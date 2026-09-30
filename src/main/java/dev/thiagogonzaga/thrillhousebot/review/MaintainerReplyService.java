@@ -388,7 +388,9 @@ public class MaintainerReplyService {
         Log.debug("Reply assistant produced an empty reply — posting nothing");
         return null;
       }
-      return reply.strip();
+      // The reply model reads the finding it answers for, which may carry the review prompt's
+      // vocabulary from a round posted before the guard existed; it must not echo it (#950).
+      return PromptLabelScrubber.scrub(reply.strip());
     } catch (AiResponseTruncatedException e) {
       // Named separately from the generic failure: the cause is a cap the operator set, not a
       // provider error, and the message says which knob to raise.

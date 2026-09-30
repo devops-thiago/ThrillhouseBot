@@ -46,6 +46,11 @@ import java.util.regex.Pattern;
  * placeholder wherever it appears unless it is one of the real paths the caller passes — the files
  * the findings are filed on and the summary describes, which are the paths of this pull request the
  * text can be about.
+ *
+ * <p>Some prompt vocabulary is rewritten rather than removed, because a sentence leans on it
+ * (#950): a learning id ("[L51]") becomes "a maintainer's earlier decision", the config-key block's
+ * name ("the config-key definitions section") becomes "the configuration code", and "the provided
+ * material" — the prompts' name for everything they hand the model — becomes "the reviewed code".
  */
 public final class PromptLabelScrubber {
 
@@ -158,6 +163,47 @@ public final class PromptLabelScrubber {
       Pattern.compile(
           ",? which (?:this|the) (?:PR|pull request|finding) must quote(?![^:.;,])",
           Pattern.CASE_INSENSITIVE);
+
+  /**
+   * One or more learning ids as the prompt prints them ({@code [L12]}), joined as "[L51]/[L52]" or
+   * "[L51], [L52] and [L53]" (#950). Not an index ({@code arr[L1]}) and not a markdown link's text
+   * ({@code [L10](...)}).
+   */
+  private static final String LEARNING_ID_GROUP =
+      "(?<![\\w\\]\\[])\\[L\\d{1,18}\\](?![(\\[])"
+          + "(?:(?: ?[/,&] ?| (?:and|or) )\\[L\\d{1,18}\\](?![(\\[]))*";
+
+  private static final Pattern LEARNING_IDS = Pattern.compile(LEARNING_ID_GROUP);
+
+  /** "([L51]/[L52]/[L53])" or "(see [L12])", with the blanks before it. */
+  private static final Pattern LEARNING_ID_PARENTHETICAL =
+      Pattern.compile("[ \\t]*\\((?:(?i:see|per|cf\\.?|e\\.g\\.,?) )?" + LEARNING_ID_GROUP + "\\)");
+
+  /** "the decision [L12]": the noun already says what the id stood for. */
+  private static final Pattern NAMED_LEARNING_IDS =
+      Pattern.compile("(?<![\\w-])((?i:decisions?|learnings?))[ \\t]+" + LEARNING_ID_GROUP);
+
+  /** An article ending the text before a learning id: "the [L12]". */
+  private static final Pattern ARTICLE_BEFORE =
+      Pattern.compile("(?<![\\w-])(a|an|the)[ \\t]+$", Pattern.CASE_INSENSITIVE);
+
+  /** The config-key context block's heading, cited by name (#950). */
+  private static final Pattern CONFIG_KEY_HEADING =
+      Pattern.compile(
+          "(?<![\\w-])(?:the )?\"?config[- ]key definitions from the repository\"?"
+              + "(?: (?:section|block))?",
+          Pattern.CASE_INSENSITIVE);
+
+  private static final String CONFIG_KEY_CODE = "the repository's configuration code";
+
+  /** "config-key definitions section", "config key definition block" and the like (#950). */
+  private static final Pattern CONFIG_KEY_SECTION =
+      Pattern.compile(
+          "(?<![\\w-])config[- ]keys? definitions? (?:section|block)\\b", Pattern.CASE_INSENSITIVE);
+
+  /** The prompts' name for everything they hand the model (#950). */
+  private static final Pattern PROVIDED_MATERIAL =
+      Pattern.compile("(?<![\\w-])(the )?provided materials?\\b", Pattern.CASE_INSENSITIVE);
 
   private PromptLabelScrubber() {}
 
@@ -363,7 +409,69 @@ public final class PromptLabelScrubber {
     var s = removeLabelParentheticals(prose);
     s = removeNumberedLabels(s);
     s = GUIDANCE_ASIDE.matcher(s).replaceAll(" ");
-    return RESTATED_RULE.matcher(s).replaceAll("");
+    s = RESTATED_RULE.matcher(s).replaceAll("");
+    s = rewriteLearningIds(s);
+    s = CONFIG_KEY_HEADING.matcher(s).replaceAll(m -> capitalizeLike(m.group(), CONFIG_KEY_CODE));
+    s =
+        CONFIG_KEY_SECTION
+            .matcher(s)
+            .replaceAll(m -> capitalizeLike(m.group(), "configuration code"));
+    return PROVIDED_MATERIAL
+        .matcher(s)
+        .replaceAll(
+            m ->
+                capitalizeLike(
+                    m.group(), m.group(1) == null ? "reviewed code" : "the reviewed code"));
+  }
+
+  /** {@code phrase}, capitalized when {@code original} starts with a capital. */
+  private static String capitalizeLike(String original, String phrase) {
+    return Character.isUpperCase(original.charAt(0)) ? capitalize(phrase) : phrase;
+  }
+
+  private static String capitalize(String phrase) {
+    return Character.toUpperCase(phrase.charAt(0)) + phrase.substring(1);
+  }
+
+  /**
+   * Rewrites learning ids — {@code [L51]}, or {@code [L51]/[L52]/[L53]} together — to plain words
+   * (#950): the id is the prompt's handle for a stored decision and means nothing to a reader. A
+   * parenthetical holding nothing but ids goes with the blanks before it; ids right after
+   * "decision" or "learning" go alone ("the decision [L12]" reads "the decision"); any other
+   * becomes "a maintainer's earlier decision", or "maintainers' earlier decisions" for several,
+   * taking the place of an article before it and capitalized when it opens a clause.
+   */
+  private static String rewriteLearningIds(String text) {
+    if (!text.contains("[L")) {
+      return text;
+    }
+    var s = LEARNING_ID_PARENTHETICAL.matcher(text).replaceAll("");
+    s = NAMED_LEARNING_IDS.matcher(s).replaceAll("$1");
+    var m = LEARNING_IDS.matcher(s);
+    var out = new StringBuilder(s.length());
+    int at = 0;
+    while (m.find()) {
+      int start = m.start();
+      boolean plural = m.group().indexOf("[L", 1) > 0;
+      var phrase = plural ? "maintainers' earlier decisions" : "a maintainer's earlier decision";
+      var article = ARTICLE_BEFORE.matcher(s.substring(at, start));
+      boolean capital;
+      if (article.find()) {
+        start = at + article.start();
+        capital = Character.isUpperCase(s.charAt(start));
+        if (!plural && "the".equalsIgnoreCase(article.group(1))) {
+          phrase = "the maintainer's earlier decision";
+        }
+      } else {
+        capital = opensClause(s, start, at) && !afterAbbreviation(s, start, at);
+      }
+      if (capital) {
+        phrase = capitalize(phrase);
+      }
+      out.append(s, at, start).append(phrase);
+      at = m.end();
+    }
+    return out.append(s, at, s.length()).toString();
   }
 
   /**
@@ -500,6 +608,12 @@ public final class PromptLabelScrubber {
       end++;
     }
     return s.substring(i, end).toLowerCase(Locale.ROOT);
+  }
+
+  /** Whether the blanks before {@code start} follow "e.g.", "i.e." or "cf.", not a sentence end. */
+  private static boolean afterAbbreviation(String s, int start, int floor) {
+    var before = s.substring(floor, skipBlanksBack(s, start, floor)).toLowerCase(Locale.ROOT);
+    return before.endsWith("e.g.") || before.endsWith("i.e.") || before.endsWith("cf.");
   }
 
   /** Whether {@code start} opens a line, or a clause after a sentence end, colon, dash or pipe. */

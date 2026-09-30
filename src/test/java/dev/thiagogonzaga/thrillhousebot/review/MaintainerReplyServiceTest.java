@@ -205,6 +205,34 @@ class MaintainerReplyServiceTest {
     verifyNoInteractions(commentClient);
   }
 
+  // #950: the reply model reads a finding posted before the guard and echoes its vocabulary.
+  @Test
+  void replyIsScrubbedOfLearningIdsAndPromptSectionNames() {
+    authorize();
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(
+            List.of(
+                comment(99L, null, BOT, "**MEDIUM — unpinned actions** see [L51]"),
+                comment(1000L, 99L, "octocat", "Why is this flagged?")));
+    when(replyAssistant.reply(any(), any(), any(), any(), any()))
+        .thenReturn(
+            aiOk(
+                "The policy decided elsewhere (e.g. [L51], which cites the release pipeline)"
+                    + " covers images only; line 16 of the config-key definition section agrees."));
+
+    service.handle(reviewThreadTask(false));
+
+    var reply = ArgumentCaptor.forClass(GitHubReviewClient.ReplyToReviewCommentRequest.class);
+    verify(reviewClient)
+        .replyToReviewComment(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), reply.capture());
+    assertEquals(
+        "The policy decided elsewhere (e.g. a maintainer's earlier decision, which cites the"
+            + " release pipeline) covers images only; line 16 of the configuration code agrees.",
+        reply.getValue().body());
+  }
+
   @Test
   void replyOnHumanThreadWithoutMentionPostsNothing() {
     authorize();

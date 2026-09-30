@@ -381,4 +381,161 @@ class PromptLabelScrubberTest {
     assertEquals(
         "Still wrong.", PromptLabelScrubber.scrub(noteOnly).previousStatuses().getFirst().note());
   }
+
+  // #950, ThrillhouseBot-test#152 thread 4149758246.
+  static final String LEARNING_ID_LEAK =
+      "Pin both steps to the full commit SHA for the versions you intend, or note that"
+          + " tag-following is a deliberate choice for this repo — the base-image digest policy"
+          + " decided elsewhere (e.g. [L51], which cites the release pipeline resolving image"
+          + " digests) does not do that resolution for CI actions.";
+
+  static final String LEARNING_ID_CLEAN =
+      "Pin both steps to the full commit SHA for the versions you intend, or note that"
+          + " tag-following is a deliberate choice for this repo — the base-image digest policy"
+          + " decided elsewhere (e.g. a maintainer's earlier decision, which cites the release"
+          + " pipeline resolving image digests) does not do that resolution for CI actions.";
+
+  // #950, ThrillhouseBot-test#149 review 5372588106.
+  static final String SECTION_NAME_LEAK =
+      "The definition (Config.java, line 16 of the config-key definition section, mirrored in"
+          + " this diff) reads the key as an integer.";
+
+  static final String SECTION_NAME_CLEAN =
+      "The definition (Config.java, line 16 of the configuration code, mirrored in this diff)"
+          + " reads the key as an integer.";
+
+  @Test
+  void bothRound12PhrasesAreRewrittenToPlainWords() {
+    assertEquals(LEARNING_ID_CLEAN, PromptLabelScrubber.scrub(LEARNING_ID_LEAK));
+    assertEquals(SECTION_NAME_CLEAN, PromptLabelScrubber.scrub(SECTION_NAME_LEAK));
+    assertEquals(LEARNING_ID_CLEAN, PromptLabelScrubber.scrub(LEARNING_ID_CLEAN));
+    assertEquals(SECTION_NAME_CLEAN, PromptLabelScrubber.scrub(SECTION_NAME_CLEAN));
+  }
+
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          # ThrillhouseBot-test#156 comment 4149843646: ids cited together, in parentheses.
+          the base-image tag findings the maintainers declined on Dockerfiles ([L51]/[L52]/[L53]), but | the base-image tag findings the maintainers declined on Dockerfiles, but
+          declined earlier (see [L12]). | declined earlier.
+          The decision [L12] no longer holds. | The decision no longer holds.
+          two learnings [L3] and [L4] say so | two learnings say so
+          as [L12] states, tags are fine | as a maintainer's earlier decision states, tags are fine
+          as [L1], [L2] and [L3] state | as maintainers' earlier decisions state
+          [L12] declined this on Dockerfiles. | A maintainer's earlier decision declined this on Dockerfiles.
+          Fine. [L12] still applies. | Fine. A maintainer's earlier decision still applies.
+          the [L12] reasoning | the maintainer's earlier decision reasoning
+          The [L12] reasoning | The maintainer's earlier decision reasoning
+          an [L12] reason | a maintainer's earlier decision reason
+          per the [L1]/[L2], tags are fine | per maintainers' earlier decisions, tags are fine
+          tags are fine (i.e. [L12] holds) | tags are fine (i.e. a maintainer's earlier decision holds)
+          cf. [L12] for the reason | cf. a maintainer's earlier decision for the reason
+          # ThrillhouseBot-test#156 comments 4149744690 and 4149744783, #158.
+          confirmed by the repository's config-key definitions section (which lists only X) | confirmed by the repository's configuration code (which lists only X)
+          The repository's config-key definitions section for ARTWORK_DIR gives | The repository's configuration code for ARTWORK_DIR gives
+          quoted in the repository's config key definitions section and in the diff | quoted in the repository's configuration code and in the diff
+          Config key definitions section: line 3. | Configuration code: line 3.
+          shown in the "Config key definitions from the repository" section. | shown in the repository's configuration code.
+          The Config key definitions from the repository block shows it. | The repository's configuration code shows it.
+          # #154 4149694445, #157 4149687021, #158 4149709454: the prompts' name for their input.
+          the only validation in the provided material is queue.zig line 25 | the only validation in the reviewed code is queue.zig line 25
+          no intake handler exists anywhere in the provided material — verify it. | no intake handler exists anywhere in the reviewed code — verify it.
+          but nothing in the provided material reads that variable. | but nothing in the reviewed code reads that variable.
+          The provided material shows no producer. | The reviewed code shows no producer.
+          nothing in provided materials builds it | nothing in reviewed code builds it
+          """)
+  void learningIdsAndContextBlockNamesAreRewritten(String leaked, String clean) {
+    assertEquals(clean, PromptLabelScrubber.scrub(leaked));
+    assertEquals(clean, PromptLabelScrubber.scrub(clean));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "See [L10](https://github.com/o/r/blob/main/A.java#L10) for the call.",
+        "A reference link [L10][1] stays.",
+        "matrix[L1] is read before it is set.",
+        "The regex `\\[L\\d+\\]` and `[L51]` in code stay.",
+        "```\nlog(\"[L51]\")\n```",
+        "Ranges such as [L10-L20] stay.",
+        "Nothing in the material builds dist/bundle.js.",
+        "The vendor-provided material is copied verbatim.",
+        "The config key definitions in Config.java read four variables.",
+        "Input not in the diff: a sensor_id of `s1; touch /tmp/pwn` passes validation.",
+        "no line in the shown sources calls env::var(\"COLDCHAIN_API_TOKEN\")",
+        "A [LOW] tag and a [Link] stay."
+      })
+  void ordinaryBracketsAndMaterialWordsAreLeftAlone(String text) {
+    assertEquals(text, PromptLabelScrubber.scrub(text));
+  }
+
+  @Test
+  void bothRound12PhrasesAreRewrittenOnEveryPostedSurface() {
+    var response =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "medium",
+                    "medium",
+                    ".github/workflows/ci.yml",
+                    9,
+                    "Unpinned actions despite [L51]",
+                    LEARNING_ID_LEAK,
+                    "- uses: actions/checkout@v4 # [L51]",
+                    "")),
+            List.of(new ReviewResponse.PreviousFindingStatus(2, "unresolved", SECTION_NAME_LEAK)),
+            new ReviewResponse.Summary(
+                1,
+                0,
+                0,
+                1,
+                0,
+                SECTION_NAME_LEAK,
+                LEARNING_ID_LEAK,
+                List.of(SECTION_NAME_LEAK),
+                List.of(),
+                List.of(new ReviewResponse.FileSummary("Config.java", LEARNING_ID_LEAK)),
+                ""));
+
+    var scrubbed = PromptLabelScrubber.scrub(response);
+
+    var finding = scrubbed.findings().getFirst();
+    assertEquals("Unpinned actions despite a maintainer's earlier decision", finding.title());
+    assertEquals(LEARNING_ID_CLEAN, finding.description());
+    assertEquals("- uses: actions/checkout@v4 # [L51]", finding.suggestionOld());
+    assertEquals(SECTION_NAME_CLEAN, scrubbed.previousFindingsStatus().getFirst().note());
+    var summary = scrubbed.summary();
+    assertEquals(SECTION_NAME_CLEAN, summary.overallAssessment());
+    assertEquals(LEARNING_ID_CLEAN, summary.prPurpose());
+    assertEquals(List.of(SECTION_NAME_CLEAN), summary.descriptionGaps());
+    assertEquals(LEARNING_ID_CLEAN, summary.fileSummaries().getFirst().summary());
+
+    // The publisher's guard: a stored round's findings, review body and status notes.
+    var result =
+        new ReviewResult(
+            List.of(
+                new Finding(RiskLevel.MEDIUM, "Config.java", 16, "Key", SECTION_NAME_LEAK, "", "")),
+            0,
+            0,
+            1,
+            0,
+            RiskLevel.MEDIUM,
+            ReviewState.COMMENT,
+            false,
+            "## Summary\n" + LEARNING_ID_LEAK + "\n<!-- thrillhousebot:finding=3 [L51] -->",
+            List.of(new ReviewResult.PreviousFindingStatus(3, "unresolved", LEARNING_ID_LEAK)),
+            List.of(),
+            0);
+    var published = PromptLabelScrubber.scrub(result);
+    assertEquals(SECTION_NAME_CLEAN, published.findings().getFirst().description());
+    assertEquals(
+        "## Summary\n" + LEARNING_ID_CLEAN + "\n<!-- thrillhousebot:finding=3 [L51] -->",
+        published.summaryMarkdown());
+    assertEquals(LEARNING_ID_CLEAN, published.previousStatuses().getFirst().note());
+    assertEquals(
+        SECTION_NAME_CLEAN,
+        PromptLabelScrubber.scrubMarkdown(SECTION_NAME_LEAK, result.findings()));
+  }
 }
