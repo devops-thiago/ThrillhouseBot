@@ -374,14 +374,40 @@ class FollowUpAnalyzerLearningsTest {
   }
 
   @Test
-  void aRefutablePremiseIsRecognizedOnlyForAConcurrencyFinding() {
-    assertTrue(RebuttalContradiction.assertsRefutablePremise(RACE, ASYNC_AFTER_ACK));
-    assertFalse(RebuttalContradiction.assertsRefutablePremise(NESTED, ASYNC_AFTER_ACK));
-    assertFalse(RebuttalContradiction.assertsRefutablePremise(RACE, "House style, not changing."));
-    assertFalse(RebuttalContradiction.assertsRefutablePremise(null, ASYNC_AFTER_ACK));
-    assertFalse(RebuttalContradiction.assertsRefutablePremise(RACE, null));
+  void aRefutablePremiseIsRecognizedWhateverTheFindingIsCalled() {
+    assertTrue(RebuttalContradiction.assertsRefutablePremise(ASYNC_AFTER_ACK));
     assertTrue(
-        RebuttalContradiction.assertsRefutablePremise(NESTED, "x".repeat(20_001)),
+        RebuttalContradiction.assertsRefutablePremise("It never runs concurrently for one PR."));
+    assertFalse(RebuttalContradiction.assertsRefutablePremise(FLAT_THREADS));
+    assertFalse(RebuttalContradiction.assertsRefutablePremise("House style, not changing."));
+    assertFalse(RebuttalContradiction.assertsRefutablePremise(null));
+    assertTrue(
+        RebuttalContradiction.assertsRefutablePremise("x".repeat(20_001)),
         "a reason too long for the re-check to read was never re-checked");
+  }
+
+  @Test
+  void aRaceDescribedWithoutConcurrencyWordsIsStillNotRemembered() {
+    var doubleInsert =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            PAUSE_FILE,
+            60,
+            "pause() double-inserts PausedPr and violates the unique constraint on redelivery",
+            "Two deliveries both pass the existence check.",
+            null,
+            null);
+
+    var surviving =
+        analyzer.survivingDeclines(
+            List.of(doubleInsert),
+            List.of(1),
+            thread(doubleInsert, 800L, "Not changed — it is only ever called from /pause."),
+            List.of(),
+            BOT_ID,
+            () -> PLAIN_DIFF);
+
+    assertTrue(surviving.isEmpty());
   }
 }

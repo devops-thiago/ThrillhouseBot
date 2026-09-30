@@ -185,7 +185,41 @@ class ReviewLearningsTest {
   void aStoredCredentialIsNeverReplayed() {
     var leaked = view(1, ReviewLearning.KIND_CONVENTION, null, "use ghp_abcdefghijklmnop1234", 0);
 
-    assertTrue(ReviewLearnings.select(List.of(leaked), List.of(), 10, 10_000).isEmpty());
+    var leakedTitle =
+        new LearningView(
+            2,
+            ReviewLearning.KIND_DECLINE,
+            "hardcoded AKIAABCDEFGHIJKLMNOP",
+            null,
+            "a/B.java",
+            "fine",
+            1,
+            "u",
+            "m",
+            Instant.EPOCH,
+            true,
+            null,
+            null);
+    var leakedPath =
+        new LearningView(
+            3,
+            ReviewLearning.KIND_DECLINE,
+            "t",
+            null,
+            "keys/ghp_abcdefghijklmnop1234.txt",
+            "fine",
+            1,
+            "u",
+            "m",
+            Instant.EPOCH,
+            true,
+            null,
+            null);
+
+    assertTrue(
+        ReviewLearnings.select(
+                List.of(leaked, leakedTitle, leakedPath), List.of("a/B.java"), 10, 10_000)
+            .isEmpty());
   }
 
   @Test

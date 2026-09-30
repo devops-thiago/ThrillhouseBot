@@ -2055,7 +2055,7 @@ public class FollowUpAnalyzer {
         var sources =
             declineSources(finding, id, comments, repliesByRoot, conversationComments, botIdentity);
         if (!sources.isEmpty()
-            && sources.stream().allMatch(source -> isRememberable(finding, source.reason()))) {
+            && sources.stream().allMatch(source -> isRememberable(source.reason()))) {
           surviving.add(survivingDecline(finding, sources));
         }
       }
@@ -2074,9 +2074,9 @@ public class FollowUpAnalyzer {
         first.author());
   }
 
-  private static boolean isRememberable(ReviewResponse.Finding finding, String reason) {
+  private static boolean isRememberable(String reason) {
     // Never null: a thread reply is kept only with a body, and a directive's reason is joined text.
-    return !reason.isBlank() && !RebuttalContradiction.assertsRefutablePremise(finding, reason);
+    return !reason.isBlank() && !RebuttalContradiction.assertsRefutablePremise(reason);
   }
 
   /**

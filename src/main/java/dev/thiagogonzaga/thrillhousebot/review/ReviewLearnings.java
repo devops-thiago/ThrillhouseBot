@@ -160,7 +160,7 @@ public class ReviewLearnings {
     // Scored once per learning, so the sort compares stored scores instead of re-deriving them.
     var ranked =
         active.stream()
-            .filter(l -> !LearningText.containsCredential(l.text()))
+            .filter(l -> !carriesCredential(l))
             .map(l -> new Scored(l, relevance(l, paths, dirs, extensions)))
             .filter(scored -> scored.score() > 0)
             .sorted(
@@ -192,6 +192,13 @@ public class ReviewLearnings {
    * still reaches a pull request that changes other Java files, while a decline about a workflow
    * file stays out of a documentation-only change.
    */
+  /** Whether any replayed field of the learning — text, title or path — is credential-shaped. */
+  private static boolean carriesCredential(ReviewLearningService.LearningView learning) {
+    return LearningText.containsCredential(learning.text())
+        || LearningText.containsCredential(learning.findingTitle())
+        || LearningText.containsCredential(learning.path());
+  }
+
   private record Scored(ReviewLearningService.LearningView learning, int score) {}
 
   static int relevance(

@@ -203,23 +203,25 @@ final class RebuttalContradiction {
   }
 
   /**
-   * Whether {@code rebuttal} rests on a premise of the kind {@link #find} exists to refute — a
-   * "this cannot run concurrently" claim against a concurrency finding — or is too long to be read
-   * at all. {@link #find} can only refute such a premise from the code in the reviewed diff, and
-   * the dispatch that makes it false often lives outside it (PR #160's unbounded executor sat in a
-   * file the pull request never touched). A decline that stands this round is therefore still not
-   * safe to remember across pull requests when this is true: the learnings store (#38) keeps only
-   * declines whose premise is not one the code could contradict.
+   * Whether {@code rebuttal} asserts a premise of the kind {@link #find} exists to refute — a "this
+   * cannot run concurrently" claim — or is too long to be read at all. {@link #find} can only
+   * refute such a premise from the code in the reviewed diff, and the dispatch that makes it false
+   * often lives outside it (PR #160's unbounded executor sat in a file the pull request never
+   * touched). A decline that stands this round is therefore still not safe to remember across pull
+   * requests when this is true: the learnings store (#38) keeps only declines whose premise is not
+   * one the code could contradict.
+   *
+   * <p>Unlike {@link #find}, this does not also require the finding to use concurrency words. A
+   * race can be described without them ("double-inserts on redelivery"), and here a false positive
+   * only means one learning is not stored, while a false negative stores a decline that may
+   * suppress a valid finding on every later pull request.
    */
-  static boolean assertsRefutablePremise(ReviewResponse.Finding finding, String rebuttal) {
-    if (finding == null || rebuttal == null) {
+  static boolean assertsRefutablePremise(String rebuttal) {
+    if (rebuttal == null) {
       return false;
     }
-    if (rebuttal.length() > MAX_REBUTTAL_CHARS) {
-      return true;
-    }
-    return CONCURRENCY_FINDING.matcher(findingText(finding)).find()
-        && earliestMatch(NO_CONCURRENCY_CLAIMS, assertedText(rebuttal)) != null;
+    return rebuttal.length() > MAX_REBUTTAL_CHARS
+        || earliestMatch(NO_CONCURRENCY_CLAIMS, assertedText(rebuttal)) != null;
   }
 
   /**

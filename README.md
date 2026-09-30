@@ -688,9 +688,10 @@ place for facts you want to write down yourself; learnings capture them from the
 - A decline of a previous finding, with the maintainer's reason, but only once it has survived
   the [decline re-check](#re-checking-declines). The review must record the finding
   `justified`, the re-check must have run against the reviewed code, and the reason must not rest
-  on a premise the code could refute. A "this cannot run concurrently" decline of a race finding
-  is never remembered, even when it stands this round, because the code that refutes it (PR #160's
-  unbounded executor) can sit outside the diff. A decline that stood only because the maintainer
+  on a premise the code could refute. A decline arguing "this cannot run concurrently" (only one
+  caller, runs serially, single-threaded) is never remembered, whatever the finding is titled, even
+  when it stands this round, because the code that refutes it (PR #160's unbounded executor) can
+  sit outside the diff. A decline that stood only because the maintainer
   answered the re-check's push-back a second time is not remembered either. The author must hold
   write access, confirmed against the collaborator-permission API.
 - A convention stated explicitly with `/remember <text>` on the PR conversation.
