@@ -30,6 +30,7 @@ import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.notification.ReviewNotifier;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
@@ -279,8 +280,13 @@ class ReviewOrchestratorTest {
         carryover,
         ciHoldRegistry,
         reviewExecutor,
-        notifier);
+        notifier,
+        ciFailureContext);
   }
+
+  /** The CI-failure context the orchestrator is built with; off unless a test switches it on. */
+  private CiFailureContextResolver ciFailureContext =
+      new CiFailureContextResolver(null, null, null, false, false, 4000);
 
   private ReviewContextLoader newContextLoader() {
     return new ReviewContextLoader(
@@ -1602,6 +1608,52 @@ class ReviewOrchestratorTest {
     /** Runs review() far enough to capture the prompt and returns its repoInstructions slot. */
     private String captureRepoInstructions(GitHubPullRequestClient.FileDiff... files) {
       return capturePromptInputs(files).repoInstructions();
+    }
+
+    /** #59: a failing check at the head, as the gate's own CI read returns it. */
+    private void stubFailingCheckAtHead() {
+      when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(
+              List.of(
+                  new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                      77L,
+                      "unit-tests",
+                      "completed",
+                      "failure",
+                      new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(
+                          1L, "github-actions", "GitHub Actions"),
+                      new GitHubCheckRunClient.CheckRunsResponse.CheckRun.CheckRunOutput(
+                          "1 test failed", "FooTest.bar expected 1 but was 2", 0))));
+    }
+
+    @Test
+    void aFailingCheckReachesTheReviewPromptFencedWhenCiContextIsOn() {
+      ciFailureContext =
+          new CiFailureContextResolver(checkRunClient, null, null, true, false, 4000);
+      orchestrator = newOrchestrator();
+      stubFailingCheckAtHead();
+
+      var guidance = capturePromptInputs().repoInstructions();
+
+      assertTrue(guidance.contains(PrReviewPrompts.CI_FAILURES_REQUEST), guidance);
+      assertTrue(guidance.contains("### unit-tests (conclusion: failure)"), guidance);
+      assertTrue(guidance.contains("FooTest.bar expected 1 but was 2"), guidance);
+      assertTrue(
+          guidance.indexOf(PromptTemplateEscaper.fencePrefix())
+              < guidance.indexOf("### unit-tests"),
+          "the check output sits inside the untrusted-data fence");
+      // The failing checks come from the gate's own CI read, not a second fetch.
+      verify(checkRunClient, times(1)).getAllCheckRuns(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void aFailingCheckStaysOutOfTheReviewPromptWhenCiContextIsOff() {
+      stubFailingCheckAtHead();
+
+      var guidance = capturePromptInputs().repoInstructions();
+
+      assertFalse(guidance.contains("CI Failures on This Commit"), guidance);
+      assertFalse(guidance.contains("unit-tests"), guidance);
     }
 
     /** Runs review() far enough to capture the prompt inputs the review call was given. */

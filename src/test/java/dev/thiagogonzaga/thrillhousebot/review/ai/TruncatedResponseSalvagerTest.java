@@ -358,4 +358,108 @@ class TruncatedResponseSalvagerTest {
     assertDoesNotThrow(() -> TruncatedResponseSalvager.closeQuietly(parser));
     verify(parser).close();
   }
+
+  @Test
+  void salvagesTheCompleteFindingsOfAProductionShapedBodyCutInItsFileSummaries() {
+    // #894, the production shape: 252,380 characters of deliberation whose first '[' is a "[LOW]"
+    // tag at the start and whose fenced swift, diff and json excerpts carry braces and brackets,
+    // then the fenced answer, cut inside file_summaries after the findings array had closed. The
+    // pass started at the "[LOW]" and salvaged nothing, and the whole round was discarded.
+    var deliberation =
+        DeliberationFixture.deliberation(DeliberationFixture.PRODUCTION_DELIBERATION_CHARS);
+    var body =
+        deliberation
+            + "```json\n{\"findings\":["
+            + finding("F1")
+            + ","
+            + finding("F2")
+            + ","
+            + finding("F3")
+            + "],\"previous_findings_status\":[{\"id\":2,\"status\":\"unresolved\",\"note\":\"n\"}],"
+            + "\"summary\":{\"total_findings\":3,\"critical\":0,\"high\":0,\"medium\":3,\"low\":0,"
+            + "\"overall_assessment\":\"three issues\",\"pr_purpose\":\"report pull progress\","
+            + "\"file_summaries\":[{\"path\":\"Sources/Registry.swift\",\"summary\":\"rekeys\"},"
+            + "{\"path\":\"CreateIntegrationTests.swift\",\"summ";
+    assertTrue(body.indexOf('[') < 300, "the first bracket is a severity tag near the start");
+
+    var salvaged = salvager.salvage(body);
+
+    assertEquals(
+        java.util.List.of("F1", "F2", "F3"),
+        salvaged.findings().stream().map(ReviewResponse.Finding::title).toList());
+    assertEquals(1, salvaged.previousFindingsStatus().size());
+    assertNull(salvager.salvageSummary(body), "the summary object never closed");
+    assertTrue(salvaged.hasFindingsOrStatuses());
+  }
+
+  @Test
+  void salvagesTheSummaryOfASummaryCallBodyThatFollowsDeliberation() {
+    // The summary call's salvage anchors on the same root keys as its parse, so prose ahead of
+    // the answer with a "[LOW]" tag and fenced excerpts does not start the pass on a bracket.
+    var deliberation = DeliberationFixture.deliberation(20_000);
+    var body =
+        deliberation
+            + "```json\n{\"summary\":{\"total_findings\":1,\"critical\":0,\"high\":0,"
+            + "\"medium\":1,\"low\":0,\"overall_assessment\":\"one issue\","
+            + "\"pr_purpose\":\"report pull progress\"},\"previous_findings_status\":[{\"id\":2,"
+            + "\"status\":\"unres";
+    assertTrue(body.indexOf('[') < 300, "the first bracket is a severity tag near the start");
+
+    var summary = salvager.salvageSummary(body);
+
+    assertNotNull(summary, "the summary object closed before the cut");
+    assertEquals("report pull progress", summary.prPurpose());
+  }
+
+  @Test
+  void salvagesANamedArrayWhoseObjectFollowsBracketedProse() {
+    // The verifier's lane anchors on its own field the same way.
+    var body =
+        """
+        [HIGH] finding 1 looks wrong; {see} below.
+        ```json
+        {"verdicts":[{"id":1,"verdict":"rejected","risk":null,"confidence":null,"reason":"fp"},\
+        {"id":2,"verd""";
+
+    var verdicts = salvager.salvageArray(body, "verdicts", VerificationResponse.Verdict.class);
+
+    assertEquals(1, verdicts.size());
+    assertEquals("rejected", verdicts.get(0).verdict());
+  }
+
+  @Test
+  void salvagesACutRootThatOpensOnAnotherKeyAndHoldsANestedSummary() {
+    // The root opens on a key the contract does not name and holds an object that opens on
+    // "summary". Cut, the root never closes, and it must still be the object the pass reads —
+    // anchoring on the nested summary would leave the findings array unreachable.
+    var body =
+        "[LOW] a {note} first.\n{\"analysis\": {\"summary\": {\"pr_purpose\": \"x\"}},"
+            + " \"findings\": ["
+            + finding("F1")
+            + ","
+            + finding("F2")
+            + ",{\"risk\":\"lo";
+
+    var salvaged = salvager.salvage(body);
+
+    assertEquals(
+        java.util.List.of("F1", "F2"),
+        salvaged.findings().stream().map(ReviewResponse.Finding::title).toList());
+  }
+
+  @Test
+  void doesNotSalvageAPreviousRoundsAnswerQuotedInTheDeliberation() {
+    var previous = "{\"findings\":[" + finding("STALE") + "]}";
+    var body =
+        DeliberationFixture.deliberationQuotingAPreviousAnswer(40_000, previous)
+            + "```json\n{\"findings\":["
+            + finding("F1")
+            + ",{\"risk\":\"hi";
+
+    var salvaged = salvager.salvage(body);
+
+    assertEquals(
+        java.util.List.of("F1"),
+        salvaged.findings().stream().map(ReviewResponse.Finding::title).toList());
+  }
 }

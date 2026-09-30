@@ -322,6 +322,9 @@ will change per provider:
 | `REVIEW_GENERATE_TESTS_ENABLED` | Allow the on-demand `/generate-tests` command to propose unit tests for the changed code | `true` |
 | `REVIEW_DIAGRAM_ENABLED` | Include an opt-in Mermaid control-flow diagram in the PR summary | `false` |
 | `REVIEW_PATCH_COVERAGE_ENABLED` | Feed patch coverage into the review context: the added lines the repository's own coverage report records as never executed (see [Repository configuration](#repository-configuration)). Only takes effect for a repository that names its coverage artifact in `.github/thrillhousebot.yml` | `false` |
+| `REVIEW_CI_CONTEXT_ENABLED` | Feed the head commit's failing CI checks into the review context: check name, conclusion, output title and summary, and a page of annotations, fenced as untrusted data (see [CI-failure context](#ci-failure-context)) | `false` |
+| `REVIEW_CI_CONTEXT_INCLUDE_LOGS` | With `REVIEW_CI_CONTEXT_ENABLED`, also read the tail of up to two failing GitHub Actions job logs. Uses the `Actions: Read` permission the app already has | `false` |
+| `REVIEW_CI_CONTEXT_MAX_CHARS` | Character cap on the whole CI-failure section, validated at boot to 500–20000 while the feature is on | `4000` |
 | `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | Post a short delta comment on follow-up reviews with the new-finding, resolved, and still-open counts. The full summary is a single comment the bot edits in place each round, so this is the per-round record of what moved; a follow-up pass with no delta (nothing new, nothing resolved) posts nothing | `false` |
 | `REVIEW_LARGE_PR_NUDGE_ENABLED` | Add a note to the PR summary when a large PR's review opened **no inline finding** — it may be genuinely clean, or the pass may have been shallow — pointing at `/review` and `/improve`. Costs no extra AI call and never changes the verdict; a PR under both thresholds below is unaffected | `false` |
 | `REVIEW_LARGE_PR_NUDGE_MIN_FILES` | Changed files at or above which the nudge applies (PR-level total, so ignored files still count). `0` switches this dimension off | `20` |
@@ -705,6 +708,36 @@ app → Permissions & events → Subscribe to events** (under the organization's
 settings for an organization-owned app), tick **Check suite** and **Status**, and
 save. The `Checks: Read & write` and `Commit statuses: Read` permissions the app
 already has cover both events; nothing else changes.
+
+### CI-failure context
+
+`REVIEW_CI_CONTEXT_ENABLED=true` gives the review the checks that had already failed
+on the head commit when the review started, so a finding can name the test or build
+step the change breaks. The failing checks come from the same CI read the gate makes
+(with `REVIEW_CI_GATING=off` the gate's read is still made, for this purpose only,
+and never holds approval). For each failing check, required or not, the prompt gets
+its name, conclusion, output title and summary, and up to eight annotations from one
+page, failure-level first. Five checks are described in full and any others are listed
+by name. `REVIEW_CI_CONTEXT_INCLUDE_LOGS=true` adds the last lines of up to two failing
+GitHub Actions job logs. The whole section is capped at `REVIEW_CI_CONTEXT_MAX_CHARS`
+and counted in the per-call token budget like the rest of the prompt. The extra cost is
+one annotations request per detailed check that has annotations, plus one log download
+per job when logs are on. Job logs use the `Actions: Read` permission the manifest
+already requests, so no new permission is needed.
+
+Check output is written by the pull request's own code, since a test can print
+anything, so the section is treated like the PR description: ANSI codes, control and
+bidi characters are stripped, each field is clipped, and the whole list sits inside
+the untrusted-data fence with guidance that it is data, not instructions. The model is
+told to use a failure to find the changed line that causes it, to quote the failure it
+relied on, and not to report a failure the diff does not explain.
+
+Checks still running when the review starts add nothing on their own. An automatic
+review usually starts before CI finishes, so in practice the section shows up on a
+`/review` after CI has failed. Next to a failure, still-running checks get one line
+with their count. The CI-hold revisit does not run a new review when CI later fails:
+it re-reads the gate and nothing else, as described under
+[CI gating](#ci-gating). Comment `/review` to get a review that sees the failure.
 
 ### Per-model AI settings
 

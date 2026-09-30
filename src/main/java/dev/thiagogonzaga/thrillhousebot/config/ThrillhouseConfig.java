@@ -425,6 +425,9 @@ public interface ThrillhouseConfig {
     @WithName("patch-coverage")
     PatchCoverageConfig patchCoverage();
 
+    @WithName("ci-context")
+    CiContextConfig ciContext();
+
     @WithName("follow-up-summary")
     FollowUpSummaryConfig followUpSummary();
 
@@ -526,6 +529,45 @@ public interface ThrillhouseConfig {
     /** Master switch — no artifact is looked up or downloaded unless this is {@code true}. */
     @WithDefault("false")
     boolean enabled();
+  }
+
+  /**
+   * Opt-in CI-failure context (#59). When {@link #enabled()} and the head commit already has
+   * completed, failing checks when the review starts, the review prompt carries a bounded, fenced
+   * summary of them — each check's name and conclusion, its output title and summary, and a page of
+   * its annotations — so a finding can be tied to the failing test or build step it explains. The
+   * check list is the one the CI gate already reads; the extra cost is at most one annotations page
+   * per detailed failing check. Off by default: it adds prompt tokens, and a review that starts
+   * while CI is still running (the usual case for an automatic review) has nothing to add.
+   */
+  interface CiContextConfig {
+    /** Lower bound accepted for {@link #maxChars()}: room for a header and one check. */
+    int MIN_MAX_CHARS = 500;
+
+    /** Upper bound accepted for {@link #maxChars()}, so CI output can never rival the diff. */
+    int MAX_MAX_CHARS = 20_000;
+
+    /** Master switch — no CI-failure section is built unless this is {@code true}. */
+    @WithDefault("false")
+    boolean enabled();
+
+    /**
+     * Also read the tail of each failing GitHub Actions job's log (a bounded number of jobs). Needs
+     * the {@code Actions: Read} permission the App manifest already requests, and costs one log
+     * download per job, so it is a separate switch. Ignored unless {@link #enabled()}.
+     */
+    @WithName("include-logs")
+    @WithDefault("false")
+    boolean includeLogs();
+
+    /**
+     * Character cap on the whole CI-failure section, before fencing. Counted in the planner's
+     * shared prompt overhead like every other non-diff section. Validated at boot to {@value
+     * #MIN_MAX_CHARS}..{@value #MAX_MAX_CHARS}.
+     */
+    @WithName("max-chars")
+    @WithDefault("4000")
+    int maxChars();
   }
 
   /**

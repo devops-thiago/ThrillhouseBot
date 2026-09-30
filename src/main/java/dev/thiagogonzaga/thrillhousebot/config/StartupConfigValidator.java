@@ -118,6 +118,7 @@ public class StartupConfigValidator {
     requirePresent(problems, aiApiKey, "AI_API_KEY", "quarkus.langchain4j.openai.api-key");
     validateReviewBudget(problems, config.review());
     validateCiGating(problems, config.review());
+    validateCiContext(problems, config.review().ciContext());
     validateBlockingStrictness(problems, config.review());
     validateSecurityScan(problems, config.review().securityScan());
     validateModelSettings(problems, config.ai().models());
@@ -594,6 +595,29 @@ public class StartupConfigValidator {
               + String.join(", ", allowed)
               + " (thrillhousebot.review.ci-gating): "
               + review.ciGating());
+    }
+  }
+
+  /**
+   * Rejects a {@code REVIEW_CI_CONTEXT_MAX_CHARS} outside its bounds at boot (#59) — only when the
+   * feature is on, since a disabled section is never built — so a typo cannot silently turn the CI
+   * section into one that crowds out the diff or into one too small to hold a single check.
+   */
+  private static void validateCiContext(
+      List<String> problems, ThrillhouseConfig.CiContextConfig ciContext) {
+    if (!ciContext.enabled()) {
+      return;
+    }
+    var maxChars = ciContext.maxChars();
+    if (maxChars < ThrillhouseConfig.CiContextConfig.MIN_MAX_CHARS
+        || maxChars > ThrillhouseConfig.CiContextConfig.MAX_MAX_CHARS) {
+      problems.add(
+          "REVIEW_CI_CONTEXT_MAX_CHARS must be between "
+              + ThrillhouseConfig.CiContextConfig.MIN_MAX_CHARS
+              + " and "
+              + ThrillhouseConfig.CiContextConfig.MAX_MAX_CHARS
+              + " (thrillhousebot.review.ci-context.max-chars): "
+              + maxChars);
     }
   }
 

@@ -1017,4 +1017,262 @@ class ReviewResponseParserTest {
         "Model response has no findings node; a clean review states \"findings\": []",
         ex.getMessage());
   }
+
+  // --- #894: anchoring on the answer, not on the first bracket in the body ---
+
+  private static final java.util.List<String> KEYS = ReviewResponseParser.REVIEW_ROOT_KEYS;
+
+  /** The answer the production response carried after its deliberation, fenced as it was. */
+  private static final String FENCED_ANSWER =
+      """
+      ```json
+      {"findings": [
+        {"risk": "low", "confidence": "high", "file": "CreateIntegrationTests.swift", "line": 175,
+         "title": "Pull-progress doc comment names a placeholder that is never substituted",
+         "description": "the {progress} placeholder is documented but not filled"},
+        {"risk": "medium", "confidence": "high", "file": "Sources/Registry.swift", "line": 42,
+         "title": "Cache key drops the tag", "description": "two tags of one image collide [sic]"}
+       ],
+       "previous_findings_status": [{"id": 2, "status": "unresolved", "note": "unchanged"}],
+       "summary": {"total_findings": 2, "critical": 0, "high": 0, "medium": 1, "low": 1,
+         "overall_assessment": "two issues", "pr_purpose": "report pull progress",
+         "file_summaries": [{"path": "Sources/Registry.swift", "summary": "rekeys the cache"}]}}
+      ```
+      """;
+
+  @Test
+  void shouldParseTheAnswerAfterAProductionSizedDeliberationFullOfBracketsAndFences() {
+    // #894: the first '[' of this body is a "[LOW]" tag in prose, its first '{' a placeholder in
+    // prose, and fenced swift, diff and json excerpts sit between them and the answer. The
+    // first-bracket anchor failed the whole parse on "[LOW]" and paid a full-price retry.
+    var deliberation =
+        DeliberationFixture.deliberation(DeliberationFixture.PRODUCTION_DELIBERATION_CHARS);
+    var raw = deliberation + FENCED_ANSWER;
+    assertTrue(raw.indexOf('[') < 300, "the first bracket is a severity tag near the start");
+    assertTrue(raw.contains("```swift") && raw.contains("```diff"));
+
+    var response = parser.parse(raw);
+
+    assertEquals(
+        java.util.List.of("CreateIntegrationTests.swift", "Sources/Registry.swift"),
+        response.findings().stream().map(ReviewResponse.Finding::file).toList());
+    assertEquals(1, response.previousFindingsStatus().size());
+    assertEquals("report pull progress", response.summary().prPurpose());
+    assertTrue(
+        ReviewResponseParser.extractJson(raw, KEYS).startsWith("{\"findings\": ["),
+        "the extraction starts at the answer, not in the deliberation");
+  }
+
+  @Test
+  void shouldStillReadEveryDocumentOfASplitResponseAfterDeliberation() {
+    // #805's split survives the new anchor: the first contract-keyed object is the first document,
+    // and the fenced findings document after it is merged in as before.
+    var raw =
+        DeliberationFixture.deliberation(20_000)
+            + """
+            {"summary": {"total_findings": 1, "pr_purpose": "split"},
+             "previous_findings_status": [{"id": 1, "status": "resolved", "note": "ok"}]}
+            ```json
+            {"findings": [{"risk": "low", "confidence": "high", "file": "f", "line": 1,
+                           "title": "t", "description": "d"}]}
+            ```
+            """;
+
+    var response = parser.parse(raw);
+
+    assertEquals(1, response.findings().size());
+    assertEquals("split", response.summary().prPurpose());
+    assertEquals(1, response.previousFindingsStatus().size());
+  }
+
+  @Test
+  void shouldKeepARootThatEnclosesAContractKeyedObject() {
+    // A root whose first key is not a contract key but which holds an object opening on one: the
+    // first-bracket rule read the whole root, and so must the anchor. The raw tab inside a string
+    // must not make the enclosure probe fail.
+    var raw =
+        "Here it is: {\"analysis\": {\"summary\": {\"pr_purpose\": \"a\tb\"}},"
+            + " \"findings\": []}";
+
+    assertEquals(
+        "{\"analysis\": {\"summary\": {\"pr_purpose\": \"a\\tb\"}}, \"findings\": []}",
+        ReviewResponseParser.extractJson(raw, KEYS));
+  }
+
+  @Test
+  void shouldAnchorPastAnEarlierCompleteObjectThatDoesNotEncloseTheAnswer() {
+    var raw = "The config is {\"retries\": 3}; the review:\n{\"findings\": []}";
+
+    assertEquals("{\"findings\": []}", ReviewResponseParser.extractJson(raw, KEYS));
+    assertTrue(parser.parse(raw).findings().isEmpty());
+  }
+
+  @Test
+  void shouldNotTakeAFileSummaryEntryWithAStringSummaryForTheRoot() {
+    // An entry written {"summary": "...", ...} opens on a root key, but the unwrapped root (#850)
+    // encloses it, so the root is what is read.
+    var response =
+        parser.parseSummary(
+            """
+            {"pr_purpose": "p",
+             "file_summaries": [{"summary": "rekeys the cache", "path": "Registry.swift"}]}
+            """);
+
+    assertEquals("p", response.summary().prPurpose());
+    assertEquals("Registry.swift", response.summary().fileSummaries().get(0).path());
+  }
+
+  @Test
+  void shouldFallBackToTheFirstBracketWhenNoObjectOpensOnARootKey() {
+    for (var raw :
+        java.util.List.of(
+            "Here is the list: [1, 2, 3]", "```json\n{\"verdicts\": []}\n```", "no json at all")) {
+      assertEquals(
+          ReviewResponseParser.extractJson(raw), ReviewResponseParser.extractJson(raw, KEYS));
+    }
+    assertEquals("", ReviewResponseParser.extractJson(null, KEYS));
+  }
+
+  @Test
+  void shouldCutTheClosingFenceOfAResponseWrappedWholeInOne() {
+    // Prose after the closing fence is not read as a further document, as before #894.
+    var raw = "```json\n{\"findings\": []}\n```\nSee the {config} block.";
+
+    assertEquals("{\"findings\": []}", ReviewResponseParser.extractJson(raw, KEYS));
+    assertTrue(parser.parse(raw).findings().isEmpty());
+  }
+
+  @Test
+  void shouldNotCutAtTheLastFenceWhenTheBodyOpensOnAnExcerpt() {
+    // A cut response opening on a quoted excerpt: its last marker is the answer's opening fence,
+    // and cutting there, as the whole-fence strip does, would drop the answer.
+    var cut = "```swift\nfunc a() {}\n```\nNow the answer:\n```json\n{\"findings\": [";
+    assertEquals("{\"findings\": [", ReviewResponseParser.extractJson(cut, KEYS));
+    // Closed, the answer's fence stays for readDocuments to skip, rather than being cut.
+    var closed = "```swift\nlet x = 1\n```\n{\"findings\": []}\n```";
+    assertEquals("{\"findings\": []}\n```", ReviewResponseParser.extractJson(closed, KEYS));
+    assertTrue(parser.parse(closed).findings().isEmpty());
+  }
+
+  @Test
+  void shouldNotTakeAPreviousRoundsAnswerQuotedInTheDeliberationForTheAnswer() {
+    // A recap of an earlier round, written as contract-shaped JSON, opens on "findings" too. The
+    // deliberation after it holds braces that do not parse, so it is not the tail of the body, and
+    // its findings must not be published again beside this round's.
+    var previous =
+        "{\"findings\": [{\"risk\": \"high\", \"confidence\": \"high\", \"file\": \"Old.swift\","
+            + " \"line\": 9, \"title\": \"stale\", \"description\": \"from round 1\"}]}";
+    var raw =
+        DeliberationFixture.deliberationQuotingAPreviousAnswer(40_000, previous) + FENCED_ANSWER;
+
+    var response = parser.parse(raw);
+
+    assertEquals(
+        java.util.List.of("CreateIntegrationTests.swift", "Sources/Registry.swift"),
+        response.findings().stream().map(ReviewResponse.Finding::file).toList());
+  }
+
+  @Test
+  void shouldFallBackToTheFirstRootKeyedObjectWhenNoObjectReadsToTheEnd() {
+    // The answer is followed by a brace that does not parse, so nothing reads to the end: the
+    // anchor is the first root-keyed object and readDocuments raises its usual error. The second
+    // candidate joins the first one's broken run and is not walked again.
+    var raw = "Notes [x]. {\"findings\": []} {\"a\": 1} {bad}";
+    assertEquals(
+        "{\"findings\": []} {\"a\": 1} {bad}", ReviewResponseParser.extractJson(raw, KEYS));
+    assertThrows(IllegalArgumentException.class, () -> parser.parse(raw));
+    // A cut object that holds no root key is not the answer either.
+    var cutExcerpt = "[x] {\"findings\": []} {bad} {\"other\": [1,";
+    assertEquals(
+        "{\"findings\": []} {bad} {\"other\": [1,",
+        ReviewResponseParser.extractJson(cutExcerpt, KEYS));
+  }
+
+  @Test
+  void shouldAnchorOnTheFirstDocumentOfASplitAnswerCutInItsSecond() {
+    var raw = "[LOW] {x}\n{\"summary\": {\"pr_purpose\": \"p\"}}\n```json\n{\"findings\": [1,";
+
+    assertEquals(
+        "{\"summary\": {\"pr_purpose\": \"p\"}}\n```json\n{\"findings\": [1,",
+        ReviewResponseParser.extractJson(raw, KEYS));
+  }
+
+  @Test
+  void shouldTreatACutInsideALiteralOrAfterACommaAsTheEndOfTheAnswer() {
+    // Jackson reports these cuts as plain parse errors, not as an end of input: after a comma at
+    // the error's own location, inside a literal at the literal's start. Both are the answer cut,
+    // not a broken excerpt, so a recap earlier in the body must not be preferred to them.
+    var recap = "[x] {\"findings\": []} then {bad}\n";
+    for (var cut :
+        java.util.List.of(
+            "{\"findings\": [{\"risk\": nul",
+            "{\"findings\": [{\"ok\": tr",
+            "{\"findings\": [{\"ok\": fals",
+            "{\"findings\": [1,")) {
+      assertEquals(cut, ReviewResponseParser.extractJson(recap + cut, KEYS), cut);
+    }
+  }
+
+  @Test
+  void shouldNotTreatAFailureWithoutAParseLocationAsACut() {
+    var chars = "{\"a\"".toCharArray();
+    assertFalse(ReviewResponseParser.endsAtTheCut(new java.io.IOException("io"), chars, 0));
+    assertEquals(7, ReviewResponseParser.failureOffset(new java.io.IOException("io"), 7));
+    assertEquals(
+        7,
+        ReviewResponseParser.failureOffset(
+            new com.fasterxml.jackson.core.JsonParseException(null, "no location"), 7));
+    assertFalse(
+        ReviewResponseParser.endsAtTheCut(
+            new com.fasterxml.jackson.core.JsonParseException(null, "no location"), chars, 0));
+  }
+
+  /**
+   * An excerpt quoted in the deliberation that opens {@code depth} nested objects — each a
+   * candidate, each carrying a string with escaped quotes and a backslash and a closed array and
+   * object of its own — and then a long array, and never closes any of them.
+   */
+  private static String unclosedExcerpt(int depth, int arrayLength) {
+    return ("{\"name\": \"a \\\"quoted\\\" \\\\ name\", \"tags\": [\"x\"],"
+                + " \"meta\": {\"k\": 1}, \"layer\": ")
+            .repeat(depth)
+        + "{\"blobs\": ["
+        + "1, ".repeat(arrayLength);
+  }
+
+  @Test
+  void shouldFindTheAnswerPastALargeUnclosedExcerptWithBoundedProbeWork() {
+    // Every object of the excerpt is open where it breaks, at the fence that follows it. Each would
+    // break at the same place, and parsing each of the 200 levels to the break, as the probe did,
+    // is 200 times the excerpt's length; the probe must stay within a small multiple of the body.
+    var raw =
+        (DeliberationFixture.deliberation(20_000)
+                + "The manifest as the PR leaves it:\n```json\n"
+                + unclosedExcerpt(200, 5_000)
+                + "\n```\nThe excerpt above is cut off {sic}.\n"
+                + DeliberationFixture.deliberation(20_000)
+                + FENCED_ANSWER)
+            .strip();
+
+    var search = ReviewResponseParser.findAnswer(raw, KEYS);
+
+    assertEquals(raw.indexOf("{\"findings\": ["), search.start());
+    assertTrue(
+        search.charsParsed() <= 3L * raw.length(),
+        "parsed " + search.charsParsed() + " characters of a " + raw.length() + "-character body");
+    assertEquals(2, parser.parse(raw).findings().size());
+  }
+
+  @Test
+  void shouldNotProbeCandidatesPastTheLastRootKeyedObject() {
+    // A cut excerpt after the last root-keyed object runs to the end of the body; none of its
+    // objects can hold a root key, so none is probed rather than each being parsed to the end.
+    var raw = "[x] {\"findings\": []} {bad} " + unclosedExcerpt(200, 5_000);
+
+    var search = ReviewResponseParser.findAnswer(raw, KEYS);
+
+    assertEquals(-1, search.start());
+    assertTrue(search.charsParsed() < 100, "parsed " + search.charsParsed() + " characters");
+    assertTrue(ReviewResponseParser.extractJson(raw, KEYS).startsWith("{\"findings\": []} {bad}"));
+  }
 }

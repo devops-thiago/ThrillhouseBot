@@ -26,9 +26,11 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Arrays;
 
 /**
- * Fetches the bytes behind the pre-signed URL GitHub redirects an artifact download to.
+ * Fetches the bytes behind the pre-signed URL GitHub redirects an artifact download to — and, for
+ * the opt-in CI-failure review context (#59), the tail of a job log behind the same kind of URL.
  *
  * <p>Separate from {@link GitHubActionsClient} on purpose. That redirect points at blob storage on
  * a different host, and the installation token must not travel there: an {@code Authorization}
@@ -49,6 +51,12 @@ public class ArtifactZipFetcher {
 
   /** Ceiling on a downloaded artifact; a coverage report zip is orders of magnitude smaller. */
   static final int MAX_BYTES = 16 * 1024 * 1024;
+
+  /**
+   * Ceiling on a job log streamed by {@link #fetchTail}. A log is read to its end to find its tail,
+   * so the bound is on bytes scanned, not kept; a failing job's log is almost always far smaller.
+   */
+  static final long MAX_TAIL_SCAN_BYTES = 64L * 1024 * 1024;
 
   private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
   private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
@@ -121,24 +129,86 @@ public class ArtifactZipFetcher {
    * reaches it only through {@link #fetch}, so only {@code https} is ever transferred.
    */
   byte[] transfer(URI location) {
+    return transfer(location, ArtifactZipFetcher::readBounded);
+  }
+
+  /**
+   * The last {@code tailBytes} bytes behind {@code location}, or an empty array when it is unusable
+   * or the download failed — the job-log hop of the opt-in CI-failure review context (#59). A
+   * failing job's log is where its error is, and the error is at the end, so only a sliding window
+   * of the stream is kept; a log longer than {@link #MAX_TAIL_SCAN_BYTES} is abandoned rather than
+   * read without limit. Same https-only policy and same credential-free client as {@link #fetch}.
+   */
+  public byte[] fetchTail(URI location, int tailBytes) {
+    if (location == null || !"https".equalsIgnoreCase(location.getScheme()) || tailBytes <= 0) {
+      Log.debugf("Refusing to download a job log from %s", location);
+      return NOTHING;
+    }
+    return transferTail(location, tailBytes);
+  }
+
+  /** {@link #fetchTail} with its scheme policy applied; see {@link #transfer(URI)}. */
+  byte[] transferTail(URI location, int tailBytes) {
+    return transfer(location, body -> readTail(body, tailBytes));
+  }
+
+  /** How one download's body is consumed. */
+  @FunctionalInterface
+  private interface BodyReader {
+    byte[] read(InputStream body) throws IOException;
+  }
+
+  private byte[] transfer(URI location, BodyReader reader) {
     try {
       var request = HttpRequest.newBuilder(location).timeout(REQUEST_TIMEOUT).GET().build();
       var response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
       if (response.statusCode() / 100 != 2) {
-        Log.debugf("Coverage artifact download returned HTTP %d", response.statusCode());
+        Log.debugf("Download from %s returned HTTP %d", location.getHost(), response.statusCode());
         return NOTHING;
       }
       try (var body = response.body()) {
-        return readBounded(body);
+        return reader.read(body);
       }
     } catch (InterruptedException _) {
       Thread.currentThread().interrupt();
-      Log.debug("Interrupted while downloading coverage artifact");
+      Log.debug("Interrupted while downloading from blob storage");
       return NOTHING;
     } catch (IOException | RuntimeException e) {
-      Log.debugf(e, "Could not download coverage artifact from %s", location.getHost());
+      Log.debugf(e, "Could not download from %s", location.getHost());
       return NOTHING;
     }
+  }
+
+  /**
+   * The last {@code tailBytes} bytes of {@code in}, or nothing when the stream runs past {@link
+   * #MAX_TAIL_SCAN_BYTES}. The window is twice the tail so a full buffer is compacted once per tail
+   * length rather than on every read.
+   */
+  static byte[] readTail(InputStream in, int tailBytes) throws IOException {
+    var window = new byte[tailBytes * 2];
+    var buffer = new byte[8192];
+    var length = 0;
+    long total = 0;
+    int read;
+    while ((read = in.read(buffer)) != -1) {
+      total += read;
+      if (total > MAX_TAIL_SCAN_BYTES) {
+        Log.debugf("Job log exceeds %d bytes; ignoring it", MAX_TAIL_SCAN_BYTES);
+        return NOTHING;
+      }
+      var offset = 0;
+      while (offset < read) {
+        if (length == window.length) {
+          System.arraycopy(window, length - tailBytes, window, 0, tailBytes);
+          length = tailBytes;
+        }
+        var chunk = Math.min(read - offset, window.length - length);
+        System.arraycopy(buffer, offset, window, length, chunk);
+        length += chunk;
+        offset += chunk;
+      }
+    }
+    return Arrays.copyOfRange(window, Math.max(0, length - tailBytes), length);
   }
 
   /**
