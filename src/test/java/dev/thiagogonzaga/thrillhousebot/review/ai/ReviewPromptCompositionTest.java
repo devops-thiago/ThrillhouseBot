@@ -152,6 +152,7 @@ class ReviewPromptCompositionTest {
   @Test
   void theVerifierMonolithIsItsBlocksAndARoutedVerifierCarriesItsCarveOuts() {
     assertEquals(
+        FindingVerifierPrompts.SYSTEM,
         FindingVerifierPrompts.CORE_HEAD
             + FindingVerifierPrompts.CARVE_OUT_MOCK_FIDELITY
             + FindingVerifierPrompts.CORE_HEURISTIC_LIMITATION
@@ -160,8 +161,7 @@ class ReviewPromptCompositionTest {
             + FindingVerifierPrompts.CARVE_OUT_ARTIFACT_REFERENCE
             + FindingVerifierPrompts.CARVE_OUT_PRODUCER_CONSUMER
             + FindingVerifierPrompts.CORE_TAIL
-            + FindingVerifierPrompts.RESPONSE_SCHEMA,
-        FindingVerifierPrompts.SYSTEM);
+            + FindingVerifierPrompts.RESPONSE_SCHEMA);
     for (var dimensions : everyRouting()) {
       var prompt = FindingVerifierPrompts.verifierSystemPrompt(dimensions);
       assertEquals(

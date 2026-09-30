@@ -81,17 +81,27 @@ public record EvalCase(String name, String diff, Spec spec) {
    */
   List<GitHubPullRequestClient.FileDiff> files() {
     var files = new ArrayList<GitHubPullRequestClient.FileDiff>();
-    var matcher = SECTION.matcher(diff);
-    while (matcher.find()) {
+    var lines = diff.split("\n", -1);
+    for (int i = 0; i + 1 < lines.length; i++) {
+      var header = SECTION_HEADER.matcher(lines[i]);
+      if (!header.matches() || !"```diff".equals(lines[i + 1])) {
+        continue;
+      }
+      var patch = new ArrayList<String>();
+      int j = i + 2;
+      while (j < lines.length && !"```".equals(lines[j])) {
+        patch.add(lines[j++]);
+      }
       files.add(
           new GitHubPullRequestClient.FileDiff(
-              matcher.group(1), matcher.group(2), 0, 0, 0, matcher.group(3)));
+              header.group(1), header.group(2), 0, 0, 0, String.join("\n", patch)));
+      i = j;
     }
     return List.copyOf(files);
   }
 
-  private static final Pattern SECTION =
-      Pattern.compile("(?m)^### (\\S+) \\((\\w+)[^)]*\\)\\n```diff\\n(.*?)\\n```", Pattern.DOTALL);
+  /** A section header, {@code ### path (status, +A -D)}. */
+  private static final Pattern SECTION_HEADER = Pattern.compile("### (\\S+) \\((\\w+),[^)]*\\)");
 
   boolean isVerifierCase() {
     return KIND_VERIFIER.equals(spec.kind());
