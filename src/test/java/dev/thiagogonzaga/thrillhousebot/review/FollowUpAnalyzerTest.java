@@ -4803,4 +4803,42 @@ class FollowUpAnalyzerTest {
     assertTrue(
         FollowUpAnalyzer.stillOpenFindings(List.of(), List.of(), List.of(standing)).isEmpty());
   }
+
+  /**
+   * Any reply that is not a lone decline failing the re-check settles the finding, as the reply
+   * hatch always has (an acknowledgement, a deferral, a question): the maintainer engaged.
+   */
+  @Test
+  void earlierRoundReplyThatIsNotADeclineSettlesTheFinding() {
+    assertStands(
+        race(
+            raceBackstop(
+                analyzer,
+                earlierRaceThread("Agreed, will fix in the next PR."),
+                () -> "+counter.bump();")));
+  }
+
+  /**
+   * The id a standing decline carries names nothing to the consumers keyed by id: thread resolution
+   * finds no thread for it, and the learnings capture never reads it as a decline.
+   */
+  @Test
+  void theEarlierRoundIdNamesNoThreadAndNoLearning() {
+    var previous = analyzer.parsePreviousResponses(List.of(RACE_ROUND_JSON)).get(0).findings();
+    var threads = earlierRaceThread(RACE_WRONG_DECLINE);
+
+    var byId = analyzer.matchFindingThreads(previous, threads, BOT_ID);
+    assertEquals(100L, byId.get(1));
+    assertFalse(byId.containsKey(FollowUpAnalyzer.EARLIER_ROUND_ID));
+    assertTrue(
+        analyzer
+            .survivingDeclines(
+                previous,
+                List.of(FollowUpAnalyzer.EARLIER_ROUND_ID),
+                threads,
+                List.of(),
+                BOT_ID,
+                () -> "+counter.bump();")
+            .isEmpty());
+  }
 }

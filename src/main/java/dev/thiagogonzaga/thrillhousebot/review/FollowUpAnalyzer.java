@@ -2566,9 +2566,15 @@ public class FollowUpAnalyzer {
    */
   public static final int EARLIER_ROUND_ID = 0;
 
-  /** Note on the {@code justified} status of an earlier round's decline that stands (#947). */
+  /**
+   * Note on the {@code justified} status of an earlier round's finding a maintainer answered on its
+   * thread (#947). The reply is not classified: whatever it says — a decline, a deferral, a
+   * question — the backstop defers to the human who engaged, as it always has, unless it is a lone
+   * decline that does not hold up. So the note states only that the reply settled it.
+   */
   static final String STANDING_DECLINE_NOTE =
-      "Raised in an earlier review and declined on its review thread; the decline stands.";
+      "Raised in an earlier review and answered by a maintainer on its review thread; the reply"
+          + " settles it.";
 
   /** Note on the {@code unresolved} status of a finding the backstop holds without a reply. */
   static final String HELD_NOTE =
