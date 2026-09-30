@@ -122,6 +122,77 @@ class SummaryAcrossRoundsTest {
   private static final ReviewResponse ROUND_ONE =
       new ReviewResponse(List.of(CRITICAL, HIGH, DOUBLE_CHECK), List.of(), null);
 
+  // #934's shapes. ThrillhouseBot-test#139 (Scala): a HIGH SQL injection and a second finding on
+  // the same line. #145 (Node): a null-body CRITICAL and a LOW whose text restates it, one line.
+
+  private static final String REPO = "app/EventRepository.scala";
+
+  private static final String REPO_PATCH =
+      """
+      @@ -15,0 +15,1 @@
+      +sql"SELECT * FROM events WHERE container = $containerId"      """;
+
+  private static final String SERVER = "api/server.js";
+
+  private static final String SERVER_PATCH =
+      """
+      @@ -32,0 +32,1 @@
+      +const name = req.body.name;      """;
+
+  private static final Map<String, String> PATCHES =
+      Map.of(FILE, PATCH, REPO, REPO_PATCH, SERVER, SERVER_PATCH);
+
+  private static final ReviewResponse.Finding SQL_INJECTION =
+      new ReviewResponse.Finding(
+          "high",
+          "high",
+          REPO,
+          15,
+          "SQL injection via unvalidated container id in findByContainer",
+          "The container id is interpolated into the SQL text of findByContainer without"
+              + " validation, so a crafted container id injects SQL.",
+          "sql\"SELECT * FROM events WHERE container = $containerId\"",
+          null);
+
+  private static final ReviewResponse.Finding UNVALIDATED_ID =
+      new ReviewResponse.Finding(
+          "medium",
+          "high",
+          REPO,
+          15,
+          "Container id is not validated in findByContainer",
+          "findByContainer accepts any container id without validation before it reaches the SQL"
+              + " text.",
+          "sql\"SELECT * FROM events WHERE container = $containerId\"",
+          null);
+
+  private static final ReviewResponse.Finding NULL_BODY =
+      new ReviewResponse.Finding(
+          "critical",
+          "high",
+          SERVER,
+          32,
+          "Null request body crashes the server",
+          "req.body is dereferenced without a null check, so a request with no JSON body throws"
+              + " and crashes the server process.",
+          "const name = req.body.name;",
+          null);
+
+  private static final ReviewResponse.Finding NULL_BODY_LOW =
+      new ReviewResponse.Finding(
+          "low",
+          "high",
+          SERVER,
+          32,
+          "req.body.name read without a null check",
+          "req.body is dereferenced without a null check when a request has no JSON body.",
+          "const name = req.body.name;",
+          null);
+
+  private static final ReviewResponse SHAPES_ROUND =
+      new ReviewResponse(
+          List.of(SQL_INJECTION, UNVALIDATED_ID, NULL_BODY, NULL_BODY_LOW), List.of(), null);
+
   private final ObjectMapper mapper = new ObjectMapper();
 
   private final GitHubCommentClient commentClient = mock(GitHubCommentClient.class);
@@ -377,6 +448,224 @@ class SummaryAcrossRoundsTest {
         PrSummaryGenerator.ZERO_ISSUES_MESSAGE, VerdictBuilder.checkSummaryForResult(approved));
   }
 
+  // #934: the carried set is the still-open set by identity.
+
+  private static ReviewResponse allUnresolved(List<ReviewResponse.Finding> raised, int count) {
+    var statuses = new ArrayList<ReviewResponse.PreviousFindingStatus>();
+    for (var id = 1; id <= count; id++) {
+      statuses.add(new ReviewResponse.PreviousFindingStatus(id, "unresolved", "still there"));
+    }
+    return new ReviewResponse(raised, statuses, null);
+  }
+
+  /** The Risk Assessment, "including N" line and "Still present" row all name {@code open}. */
+  private static void assertOpenCount(String body, int open) {
+    assertTrue(body.contains("| ⚠️ Still present | " + open + " |"), body);
+    assertTrue(body.contains(PrSummaryGenerator.carriedCountNote(open)), body);
+  }
+
+  @Test
+  void distinctFindingsOnOneLineAreBothCarriedWhenTheModelReportsThem() {
+    // The precondition that made #917's dedupe fold them: they read as one defect.
+    assertTrue(FollowUpAnalyzer.isSameFinding(UNVALIDATED_ID, SQL_INJECTION));
+    assertTrue(FollowUpAnalyzer.isSameFinding(NULL_BODY_LOW, NULL_BODY));
+    var first = publishFirstRound(SHAPES_ROUND);
+    assertRisk(first, 1, 1, 1, 1);
+
+    var result =
+        builder.build(
+            followUp(List.of(SHAPES_ROUND), List.of()),
+            allUnresolved(List.of(), 4),
+            CI_CLEAR,
+            plan);
+    var edited = publishFollowUp(result, first);
+
+    assertEquals(4, result.unresolvedPreviousCount());
+    assertEquals(result.unresolvedPreviousCount(), result.openPreviousFindings().size());
+    assertRisk(edited, 1, 1, 1, 1);
+    assertOpenCount(edited, 4);
+    var keyFindings = section(edited, "### Key Findings");
+    for (var finding : SHAPES_ROUND.findings()) {
+      assertTrue(keyFindings.contains(finding.title()), edited);
+    }
+    assertTrue(
+        keyFindings.contains(
+            NULL_BODY.title() + " (`" + SERVER + ":32`) " + PrSummaryGenerator.CARRIED_NOTE),
+        edited);
+  }
+
+  @Test
+  void distinctFindingsOneRoundRaisedAreEachHeldWhenTheModelSaysNothing() {
+    var first = publishFirstRound(SHAPES_ROUND);
+
+    var result =
+        builder.build(
+            followUp(List.of(SHAPES_ROUND), List.of()),
+            new ReviewResponse(List.of(), List.of(), null),
+            CI_CLEAR,
+            plan);
+    var edited = publishFollowUp(result, first);
+
+    // Two threads each: the backstop must not fold a round's own findings into one hold.
+    assertEquals(4, result.unresolvedPreviousCount());
+    assertEquals(ReviewState.COMMENT, result.reviewState());
+    assertRisk(edited, 1, 1, 1, 1);
+    assertOpenCount(edited, 4);
+    assertTrue(section(edited, "### Key Findings").contains(SQL_INJECTION.title()), edited);
+    assertTrue(section(edited, "### Key Findings").contains(NULL_BODY.title()), edited);
+  }
+
+  @Test
+  void aReRaiseRatedHigherLaterIsHeldAtItsHigherSeverity() {
+    var reRated =
+        new ReviewResponse.Finding(
+            "critical",
+            "high",
+            SERVER,
+            32,
+            "Missing null check on req.body crashes the server",
+            NULL_BODY_LOW.description(),
+            NULL_BODY_LOW.suggestionOld(),
+            null);
+    assertTrue(FollowUpAnalyzer.isSameFinding(reRated, NULL_BODY_LOW));
+    var roundOne = new ReviewResponse(List.of(NULL_BODY_LOW), List.of(), null);
+    var roundTwo = allUnresolved(List.of(reRated), 1);
+    var first = publishFirstRound(roundOne);
+    var second =
+        publishFollowUp(
+            builder.build(followUp(List.of(roundOne), List.of()), roundTwo, CI_CLEAR, plan), first);
+    assertRisk(second, 1, 0, 0, 1);
+
+    // Round three says nothing about either: the backstop holds the defect once, and lists it as
+    // the critical it was re-rated to rather than the low it was first raised as.
+    var result =
+        builder.build(
+            followUp(List.of(roundTwo, roundOne), List.of()),
+            new ReviewResponse(List.of(), List.of(), null),
+            CI_CLEAR,
+            plan);
+    var third = publishFollowUp(result, second);
+
+    assertEquals(1, result.unresolvedPreviousCount());
+    assertRisk(third, 1, 0, 0, 0);
+    assertOpenCount(third, 1);
+    assertTrue(section(third, "### Key Findings").contains(reRated.title()), third);
+  }
+
+  @Test
+  void theKeyFindingsCapNeverCutsACarriedFindingForALowerOrEqualNewOne() {
+    var first = publishFirstRound();
+    var fresh = new ArrayList<ReviewResponse.Finding>();
+    for (var i = 0; i < 6; i++) {
+      fresh.add(
+          new ReviewResponse.Finding(
+              "high",
+              "high",
+              FILE,
+              100 + i,
+              "Fresh high finding " + i,
+              "A distinct defect raised this round, number " + i + ".",
+              null,
+              null));
+    }
+    fresh.add(
+        new ReviewResponse.Finding(
+            "medium", "high", FILE, 200, "Fresh medium finding", "A medium one.", null, null));
+
+    var result =
+        builder.build(
+            followUp(List.of(ROUND_ONE), List.of()), allUnresolved(fresh, 3), CI_CLEAR, plan);
+    var edited = publishFollowUp(result, first);
+
+    assertRisk(edited, 1, 7, 2, 0);
+    assertOpenCount(edited, 3);
+    var keyFindings = section(edited, "### Key Findings");
+    assertEquals(ReviewResult.KEY_FINDINGS_COUNT, keyFindings.split("\n- ").length - 1, edited);
+    assertTrue(
+        keyFindings.contains(
+            CRITICAL.title() + " (`" + FILE + ":10`) " + PrSummaryGenerator.CARRIED_NOTE),
+        edited);
+    // At equal severity the carried high outranks the round's own.
+    assertTrue(
+        keyFindings.contains(
+            HIGH.title() + " (`" + FILE + ":20`) " + PrSummaryGenerator.CARRIED_NOTE),
+        edited);
+    assertFalse(keyFindings.contains("Fresh medium finding"), edited);
+    assertTrue(keyFindings.indexOf(HIGH.title()) < keyFindings.indexOf("Fresh high finding"));
+  }
+
+  /**
+   * ThrillhouseBot-test#146 (Rust), round three: the round re-raised findings still open from
+   * earlier rounds, the summary kept the re-raises, dropped the originals, lost every "(open since
+   * an earlier review)" tag and said "including 4" beside a larger "Still present".
+   */
+  @Test
+  void threeRoundsKeepEveryCarriedFindingAndItsTagWhenTheRoundReRaisesThem() {
+    var first = publishFirstRound();
+
+    var roundTwo = allUnresolved(List.of(NEW_IN_ROUND_TWO), 3);
+    var second = builder.build(followUp(List.of(ROUND_ONE), List.of()), roundTwo, CI_CLEAR, plan);
+    var secondBody = publishFollowUp(second, first);
+    assertRisk(secondBody, 1, 1, 2, 0);
+    assertOpenCount(secondBody, 3);
+
+    // Round three reports on round two, re-raises HIGH exactly (re-rated medium) and CRITICAL
+    // reworded a line lower. Round one's findings are held by the backstop.
+    var exactReRaise =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            FILE,
+            HIGH.line(),
+            HIGH.title(),
+            "Reworded, same defect.",
+            HIGH.suggestionOld(),
+            null);
+    var driftedReRaise =
+        new ReviewResponse.Finding(
+            "critical",
+            "high",
+            FILE,
+            CRITICAL.line() + 1,
+            "Query built by concatenating request input",
+            "Request input is concatenated into the SQL string.",
+            CRITICAL.suggestionOld(),
+            null);
+    var roundThree = allUnresolved(List.of(exactReRaise, driftedReRaise), 1);
+    var third =
+        builder.build(
+            followUp(List.of(roundTwo, ROUND_ONE), List.of()), roundThree, CI_CLEAR, plan);
+    var thirdBody = publishFollowUp(third, secondBody);
+
+    assertEquals(4, third.unresolvedPreviousCount());
+    assertEquals(third.unresolvedPreviousCount(), third.openPreviousFindings().size());
+    assertOpenCount(thirdBody, 4);
+    // Four still open plus two raised this round, one of which is the same finding again: five,
+    // the exact re-raise listed once and at the higher of its two ratings.
+    assertRisk(thirdBody, 2, 1, 2, 0);
+    var keyFindings = section(thirdBody, "### Key Findings");
+    assertTrue(
+        keyFindings.contains(
+            CRITICAL.title() + " (`" + FILE + ":10`) " + PrSummaryGenerator.CARRIED_NOTE),
+        thirdBody);
+    assertTrue(
+        keyFindings.contains(
+            "HIGH:** " + HIGH.title() + " (`" + FILE + ":20`) " + PrSummaryGenerator.CARRIED_NOTE),
+        thirdBody);
+    assertTrue(
+        keyFindings.contains(
+            NEW_IN_ROUND_TWO.title() + " (`" + FILE + ":40`) " + PrSummaryGenerator.CARRIED_NOTE),
+        thirdBody);
+    assertTrue(keyFindings.contains(driftedReRaise.title() + " (`" + FILE + ":11`)\n"), thirdBody);
+    assertTrue(
+        section(thirdBody, "### Things to double-check")
+            .contains(DOUBLE_CHECK.title() + " (`" + FILE + ":30`) "),
+        thirdBody);
+    assertTrue(
+        section(thirdBody, "### Things to double-check").contains(PrSummaryGenerator.CARRIED_NOTE),
+        thirdBody);
+  }
+
   /** The body of the review the publisher posts for {@code result}; the latest one posted. */
   private String postedReviewBody(ReviewResult result) {
     publisher.postReview(
@@ -398,8 +687,13 @@ class SummaryAcrossRoundsTest {
 
   /** Round one: a first review, which creates the summary comment. Returns the posted body. */
   private String publishFirstRound() {
+    return publishFirstRound(ROUND_ONE);
+  }
+
+  /** Round one raising {@code findings}. Returns the posted body. */
+  private String publishFirstRound(ReviewResponse findings) {
     var ctx = context(List.of(), List.of(), true, false);
-    var result = builder.build(ctx, ROUND_ONE, CI_CLEAR, plan);
+    var result = builder.build(ctx, findings, CI_CLEAR, plan);
     assertTrue(publisher.publishSummary("auth", "o", "r", 1, result, false));
     var captor = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
     verify(commentClient)
@@ -441,9 +735,10 @@ class SummaryAcrossRoundsTest {
     for (var round : priorRounds) {
       jsons.add(mapper.valueToTree(round).toString());
     }
-    var file = new FileDiff(FILE, "modified", 4, 0, 4, PATCH);
+    var files = new ArrayList<FileDiff>();
+    PATCHES.forEach((path, patch) -> files.add(new FileDiff(path, "modified", 4, 0, 4, patch)));
     return new ReviewContextLoader.ReviewContext(
-        List.of(file),
+        files,
         "",
         "",
         0,
@@ -462,8 +757,8 @@ class SummaryAcrossRoundsTest {
         "",
         "",
         "",
-        List.of(file),
-        () -> new DiffLineResolver(Map.of(FILE, PATCH)),
+        files,
+        () -> new DiffLineResolver(PATCHES),
         null,
         conversation,
         List.of());

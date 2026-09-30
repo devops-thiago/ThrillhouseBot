@@ -178,8 +178,9 @@ public class PrSummaryGenerator {
     // The nudge keys off this round (see LargePrNudge) and stays off while an earlier finding is
     // open (#933); every other section describes the pull request as it stands, earlier rounds'
     // open findings included (#917).
-    var result = currentState(round);
-    var carried = identitySet(round.openPreviousFindings());
+    var state = currentState(round);
+    var result = state.result();
+    var carried = state.carried();
     var sb = new StringBuilder();
     sb.append(SUMMARY_HEADING).append("\n\n");
 
@@ -228,6 +229,15 @@ public class PrSummaryGenerator {
   }
 
   /**
+   * What the summary renders: {@code result}, whose findings and risk counts cover the pull request
+   * as it stands, and {@code carried}, the entries among them that are open since an earlier review
+   * (by identity, so a carried finding is told apart from an equal new one). {@code carried} has
+   * exactly one entry per earlier finding still open, so the "including N" line always equals the
+   * still-open set the "Still present" count is taken over.
+   */
+  record CurrentState(ReviewResult result, Set<Finding> carried) {}
+
+  /**
    * The result the summary renders: this round's findings followed by the earlier rounds' findings
    * still open, with the risk counts taken over both. The summary comment is edited in place every
    * round (#868) and nothing from the earlier render survives the edit, so a render of this round
@@ -235,45 +245,102 @@ public class PrSummaryGenerator {
    * comment's status table counted it as still present (#917). The counts and lists are merged
    * here, deterministically, rather than asked of the summary call, so its input stays this round's
    * findings. {@code round} is returned as-is when nothing earlier is open.
+   *
+   * <p>Every still-open finding is listed; none is dropped for resembling another (#934). The only
+   * fold is the same finding raised again by this round — the same file, line and title ({@link
+   * #reRaises}) — which is listed once, as the round's entry, marked as open since an earlier
+   * review, and at the higher of the two severities. Each round finding absorbs at most one earlier
+   * one, so the carried count cannot fall below the still-open set.
    */
-  static ReviewResult currentState(ReviewResult round) {
+  static CurrentState currentState(ReviewResult round) {
     var open = round.openPreviousFindings();
     if (open.isEmpty()) {
-      return round;
+      return new CurrentState(round, Set.of());
     }
-    var findings = new ArrayList<Finding>(round.findings().size() + open.size());
-    findings.addAll(round.findings());
-    findings.addAll(open);
+    var own = round.findings();
+    var findings = new ArrayList<Finding>(own.size() + open.size());
+    findings.addAll(own);
+    var absorbed = new boolean[own.size()];
+    Set<Finding> carried = Collections.newSetFromMap(new IdentityHashMap<>());
+    for (var earlier : open) {
+      var at = reRaisedAt(own, absorbed, earlier);
+      if (at < 0) {
+        findings.add(earlier);
+        carried.add(earlier);
+        continue;
+      }
+      absorbed[at] = true;
+      var raised = own.get(at);
+      var kept =
+          earlier.risk().compareTo(raised.risk()) < 0 ? withRisk(raised, earlier.risk()) : raised;
+      findings.set(at, kept);
+      carried.add(kept);
+    }
     var counts = new EnumMap<RiskLevel, Integer>(RiskLevel.class);
     for (Finding f : findings) {
       counts.merge(f.risk(), 1, Integer::sum);
     }
     var highest = findings.stream().map(Finding::risk).min(Comparator.naturalOrder()).orElse(null);
-    return new ReviewResult(
-        findings,
-        counts.getOrDefault(RiskLevel.CRITICAL, 0),
-        counts.getOrDefault(RiskLevel.HIGH, 0),
-        counts.getOrDefault(RiskLevel.MEDIUM, 0),
-        counts.getOrDefault(RiskLevel.LOW, 0),
-        highest,
-        round.reviewState(),
-        round.isFirstReview(),
-        round.summaryMarkdown(),
-        round.previousStatuses(),
-        round.offendingCiChecks(),
-        round.omittedFiles(),
-        round.ciUnreadable(),
-        round.requiredContextsKnown(),
-        round.truncation(),
-        round.blockingWithheldByConfidence(),
-        open);
+    var result =
+        new ReviewResult(
+            findings,
+            counts.getOrDefault(RiskLevel.CRITICAL, 0),
+            counts.getOrDefault(RiskLevel.HIGH, 0),
+            counts.getOrDefault(RiskLevel.MEDIUM, 0),
+            counts.getOrDefault(RiskLevel.LOW, 0),
+            highest,
+            round.reviewState(),
+            round.isFirstReview(),
+            round.summaryMarkdown(),
+            round.previousStatuses(),
+            round.offendingCiChecks(),
+            round.omittedFiles(),
+            round.ciUnreadable(),
+            round.requiredContextsKnown(),
+            round.truncation(),
+            round.blockingWithheldByConfidence(),
+            open);
+    return new CurrentState(result, carried);
   }
 
-  /** The findings by identity, so a carried finding is told apart from an equal new one. */
-  private static Set<Finding> identitySet(List<Finding> findings) {
-    Set<Finding> set = Collections.newSetFromMap(new IdentityHashMap<>());
-    set.addAll(findings);
-    return set;
+  /** Position of the first round finding not yet absorbed that re-raises {@code earlier}, or -1. */
+  private static int reRaisedAt(List<Finding> own, boolean[] absorbed, Finding earlier) {
+    for (var i = 0; i < own.size(); i++) {
+      if (!absorbed[i] && reRaises(own.get(i), earlier)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Whether a round's finding is an earlier finding raised again, by identity: the same file, the
+   * same line and the same title (ignoring case and surrounding space). Deliberately not the
+   * tolerant {@link FollowUpAnalyzer#isSameFinding}: two distinct findings a line apart, or a
+   * critical whose text overlaps a low, read as alike to it, and folding them dropped an open
+   * finding from the summary (#934). A reworded or drifted re-raise is listed as its own entry,
+   * which is what it is on the pull request: a second open thread. A finding with no title has
+   * nothing to match on and is never folded.
+   */
+  static boolean reRaises(Finding raised, Finding earlier) {
+    return raised.line() == earlier.line()
+        && FilePaths.same(raised.file(), earlier.file())
+        && raised.title() != null
+        && earlier.title() != null
+        && !raised.title().isBlank()
+        && raised.title().strip().equalsIgnoreCase(earlier.title().strip());
+  }
+
+  private static Finding withRisk(Finding finding, RiskLevel risk) {
+    return new Finding(
+        risk,
+        finding.confidence(),
+        finding.file(),
+        finding.line(),
+        finding.title(),
+        finding.description(),
+        finding.suggestionOld(),
+        finding.suggestionNew());
   }
 
   /** Suffix on a Key Findings or double-check bullet for a finding raised by an earlier review. */
@@ -325,7 +392,7 @@ public class PrSummaryGenerator {
   private static void appendFindingsOrCelebration(
       StringBuilder sb, ReviewResult result, Set<Finding> carried) {
     if (result.hasIssues()) {
-      var keyFindings = result.keyFindings();
+      var keyFindings = result.keyFindings(carried::contains);
       if (!keyFindings.isEmpty()) {
         sb.append("### Key Findings\n");
         for (Finding f : keyFindings) {

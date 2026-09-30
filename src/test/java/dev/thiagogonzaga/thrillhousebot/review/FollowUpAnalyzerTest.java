@@ -4528,14 +4528,13 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
-  void stillOpenFindingsListsTheModelsUnresolvedThenTheBackstopsHoldsOnceEach() {
+  void stillOpenFindingsListsTheModelsUnresolvedThenEveryBackstopHoldByIdentity() {
     var first = openFinding(10, "Missing null check on the account", "The account may be absent.");
     var second = openFinding(40, "Retry loop never backs off", "The loop spins on failure.");
     var third = openFinding(70, "Cache key ignores the tenant", "Two tenants share entries.");
     var held = openFinding(100, "Timeout is never applied", "The client waits forever.");
     var restatedHold =
         openFinding(11, "Missing null check on account", "The account may be absent.");
-    var newFinding = openFinding(71, "Cache key ignores tenant", "Two tenants share entries.");
 
     var open =
         FollowUpAnalyzer.stillOpenFindings(
@@ -4544,18 +4543,26 @@ class FollowUpAnalyzerTest {
                 new ReviewResponse.PreviousFindingStatus(3, "unresolved", "re-raised this round"),
                 new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed"),
                 new ReviewResponse.PreviousFindingStatus(1, "UNRESOLVED", "still there"),
+                new ReviewResponse.PreviousFindingStatus(1, "unresolved", "reported twice"),
                 new ReviewResponse.PreviousFindingStatus(0, "unresolved", "no such finding"),
                 new ReviewResponse.PreviousFindingStatus(9, "unresolved", "no such finding")),
             List.of(
                 new FollowUpAnalyzer.HeldPrevious(
                     new ReviewResult.PreviousFindingStatus(1, "unresolved", "held"), held),
                 new FollowUpAnalyzer.HeldPrevious(
-                    new ReviewResult.PreviousFindingStatus(2, "unresolved", "held"), restatedHold)),
-            List.of(newFinding));
+                    new ReviewResult.PreviousFindingStatus(2, "unresolved", "held"),
+                    restatedHold)));
 
-    // The resolved one and the ids naming nothing are gone; the re-raise is listed once, as the
-    // round's own finding; the hold restating a kept finding is not listed twice.
-    assertEquals(List.of(Finding.fromAiResponse(first), Finding.fromAiResponse(held)), open);
+    // The resolved one and the ids naming nothing are gone; an id reported twice is one finding.
+    // Every hold is listed, the one that reads like a kept finding included: it is its own thread
+    // and the "Still present" count names it (#934).
+    assertEquals(
+        List.of(
+            Finding.fromAiResponse(first),
+            Finding.fromAiResponse(third),
+            Finding.fromAiResponse(held),
+            Finding.fromAiResponse(restatedHold)),
+        open);
   }
 
   @Test
