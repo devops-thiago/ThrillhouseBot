@@ -236,6 +236,10 @@ public class VerdictBuilder {
     effectiveStatuses =
         followUpAnalyzer.clearNamedInConversation(
             ctx.previousFindingsList(), effectiveStatuses, ctx.conversationComments(), botIdentity);
+    // "Still present" counts these statuses and the summary lists one finding per id, so an id
+    // reported unresolved twice, or one naming no finding, must not be counted either (#934).
+    effectiveStatuses =
+        FollowUpAnalyzer.withoutPhantomUnresolved(ctx.previousFindingsList(), effectiveStatuses);
     var effectiveResponse =
         new ReviewResponse(aiResponse.findings(), effectiveStatuses, aiResponse.summary());
     var unresolvedPrevious =
@@ -257,11 +261,11 @@ public class VerdictBuilder {
     var backstopUnresolved = held.stream().map(FollowUpAnalyzer.HeldPrevious::status).toList();
     // The summary is edited in place every round (#868), so it must describe the pull request as
     // it stands, not only this round: every earlier finding still open, beside the new ones (#917).
-    // Taken from the same statuses and holds the gate and the "Still present" count use, so the
-    // lists and that count cannot disagree about what is open.
+    // Taken from the same statuses and holds the gate and the "Still present" count use, one entry
+    // per open finding by identity, so the lists and that count cannot disagree about what is open
+    // (#934).
     var openPrevious =
-        FollowUpAnalyzer.stillOpenFindings(
-            ctx.previousFindingsList(), effectiveStatuses, held, aiResponse.findings());
+        FollowUpAnalyzer.stillOpenFindings(ctx.previousFindingsList(), effectiveStatuses, held);
     return buildResult(
         effectiveResponse,
         ctx.isFirstVisibleReview(),
