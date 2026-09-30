@@ -44,12 +44,16 @@ import java.util.Optional;
  * and the "all low confidence" round where every finding was routed to "Things to double-check" and
  * the diff itself still shows nothing.
  *
- * <p>Deliberately keyed off <em>this</em> round's findings only, never the previous-findings
- * statuses or the unresolved count. Issue #455 records that a round returning zero findings
- * corrupts the previous-findings context — the bot's own review body is fed back as a pseudo
- * finding and the unresolved count drifts upward — and a zero-finding round is precisely the round
- * this heuristic fires on. Reading either signal here would make the nudge appear or vanish on a
- * phantom. The findings list carries no such defect: it is rebuilt from this round's model calls.
+ * <p>The trigger reads <em>this</em> round's findings, and the note says what this round's inline
+ * output was. It does not fire on a follow-up round while an earlier finding is still open (#933):
+ * the note exists to question a clean result, and a pull request with open findings has not come
+ * back clean. "Opened no inline findings" beside open threads and a CHANGES_REQUESTED review read
+ * as a claim that the pull request has nothing open. Open is {@link
+ * ReviewResult#unresolvedPreviousCount()}, the count the review body and the delta comment state
+ * and the summary's carried list (#917) is built from. Issue #455's phantom — the bot's own review
+ * body fed back as a pseudo finding, inflating that count on zero-finding rounds — is closed by
+ * {@code FollowUpAnalyzer.isSelfAuthoredStatusBody}; should a phantom ever return, it suppresses an
+ * advisory note, the harmless direction.
  *
  * <p>Advisory only. The APPROVE gates in {@link VerdictBuilder} are untouched: holding a merge on
  * the suspicion that a clean review might be wrong would block every large PR that really is clean,
@@ -94,7 +98,8 @@ record LargePrNudge(boolean enabled, int minFiles, int minChangedLines) {
 
   /**
    * The note for this review, or {@link Optional#empty()} when it does not apply — the feature is
-   * off, the PR is under both thresholds, or at least one finding opened an inline thread.
+   * off, the PR is under both thresholds, at least one finding opened an inline thread, or an
+   * earlier round's finding is still open.
    *
    * <p>{@code filesChanged}/{@code additions}/{@code deletions} are the PR-level totals the summary
    * already renders under "Changes Overview" (GitHub's own, or the diff-derived fallback), so the
@@ -103,7 +108,8 @@ record LargePrNudge(boolean enabled, int minFiles, int minChangedLines) {
   Optional<String> render(int filesChanged, int additions, int deletions, ReviewResult result) {
     if (!enabled
         || !overThreshold(filesChanged, additions, deletions)
-        || opensInlineThread(result)) {
+        || opensInlineThread(result)
+        || result.unresolvedPreviousCount() > 0) {
       return Optional.empty();
     }
     var sb = new StringBuilder();

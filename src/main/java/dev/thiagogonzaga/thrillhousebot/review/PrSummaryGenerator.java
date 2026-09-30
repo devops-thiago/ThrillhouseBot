@@ -175,8 +175,9 @@ public class PrSummaryGenerator {
       List<ChangedFile> changedFiles,
       ReviewResponse.Summary aiSummary,
       ReviewResult round) {
-    // The nudge keys off this round's findings alone (see LargePrNudge); every other section
-    // describes the pull request as it stands, earlier rounds' open findings included (#917).
+    // The nudge keys off this round (see LargePrNudge) and stays off while an earlier finding is
+    // open (#933); every other section describes the pull request as it stands, earlier rounds'
+    // open findings included (#917).
     var result = currentState(round);
     var carried = identitySet(round.openPreviousFindings());
     var sb = new StringBuilder();
