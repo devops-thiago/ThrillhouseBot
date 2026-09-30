@@ -52,7 +52,7 @@ final class SecretScanner {
   record Hit(SecurityRule rule, String literal, String keyName) {}
 
   /** Characters of a known-format value shown before the ellipsis; its prefix names the format. */
-  private static final int REDACTED_PREFIX = 4;
+  static final int REDACTED_PREFIX = 4;
 
   /**
    * Lines longer than this are skipped by the generic assignment rule, which is the one expression

@@ -909,6 +909,37 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void nothingIsSupersededOnAnUnchangedHead() {
+    // #932: the same vanished finding as above, but the head is the one its round reviewed. The
+    // anchor failing to match is a location problem there, never a fix, so it stays open — and so
+    // does a "superseded" that arrived from anywhere else.
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10)));
+    var statuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"),
+            new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still"),
+            new ReviewResponse.PreviousFindingStatus(3, "Superseded", "model said so"));
+
+    var superseded = analyzer.supersedeVanished(PREVIOUS_JSON, statuses, resolver);
+    assertEquals("superseded", superseded.get(1).status(), "the head moved: superseded");
+
+    var held = FollowUpAnalyzer.holdSupersededOnUnchangedHead(superseded, true);
+    assertEquals(3, held.size());
+    assertSame(superseded.get(0), held.get(0), "a status that is not superseded passes through");
+    for (var status : held.subList(1, 3)) {
+      assertEquals("unresolved", status.status());
+      assertEquals(FollowUpAnalyzer.HEAD_UNCHANGED_NOTE, status.note());
+    }
+    assertEquals(List.of(1, 2, 3), held.stream().map(s -> s.id()).toList());
+    assertTrue(held.stream().noneMatch(s -> "superseded".equalsIgnoreCase(s.status())));
+
+    assertSame(
+        superseded,
+        FollowUpAnalyzer.holdSupersededOnUnchangedHead(superseded, false),
+        "a head that moved, or one nobody compared, leaves the supersede pass as it was");
+  }
+
+  @Test
   void supersedeVanishedShouldNotSupersedeASettledId() {
     // Finding #2's code vanished, but a newer round already closed it (settled). It must not be
     // rewritten to superseded, or hasSupersededPrevious would pin on and re-post the summary every

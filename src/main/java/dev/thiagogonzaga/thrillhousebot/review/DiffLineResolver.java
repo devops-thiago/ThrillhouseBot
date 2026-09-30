@@ -89,6 +89,11 @@ public final class DiffLineResolver {
    * (that is the drift the check exists to tolerate), so this errs toward holding — a needless
    * APPROVE→COMMENT, the safe direction for a downgrade-only backstop, never the under-block.
    *
+   * <p>An anchor the security scan redacted ({@code [redacted: zKXq…, 40 chars]} where a quoted
+   * credential stood) is compared in that redacted form ({@link RedactedAnchor}): the diff still
+   * carries the literal, and comparing the stored text verbatim read every finding that quoted a
+   * secret as gone on the very next round, even on an unchanged head (#932).
+   *
    * <p>When the finding has no anchor (a suggestion-less finding, or one whose suggestion was
    * stripped), it falls back to checking whether the file has any changes in the diff. This leans
    * toward holding (returning true) for the downgrade-only backstop, avoiding the drift-fragile
@@ -98,7 +103,7 @@ public final class DiffLineResolver {
     if (file == null) {
       return false;
     }
-    List<String> anchorLines = normalizedAnchorLines(anchor);
+    List<Predicate<String>> anchorLines = normalizedAnchorLines(anchor);
     if (anchorLines.isEmpty()) {
       return presentInFileOrVariant(rightSideLinesByFile, file, lines -> true);
     }
@@ -135,7 +140,7 @@ public final class DiffLineResolver {
   }
 
   /** Whether {@code needle} appears as a contiguous, in-order run within {@code haystack}. */
-  private static boolean containsContiguous(List<String> haystack, List<String> needle) {
+  private static boolean containsContiguous(List<String> haystack, List<Predicate<String>> needle) {
     for (int i = 0; i + needle.size() <= haystack.size(); i++) {
       if (matchesAt(haystack, i, needle)) {
         return true;
@@ -144,9 +149,10 @@ public final class DiffLineResolver {
     return false;
   }
 
-  private static boolean matchesAt(List<String> haystack, int offset, List<String> needle) {
+  private static boolean matchesAt(
+      List<String> haystack, int offset, List<Predicate<String>> needle) {
     for (int j = 0; j < needle.size(); j++) {
-      if (!haystack.get(offset + j).equals(needle.get(j))) {
+      if (!needle.get(j).test(haystack.get(offset + j))) {
         return false;
       }
     }
@@ -242,16 +248,21 @@ public final class DiffLineResolver {
     return resolved != null ? resolved : new TreeSet<>();
   }
 
-  /** Trimmed, non-blank lines of an anchor (a finding's {@code suggestion_old}). */
-  private static List<String> normalizedAnchorLines(String anchor) {
+  /**
+   * Trimmed, non-blank lines of an anchor (a finding's {@code suggestion_old}), each as a matcher
+   * for a trimmed right-side line: plain equality, or — for a line the security scan redacted — the
+   * redacted form ({@link RedactedAnchor}), so a finding that quoted a secret is still located
+   * (#932).
+   */
+  private static List<Predicate<String>> normalizedAnchorLines(String anchor) {
     if (anchor == null || anchor.isBlank()) {
       return List.of();
     }
-    var lines = new ArrayList<String>();
+    var lines = new ArrayList<Predicate<String>>();
     for (String raw : anchor.split("\n", -1)) {
       String stripped = raw.strip();
       if (!stripped.isEmpty()) {
-        lines.add(stripped);
+        lines.add(RedactedAnchor.lineMatcher(stripped));
       }
     }
     return lines;
@@ -300,7 +311,7 @@ public final class DiffLineResolver {
     if (file == null) {
       return Optional.empty();
     }
-    List<String> anchorLines = normalizedAnchorLines(suggestionOld);
+    List<Predicate<String>> anchorLines = normalizedAnchorLines(suggestionOld);
     if (anchorLines.size() < 2) {
       return Optional.empty();
     }
