@@ -39,6 +39,9 @@ import org.mockito.ArgumentCaptor;
 
 class ReviewLearningsTest {
 
+  /** Credential-shaped values built at run time, so no real-format literal sits in the source. */
+  private static final FakeCredentials FAKE = new FakeCredentials(38);
+
   private final ReviewLearningService store = mock(ReviewLearningService.class);
   private final GitHubInstallationClient installationClient = mock(GitHubInstallationClient.class);
   private final FollowUpAnalyzer analyzer = new FollowUpAnalyzer(new ObjectMapper());
@@ -183,13 +186,13 @@ class ReviewLearningsTest {
 
   @Test
   void aStoredCredentialIsNeverReplayed() {
-    var leaked = view(1, ReviewLearning.KIND_CONVENTION, null, "use ghp_abcdefghijklmnop1234", 0);
+    var leaked = view(1, ReviewLearning.KIND_CONVENTION, null, "use " + FAKE.githubToken(), 0);
 
     var leakedTitle =
         new LearningView(
             2,
             ReviewLearning.KIND_DECLINE,
-            "hardcoded AKIAABCDEFGHIJKLMNOP",
+            "hardcoded " + FAKE.awsAccessKey(),
             null,
             "a/B.java",
             "fine",
@@ -206,7 +209,7 @@ class ReviewLearningsTest {
             ReviewLearning.KIND_DECLINE,
             "t",
             null,
-            "keys/ghp_abcdefghijklmnop1234.txt",
+            "keys/" + FAKE.githubToken() + ".txt",
             "fine",
             1,
             "u",

@@ -35,6 +35,9 @@ import org.junit.jupiter.api.Test;
 @QuarkusTest
 class ReviewLearningServiceTest {
 
+  /** Credential-shaped values built at run time, so no real-format literal sits in the source. */
+  private static final FakeCredentials FAKE = new FakeCredentials(38);
+
   private static final String FLAT =
       "GitHub PR review threads are flat: every reply's in_reply_to_id is the thread root.";
 
@@ -143,13 +146,13 @@ class ReviewLearningServiceTest {
   void aCredentialIsNeverStored() {
     assertEquals(
         RecordOutcome.REFUSED_SECRET,
-        service.save(decline(1L, "o/r", "u1", "use ghp_abcdefghijklmnop1234 here"), 10));
+        service.save(decline(1L, "o/r", "u1", "use " + FAKE.githubToken() + " here"), 10));
     var titled =
         new LearningInput(
             1L,
             "o/r",
             ReviewLearning.KIND_DECLINE,
-            "leaks AKIAABCDEFGHIJKLMNOP",
+            "leaks " + FAKE.awsAccessKey(),
             "high",
             "a.tf",
             "fine",
@@ -164,7 +167,7 @@ class ReviewLearningServiceTest {
             ReviewLearning.KIND_DECLINE,
             "t",
             "high",
-            "keys/ghp_abcdefghijklmnop1234.txt",
+            "keys/" + FAKE.githubToken() + ".txt",
             "fine",
             1,
             "u3",

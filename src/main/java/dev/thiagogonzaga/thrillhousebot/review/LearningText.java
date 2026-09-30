@@ -55,10 +55,11 @@ final class LearningText {
           Pattern.compile("\\bAIza[\\w-]{30,}"),
           // A token, unlike the word after "bearer" in prose, carries a digit.
           Pattern.compile("(?i)\\bbearer\\s+(?=[\\w.~+/=-]*\\d)[\\w.~+/=-]{12,}"),
+          // Any credential-named key, prefixed or suffixed ("secret_key", "authToken"), assigned an
+          // unquoted or quoted value-like value.
           Pattern.compile(
-              "(?i)\\b(?:password|passwd|secret)\\s{0,4}[:=]\\s{0,4}['\"]?" + ASSIGNED_VALUE),
-          Pattern.compile(
-              "(?i)\\b(?:api|access|client)[_-]?(?:key|token|secret)\\s{0,4}[:=]\\s{0,4}['\"]?"
+              "(?i)[\\w.-]{0,40}(?:passw(?:or)?d|pwd|secret|token|api[_-]?key|access[_-]?key"
+                  + "|private[_-]?key)[\\w.-]{0,40}\\s{0,4}(?::=|=>|[:=])\\s{0,4}['\"]?"
                   + ASSIGNED_VALUE));
 
   private static final Pattern BLOCKQUOTE_LINE = Pattern.compile("(?m)^[ \\t]{0,8}>.*$");
@@ -67,6 +68,9 @@ final class LearningText {
   /** Control and format characters (bidi overrides, zero-width joiners), plus any whitespace. */
   private static final Pattern WHITESPACE_AND_INVISIBLES =
       Pattern.compile("[\\s\\p{IsZs}\\p{IsCc}\\p{IsCf}\\u2028\\u2029]+");
+
+  /** The diff scan's default entropy bar for its generic rule ({@code entropy-threshold}). */
+  private static final double SCANNER_ENTROPY_THRESHOLD = 3.5;
 
   private LearningText() {}
 
@@ -77,6 +81,13 @@ final class LearningText {
     }
     for (var shape : CREDENTIAL_SHAPES) {
       if (shape.matcher(text).find()) {
+        return true;
+      }
+    }
+    // The diff scan's rules (#60) as a second opinion, line by line as it reads a diff: any format
+    // it knows that the shapes above do not name is refused too.
+    for (var line : text.split("\n", -1)) {
+      if (!SecretScanner.scan(line, null, SCANNER_ENTROPY_THRESHOLD).isEmpty()) {
         return true;
       }
     }

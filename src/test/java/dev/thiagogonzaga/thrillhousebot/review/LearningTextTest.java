@@ -22,21 +22,31 @@ import org.junit.jupiter.api.Test;
 
 class LearningTextTest {
 
+  /** Credential-shaped values built at run time, so no real-format literal sits in the source. */
+  private static final FakeCredentials FAKE = new FakeCredentials(38);
+
   @Test
   void credentialShapedValuesAreRecognized() {
     var secrets =
         List.of(
-            "use ghp_abcdefghijklmnop1234 for the bot",
-            "github_pat_11ABCDEFG0123456789_abcdef",
-            "key AKIAABCDEFGHIJKLMNOP in the env",
-            "-----BEGIN RSA PRIVATE KEY-----",
-            "token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig",
-            "slack xoxb-123456789012-abcdef",
-            "sk-proj-abcdefghijklmnopqrstuv",
-            "AIzaSyA1234567890abcdefghijklmnopqrstu",
+            "use " + FAKE.githubToken() + " for the bot",
+            FAKE.githubFineGrainedToken(),
+            "key " + FAKE.awsAccessKey() + " in the env",
+            FakeCredentials.pemHeader("RSA"),
+            "token " + FAKE.jwt(),
+            "slack " + FAKE.slackToken(),
+            "sk-" + "proj-" + FAKE.alnum(22),
+            FAKE.googleApiKey(),
+            // Only the diff scan's rules (#60) know this one.
+            "stripe " + FAKE.stripeLiveKey(),
             "Authorization: Bearer abcdef1234567890abcd",
             "password = hunter22hunter",
-            "client_secret: 'abcdefgh12345'");
+            "client_secret: 'abcdefgh12345'",
+            "secret_key = hunter22hunter",
+            "token = hunter22hunter",
+            "authToken: hunter22hunter",
+            "secret_key: ABCD1234EFGH in prod config",
+            "DB_PASSWORD=\"s3cr3t!pass\"");
     for (var secret : secrets) {
       assertTrue(LearningText.containsCredential(secret), secret);
     }

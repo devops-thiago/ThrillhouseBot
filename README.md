@@ -811,7 +811,8 @@ repository.
 
 **Safety.** Learnings are scoped to one repository under one GitHub App installation and never
 read by any other. Text with anything shaped like a credential (GitHub, AWS, Slack, OpenAI and
-Google keys, private-key headers, JWTs, bearer values, `password=`-style assignments) is refused
+Google keys, private-key headers, JWTs, bearer values, a value assigned to a credential-named key
+such as `secret_key` or `authToken`, and every format the diff secret scan knows) is refused
 rather than stored, and is filtered again before a learning is replayed. Quoted lines, control
 and bidi characters are dropped and each learning is clipped to 1000 characters.
 `REVIEW_LEARNINGS_MAX_PER_REPO` caps how many one repository holds. The table
