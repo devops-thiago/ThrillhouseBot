@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
@@ -154,6 +155,53 @@ class PromptLabelScrubberTest {
       })
   void ordinaryTextAndCodeAreLeftExactlyAsWritten(String text) {
     assertEquals(text, PromptLabelScrubber.scrub(text));
+  }
+
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      quoteCharacter = '"',
+      value = {
+        "Stale (see dimension 4).|Stale.",
+        "Stale (review dimension 4).|Stale.",
+        "Two (dimensions 4 / 5) here.|Two here.",
+        "Dimension 7: artifact mismatch.|Artifact mismatch.",
+        "* Dimension 4	stale comment.|* Stale comment.",
+        "> (dimension 4) Quoted.|> Quoted.",
+        "A gap, under dimension 10.|A gap.",
+        "It falls under dimension 7, the config check.|It falls under the config check.",
+        "under dimension 10 it lands.|\" it lands.\"",
+      })
+  void labelVariantsAreRemoved(String leaked, String clean) {
+    assertEquals(clean, PromptLabelScrubber.scrub(leaked));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "Stale (dimension 4 and ) here.",
+        "Stale (dimension 4, ) here.",
+        "Summary: dimension 7",
+        "Stale (dimension 123) here.",
+        "Stale (dimension 4a) here.",
+        "Stale (a dimension 4) here.",
+        "Dimension 7 42 is the answer.",
+        "The list ends at Dimension 7",
+        "It found dimension 7 errors.",
+        "The thunder dimension 7 rumbles.",
+        "A visit is dimension 5 minutes.",
+        "The dimension 4 thing and foo:dimension 4 bar.",
+        "An unclosed ` backtick (dimension 4",
+        "```\nuntouched (dimension 4) in an unclosed fence",
+        "~~~\n(dimension 4)\n~~~",
+      })
+  void nearMissesAndCodeAreLeftAlone(String text) {
+    assertEquals(text, PromptLabelScrubber.scrub(text));
+  }
+
+  @Test
+  void aCodeSpanDoesNotRunPastItsLine() {
+    assertEquals("`a\nb` c.", PromptLabelScrubber.scrub("`a\nb` c (dimension 4)."));
   }
 
   @Test
@@ -307,5 +355,25 @@ class PromptLabelScrubberTest {
     var rewritten = PromptLabelScrubber.scrub(summaryOnly);
     assertEquals("Stale comment.", rewritten.summaryMarkdown());
     assertSame(summaryOnly.findings().getFirst(), rewritten.findings().getFirst());
+
+    // A leaked status note alone: a reopened decline's note is posted in the review body.
+    var noteOnly =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            RiskLevel.LOW,
+            ReviewState.APPROVE,
+            false,
+            "",
+            List.of(
+                new ReviewResult.PreviousFindingStatus(
+                    3, "unresolved", "Still wrong (dimension 4).")),
+            List.of(),
+            0);
+    assertEquals(
+        "Still wrong.", PromptLabelScrubber.scrub(noteOnly).previousStatuses().getFirst().note());
   }
 }

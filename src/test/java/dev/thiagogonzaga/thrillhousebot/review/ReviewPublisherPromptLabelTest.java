@@ -94,7 +94,12 @@ class ReviewPublisherPromptLabelTest {
         ReviewState.REQUEST_CHANGES,
         firstReview,
         summary,
-        List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed")),
+        List.of(
+            new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed"),
+            new ReviewResult.PreviousFindingStatus(
+                2,
+                "unresolved",
+                RebuttalContradiction.NOTE_LEAD_IN + " the reply says one caller (dimension 9).")),
         List.of(),
         0);
   }
@@ -137,6 +142,9 @@ class ReviewPublisherPromptLabelTest {
     var posted = postedText();
     assertTrue(
         posted.stream().anyMatch(text -> text.contains("Artifact-name mismatch.")),
+        String.join("\n---\n", posted));
+    assertTrue(
+        posted.stream().anyMatch(text -> text.contains("the reply says one caller.")),
         String.join("\n---\n", posted));
     assertTrue(
         posted.stream().anyMatch(text -> text.contains("COPY names roombook-server")),

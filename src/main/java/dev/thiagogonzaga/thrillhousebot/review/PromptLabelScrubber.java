@@ -16,14 +16,12 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -42,8 +40,9 @@ import java.util.regex.Pattern;
  * sentence, or after the few verbs that cite it ("this is dimension 5", "under dimension 10"), and
  * only for the numbers the prompt used, 1 through 10. Code — a fenced block, an inline code span —
  * and HTML comments (the bot's own markers) are left exactly as written; the one exception is the
- * prompt's example locator, which is rewritten to a placeholder wherever it appears unless the pull
- * request really has a file at that path.
+ * prompt's example locator, which is rewritten to a placeholder wherever it appears unless it is
+ * one of the real paths the caller passes — the files the findings are filed on and the summary
+ * describes, which are the paths of this pull request the text can be about.
  */
 public final class PromptLabelScrubber {
 
@@ -53,78 +52,63 @@ public final class PromptLabelScrubber {
   private static final Pattern EXAMPLE_LOCATOR =
       Pattern.compile("(?<![\\w/.-])" + Pattern.quote(EXAMPLE_PATH) + "(:\\d+)?(?![\\w/])");
 
-  /** Code and markers the prose rules must not touch: fenced blocks, code spans, HTML comments. */
-  private static final Pattern PROTECTED =
-      Pattern.compile("(?s)```.*?(?:```|\\z)|~~~.*?(?:~~~|\\z)|`[^`\\n]*`|<!--.*?(?:-->|\\z)");
+  /** A one-line parenthetical; whether its content is a label is decided by {@link #isLabel}. */
+  private static final Pattern PARENTHETICAL = Pattern.compile("\\(([^()\\n]{1,80})\\)");
 
-  private static final String NUMBER = "(?:10|[1-9])(?!\\d)";
+  /** A numbered dimension citation; whether its context makes it a label is decided in code. */
+  private static final Pattern NUMBERED =
+      Pattern.compile("\\b(?:review )?dimension (\\d{1,2})\\b", Pattern.CASE_INSENSITIVE);
 
-  private static final String NUMBERS = NUMBER + "(?:\\s*(?:,|/|&|and|or)\\s*" + NUMBER + ")*";
+  /** Separates the numbers of "(dimensions 4, 5 and 8)". */
+  private static final Pattern NUMBER_SEPARATOR = Pattern.compile(" ?(?:,|/|&) ?| and | or ");
 
-  /** The block names the prompt prints as headings, cited in parentheses. */
-  private static final String HEADING_NAMES =
-      "FUNCTIONAL CORRECTNESS|SECURITY|REGRESSIONS|COMMENT CONTRADICTS CODE"
-          + "|CODE QUALITY AND ALGORITHMIC COMPLEXITY|PAGINATION / TRUNCATION"
-          + "|CONFIG / IaC CORRECTNESS|MOCK FIDELITY|PRODUCER → CONSUMER CONTRACT"
-          + "|CONFIG KEY DOCUMENTATION COMPLETENESS";
+  /** The block names the prompt prints as headings, lower-cased, as cited in parentheses. */
+  private static final Set<String> HEADING_NAMES =
+      Set.of(
+          "functional correctness",
+          "security",
+          "regressions",
+          "comment contradicts code",
+          "code quality and algorithmic complexity",
+          "pagination / truncation",
+          "config / iac correctness",
+          "mock fidelity",
+          "producer → consumer contract",
+          "config key documentation completeness");
 
-  private static final String LABEL =
-      "\\(\\s*(?:(?:see|per|under)\\s+)?(?:(?:review\\s+)?dimensions?\\s+"
-          + NUMBERS
-          + "|(?:the\\s+)?heuristic(?:\\s+failure[- ]mode)?(?:\\s+characterization)?\\s+"
-          + "section|(?:"
-          + HEADING_NAMES
-          + "))\\s*\\)";
+  /** The heuristic block's name, as cited in parentheses. */
+  private static final Set<String> SECTION_NAMES =
+      Set.of(
+          "heuristic section",
+          "the heuristic section",
+          "heuristic failure-mode section",
+          "heuristic failure mode section");
 
-  /** A label opening a line, "(dimension 9) The trace ...": the space after it goes too. */
-  private static final Pattern LEADING_PARENTHETICAL =
-      Pattern.compile(
-          "(?m)^([ \\t]*(?:[-*>][ \\t]+)?)" + LABEL + "[ \\t]*", Pattern.CASE_INSENSITIVE);
+  /** A word after "dimension N" that reads it as a tensor or array axis, not a label. */
+  private static final Set<String> AXIS_WORDS =
+      Set.of(
+          "of", "is", "was", "has", "in", "at", "to", "and", "or", "for", "with", "along", "size",
+          "index", "axis");
 
-  /** "(dimension 4)", "(dimensions 4 and 5)", "(heuristic section)", "(MOCK FIDELITY)". */
-  private static final Pattern PARENTHETICAL =
-      Pattern.compile("[ \\t]*" + LABEL, Pattern.CASE_INSENSITIVE);
+  /** Verbs that cite a label mid-sentence and stay: "This is dimension 5, class (c)". */
+  private static final List<String> CITING_VERBS =
+      List.of("falls under", "this is", "that is", "it is");
 
-  /**
-   * "Dimension 7 artifact-name mismatch." opening a text, a line, a sentence, a clause after a
-   * colon or dash, or a table cell: the label goes and the next word is capitalized. A following
-   * function word ("of", "is", "size") reads as an axis, not a label, and is left alone.
-   */
-  private static final Pattern LEADING_LABEL =
-      Pattern.compile(
-          "(^|[.!?:;—–|][ \\t]+|\\n[ \\t]*(?:[-*>][ \\t]+)?)(?:review\\s+)?dimension\\s+"
-              + NUMBER
-              + "(?:\\s*[:,—–-]\\s*|\\s+)"
-              + "(?!(?:of|is|was|has|in|at|to|and|or|for|with|along|size|index|axis)\\b)"
-              + "(\\p{L})",
-          Pattern.CASE_INSENSITIVE);
+  /** Prepositions whose whole citation goes: "a documentation gap under dimension 10." */
+  private static final List<String> CITING_PREPOSITIONS = List.of("under", "per");
 
-  /** "This is dimension 5, class (c)" — the verb stays, the label goes. */
-  private static final Pattern CITED_AS =
-      Pattern.compile(
-          "\\b(this is|that is|it is|falls under)\\s+dimension\\s+"
-              + NUMBER
-              + "(?!\\s+of\\b)\\s*,?\\s+",
-          Pattern.CASE_INSENSITIVE);
-
-  /** "a documentation gap under dimension 10." — the whole trailing citation goes. */
-  private static final Pattern CITED_UNDER =
-      Pattern.compile(
-          "\\s*,?\\s+(?:under|per)\\s+(?:review\\s+)?dimensions?\\s+" + NUMBERS + "(?!\\s+of\\b)",
-          Pattern.CASE_INSENSITIVE);
+  /** Characters after which a label opens a clause: sentence ends, colons, dashes, table pipes. */
+  private static final String CLAUSE_OPENERS = ".!?:;—–|";
 
   /** "but, as class guidance notes, does not pin images" — an aside quoting the prompt. */
   private static final Pattern GUIDANCE_ASIDE =
       Pattern.compile(
-          ",\\s*as\\s+(?:the\\s+)?(?:anchored\\s+)?(?:infrastructure\\s+)?(?:class\\s+)?guidance"
-              + "\\s+(?:notes|says|states),\\s*",
-          Pattern.CASE_INSENSITIVE);
+          ", as (?:the )?(?:class )?guidance (?:notes|says|states), ", Pattern.CASE_INSENSITIVE);
 
   /** "acceptance criterion, which this PR must quote: ..." — the prompt's rule, restated. */
   private static final Pattern RESTATED_RULE =
       Pattern.compile(
-          ",?\\s*which\\s+(?:this|the)\\s+(?:PR|pull request|finding|description|change)"
-              + "\\s+must\\s+quote(?=\\s*[:.;,]|\\s*$)",
+          ",? which (?:this|the) (?:PR|pull request|finding) must quote(?![^:.;,])",
           Pattern.CASE_INSENSITIVE);
 
   private PromptLabelScrubber() {}
@@ -138,22 +122,28 @@ public final class PromptLabelScrubber {
    * The text without the prompt's labels, section names, restated rules and example locators.
    * Idempotent, and the identity on text that carries none of them.
    *
-   * @param realPaths files the pull request really has; an example locator equal to one of them is
-   *     a real path and is kept
+   * @param realPaths paths known to be real — the callers here pass the files the findings are
+   *     filed on and the summary describes, not the pull request's whole file list; an example
+   *     locator equal to one of them is kept
    */
   public static String scrub(String text, Collection<String> realPaths) {
     if (text == null || text.isEmpty()) {
       return text;
     }
     var out = new StringBuilder(text.length());
-    var code = PROTECTED.matcher(text);
-    int at = 0;
-    while (code.find()) {
-      out.append(scrubProse(text.substring(at, code.start())));
-      out.append(code.group());
-      at = code.end();
+    int prose = 0;
+    int i = 0;
+    while (i < text.length()) {
+      int end = protectedEnd(text, i);
+      if (end < 0) {
+        i++;
+        continue;
+      }
+      out.append(scrubProse(text.substring(prose, i))).append(text, i, end);
+      prose = end;
+      i = end;
     }
-    out.append(scrubProse(text.substring(at)));
+    out.append(scrubProse(text.substring(prose)));
     return replaceExamplePaths(out.toString(), realPaths);
   }
 
@@ -184,14 +174,21 @@ public final class PromptLabelScrubber {
   }
 
   /**
-   * A review result with its findings and its rendered summary scrubbed — the publisher's guard for
-   * whatever reached it without passing the pipeline's (a round carried over from storage written
-   * before #918). The same instance when nothing changed.
+   * A review result with its findings, its previous-finding notes and its rendered summary scrubbed
+   * — the publisher's guard for whatever reached it without passing the pipeline's (a round carried
+   * over from storage written before #918). The same instance when nothing changed.
    */
   public static ReviewResult scrub(ReviewResult result) {
     var findings = scrubFindings(result.findings());
     var summary = scrubMarkdown(result.summaryMarkdown(), result.findings());
-    if (findings.equals(result.findings()) && Objects.equals(summary, result.summaryMarkdown())) {
+    // A status note is posted too: a reopened decline's note goes into the review body.
+    var statuses =
+        result.previousStatuses().stream()
+            .map(s -> new ReviewResult.PreviousFindingStatus(s.id(), s.status(), scrub(s.note())))
+            .toList();
+    if (findings.equals(result.findings())
+        && Objects.equals(summary, result.summaryMarkdown())
+        && statuses.equals(result.previousStatuses())) {
       return result;
     }
     return new ReviewResult(
@@ -204,7 +201,7 @@ public final class PromptLabelScrubber {
         result.reviewState(),
         result.isFirstReview(),
         summary,
-        result.previousStatuses(),
+        statuses,
         result.offendingCiChecks(),
         result.omittedFiles(),
         result.ciUnreadable(),
@@ -233,19 +230,20 @@ public final class PromptLabelScrubber {
     if (summary != null) {
       summary.fileSummaries().forEach(s -> addPath(paths, s.path()));
     }
-    var findings = new ArrayList<ReviewResponse.Finding>(response.findings().size());
-    for (var f : response.findings()) {
-      findings.add(
-          new ReviewResponse.Finding(
-              f.risk(),
-              f.confidence(),
-              f.file(),
-              f.line(),
-              scrub(f.title(), paths),
-              scrub(f.description(), paths),
-              f.suggestionOld(),
-              f.suggestionNew()));
-    }
+    var findings =
+        response.findings().stream()
+            .map(
+                f ->
+                    new ReviewResponse.Finding(
+                        f.risk(),
+                        f.confidence(),
+                        f.file(),
+                        f.line(),
+                        scrub(f.title(), paths),
+                        scrub(f.description(), paths),
+                        f.suggestionOld(),
+                        f.suggestionNew()))
+            .toList();
     var statuses =
         response.previousFindingsStatus().stream()
             .map(s -> new ReviewResponse.PreviousFindingStatus(s.id(), s.status(), scrub(s.note())))
@@ -281,28 +279,211 @@ public final class PromptLabelScrubber {
     }
   }
 
+  /**
+   * Where the code or marker starting at {@code i} ends — a fenced block, an HTML comment or a
+   * one-line code span — or -1 when none starts there. An unclosed fence or comment runs to the
+   * end.
+   */
+  private static int protectedEnd(String text, int i) {
+    for (var fence : List.of("```", "~~~")) {
+      if (text.startsWith(fence, i)) {
+        return closeAt(text, i + fence.length(), fence);
+      }
+    }
+    if (text.startsWith("<!--", i)) {
+      return closeAt(text, i + 4, "-->");
+    }
+    if (text.charAt(i) == '`') {
+      int close = text.indexOf('`', i + 1);
+      int newline = text.indexOf('\n', i + 1);
+      if (close > 0 && (newline < 0 || close < newline)) {
+        return close + 1;
+      }
+    }
+    return -1;
+  }
+
+  private static int closeAt(String text, int from, String closer) {
+    int close = text.indexOf(closer, from);
+    return close < 0 ? text.length() : close + closer.length();
+  }
+
   private static String scrubProse(String prose) {
     if (prose.isEmpty()) {
       return prose;
     }
-    var s = LEADING_PARENTHETICAL.matcher(prose).replaceAll("$1");
-    s = PARENTHETICAL.matcher(s).replaceAll("");
-    s = capitalizeAfterLeadingLabel(s);
-    s = CITED_AS.matcher(s).replaceAll("$1 ");
-    s = CITED_UNDER.matcher(s).replaceAll("");
+    var s = removeLabelParentheticals(prose);
+    s = removeNumberedLabels(s);
     s = GUIDANCE_ASIDE.matcher(s).replaceAll(" ");
     return RESTATED_RULE.matcher(s).replaceAll("");
   }
 
-  private static String capitalizeAfterLeadingLabel(String s) {
-    Matcher m = LEADING_LABEL.matcher(s);
+  /**
+   * Drops "(dimension 4)", "(heuristic section)" and the like with the space before them — or, when
+   * one opens a line, with the space after it, so the line does not start with a blank.
+   */
+  private static String removeLabelParentheticals(String s) {
+    var m = PARENTHETICAL.matcher(s);
     var out = new StringBuilder(s.length());
+    int at = 0;
     while (m.find()) {
-      m.appendReplacement(
-          out, Matcher.quoteReplacement(m.group(1) + m.group(2).toUpperCase(Locale.ROOT)));
+      if (!isLabel(m.group(1))) {
+        continue;
+      }
+      int start = m.start();
+      int end = m.end();
+      int blank = skipBlanksBack(s, start, at);
+      if (opensLine(s, blank)) {
+        end = skipBlanks(s, end);
+      } else {
+        start = blank;
+      }
+      out.append(s, at, start);
+      at = end;
     }
-    m.appendTail(out);
-    return out.toString();
+    return out.append(s, at, s.length()).toString();
+  }
+
+  /** Whether a parenthetical's content is one of the prompt's labels. */
+  private static boolean isLabel(String content) {
+    var c = content.strip().toLowerCase(Locale.ROOT);
+    for (var lead : List.of("see ", "per ", "under ")) {
+      if (c.startsWith(lead)) {
+        c = c.substring(lead.length()).strip();
+        break;
+      }
+    }
+    if (c.startsWith("review ")) {
+      c = c.substring("review ".length()).strip();
+    }
+    if (HEADING_NAMES.contains(c) || SECTION_NAMES.contains(c)) {
+      return true;
+    }
+    String numbers;
+    if (c.startsWith("dimensions ")) {
+      numbers = c.substring("dimensions ".length());
+    } else if (c.startsWith("dimension ")) {
+      numbers = c.substring("dimension ".length());
+    } else {
+      return false;
+    }
+    for (var number : NUMBER_SEPARATOR.split(numbers.strip(), -1)) {
+      if (!isPromptNumber(number)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** 1 through 10: the numbers the prompt gave its dimensions. */
+  private static boolean isPromptNumber(String s) {
+    if (s.isEmpty() || s.length() > 2 || !s.chars().allMatch(Character::isDigit)) {
+      return false;
+    }
+    int n = Integer.parseInt(s);
+    return n >= 1 && n <= 10;
+  }
+
+  /**
+   * Drops "dimension N" where its context makes it the prompt's label: opening a text, a line, a
+   * sentence, a clause after a colon or dash, or a table cell (the next word is capitalized); after
+   * a citing verb ("this is dimension 5, class (c)"); or after "under"/"per", which go with it.
+   * Followed by a word that reads it as an axis ("dimension 1 of the output"), it stays.
+   */
+  private static String removeNumberedLabels(String s) {
+    var m = NUMBERED.matcher(s);
+    var out = new StringBuilder(s.length());
+    int at = 0;
+    while (m.find()) {
+      int start = m.start();
+      int end = m.end();
+      if (!isPromptNumber(m.group(1)) || AXIS_WORDS.contains(wordAt(s, skipBlanks(s, end)))) {
+        continue;
+      }
+      var before = s.substring(Math.max(at, start - 40), start).toLowerCase(Locale.ROOT).strip();
+      int after = skipBlanks(s, end);
+      if (after < s.length() && ":,—–-".indexOf(s.charAt(after)) >= 0) {
+        after = skipBlanks(s, after + 1);
+      }
+      if (opensClause(s, start, at)) {
+        if (after >= s.length() || !Character.isLetter(s.charAt(after))) {
+          continue;
+        }
+        out.append(s, at, start).append(Character.toUpperCase(s.charAt(after)));
+        at = after + 1;
+      } else if (endingWord(before, CITING_VERBS) != null) {
+        out.append(s, at, start);
+        at = after;
+      } else {
+        var preposition = endingWord(before, CITING_PREPOSITIONS);
+        if (preposition == null) {
+          continue;
+        }
+        int cut = skipBlanksBack(s, skipBlanksBack(s, start, at) - preposition.length(), at);
+        if (cut > at && s.charAt(cut - 1) == ',') {
+          cut--;
+        }
+        out.append(s, at, cut);
+        at = end;
+      }
+    }
+    return out.append(s, at, s.length()).toString();
+  }
+
+  /** The one of {@code words} that {@code before} ends with as a whole word, else null. */
+  private static String endingWord(String before, List<String> words) {
+    for (var word : words) {
+      if (before.endsWith(word)
+          && (before.length() == word.length()
+              || !Character.isLetter(before.charAt(before.length() - word.length() - 1)))) {
+        return word;
+      }
+    }
+    return null;
+  }
+
+  /** The lower-cased word starting at {@code i}, empty when none does. */
+  private static String wordAt(String s, int i) {
+    int end = i;
+    while (end < s.length() && Character.isLetter(s.charAt(end))) {
+      end++;
+    }
+    return s.substring(i, end).toLowerCase(Locale.ROOT);
+  }
+
+  /** Whether {@code start} opens a line, or a clause after a sentence end, colon, dash or pipe. */
+  private static boolean opensClause(String s, int start, int floor) {
+    int blank = skipBlanksBack(s, start, floor);
+    if (opensLine(s, blank)) {
+      return true;
+    }
+    return blank < start && CLAUSE_OPENERS.indexOf(s.charAt(blank - 1)) >= 0;
+  }
+
+  /** Whether only blanks and at most one list or quote marker precede {@code i} on its line. */
+  private static boolean opensLine(String s, int i) {
+    var prefix = s.substring(s.lastIndexOf('\n', i - 1) + 1, i).strip();
+    return prefix.isEmpty() || "-".equals(prefix) || "*".equals(prefix) || ">".equals(prefix);
+  }
+
+  private static int skipBlanks(String s, int i) {
+    int j = i;
+    while (j < s.length() && isBlank(s.charAt(j))) {
+      j++;
+    }
+    return j;
+  }
+
+  private static int skipBlanksBack(String s, int i, int floor) {
+    int j = i;
+    while (j > floor && isBlank(s.charAt(j - 1))) {
+      j--;
+    }
+    return j;
+  }
+
+  private static boolean isBlank(char c) {
+    return c == ' ' || c == '\t';
   }
 
   private static String replaceExamplePaths(String text, Collection<String> realPaths) {
