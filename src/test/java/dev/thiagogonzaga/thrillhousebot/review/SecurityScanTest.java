@@ -547,6 +547,101 @@ class SecurityScanTest {
   // --- across rounds ---
 
   @Test
+  void aFindingAnEarlierRoundRaisedAndLeftOpenIsNotRaisedAgain() {
+    // #939: round two raised one new model finding, so it is the effective previous round and
+    // round one's scan findings have no id in it; the scan must still not post them twice.
+    var token = fake.githubToken();
+    var files =
+        List.of(
+            added("rust/src/client.rs", "const T: &str = \"" + token + "\";"),
+            added("rust/Dockerfile", "FROM rust:1.80", "USER root"));
+    var s = scan(true, true);
+    var roundOne = s.merge(response(), s.scan(files), List.of(), Set.of());
+    assertEquals(2, roundOne.findings().size());
+    var roundTwo =
+        new ReviewResponse(
+            List.of(modelFinding("rust/src/main.rs", 3, "Poller never started", "unwired")),
+            List.of(),
+            null);
+
+    var merged =
+        s.merge(
+            response(),
+            s.scan(files),
+            roundTwo.findings(),
+            Set.of(),
+            List.copyOf(roundOne.findings()));
+
+    assertTrue(merged.findings().isEmpty(), "no second thread: " + merged.findings());
+    assertTrue(merged.previousFindingsStatus().isEmpty(), "they have no id in round two");
+
+    // The same merge driven from a review's context reads the earlier rounds itself.
+    var ctx =
+        new ReviewContextLoader.ReviewContext(
+            files,
+            "",
+            "",
+            0,
+            List.of(),
+            List.of("{}", "{}"),
+            List.of(roundTwo, roundOne),
+            false,
+            true,
+            "{}",
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            PathScopedInstructions.NONE,
+            List.of(),
+            "",
+            "",
+            "",
+            "",
+            files,
+            () ->
+                new DiffLineResolver(
+                    Map.of(
+                        files.get(0).filename(),
+                        files.get(0).patch(),
+                        files.get(1).filename(),
+                        files.get(1).patch())),
+            null);
+    assertTrue(s.merge(response(), ctx).findings().isEmpty());
+  }
+
+  @Test
+  void anEarlierRoundFindingOnADifferentAnchorDoesNotStopANewDetection() {
+    var files = List.of(added("rust/Dockerfile", "FROM rust:1.80", "USER root"));
+    var s = scan(false, true);
+    var earlier = s.merge(response(), s.scan(files), List.of(), Set.of()).findings().get(0);
+    var elsewhere =
+        new ReviewResponse.Finding(
+            earlier.risk(),
+            earlier.confidence(),
+            earlier.file(),
+            earlier.line(),
+            earlier.title(),
+            earlier.description(),
+            "USER admin",
+            null);
+    var otherFile =
+        new ReviewResponse.Finding(
+            earlier.risk(),
+            earlier.confidence(),
+            "go/Dockerfile",
+            earlier.line(),
+            earlier.title(),
+            earlier.description(),
+            earlier.suggestionOld(),
+            null);
+
+    var merged =
+        s.merge(response(), s.scan(files), List.of(), Set.of(), List.of(elsewhere, otherFile));
+
+    assertEquals(List.of(earlier), merged.findings());
+  }
+
+  @Test
   void aSecretThePreviousRoundRaisedIsTrackedNotRaisedAgain() {
     var token = fake.githubToken();
     var files = List.of(added("app.env", "X=1", "T=" + token));

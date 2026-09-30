@@ -194,14 +194,77 @@ public class FollowUpAnalyzer {
       List<ReviewResponse> olderAiResponses,
       BotIdentity botIdentity,
       Set<Integer> settledIds) {
+    return buildPreviousFindingsContext(
+        previousFindings,
+        previousResponsePersisted,
+        priorReviews,
+        inlineComments,
+        olderAiResponses,
+        botIdentity,
+        settledIds,
+        List.of());
+  }
+
+  /**
+   * Variant that also lists the findings earlier rounds left open ({@link
+   * #openEarlierRoundFindings}), unnumbered and outside previous_findings_status like the answered
+   * ones, so a follow-up round after one that raised something new is still told what is already
+   * posted (#939). Without it those findings reach the model as never reported, and it raises them
+   * again.
+   */
+  @SuppressWarnings("java:S107")
+  public String buildPreviousFindingsContext(
+      List<ReviewResponse.Finding> previousFindings,
+      boolean previousResponsePersisted,
+      List<GitHubReviewClient.ReviewResponse> priorReviews,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<ReviewResponse> olderAiResponses,
+      BotIdentity botIdentity,
+      Set<Integer> settledIds,
+      List<ReviewResponse.Finding> openEarlier) {
     var structured =
         formatStructuredFindings(previousFindings, inlineComments, botIdentity, settledIds);
     var answered = formatAnsweredEarlier(olderAiResponses, inlineComments, botIdentity);
+    var stillOpen = formatOpenEarlier(openEarlier, previousFindings, inlineComments, botIdentity);
     if (!structured.isEmpty() || previousResponsePersisted) {
-      return structured + answered;
+      return structured + stillOpen + answered;
     }
     var fallback = buildPreviousFindingsContext(priorReviews, botIdentity);
-    return fallback + answered;
+    return fallback + stillOpen + answered;
+  }
+
+  /**
+   * Unnumbered list of the findings earlier rounds left open (#939). An entry the answered list
+   * already carries (a maintainer replied on its thread) is left to that list, and one that
+   * restates a numbered finding is left to the number, so no finding is shown twice.
+   */
+  private static String formatOpenEarlier(
+      List<ReviewResponse.Finding> openEarlier,
+      List<ReviewResponse.Finding> previousFindings,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity) {
+    var sb = new StringBuilder();
+    var seen = new HashSet<String>();
+    for (var finding : openEarlier) {
+      if (!seen.add(finding.file() + "#" + finding.title())
+          || answeredRootComment(finding, inlineComments, botIdentity) != null
+          || previousFindings.stream().anyMatch(numbered -> isSameFinding(finding, numbered))) {
+        continue;
+      }
+      if (sb.isEmpty()) {
+        sb.append("\nStill open from earlier rounds, each already posted on its own thread — do")
+            .append(
+                " NOT raise these again and do NOT include them in previous_findings_status:\n");
+      }
+      sb.append("- ")
+          .append(finding.file())
+          .append(":")
+          .append(finding.line())
+          .append(" — ")
+          .append(finding.title())
+          .append("\n");
+    }
+    return sb.toString();
   }
 
   /**
@@ -2580,6 +2643,18 @@ public class FollowUpAnalyzer {
    */
   private Map<String, OpenFinding> openFindingsAcrossRounds(
       List<ReviewResponse> chrono, List<ReviewResponse.PreviousFindingStatus> currentStatuses) {
+    var replay = replayRounds(chrono);
+    closeReported(replay.open(), replay.reportedRound(), currentStatuses);
+    return replay.open();
+  }
+
+  /**
+   * The prior findings no later round closed, and the round the current one reports on, after
+   * replaying every prior round oldest → newest. Each round closes what its own status block marked
+   * resolved or justified on the round it reported on; the current round's statuses are left to the
+   * caller, which decides what counts as accounting for a finding.
+   */
+  private static RoundReplay replayRounds(List<ReviewResponse> chrono) {
     var open = new LinkedHashMap<String, OpenFinding>();
     var reportedRound = List.<ReviewResponse.Finding>of();
     for (var round : chrono) {
@@ -2589,8 +2664,119 @@ public class FollowUpAnalyzer {
         reportedRound = round.findings();
       }
     }
-    closeReported(open, reportedRound, currentStatuses);
-    return open;
+    return new RoundReplay(open, reportedRound);
+  }
+
+  /** What {@link #replayRounds} leaves: the open set and the round the current one reports on. */
+  private record RoundReplay(
+      Map<String, OpenFinding> open, List<ReviewResponse.Finding> reportedRound) {}
+
+  /**
+   * The findings raised in rounds <em>older</em> than the effective previous round that no later
+   * round closed and whose code is still in the diff (#939).
+   *
+   * <p>A follow-up round is shown one round's findings by number — the newest round that raised any
+   * ({@link #effectivePreviousFindings}). Once a follow-up raises even one new finding, it becomes
+   * that round, and every finding the rounds before it left open drops out of the numbered list,
+   * out of the security scan's "already raised" set, and out of the prompt, unless a maintainer
+   * happened to reply on it. The next review then sees those findings as never reported and raises
+   * them again, each on a new thread beside the one still open. This set is what the prompt, the
+   * scan and {@link #withoutOpenThreadDuplicates} use to keep them reported once.
+   *
+   * <p>A finding whose code left the diff is not in the set: a defect that moved may be raised
+   * again at its new location, where the old thread no longer points.
+   *
+   * @param priorAiResponses every completed prior round's parsed response, newest first
+   */
+  public static List<ReviewResponse.Finding> openEarlierRoundFindings(
+      List<ReviewResponse> priorAiResponses,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets) {
+    if (priorAiResponses == null || lineResolver == null) {
+      return List.of();
+    }
+    var replay = replayRounds(toChronological(priorAiResponses));
+    var effective = new HashSet<String>();
+    replay.reportedRound().forEach(finding -> effective.add(findingKey(finding)));
+    return replay.open().entrySet().stream()
+        .filter(entry -> !effective.contains(entry.getKey()))
+        .map(entry -> entry.getValue().finding())
+        .filter(finding -> isStillPresent(finding, lineResolver, renameTargets))
+        .toList();
+  }
+
+  /**
+   * Deterministic guard against re-posting a finding that already has an open thread (#939): drops
+   * a new finding that {@link #isSameFinding restates} a prior finding, from any round, that has
+   * its own review thread, that no round closed, and whose code is still in the diff.
+   *
+   * <p>The prompt tells the model not to raise a prior finding again, and the scan does not raise
+   * what it raised before, but both only ever knew the effective previous round. The guard is the
+   * one check that looks at every round and at the threads themselves, and it runs on the response
+   * the review is about to persist and publish whichever path produced it — a retried call, a
+   * salvaged cut, batches, the scan. A re-raise it drops is not lost: the prior finding is still
+   * open, so the round's status for it or the verdict backstop keeps it counted and holding.
+   *
+   * <p>A prior finding this round marks resolved or justified is not guarded — its thread is about
+   * to close, so a finding on the same defect is not a duplicate of an open one. Neither is one
+   * whose code left the diff: the old thread points at code that is gone.
+   *
+   * <p>The thread is located as the approve backstop locates it ({@link #rootCommentId}): the
+   * finding's own {@code finding=N} marker in its round with its own title in the header, and the
+   * title scan only for pre-marker comments. A finding that never got a thread (a summary-only
+   * finding) is not guarded here; nothing would be duplicated on the diff.
+   *
+   * @param priorAiResponses every completed prior round's parsed response, newest first
+   */
+  public static ReviewResponse withoutOpenThreadDuplicates(
+      ReviewResponse response,
+      List<ReviewResponse> priorAiResponses,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets,
+      BotIdentity botIdentity) {
+    if (response.findings().isEmpty()
+        || priorAiResponses == null
+        || priorAiResponses.isEmpty()
+        || inlineComments.isEmpty()
+        || lineResolver == null) {
+      return response;
+    }
+    var replay = replayRounds(toChronological(priorAiResponses));
+    closeAddressed(replay.open(), replay.reportedRound(), response.previousFindingsStatus());
+    var threaded =
+        replay.open().values().stream()
+            .filter(prior -> isStillPresent(prior.finding(), lineResolver, renameTargets))
+            .filter(
+                prior ->
+                    rootCommentId(prior.finding(), prior.id(), inlineComments, botIdentity) != null)
+            .map(OpenFinding::finding)
+            .toList();
+    var kept = new ArrayList<ReviewResponse.Finding>();
+    for (var finding : response.findings()) {
+      var duplicateOf =
+          threaded.stream().filter(prior -> isSameFinding(finding, prior)).findFirst();
+      if (duplicateOf.isEmpty()) {
+        kept.add(finding);
+        continue;
+      }
+      Log.infof(
+          "Dropping re-raised finding '%s' (%s:%d) — the prior finding '%s' (%s:%d) is still open"
+              + " on its own review thread",
+          LogSafe.oneLine(finding.title()),
+          LogSafe.oneLine(finding.file()),
+          finding.line(),
+          LogSafe.oneLine(duplicateOf.get().title()),
+          LogSafe.oneLine(duplicateOf.get().file()),
+          duplicateOf.get().line());
+    }
+    if (kept.size() == response.findings().size()) {
+      return response;
+    }
+    return new ReviewResponse(
+        kept,
+        response.previousFindingsStatus(),
+        FindingVerificationService.recount(response.summary(), kept));
   }
 
   /** Groups the open findings into clusters of tolerant ({@link #isSameFinding}) identity. */

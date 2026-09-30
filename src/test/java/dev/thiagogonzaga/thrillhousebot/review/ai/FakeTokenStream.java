@@ -24,7 +24,7 @@ import java.util.List;
 import java.util.function.Consumer;
 
 /** Minimal TokenStream test double that emits a fixed payload when started. */
-final class FakeTokenStream implements TokenStream {
+public final class FakeTokenStream implements TokenStream {
 
   private final String text;
   private final int chunkSize;
@@ -33,7 +33,7 @@ final class FakeTokenStream implements TokenStream {
   private Consumer<Throwable> errorHandler;
   private int errorHandlingRegistrations;
 
-  FakeTokenStream(String text) {
+  public FakeTokenStream(String text) {
     this(text, 0);
   }
 

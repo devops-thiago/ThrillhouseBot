@@ -333,10 +333,11 @@ public class FindingPipeline {
     }
     // #60: the deterministic scan's findings join after verification, so no model grades them.
     var refined =
-        securityScan.merge(
+        finish(
             refine(
                 session, aiResponse, quoteSource, singleInputs, ctx, lineResolver, plan, evidence),
-            ctx);
+            ctx,
+            lineResolver);
     if (budgetPlanner.callCapLeavesNoSummaryCall()) {
       return summarySkippedAtCallCap(session, refined, plan, carryFor(ctx, promptInputs));
     }
@@ -536,8 +537,29 @@ public class FindingPipeline {
             botIdentity);
     refined = populateMissingAnchors(refined, lineResolver);
     // #60: as in the single-call lane, after every model stage and before the summary call.
-    refined = securityScan.merge(refined, ctx);
+    refined = finish(refined, ctx, lineResolver);
     return withSummary(session, refined, promptInputs, ctx, plan);
+  }
+
+  /**
+   * The last two steps before a review's findings are summarized, persisted and published, on both
+   * lanes: the deterministic scan's merge (#60), then the guard that drops a finding restating one
+   * still open on its own thread from any earlier round (#939). The guard runs here, on the one
+   * response every path converges on — a retried call, a salvaged cut, the batches, the scan — so
+   * no way of producing the findings can post a second thread for an open one, and the summary
+   * counts and the persisted round agree with what is posted.
+   */
+  private ReviewResponse finish(
+      ReviewResponse refined,
+      ReviewContextLoader.ReviewContext ctx,
+      DiffLineResolver lineResolver) {
+    return FollowUpAnalyzer.withoutOpenThreadDuplicates(
+        securityScan.merge(refined, ctx),
+        ctx.priorAiResponses(),
+        ctx.inlineComments(),
+        lineResolver,
+        VerdictBuilder.renameTargets(ctx.files()),
+        botIdentity);
   }
 
   /**
