@@ -27,9 +27,15 @@ import java.util.UUID;
 
 /**
  * Persists and reads {@link ReviewLearning} rows (#38). Short transactions only — never spans a
- * GitHub or model call. Every read and write is scoped to one installation and one repository, so a
- * learning taught on one repository can never reach a review of another, nor a review of the same
- * repository name under a different installation.
+ * GitHub or model call. Every write, and every read that feeds a review or a comment command, is
+ * scoped to one installation and one repository, so a learning taught on one repository can never
+ * reach a review of another, nor a review of the same repository name under a different
+ * installation. The one exception is {@link #listForAudit}, the dashboard's read-only history,
+ * which is scoped to the repository alone behind the dashboard's repository-access check.
+ *
+ * <p>The per-repository cap is checked before each insert rather than enforced by a lock, so two
+ * captures racing at the cap can each add one row. It bounds growth, not an exact count; the prompt
+ * is bounded separately by its own item and character caps.
  */
 @ApplicationScoped
 public class ReviewLearningService {

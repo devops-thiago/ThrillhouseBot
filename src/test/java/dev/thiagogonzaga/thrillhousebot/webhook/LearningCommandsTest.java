@@ -89,12 +89,14 @@ class LearningCommandsTest {
                     "Threads are flat, ping @someone"),
                 view(5, ReviewLearning.KIND_CONVENTION, null, null, "x".repeat(300)),
                 view(6, ReviewLearning.KIND_CONVENTION, null, "docs/", "docs rule"),
-                view(7, ReviewLearning.KIND_DECLINE, "t", null, " ")));
+                view(7, ReviewLearning.KIND_DECLINE, "t", null, " "),
+                view(8, ReviewLearning.KIND_DECLINE, null, "src/B.java", "why"),
+                view(9, ReviewLearning.KIND_DECLINE, " ", null, "why")));
 
     var reply = commands.reply(ctx(CommentCommand.LEARNINGS, "/learnings"));
 
     assertTrue(reply.startsWith("## 🧠 ThrillhouseBot learnings for this repository"), reply);
-    assertTrue(reply.contains("4 of at most 100 active."), reply);
+    assertTrue(reply.contains("6 of at most 100 active."), reply);
     assertTrue(
         reply.contains(
             "| 4 | declined finding | `renderThread \\| misses nested replies` in `src/A.java` |"
@@ -104,6 +106,9 @@ class LearningCommandsTest {
     assertTrue(reply.contains("| 5 | convention | whole repository | `" + "x".repeat(199) + "…`"));
     assertTrue(reply.contains("| 6 | convention | `docs/` |"), reply);
     assertTrue(reply.contains("| 7 | declined finding | `t` | - |"), reply);
+    assertTrue(
+        reply.contains("| 8 | declined finding | untitled finding in `src/B.java` |"), reply);
+    assertTrue(reply.contains("| 9 | declined finding | untitled finding | `why` |"), reply);
     assertFalse(reply.contains("older learning"), reply);
   }
 

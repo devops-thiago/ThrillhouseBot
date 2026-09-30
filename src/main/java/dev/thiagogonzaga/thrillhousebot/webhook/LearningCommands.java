@@ -128,7 +128,11 @@ public class LearningCommands {
     var where = l.path() == null ? null : code(l.path());
     String about;
     if (decline) {
-      about = code(l.findingTitle()) + (where == null ? "" : " in " + where);
+      var title =
+          l.findingTitle() == null || l.findingTitle().isBlank()
+              ? "untitled finding"
+              : code(l.findingTitle());
+      about = title + (where == null ? "" : " in " + where);
     } else {
       about = where == null ? "whole repository" : where;
     }
