@@ -190,16 +190,23 @@ public final class PromptLabelScrubber {
   /** The config-key context block's heading, cited by name (#950). */
   private static final Pattern CONFIG_KEY_HEADING =
       Pattern.compile(
-          "(?<![\\w-])(?:the )?\"?config[- ]key definitions from the repository\"?"
-              + "(?: (?:section|block))?",
+          "(?<![\\w-])(the )?\"?config(?:uration)?[- ]keys? definitions from the repository\"?"
+              + "(?: (?:sections?|blocks?))?",
           Pattern.CASE_INSENSITIVE);
 
   private static final String CONFIG_KEY_CODE = "the repository's configuration code";
 
+  /** A determiner ending the text before the heading's name: "the repository's", "its", "this". */
+  private static final Pattern DETERMINER_BEFORE =
+      Pattern.compile(
+          "(?:'s|(?<![\\w-])(?:its|this|that|a|an|their|our|your))[ \\t]+$",
+          Pattern.CASE_INSENSITIVE);
+
   /** "config-key definitions section", "config key definition block" and the like (#950). */
   private static final Pattern CONFIG_KEY_SECTION =
       Pattern.compile(
-          "(?<![\\w-])config[- ]keys? definitions? (?:section|block)\\b", Pattern.CASE_INSENSITIVE);
+          "(?<![\\w-])config(?:uration)?[- ]keys? definitions? (?:sections?|blocks?)\\b",
+          Pattern.CASE_INSENSITIVE);
 
   /** The prompts' name for everything they hand the model (#950). */
   private static final Pattern PROVIDED_MATERIAL =
@@ -411,7 +418,7 @@ public final class PromptLabelScrubber {
     s = GUIDANCE_ASIDE.matcher(s).replaceAll(" ");
     s = RESTATED_RULE.matcher(s).replaceAll("");
     s = rewriteLearningIds(s);
-    s = CONFIG_KEY_HEADING.matcher(s).replaceAll(m -> capitalizeLike(m.group(), CONFIG_KEY_CODE));
+    s = rewriteConfigKeyHeading(s);
     s =
         CONFIG_KEY_SECTION
             .matcher(s)
@@ -422,6 +429,23 @@ public final class PromptLabelScrubber {
             m ->
                 capitalizeLike(
                     m.group(), m.group(1) == null ? "reviewed code" : "the reviewed code"));
+  }
+
+  /**
+   * The config-key block's heading, cited by name, as "the repository's configuration code" — or as
+   * "configuration code" alone when a determiner already stands before it ("the repository's
+   * \"Config key definitions from the repository\" block"), so the determiner is not doubled.
+   */
+  private static String rewriteConfigKeyHeading(String text) {
+    return CONFIG_KEY_HEADING
+        .matcher(text)
+        .replaceAll(
+            m -> {
+              boolean determined =
+                  m.group(1) == null
+                      && DETERMINER_BEFORE.matcher(text.substring(0, m.start())).find();
+              return capitalizeLike(m.group(), determined ? "configuration code" : CONFIG_KEY_CODE);
+            });
   }
 
   /** {@code phrase}, capitalized when {@code original} starts with a capital. */

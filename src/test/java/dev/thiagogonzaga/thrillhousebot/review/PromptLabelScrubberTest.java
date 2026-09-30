@@ -442,6 +442,11 @@ class PromptLabelScrubberTest {
           Config key definitions section: line 3. | Configuration code: line 3.
           shown in the "Config key definitions from the repository" section. | shown in the repository's configuration code.
           The Config key definitions from the repository block shows it. | The repository's configuration code shows it.
+          line 3 of the config-key definitions sections reads it | line 3 of the configuration code reads it
+          the configuration key definitions section lists four keys | the configuration code lists four keys
+          the repository's "Config key definitions from the repository" block shows it | the repository's configuration code shows it
+          its config key definitions from the repository section | its configuration code
+          as in "Config key definitions from the repository", the key | as in the repository's configuration code, the key
           # #154 4149694445, #157 4149687021, #158 4149709454: the prompts' name for their input.
           the only validation in the provided material is queue.zig line 25 | the only validation in the reviewed code is queue.zig line 25
           no intake handler exists anywhere in the provided material — verify it. | no intake handler exists anywhere in the reviewed code — verify it.
