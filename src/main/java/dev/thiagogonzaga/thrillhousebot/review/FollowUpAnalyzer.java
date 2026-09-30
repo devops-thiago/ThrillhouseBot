@@ -2488,7 +2488,10 @@ public class FollowUpAnalyzer {
    * <p>One defect is listed once: an entry that {@link #isSameFinding restates} one already kept,
    * or one of this round's own findings (a re-raise), is skipped, so the summary's counts are the
    * distinct open set rather than a drifted duplicate counted twice. Model ids outside the previous
-   * round name no finding and are skipped, as {@link #unresolvedFindings} skips them.
+   * round name no finding and are skipped, as {@link #unresolvedFindings} skips them. The
+   * comparison is pairwise because {@link #isSameFinding} is a tolerant predicate no key can index,
+   * the same trade {@link #clusterByIdentity} makes over the same set in the backstop; the set is
+   * bounded by the findings earlier rounds posted (19 on the largest PR in #917's evidence).
    *
    * @param previous the effective previous round's findings, the id space of {@code statuses}
    * @param statuses the round's effective {@code previous_findings_status}
@@ -2500,28 +2503,21 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.PreviousFindingStatus> statuses,
       List<HeldPrevious> held,
       List<ReviewResponse.Finding> newFindings) {
-    var candidates = new ArrayList<ReviewResponse.Finding>();
-    var unresolvedIds = new TreeSet<Integer>();
-    for (var status : statuses) {
-      if (STATUS_UNRESOLVED.equalsIgnoreCase(status.status())) {
-        unresolvedIds.add(status.id());
-      }
-    }
-    for (int id : unresolvedIds) {
-      if (id >= 1 && id <= previous.size()) {
-        candidates.add(previous.get(id - 1));
-      }
-    }
-    for (var hold : held) {
-      candidates.add(hold.finding());
-    }
-    var kept = new ArrayList<ReviewResponse.Finding>(candidates.size());
-    for (var candidate : candidates) {
-      if (Stream.concat(newFindings.stream(), kept.stream())
-          .noneMatch(seen -> isSameFinding(candidate, seen))) {
-        kept.add(candidate);
-      }
-    }
+    var unresolvedIds =
+        statuses.stream()
+            .filter(status -> STATUS_UNRESOLVED.equalsIgnoreCase(status.status()))
+            .map(ReviewResponse.PreviousFindingStatus::id)
+            .filter(id -> id >= 1 && id <= previous.size())
+            .collect(Collectors.toCollection(TreeSet::new));
+    var kept = new ArrayList<ReviewResponse.Finding>();
+    Stream.concat(
+            unresolvedIds.stream().map(id -> previous.get(id - 1)),
+            held.stream().map(HeldPrevious::finding))
+        .filter(
+            candidate ->
+                Stream.concat(newFindings.stream(), kept.stream())
+                    .noneMatch(seen -> isSameFinding(candidate, seen)))
+        .forEachOrdered(kept::add);
     return kept.stream().map(Finding::fromAiResponse).toList();
   }
 

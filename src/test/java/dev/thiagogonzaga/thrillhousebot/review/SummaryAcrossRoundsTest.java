@@ -65,11 +65,13 @@ class SummaryAcrossRoundsTest {
 
   /** The head every round reviews: each finding's anchor is still in it. */
   private static final String PATCH =
-      "@@ -10,0 +10,4 @@\n"
-          + "+String sql = \"SELECT * FROM t WHERE id = \" + input;\n"
-          + "+int total = count * price;\n"
-          + "+log(user.name());\n"
-          + "+String unused = \"\";";
+      """
+      @@ -10,0 +10,4 @@
+      +String sql = "SELECT * FROM t WHERE id = " + input;
+      +int total = count * price;
+      +log(user.name());
+      +String unused = "";\
+      """;
 
   private static final ReviewResponse.Finding CRITICAL =
       new ReviewResponse.Finding(

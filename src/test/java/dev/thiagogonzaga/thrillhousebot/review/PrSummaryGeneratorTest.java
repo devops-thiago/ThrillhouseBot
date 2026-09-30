@@ -1925,8 +1925,11 @@ class PrSummaryGeneratorTest {
   @Test
   void theCarriedCountNoteIsSingularForOneFinding() {
     assertEquals(
-        "_Counts every finding still open on this pull request, including 1 finding raised by an"
-            + " earlier review._\n\n",
+        """
+        _Counts every finding still open on this pull request, including 1 finding raised by an \
+        earlier review._
+
+        """,
         PrSummaryGenerator.carriedCountNote(1));
   }
 
