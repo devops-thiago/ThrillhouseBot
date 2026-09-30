@@ -695,7 +695,9 @@ so an external tracker can be added later as another provider behind
 Only issues of the PR's own repository are read; a reference to another repository is
 ignored. A number that turns out to be a pull request, the PR's own number, and an issue
 that is missing, deleted or not readable are skipped, and the review goes on without
-them. At most `REVIEW_TICKET_CONTEXT_MAX_ISSUES` issues are read. The issue is never
+them. At most `REVIEW_TICKET_CONTEXT_MAX_ISSUES` issues are used. An unreadable candidate
+lets the next one in, so a review makes at most ten issue reads plus the one GraphQL read
+whatever the cap. The issue is never
 modified: no comment, label or state change. Reading issues uses the `Issues`
 permission the manifest already requests, so no new permission is needed.
 

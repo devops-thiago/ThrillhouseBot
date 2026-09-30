@@ -72,6 +72,9 @@ public class TicketContextResolver {
 
   private static final Pattern LIST_ITEM = Pattern.compile("^(?:[-*+]|\\d{1,3}[.)])\\s+(\\S.*)$");
 
+  /** Leading spaces that make a line after a blank one, outside a list, indented code. */
+  private static final int INDENTED_CODE = 4;
+
   private static final Pattern FENCE = Pattern.compile("^\\s{0,3}(?:```|~~~)");
 
   private final IssueTrackerProvider provider;
@@ -205,9 +208,9 @@ public class TicketContextResolver {
    * An issue body split into its acceptance criteria and the rest. When the body has a section
    * headed "Acceptance criteria" (or "Definition of done"), its list items are the criteria.
    * Otherwise its task-list items are, except those under a heading an issue form adds for its own
-   * purposes (a code-of-conduct confirmation). Lines inside fenced code blocks are never criteria.
-   * A criterion keeps its checkbox state, since a ticked box is the issue author's claim rather
-   * than evidence, and the model is told so.
+   * purposes (a code-of-conduct confirmation). Lines inside fenced or indented code blocks are
+   * never criteria. A criterion keeps its checkbox state, since a ticked box is the issue author's
+   * claim rather than evidence, and the model is told so.
    */
   static Extracted extract(String body) {
     if (body.isBlank()) {
@@ -250,23 +253,30 @@ public class TicketContextResolver {
   /** Where a line sits in the body: inside a fenced block, and under which heading. */
   private static final class SectionTracker {
     private boolean inFence;
+    private boolean inIndentedCode;
+    private boolean inList;
+    private boolean afterBlank = true;
     private boolean inAcceptance;
     private boolean inIgnored;
     private int sectionLevel; // level of the heading that opened the section; 7 for a bold line
 
-    /** Consumes {@code line}; {@code true} when it is body text rather than a fence or heading. */
+    /**
+     * Consumes {@code line}; {@code true} when it is body text rather than a fence, a line of code,
+     * or a heading.
+     */
     boolean isContent(String line) {
       if (FENCE.matcher(line).find()) {
         inFence = !inFence;
         return false;
       }
-      if (inFence) {
+      if (inFence || isIndentedCode(line)) {
         return false;
       }
       var heading = Heading.parse(line);
       if (heading == null) {
         return true;
       }
+      inList = false;
       // A sub-heading inside an acceptance section stays part of it; any other heading starts a
       // new section.
       if (!inAcceptance || heading.level() <= sectionLevel) {
@@ -275,6 +285,28 @@ public class TicketContextResolver {
         sectionLevel = heading.level();
       }
       return false;
+    }
+
+    /**
+     * Whether {@code line} belongs to an indented code block, as Markdown draws one: four or more
+     * spaces after a blank line, outside a list (inside one, the same indent nests an item). Blank
+     * lines neither open nor close a block. Tracks list and blank-line state as it goes.
+     */
+    private boolean isIndentedCode(String line) {
+      if (line.isBlank()) {
+        afterBlank = true;
+        return inIndentedCode;
+      }
+      var indent = line.length() - line.stripLeading().length();
+      var opensCode = indent >= INDENTED_CODE && afterBlank && !inList;
+      inIndentedCode = (inIndentedCode && indent >= INDENTED_CODE) || opensCode;
+      afterBlank = false;
+      if (!inIndentedCode) {
+        var stripped = line.strip();
+        // A task item is a list item too; an indented line inside a list continues it.
+        inList = LIST_ITEM.matcher(stripped).matches() || (inList && indent > 0);
+      }
+      return inIndentedCode;
     }
 
     /** Whether a list item here can be a criterion in the given extraction mode. */

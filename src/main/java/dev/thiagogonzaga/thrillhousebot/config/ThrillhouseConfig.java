@@ -543,8 +543,9 @@ public interface ThrillhouseConfig {
    * the pull request says it implements and gives their title, body and acceptance criteria to the
    * review call (as intent) and to the summary call (which lists unmet acceptance criteria under
    * Description vs. Implementation). The issue is only read, never commented on, labelled or
-   * closed. Off by default: it adds prompt tokens and up to one GraphQL and {@link #maxIssues()}
-   * REST reads per review.
+   * closed. Off by default: it adds prompt tokens and, per review, up to one GraphQL read and one
+   * REST read per candidate issue until {@link #maxIssues()} are read — at most ten, since an
+   * unreadable candidate lets the next one in.
    */
   interface TicketContextConfig {
     /** The GitHub Issues provider, and the only one this build ships. */
@@ -576,7 +577,7 @@ public interface ThrillhouseConfig {
     @WithDefault(GITHUB_PROVIDER)
     String provider();
 
-    /** Linked issues read per review; references beyond this many are ignored. */
+    /** Linked issues used per review; once this many are read, later references are ignored. */
     @WithName("max-issues")
     @WithDefault("3")
     int maxIssues();

@@ -387,6 +387,44 @@ class TicketContextResolverTest {
     }
 
     @Test
+    void indentedCodeIsNeverACriterionButANestedItemIs() {
+      var extracted =
+          TicketContextResolver.extract(
+              """
+              ## Acceptance criteria
+              Example:
+
+                  - [ ] build with make
+
+              - [ ] top item
+                that wraps onto a second line
+                  - [ ] nested item
+
+                  - [ ] continued after a blank line
+              text
+              lazy
+                  - [ ] lazy continuation
+              """);
+
+      assertEquals(
+          List.of(
+              "[ ] top item",
+              "[ ] nested item",
+              "[ ] continued after a blank line",
+              "[ ] lazy continuation"),
+          extracted.criteria());
+      assertTrue(extracted.rest().contains("build with make"), extracted.rest());
+    }
+
+    @Test
+    void aBodyThatOpensWithIndentedCodeKeepsItOutOfTheCriteria() {
+      var extracted =
+          TicketContextResolver.extract("    - [ ] code\n\n    - [ ] still code\n- [ ] real\n");
+
+      assertEquals(List.of("[ ] real"), extracted.criteria());
+    }
+
+    @Test
     void anEmptyBodyHasNoCriteria() {
       var extracted = TicketContextResolver.extract("  ");
       assertEquals(List.of(), extracted.criteria());
