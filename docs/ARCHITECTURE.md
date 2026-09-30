@@ -269,6 +269,26 @@ report, `PatchCoverage` reads the changed lines it does not cover and gives them
 to the review, so new code with no test behind it can be named as such. Off
 unless `REVIEW_PATCH_COVERAGE_ENABLED` is set.
 
+**Review prompt structure** — the review call's system prompt (`PrReviewPrompts`)
+is a core plus ten dimension blocks. The core holds the identity, the
+untrusted-data rule, the finding fields, severity and confidence calibration,
+the self-check and the response contract. Correctness, security and regressions
+are always on; the other seven (comment contradicts code, quality and
+complexity, pagination, config/IaC, mock fidelity, producer→consumer, config-key
+documentation) are routed. With `REVIEW_DIMENSION_ROUTING_ENABLED` off, the
+default, every call carries all ten blocks exactly as before. With it on,
+`ReviewDimensionRouter` picks each call's blocks from that call's files: their
+kind (documentation, configuration or infrastructure, script, source, test)
+and two probes over the patch (API or list code, mocks or stubs). An
+unrecognized file type brings every block in, and a batch of mixed files gets
+the union. A routed prompt puts the whole core first and the dimensions after
+it, so the core is the prefix a provider's prompt cache matches across calls.
+The assembler sets the whole pull request's prompt, which `DiffBudgetPlanner`
+sizes the shared overhead from; the pipeline narrows it per batch, and a
+batch's prompt is never larger. Each call's routing is logged at INFO with the
+file that brought each block in. The verifier (`FindingVerifierPrompts`) routes
+its dimension carve-outs by the files its candidates are anchored in.
+
 **CI failures as review context** — with `REVIEW_CI_CONTEXT_ENABLED`, the CI
 gate's early reading of the head commit is taken alongside the context load
 instead of alongside the model call. `CiStatusEvaluator` keeps the failing and

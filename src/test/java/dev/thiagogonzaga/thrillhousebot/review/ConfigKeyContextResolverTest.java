@@ -1097,7 +1097,11 @@ class ConfigKeyContextResolverTest {
     var labeler = mock(PrLabeler.class);
     when(labeler.allowNewLabels()).thenReturn(false);
     var assembler =
-        new ReviewPromptAssembler(config, labeler, new ReviewDiffFormatter(List.of(), 5000));
+        new ReviewPromptAssembler(
+            config,
+            labeler,
+            new ReviewDiffFormatter(List.of(), 5000),
+            ReviewDimensionRouter.disabled());
     var ctx =
         new ReviewContextLoader.ReviewContext(
             files,

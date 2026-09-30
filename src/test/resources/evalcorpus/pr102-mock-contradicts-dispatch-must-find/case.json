@@ -6,5 +6,6 @@
   "targetFile": "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java",
   "keywords": ["mock contradicts", "contradict", "never throw", "swallows"],
   "prTitle": "fix(webhook): roll back dedup slot when dispatch fails (#89)",
-  "prDescription": "- [x] 🐛 Bug fix\n\nFixes #89\n\nAdds forget(deliveryId) when routeEvent catches a RuntimeException from a saturated review executor."
+  "prDescription": "- [x] 🐛 Bug fix\n\nFixes #89\n\nAdds forget(deliveryId) when routeEvent catches a RuntimeException from a saturated review executor.",
+  "dimensions": ["MOCK_FIDELITY"]
 }

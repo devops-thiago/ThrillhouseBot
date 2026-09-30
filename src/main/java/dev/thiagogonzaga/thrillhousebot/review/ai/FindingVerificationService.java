@@ -23,6 +23,7 @@ import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.Confidence;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
+import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
 import dev.thiagogonzaga.thrillhousebot.review.RiskLevel;
 import dev.thiagogonzaga.thrillhousebot.review.VerificationCoverage;
 import io.quarkus.logging.Log;
@@ -740,6 +741,24 @@ public class FindingVerificationService {
             coverageSink));
   }
 
+  /**
+   * The verifier system prompt for these candidates (#665). With dimension routing on, a routed
+   * carve-out is carried only when some candidate is anchored in a file of a kind its dimension
+   * covers — a mock-fidelity finding sits on a stub line, a config-key documentation finding on the
+   * documentation line, an artifact-reference finding in the file naming the artifact — judged from
+   * the path alone, with every dimension for a path the router does not recognize. Off, it is the
+   * monolithic prompt.
+   */
+  private String verifierSystemPrompt(List<ReviewResponse.Finding> candidates) {
+    if (!config.review().dimensionRoutingEnabled()) {
+      return FindingVerifierPrompts.SYSTEM;
+    }
+    var dimensions =
+        ReviewDimensionRouter.dimensionsForPaths(
+            candidates.stream().map(ReviewResponse.Finding::file).toList());
+    return FindingVerifierPrompts.verifierSystemPrompt(dimensions);
+  }
+
   /** The audit itself; {@link #verify} applies the deterministic severity floor to its result. */
   @SuppressWarnings("java:S107") // Mirrors the public overload it implements.
   private ReviewResponse audit(
@@ -776,7 +795,8 @@ public class FindingVerificationService {
               prContext == null ? "" : prContext,
               diff,
               projectStack,
-              previousFindings == null ? "" : previousFindings);
+              previousFindings == null ? "" : previousFindings,
+              verifierSystemPrompt(screened.findings()));
       // Meter before unwrapping: a truncated response was still billed, so its spend counts.
       recordVerifierUsage(ledgerSessionId, result);
       var raw =

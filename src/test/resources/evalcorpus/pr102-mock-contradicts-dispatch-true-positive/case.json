@@ -12,5 +12,6 @@
     "description": "WebhookControllerTest.shouldForgetDeliveryIdWhenDispatchFails stubs reviewDispatcher.dispatch(...) with doThrow(new RuntimeException(\"executor saturated\")). The real ReviewDispatcher.dispatch() in this same diff catches RejectedExecutionException from the executor, retires the state, and returns false — it never throws to its caller for executor saturation. The mock is impossible in production for the stated trigger, so the green test does not prove the forget() rollback path runs when the executor is saturated.",
     "suggestion_old": "",
     "suggestion_new": ""
-  }
+  },
+  "dimensions": ["MOCK_FIDELITY"]
 }

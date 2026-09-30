@@ -103,9 +103,62 @@ class AiReviewServiceTest {
   }
 
   @Test
+  void theReviewCallSendsTheSystemPromptTheInputsCarry() {
+    // #665: the system prompt is a per-call value — the monolith by default, the routed prompt
+    // the assembler or the pipeline picked otherwise — and it must reach the model unchanged.
+    ReviewSession session = reviewSession();
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenAnswer(inv -> new FakeTokenStream("{\"findings\":[]}"));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    service.review(session, PROMPT_INPUTS);
+    service.review(
+        session,
+        new AiReviewService.PromptInputs("diff", "", "base", "", "", "", "", "", "ROUTED_PROMPT"));
+
+    verify(prReviewer)
+        .reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            eq(PrReviewPrompts.SYSTEM));
+    verify(prReviewer)
+        .reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            eq("ROUTED_PROMPT"));
+  }
+
+  @Test
+  void aNullSystemPromptReadsAsTheMonolith() {
+    assertEquals(
+        PrReviewPrompts.SYSTEM,
+        new AiReviewService.PromptInputs("d", "", "", "", "", "", "", "", null)
+            .reviewSystemPrompt());
+  }
+
+  @Test
   void shouldUseUnknownErrorReasonOnRetryAfterNullMessageFailure() {
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -134,6 +187,7 @@ class AiReviewServiceTest {
     ReviewSession session = reviewSession();
     when(reviewConfig.maxAiRetries()).thenReturn(2);
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -171,6 +225,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(new FakeTokenStream("{\"findings\":[]}"));
     when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -185,6 +240,7 @@ class AiReviewServiceTest {
   void reviewBatchEmitsBatchProgressAndSuppressesTokenStream() {
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -249,6 +305,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(new ErrorTokenStream(new RuntimeException()));
 
@@ -264,6 +321,7 @@ class AiReviewServiceTest {
     ReviewSession session = reviewSession();
 
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -291,6 +349,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString());
 
     var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
@@ -303,6 +362,7 @@ class AiReviewServiceTest {
     ReviewSession session = reviewSession();
     when(reviewConfig.maxAiRetries()).thenReturn(1);
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -330,6 +390,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(new OrphanedAfterCompleteTokenStream(2_000));
     // Timeout wins before parse; stub is present to document the intended happy-path return value.
@@ -348,6 +409,7 @@ class AiReviewServiceTest {
     when(reviewConfig.maxAiRetries()).thenReturn(1);
     when(reviewConfig.aiTimeoutSeconds()).thenReturn(1);
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -403,6 +465,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(stream);
 
@@ -425,6 +488,7 @@ class AiReviewServiceTest {
     when(reviewConfig.aiTimeoutSeconds()).thenReturn(30);
     var streamWaitStarted = new CountDownLatch(1);
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -464,6 +528,7 @@ class AiReviewServiceTest {
     ReviewSession session = reviewSession();
     when(reviewConfig.aiTimeoutSeconds()).thenReturn(1);
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -612,6 +677,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(new CompleteOnlyTokenStream("{\"findings\":[]}"));
     when(parser.parse("{\"findings\":[]}"))
@@ -629,6 +695,7 @@ class AiReviewServiceTest {
   void shouldCoalesceStreamBroadcastsForManySmallTokens() {
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -668,6 +735,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(
             new PartialThenErrorTokenStream(
@@ -697,6 +765,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(new FakeTokenStream(payload, 256));
     when(parser.parse(payload)).thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -715,6 +784,7 @@ class AiReviewServiceTest {
   void shouldFlushOnTimeIntervalBeforeCompletion() {
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -747,6 +817,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(new PartialHangingTokenStream("partial-output"));
 
@@ -765,6 +836,7 @@ class AiReviewServiceTest {
     ReviewSession session = reviewSession();
     var chunk = "x".repeat(500);
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -801,6 +873,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenThrow(new RuntimeException());
 
@@ -822,6 +895,7 @@ class AiReviewServiceTest {
     ReviewSession session = reviewSession();
     when(reviewConfig.maxAiRetries()).thenReturn(1);
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -851,6 +925,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(new ErrorTokenStream(new Exception("checked failure")));
 
@@ -867,6 +942,7 @@ class AiReviewServiceTest {
     when(reviewConfig.maxAiRetries()).thenReturn(1);
     var longMessage = "x".repeat(250);
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -937,6 +1013,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenThrow(new RuntimeException())
         .thenReturn(new FakeTokenStream("{\"findings\":[]}"));
@@ -979,6 +1056,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(new FakeTokenStream("not-json"));
     when(parser.parse(anyString())).thenThrow(new IllegalArgumentException("still bad"));
@@ -995,6 +1073,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString());
   }
 
@@ -1004,6 +1083,7 @@ class AiReviewServiceTest {
     when(reviewConfig.maxAiRetries()).thenReturn(1);
     when(reviewConfig.aiTimeoutSeconds()).thenReturn(1);
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -1046,6 +1126,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(new HangingTokenStream());
 
@@ -1063,6 +1144,7 @@ class AiReviewServiceTest {
     when(reviewConfig.maxAiRetries()).thenReturn(1);
     when(reviewConfig.aiTimeoutSeconds()).thenReturn(1);
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -1124,6 +1206,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(new ErrorTokenStream(new RuntimeException("provider down")));
 
@@ -1134,6 +1217,7 @@ class AiReviewServiceTest {
     assertTrue(thrown.getMessage().contains("REVIEW_MAX_TOKENS_PER_REVIEW"), thrown.getMessage());
     verify(prReviewer, times(1))
         .reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -1159,6 +1243,7 @@ class AiReviewServiceTest {
     assertTrue(thrown.getMessage().contains("REVIEW_MAX_TOKENS_PER_REVIEW"), thrown.getMessage());
     verify(prReviewer, never())
         .reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -1194,6 +1279,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(new ErrorTokenStream(new RuntimeException("transient")))
         .thenReturn(new FakeTokenStream("{\"findings\":[]}"));
@@ -1204,6 +1290,7 @@ class AiReviewServiceTest {
     assertNotNull(response);
     verify(prReviewer, times(2))
         .reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -1241,6 +1328,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenAnswer(invocation -> new FakeTokenStream("{\"schema\":\"unexpected\"}"));
     when(parser.parse(anyString()))
@@ -1268,6 +1356,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString());
   }
 
@@ -1278,6 +1367,7 @@ class AiReviewServiceTest {
     var starts = new java.util.concurrent.atomic.AtomicInteger();
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -1310,6 +1400,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(
             new ErrorTokenStream(
@@ -1332,6 +1423,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString());
   }
 
@@ -1340,6 +1432,7 @@ class AiReviewServiceTest {
     // The dashboard must not show a retry that never happens.
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -1374,6 +1467,7 @@ class AiReviewServiceTest {
     var reasoningDisabledPerCall = new java.util.ArrayList<Boolean>();
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -1430,6 +1524,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         // No usage reported on the first stop: the step-down log must cope without counts.
         .thenReturn(new TruncatedTokenStream("", starts))
@@ -1461,6 +1556,7 @@ class AiReviewServiceTest {
     var starts = new java.util.concurrent.atomic.AtomicInteger();
     var calls = new java.util.concurrent.atomic.AtomicInteger();
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -1568,6 +1664,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(new FakeTokenStream(content, 400));
     var parsed = new ReviewResponse(List.of(), List.of(), null);
@@ -1621,6 +1718,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenAnswer(invocation -> new TruncatedTokenStream("{\"findings\":[", starts));
 
@@ -1643,6 +1741,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenAnswer(invocation -> TruncatedTokenStream.reasoningExhausted(starts));
 
@@ -1659,6 +1758,7 @@ class AiReviewServiceTest {
     var starts = new java.util.concurrent.atomic.AtomicInteger();
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -1717,6 +1817,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenAnswer(invocation -> new TruncatedTokenStream("{\"findings\":[", starts));
 
@@ -1740,6 +1841,7 @@ class AiReviewServiceTest {
     ReviewSession session = reviewSession();
     var partial = "{\"findings\":[{\"file\":\"A";
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -1827,6 +1929,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenAnswer(
             invocation ->
@@ -1859,6 +1962,7 @@ class AiReviewServiceTest {
     var starts = new java.util.concurrent.atomic.AtomicInteger();
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -1928,6 +2032,7 @@ class AiReviewServiceTest {
     var gate = new ModelCallGate(1, Duration.ofSeconds(30), System::nanoTime);
     var slotsWhileRunning = new AtomicInteger(-1);
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
@@ -2010,6 +2115,7 @@ class AiReviewServiceTest {
 
       verify(prReviewer, never())
           .reviewStream(
+              anyString(),
               anyString(),
               anyString(),
               anyString(),
@@ -2141,6 +2247,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenReturn(first, then);
   }
@@ -2148,6 +2255,7 @@ class AiReviewServiceTest {
   private void verifyReviewStreamCalls(int expected) {
     verify(prReviewer, times(expected))
         .reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),

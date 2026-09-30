@@ -1,0 +1,17 @@
+{
+  "kind": "generator",
+  "sourcePr": 198,
+  "why": "Real shape from PR #198, fixed by #305 (issue #304): currentLabelKeys reads listIssueLabels for page 1 only and its result is then used as the complete set — counted for the per-PR label budget and searched with contains — so on a PR with more labels than one page holds the reconciler undercounts and re-applies labels past max-labels, with no error. The bot caught this on itself in #198. Dimension 6 (pagination) is the block that asks for the page walk; with dimension routing on, this case fails if a source batch with a REST list call stops carrying it.",
+  "expectation": "must-find",
+  "targetFile": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/PrLabeler.java",
+  "keywords": [
+    "page",
+    "paginat",
+    "truncat"
+  ],
+  "prTitle": "feat(review): keep re-reviews from pushing a PR past max-labels",
+  "prDescription": "Counts the labels already on the PR against REVIEW_LABELS_MAX so repeated reviews do not keep adding labels.",
+  "dimensions": [
+    "PAGINATION"
+  ]
+}

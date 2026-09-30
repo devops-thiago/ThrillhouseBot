@@ -98,7 +98,8 @@ class FindingPipelineTest {
             new TokenCounter(),
             tokenLedger,
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
-                new ObjectMapper()));
+                new ObjectMapper()),
+            ReviewDimensionRouter.disabled());
     when(quoteValidator.validate(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(frameworkFilter.filter(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(deduplicator.dedupe(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -2621,7 +2622,8 @@ class FindingPipelineTest {
             new TokenCounter(),
             tokenLedger,
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
-                new ObjectMapper()));
+                new ObjectMapper()),
+            ReviewDimensionRouter.disabled());
     var session = persistedSession();
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
@@ -2645,7 +2647,7 @@ class FindingPipelineTest {
 
     // No billed verifier call is made past the ceiling (the summary call stays refused too)...
     verify(findingVerifier, never())
-        .verify(anyString(), anyString(), anyString(), anyString(), anyString());
+        .verify(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
     verify(aiReviewService, never()).summarize(any(), any());
     // ...and the skip fails open: both batches' unverified findings survive.
     assertEquals(2, result.findings().size());
@@ -2678,7 +2680,8 @@ class FindingPipelineTest {
             new TokenCounter(),
             realLedger,
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
-                new ObjectMapper()));
+                new ObjectMapper()),
+            ReviewDimensionRouter.disabled());
     var session = persistedSession();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
@@ -2821,7 +2824,8 @@ class FindingPipelineTest {
             new TokenCounter(),
             tokenLedger,
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
-                new ObjectMapper()));
+                new ObjectMapper()),
+            ReviewDimensionRouter.disabled());
     var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
@@ -2891,6 +2895,147 @@ class FindingPipelineTest {
     var guidance = captor.getValue().repoInstructions();
     assertTrue(guidance.contains(PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST), guidance);
     assertTrue(guidance.startsWith("repo rules"), guidance);
+  }
+
+  /** The pipeline under test with review dimension routing on (#665). */
+  private FindingPipeline routedPipeline() {
+    return new FindingPipeline(
+        aiReviewService,
+        quoteValidator,
+        frameworkFilter,
+        deduplicator,
+        findingVerificationService,
+        new VerifierRejectionMemory(),
+        followUpAnalyzer,
+        new ObjectMapper(),
+        BotIdentity.from(List.of("thrillhousebot[bot]")),
+        budgetPlanner,
+        new TokenCounter(),
+        tokenLedger,
+        new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
+            new ObjectMapper()),
+        new ReviewDimensionRouter(true));
+  }
+
+  private static String routedPromptFor(DiffBudgetPlanner.DiffBatch batch) {
+    return PrReviewPrompts.reviewSystemPrompt(
+        ReviewDimensionRouter.routeFiles(batch.files()).dimensions());
+  }
+
+  /**
+   * #665 — each batch's system prompt is routed from that batch's own files, not the template's:
+   * the documentation batch drops the code dimensions and the source batch the documentation one.
+   */
+  @Test
+  void withRoutingOnEachBatchCarriesTheDimensionsOfItsOwnFiles() {
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var docs = batchAdding("README.md", "| `X_KEY` | the key | `1` |");
+    var code = batchAdding("src/main/java/app/Plain.java", "  var total = a + b;");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(docs, code), List.of(), List.of(), true, null, null, null, null);
+    var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    when(aiReviewService.reviewBatch(eq(session), captor.capture(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    routedPipeline()
+        .run(
+            session,
+            new AiReviewService.PromptInputs("", "ctx", "", "stack", "", "", ""),
+            reviewContext(),
+            plan,
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    var docsPrompt =
+        captor.getAllValues().stream()
+            .filter(i -> i.diff().contains("README.md"))
+            .findFirst()
+            .orElseThrow()
+            .reviewSystemPrompt();
+    var codePrompt =
+        captor.getAllValues().stream()
+            .filter(i -> i.diff().contains("Plain.java"))
+            .findFirst()
+            .orElseThrow()
+            .reviewSystemPrompt();
+    assertEquals(routedPromptFor(docs), docsPrompt);
+    assertEquals(routedPromptFor(code), codePrompt);
+    assertTrue(docsPrompt.contains(PrReviewPrompts.DIMENSION_CONFIG_KEY_DOCUMENTATION));
+    assertFalse(docsPrompt.contains(PrReviewPrompts.DIMENSION_CODE_QUALITY_AND_COMPLEXITY));
+    assertTrue(codePrompt.contains(PrReviewPrompts.DIMENSION_CODE_QUALITY_AND_COMPLEXITY));
+    assertFalse(codePrompt.contains(PrReviewPrompts.DIMENSION_CONFIG_KEY_DOCUMENTATION));
+  }
+
+  @Test
+  void withRoutingOffEveryBatchCarriesTheMonolith() {
+    var session = ReviewSession.create("owner/repo", 1, "Big PR", "sha");
+    var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    when(aiReviewService.reviewBatch(eq(session), captor.capture(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(
+        session,
+        new AiReviewService.PromptInputs("", "ctx", "", "stack", "", "", ""),
+        reviewContext(),
+        multiBatchPlan(),
+        new DiffLineResolver(Map.of()),
+        ReviewEvidence.NONE);
+
+    assertEquals(2, captor.getAllValues().size());
+    captor
+        .getAllValues()
+        .forEach(inputs -> assertEquals(PrReviewPrompts.SYSTEM, inputs.reviewSystemPrompt()));
+  }
+
+  @Test
+  void withRoutingOnTheBudgetedSingleCallIsRoutedFromItsBatch() {
+    var session = ReviewSession.create("owner/repo", 1, "Docs", "sha");
+    var docs = batchAdding("docs/config.md", "| `X_KEY` | the key | `1` |");
+    var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    when(aiReviewService.review(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    routedPipeline()
+        .run(
+            session,
+            new AiReviewService.PromptInputs("", "ctx", "", "stack", "", "", ""),
+            reviewContext(),
+            singleBatchPlan(docs, List.of()),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    assertEquals(routedPromptFor(docs), captor.getValue().reviewSystemPrompt());
+  }
+
+  @Test
+  void withRoutingOnAnUnbudgetedCallKeepsTheAssemblersPrompt() {
+    // Budgeting off, the one call reviews the whole pull request, whose prompt the assembler chose.
+    var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    var template =
+        new AiReviewService.PromptInputs(
+            "raw legacy diff", "ctx", "base", "s", "t", "", "", "", "ASSEMBLED_PROMPT");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(batch("a.java")), List.of(), List.of(), false, null, null, null, null);
+    var captor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    when(aiReviewService.review(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    routedPipeline()
+        .run(
+            session,
+            template,
+            reviewContext(),
+            plan,
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    assertEquals("ASSEMBLED_PROMPT", captor.getValue().reviewSystemPrompt());
   }
 
   /** Only the batch whose own slice introduces the rule pays for the dimension. */
