@@ -42,16 +42,63 @@ public record ReviewResult(
     // How many outstanding findings were severe enough to block but were denied eligibility by
     // their confidence alone, on a review that did not end up requesting changes — see
     // #confidenceHoldNotice(int). Zero whenever the hedge was not what decided the verdict.
-    int blockingWithheldByConfidence) {
+    int blockingWithheldByConfidence,
+    // Findings from earlier rounds still open after this one (#917): the summary edited in place
+    // describes the pull request's current state, so it lists these beside the round's own
+    // findings. Not part of findings(), which stays this round's set for the verdict, the check
+    // run and the inline comments.
+    List<Finding> openPreviousFindings) {
   public ReviewResult {
     findings = List.copyOf(findings);
     previousStatuses = List.copyOf(previousStatuses);
+    openPreviousFindings = List.copyOf(openPreviousFindings);
     offendingCiChecks = offendingCiChecks == null ? List.of() : List.copyOf(offendingCiChecks);
     truncation = truncation == null ? TruncationDetail.EMPTY : truncation;
     // Check-run conclusion derivation relies on a non-null state.
     if (reviewState == null) {
       reviewState = ReviewState.fromHighestRisk(highestRisk);
     }
+  }
+
+  /**
+   * Constructor for results that carry no earlier round's open findings: a first review, and every
+   * caller that renders nothing from them.
+   */
+  public ReviewResult(
+      List<Finding> findings,
+      int criticalCount,
+      int highCount,
+      int mediumCount,
+      int lowCount,
+      RiskLevel highestRisk,
+      ReviewState reviewState,
+      boolean isFirstReview,
+      String summaryMarkdown,
+      List<PreviousFindingStatus> previousStatuses,
+      List<CiCheck> offendingCiChecks,
+      int omittedFiles,
+      boolean ciUnreadable,
+      boolean requiredContextsKnown,
+      TruncationDetail truncation,
+      int blockingWithheldByConfidence) {
+    this(
+        findings,
+        criticalCount,
+        highCount,
+        mediumCount,
+        lowCount,
+        highestRisk,
+        reviewState,
+        isFirstReview,
+        summaryMarkdown,
+        previousStatuses,
+        offendingCiChecks,
+        omittedFiles,
+        ciUnreadable,
+        requiredContextsKnown,
+        truncation,
+        blockingWithheldByConfidence,
+        List.of());
   }
 
   /**
