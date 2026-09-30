@@ -372,7 +372,8 @@ class SecurityScanTest {
                 List.of(),
                 Set.of());
     assertEquals("[long] and [short]", merged.findings().get(0).description());
-    assertNull(SecurityScan.scrub(null, result.redactions()));
+    assertNull(SecurityScan.Scrubber.of(result.redactions()).scrub(null));
+    assertEquals("x", SecurityScan.Scrubber.of(List.of()).scrub("x"));
   }
 
   @Test
@@ -641,7 +642,18 @@ class SecurityScanTest {
     var otherTitle =
         new ReviewResponse.Finding(
             "critical", "high", "app.env", 1, "Hardcoded token", "d", null, null);
-    var merged = s.merge(response(), s.scan(files), List.of(noFile, otherTitle), Set.of());
+    var otherFile =
+        new ReviewResponse.Finding(
+            "critical", "high", "other.env", 1, raised.title(), "d", null, null);
+    var otherScanTitle =
+        new ReviewResponse.Finding(
+            "high", "high", "app.env", 1, SecurityRule.HOST_NAMESPACE.iacTitle(), "d", "x", null);
+    var merged =
+        s.merge(
+            response(),
+            s.scan(files),
+            List.of(noFile, otherTitle, otherFile, otherScanTitle),
+            Set.of());
     assertEquals(1, merged.findings().size());
     assertTrue(merged.previousFindingsStatus().isEmpty());
   }

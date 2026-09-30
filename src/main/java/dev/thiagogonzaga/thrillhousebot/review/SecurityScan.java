@@ -29,8 +29,10 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -183,17 +185,19 @@ public class SecurityScan {
       Result result,
       List<ReviewResponse.Finding> previous,
       Set<Integer> settledIds) {
+    var scanPriors = openScanPriors(previous, settledIds);
+    var scrubber = Scrubber.of(result.redactions());
     var tracked = new LinkedHashMap<Integer, Detection>();
     var raised = new ArrayList<ReviewResponse.Finding>();
     for (var detection : result.detections()) {
-      int priorId = priorIdOf(detection.finding(), previous, settledIds);
+      int priorId = priorIdOf(detection.finding(), scanPriors);
       if (priorId > 0) {
         tracked.putIfAbsent(priorId, detection);
       } else {
         raised.add(detection.finding());
       }
     }
-    var cleared = clearedPriorIds(previous, settledIds, tracked.keySet(), result.scannedFiles());
+    var cleared = clearedPriorIds(scanPriors, tracked.keySet(), result.scannedFiles());
 
     var kept = new ArrayList<ReviewResponse.Finding>();
     int duplicates = 0;
@@ -201,12 +205,11 @@ public class SecurityScan {
       if (duplicatesDetection(finding, result.detections())) {
         duplicates++;
       } else {
-        kept.add(scrub(finding, result.redactions()));
+        kept.add(scrub(finding, scrubber));
       }
     }
     kept.addAll(raised);
-    var statuses =
-        statuses(response.previousFindingsStatus(), tracked.keySet(), cleared, result.redactions());
+    var statuses = statuses(response.previousFindingsStatus(), tracked.keySet(), cleared, scrubber);
     // A duplicate needs a detection, so these two cover every merge that changed anything.
     if (!result.detections().isEmpty() || !cleared.isEmpty()) {
       Log.infof(
@@ -364,48 +367,55 @@ public class SecurityScan {
   }
 
   /**
-   * The 1-based id of the effective previous round's finding this detection repeats, or {@code 0}.
-   * A settled id is skipped: a finding a newer round closed is not the one to keep open, and a
-   * value re-added after it was resolved is a new leak.
+   * The effective previous round's findings the scan raised and no newer round settled, by 1-based
+   * id. Selected once per merge, so matching a detection or closing a prior walks only the scan's
+   * own findings rather than the whole previous round. A settled id is left out: a finding a newer
+   * round closed is not the one to keep open, and a value re-added after it was resolved is a new
+   * leak.
    */
-  private static int priorIdOf(
-      ReviewResponse.Finding detection,
-      List<ReviewResponse.Finding> previous,
-      Set<Integer> settledIds) {
+  private static Map<Integer, ReviewResponse.Finding> openScanPriors(
+      List<ReviewResponse.Finding> previous, Set<Integer> settledIds) {
+    var priors = new LinkedHashMap<Integer, ReviewResponse.Finding>();
     for (int i = 0; i < previous.size(); i++) {
       var prior = previous.get(i);
       if (!settledIds.contains(i + 1)
           && prior.file() != null
-          && FilePaths.same(prior.file(), detection.file())
+          && SecurityRule.fromTitle(prior.title()) != null) {
+        priors.put(i + 1, prior);
+      }
+    }
+    return priors;
+  }
+
+  /** The id of the open scan prior this detection repeats (same file, title, anchor), or 0. */
+  private static int priorIdOf(
+      ReviewResponse.Finding detection, Map<Integer, ReviewResponse.Finding> scanPriors) {
+    for (var entry : scanPriors.entrySet()) {
+      var prior = entry.getValue();
+      if (FilePaths.same(prior.file(), detection.file())
           && Objects.equals(prior.title(), detection.title())
           && Objects.equals(stripped(prior.suggestionOld()), stripped(detection.suggestionOld()))) {
-        return i + 1;
+        return entry.getKey();
       }
     }
     return 0;
   }
 
   /**
-   * The effective previous round's scan findings that this scan provably no longer sees: raised by
-   * a rule whose half is on, in a file the scan read, and not repeated by any detection.
+   * The open scan priors this scan provably no longer sees: raised by a rule whose half is on, in a
+   * file the scan read, and not repeated by any detection.
    */
   private Set<Integer> clearedPriorIds(
-      List<ReviewResponse.Finding> previous,
-      Set<Integer> settledIds,
+      Map<Integer, ReviewResponse.Finding> scanPriors,
       Set<Integer> trackedIds,
       List<String> scannedFiles) {
     var cleared = new HashSet<Integer>();
-    for (int i = 0; i < previous.size(); i++) {
-      int id = i + 1;
-      var prior = previous.get(i);
-      var rule = SecurityRule.fromTitle(prior.title());
-      if (rule != null
-          && halfEnabled(rule)
-          && !settledIds.contains(id)
-          && !trackedIds.contains(id)
-          && prior.file() != null
+    for (var entry : scanPriors.entrySet()) {
+      var prior = entry.getValue();
+      if (halfEnabled(SecurityRule.fromTitle(prior.title()))
+          && !trackedIds.contains(entry.getKey())
           && scannedFiles.stream().anyMatch(f -> FilePaths.same(f, prior.file()))) {
-        cleared.add(id);
+        cleared.add(entry.getKey());
       }
     }
     return cleared;
@@ -424,12 +434,12 @@ public class SecurityScan {
       List<ReviewResponse.PreviousFindingStatus> reported,
       Set<Integer> stillDetected,
       Set<Integer> noLongerDetected,
-      List<Redaction> redactions) {
+      Scrubber scrubber) {
     var result = new ArrayList<ReviewResponse.PreviousFindingStatus>(reported.size());
     var seen = new HashSet<Integer>();
     for (var status : reported) {
       seen.add(status.id());
-      result.add(applyScan(status, stillDetected, noLongerDetected, redactions));
+      result.add(applyScan(status, stillDetected, noLongerDetected, scrubber));
     }
     Stream.concat(stillDetected.stream(), noLongerDetected.stream())
         .filter(id -> !seen.contains(id))
@@ -449,8 +459,8 @@ public class SecurityScan {
       ReviewResponse.PreviousFindingStatus status,
       Set<Integer> stillDetected,
       Set<Integer> noLongerDetected,
-      List<Redaction> redactions) {
-    var note = scrub(status.note(), redactions);
+      Scrubber scrubber) {
+    var note = scrubber.scrub(status.note());
     if (stillDetected.contains(status.id())
         && !STATUS_JUSTIFIED.equalsIgnoreCase(status.status())) {
       return new ReviewResponse.PreviousFindingStatus(
@@ -497,33 +507,58 @@ public class SecurityScan {
         .collect(Collectors.toSet());
   }
 
-  private static ReviewResponse.Finding scrub(
-      ReviewResponse.Finding finding, List<Redaction> redactions) {
-    if (redactions.isEmpty()) {
-      return finding;
-    }
+  private static ReviewResponse.Finding scrub(ReviewResponse.Finding finding, Scrubber scrubber) {
     var scrubbed =
         new ReviewResponse.Finding(
             finding.risk(),
             finding.confidence(),
             finding.file(),
             finding.line(),
-            scrub(finding.title(), redactions),
-            scrub(finding.description(), redactions),
-            scrub(finding.suggestionOld(), redactions),
-            scrub(finding.suggestionNew(), redactions));
+            scrubber.scrub(finding.title()),
+            scrubber.scrub(finding.description()),
+            scrubber.scrub(finding.suggestionOld()),
+            scrubber.scrub(finding.suggestionNew()));
     return scrubbed.equals(finding) ? finding : scrubbed;
   }
 
-  static String scrub(String text, List<Redaction> redactions) {
-    if (text == null) {
-      return null;
+  /**
+   * Replaces every matched value in a text with its redacted form in one pass: the values are
+   * compiled into a single alternation once per merge, longest first so a value that contains
+   * another is replaced whole, instead of rebuilding each text once per value.
+   */
+  static final class Scrubber {
+    private static final Scrubber NONE = new Scrubber(null, Map.of());
+
+    private final Pattern values;
+    private final Map<String, String> replacements;
+
+    private Scrubber(Pattern values, Map<String, String> replacements) {
+      this.values = values;
+      this.replacements = replacements;
     }
-    var scrubbed = text;
-    for (var redaction : redactions) {
-      scrubbed = scrubbed.replace(redaction.literal(), redaction.replacement());
+
+    /** Built from redactions already ordered longest first ({@link Result#redactions()}). */
+    static Scrubber of(List<Redaction> redactions) {
+      if (redactions.isEmpty()) {
+        return NONE;
+      }
+      var replacements = new LinkedHashMap<String, String>();
+      for (var redaction : redactions) {
+        replacements.putIfAbsent(redaction.literal(), redaction.replacement());
+      }
+      var alternation =
+          replacements.keySet().stream().map(Pattern::quote).collect(Collectors.joining("|"));
+      return new Scrubber(Pattern.compile(alternation), replacements);
     }
-    return scrubbed;
+
+    String scrub(String text) {
+      if (text == null || values == null) {
+        return text;
+      }
+      return values
+          .matcher(text)
+          .replaceAll(match -> Matcher.quoteReplacement(replacements.get(match.group())));
+    }
   }
 
   private static String stripped(String text) {
