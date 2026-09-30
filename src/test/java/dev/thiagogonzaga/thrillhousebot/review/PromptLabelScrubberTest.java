@@ -435,6 +435,11 @@ class PromptLabelScrubberTest {
           Tags are fine; [L12] still applies. | Tags are fine; a maintainer's earlier decision still applies.
           Is it fine? [L12] says yes. | Is it fine? A maintainer's earlier decision says yes.
           x.[L12] holds | x.a maintainer's earlier decision holds
+          its [L12] says so | its earlier maintainer decision says so
+          this [L1]/[L2] pair still holds | this earlier maintainer decisions pair still holds
+          tags stay (not [L12]) here | tags stay (not a maintainer's earlier decision) here
+          - ([L12]) Tags hold | - Tags hold
+          ok (per [L12]). | ok.
           # ThrillhouseBot-test#156 comments 4149744690 and 4149744783, #158.
           confirmed by the repository's config-key definitions section (which lists only X) | confirmed by the repository's configuration code (which lists only X)
           The repository's config-key definitions section for ARTWORK_DIR gives | The repository's configuration code for ARTWORK_DIR gives
@@ -447,6 +452,10 @@ class PromptLabelScrubberTest {
           the repository's "Config key definitions from the repository" block shows it | the repository's configuration code shows it
           its config key definitions from the repository section | its configuration code
           as in "Config key definitions from the repository", the key | as in the repository's configuration code, the key
+          "Config key definitions from the repository" states it. | The repository's configuration code states it.
+          shown in Config key definitions from the repository. | shown in the repository's configuration code.
+          in the repository's Config-key definitions section. | in the repository's configuration code.
+          Fine. Config-key definitions section agrees. | Fine. Configuration code agrees.
           # #154 4149694445, #157 4149687021, #158 4149709454: the prompts' name for their input.
           the only validation in the provided material is queue.zig line 25 | the only validation in the reviewed code is queue.zig line 25
           no intake handler exists anywhere in the provided material — verify it. | no intake handler exists anywhere in the reviewed code — verify it.

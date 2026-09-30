@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -170,18 +171,24 @@ public final class PromptLabelScrubber {
    * ({@code [L10](...)}).
    */
   private static final String LEARNING_ID_GROUP =
-      "(?<![\\w\\]\\[])\\[L\\d{1,18}\\](?![(\\[])"
-          + "(?:(?: ?[/,&] ?| (?:and|or) )\\[L\\d{1,18}\\](?![(\\[]))*";
+      "(?<![\\w\\[\\]])\\[L\\d{1,18}](?:[ /,&]{1,3}(?:(?:and|or) )?\\[L\\d{1,18}])*(?![(\\[])";
 
   private static final Pattern LEARNING_IDS = Pattern.compile(LEARNING_ID_GROUP);
 
-  /** "([L51]/[L52]/[L53])" or "(see [L12])", with the blanks before it. */
+  /**
+   * "([L51]/[L52]/[L53])" or "(see [L12])", with the blanks before it; whether the words before the
+   * ids are only a citing lead is decided by {@link #CITING_LEADS}.
+   */
   private static final Pattern LEARNING_ID_PARENTHETICAL =
-      Pattern.compile("[ \\t]*\\((?:(?i:see|per|cf\\.?|e\\.g\\.,?) )?" + LEARNING_ID_GROUP + "\\)");
+      Pattern.compile("[ \\t]*\\(([^()\\n]{0,6}?)" + LEARNING_ID_GROUP + "\\)");
+
+  /** What may stand before the ids of a parenthetical that goes whole: "(see [L12])". */
+  private static final Set<String> CITING_LEADS =
+      Set.of("", "see", "per", "cf", "cf.", "e.g.", "e.g.,");
 
   /** "the decision [L12]": the noun already says what the id stood for. */
   private static final Pattern NAMED_LEARNING_IDS =
-      Pattern.compile("(?<![\\w-])((?i:decisions?|learnings?))[ \\t]+" + LEARNING_ID_GROUP);
+      Pattern.compile("\\b((?i:decision|learning)s?) " + LEARNING_ID_GROUP);
 
   /** An article ending the text before a learning id: "the [L12]". */
   private static final Pattern ARTICLE_BEFORE =
@@ -419,10 +426,15 @@ public final class PromptLabelScrubber {
     s = RESTATED_RULE.matcher(s).replaceAll("");
     s = rewriteLearningIds(s);
     s = rewriteConfigKeyHeading(s);
+    var headed = s;
     s =
         CONFIG_KEY_SECTION
-            .matcher(s)
-            .replaceAll(m -> capitalizeLike(m.group(), "configuration code"));
+            .matcher(headed)
+            .replaceAll(
+                m ->
+                    opensSentence(headed, m.start(), 0)
+                        ? "Configuration code"
+                        : "configuration code");
     return PROVIDED_MATERIAL
         .matcher(s)
         .replaceAll(
@@ -441,10 +453,17 @@ public final class PromptLabelScrubber {
         .matcher(text)
         .replaceAll(
             m -> {
-              boolean determined =
-                  m.group(1) == null
-                      && DETERMINER_BEFORE.matcher(text.substring(0, m.start())).find();
-              return capitalizeLike(m.group(), determined ? "configuration code" : CONFIG_KEY_CODE);
+              if (m.group(1) != null) {
+                return capitalizeLike(m.group(1), CONFIG_KEY_CODE);
+              }
+              if (DETERMINER_BEFORE.matcher(text.substring(0, m.start())).find()) {
+                return "configuration code";
+              }
+              // The heading prints "Config" in capitals, so its case says nothing about the
+              // sentence: a quoted or bare heading is capitalized only where a sentence opens.
+              return opensSentence(text, m.start(), 0)
+                  ? capitalize(CONFIG_KEY_CODE)
+                  : CONFIG_KEY_CODE;
             });
   }
 
@@ -469,7 +488,14 @@ public final class PromptLabelScrubber {
     if (!text.contains("[L")) {
       return text;
     }
-    var s = LEARNING_ID_PARENTHETICAL.matcher(text).replaceAll("");
+    var s =
+        LEARNING_ID_PARENTHETICAL
+            .matcher(text)
+            .replaceAll(
+                m ->
+                    CITING_LEADS.contains(m.group(1).strip().toLowerCase(Locale.ROOT))
+                        ? ""
+                        : Matcher.quoteReplacement(m.group()));
     s = NAMED_LEARNING_IDS.matcher(s).replaceAll("$1");
     var m = LEARNING_IDS.matcher(s);
     var out = new StringBuilder(s.length());
@@ -486,6 +512,10 @@ public final class PromptLabelScrubber {
         if (!plural && "the".equalsIgnoreCase(article.group(1))) {
           phrase = "the maintainer's earlier decision";
         }
+      } else if (DETERMINER_BEFORE.matcher(s.substring(at, start)).find()) {
+        // "its [L12]", "this [L12]", "the decision's [L12]": the determiner stays, so no article.
+        phrase = plural ? "earlier maintainer decisions" : "earlier maintainer decision";
+        capital = false;
       } else {
         capital = opensSentence(s, start, at);
       }

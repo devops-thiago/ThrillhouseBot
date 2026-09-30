@@ -274,7 +274,7 @@ class MaintainerReplyServiceTest {
     service.handle(reviewThreadTask(true));
 
     var reply = ArgumentCaptor.forClass(GitHubReviewClient.ReplyToReviewCommentRequest.class);
-    verify(reviewClient, org.mockito.Mockito.times(3))
+    verify(reviewClient, times(3))
         .replyToReviewComment(
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), reply.capture());
     assertEquals(
