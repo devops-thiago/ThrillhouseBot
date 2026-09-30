@@ -52,6 +52,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics
+- Optional deterministic security scan of the added lines — leaked credentials in well-known formats and a short list of risky Terraform, Kubernetes, CloudFormation and Dockerfile settings — raised as findings without a model call, with every matched secret redacted
 - Optional outgoing notification when a review completes or fails — structured JSON or a Slack/Discord message, HMAC-signed, metadata only unless you opt in
 - Optional reasoning-effort dial and per-model generation/budget caps for OpenAI-compatible endpoints
 - Reads per-repo instructions from `.github/thrillhousebot.md`, falling back to Copilot/Claude/Agents files
@@ -334,6 +335,10 @@ will change per provider:
 | `REVIEW_LARGE_PR_NUDGE_ENABLED` | Add a note to the PR summary when a large PR's review opened **no inline finding** — it may be genuinely clean, or the pass may have been shallow — pointing at `/review` and `/improve`. Costs no extra AI call and never changes the verdict; a PR under both thresholds below is unaffected | `false` |
 | `REVIEW_LARGE_PR_NUDGE_MIN_FILES` | Changed files at or above which the nudge applies (PR-level total, so ignored files still count). `0` switches this dimension off | `20` |
 | `REVIEW_LARGE_PR_NUDGE_MIN_CHANGED_LINES` | Changed lines (additions + deletions) at or above which the nudge applies; either dimension triggers it on its own. `0` switches this dimension off — with both at `0` the nudge never fires | `1000` |
+| `REVIEW_SECRET_SCAN_ENABLED` | Scan the lines a PR adds for leaked credentials (see [Security scan](#security-scan)). No AI call; a match posts as a critical or high finding with the value redacted | `false` |
+| `REVIEW_IAC_SCAN_ENABLED` | Scan the lines a PR adds for risky infrastructure-as-code settings (see [Security scan](#security-scan)). No AI call | `false` |
+| `REVIEW_SECRET_SCAN_ENTROPY_THRESHOLD` | Minimum Shannon entropy (bits per character) a quoted literal assigned to a credential-named key needs before the generic assignment rule reports it; the well-known token formats are not gated by it. Must lie in (0, 8] | `3.5` |
+| `REVIEW_SECURITY_SCAN_SKIPPED_FILES` | Comma-separated gitignore-style globs the security scan skips on top of the review's ignore set, for fixtures and snapshots that hold token-shaped sample data | `**/fixtures/**,**/__fixtures__/**,**/testdata/**,**/test-data/**,**/__snapshots__/**,**/*.snap` |
 | `REVIEW_MAX_INPUT_TOKENS` | Per-call input-token budget for review, `/improve`, `/describe` and `/changelog` calls; large PRs are split into batches that each fit it. Bounded by the active model's input cap (see [Per-model AI settings](#per-model-ai-settings)). `0` disables token budgeting | `48000` |
 | `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved out of the input budget for the model's response | `8192` |
 | `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` | Response cap (`max_tokens`) for the fixed-shape/short AI calls — the final summary of a multi-call review, the finding verifier, and maintainer replies — which run on the `concise` named model so they don't share a cap sized for batch review output (see [Per-model AI settings](#per-model-ai-settings)). A summary cut at this cap is salvaged from the cut response or falls back to a counts-only summary, the findings are kept, and the posted review names this variable; set it empty to drop the cap and use the provider default | `8192` |
@@ -616,6 +621,87 @@ If you switch to a different `AI_MODEL`, add a matching
 `thrillhousebot.ai.pricing.<model>.*` pair so the dashboard can compute cost.
 Without an entry the bot still records tokens, but warns once and flags sessions
 as "no pricing" instead of showing `$0`.
+
+### Security scan
+
+An opt-in pass reads the lines a pull request **adds** for leaked credentials
+(`REVIEW_SECRET_SCAN_ENABLED`) and risky infrastructure-as-code settings
+(`REVIEW_IAC_SCAN_ENABLED`). It is a fixed list of regular expressions: no model
+call, no extra dependency, and the same input always gives the same findings. It
+is distinct from general linter integration
+([#34](https://github.com/devops-thiago/ThrillhouseBot/issues/34)). Both halves are off by default, because each
+adds findings that can request changes on a deployment that did not have them.
+
+Secret rules (each finding is graded as listed, at high confidence):
+
+| Rule | Matches | Risk |
+|---|---|---|
+| AWS access key ID | `AKIA`/`ASIA`/`ABIA`/`ACCA` + 16 characters | critical |
+| GitHub token | `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` tokens and `github_pat_` fine-grained tokens | critical |
+| Slack token | `xoxb-`, `xoxp-`, `xoxa-`, `xoxo-`, `xoxs-`, `xoxr-` tokens | critical |
+| Google API key | `AIza` + 35 characters | critical |
+| Stripe live key | `sk_live_` / `rk_live_` keys (test keys are ignored) | critical |
+| Private key | a PEM `BEGIN … PRIVATE KEY` header followed by a key body (a header alone is code that parses keys) | critical |
+| JSON Web Token | three base64url segments whose first two start `eyJ` | high |
+| Credential assignment | a quoted literal assigned to a key named like `password`, `secret`, `token`, `api_key`, `access_key`, `private_key` or `client_secret`, when the literal has at least 8 characters, a non-letter, two character classes and entropy at or above `REVIEW_SECRET_SCAN_ENTROPY_THRESHOLD`, and is not a URL, a path or an identifier such as `DB_PASSWORD` | high |
+
+IaC rules (high confidence unless noted):
+
+| Rule | Files | Matches | Risk |
+|---|---|---|---|
+| Admin port open to the internet | `.tf`, `.yaml`/`.yml`, `.json` | an ingress rule admitting `0.0.0.0/0` or `::/0` to port 22, 23, 3389, 5985 or 5986, to a port range containing one, or to every protocol | high |
+| S3 bucket made public | `.tf`, `.yaml`/`.yml`, `.json` | a `public-read`/`public-read-write` ACL (`AccessControl: PublicRead…`), or a Block Public Access setting set to `false` | high |
+| IAM wildcard | `.tf`, `.yaml`/`.yml`, `.json` | `Action: "*"` with `Resource: "*"` in the same statement and no `Effect: Deny` | high |
+| Privileged container | `.yaml`/`.yml`, `.json` | `privileged: true` (in YAML, also `yes`, `on`, `y` in any case) | high |
+| Host namespace | `.yaml`/`.yml`, `.json` | `hostNetwork`, `hostPID` or `hostIPC` set to `true` (in YAML, also `yes`, `on`, `y`) | high |
+| Final stage runs as root | Dockerfiles | `USER root` (or `0`) with no later `FROM` or `USER`, in a new file or in a last hunk that reaches the end of the file | medium, medium confidence (the grade the reviewer's own missing-privilege-drop class gets) |
+| Storage encryption off | `.tf` | `encrypted = false` or `storage_encrypted = false` | medium |
+
+A rule that needs context (the direction and port of a firewall rule, the
+resource of an IAM statement, what follows a `USER`) reads it from the same hunk
+of the patch. When that context is not in the patch the rule does not fire, and
+the model review still covers the line.
+
+**What is skipped.** Files the review ignores (`THRILLHOUSEBOT_REVIEW_IGNORED_FILES` and the
+repository's own `review.ignored-files`), files matching
+`REVIEW_SECURITY_SCAN_SKIPPED_FILES` (fixtures and snapshots by default), files
+GitHub sends no patch for, comment lines for the IaC rules, and placeholder
+values: anything containing `example`, `sample`, `dummy`, `placeholder`,
+`changeme`, `redacted`, `your_`/`your-`, `fake`, `xxxx`, `****`, `<`/`>`, `${`,
+`{{`, `$(`, `%s` or an ellipsis, a run of six identical characters, and for
+assignments any value starting with `$`. To accept a specific line, put
+`thrillhousebot:allow-secret` (or `thrillhousebot:allow-iac`) in a comment on
+that line or on the line directly above it — above is the only place a
+Dockerfile instruction can take one. JSON cannot carry a comment, so a JSON
+file that must hold such a value belongs in the skipped globs.
+
+**The secret is never repeated.** A secret finding's title and text show only
+the value's first characters and its length — four for a known format, which is
+the provider prefix (`ghp_…, 40 chars`), and at most one character in four of a
+generic value. It carries no quoted code, so nothing in the inline comment, the
+check run, the notification, the stored session or the dashboard holds the
+value, and nothing is logged but counts. When the scan matches a value, every
+verbatim occurrence of it is also replaced with its redacted form in the model
+findings, status notes and summary of the same review, so a model finding that
+quoted the line cannot post it either. A fragment or an altered copy of the
+value is not recognized.
+Treat a reported credential as leaked whatever happens to the pull request:
+removing it from the branch does not remove it from the git history.
+
+**How the findings join the review.** They are added after the second-pass
+verifier and after severity calibration, so no model re-grades them: the
+verifier would judge the same diff the pattern already read. For the same
+reason they are never marked unverified when the verifier fails open. A model
+finding within three lines of a scan finding in the same file is dropped when it
+reports the same defect (same title by the deduplicator's measure, or a title
+using at least two of the rule's own words), so one secret normally produces one
+comment, the redacted one; a duplicate worded differently is still scrubbed. On a
+later push, a scan finding the previous round already raised is not posted
+again: its status is kept `unresolved` while the pattern is still on an added
+line (a maintainer's `justified` stands), and set `resolved` once the line is
+gone or carries the allow marker. Under the default `balanced` strictness a
+critical or high scan finding requests changes on its own, like any
+high-confidence finding.
 
 ### CI gating
 
@@ -1223,6 +1309,15 @@ This is still an early-stage project; the current constraints are:
   default (`thrillhousebot.review.ignored-files`, overridable per deployment, and
   extendable per repository via `.github/thrillhousebot.yml` — see
   [Repository configuration](#repository-configuration)).
+- **Security scan** — the optional [security scan](#security-scan) matches a
+  short list of patterns on the lines a pull request adds. It is not a
+  replacement for GitHub secret scanning or push protection: it does not read
+  git history or unchanged lines, and a credential in a format outside its list
+  is left to the model review. A secret finding carries no code anchor (that
+  would store the value), so when an older round's finding is no longer in the
+  previous round the bot compares against, it is judged present while its file
+  stays in the pull request's diff; a reply on its thread or an
+  `@thrillhousebot resolved` comment clears it.
 - **Self-hosted** — no managed offering from this project.
 
 ## Verifying a release

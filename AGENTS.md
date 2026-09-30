@@ -63,6 +63,7 @@ same diff.
 | Model calls: single call, batches, retries, sequential retry, truncation salvage, summary call | `review/FindingPipeline.run` → `review/ai/AiReviewService` (`review`, `reviewBatch`, `summarize`) |
 | Post-model chain, in order: evidence, quote validation, framework filter, dedupe, rejection memory, verifier, severity calibration, replied-duplicate and litigated drops, anchors | `review/FindingPipeline.refine` (single call) and the per-batch path in the same class |
 | Verifier | `review/ai/FindingVerificationService`, evidence from `review/ContextEvidenceResolver` and `review/CitedLocationResolver` |
+| Opt-in deterministic security scan (secrets, risky IaC): merged after the post-model chain, before the summary call, on every lane including the one with no review call | `review/SecurityScan.merge` (rules in `SecurityRule`, detection in `SecretScanner` and `IacScanner` over `PatchLines`), called from `FindingPipeline.runWithLedger`, `runMultiCall` and `summarizeWithoutReview` |
 | Verdict and check-run text | `review/VerdictBuilder` |
 | Post review, inline comments, thread resolution | `review/ReviewPublisher`, `review/CheckRunManager` |
 | Summary comment | `review/PrSummaryGenerator` |
@@ -109,6 +110,10 @@ same diff.
   candidates. `FindingVerificationService.markUnscreened` caps them at medium confidence and
   appends the unverified note (#885), and `VerificationCoverage` discloses the round's coverage. Do
   not make a verifier failure drop findings or block a review.
+- **Deterministic scan findings skip the verifier and calibrator.** `SecurityScan.merge` runs
+  after `FindingVerificationService.verify` and `SeverityCalibrator.calibrate`, so no model grades
+  a pattern match, and `markUnscreened` and `VerificationCoverage` never see one. The grade comes
+  from `SecurityRule`. Keep new deterministic findings on that side of the verifier.
 - **AI services are stateless.** Every `@RegisterAiService` sets
   `NoChatMemoryProviderSupplier`. Review state travels in the previous-findings section, never in
   chat history.
@@ -229,6 +234,13 @@ live `fence(...)` (#604).
   splices one in, directly or through a same-file local. It cannot follow a value across a method
   boundary, so wrap early. `%d` numbers are exempt.
 - **Text the bot posts to GitHub** goes through `review/MarkdownSafe`, not `LogSafe`.
+- **A detected secret is never echoed.** Only `SecretScanner.redact` output (first characters and
+  length) goes into a scan finding's title and description, and a secret finding has no
+  `suggestion_old`, because the anchor is persisted with the session and shown on the dashboard.
+  `SecurityScan.Scrubber` replaces every verbatim occurrence of a matched value in the same response's model findings,
+  status notes and summary before it is persisted, posted or handed to the summary call.
+  `SecurityScan` logs counts only. Never log, persist or post `SecretScanner.Hit.literal()`, and
+  keep test credentials generated at run time (`FakeCredentials`), never as literals.
 
 ## Native image
 
@@ -274,6 +286,7 @@ automatically. A rename or drop is not, so it needs a deliberate plan.
 | Reading the answer from the first bracket or the last fence | Deliberation brackets and fenced excerpts ahead of the answer lost findings, and split answers span fences (#894, #805). |
 | Budgeting from a live random fence | Its token width varies, so plans were not reproducible and tests flaked (#604). |
 | Dropping findings when the verifier fails | Loses the reviewer's work to an outage. Keep them, marked unverified and capped at medium (#623, #885). |
+| Putting deterministic scan findings through the verifier | The verifier sees the same diff the pattern read, so it can only demote or drop a certain match, and a fail-open round would mark it unverified (#60). |
 | A call-graph taint pass in `LogSafeInvariantTest` | Measured: 31 extra reports, sampled ones were name collisions with impossible fixes (#764). |
 
 ## CHANGELOG and docs
