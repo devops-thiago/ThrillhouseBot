@@ -594,6 +594,29 @@ class SummaryAcrossRoundsTest {
     assertTrue(keyFindings.indexOf(HIGH.title()) < keyFindings.indexOf("Fresh high finding"));
   }
 
+  @Test
+  void anIdReportedTwiceOrNamingNoFindingIsNotCountedAsStillPresent() {
+    var first = publishFirstRound();
+    var round =
+        new ReviewResponse(
+            List.of(),
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there"),
+                new ReviewResponse.PreviousFindingStatus(1, "unresolved", "said again"),
+                new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there"),
+                new ReviewResponse.PreviousFindingStatus(3, "unresolved", "still there"),
+                new ReviewResponse.PreviousFindingStatus(9, "unresolved", "no such finding")),
+            null);
+
+    var result = builder.build(followUp(List.of(ROUND_ONE), List.of()), round, CI_CLEAR, plan);
+    var edited = publishFollowUp(result, first);
+
+    assertEquals(3, result.unresolvedPreviousCount());
+    assertEquals(result.unresolvedPreviousCount(), result.openPreviousFindings().size());
+    assertOpenCount(edited, 3);
+    assertRisk(edited, 1, 1, 1, 0);
+  }
+
   /**
    * ThrillhouseBot-test#146 (Rust), round three: the round re-raised findings still open from
    * earlier rounds, the summary kept the re-raises, dropped the originals, lost every "(open since

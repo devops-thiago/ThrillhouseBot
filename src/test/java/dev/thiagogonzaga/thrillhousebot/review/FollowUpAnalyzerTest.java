@@ -4566,6 +4566,30 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void withoutPhantomUnresolvedDropsRepeatedAndOutOfRangeUnresolvedIdsOnly() {
+    var previous = List.of(openFinding(10, "One", "d"), openFinding(20, "Two", "d"));
+    var resolvedOutOfRange = new ReviewResponse.PreviousFindingStatus(7, "resolved", "kept");
+    var first = new ReviewResponse.PreviousFindingStatus(1, "unresolved", "first");
+    var resolvedTwo = new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed");
+    var statuses =
+        List.of(
+            first,
+            new ReviewResponse.PreviousFindingStatus(1, "UNRESOLVED", "again"),
+            new ReviewResponse.PreviousFindingStatus(0, "unresolved", "none"),
+            new ReviewResponse.PreviousFindingStatus(3, "unresolved", "none"),
+            resolvedTwo,
+            resolvedOutOfRange);
+
+    assertEquals(
+        List.of(first, resolvedTwo, resolvedOutOfRange),
+        FollowUpAnalyzer.withoutPhantomUnresolved(previous, statuses));
+    var clean = List.of(first, resolvedTwo);
+    assertSame(clean, FollowUpAnalyzer.withoutPhantomUnresolved(previous, clean));
+    // Nothing persisted to map ids onto: the statuses are the only hold, so they stay.
+    assertSame(statuses, FollowUpAnalyzer.withoutPhantomUnresolved(List.of(), statuses));
+  }
+
+  @Test
   void heldPreviousFindingsKeepsTheHeldFindingBesideItsStatus() {
     var prior = analyzer.parsePreviousResponses(List.of(PREVIOUS_JSON));
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));

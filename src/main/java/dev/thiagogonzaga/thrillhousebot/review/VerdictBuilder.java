@@ -236,6 +236,10 @@ public class VerdictBuilder {
     effectiveStatuses =
         followUpAnalyzer.clearNamedInConversation(
             ctx.previousFindingsList(), effectiveStatuses, ctx.conversationComments(), botIdentity);
+    // "Still present" counts these statuses and the summary lists one finding per id, so an id
+    // reported unresolved twice, or one naming no finding, must not be counted either (#934).
+    effectiveStatuses =
+        FollowUpAnalyzer.withoutPhantomUnresolved(ctx.previousFindingsList(), effectiveStatuses);
     var effectiveResponse =
         new ReviewResponse(aiResponse.findings(), effectiveStatuses, aiResponse.summary());
     var unresolvedPrevious =

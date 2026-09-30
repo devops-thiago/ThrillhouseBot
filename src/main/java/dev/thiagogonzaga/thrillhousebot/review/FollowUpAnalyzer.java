@@ -2511,6 +2511,38 @@ public class FollowUpAnalyzer {
   }
 
   /**
+   * {@code statuses} without the {@code unresolved} entries that name no finding: an id outside the
+   * previous round, or an id an earlier entry already reported {@code unresolved}. Every other
+   * entry is kept as it is, in order.
+   *
+   * <p>The "Still present" count, the review body's unresolved line and the delta comment count
+   * these statuses, while the summary lists one finding per distinct in-range id ({@link
+   * #stillOpenFindings}); a phantom entry made the count exceed the list beside it (#934). Dropping
+   * one cannot let APPROVE past an open finding: a previous finding the model did not report under
+   * its own id is held by the backstop ({@link #heldPreviousFindings}). With no previous findings
+   * to map ids onto (the review-body fallback, where nothing was persisted) the statuses are the
+   * only hold there is, so they are returned unchanged.
+   *
+   * @param previous the effective previous round's findings, the id space of {@code statuses}
+   */
+  public static List<ReviewResponse.PreviousFindingStatus> withoutPhantomUnresolved(
+      List<ReviewResponse.Finding> previous, List<ReviewResponse.PreviousFindingStatus> statuses) {
+    if (previous.isEmpty()) {
+      return statuses;
+    }
+    var seen = new HashSet<Integer>();
+    var kept = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
+    for (var status : statuses) {
+      var id = status.id();
+      if (!STATUS_UNRESOLVED.equalsIgnoreCase(status.status())
+          || (id >= 1 && id <= previous.size() && seen.add(id))) {
+        kept.add(status);
+      }
+    }
+    return kept.size() == statuses.size() ? statuses : kept;
+  }
+
+  /**
    * Every prior finding still open after this round, as the summary edited in place must list them
    * (#917): the effective previous round's findings this round reports {@code unresolved} (after
    * the supersede, decline re-check and conversation-clear passes rewrote the statuses), then the
