@@ -240,7 +240,8 @@ class ReviewOrchestratorTest {
     lenient().when(followUpAnalyzer.parsePreviousResponses(any())).thenReturn(List.of());
     lenient()
         .when(
-            followUpAnalyzer.heldPreviousFindings(any(), any(), any(), any(), any(), any(), any()))
+            followUpAnalyzer.heldPreviousFindings(
+                any(), any(), any(), any(), any(), any(), any(), any()))
         .thenReturn(List.of());
     lenient()
         .when(followUpAnalyzer.clearNamedInConversation(any(), any(), any(), any()))
@@ -6647,7 +6648,7 @@ class ReviewOrchestratorTest {
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
         when(followUpAnalyzer.heldPreviousFindings(
-                any(), any(), any(), any(), any(), eq(BOT_ID), any()))
+                any(), any(), any(), any(), any(), eq(BOT_ID), any(), any()))
             .thenReturn(
                 List.of(
                     new FollowUpAnalyzer.HeldPrevious(
@@ -6843,7 +6844,7 @@ class ReviewOrchestratorTest {
       when(followUpAnalyzer.parsePreviousResponses(any()))
           .thenAnswer(invocation -> realAnalyzer.parsePreviousResponses(invocation.getArgument(0)));
       when(followUpAnalyzer.heldPreviousFindings(
-              any(), any(), any(), any(), any(), eq(BOT_ID), any()))
+              any(), any(), any(), any(), any(), eq(BOT_ID), any(), any()))
           .thenAnswer(
               invocation ->
                   realAnalyzer.heldPreviousFindings(
@@ -6853,7 +6854,8 @@ class ReviewOrchestratorTest {
                       invocation.getArgument(3),
                       invocation.getArgument(4),
                       invocation.getArgument(5),
-                      invocation.getArgument(6)));
+                      invocation.getArgument(6),
+                      invocation.getArgument(7)));
     }
 
     private static final String PRIOR_FINDING_JSON =
