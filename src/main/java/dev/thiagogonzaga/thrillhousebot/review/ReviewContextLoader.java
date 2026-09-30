@@ -114,7 +114,13 @@ public class ReviewContextLoader {
    */
   public record PrTotals(int filesChanged, int additions, int deletions) {}
 
-  /** Everything the review pipeline reads before the model call, loaded once up front. */
+  /**
+   * Everything the review pipeline reads before the model call, loaded once up front.
+   *
+   * @param previousRoundHeadUnchanged true only when this review's head commit is provably the one
+   *     the round it reports on reviewed ({@link #previousRoundHeadSha}); false when the head moved
+   *     or that cannot be established. Nothing can be superseded on an unchanged head (#932).
+   */
   public record ReviewContext(
       List<GitHubPullRequestClient.FileDiff> files,
       String diff,
@@ -141,7 +147,8 @@ public class ReviewContextLoader {
       List<GitHubCommentClient.IssueComment> conversationComments,
       List<String> unmatchedIgnoreGlobs,
       SupersededFindingsCarryover.Carried carried,
-      String coverageArtifactRefusal) {
+      String coverageArtifactRefusal,
+      boolean previousRoundHeadUnchanged) {
     public ReviewContext {
       files = List.copyOf(files);
       priorReviews = List.copyOf(priorReviews);
@@ -152,6 +159,69 @@ public class ReviewContextLoader {
       reviewableFiles = List.copyOf(reviewableFiles);
       conversationComments = List.copyOf(conversationComments);
       unmatchedIgnoreGlobs = List.copyOf(unmatchedIgnoreGlobs);
+    }
+
+    /**
+     * Back-compat constructor for callers that do not know the previous round's head. Defaults it
+     * to "not provably unchanged", which leaves the supersede pass exactly as it was — the guard
+     * only ever holds a finding open, so it must not fire on a head nobody compared (#932).
+     */
+    @SuppressWarnings("java:S107")
+    public ReviewContext(
+        List<GitHubPullRequestClient.FileDiff> files,
+        String diff,
+        String baseComparison,
+        int omittedFiles,
+        List<GitHubReviewClient.ReviewResponse> priorReviews,
+        List<String> priorAiResponseJsons,
+        List<ReviewResponse> priorAiResponses,
+        boolean isFirstVisibleReview,
+        boolean hasContext,
+        String previousAiResponseJson,
+        List<GitHubReviewClient.PullRequestComment> inlineComments,
+        String previousFindings,
+        InstructionsResolver.ResolvedInstructions instructions,
+        PathScopedInstructions pathInstructions,
+        List<GitHubLabelClient.Label> repoLabels,
+        String projectStack,
+        String linkedIssuesContext,
+        String configKeyContext,
+        String patchCoverage,
+        List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+        Supplier<DiffLineResolver> lineResolverSupplier,
+        PrTotals prTotals,
+        List<GitHubCommentClient.IssueComment> conversationComments,
+        List<String> unmatchedIgnoreGlobs,
+        SupersededFindingsCarryover.Carried carried,
+        String coverageArtifactRefusal) {
+      this(
+          files,
+          diff,
+          baseComparison,
+          omittedFiles,
+          priorReviews,
+          priorAiResponseJsons,
+          priorAiResponses,
+          isFirstVisibleReview,
+          hasContext,
+          previousAiResponseJson,
+          inlineComments,
+          previousFindings,
+          instructions,
+          pathInstructions,
+          repoLabels,
+          projectStack,
+          linkedIssuesContext,
+          configKeyContext,
+          patchCoverage,
+          reviewableFiles,
+          lineResolverSupplier,
+          prTotals,
+          conversationComments,
+          unmatchedIgnoreGlobs,
+          carried,
+          coverageArtifactRefusal,
+          false);
     }
 
     /**
@@ -466,6 +536,10 @@ public class ReviewContextLoader {
     // round held back only by pending CI posts the summary comment but no review.
     List<String> priorAiResponseJsons =
         sessionPersistence.findAllPriorAiResponseJsons(repository, req.prNumber(), session.id);
+    // Read right beside the responses, from the same history in the same order, so each response's
+    // head is known; the supersede guard needs the head of the round this review reports on (#932).
+    List<String> priorCommitShas =
+        sessionPersistence.findAllPriorCommitShas(repository, req.prNumber(), session.id);
     var isFirstVisibleReview =
         priorReviews.stream()
                 .noneMatch(r -> r.user() != null && botIdentity.matches(r.user().login()))
@@ -574,7 +648,41 @@ public class ReviewContextLoader {
         conversationComments,
         unmatchedIgnoreGlobs,
         carried,
-        patchCoverage.artifactRefusal());
+        patchCoverage.artifactRefusal(),
+        headUnchanged(
+            previousRoundHeadSha(
+                priorCommitShas, priorAiResponseJsons.size(), previousRoundIndex, carried),
+            req.commitSha()));
+  }
+
+  /**
+   * The head commit the round this review reports on reviewed, or {@code null} when it cannot be
+   * established. {@code commitShas} comes from the same completed-session history, in the same
+   * newest-first order, as the prior responses, so the effective previous round's index names its
+   * session; a history of a different length (a round completed between the two reads) cannot be
+   * aligned and yields {@code null}. So do findings carried from a run that stood down (#806): they
+   * were raised on the head that run reviewed, not the one this history records, so the round they
+   * join has no single head.
+   */
+  static String previousRoundHeadSha(
+      List<String> commitShas,
+      int roundCount,
+      int previousRoundIndex,
+      SupersededFindingsCarryover.Carried carried) {
+    if (!carried.isEmpty()
+        || commitShas.size() != roundCount
+        || previousRoundIndex >= commitShas.size()) {
+      return null;
+    }
+    return commitShas.get(previousRoundIndex);
+  }
+
+  /** Whether two head SHAs are known and name the same commit. */
+  static boolean headUnchanged(String previousHead, String currentHead) {
+    return previousHead != null
+        && currentHead != null
+        && !currentHead.isBlank()
+        && previousHead.equalsIgnoreCase(currentHead);
   }
 
   /** Thread-safe memoizing supplier — the resolver is built at most once per review context. */

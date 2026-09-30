@@ -118,6 +118,24 @@ class ReviewSessionPersistenceTest extends ReviewSessionTestSupport {
   }
 
   @Test
+  void shouldReturnEachPriorRoundsHeadAlignedWithItsResponse() throws Exception {
+    persistSessionWith("owner/repo", 3, ReviewSession.STATUS_COMPLETED, "{\"v\":1}", "sha-one");
+    persistSessionWith("owner/repo", 3, ReviewSession.STATUS_FAILED, "{\"v\":2}", "sha-failed");
+    persistSessionWith("owner/repo", 3, ReviewSession.STATUS_COMPLETED, null, "sha-no-response");
+    persistSessionWith("owner/repo", 4, ReviewSession.STATUS_COMPLETED, "{\"v\":3}", "sha-other");
+    persistSessionWith("owner/repo", 3, ReviewSession.STATUS_COMPLETED, "{\"v\":4}", "sha-two");
+    var current =
+        persistSessionWith("owner/repo", 3, ReviewSession.STATUS_IN_PROGRESS, null, "sha-now");
+
+    assertEquals(
+        java.util.List.of("{\"v\":4}", "{\"v\":1}"),
+        persistence.findAllPriorAiResponseJsons("owner/repo", 3, current.id));
+    assertEquals(
+        java.util.List.of("sha-two", "sha-one"),
+        persistence.findAllPriorCommitShas("owner/repo", 3, current.id));
+  }
+
+  @Test
   void shouldReturnEmptyListWhenNoPriorSessions() throws Exception {
     var current = persistSessionWith("owner/repo", 3, ReviewSession.STATUS_COMPLETED, "{\"v\":1}");
 
@@ -135,8 +153,14 @@ class ReviewSessionPersistenceTest extends ReviewSessionTestSupport {
 
   private ReviewSession persistSessionWith(
       String repository, int prNumber, String status, String aiResponseJson) throws Exception {
+    return persistSessionWith(repository, prNumber, status, aiResponseJson, "abc");
+  }
+
+  private ReviewSession persistSessionWith(
+      String repository, int prNumber, String status, String aiResponseJson, String commitSha)
+      throws Exception {
     tx.begin();
-    ReviewSession session = ReviewSession.create(repository, prNumber, "PR", "abc");
+    ReviewSession session = ReviewSession.create(repository, prNumber, "PR", commitSha);
     session.setStatus(status);
     session.setAiResponseJson(aiResponseJson);
     session.persist();

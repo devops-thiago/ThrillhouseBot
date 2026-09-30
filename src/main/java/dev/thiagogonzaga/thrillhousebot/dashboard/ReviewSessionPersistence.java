@@ -26,6 +26,11 @@ import java.util.function.Consumer;
 @ApplicationScoped
 public class ReviewSessionPersistence {
 
+  /** The completed prior rounds of a pull request that persisted a response, newest first. */
+  private static final String PRIOR_ROUNDS_QUERY =
+      "repository = ?1 and prNumber = ?2 and id <> ?3 and status = ?4"
+          + " and aiResponseJson is not null order by id desc";
+
   private final ReviewSessionRepository repository;
 
   @Inject
@@ -47,8 +52,7 @@ public class ReviewSessionPersistence {
       String repository, int prNumber, long excludeSessionId) {
     return this.repository
         .find(
-            "repository = ?1 and prNumber = ?2 and id <> ?3 and status = ?4"
-                + " and aiResponseJson is not null order by id desc",
+            PRIOR_ROUNDS_QUERY,
             repository,
             prNumber,
             excludeSessionId,
@@ -67,14 +71,34 @@ public class ReviewSessionPersistence {
       String repository, int prNumber, long excludeSessionId) {
     return this.repository
         .find(
-            "repository = ?1 and prNumber = ?2 and id <> ?3 and status = ?4"
-                + " and aiResponseJson is not null order by id desc",
+            PRIOR_ROUNDS_QUERY,
             repository,
             prNumber,
             excludeSessionId,
             ReviewSession.STATUS_COMPLETED)
         .stream()
         .map(ReviewSession::getAiResponseJson)
+        .toList();
+  }
+
+  /**
+   * Head commit SHAs of the same sessions {@link #findAllPriorAiResponseJsons} returns, in the same
+   * newest-first order, so the review can tell which commit each prior round reviewed (#932). A
+   * session with no recorded SHA contributes {@code null} at its position, keeping the two lists
+   * aligned.
+   */
+  @Transactional
+  public List<String> findAllPriorCommitShas(
+      String repository, int prNumber, long excludeSessionId) {
+    return this.repository
+        .find(
+            PRIOR_ROUNDS_QUERY,
+            repository,
+            prNumber,
+            excludeSessionId,
+            ReviewSession.STATUS_COMPLETED)
+        .stream()
+        .map(ReviewSession::getCommitSha)
         .toList();
   }
 

@@ -64,6 +64,10 @@ public class FollowUpAnalyzer {
       "The code this finding targeted is no longer in this revision's diff (removed by a"
           + " force-push or a later commit) — superseded.";
 
+  static final String HEAD_UNCHANGED_NOTE =
+      "The head commit is the one the round that raised this finding reviewed, so its code cannot"
+          + " have left the diff — still open.";
+
   private static final String PURE_RENAME_UNRESOLVED_NOTE =
       "The finding's file was renamed without content changes, so the finding remains unresolved.";
 
@@ -1889,6 +1893,34 @@ public class FollowUpAnalyzer {
       }
     }
     return result;
+  }
+
+  /**
+   * The guard that makes "superseded" impossible on an unchanged head (#932): when this round
+   * reviews the very commit the round that raised the findings reviewed, the code those findings
+   * target cannot have left the diff, so every {@code superseded} status — rewritten in by {@link
+   * #supersedeVanished} or {@link #addUnreportedVanished} because an anchor could not be located,
+   * or reported by the model itself — is held {@code unresolved} instead. An anchor that fails to
+   * match on an unchanged head is a location problem (a redacted quote, a drifted or invented one),
+   * never evidence of a fix, and reading it as "left the diff" dropped a still-open finding out of
+   * the counts, Key Findings and the approval gate.
+   *
+   * <p>When the head moved, or whether it moved is unknown ({@code headUnchanged} false), the
+   * statuses pass through untouched.
+   */
+  public static List<ReviewResponse.PreviousFindingStatus> holdSupersededOnUnchangedHead(
+      List<ReviewResponse.PreviousFindingStatus> statuses, boolean headUnchanged) {
+    if (!headUnchanged) {
+      return statuses;
+    }
+    return statuses.stream()
+        .map(
+            status ->
+                STATUS_SUPERSEDED.equalsIgnoreCase(status.status())
+                    ? new ReviewResponse.PreviousFindingStatus(
+                        status.id(), STATUS_UNRESOLVED, HEAD_UNCHANGED_NOTE)
+                    : status)
+        .toList();
   }
 
   private static boolean hasVanished(
