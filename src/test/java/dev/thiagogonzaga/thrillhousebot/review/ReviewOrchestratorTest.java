@@ -240,8 +240,7 @@ class ReviewOrchestratorTest {
     lenient().when(followUpAnalyzer.parsePreviousResponses(any())).thenReturn(List.of());
     lenient()
         .when(
-            followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
-                any(), any(), any(), any(), any(), any(), any()))
+            followUpAnalyzer.heldPreviousFindings(any(), any(), any(), any(), any(), any(), any()))
         .thenReturn(List.of());
     lenient()
         .when(followUpAnalyzer.clearNamedInConversation(any(), any(), any(), any()))
@@ -6553,10 +6552,14 @@ class ReviewOrchestratorTest {
             .thenReturn("1. [MEDIUM] src/Main.java:10 — Dropped finding");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-        when(followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
+        when(followUpAnalyzer.heldPreviousFindings(
                 any(), any(), any(), any(), any(), eq(BOT_ID), any()))
             .thenReturn(
-                List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present")));
+                List.of(
+                    new FollowUpAnalyzer.HeldPrevious(
+                        new ReviewResult.PreviousFindingStatus(1, "unresolved", "still present"),
+                        new ReviewResponse.Finding(
+                            "medium", "src/Main.java", 10, "Dropped finding", "d", "new", null))));
 
         orchestrator.review(followUpRequest());
 
@@ -6626,11 +6629,11 @@ class ReviewOrchestratorTest {
     }
 
     /**
-     * End-to-end guard for #136(c): every other backstop test stubs {@code
-     * unreportedUnresolvedStatusesFromParsed} to a canned list, so only the gate wiring (backstop
-     * list → previousStatuses → hasUnresolved → COMMENT) is exercised. Here the real analyzer runs
-     * inside {@code review()}, so a break anywhere along parse prior JSON → anchored presence check
-     * → maintainer-reply check → 1-based id mapping fails this test.
+     * End-to-end guard for #136(c): every other backstop test stubs {@code heldPreviousFindings} to
+     * a canned list, so only the gate wiring (backstop list → previousStatuses → hasUnresolved →
+     * COMMENT) is exercised. Here the real analyzer runs inside {@code review()}, so a break
+     * anywhere along parse prior JSON → anchored presence check → maintainer-reply check → 1-based
+     * id mapping fails this test.
      */
     @Test
     void shouldHoldApproveViaTheRealBackstopComputationThroughReview() {
@@ -6745,11 +6748,11 @@ class ReviewOrchestratorTest {
     private void delegateBackstopComputation() {
       when(followUpAnalyzer.parsePreviousResponses(any()))
           .thenAnswer(invocation -> realAnalyzer.parsePreviousResponses(invocation.getArgument(0)));
-      when(followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
+      when(followUpAnalyzer.heldPreviousFindings(
               any(), any(), any(), any(), any(), eq(BOT_ID), any()))
           .thenAnswer(
               invocation ->
-                  realAnalyzer.unreportedUnresolvedStatusesFromParsed(
+                  realAnalyzer.heldPreviousFindings(
                       invocation.getArgument(0),
                       invocation.getArgument(1),
                       invocation.getArgument(2),

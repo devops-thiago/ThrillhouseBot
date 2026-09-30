@@ -2433,6 +2433,41 @@ public class FollowUpAnalyzer {
       DiffLineResolver lineResolver,
       BotIdentity botIdentity,
       Map<String, String> renameTargets) {
+    return heldPreviousFindings(
+            priorAiResponses,
+            currentStatuses,
+            inlineComments,
+            conversationComments,
+            lineResolver,
+            botIdentity,
+            renameTargets)
+        .stream()
+        .map(HeldPrevious::status)
+        .toList();
+  }
+
+  /**
+   * A prior finding the backstop holds open, with the status it contributes to the verdict. The
+   * status alone is enough for the APPROVE gate and the counts, but its id is relative to the round
+   * that raised the finding, so it cannot be mapped back to a finding once the rounds are merged;
+   * the summary, which lists every finding still open (#917), needs the finding itself.
+   */
+  public record HeldPrevious(
+      ReviewResult.PreviousFindingStatus status, ReviewResponse.Finding finding) {}
+
+  /**
+   * The same backstop computation as {@link #unreportedUnresolvedStatusesFromParsed}, keeping the
+   * held finding beside each status so the verdict path can render what it holds, not only count it
+   * (#917).
+   */
+  public List<HeldPrevious> heldPreviousFindings(
+      List<ReviewResponse> priorAiResponses,
+      List<ReviewResponse.PreviousFindingStatus> currentStatuses,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      DiffLineResolver lineResolver,
+      BotIdentity botIdentity,
+      Map<String, String> renameTargets) {
     if (priorAiResponses == null || priorAiResponses.isEmpty() || lineResolver == null) {
       return List.of();
     }
@@ -2441,6 +2476,49 @@ public class FollowUpAnalyzer {
     var clusters = clusterByIdentity(open);
     return heldFromClusters(
         clusters, inlineComments, conversationComments, lineResolver, botIdentity, renameTargets);
+  }
+
+  /**
+   * Every prior finding still open after this round, as the summary edited in place must list them
+   * (#917): the effective previous round's findings this round reports {@code unresolved} (after
+   * the supersede, decline re-check and conversation-clear passes rewrote the statuses), then the
+   * findings the backstop holds from any earlier round. A finding the round resolved, a maintainer
+   * declined or cleared, or whose code left the diff is in neither list, so it leaves the summary.
+   *
+   * <p>One defect is listed once: an entry that {@link #isSameFinding restates} one already kept,
+   * or one of this round's own findings (a re-raise), is skipped, so the summary's counts are the
+   * distinct open set rather than a drifted duplicate counted twice. Model ids outside the previous
+   * round name no finding and are skipped, as {@link #unresolvedFindings} skips them. The
+   * comparison is pairwise because {@link #isSameFinding} is a tolerant predicate no key can index,
+   * the same trade {@link #clusterByIdentity} makes over the same set in the backstop; the set is
+   * bounded by the findings earlier rounds posted (19 on the largest PR in #917's evidence).
+   *
+   * @param previous the effective previous round's findings, the id space of {@code statuses}
+   * @param statuses the round's effective {@code previous_findings_status}
+   * @param held the backstop's holds ({@link #heldPreviousFindings})
+   * @param newFindings this round's own findings
+   */
+  public static List<Finding> stillOpenFindings(
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      List<HeldPrevious> held,
+      List<ReviewResponse.Finding> newFindings) {
+    var unresolvedIds =
+        statuses.stream()
+            .filter(status -> STATUS_UNRESOLVED.equalsIgnoreCase(status.status()))
+            .map(ReviewResponse.PreviousFindingStatus::id)
+            .filter(id -> id >= 1 && id <= previous.size())
+            .collect(Collectors.toCollection(TreeSet::new));
+    var kept = new ArrayList<ReviewResponse.Finding>();
+    Stream.concat(
+            unresolvedIds.stream().map(id -> previous.get(id - 1)),
+            held.stream().map(HeldPrevious::finding))
+        .filter(
+            candidate ->
+                Stream.concat(newFindings.stream(), kept.stream())
+                    .noneMatch(seen -> isSameFinding(candidate, seen)))
+        .forEachOrdered(kept::add);
+    return kept.stream().map(Finding::fromAiResponse).toList();
   }
 
   /**
@@ -2505,14 +2583,14 @@ public class FollowUpAnalyzer {
   }
 
   /** Holds one unresolved status per cluster whose code is still present and unanswered. */
-  private List<ReviewResult.PreviousFindingStatus> heldFromClusters(
+  private List<HeldPrevious> heldFromClusters(
       List<List<OpenFinding>> clusters,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<GitHubCommentClient.IssueComment> conversationComments,
       DiffLineResolver lineResolver,
       BotIdentity botIdentity,
       Map<String, String> renameTargets) {
-    var held = new ArrayList<ReviewResult.PreviousFindingStatus>();
+    var held = new ArrayList<HeldPrevious>();
     var directives = maintainerDeclines(conversationComments, botIdentity);
     for (var cluster : clusters) {
       OpenFinding target =
@@ -2526,10 +2604,12 @@ public class FollowUpAnalyzer {
               renameTargets);
       if (target != null) {
         held.add(
-            new ReviewResult.PreviousFindingStatus(
-                target.id(),
-                STATUS_UNRESOLVED,
-                "Flagged in an earlier round and still present; not addressed in this revision."));
+            new HeldPrevious(
+                new ReviewResult.PreviousFindingStatus(
+                    target.id(),
+                    STATUS_UNRESOLVED,
+                    "Flagged in an earlier round and still present; not addressed in this revision."),
+                target.finding()));
       }
     }
     return held;

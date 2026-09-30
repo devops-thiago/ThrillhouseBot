@@ -238,9 +238,9 @@ public class VerdictBuilder {
     // Lazily resolve the shared DiffLineResolver only when the backstop runs — first reviews and
     // other no-context paths never pay for a patch re-parse here (FindingPipeline / postReview
     // still share the same memoized supplier when they need it).
-    var backstopUnresolved =
+    var held =
         ctx.hasContext()
-            ? followUpAnalyzer.unreportedUnresolvedStatusesFromParsed(
+            ? followUpAnalyzer.heldPreviousFindings(
                 ctx.priorAiResponses(),
                 effectiveStatuses,
                 ctx.inlineComments(),
@@ -248,7 +248,15 @@ public class VerdictBuilder {
                 ctx.lineResolver(),
                 botIdentity,
                 currentRenameTargets)
-            : List.<ReviewResult.PreviousFindingStatus>of();
+            : List.<FollowUpAnalyzer.HeldPrevious>of();
+    var backstopUnresolved = held.stream().map(FollowUpAnalyzer.HeldPrevious::status).toList();
+    // The summary is edited in place every round (#868), so it must describe the pull request as
+    // it stands, not only this round: every earlier finding still open, beside the new ones (#917).
+    // Taken from the same statuses and holds the gate and the "Still present" count use, so the
+    // lists and that count cannot disagree about what is open.
+    var openPrevious =
+        FollowUpAnalyzer.stillOpenFindings(
+            ctx.previousFindingsList(), effectiveStatuses, held, aiResponse.findings());
     return buildResult(
         effectiveResponse,
         ctx.isFirstVisibleReview(),
@@ -260,7 +268,8 @@ public class VerdictBuilder {
             ReviewDiffFormatter.formatUnmatchedIgnoreGlobs(ctx.unmatchedIgnoreGlobs()),
             PatchCoverageResolver.formatScopeNote(ctx.coverageArtifactRefusal()),
             SupersededFindingsCarryover.formatScopeNote(ctx.carried()),
-            reasoningStepDownNote(plan.reasoningStepDown())),
+            reasoningStepDownNote(plan.reasoningStepDown()),
+            openPrevious),
         unresolvedPrevious,
         ciEvaluation,
         backstopUnresolved);
@@ -567,10 +576,11 @@ public class VerdictBuilder {
   }
 
   /**
-   * Inputs that only shape the summary walkthrough: the file rows, the pure-rename rollup, the
+   * Inputs that only shape the summary: the file rows, the pure-rename rollup, the
    * unmatched-ignore-glob note, the refused-coverage-artifact note, the superseded-run carry-over
-   * note, and the reasoning step-down note. The notes share the review-scope blockquote — each
-   * answers "what did this review look at, or not, and why".
+   * note, the reasoning step-down note, and the earlier rounds' findings still open. The notes
+   * share the review-scope blockquote — each answers "what did this review look at, or not, and
+   * why".
    */
   private record SummaryInputs(
       List<PrSummaryGenerator.ChangedFile> changedFiles,
@@ -578,7 +588,8 @@ public class VerdictBuilder {
       String unmatchedIgnoreGlobs,
       String coverageArtifactNotRead,
       String carriedFromSupersededRun,
-      String reasoningStepDown) {}
+      String reasoningStepDown,
+      List<Finding> openPrevious) {}
 
   ReviewResult buildResult(
       ReviewResponse aiResponse,
@@ -592,7 +603,7 @@ public class VerdictBuilder {
         aiResponse,
         isFirstReview,
         diffStats,
-        new SummaryInputs(changedFiles, "", "", "", "", ""),
+        new SummaryInputs(changedFiles, "", "", "", "", "", unresolvedPrevious),
         unresolvedPrevious,
         ciEvaluation,
         backstopUnresolved);
@@ -665,7 +676,8 @@ public class VerdictBuilder {
                 ciUnreadable,
                 requiredContextsKnown,
                 diffStats.truncation(),
-                withheldByConfidence));
+                withheldByConfidence,
+                summaryInputs.openPrevious()));
     var scopeNote = reviewScopeNote(summaryInputs);
     if (!scopeNote.isEmpty()) {
       summaryMarkdown =
@@ -724,7 +736,8 @@ public class VerdictBuilder {
         ciUnreadable,
         requiredContextsKnown,
         diffStats.truncation(),
-        withheldByConfidence);
+        withheldByConfidence,
+        summaryInputs.openPrevious());
   }
 
   /**
