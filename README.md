@@ -107,7 +107,7 @@ not a reaction.
 | `/resolve` | Resolve ThrillhouseBot's outstanding finding threads on the PR | write |
 | `/pause` | Silence the bot on the PR | write |
 | `/resume` | Re-enable the bot on a paused PR | write |
-| `/learnings` | List what the bot remembers about this repository, with ids and source links (see [Review learnings](#review-learnings)) | write |
+| `/learnings` | List what the bot remembers about this repository, with ids and source links (see **Review learnings** under Configuration) | write |
 | `/remember <text>` | Remember a convention for later reviews of this repository | write |
 | `/forget <id>` | Retract one remembered learning | write |
 | `@thrillhousebot resolved <path>:<line> — <title>` | Close a previous finding that has no review thread to reply on, so it stops holding approval (see **Clearing a finding with no thread** under Configuration) | write |
@@ -697,7 +697,7 @@ place for facts you want to write down yourself; learnings capture them from the
 
 A 👍/👎 reaction or a bare "not useful" reply is not a learning. It says the finding was unwelcome,
 not why, and a learning without a reason cannot be applied to new code. Those signals are still
-recorded for [finding feedback](docs/FEEDBACK.md).
+recorded for [finding feedback](https://github.com/devops-thiago/ThrillhouseBot/blob/main/docs/FEEDBACK.md).
 
 **How it is used.** Before each review, the repository's active learnings are ranked by how close
 their file is to the files the pull request changes: the same file, then the same directory (and

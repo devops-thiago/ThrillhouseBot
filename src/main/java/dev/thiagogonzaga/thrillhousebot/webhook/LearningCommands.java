@@ -48,7 +48,7 @@ public class LearningCommands {
 
   /** The id argument of {@code /forget}: {@code 12}, {@code L12}, {@code #12} or {@code [L12]}. */
   private static final Pattern FORGET_ID =
-      Pattern.compile("(?i)\\bforget\\s{1,8}\\[?(?:L|#)?(\\d{1,18})\\]?(?!\\w)");
+      Pattern.compile("(?i)\\bforget\\s{1,8}\\[?[L#]?(\\d{1,18})\\]?(?!\\w)");
 
   /** The command word of {@code /remember} or {@code @<bot> remember}; the text follows it. */
   private static final Pattern REMEMBER_WORD =
@@ -111,10 +111,13 @@ public class LearningCommands {
 
   private static String row(ReviewLearningService.LearningView l) {
     var decline = ReviewLearning.KIND_DECLINE.equals(l.kind());
-    var about =
-        decline
-            ? code(l.findingTitle()) + (l.path() == null ? "" : " in " + code(l.path()))
-            : (l.path() == null ? "whole repository" : code(l.path()));
+    var where = l.path() == null ? null : code(l.path());
+    String about;
+    if (decline) {
+      about = code(l.findingTitle()) + (where == null ? "" : " in " + where);
+    } else {
+      about = where == null ? "whole repository" : where;
+    }
     return "| "
         + l.id()
         + " | "

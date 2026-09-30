@@ -67,7 +67,7 @@ same diff.
 | Post review, inline comments, thread resolution | `review/ReviewPublisher`, `review/CheckRunManager` |
 | Summary comment | `review/PrSummaryGenerator` |
 | CI hold and revisit | `review/CiHoldRegistry`, `review/CiHoldRevisit` |
-| Opt-in review learnings: capture after the post, from the round's final statuses | `review/ReviewLearnings.captureSurvivingDeclines` → `review/FollowUpAnalyzer.survivingDeclines` → `review/ReviewLearningService.record` |
+| Opt-in review learnings: capture after the post, from the round's final statuses | `review/ReviewLearnings.captureSurvivingDeclines` → `review/FollowUpAnalyzer.survivingDeclines` → `review/ReviewLearningService.save` |
 | `/learnings`, `/remember`, `/forget` | `webhook/LearningCommands` (routed by `CommentCommandService`) |
 | Maintainer replies and mentions | `review/MaintainerReplyService`, `review/MaintainerReplyDispatcher` |
 | On-request commands (`/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`) | `review/AbstractPrSuggestionGenerator` and its subclasses |
@@ -218,7 +218,7 @@ live `fence(...)` (#604).
   splices one in, directly or through a same-file local. It cannot follow a value across a method
   boundary, so wrap early. `%d` numbers are exempt.
 - **Text the bot posts to GitHub** goes through `review/MarkdownSafe`, not `LogSafe`.
-- **Review learnings are maintainer text and stay data.** `ReviewLearningService.record` refuses
+- **Review learnings are maintainer text and stay data.** `ReviewLearningService.save` refuses
   credential-shaped text (`LearningText.containsCredential`) and flattens the rest
   (`LearningText.normalize`); `ReviewLearnings.select` screens again before replay, and
   `ReviewPromptAssembler.learningsSection` fences the list under `PrReviewPrompts.LEARNINGS_REQUEST`.

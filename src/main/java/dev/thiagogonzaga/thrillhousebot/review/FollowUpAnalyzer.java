@@ -2041,33 +2041,31 @@ public class FollowUpAnalyzer {
     if (code == null || code.isBlank()) {
       return List.of();
     }
+    var comments =
+        inlineComments == null ? List.<GitHubReviewClient.PullRequestComment>of() : inlineComments;
     var surviving = new ArrayList<SurvivingDecline>();
     for (int id : new TreeSet<>(justifiedIds)) {
-      if (id < 1 || id > previous.size()) {
-        continue;
+      if (id >= 1 && id <= previous.size()) {
+        var finding = previous.get(id - 1);
+        var sources = declineSources(finding, id, comments, conversationComments, botIdentity);
+        if (!sources.isEmpty()
+            && sources.stream().allMatch(source -> isRememberable(finding, source.reason()))) {
+          surviving.add(survivingDecline(finding, sources));
+        }
       }
-      var finding = previous.get(id - 1);
-      var sources =
-          declineSources(
-              finding,
-              id,
-              inlineComments == null ? List.of() : inlineComments,
-              conversationComments,
-              botIdentity);
-      if (sources.isEmpty()
-          || !sources.stream().allMatch(source -> isRememberable(finding, source.reason()))) {
-        continue;
-      }
-      var first = sources.get(0);
-      surviving.add(
-          new SurvivingDecline(
-              finding,
-              sources.stream().map(DeclineSource::reason).collect(Collectors.joining("\n\n")),
-              first.commentId(),
-              first.onThread(),
-              first.author()));
     }
     return surviving;
+  }
+
+  private static SurvivingDecline survivingDecline(
+      ReviewResponse.Finding finding, List<DeclineSource> sources) {
+    var first = sources.get(0);
+    return new SurvivingDecline(
+        finding,
+        sources.stream().map(DeclineSource::reason).collect(Collectors.joining("\n\n")),
+        first.commentId(),
+        first.onThread(),
+        first.author());
   }
 
   private static boolean isRememberable(ReviewResponse.Finding finding, String reason) {

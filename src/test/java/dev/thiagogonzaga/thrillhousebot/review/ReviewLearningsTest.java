@@ -239,7 +239,7 @@ class ReviewLearningsTest {
   @Test
   void thePr159DeclineBecomesALearningCitingItsThreadReply() {
     writeAccess("write");
-    when(store.record(any(), anyInt())).thenReturn(RecordOutcome.STORED);
+    when(store.save(any(), anyInt())).thenReturn(RecordOutcome.STORED);
 
     var stored =
         enabled()
@@ -248,7 +248,7 @@ class ReviewLearningsTest {
 
     assertEquals(1, stored);
     var input = ArgumentCaptor.forClass(LearningInput.class);
-    verify(store).record(input.capture(), eq(100));
+    verify(store).save(input.capture(), eq(100));
     var learning = input.getValue();
     assertEquals(1L, learning.installationId());
     assertEquals("o/r", learning.repository());
@@ -265,7 +265,7 @@ class ReviewLearningsTest {
   @Test
   void aConversationDeclineCitesTheIssueComment() {
     writeAccess("admin");
-    when(store.record(any(), anyInt())).thenReturn(RecordOutcome.STORED);
+    when(store.save(any(), anyInt())).thenReturn(RecordOutcome.STORED);
     var directive =
         "@thrillhousebot declined `"
             + NESTED_FILE
@@ -289,7 +289,7 @@ class ReviewLearningsTest {
                 () -> PLAIN_DIFF));
 
     var input = ArgumentCaptor.forClass(LearningInput.class);
-    verify(store).record(input.capture(), anyInt());
+    verify(store).save(input.capture(), anyInt());
     assertEquals("https://github.com/o/r/pull/161#issuecomment-902", input.getValue().sourceUrl());
   }
 
@@ -339,7 +339,7 @@ class ReviewLearningsTest {
         enabled()
             .captureSurvivingDeclines(
                 capture(NESTED, "justified", thread(NESTED, 500L, FLAT_THREADS), PLAIN_DIFF)));
-    verify(store, never()).record(any(), anyInt());
+    verify(store, never()).save(any(), anyInt());
   }
 
   @Test
@@ -369,13 +369,13 @@ class ReviewLearningsTest {
         enabled()
             .captureSurvivingDeclines(
                 capture(NESTED, "justified", thread(NESTED, 500L, FLAT_THREADS), PLAIN_DIFF)));
-    verify(store, never()).record(any(), anyInt());
+    verify(store, never()).save(any(), anyInt());
   }
 
   @Test
   void aRefusedRecordIsNotCounted() {
     writeAccess("maintain");
-    when(store.record(any(), anyInt())).thenReturn(RecordOutcome.REFUSED_CAP);
+    when(store.save(any(), anyInt())).thenReturn(RecordOutcome.REFUSED_CAP);
 
     assertEquals(
         0,
@@ -424,14 +424,14 @@ class ReviewLearningsTest {
 
   @Test
   void aConventionIsStoredWithItsCommentLink() {
-    when(store.record(any(), anyInt())).thenReturn(RecordOutcome.STORED);
+    when(store.save(any(), anyInt())).thenReturn(RecordOutcome.STORED);
 
     assertEquals(
         RecordOutcome.STORED,
         enabled().rememberConvention(1L, "o", "r", 7, 99L, "maintainer", "Prefer records."));
 
     var input = ArgumentCaptor.forClass(LearningInput.class);
-    verify(store).record(input.capture(), eq(100));
+    verify(store).save(input.capture(), eq(100));
     assertEquals(ReviewLearning.KIND_CONVENTION, input.getValue().kind());
     assertNull(input.getValue().path());
     assertEquals("https://github.com/o/r/pull/7#issuecomment-99", input.getValue().sourceUrl());

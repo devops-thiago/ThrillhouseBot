@@ -56,7 +56,7 @@ public class ReviewLearningService {
       String sourceUrl,
       String author) {}
 
-  /** What {@link #record} did with an input. */
+  /** What {@link #save} did with an input. */
   public enum RecordOutcome {
     /** A new active row was written. */
     STORED,
@@ -102,7 +102,7 @@ public class ReviewLearningService {
    * anyone asking.
    */
   @Transactional
-  public RecordOutcome record(LearningInput input, int maxPerRepo) {
+  public RecordOutcome save(LearningInput input, int maxPerRepo) {
     if (input == null
         || isBlank(input.repository())
         || isBlank(input.kind())

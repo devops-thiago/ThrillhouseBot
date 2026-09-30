@@ -63,7 +63,7 @@ class LearningTextTest {
         > **MEDIUM — renderThread misses deeper nested replies**
         > the bot's text
 
-        Threads are‮ flat:​ every reply's `in_reply_to_id` is the root.\u001B[31m
+        Threads are\u202E flat:\u200B every reply's `in_reply_to_id` is the root.\u001B[31m
         ```
         in_reply_to_id == rootId
         ```

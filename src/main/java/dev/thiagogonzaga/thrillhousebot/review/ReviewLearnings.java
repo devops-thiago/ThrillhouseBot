@@ -312,7 +312,7 @@ public class ReviewLearnings {
         continue;
       }
       var finding = decline.finding();
-      var outcome = store.record(declineInput(capture, decline), settings.maxPerRepo());
+      var outcome = store.save(declineInput(capture, decline), settings.maxPerRepo());
       Log.infof(
           "Learning from the decline of '%s' (%s) on %s/%s #%d: %s",
           LogSafe.oneLine(finding.title()),
@@ -392,7 +392,7 @@ public class ReviewLearnings {
       long commentId,
       String author,
       String text) {
-    return store.record(
+    return store.save(
         new ReviewLearningService.LearningInput(
             installationId,
             owner + "/" + repo,

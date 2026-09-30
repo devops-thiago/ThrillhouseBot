@@ -191,7 +191,7 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
 
   @Test
   void learningsListEveryLearningWithItsSourceIncludingRetractedOnes() {
-    reviewLearningService.record(
+    reviewLearningService.save(
         new ReviewLearningService.LearningInput(
             1L,
             "owner/repo",

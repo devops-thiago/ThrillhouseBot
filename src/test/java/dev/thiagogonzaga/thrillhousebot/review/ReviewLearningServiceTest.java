@@ -97,8 +97,8 @@ class ReviewLearningServiceTest {
   void aDeclineIsStoredOnceAndReadBackNormalized() {
     var input = decline(1L, "Owner/Repo", "https://github.com/o/r/pull/159#discussion_r1", FLAT);
 
-    assertEquals(RecordOutcome.STORED, service.record(input, 10));
-    assertEquals(RecordOutcome.DUPLICATE, service.record(input, 10));
+    assertEquals(RecordOutcome.STORED, service.save(input, 10));
+    assertEquals(RecordOutcome.DUPLICATE, service.save(input, 10));
 
     var active = service.listActive(1L, "owner/repo", 10);
     assertEquals(1, active.size());
@@ -130,7 +130,7 @@ class ReviewLearningServiceTest {
             "https://github.com/o/r/pull/3#issuecomment-9",
             "m");
 
-    assertEquals(RecordOutcome.STORED, service.record(input, 10));
+    assertEquals(RecordOutcome.STORED, service.save(input, 10));
 
     var learning = service.listActive(1L, "o/r", 10).get(0);
     assertNull(learning.findingTitle());
@@ -143,7 +143,7 @@ class ReviewLearningServiceTest {
   void aCredentialIsNeverStored() {
     assertEquals(
         RecordOutcome.REFUSED_SECRET,
-        service.record(decline(1L, "o/r", "u1", "use ghp_abcdefghijklmnop1234 here"), 10));
+        service.save(decline(1L, "o/r", "u1", "use ghp_abcdefghijklmnop1234 here"), 10));
     var titled =
         new LearningInput(
             1L,
@@ -156,47 +156,47 @@ class ReviewLearningServiceTest {
             1,
             "u2",
             "m");
-    assertEquals(RecordOutcome.REFUSED_SECRET, service.record(titled, 10));
+    assertEquals(RecordOutcome.REFUSED_SECRET, service.save(titled, 10));
     assertEquals(0, service.countActive(1L, "o/r"));
   }
 
   @Test
   void incompleteOrEmptyInputIsRefused() {
-    assertEquals(RecordOutcome.REFUSED_EMPTY, service.record(null, 10));
-    assertEquals(RecordOutcome.REFUSED_EMPTY, service.record(decline(1L, " ", "u", FLAT), 10));
-    assertEquals(RecordOutcome.REFUSED_EMPTY, service.record(decline(1L, "o/r", "u", "> x"), 10));
-    assertEquals(RecordOutcome.REFUSED_EMPTY, service.record(decline(1L, "o/r", " ", FLAT), 10));
-    assertEquals(RecordOutcome.REFUSED_EMPTY, service.record(decline(1L, "o/r", null, FLAT), 10));
+    assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(null, 10));
+    assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(decline(1L, " ", "u", FLAT), 10));
+    assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(decline(1L, "o/r", "u", "> x"), 10));
+    assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(decline(1L, "o/r", " ", FLAT), 10));
+    assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(decline(1L, "o/r", null, FLAT), 10));
     var noKind = new LearningInput(1L, "o/r", null, null, null, null, FLAT, 1, "u", "m");
-    assertEquals(RecordOutcome.REFUSED_EMPTY, service.record(noKind, 10));
+    assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(noKind, 10));
     var noAuthor =
         new LearningInput(
             1L, "o/r", ReviewLearning.KIND_CONVENTION, null, null, null, FLAT, 1, "u", " ");
-    assertEquals(RecordOutcome.REFUSED_EMPTY, service.record(noAuthor, 10));
+    assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(noAuthor, 10));
     var nullAuthor =
         new LearningInput(
             1L, "o/r", ReviewLearning.KIND_CONVENTION, null, null, null, FLAT, 1, "u", null);
-    assertEquals(RecordOutcome.REFUSED_EMPTY, service.record(nullAuthor, 10));
+    assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(nullAuthor, 10));
   }
 
   @Test
   void theCapRefusesInsteadOfEvictingAndRetractionFreesRoom() {
-    assertEquals(RecordOutcome.STORED, service.record(decline(1L, "o/r", "u1", FLAT), 2));
-    assertEquals(RecordOutcome.STORED, service.record(decline(1L, "o/r", "u2", FLAT), 2));
-    assertEquals(RecordOutcome.REFUSED_CAP, service.record(decline(1L, "o/r", "u3", FLAT), 2));
+    assertEquals(RecordOutcome.STORED, service.save(decline(1L, "o/r", "u1", FLAT), 2));
+    assertEquals(RecordOutcome.STORED, service.save(decline(1L, "o/r", "u2", FLAT), 2));
+    assertEquals(RecordOutcome.REFUSED_CAP, service.save(decline(1L, "o/r", "u3", FLAT), 2));
     assertEquals(
         RecordOutcome.STORED,
-        service.record(decline(1L, "other/repo", "u3", FLAT), 2),
+        service.save(decline(1L, "other/repo", "u3", FLAT), 2),
         "the cap is per repository");
 
     var oldest = service.listActive(1L, "o/r", 10).get(1);
     assertEquals(RetractOutcome.RETRACTED, service.retract(1L, "o/r", oldest.id(), "Admin"));
-    assertEquals(RecordOutcome.STORED, service.record(decline(1L, "o/r", "u3", FLAT), 2));
+    assertEquals(RecordOutcome.STORED, service.save(decline(1L, "o/r", "u3", FLAT), 2));
   }
 
   @Test
   void learningsNeverCrossRepositoriesOrInstallations() {
-    service.record(decline(1L, "o/r", "u1", FLAT), 10);
+    service.save(decline(1L, "o/r", "u1", FLAT), 10);
 
     assertEquals(1, service.listActive(1L, "o/r", 10).size());
     assertTrue(service.listActive(2L, "o/r", 10).isEmpty(), "another installation");
@@ -210,7 +210,7 @@ class ReviewLearningServiceTest {
 
   @Test
   void retractIsScopedAndAudited() {
-    service.record(decline(1L, "o/r", "u1", FLAT), 10);
+    service.save(decline(1L, "o/r", "u1", FLAT), 10);
     var id = service.listActive(1L, "o/r", 10).get(0).id();
 
     assertEquals(RetractOutcome.NOT_FOUND, service.retract(1L, "o/other", id, "x"));
@@ -230,7 +230,7 @@ class ReviewLearningServiceTest {
 
   @Test
   void aRetractionWithoutALoginIsStillRecorded() {
-    service.record(decline(1L, "o/r", "u1", FLAT), 10);
+    service.save(decline(1L, "o/r", "u1", FLAT), 10);
     var id = service.listActive(1L, "o/r", 10).get(0).id();
 
     assertEquals(RetractOutcome.RETRACTED, service.retract(1L, "o/r", id, null));

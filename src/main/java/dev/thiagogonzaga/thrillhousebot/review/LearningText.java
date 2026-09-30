@@ -49,8 +49,9 @@ final class LearningText {
           Pattern.compile("\\bAIza[\\w-]{30,}"),
           Pattern.compile("(?i)\\bbearer\\s+[\\w.~+/=-]{12,}"),
           Pattern.compile(
-              "(?i)\\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|client[_-]?secret)"
-                  + "\\s{0,4}[:=]\\s{0,4}['\"]?[^\\s'\"]{8,}"));
+              "(?i)\\b(?:password|passwd|secret)\\s{0,4}[:=]\\s{0,4}['\"]?[^\\s'\"]{8,}"),
+          Pattern.compile(
+              "(?i)\\b(?:api|access|client)[_-]?(?:key|token|secret)\\s{0,4}[:=]\\s{0,4}['\"]?[^\\s'\"]{8,}"));
 
   private static final Pattern BLOCKQUOTE_LINE = Pattern.compile("(?m)^[ \\t]{0,8}>.*$");
   private static final Pattern ANSI_CSI = Pattern.compile("\u001B\\[[0-?]*[ -/]*[@-~]");
