@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -80,7 +81,7 @@ final class SecretScanner {
                 + TOKEN_END));
     formats.put(
         SecurityRule.SLACK_TOKEN,
-        Pattern.compile(TOKEN_START + "(xox[abposr]-[0-9]{8,13}-[A-Za-z0-9-]{16,})" + TOKEN_END));
+        Pattern.compile(TOKEN_START + "(xox[abposr]-\\d{8,13}-[A-Za-z0-9-]{16,})" + TOKEN_END));
     formats.put(
         SecurityRule.GOOGLE_API_KEY,
         Pattern.compile(TOKEN_START + "(AIza[0-9A-Za-z_-]{35})" + TOKEN_END));
@@ -149,10 +150,9 @@ final class SecretScanner {
    * A value made of identifier words — {@code spring.datasource.password}, {@code DB_PASSWORD},
    * {@code my-app-secret-v2} — names a credential rather than being one.
    */
-  private static final String IDENTIFIER_WORD = "(?:[a-z]+[0-9]{0,2}|[A-Z]+[0-9]{0,2})";
+  private static final Pattern IDENTIFIER_WORD = Pattern.compile("[a-z]+\\d{0,2}|[A-Z]+\\d{0,2}");
 
-  private static final Pattern IDENTIFIER_WORDS =
-      Pattern.compile(IDENTIFIER_WORD + "(?:[._/-]" + IDENTIFIER_WORD + ")+");
+  private static final Pattern IDENTIFIER_SEPARATOR = Pattern.compile("[._/-]");
 
   /**
    * The start of a PEM body: base64 of at least a line's worth, either on the line after the header
@@ -234,12 +234,22 @@ final class SecretScanner {
         || value.startsWith("./")
         || value.startsWith("~/")
         || value.contains("://")
-        || IDENTIFIER_WORDS.matcher(value).matches()) {
+        || isIdentifier(value)) {
       return false;
     }
     return characterClasses(value) >= 2
         && value.chars().anyMatch(c -> !Character.isLetter(c))
         && entropy(value) >= entropyThreshold;
+  }
+
+  /**
+   * Whether the value is two or more identifier words joined by separators. Split rather than one
+   * repeated group, which would backtrack through every separator of a long value.
+   */
+  private static boolean isIdentifier(String value) {
+    var words = IDENTIFIER_SEPARATOR.split(value, -1);
+    return words.length >= 2
+        && Arrays.stream(words).allMatch(word -> IDENTIFIER_WORD.matcher(word).matches());
   }
 
   /** Whether a matched value is a documentation or template stand-in. */
@@ -275,7 +285,7 @@ final class SecretScanner {
     var counts = new HashMap<Integer, Integer>();
     value.chars().forEach(c -> counts.merge(c, 1, Integer::sum));
     double entropy = 0.0;
-    for (int count : counts.values()) {
+    for (var count : counts.values()) {
       double p = (double) count / value.length();
       entropy -= p * (Math.log(p) / Math.log(2));
     }

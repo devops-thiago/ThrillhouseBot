@@ -50,7 +50,7 @@ final class IacScanner {
   private static final int WINDOW = 15;
 
   private static final Pattern OPEN_CIDR =
-      Pattern.compile("(?<![0-9.])0\\.0\\.0\\.0/0(?![0-9])|(?<![0-9A-Fa-f:])::/0(?![0-9])");
+      Pattern.compile("(?<![\\d.])0\\.0\\.0\\.0/0(?!\\d)|(?<![\\dA-Fa-f:])::/0(?!\\d)");
 
   private static final Pattern INGRESS =
       Pattern.compile(
@@ -63,10 +63,10 @@ final class IacScanner {
               + "|direction\\W+EGRESS");
 
   private static final Pattern FROM_PORT =
-      Pattern.compile("(?i)\\b\"?(?:from_?port)\"?\\s*[=:]\\s*\"?(-?\\d{1,5})");
+      Pattern.compile("(?i)\\b\"?from_?port\"?\\s*[=:]\\s*\"?(-?\\d{1,5})");
 
   private static final Pattern TO_PORT =
-      Pattern.compile("(?i)\\b\"?(?:to_?port)\"?\\s*[=:]\\s*\"?(-?\\d{1,5})");
+      Pattern.compile("(?i)\\b\"?to_?port\"?\\s*[=:]\\s*\"?(-?\\d{1,5})");
 
   private static final Pattern PORT_LIST =
       Pattern.compile("(?i)\\b\"?(?:ports?|port_range|destination_port_range)\"?\\s*[=:]\\s*(.+)");
@@ -76,20 +76,23 @@ final class IacScanner {
   private static final Pattern ALL_PROTOCOLS =
       Pattern.compile("(?i)\\b\"?(?:ip_?)?protocol\"?\\s*[=:]\\s*[\"']?(?:-1|all)[\"']?,?$");
 
-  private static final Pattern PUBLIC_BUCKET =
-      Pattern.compile(
-          "\\bacl\\s*=\\s*\"public-read(?:-write)?\""
-              + "|\"?AccessControl\"?\\s*:\\s*[\"']?PublicRead(?:Write)?\\b"
-              + "|\\b(?:block_public_acls|block_public_policy|ignore_public_acls"
-              + "|restrict_public_buckets)\\s*=\\s*false\\b"
-              + "|\"?(?:BlockPublicAcls|BlockPublicPolicy|IgnorePublicAcls|RestrictPublicBuckets)"
-              + "\"?\\s*:\\s*[\"']?false\\b");
+  /** The spellings of a public bucket, one expression per setting to keep each one simple. */
+  private static final List<Pattern> PUBLIC_BUCKET =
+      List.of(
+          Pattern.compile("\\bacl\\s*=\\s*\"public-read(?:-write)?\""),
+          Pattern.compile("\"?AccessControl\"?\\s*:\\s*[\"']?PublicRead(?:Write)?\\b"),
+          Pattern.compile(
+              "\\b(?:block_public_acls|block_public_policy|ignore_public_acls"
+                  + "|restrict_public_buckets)\\s*=\\s*false\\b"),
+          Pattern.compile(
+              "\"?(?:BlockPublicAcls|BlockPublicPolicy|IgnorePublicAcls|RestrictPublicBuckets)"
+                  + "\"?\\s*:\\s*[\"']?false\\b"));
 
   private static final Pattern WILDCARD_ACTION =
-      Pattern.compile("(?i)(?<![a-z])\"?actions?\"?\\s*[=:]\\s*\\[?\\s*[\"']\\*[\"']]?,?$");
+      Pattern.compile("(?i)(?<![a-z])\"?actions?\"?\\s*+[=:]\\s*+\\[?\\s*+[\"']\\*[\"']]?,?$");
 
   private static final Pattern WILDCARD_RESOURCE =
-      Pattern.compile("(?i)(?<![a-z])\"?resources?\"?\\s*[=:]\\s*\\[?\\s*[\"']\\*[\"']]?,?$");
+      Pattern.compile("(?i)(?<![a-z])\"?resources?\"?\\s*+[=:]\\s*+\\[?\\s*+[\"']\\*[\"']]?,?$");
 
   private static final Pattern DENY_EFFECT =
       Pattern.compile("(?i)\"?effect\"?\\s*[=:]\\s*[\"']?deny");
@@ -168,7 +171,7 @@ final class IacScanner {
     if (kind != FileKind.TERRAFORM && HOST_NAMESPACE.matcher(text).find()) {
       return SecurityRule.HOST_NAMESPACE;
     }
-    if (PUBLIC_BUCKET.matcher(text).find()) {
+    if (PUBLIC_BUCKET.stream().anyMatch(p -> p.matcher(text).find())) {
       return SecurityRule.PUBLIC_BUCKET;
     }
     if (WILDCARD_ACTION.matcher(text.stripTrailing()).find()
@@ -364,11 +367,10 @@ final class IacScanner {
    */
   private static List<PatchLines.Line> block(Window window) {
     var above = new ArrayList<PatchLines.Line>();
-    for (int i = window.index() - 1; !opensBlock(window.self().text()) && i >= 0; i--) {
+    for (int i = window.index() - 1;
+        !opensBlock(window.self().text()) && i >= 0 && !closesBlock(window.line(i).text());
+        i--) {
       var line = window.line(i);
-      if (closesBlock(line.text())) {
-        break;
-      }
       above.add(line);
       if (opensBlock(line.text())) {
         break;

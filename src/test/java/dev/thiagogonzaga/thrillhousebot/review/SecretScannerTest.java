@@ -221,6 +221,8 @@ class SecretScannerTest {
       assertFalse(SecretScanner.looksLikeSecret(value, 1.0), value);
     }
     assertTrue(SecretScanner.looksLikeSecret("q8#Lm2!vRt9Z", 3.5));
+    // Separators alone do not make an identifier: a segment here is not a word.
+    assertTrue(SecretScanner.looksLikeSecret("Zx9!-q8#Lm2-vRt", 3.5));
   }
 
   @Test
@@ -240,7 +242,7 @@ class SecretScannerTest {
   @Test
   void theEntropyThresholdGatesTheGenericRule() {
     var line = "password = \"q8#Lm2!vRt9Z\"";
-    assertTrue(SecretScanner.scan(line, null, 3.0).size() == 1);
+    assertEquals(1, SecretScanner.scan(line, null, 3.0).size());
     assertTrue(SecretScanner.scan(line, null, 4.5).isEmpty());
   }
 

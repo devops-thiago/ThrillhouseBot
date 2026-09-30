@@ -33,6 +33,11 @@ class IacScannerTest {
     return PatchLines.parse(sb.toString());
   }
 
+  /** A raw patch, one line per argument. */
+  private static PatchLines patch(String... lines) {
+    return PatchLines.parse(String.join("\n", lines) + "\n");
+  }
+
   private static List<IacScanner.Hit> scanNew(String filename, String... lines) {
     return IacScanner.scan(filename, added(lines), true);
   }
@@ -299,9 +304,14 @@ class IacScannerTest {
   void contextNeverCrossesAHunkOrTheWindow() {
     // The ingress block opens in the first hunk; the second hunk alone says nothing of direction.
     var split =
-        PatchLines.parse(
-            "@@ -1,3 +1,3 @@\n ingress {\n   from_port = 22\n   to_port = 22\n"
-                + "@@ -40,1 +40,2 @@\n+  cidr_blocks = [\"0.0.0.0/0\"]\n }\n");
+        patch(
+            "@@ -1,3 +1,3 @@",
+            " ingress {",
+            "   from_port = 22",
+            "   to_port = 22",
+            "@@ -40,1 +40,2 @@",
+            "+  cidr_blocks = [\"0.0.0.0/0\"]",
+            " }");
     assertTrue(IacScanner.scan("sg.tf", split, false).isEmpty());
 
     var padding = new java.util.ArrayList<String>();
@@ -322,9 +332,15 @@ class IacScannerTest {
   @Test
   void aRuleAtTheEndOfAHunkReadsItsResourceFromThatHunkOnly() {
     var patch =
-        PatchLines.parse(
-            "@@ -1,3 +1,4 @@\n   allow {\n     ports = [\"22\"]\n   }\n+  source_ranges ="
-                + " [\"0.0.0.0/0\"]\n@@ -50,1 +51,1 @@\n-x\n+ports = [\"80\"]\n");
+        patch(
+            "@@ -1,3 +1,4 @@",
+            "   allow {",
+            "     ports = [\"22\"]",
+            "   }",
+            "+  source_ranges = [\"0.0.0.0/0\"]",
+            "@@ -50,1 +51,1 @@",
+            "-x",
+            "+ports = [\"80\"]");
     assertEquals(1, IacScanner.scan("fw.tf", patch, false).size());
     assertEquals(
         1,

@@ -109,7 +109,8 @@ enum SecurityRule {
       "`privileged: true` gives the container every capability and access to the host's devices,"
           + " so a compromise of the container is a compromise of the node. Drop it and add only"
           + " the specific capabilities the workload needs.",
-      Set.of("privileged", "privilege", "privileges", "container", "capabilities", "root")),
+      Set.of(
+          "privileged", Topics.PRIVILEGE, Topics.PRIVILEGES, "container", "capabilities", "root")),
   HOST_NAMESPACE(
       Category.IAC,
       "pod shares a host namespace",
@@ -138,7 +139,15 @@ enum SecurityRule {
           + " every process as root and a compromise of it starts with root privileges. Switch to"
           + " an unprivileged user (`USER 10001` or a named user created in the image) after the"
           + " steps that need root.",
-      Set.of("root", "user", "privilege", "privileges", "drop", "nonroot", "non", "unprivileged")),
+      Set.of(
+          "root",
+          "user",
+          Topics.PRIVILEGE,
+          Topics.PRIVILEGES,
+          "drop",
+          "nonroot",
+          "non",
+          "unprivileged")),
   UNENCRYPTED_STORAGE(
       Category.IAC,
       "storage encryption turned off",
@@ -198,6 +207,9 @@ enum SecurityRule {
    * enum constant's constructor arguments cannot read a static field of the enum itself.
    */
   private static final class Topics {
+    static final String PRIVILEGE = "privilege";
+    static final String PRIVILEGES = "privileges";
+
     static final Set<String> SECRET =
         Set.of(
             "secret",

@@ -23,6 +23,7 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -31,6 +32,8 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * The deterministic security scan (#60): reads the lines a pull request adds for leaked credentials
@@ -307,22 +310,18 @@ public class SecurityScan {
       String filename, int line, SecretScanner.Hit hit) {
     var rule = hit.rule();
     var redacted = SecretScanner.redact(hit);
-    String title;
-    String what;
-    if (rule == SecurityRule.GENERIC_SECRET) {
-      var key = keyName(hit.keyName());
-      title = rule.secretTitleHead() + " in " + key + " (" + redacted + ")";
-      what =
-          "This added line assigns a high-entropy literal to `"
-              + key
-              + "`, a name that marks a credential.";
-    } else if (rule == SecurityRule.PRIVATE_KEY) {
-      title = rule.secretTitleHead() + " (" + redacted + ")";
-      what = "This added line starts a PEM private key, and the key body follows it.";
-    } else {
-      title = rule.secretTitleHead() + " (" + redacted + ")";
-      what = "This added line carries a value in the " + rule.label() + " format.";
-    }
+    var key = rule == SecurityRule.GENERIC_SECRET ? keyName(hit.keyName()) : null;
+    var title = rule.secretTitleHead() + (key == null ? "" : " in " + key) + " (" + redacted + ")";
+    var what =
+        switch (rule) {
+          case GENERIC_SECRET ->
+              "This added line assigns a high-entropy literal to `"
+                  + key
+                  + "`, a name that marks a credential.";
+          case PRIVATE_KEY ->
+              "This added line starts a PEM private key, and the key body follows it.";
+          default -> "This added line carries a value in the " + rule.label() + " format.";
+        };
     var description =
         what
             + " The bot never repeats a matched secret: it is shown here only as its first"
@@ -432,25 +431,17 @@ public class SecurityScan {
       seen.add(status.id());
       result.add(applyScan(status, stillDetected, noLongerDetected, redactions));
     }
-    var missing = new ArrayList<Integer>();
-    for (int id : stillDetected) {
-      if (!seen.contains(id)) {
-        missing.add(id);
-      }
-    }
-    for (int id : noLongerDetected) {
-      if (!seen.contains(id)) {
-        missing.add(id);
-      }
-    }
-    missing.sort(Comparator.naturalOrder());
-    for (int id : missing) {
-      result.add(
-          stillDetected.contains(id)
-              ? new ReviewResponse.PreviousFindingStatus(id, STATUS_UNRESOLVED, STILL_DETECTED_NOTE)
-              : new ReviewResponse.PreviousFindingStatus(
-                  id, STATUS_RESOLVED, NO_LONGER_DETECTED_NOTE));
-    }
+    Stream.concat(stillDetected.stream(), noLongerDetected.stream())
+        .filter(id -> !seen.contains(id))
+        .sorted()
+        .map(
+            id ->
+                stillDetected.contains(id)
+                    ? new ReviewResponse.PreviousFindingStatus(
+                        id, STATUS_UNRESOLVED, STILL_DETECTED_NOTE)
+                    : new ReviewResponse.PreviousFindingStatus(
+                        id, STATUS_RESOLVED, NO_LONGER_DETECTED_NOTE))
+        .forEach(result::add);
     return result;
   }
 
@@ -498,16 +489,12 @@ public class SecurityScan {
   }
 
   private static Set<String> words(String title) {
-    var words = new HashSet<String>();
     if (title == null) {
-      return words;
+      return Set.of();
     }
-    for (String word : title.toLowerCase(Locale.ROOT).split("[^a-z0-9]+")) {
-      if (!word.isEmpty()) {
-        words.add(word);
-      }
-    }
-    return words;
+    return Arrays.stream(title.toLowerCase(Locale.ROOT).split("[^a-z0-9]+"))
+        .filter(word -> !word.isEmpty())
+        .collect(Collectors.toSet());
   }
 
   private static ReviewResponse.Finding scrub(
