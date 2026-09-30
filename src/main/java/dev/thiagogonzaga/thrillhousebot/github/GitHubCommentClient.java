@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import java.util.ArrayList;
@@ -209,6 +210,7 @@ public interface GitHubCommentClient {
     }
 
     /** The {@code pull_request} object the issues endpoint adds for a pull request number. */
+    @RegisterForReflection
     public record PullRequestRef(String url) {}
   }
 
