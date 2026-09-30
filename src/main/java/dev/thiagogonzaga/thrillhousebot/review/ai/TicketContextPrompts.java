@@ -70,7 +70,9 @@ public final class TicketContextPrompts {
             description, the changed-file list and the findings.
             - For each criterion the material shows is NOT addressed, add one description_gaps
               entry reading "Linked issue #N: <criterion, shortened> — <what shows it is not
-              addressed>". This applies even when the PR description is empty. Shown means one of:
+              addressed>". #N is the number in that issue's own "### Issue #N" heading, one of the
+              numbers the section's first line lists — never a count, a position or a list
+              index. This applies even when the PR description is empty. Shown means one of:
               the criterion names a file, component, setting, document or test that no path in the
               changed-file list touches; the PR description says it is deferred or out of scope; or
               a finding says the change does the opposite of it.

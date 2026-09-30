@@ -347,7 +347,12 @@ the acceptance criteria, and caps the section. `ReviewPromptAssembler` fences it
 both calls' trailing guidance with different requests: the review call reads it as
 intent (so `DiffBudgetPlanner` counts it as shared overhead), and the summary call
 lists unaddressed criteria as description gaps (so the pipeline counts it in the
-summary clamp). A missing criterion is never a finding.
+summary clamp). A missing criterion is never a finding. `FindingPipeline` checks each
+`Linked issue #N` entry against the linked set read from the section's first line,
+and `DescriptionGapCarryover` carries the gaps the previous summary comment listed
+into the round: they ride the summary call's guidance, labelled, so the call can name
+the ones now resolved (`addressed_gaps`), and every other one is merged back after
+the call, on the degraded paths as well.
 
 **Repository-supplied configuration** — `.github/thrillhousebot.yml` carries a
 repository's own ignore globs and path-scoped review instructions, read from the

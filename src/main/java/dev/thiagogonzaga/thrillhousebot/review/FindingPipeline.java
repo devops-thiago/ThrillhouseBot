@@ -193,7 +193,8 @@ public class FindingPipeline {
           base.previousFindings(),
           repoInstructions,
           base.summaryInstructions(),
-          reviewSystemPrompt);
+          reviewSystemPrompt,
+          base.linkedIssues());
     }
   }
 
@@ -337,7 +338,7 @@ public class FindingPipeline {
                 session, aiResponse, quoteSource, singleInputs, ctx, lineResolver, plan, evidence),
             ctx);
     if (budgetPlanner.callCapLeavesNoSummaryCall()) {
-      return summarySkippedAtCallCap(session, refined, plan);
+      return summarySkippedAtCallCap(session, refined, plan, carryFor(ctx, promptInputs));
     }
     return withSummary(session, refined, promptInputs, ctx, plan);
   }
@@ -349,13 +350,16 @@ public class FindingPipeline {
    * instead of making a call the operator capped away.
    */
   private ReviewResponse summarySkippedAtCallCap(
-      ReviewSession session, ReviewResponse refined, DiffBudgetPlanner.BudgetPlan plan) {
+      ReviewSession session,
+      ReviewResponse refined,
+      DiffBudgetPlanner.BudgetPlan plan,
+      DescriptionGapCarryover.Carry carry) {
     plan.recordSummaryDegradation(SummaryDegradation.SKIPPED_AT_CALL_CAP);
     Log.warnf(
         "Review session %d skips its summary call: REVIEW_MAX_AI_CALLS=1 was spent by the review"
             + " call; keeping the %d findings with a counts-only summary",
         ledgerSessionId(session), refined.findings().size());
-    return persistWithSummary(session, refined, null);
+    return persistWithSummary(session, refined, null, carry);
   }
 
   /**
@@ -546,6 +550,10 @@ public class FindingPipeline {
    * leaves once the prompt templates, PR context, previous findings and that guidance are counted;
    * the guidance itself is sent whole, as the review call's trailing guidance is. Persists and
    * returns the merged response on every path that does not rethrow.
+   *
+   * <p>The description gaps the previous round listed ride that guidance too (#923), so the call
+   * can say which of them are now resolved; every path, degraded ones included, then carries the
+   * rest into the summary it persists ({@link DescriptionGapCarryover}).
    */
   private ReviewResponse withSummary(
       ReviewSession session,
@@ -553,38 +561,63 @@ public class FindingPipeline {
       AiReviewService.PromptInputs promptInputs,
       ReviewContextLoader.ReviewContext ctx,
       DiffBudgetPlanner.BudgetPlan plan) {
+    var carry = carryFor(ctx, promptInputs);
     if (tokenLedger.ceilingReached(ledgerSessionId(session))) {
-      return countsOnlySummary(session, refined, plan, "skipping the summary call");
+      return countsOnlySummary(session, refined, plan, "skipping the summary call", carry);
     }
-    var overview = clampOverview(changedFilesOverview(ctx, plan), promptInputs);
+    // Added before the clamps below, so the overview and findings are sized around it.
+    var inputs = withCarriedGaps(promptInputs, carry);
+    var overview = clampOverview(changedFilesOverview(ctx, plan), inputs);
     var summaryInputs =
         new AiReviewService.SummaryInputs(
-            promptInputs.prContext(),
+            inputs.prContext(),
             PromptTemplateEscaper.escape(
-                budgetedFindingsJson(refined.findings(), promptInputs, overview)),
+                budgetedFindingsJson(refined.findings(), inputs, overview)),
             PromptTemplateEscaper.escape(overview),
-            promptInputs.previousFindings(),
-            promptInputs.summaryInstructions());
+            inputs.previousFindings(),
+            inputs.summaryInstructions());
     ReviewResponse summaryResponse;
     try {
       summaryResponse = aiReviewService.summarize(session, summaryInputs);
     } catch (TokenSpendCeilingExceededException _) {
       // The gate above passed but a late usage callback (e.g. a timed-out review attempt's
       // response) crossed the ceiling first, or a summary retry was refused mid-loop.
-      return countsOnlySummary(session, refined, plan, "summary call refused");
+      return countsOnlySummary(session, refined, plan, "summary call refused", carry);
     } catch (AiResponseTruncatedException e) {
       // #500 scope A: every review call succeeded and was billed. Losing the whole review to a
       // truncated summary would discard exactly the paid work #495 preserved on the review lane —
       // salvage the summary object if it closed before the cut, else degrade to the same
       // counts-only shape as the ceiling-tripped path above. Never re-enters the retry lane.
-      return salvagedOrCountsOnlySummary(session, refined, plan, e);
+      return salvagedOrCountsOnlySummary(session, refined, plan, e, carry);
     } catch (AiReviewException e) {
       // #851: the same reasoning holds for every other way the summary call can fail its retries
       // (a response the parser refused, a timeout, a connection reset): the review calls are paid
       // for, so the review keeps their findings under the counts-only summary instead of failing.
-      return failedSummary(session, refined, plan, e);
+      return failedSummary(session, refined, plan, e, carry);
     }
-    return persistWithSummary(session, refined, summaryResponse.summary());
+    return persistWithSummary(session, refined, summaryResponse.summary(), carry);
+  }
+
+  /** The inputs with the carried gaps' request appended to the summary call's guidance. */
+  private static AiReviewService.PromptInputs withCarriedGaps(
+      AiReviewService.PromptInputs promptInputs, DescriptionGapCarryover.Carry carry) {
+    var section = carry.promptSection();
+    if (section.isEmpty()) {
+      return promptInputs;
+    }
+    return promptInputs.withSummaryInstructions(
+        ReviewPromptAssembler.combineSections(
+            Objects.requireNonNullElse(promptInputs.summaryInstructions(), ""), section));
+  }
+
+  /**
+   * The description gaps carried into this round: the ones the bot's previous summary comment
+   * listed, checked against the issues this round's prompt links (#923).
+   */
+  private DescriptionGapCarryover.Carry carryFor(
+      ReviewContextLoader.ReviewContext ctx, AiReviewService.PromptInputs promptInputs) {
+    return DescriptionGapCarryover.of(
+        ctx.conversationComments(), botIdentity, promptInputs.linkedIssues());
   }
 
   /**
@@ -600,7 +633,8 @@ public class FindingPipeline {
       ReviewSession session,
       ReviewResponse refined,
       DiffBudgetPlanner.BudgetPlan plan,
-      String what) {
+      String what,
+      DescriptionGapCarryover.Carry carry) {
     plan.recordSummaryDegradation(SummaryDegradation.SKIPPED_AT_CEILING);
     Log.warnf(
         "Review session %d reached its token spend ceiling before the summary call (%d tokens"
@@ -611,7 +645,7 @@ public class FindingPipeline {
         tokenLedger.ceiling(),
         what,
         refined.findings().size());
-    return persistWithSummary(session, refined, null);
+    return persistWithSummary(session, refined, null, carry);
   }
 
   /**
@@ -629,7 +663,8 @@ public class FindingPipeline {
       ReviewSession session,
       ReviewResponse refined,
       DiffBudgetPlanner.BudgetPlan plan,
-      AiResponseTruncatedException truncation) {
+      AiResponseTruncatedException truncation,
+      DescriptionGapCarryover.Carry carry) {
     plan.recordSummaryDegradation(SummaryDegradation.RESPONSE_CUT);
     var salvagedSummary = salvager.salvageSummary(truncation.partialBody());
     if (salvagedSummary != null) {
@@ -638,14 +673,14 @@ public class FindingPipeline {
               + " (max-output-tokens / REVIEW_CONCISE_MAX_OUTPUT_TOKENS); the summary object"
               + " closed before the cut and was salvaged — keeping the %d paid findings",
           ledgerSessionId(session), refined.findings().size());
-      return persistWithSummary(session, refined, salvagedSummary);
+      return persistWithSummary(session, refined, salvagedSummary, carry);
     }
     Log.warnf(
         "Summary response for session %d was cut at the model's response-length cap"
             + " (max-output-tokens / REVIEW_CONCISE_MAX_OUTPUT_TOKENS) and no complete summary"
             + " object could be salvaged; keeping the %d paid findings with a counts-only summary",
         ledgerSessionId(session), refined.findings().size());
-    return persistWithSummary(session, refined, null);
+    return persistWithSummary(session, refined, null, carry);
   }
 
   /**
@@ -662,7 +697,8 @@ public class FindingPipeline {
       ReviewSession session,
       ReviewResponse refined,
       DiffBudgetPlanner.BudgetPlan plan,
-      AiReviewException failure) {
+      AiReviewException failure,
+      DescriptionGapCarryover.Carry carry) {
     if (isInterruption(failure)) {
       throw failure;
     }
@@ -671,7 +707,7 @@ public class FindingPipeline {
         "Summary call for session %d failed after %d attempt(s); keeping the %d paid findings"
             + " with a counts-only summary",
         ledgerSessionId(session), failure.attempts(), refined.findings().size());
-    return persistWithSummary(session, refined, null);
+    return persistWithSummary(session, refined, null, carry);
   }
 
   /**
@@ -688,13 +724,18 @@ public class FindingPipeline {
    * Persists and returns the refined findings/statuses under the given (possibly null) summary —
    * the one exit every lane and every degradation takes, so it is where the prompt's own labels are
    * removed from what the model wrote (#918): the stored round then matches what is posted, and the
-   * next round's previous findings are read back clean.
+   * next round's previous findings are read back clean. It is also where the description gaps
+   * carried from the previous round join the summary (#923), on every lane and degradation alike.
    */
   private ReviewResponse persistWithSummary(
-      ReviewSession session, ReviewResponse refined, ReviewResponse.Summary summary) {
+      ReviewSession session,
+      ReviewResponse refined,
+      ReviewResponse.Summary summary,
+      DescriptionGapCarryover.Carry carry) {
     var merged =
         PromptLabelScrubber.scrub(
-            new ReviewResponse(refined.findings(), refined.previousFindingsStatus(), summary));
+            new ReviewResponse(
+                refined.findings(), refined.previousFindingsStatus(), carry.apply(summary)));
     persistAiResponse(session, merged);
     return merged;
   }

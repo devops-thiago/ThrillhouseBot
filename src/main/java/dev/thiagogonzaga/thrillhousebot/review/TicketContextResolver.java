@@ -21,6 +21,7 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.BitSet;
 import java.util.List;
 import java.util.Locale;
@@ -176,9 +177,42 @@ public class TicketContextResolver {
     }
   }
 
+  /** Opening of the section's first line, which lists the linked issues' keys. */
+  static final String LINKED_HEADER = "Issues this pull request is linked to: ";
+
+  private static final String KEY_SEPARATOR = ", ";
+
+  /** Opening of each issue's heading, followed by its key. */
+  static final String ISSUE_HEADING = "### Issue ";
+
+  /**
+   * The keys of the issues a section built by {@link #resolve} is linked to ({@code "#114"} for a
+   * GitHub issue), read from its first line; empty for a blank or foreign text. Only that line is
+   * read: it is rendered from the provider's keys before any issue text, so nothing an issue author
+   * writes can add a key to it.
+   */
+  static List<String> linkedKeys(String section) {
+    if (section == null || !section.startsWith(LINKED_HEADER)) {
+      return List.of();
+    }
+    var end = section.indexOf('\n');
+    var line = section.substring(LINKED_HEADER.length(), end < 0 ? section.length() : end);
+    return Arrays.stream(line.split(KEY_SEPARATOR))
+        .map(String::strip)
+        .filter(key -> !key.isEmpty())
+        .toList();
+  }
+
   private String render(List<IssueTrackerProvider.LinkedTicket> tickets) {
-    var sb = new StringBuilder();
-    sb.append("Issues this pull request is linked to: ").append(tickets.size()).append('\n');
+    var sb = new StringBuilder(LINKED_HEADER);
+    // The keys, not a count: a bare "1" here was echoed back as "Linked issue #1" on a pull
+    // request linked to #114 (#923). The line is built from the provider's keys alone, before any
+    // issue text, so it is also where the linked set is read back from (linkedKeys).
+    sb.append(
+            String.join(
+                KEY_SEPARATOR,
+                tickets.stream().map(t -> CiFailureContextResolver.oneLine(t.key())).toList()))
+        .append('\n');
     // Each issue gets an equal share, so one sprawling issue cannot crowd out the others.
     var share = Math.max(0, (maxChars - sb.length()) / tickets.size());
     for (var ticket : tickets) {
@@ -193,7 +227,8 @@ public class TicketContextResolver {
    * still bounds the whole.
    */
   static String renderTicket(IssueTrackerProvider.LinkedTicket ticket, int share) {
-    var sb = new StringBuilder("### Issue ").append(CiFailureContextResolver.oneLine(ticket.key()));
+    var sb =
+        new StringBuilder(ISSUE_HEADING).append(CiFailureContextResolver.oneLine(ticket.key()));
     var title = CiFailureContextResolver.oneLine(ticket.title());
     if (!title.isEmpty()) {
       sb.append(": ").append(title);

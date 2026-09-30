@@ -392,6 +392,32 @@ class ReviewResponseParserTest {
   }
 
   @Test
+  void shouldReadAddressedGapsInEveryShapeWithoutLosingTheSummary() {
+    // #923: a mis-shaped addressed_gaps would fail the summary's schema mapping and discard the
+    // whole summary — the purpose and the gaps with it — so it is normalized like description_gaps.
+    var response =
+        parser.parseSummary(
+            """
+            {"summary": {"total_findings": 0, "pr_purpose": "p",
+              "description_gaps": ["a new gap"],
+              "addressed_gaps": ["G1: the doc now covers it", 2, {"id": "G3", "why": "fixed"}]}}
+            """);
+
+    assertEquals("p", response.summary().prPurpose());
+    assertEquals(
+        java.util.List.of("G1: the doc now covers it", "2", "G3: fixed"),
+        response.summary().addressedGaps());
+    var single =
+        parser.parseSummary(
+            """
+            {"summary": {"total_findings": 0, "addressed_gaps": "G2"}}
+            """);
+    assertEquals(java.util.List.of("G2"), single.summary().addressedGaps());
+    var absent = parser.parseSummary("{\"summary\": {\"total_findings\": 0}}");
+    assertEquals(java.util.List.of(), absent.summary().addressedGaps());
+  }
+
+  @Test
   void shouldSalvageFindingsWhenSummaryStillDoesNotMap() {
     // A mapping failure confined to the summary must not discard findings that mapped
     // cleanly — the summary degrades to null (every consumer null-guards it).

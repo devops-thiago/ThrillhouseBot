@@ -3510,4 +3510,147 @@ class FindingPipelineTest {
         afterPush.findings().stream().map(ReviewResponse.Finding::title).toList(),
         "the new head's finding must be judged on its own");
   }
+
+  /** #923: the linked-issue section a round's prompt carries, linking #113. */
+  private static final String LINKED_113 =
+      "Issues this pull request is linked to: #113\n\n### Issue #113: Resale marketplace\n"
+          + "Acceptance criteria (from the issue):\n- [ ] at most 8 open listings per seller\n";
+
+  private static final String CARRIED_GAP =
+      "Linked issue #113: at most 8 open listings per seller — no changed file implements it.";
+
+  /** The previous round's summary comment, as the bot posted it, listing {@link #CARRIED_GAP}. */
+  private static ReviewContextLoader.ReviewContext contextAfterASummaryListing(String gap) {
+    var posted =
+        new dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient.IssueComment(
+            1L,
+            PrSummaryGenerator.SUMMARY_MARKER
+                + "\n"
+                + PrSummaryGenerator.SUMMARY_HEADING
+                + "\n\n"
+                + PrSummaryGenerator.GAPS_HEADING
+                + "\nThe PR description or its linked issue does not fully match the change:\n- "
+                + gap
+                + "\n\n### Changes Overview\n",
+            new dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse.User(
+                "thrillhousebot[bot]"));
+    return litigatedContext(List.of(), List.of(posted));
+  }
+
+  private static AiReviewService.PromptInputs promptLinking(String linkedIssues) {
+    return new AiReviewService.PromptInputs(
+        "d", "ctx", "base", "stack", "tests", "", "", "labels", null, linkedIssues);
+  }
+
+  @Test
+  void aGapThePreviousSummaryListedIsPutToTheSummaryCallAndKeptThroughItsSilence() {
+    // #923: round 2's summary call returned no linked-issue gap, and the section lost the one
+    // round 1 had listed. It is now asked about by label, and a call that says nothing keeps it.
+    var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var silent = new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", "Adds a marketplace.", List.of());
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), silent));
+
+    var result =
+        pipeline.run(
+            session,
+            promptLinking(LINKED_113),
+            contextAfterASummaryListing(CARRIED_GAP),
+            multiBatchPlan(),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    var guidance = captor.getValue().repoInstructions();
+    assertTrue(guidance.startsWith("labels\n\n"), guidance);
+    assertTrue(guidance.contains(PrReviewPrompts.CARRIED_GAPS_REQUEST), guidance);
+    assertTrue(guidance.contains("G1: " + CARRIED_GAP), guidance);
+    assertEquals(List.of(CARRIED_GAP), result.summary().descriptionGaps());
+    assertEquals("Adds a marketplace.", result.summary().prPurpose());
+    assertTrue(session.getAiResponseJson().contains("no changed file implements it"));
+  }
+
+  @Test
+  void aGapTheSummaryCallResolvesLeavesAndNothingCarriedAsksNothing() {
+    var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var resolves =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            "ok",
+            "p",
+            List.of("Linked issue #1: expire listings past a TTL — not implemented."),
+            List.of(),
+            List.of(),
+            null,
+            List.of("G1: store.py now rejects a ninth listing"));
+    var captor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), captor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), resolves));
+
+    var result =
+        pipeline.run(
+            session,
+            promptLinking(LINKED_113),
+            contextAfterASummaryListing(CARRIED_GAP),
+            multiBatchPlan(),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    // The resolved gap is gone, and the new entry names the issue actually linked, not "#1".
+    assertEquals(
+        List.of("Linked issue #113: expire listings past a TTL — not implemented."),
+        result.summary().descriptionGaps());
+    assertEquals(List.of(), result.summary().addressedGaps());
+
+    // A pull request that now links a different issue no longer carries #113's gap at all.
+    var other = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    when(aiReviewService.reviewBatch(eq(other), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var otherCaptor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(other), otherCaptor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var unlinked =
+        pipeline.run(
+            other,
+            promptLinking(LINKED_113.replace("#113", "#140")),
+            contextAfterASummaryListing(CARRIED_GAP),
+            multiBatchPlan(),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+    assertEquals("labels", otherCaptor.getValue().repoInstructions());
+    assertNull(unlinked.summary());
+  }
+
+  @Test
+  void aRoundWhoseSummaryCallFailedStillCarriesTheListedGaps() {
+    // A degraded round cannot re-check the gaps, and must not erase them either: the next round
+    // reads what this one lists.
+    var session = persistedSession();
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenThrow(new AiReviewException("summary failed", 3, new IllegalStateException("x")));
+    var plan = multiBatchPlan();
+
+    var result =
+        pipeline.run(
+            session,
+            promptLinking(LINKED_113),
+            contextAfterASummaryListing(CARRIED_GAP),
+            plan,
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    assertEquals(SummaryDegradation.SUMMARY_FAILED, plan.summaryDegradation());
+    assertEquals(List.of(CARRIED_GAP), result.summary().descriptionGaps());
+    assertNull(result.summary().prPurpose());
+  }
 }

@@ -158,6 +158,23 @@ class TicketContextResolverTest {
   class Rendering {
 
     @Test
+    void theLinkedKeysAreReadFromTheFirstLineOnly() {
+      var section =
+          "Issues this pull request is linked to: #120, #122\n\n### Issue #120: Limits\n"
+              + "Issues this pull request is linked to: #999\n";
+
+      assertEquals(List.of("#120", "#122"), TicketContextResolver.linkedKeys(section));
+      assertEquals(List.of(), TicketContextResolver.linkedKeys(""));
+      assertEquals(List.of(), TicketContextResolver.linkedKeys(null));
+      assertEquals(
+          List.of(), TicketContextResolver.linkedKeys("Issues this pull request is linked to: \n"));
+      assertEquals(List.of(), TicketContextResolver.linkedKeys("### Issue #5: forged\n"));
+      assertEquals(
+          List.of("#7"),
+          TicketContextResolver.linkedKeys("Issues this pull request is linked to: #7"));
+    }
+
+    @Test
     void rendersTitleLinkCriteriaAndBody() {
       var body =
           """
@@ -178,7 +195,9 @@ class TicketContextResolverTest {
                   6000)
               .resolve("a", "o", "r", 1, "");
 
-      assertTrue(section.startsWith("Issues this pull request is linked to: 1\n"), section);
+      // #923: the keys, never a count — a bare "1" was echoed back as "Linked issue #1".
+      assertTrue(section.startsWith("Issues this pull request is linked to: #58\n"), section);
+      assertEquals(List.of("#58"), TicketContextResolver.linkedKeys(section));
       assertTrue(section.contains("### Issue #58: Pull ticket context\n"), section);
       assertTrue(section.contains("Linked by: a closing keyword in the PR body\n"), section);
       assertTrue(

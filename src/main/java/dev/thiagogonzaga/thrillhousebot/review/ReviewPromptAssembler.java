@@ -187,7 +187,8 @@ public class ReviewPromptAssembler {
         // The whole pull request's system prompt (#665): the largest any batch of it can get, so
         // the planner sizes the shared overhead from a prompt no batch's own exceeds. The pipeline
         // swaps in each batch's own; budgeting off, the one call reviews exactly these files.
-        dimensionRouter.systemPromptFor(ctx.reviewableFiles()));
+        dimensionRouter.systemPromptFor(ctx.reviewableFiles()),
+        linkedIssues);
   }
 
   /**

@@ -579,7 +579,8 @@ public class DiffBudgetPlanner {
         bounded.text(),
         inputs.repoInstructions(),
         inputs.summaryInstructions(),
-        inputs.reviewSystemPrompt());
+        inputs.reviewSystemPrompt(),
+        inputs.linkedIssues());
   }
 
   /** A bounded previous-findings block: its text and what the bounding cost. */

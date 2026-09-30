@@ -446,6 +446,10 @@ public class AiReviewService {
    * files. The assembler sets the whole pull request's, which is the largest any batch of it can
    * get and what the budget planner sizes the shared overhead from; the pipeline swaps in each
    * batch's own. {@code null} reads as {@link PrReviewPrompts#SYSTEM}.
+   *
+   * <p>{@code linkedIssues} is the unfenced linked-issue section (#58) both calls already carry
+   * inside their guidance, kept apart as well so the summary's {@code Linked issue #N} entries can
+   * be checked against the issues actually linked (#923). {@code null} reads as {@code ""}.
    */
   public record PromptInputs(
       String diff,
@@ -456,10 +460,51 @@ public class AiReviewService {
       String previousFindings,
       String repoInstructions,
       String summaryInstructions,
-      String reviewSystemPrompt) {
+      String reviewSystemPrompt,
+      String linkedIssues) {
 
     public PromptInputs {
       reviewSystemPrompt = reviewSystemPrompt == null ? PrReviewPrompts.SYSTEM : reviewSystemPrompt;
+      linkedIssues = linkedIssues == null ? "" : linkedIssues;
+    }
+
+    /** Inputs that carry no linked-issue section of their own. */
+    public PromptInputs(
+        String diff,
+        String prContext,
+        String baseComparison,
+        String projectStack,
+        String relatedTests,
+        String previousFindings,
+        String repoInstructions,
+        String summaryInstructions,
+        String reviewSystemPrompt) {
+      this(
+          diff,
+          prContext,
+          baseComparison,
+          projectStack,
+          relatedTests,
+          previousFindings,
+          repoInstructions,
+          summaryInstructions,
+          reviewSystemPrompt,
+          "");
+    }
+
+    /** These inputs with the summary call's guidance replaced; every other slot is kept. */
+    public PromptInputs withSummaryInstructions(String replacement) {
+      return new PromptInputs(
+          diff,
+          prContext,
+          baseComparison,
+          projectStack,
+          relatedTests,
+          previousFindings,
+          repoInstructions,
+          replacement,
+          reviewSystemPrompt,
+          linkedIssues);
     }
 
     /** Inputs whose review call carries the monolithic system prompt, every dimension included. */
