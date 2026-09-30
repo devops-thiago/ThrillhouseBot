@@ -207,7 +207,7 @@ sequenceDiagram
 | Package | Responsibility | Notable classes |
 |---|---|---|
 | `webhook/` | Receives GitHub events, verifies the HMAC signature, decides whether an event triggers a review (trigger filters, per-PR pause state, auto-review rate limit), acks slash/mention commands with 👀, re-reads CI for a verdict held on pending CI when a `check_suite` or `status` event reports on its head, runs the comment commands (`/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`), and schedules finding-feedback capture on review-thread replies | `WebhookController`, `WebhookVerifier`, `TriggerDetector`, `ReviewTriggerFilter`, `AckReactionService`, `CommentCommandService`, `PrPauseService` |
-| `review/` | Orchestrates a review: plans the token budget and the per-review spend ceiling, calls the AI layer (single-call or map-reduce), maps findings to a risk level and review state, re-checks a maintainer's decline against the reviewed code, writes the summary comment, optionally labels the PR, answers maintainer replies/mentions in PR threads, and persists maintainer finding feedback (👍/👎 / reply heuristics) for a future learnings pipeline | `ReviewOrchestrator`, `ReviewDispatcher`, `DiffBudgetPlanner`, `FindingPipeline`, `AutoReviewRateLimiter`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `FindingFeedbackCaptureService`, `FindingFeedbackService`, `PrSummaryGenerator`, `PrLabeler`, `MaintainerReplyService`, `MaintainerReplyDispatcher`, `PrImprovementService`, `PatchCoverageResolver`, `CiFailureContextResolver`, `ConfigKeyContextResolver`, `RebuttalContradiction`, `SummarySurfaceDeduplicator`, `VerdictBuilder` |
+| `review/` | Orchestrates a review: plans the token budget and the per-review spend ceiling, calls the AI layer (single-call or map-reduce), maps findings to a risk level and review state, optionally scans the added lines for leaked secrets and risky IaC without a model call, re-checks a maintainer's decline against the reviewed code, writes the summary comment, optionally labels the PR, answers maintainer replies/mentions in PR threads, and persists maintainer finding feedback (👍/👎 / reply heuristics) for a future learnings pipeline | `ReviewOrchestrator`, `ReviewDispatcher`, `DiffBudgetPlanner`, `FindingPipeline`, `SecurityScan`, `AutoReviewRateLimiter`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `FindingFeedbackCaptureService`, `FindingFeedbackService`, `PrSummaryGenerator`, `PrLabeler`, `MaintainerReplyService`, `MaintainerReplyDispatcher`, `PrImprovementService`, `PatchCoverageResolver`, `CiFailureContextResolver`, `ConfigKeyContextResolver`, `RebuttalContradiction`, `SummarySurfaceDeduplicator`, `VerdictBuilder` |
 | `review/ai/` | The LangChain4j layer: streams or batches model responses, parses findings, runs a second pass to verify them, applies generation/reasoning customizers, and writes conversational replies | `PrReviewer`, `AiReviewService`, `ChatModelCustomizers`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant`, `TruncatedResponseSalvager`, `FindingVerifierPrompts` |
 | `github/` | Talks to the GitHub REST and GraphQL APIs: app auth, pull requests, reviews, check runs, comments, labels, reactions (create + list), and reading the repo instructions file | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubLabelClient`, `GitHubReactionClient`, `InstructionsResolver`, `GitHubWriteRetry` |
 | `dashboard/` | The live UI backend: OAuth login (in-memory sessions), WebSocket broadcaster (`review.stream` / `review.batch`), review session persistence, and finding-feedback aggregates | `AuthResource`, `DashboardSessionStore`, `SessionEventBroadcaster`, `ReviewSessionRepository`, `DashboardResource` |
@@ -268,6 +268,23 @@ completed before the cut rather than being discarded whole.
 report, `PatchCoverageResolver` reads the changed lines it does not cover and gives them
 to the review, so new code with no test behind it can be named as such. Off
 unless `REVIEW_PATCH_COVERAGE_ENABLED` is set.
+
+**Deterministic security scan** — when `REVIEW_SECRET_SCAN_ENABLED` or
+`REVIEW_IAC_SCAN_ENABLED` is set, `SecurityScan` reads the added lines of every
+reviewable file (`PatchLines`) with a fixed rule list: `SecretScanner` for
+credential formats, private keys, JWTs and entropy-gated assignments,
+`IacScanner` for open admin ports, public S3 buckets, wildcard IAM, privileged
+pods, host namespaces, a final-stage `USER root` and disabled encryption
+(`SecurityRule` holds each rule's grade and title). `FindingPipeline` merges the
+result on both lanes, and on the lane that makes no review call, after
+verification and calibration and before the summary call: no model grades these
+findings, the verifier's fail-open marking never applies to them, a model
+finding reporting the same defect nearby is dropped, and the matched values are
+scrubbed out of every other finding and status note. A secret finding shows
+only the value's first characters and length and carries no code anchor, so
+the value reaches no comment, log line, stored session or dashboard. A finding
+the previous round already raised is not posted again; the scan sets its
+status (`unresolved` while it is still matched, `resolved` once it is not).
 
 **Review prompt structure** — the review call's system prompt (`PrReviewPrompts`)
 is a core plus ten dimension blocks. The core holds the identity, the
