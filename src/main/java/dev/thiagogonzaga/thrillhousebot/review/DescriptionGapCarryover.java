@@ -52,9 +52,11 @@ import java.util.regex.Pattern;
  * </ul>
  *
  * <p>The merge itself is deterministic and runs after the summary call, like the finding merge of
- * #917. The call's input grows by at most {@value #MAX_CARRIED_GAPS} labelled gaps of at most
+ * #917. The call's input grows by at most {@value #MAX_PROMPTED_GAPS} labelled gaps of at most
  * {@value #MAX_PROMPT_GAP_CHARS} characters each, counted in the summary clamps with the rest of
- * its guidance.
+ * its guidance. That bound applies to what the call is asked about, never to what is carried: every
+ * listed gap is read back, and one past the first {@value #MAX_PROMPTED_GAPS} stays listed without
+ * being put to the call, so it is asked about once gaps ahead of it leave.
  *
  * <p>This class also keeps a {@code Linked issue #N} entry to the issues actually linked: a number
  * the pull request does not link is rewritten to the linked one (#923, where a pull request linked
@@ -64,8 +66,8 @@ final class DescriptionGapCarryover {
 
   private DescriptionGapCarryover() {}
 
-  /** Gaps read back from the previous summary, and so sent to the summary call, at most. */
-  static final int MAX_CARRIED_GAPS = 10;
+  /** Carried gaps put to the summary call, at most; the rest are carried without being asked. */
+  static final int MAX_PROMPTED_GAPS = 10;
 
   /** Characters of one carried gap in the summary call's prompt. */
   static final int MAX_PROMPT_GAP_CHARS = 400;
@@ -117,7 +119,7 @@ final class DescriptionGapCarryover {
         return "";
       }
       var list = new StringBuilder();
-      for (var i = 0; i < gaps.size(); i++) {
+      for (var i = 0; i < Math.min(gaps.size(), MAX_PROMPTED_GAPS); i++) {
         list.append(LABEL_PREFIX)
             .append(i + 1)
             .append(": ")
@@ -183,10 +185,12 @@ final class DescriptionGapCarryover {
   }
 
   /**
-   * The bullets of a rendered summary's Description vs. Implementation section, at most {@value
-   * #MAX_CARRIED_GAPS}. The intro line and the all-reported-as-findings line are not bullets, so a
-   * section that listed nothing carries nothing. A line after a bullet that is neither a bullet, a
-   * blank nor a heading continues it (a gap rendered before bullets were flattened to one line).
+   * The bullets of a rendered summary's Description vs. Implementation section, all of them: a gap
+   * cut here would leave the section with no reason given, the failure this class exists for. The
+   * section is bounded by the comment it sits in. The intro line and the all-reported-as-findings
+   * line are not bullets, so a section that listed nothing carries nothing. A line after a bullet
+   * that is neither a bullet, a blank nor a heading continues it (a gap rendered before bullets
+   * were flattened to one line).
    */
   static List<String> listedGaps(String body) {
     var gaps = new ArrayList<String>();
@@ -217,7 +221,7 @@ final class DescriptionGapCarryover {
       }
     }
     addGap(gaps, open);
-    return gaps.size() > MAX_CARRIED_GAPS ? List.copyOf(gaps.subList(0, MAX_CARRIED_GAPS)) : gaps;
+    return gaps;
   }
 
   private static void addGap(List<String> gaps, StringBuilder gap) {
@@ -319,7 +323,7 @@ final class DescriptionGapCarryover {
       var label = LABEL_REFERENCE.matcher(entry);
       if (label.find()) {
         var position = Integer.parseInt(label.group(1)) - 1;
-        if (position >= 0 && position < carried.size()) {
+        if (position >= 0 && position < Math.min(carried.size(), MAX_PROMPTED_GAPS)) {
           positions.add(position);
         }
         continue;

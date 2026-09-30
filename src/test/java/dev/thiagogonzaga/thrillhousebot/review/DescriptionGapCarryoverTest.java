@@ -132,15 +132,22 @@ class DescriptionGapCarryoverTest {
     }
 
     @Test
-    void atMostTheCapIsCarried() {
+    void everyListedGapIsCarriedButOnlyTheFirstFewAreAskedAbout() {
       var body = new StringBuilder(PrSummaryGenerator.GAPS_HEADING).append("\nintro:\n");
-      IntStream.rangeClosed(1, DescriptionGapCarryover.MAX_CARRIED_GAPS + 3)
+      var listed = DescriptionGapCarryover.MAX_PROMPTED_GAPS + 3;
+      IntStream.rangeClosed(1, listed)
           .forEach(i -> body.append("- gap number ").append(i).append('\n'));
 
       var gaps = DescriptionGapCarryover.listedGaps(body.toString());
 
-      assertEquals(DescriptionGapCarryover.MAX_CARRIED_GAPS, gaps.size());
-      assertEquals("gap number 1", gaps.getFirst());
+      assertEquals(listed, gaps.size());
+      var section = new DescriptionGapCarryover.Carry(gaps, "").promptSection();
+      assertTrue(section.contains("G10: gap number 10"), section);
+      assertFalse(section.contains("gap number 11"), section);
+      // A label the call was never shown resolves nothing: gap 11 stays listed.
+      assertEquals(
+          gaps.subList(1, listed),
+          DescriptionGapCarryover.merge(List.of(), gaps, List.of("G1: done", "G11: done")));
     }
 
     @Test
