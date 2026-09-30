@@ -684,6 +684,63 @@ class SecurityScanTest {
   }
 
   @Test
+  void aPrivateKeyBodyStopsAtTheEndOfItsHunk() {
+    var body = fake.pemBodyLine();
+    var laterHunk = fake.pemBodyLine();
+    var patch =
+        String.join(
+                "\n",
+                "@@ -0,0 +1,2 @@",
+                "+" + FakeCredentials.pemHeader("RSA"),
+                "+" + body,
+                "@@ -9,0 +11,1 @@",
+                "+" + laterHunk)
+            + "\n";
+    var redactions =
+        scan(true, false)
+            .scan(List.of(new FileDiff("k.pem", "modified", 3, 0, 3, patch)))
+            .redactions();
+    assertEquals(List.of(body), redactions.stream().map(SecurityScan.Redaction::literal).toList());
+  }
+
+  @Test
+  void aSummaryThatReachesTheMergeIsScrubbedToo() {
+    var key = fake.googleApiKey();
+    var summary =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            "Adds " + key,
+            "Purpose " + key,
+            List.of("gap " + key),
+            List.of("security"),
+            List.of(new ReviewResponse.FileSummary("a.env", "sets " + key)),
+            "flowchart TD\n  A[" + key + "]");
+    var merged =
+        merge(
+            scan(true, false),
+            new ReviewResponse(List.of(), List.of(), summary),
+            List.of(added("a.env", "K=" + key)));
+    var scrubbed = merged.summary();
+    assertEquals(1, scrubbed.totalFindings());
+    assertEquals(1, scrubbed.critical());
+    var text =
+        String.join(
+            "|",
+            scrubbed.overallAssessment(),
+            scrubbed.prPurpose(),
+            scrubbed.descriptionGaps().get(0),
+            scrubbed.fileSummaries().get(0).summary(),
+            scrubbed.walkthroughDiagram());
+    assertFalse(text.contains(key), text);
+    assertEquals(List.of("security"), scrubbed.suggestedLabels());
+    assertEquals("a.env", scrubbed.fileSummaries().get(0).path());
+  }
+
+  @Test
   void anIacPriorIsTrackedOnlyByItsOwnAnchor() {
     var s = scan(false, true);
     var files = List.of(added("pod.yaml", "  hostNetwork: true", "  hostPID: true"));

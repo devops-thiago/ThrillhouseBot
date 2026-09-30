@@ -227,7 +227,9 @@ public class SecurityScan {
           raised.size(), tracked.size(), cleared.size(), duplicates);
     }
     return new ReviewResponse(
-        kept, statuses, FindingVerificationService.recount(response.summary(), kept));
+        kept,
+        statuses,
+        scrub(FindingVerificationService.recount(response.summary(), kept), scrubber));
   }
 
   /** Reads every file the review covers, minus the skipped globs and files with no patch text. */
@@ -284,9 +286,11 @@ public class SecurityScan {
    */
   private static void addPemMaterial(
       List<PatchLines.Line> lines, int headerIndex, List<Redaction> redactions) {
+    int hunk = lines.get(headerIndex).hunk();
     for (int i = headerIndex; i < lines.size(); i++) {
       var line = lines.get(i);
-      if (i > headerIndex && (!line.added() || !SecretScanner.isPemBodyLine(line.text()))) {
+      if (i > headerIndex
+          && (line.hunk() != hunk || !line.added() || !SecretScanner.isPemBodyLine(line.text()))) {
         return;
       }
       var material = PEM_MATERIAL.matcher(line.text());
@@ -549,6 +553,31 @@ public class SecurityScan {
             scrubber.scrub(finding.suggestionOld()),
             scrubber.scrub(finding.suggestionNew()));
     return scrubbed.equals(finding) ? finding : scrubbed;
+  }
+
+  /**
+   * The summary with every matched value scrubbed from its text. The review call returns findings
+   * only, so a summary rarely reaches the merge; when one does (a salvaged or legacy response), it
+   * is persisted and rendered like the findings, so it gets the same treatment.
+   */
+  private static ReviewResponse.Summary scrub(ReviewResponse.Summary summary, Scrubber scrubber) {
+    if (summary == null) {
+      return null;
+    }
+    return new ReviewResponse.Summary(
+        summary.totalFindings(),
+        summary.critical(),
+        summary.high(),
+        summary.medium(),
+        summary.low(),
+        scrubber.scrub(summary.overallAssessment()),
+        scrubber.scrub(summary.prPurpose()),
+        summary.descriptionGaps().stream().map(scrubber::scrub).toList(),
+        summary.suggestedLabels(),
+        summary.fileSummaries().stream()
+            .map(f -> new ReviewResponse.FileSummary(f.path(), scrubber.scrub(f.summary())))
+            .toList(),
+        scrubber.scrub(summary.walkthroughDiagram()));
   }
 
   /**

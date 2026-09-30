@@ -253,16 +253,17 @@ final class IacScanner {
    * administration port. The direction is the nearest ingress or egress marker above the line
    * (where the enclosing block or list is named), or, when none is above, inside the rule's own
    * block below it (a {@code type = "ingress"} written after the CIDR). The ports come from the
-   * rule's own block only ({@link #block}): the nearest {@code from_port}/{@code to_port} pair or
-   * port list, and an all-protocols rule reaches every port. A rule whose direction or ports are
-   * not in the hunk does not fire.
+   * rule's own block ({@link #block}), or failing that from a port list in its resource ({@link
+   * #portListReachesAdminPort}): the nearest {@code from_port}/{@code to_port} pair or port list,
+   * and an all-protocols rule reaches every port. A rule whose direction or ports are not in the
+   * hunk does not fire.
    */
   private static boolean isOpenAdminIngress(Window window) {
     if (!isIngress(window)) {
       return false;
     }
     return reachesAdminPort(block(window))
-        .or(() -> reachesAdminPort(resource(window)))
+        .or(() -> portListReachesAdminPort(resource(window)))
         .orElse(false);
   }
 
@@ -283,6 +284,22 @@ final class IacScanner {
       int high = to != null ? to : from;
       return Optional.of(coversAdminPort(low, high));
     }
+    for (var line : scope) {
+      Matcher list = PORT_LIST.matcher(line.text());
+      if (list.find()) {
+        return Optional.of(listCoversAdminPort(list.group(1)));
+      }
+    }
+    return Optional.empty();
+  }
+
+  /**
+   * The fallback for a rule whose own block names no ports: a port list elsewhere in the resource
+   * (a GCP firewall's {@code allow { ports }}). Only a port list is read there. A protocol or a
+   * {@code from_port}/{@code to_port} pair in the resource belongs to a sibling rule, such as an
+   * all-protocols egress next to the ingress, and would otherwise be read as this rule's ports.
+   */
+  private static Optional<Boolean> portListReachesAdminPort(List<PatchLines.Line> scope) {
     for (var line : scope) {
       Matcher list = PORT_LIST.matcher(line.text());
       if (list.find()) {
