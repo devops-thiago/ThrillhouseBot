@@ -32,6 +32,9 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
@@ -181,7 +184,8 @@ public class MaintainerReplyService {
             PromptSections.prContext(task.prTitle(), task.prDescription()),
             finding,
             task.diffHunk() != null ? task.diffHunk() : "",
-            thread);
+            thread,
+            root != null && root.path() != null ? Set.of(root.path()) : Set.of());
     if (reply == null) {
       return;
     }
@@ -312,7 +316,8 @@ public class MaintainerReplyService {
             PromptSections.prContext(task.prTitle(), task.prDescription()),
             "",
             diff.text(),
-            "");
+            "",
+            diff.paths());
     if (reply == null) {
       return;
     }
@@ -369,7 +374,12 @@ public class MaintainerReplyService {
 
   /** Calls the assistant with already-raw inputs, escaping each for templating. Null on failure. */
   private String generateReply(
-      String question, String prContext, String finding, String codeContext, String thread) {
+      String question,
+      String prContext,
+      String finding,
+      String codeContext,
+      String thread,
+      Set<String> realPaths) {
     try {
       String reply =
           AiResponses.textOrThrowOnTruncation(
@@ -390,7 +400,9 @@ public class MaintainerReplyService {
       }
       // The reply model reads the finding it answers for, which may carry the review prompt's
       // vocabulary from a round posted before the guard existed; it must not echo it (#950).
-      return PromptLabelScrubber.scrub(reply.strip());
+      // The paths the reply can really be about are passed, so a file of this pull request that
+      // happens to be named like the prompt's example locator is kept.
+      return PromptLabelScrubber.scrub(reply.strip(), realPaths);
     } catch (AiResponseTruncatedException e) {
       // Named separately from the generic failure: the cause is a cap the operator set, not a
       // provider error, and the message says which knob to raise.
@@ -444,8 +456,8 @@ public class MaintainerReplyService {
    * The rendered PR diff handed to the reply model, plus any partial-coverage disclosure to append
    * to the posted answer ({@code ""} when nothing was omitted).
    */
-  private record MentionDiff(String text, String disclosure) {
-    static final MentionDiff EMPTY = new MentionDiff("", "");
+  private record MentionDiff(String text, String disclosure, Set<String> paths) {
+    static final MentionDiff EMPTY = new MentionDiff("", "", Set.of());
   }
 
   private MentionDiff fetchDiff(String auth, ReplyTask task) {
@@ -473,7 +485,12 @@ public class MaintainerReplyService {
       var formatted = diffFormatter.buildDiffStringWithStats(files, reviewable);
       String disclosure =
           formatted.truncated() ? ReviewResult.truncationDisclosure(formatted.omittedFiles()) : "";
-      return new MentionDiff(formatted.text(), disclosure);
+      var paths =
+          files.stream()
+              .map(GitHubPullRequestClient.FileDiff::filename)
+              .filter(Objects::nonNull)
+              .collect(Collectors.toUnmodifiableSet());
+      return new MentionDiff(formatted.text(), disclosure, paths);
     } catch (RuntimeException e) {
       Log.warn("Failed to fetch PR diff for mention reply, continuing without it", e);
       return MentionDiff.EMPTY;

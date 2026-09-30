@@ -463,7 +463,7 @@ public final class PromptLabelScrubber {
           phrase = "the maintainer's earlier decision";
         }
       } else {
-        capital = opensClause(s, start, at) && !afterAbbreviation(s, start, at);
+        capital = opensSentence(s, start, at);
       }
       if (capital) {
         phrase = capitalize(phrase);
@@ -610,10 +610,20 @@ public final class PromptLabelScrubber {
     return s.substring(i, end).toLowerCase(Locale.ROOT);
   }
 
-  /** Whether the blanks before {@code start} follow "e.g.", "i.e." or "cf.", not a sentence end. */
-  private static boolean afterAbbreviation(String s, int start, int floor) {
-    var before = s.substring(floor, skipBlanksBack(s, start, floor)).toLowerCase(Locale.ROOT);
-    return before.endsWith("e.g.") || before.endsWith("i.e.") || before.endsWith("cf.");
+  /**
+   * Whether {@code start} opens a line or a sentence: after ".", "!" or "?", but not after "e.g.",
+   * "i.e." or "cf.". A clause after a colon, semicolon or dash stays lower-case.
+   */
+  private static boolean opensSentence(String s, int start, int floor) {
+    int blank = skipBlanksBack(s, start, floor);
+    if (opensLine(s, blank)) {
+      return true;
+    }
+    if (blank == start || ".!?".indexOf(s.charAt(blank - 1)) < 0) {
+      return false;
+    }
+    var before = s.substring(floor, blank).toLowerCase(Locale.ROOT);
+    return !before.endsWith("e.g.") && !before.endsWith("i.e.") && !before.endsWith("cf.");
   }
 
   /** Whether {@code start} opens a line, or a clause after a sentence end, colon, dash or pipe. */

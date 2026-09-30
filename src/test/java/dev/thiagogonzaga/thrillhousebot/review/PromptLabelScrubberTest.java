@@ -432,6 +432,9 @@ class PromptLabelScrubberTest {
           per the [L1]/[L2], tags are fine | per maintainers' earlier decisions, tags are fine
           tags are fine (i.e. [L12] holds) | tags are fine (i.e. a maintainer's earlier decision holds)
           cf. [L12] for the reason | cf. a maintainer's earlier decision for the reason
+          Tags are fine; [L12] still applies. | Tags are fine; a maintainer's earlier decision still applies.
+          Is it fine? [L12] says yes. | Is it fine? A maintainer's earlier decision says yes.
+          x.[L12] holds | x.a maintainer's earlier decision holds
           # ThrillhouseBot-test#156 comments 4149744690 and 4149744783, #158.
           confirmed by the repository's config-key definitions section (which lists only X) | confirmed by the repository's configuration code (which lists only X)
           The repository's config-key definitions section for ARTWORK_DIR gives | The repository's configuration code for ARTWORK_DIR gives

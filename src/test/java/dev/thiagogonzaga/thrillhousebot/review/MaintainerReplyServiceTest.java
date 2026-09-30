@@ -233,6 +233,78 @@ class MaintainerReplyServiceTest {
         reply.getValue().body());
   }
 
+  // #950: the reply scrub keeps a real file of this pull request named like the prompt's example
+  // locator — the thread's file on a thread reply, the pull request's files on a mention.
+  @Test
+  void replyScrubKeepsTheThreadsOwnFileAndOnlyThat() {
+    authorize();
+    String answer = "Line 3 of path/to/File.java is fine.";
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk(answer));
+
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(
+            List.of(
+                new GitHubReviewClient.PullRequestComment(
+                    99L,
+                    null,
+                    "path/to/File.java",
+                    "**LOW — x**",
+                    new GitHubReviewClient.ReviewResponse.User(BOT)),
+                comment(1000L, 99L, "octocat", "Why?")));
+    service.handle(reviewThreadTask(false));
+
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(
+            List.of(
+                new GitHubReviewClient.PullRequestComment(
+                    99L,
+                    null,
+                    null,
+                    "**LOW — x**",
+                    new GitHubReviewClient.ReviewResponse.User(BOT)),
+                comment(1000L, 99L, "octocat", "Why?")));
+    service.handle(reviewThreadTask(false));
+
+    // Root not found, answered because the bot was mentioned: no path is known to be real.
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(List.of());
+    service.handle(reviewThreadTask(true));
+
+    var reply = ArgumentCaptor.forClass(GitHubReviewClient.ReplyToReviewCommentRequest.class);
+    verify(reviewClient, org.mockito.Mockito.times(3))
+        .replyToReviewComment(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), reply.capture());
+    assertEquals(
+        List.of(answer, "Line 3 of <path> is fine.", "Line 3 of <path> is fine."),
+        reply.getAllValues().stream()
+            .map(GitHubReviewClient.ReplyToReviewCommentRequest::body)
+            .toList());
+  }
+
+  @Test
+  void mentionReplyScrubKeepsAFileOfThePullRequest() {
+    authorize();
+    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(List.of(fileDiff("path/to/File.java", "@@ -1 +1 @@\n-a\n+b", 1)));
+    when(diffFormatter.reviewableFiles(any(), any())).thenReturn(List.of());
+    when(diffFormatter.buildDiffStringWithStats(any(), any()))
+        .thenReturn(new ReviewDiffFormatter.FormattedDiff("diff --git a/x b/x", 0));
+    when(replyAssistant.reply(any(), any(), any(), any(), any()))
+        .thenReturn(aiOk("path/to/File.java is fine; [L7] still applies."));
+
+    service.handle(mentionTask());
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), body.capture());
+    assertEquals(
+        "path/to/File.java is fine; a maintainer's earlier decision still applies.",
+        body.getValue().body());
+  }
+
   @Test
   void replyOnHumanThreadWithoutMentionPostsNothing() {
     authorize();
