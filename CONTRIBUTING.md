@@ -85,6 +85,11 @@ See the [architecture overview](https://devops-thiago.github.io/ThrillhouseBot/a
 (source: [docs/ARCHITECTURE.md](https://github.com/devops-thiago/ThrillhouseBot/blob/main/docs/ARCHITECTURE.md)). Package flow:
 `webhook/` → `review/` (`review/ai/`) → `github/` → `dashboard/` (`frontend/`).
 
+Before changing the review pipeline, prompts or model calls, read
+[AGENTS.md](https://github.com/devops-thiago/ThrillhouseBot/blob/main/AGENTS.md): it lists the
+invariants the build and tests enforce, where each pipeline stage lives, and the alternatives that
+were tried and rejected.
+
 ## Adding an AI provider
 
 There is no provider-specific code to write. The model is reached through
