@@ -72,6 +72,9 @@ public class TicketContextResolver {
 
   private static final Pattern LIST_ITEM = Pattern.compile("^(?:[-*+]|\\d{1,3}[.)])\\s+(\\S.*)$");
 
+  /** The level a bold-line heading gets: below every ATX level. */
+  static final int BOLD_LEVEL = 7;
+
   /** Section names that hold no criteria even when they sit under an acceptance heading. */
   private static final List<String> NON_CRITERIA_SECTIONS =
       List.of(
@@ -296,12 +299,10 @@ public class TicketContextResolver {
         return true;
       }
       inList = false;
-      // A sub-heading inside an acceptance section stays part of it (a bold "**Backend**" label
-      // groups criteria), unless it names a section that holds none ("**Non-goals:**"); any other
-      // heading starts a new section.
-      if (!inAcceptance
-          || heading.level() <= sectionLevel
-          || namesNonCriteriaSection(heading.text())) {
+      // Inside an acceptance section, a deeper ATX heading or any bold line stays part of it (a
+      // bold "**Backend**" label groups criteria), unless it names a section that holds none
+      // ("**Non-goals:**"); any other heading starts a new section.
+      if (!inAcceptance || closesSection(heading) || namesNonCriteriaSection(heading.text())) {
         inAcceptance = ACCEPTANCE_HEADING.matcher(heading.text()).find();
         inIgnored = IGNORED_HEADING.matcher(heading.text()).find();
         sectionLevel = heading.level();
@@ -329,6 +330,15 @@ public class TicketContextResolver {
         inList = LIST_ITEM.matcher(stripped).matches() || (inList && indent > 0);
       }
       return inIndentedCode;
+    }
+
+    /**
+     * Whether {@code heading} ends the open acceptance section by level: an ATX heading at the
+     * opener's level or above, or any ATX heading under a bold opener. A bold line never does,
+     * whatever opened the section, since bold labels are how criteria get grouped.
+     */
+    private boolean closesSection(Heading heading) {
+      return heading.level() < BOLD_LEVEL && heading.level() <= sectionLevel;
     }
 
     /** Whether a list item here can be a criterion in the given extraction mode. */
@@ -367,7 +377,7 @@ public class TicketContextResolver {
       }
       var bold = t.endsWith(":") ? t.substring(0, t.length() - 1) : t;
       if (bold.length() > 4 && bold.startsWith("**") && bold.endsWith("**")) {
-        return new Heading(7, bold.substring(2, bold.length() - 2));
+        return new Heading(BOLD_LEVEL, bold.substring(2, bold.length() - 2));
       }
       return null;
     }

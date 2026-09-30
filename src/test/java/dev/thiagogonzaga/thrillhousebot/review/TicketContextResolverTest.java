@@ -443,6 +443,24 @@ class TicketContextResolverTest {
     }
 
     @Test
+    void aBoldLabelUnderABoldOpenerStaysInTheSectionUntilAnAtxHeading() {
+      var extracted =
+          TicketContextResolver.extract(
+              """
+              **Acceptance criteria:**
+              - [ ] a
+              **Details**
+              - [ ] b
+              **Additional context**
+              - [ ] c
+              ###### Anything
+              - [ ] d
+              """);
+
+      assertEquals(List.of("[ ] a", "[ ] b"), extracted.criteria());
+    }
+
+    @Test
     void nonCriteriaSectionNamesMatchWholeWordStarts() {
       assertTrue(TicketContextResolver.namesNonCriteriaSection("Non-goals:"));
       assertTrue(TicketContextResolver.namesNonCriteriaSection("Notes"));
