@@ -181,6 +181,16 @@ class GitHubIssuesProviderTest {
     }
 
     @Test
+    void aBracketedReferenceAfterTheKeywordStillLinks() {
+      assertEquals(
+          List.of(12, 13, 14),
+          GitHubIssuesProvider.bodyReferences(
+              "resolves (https://github.com/o/r/issues/12) fixes [#13] (closes #14) fixes (x)",
+              "o",
+              "r"));
+    }
+
+    @Test
     void aCrlfBlankLineEndsAParagraphLikeAnLfOne() {
       assertEquals(
           List.of(2), GitHubIssuesProvider.bodyReferences("x ` y\r\n\r\nFixes #2 ` b", "o", "r"));

@@ -189,7 +189,10 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
     var numbers = new LinkedHashSet<Integer>();
     var keywords = CLOSING_KEYWORD.matcher(visible);
     while (keywords.find()) {
-      var reference = ISSUE_REFERENCE.matcher(keywords.group(1));
+      // A reference wrapped in brackets, "fixes (#12)" or "fixes [#12]", still names the issue.
+      var token = keywords.group(1);
+      var opener = token.charAt(0) == '(' || token.charAt(0) == '[' ? 1 : 0;
+      var reference = ISSUE_REFERENCE.matcher(token.substring(opener));
       if (reference.lookingAt()) {
         var named = reference.group(reference.group(1) != null ? 1 : 2);
         var number = Integer.parseInt(reference.group(3));
