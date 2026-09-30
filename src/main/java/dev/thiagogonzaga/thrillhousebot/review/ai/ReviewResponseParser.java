@@ -52,6 +52,14 @@ public class ReviewResponseParser {
   private static final String PATH = "path";
 
   /**
+   * The {@link ReviewResponse.Summary} count fields, mapped to {@code int}. The rendered risk table
+   * recomputes every one of them from the findings, so none carries anything the summary cannot
+   * lose — yet one that fails to map takes the whole summary node with it (#944).
+   */
+  private static final List<String> SUMMARY_COUNT_FIELDS =
+      List.of("total_findings", "critical", "high", "medium", "low");
+
+  /**
    * Keys a mis-shaped {@code file_summaries} entry may carry the path under, most canonical first.
    * Jackson ignores unknown properties, so an entry keyed {@code file} maps to a FileSummary with a
    * null path — which the walkthrough renderer then drops without a word (#536).
@@ -126,6 +134,7 @@ public class ReviewResponseParser {
     // fail the summary's schema mapping and take the whole summary with it.
     normalizeStringList(root, ADDRESSED_GAPS);
     normalizeFileSummaries(root);
+    normalizeSummaryCounts(root);
     if (!root.hasNonNull(FINDINGS)) {
       if (!summaryLane) {
         // Absent is not the same as empty. A review that found nothing says "findings": [] — both
@@ -375,6 +384,55 @@ public class ReviewResponseParser {
             + " into one",
         summary.size());
     root.set(SUMMARY, summary);
+  }
+
+  /**
+   * Models sometimes put something other than a whole number in one of the summary's count fields:
+   * an array where {@code high} belongs failed the summary's schema mapping, and the salvage in
+   * {@link #parseWithoutSummary} then dropped the overview and every file summary over a number the
+   * renderer recomputes from the findings anyway (#944). A count written as a numeric string is
+   * coerced to the number; any other shape that is not an integral {@code int} is removed, so it
+   * maps to 0 and the rest of the summary maps normally. A null is left for Jackson, which already
+   * maps it to 0.
+   */
+  private void normalizeSummaryCounts(ObjectNode root) {
+    if (!(root.get(SUMMARY) instanceof ObjectNode summary)) {
+      return;
+    }
+    var coerced = 0;
+    var removed = 0;
+    for (var field : SUMMARY_COUNT_FIELDS) {
+      var value = summary.get(field);
+      if (value == null
+          || value.isNull()
+          || (value.isIntegralNumber() && value.canConvertToInt())) {
+        continue;
+      }
+      var number = value.isTextual() ? parseCount(value.asText()) : null;
+      if (number != null) {
+        summary.put(field, number.intValue());
+        coerced++;
+      } else {
+        summary.remove(field);
+        removed++;
+      }
+    }
+    if (coerced + removed > 0) {
+      Log.infof(
+          "Summary response carried %d count field(s) that were not whole numbers; coerced %d"
+              + " numeric string(s) and dropped %d value(s) of another shape, since the counts are"
+              + " recomputed from the findings",
+          coerced + removed, coerced, removed);
+    }
+  }
+
+  /** A count written as a string, such as {@code "3"}; {@code null} when it is not an int. */
+  private static Integer parseCount(String text) {
+    try {
+      return Integer.valueOf(text.strip());
+    } catch (NumberFormatException _) {
+      return null;
+    }
   }
 
   /**
