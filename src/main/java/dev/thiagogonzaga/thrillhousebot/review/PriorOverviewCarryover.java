@@ -94,9 +94,13 @@ final class PriorOverviewCarryover {
   /**
    * The summary of the round the head comparison was made against: the same effective previous
    * round {@link ReviewContextLoader} takes the head from, so the overview and the head check name
-   * one round. The list holds no null entries (the context copies it).
+   * one round. The list holds no null entries (the context copies it); a null list, which the
+   * context never passes, reads as no previous round.
    */
-  private static ReviewResponse.Summary previousRoundSummary(List<ReviewResponse> priorResponses) {
+  static ReviewResponse.Summary previousRoundSummary(List<ReviewResponse> priorResponses) {
+    if (priorResponses == null) {
+      return null;
+    }
     var index = Math.max(FollowUpAnalyzer.effectivePreviousRoundIndex(priorResponses), 0);
     if (index >= priorResponses.size()) {
       return null;

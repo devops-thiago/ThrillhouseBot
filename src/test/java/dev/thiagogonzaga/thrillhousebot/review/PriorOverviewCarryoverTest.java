@@ -177,6 +177,12 @@ class PriorOverviewCarryoverTest {
   }
 
   @Test
+  void noPreviousRoundListMeansNoPreviousSummary() {
+    assertNull(PriorOverviewCarryover.previousRoundSummary(null));
+    assertNull(PriorOverviewCarryover.previousRoundSummary(List.of()));
+  }
+
+  @Test
   void hasOverviewNeedsAPurposeOrAFileSummary() {
     assertFalse(PriorOverviewCarryover.hasOverview(null));
     assertFalse(
