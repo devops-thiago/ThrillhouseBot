@@ -114,7 +114,8 @@ public class ReviewLearningService {
       return RecordOutcome.REFUSED_EMPTY;
     }
     if (LearningText.containsCredential(input.text())
-        || LearningText.containsCredential(input.findingTitle())) {
+        || LearningText.containsCredential(input.findingTitle())
+        || LearningText.containsCredential(input.path())) {
       return RecordOutcome.REFUSED_SECRET;
     }
     var text = LearningText.normalize(input.text(), ReviewLearning.MAX_TEXT_CHARS);

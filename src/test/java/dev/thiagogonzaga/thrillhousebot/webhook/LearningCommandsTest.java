@@ -190,8 +190,13 @@ class LearningCommandsTest {
         commands.reply(
             ctx(
                 CommentCommand.REMEMBER,
-                "> /remember quoted\n```\n/remember fenced\n```\nsee `/remember x`\n"
-                    + "/remember Use `UTC` times."));
+                """
+                > /remember quoted
+                ```
+                /remember fenced
+                ```
+                see `/remember x`
+                /remember Use `UTC` times."""));
 
     assertTrue(reply.startsWith("🧠 Remembered"), reply);
     assertEquals(

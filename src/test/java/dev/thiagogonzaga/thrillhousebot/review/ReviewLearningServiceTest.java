@@ -157,6 +157,19 @@ class ReviewLearningServiceTest {
             "u2",
             "m");
     assertEquals(RecordOutcome.REFUSED_SECRET, service.save(titled, 10));
+    var pathed =
+        new LearningInput(
+            1L,
+            "o/r",
+            ReviewLearning.KIND_DECLINE,
+            "t",
+            "high",
+            "keys/ghp_abcdefghijklmnop1234.txt",
+            "fine",
+            1,
+            "u3",
+            "m");
+    assertEquals(RecordOutcome.REFUSED_SECRET, service.save(pathed, 10));
     assertEquals(0, service.countActive(1L, "o/r"));
   }
 

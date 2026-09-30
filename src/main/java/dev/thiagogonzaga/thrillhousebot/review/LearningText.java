@@ -33,17 +33,17 @@ import java.util.regex.Pattern;
 final class LearningText {
 
   /**
+   * An assigned value that looks like a credential rather than a word: eight or more characters
+   * with at least one that is not a letter, so "password: required" in an explanation is not
+   * refused. Only used inside case-insensitive patterns, so {@code a-z} covers both cases.
+   */
+  private static final String ASSIGNED_VALUE = "(?=[^\\s'\"]*[^\\sa-z'\"])[^\\s'\"]{8,}";
+
+  /**
    * Credential shapes, one small pattern each so every one stays readable and inside the regex
    * complexity budget. The sigils are distinctive enough that prose never carries them; the
-   * assignment shape needs eight value characters so "password: yes" in an explanation is not a
-   * secret.
+   * assignment shapes need a value-like value ({@link #ASSIGNED_VALUE}).
    */
-  /**
-   * An assigned value that looks like a secret rather than a word: eight or more characters with at
-   * least one that is not a letter, so "password: required" in an explanation is not refused.
-   */
-  private static final String SECRET_VALUE = "(?=[^\\s'\"]*[^\\sA-Za-z'\"])[^\\s'\"]{8,}";
-
   private static final List<Pattern> CREDENTIAL_SHAPES =
       List.of(
           Pattern.compile("(?i)\\b(?:gh[pousr]_|github_pat_)\\w{4,}"),
@@ -56,10 +56,10 @@ final class LearningText {
           // A token, unlike the word after "bearer" in prose, carries a digit.
           Pattern.compile("(?i)\\bbearer\\s+(?=[\\w.~+/=-]*\\d)[\\w.~+/=-]{12,}"),
           Pattern.compile(
-              "(?i)\\b(?:password|passwd|secret)\\s{0,4}[:=]\\s{0,4}['\"]?" + SECRET_VALUE),
+              "(?i)\\b(?:password|passwd|secret)\\s{0,4}[:=]\\s{0,4}['\"]?" + ASSIGNED_VALUE),
           Pattern.compile(
               "(?i)\\b(?:api|access|client)[_-]?(?:key|token|secret)\\s{0,4}[:=]\\s{0,4}['\"]?"
-                  + SECRET_VALUE));
+                  + ASSIGNED_VALUE));
 
   private static final Pattern BLOCKQUOTE_LINE = Pattern.compile("(?m)^[ \\t]{0,8}>.*$");
   private static final Pattern ANSI_CSI = Pattern.compile("\u001B\\[[0-?]*[ -/]*[@-~]");
