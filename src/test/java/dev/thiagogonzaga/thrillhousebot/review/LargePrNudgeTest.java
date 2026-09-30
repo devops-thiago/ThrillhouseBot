@@ -123,6 +123,54 @@ class LargePrNudgeTest {
   }
 
   @Test
+  void staysSilentOnAFollowUpRoundWithEarlierFindingsStillOpen() {
+    // #933: a round that opened nothing new over open threads must not read as "no inline
+    // findings" — the pull request has not come back clean.
+    var followUp =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.REQUEST_CHANGES,
+            false,
+            "",
+            List.of(
+                new ReviewResult.PreviousFindingStatus(1, "unresolved", ""),
+                new ReviewResult.PreviousFindingStatus(2, "resolved", "")),
+            List.of(),
+            0);
+
+    assertEquals(Optional.empty(), ENABLED.render(42, 3102, 876, followUp));
+  }
+
+  @Test
+  void firesOnAFollowUpRoundWhoseEarlierFindingsAreAllClosed() {
+    // Nothing is open, so "this review opened no inline findings" is the whole truth again.
+    var followUp =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.APPROVE,
+            false,
+            "",
+            List.of(
+                new ReviewResult.PreviousFindingStatus(1, "resolved", ""),
+                new ReviewResult.PreviousFindingStatus(2, "justified", ""),
+                new ReviewResult.PreviousFindingStatus(3, "superseded", "")),
+            List.of(),
+            0);
+
+    assertTrue(ENABLED.render(42, 3102, 876, followUp).isPresent());
+  }
+
+  @Test
   void staysSilentWhenDisabled() {
     var off = new LargePrNudge(false, 20, 1000);
 

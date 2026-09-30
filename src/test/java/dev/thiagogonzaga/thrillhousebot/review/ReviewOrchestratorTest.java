@@ -1382,6 +1382,80 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void checkSummaryForResultShouldStateTheOpenCountOnEveryHeldFollowUpBranch() {
+      // #933: "No new issues found, but CI …" alone read as the whole story on a follow-up round
+      // whose earlier findings were still open.
+      var open =
+          List.of(
+              new ReviewResult.PreviousFindingStatus(1, "unresolved", ""),
+              new ReviewResult.PreviousFindingStatus(2, "unresolved", ""),
+              new ReviewResult.PreviousFindingStatus(3, "resolved", ""));
+      var checks = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", null));
+      var ciHeld =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.REQUEST_CHANGES, false, "", open, checks, 0);
+      var unreadable =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.REQUEST_CHANGES,
+              false,
+              "",
+              open,
+              List.of(),
+              0,
+              true);
+      var truncated =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.REQUEST_CHANGES,
+              false,
+              "",
+              open,
+              List.of(),
+              4);
+
+      for (var result : List.of(ciHeld, unreadable, truncated)) {
+        var summary = VerdictBuilder.checkSummaryForResult(result);
+        assertTrue(summary.contains(" 2 previous finding(s) remain unresolved."), summary);
+        assertFalse(summary.contains("No issues found"), summary);
+      }
+    }
+
+    @Test
+    void checkSummaryForResultShouldOmitTheOpenCountWhenNothingEarlierIsOpen() {
+      var checks = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", null));
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "")),
+              checks,
+              0);
+
+      var summary = VerdictBuilder.checkSummaryForResult(result);
+
+      assertEquals(
+          "No new issues found, but 1 required CI check(s) are still pending or failing.", summary);
+    }
+
+    @Test
     void checkSummaryForResultShouldSummarizeFindingCountsWhenIssuesPresent() {
       var result =
           new ReviewResult(
@@ -7773,12 +7847,50 @@ class ReviewOrchestratorTest {
           .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
 
       var body = captor.getValue().body();
-      assertTrue(body.contains("some checks are still pending or failed:"));
+      // #933: an earlier finding is still open, so the body leads with that and never claims the
+      // PR has no issues; the CI hold follows under a neutral lead-in.
+      assertTrue(
+          body.startsWith(
+              "No new issues in this revision, but 1 previous finding(s) remain unresolved"),
+          body);
+      assertTrue(body.contains("\n\n" + ReviewResult.CI_PENDING_ALSO_LEAD_IN + "\n"), body);
       assertTrue(body.contains("- Check **build** is failed"));
       assertTrue(body.contains("- Check **lint** is pending"));
-      assertTrue(
-          body.contains(
-              "Additionally, No new issues in this revision, but 1 previous finding(s) remain unresolved"));
+      assertFalse(body.contains("found no issues"), body);
+      assertFalse(body.contains("Additionally,"), body);
+      // The first line stays the bot's own status sentence, so a later round's previous-findings
+      // context still recognizes and discards it (#455).
+      assertTrue(FollowUpAnalyzer.isSelfAuthoredStatusBody(body));
+    }
+
+    @Test
+    void shouldKeepTheNoIssuesLeadInWhenCiAloneHeldAFollowUpRound() {
+      // The other half of #933: nothing earlier is open, so "found no issues in this PR" is true
+      // and stays the lead-in.
+      var offending = List.of(new ReviewResult.CiCheck("build", "check-run", "failing", "failure"));
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "")),
+              offending,
+              0);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.startsWith(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN + "\n"), body);
+      assertFalse(body.contains("remain unresolved"), body);
     }
 
     @Test
@@ -7805,8 +7917,9 @@ class ReviewOrchestratorTest {
       verify(reviewClient)
           .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
       var body = captor.getValue().body();
-      assertTrue(body.contains("CI status could not be read"));
-      assertTrue(body.contains("Additionally, No new issues in this revision"));
+      assertTrue(body.startsWith("No new issues in this revision, but 1 previous finding(s)"));
+      assertTrue(body.contains(ReviewResult.CI_UNREADABLE_ALSO_LEAD_IN), body);
+      assertFalse(body.contains("found no issues"), body);
     }
 
     @Test
@@ -7833,8 +7946,8 @@ class ReviewOrchestratorTest {
       verify(reviewClient)
           .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
       var body = captor.getValue().body();
-      assertTrue(body.contains("CI status could not be read"));
-      assertFalse(body.contains("Additionally,"));
+      assertTrue(body.startsWith(ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN), body);
+      assertFalse(body.contains("remain unresolved"), body);
     }
 
     @Test

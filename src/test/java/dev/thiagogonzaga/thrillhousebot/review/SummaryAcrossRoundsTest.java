@@ -37,6 +37,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -132,16 +133,30 @@ class SummaryAcrossRoundsTest {
           BOT,
           BlockingStrictness.BALANCED);
 
+  private final GitHubReviewClient reviewClient = mock(GitHubReviewClient.class);
+
   private final ReviewPublisher publisher =
       new ReviewPublisher(
-          mock(GitHubReviewClient.class),
+          reviewClient,
           commentClient,
           mock(ReviewThreadService.class),
           mock(SuggestionFormatter.class),
           mock(FollowUpAnalyzer.class),
           mock(PrLabeler.class),
-          mock(ThrillhouseConfig.class),
+          configWithWriteBudget(),
           BOT);
+
+  /** A test PR (one file, +4) is over these thresholds, so only the #933 guard can silence it. */
+  private final VerdictBuilder nudgingBuilder =
+      new VerdictBuilder(
+          new PrSummaryGenerator(false, new LargePrNudge(true, 1, 0)),
+          new FollowUpAnalyzer(mapper),
+          BOT,
+          BlockingStrictness.BALANCED);
+
+  private static final CiStatusEvaluator.CiEvaluation CI_FAILING =
+      new CiStatusEvaluator.CiEvaluation(
+          List.of(new ReviewResult.CiCheck("test", "check-run", "failing", "failure")), false);
 
   private final DiffBudgetPlanner.BudgetPlan plan =
       new DiffBudgetPlanner.BudgetPlan(
@@ -286,6 +301,99 @@ class SummaryAcrossRoundsTest {
     assertRisk(body, 1, 0, 0, 0);
     assertTrue(section(body, "### Key Findings").contains(CRITICAL.title()), body);
     assertFalse(body.contains(DOUBLE_CHECK.title()), body);
+  }
+
+  /**
+   * #933: a follow-up round that opened nothing new while earlier findings stay open. Seen on a
+   * CI-held `/review` of an unchanged head: the summary carried the "Large PR — no inline findings"
+   * note and the review body opened "found no issues in this PR" under CHANGES_REQUESTED. No
+   * surface may claim the pull request is clean while anything is open.
+   */
+  @Test
+  void aFollowUpWithNoNewFindingsNeverCallsThePrCleanWhileEarlierFindingsAreOpen() {
+    var first = publishFirstRound();
+    var round =
+        new ReviewResponse(
+            List.of(),
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there"),
+                new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there")),
+            null);
+
+    var result =
+        nudgingBuilder.build(followUp(List.of(ROUND_ONE), List.of()), round, CI_FAILING, plan);
+    var summary = publishFollowUp(result, first);
+    var body = postedReviewBody(result);
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+
+    assertEquals(0, result.totalFindings());
+    assertEquals(3, result.unresolvedPreviousCount());
+    assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
+    assertFalse(summary.contains(LargePrNudge.NUDGE_HEADING), summary);
+    assertFalse(summary.contains("opened no inline findings"), summary);
+    assertFalse(summary.contains(PrSummaryGenerator.ZERO_ISSUES_MESSAGE), summary);
+    assertTrue(body.startsWith(ReviewResult.unresolvedPreviousMessage(3)), body);
+    assertTrue(body.contains(ReviewResult.CI_PENDING_ALSO_LEAD_IN), body);
+    assertFalse(body.contains("found no issues"), body);
+    assertTrue(checkSummary.contains("3 previous finding(s) remain unresolved"), checkSummary);
+    // The delta comment (it posts only on a round that moved something) would count the same
+    // set: its "still open" line is the same unresolvedPreviousCount the body states.
+    assertEquals(result.unresolvedPreviousCount(), result.openPreviousFindings().size());
+  }
+
+  /** The other half of #933: with nothing earlier open, the clean wording is still right. */
+  @Test
+  void aFollowUpThatClosedEverythingKeepsTheCleanWording() {
+    var first = publishFirstRound();
+    var round =
+        new ReviewResponse(
+            List.of(),
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "resolved", "prepared statement"),
+                new ReviewResponse.PreviousFindingStatus(2, "resolved", "widened to long"),
+                new ReviewResponse.PreviousFindingStatus(3, "resolved", "null-guarded")),
+            null);
+
+    var held =
+        nudgingBuilder.build(followUp(List.of(ROUND_ONE), List.of()), round, CI_FAILING, plan);
+    assertEquals(0, held.unresolvedPreviousCount());
+    assertTrue(held.openPreviousFindings().isEmpty());
+    var heldSummary = publishFollowUp(held, first);
+    assertTrue(heldSummary.contains(LargePrNudge.NUDGE_HEADING), heldSummary);
+    var heldBody = postedReviewBody(held);
+    assertTrue(heldBody.startsWith(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN), heldBody);
+    assertFalse(heldBody.contains("remain unresolved"), heldBody);
+    assertFalse(
+        VerdictBuilder.checkSummaryForResult(held).contains("remain unresolved"),
+        VerdictBuilder.checkSummaryForResult(held));
+
+    var approved =
+        nudgingBuilder.build(followUp(List.of(ROUND_ONE), List.of()), round, CI_CLEAR, plan);
+    assertEquals(ReviewState.APPROVE, approved.reviewState());
+    var approvedSummary = publishFollowUp(approved, heldSummary);
+    assertTrue(approvedSummary.contains(PrSummaryGenerator.ZERO_ISSUES_MESSAGE), approvedSummary);
+    assertTrue(approvedSummary.contains(LargePrNudge.NUDGE_HEADING), approvedSummary);
+    assertEquals(
+        PrSummaryGenerator.ZERO_ISSUES_MESSAGE, VerdictBuilder.checkSummaryForResult(approved));
+  }
+
+  /** The body of the review the publisher posts for {@code result}; the latest one posted. */
+  private String postedReviewBody(ReviewResult result) {
+    publisher.postReview(
+        "auth", "o", "r", 1, "sha", result, new DiffLineResolver(Map.of(FILE, PATCH)));
+    var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+    verify(reviewClient, atLeastOnce())
+        .createReview(anyString(), anyString(), eq("o"), eq("r"), eq(1), captor.capture());
+    var reviews = captor.getAllValues();
+    return reviews.get(reviews.size() - 1).body();
+  }
+
+  private static ThrillhouseConfig configWithWriteBudget() {
+    var config = mock(ThrillhouseConfig.class);
+    var github = mock(ThrillhouseConfig.GitHubConfig.class);
+    when(config.github()).thenReturn(github);
+    when(github.writeRetryBudget()).thenReturn(Duration.ofMinutes(5));
+    return config;
   }
 
   /** Round one: a first review, which creates the summary comment. Returns the posted body. */

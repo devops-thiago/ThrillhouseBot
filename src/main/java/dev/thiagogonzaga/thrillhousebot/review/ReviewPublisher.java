@@ -680,30 +680,52 @@ public class ReviewPublisher {
    * unresolved message is emitted only when there actually are unresolved findings (never a bogus
    * "0 … unresolved"), and truncation is disclosed here on follow-up reviews, which post no summary
    * comment to carry the first-review banner.
+   *
+   * <p>When anything is still open the body leads with that, and the CI hold follows under a
+   * lead-in that makes no claim about the pull request as a whole (#933). The CI lead-ins open with
+   * "found no issues in this PR", which is true only when nothing earlier is open; a follow-up
+   * round posted it with state CHANGES_REQUESTED over sixteen open threads. The open count is
+   * {@link ReviewResult#unresolvedPreviousCount()}, the same statuses the delta comment's "still
+   * open" line and the summary's carried list (#917) are built from.
    */
   private String noIssuesBody(ReviewResult result, List<ReviewResponse.Finding> previousFindings) {
     long unresolved = result.unresolvedPreviousCount();
     var sb = new StringBuilder();
-    boolean ciHeld = false;
+    if (unresolved > 0) {
+      sb.append(ReviewResult.unresolvedPreviousMessage(unresolved));
+      appendReopenedDeclineNotes(sb, result);
+    }
+    appendSection(sb, ciHoldSection(result, unresolved > 0));
+    appendSection(sb, ClosedFindingNames.reviewBodySection(result, previousFindings));
+    appendSection(sb, result.truncated() ? result.truncationNotice() : "");
+    return sb.toString();
+  }
+
+  /**
+   * The failing/pending checks and the unreadable-CI notice that held the verdict, or an empty
+   * string when CI held nothing. {@code previousOpen} picks the lead-ins: the "found no issues in
+   * this PR" ones only when no earlier finding is open, the neutral ones otherwise (#933).
+   */
+  private static String ciHoldSection(ReviewResult result, boolean previousOpen) {
+    var sb = new StringBuilder();
     if (!result.offendingCiChecks().isEmpty()) {
-      sb.append(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN).append("\n");
+      sb.append(
+              previousOpen
+                  ? ReviewResult.CI_PENDING_ALSO_LEAD_IN
+                  : ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN)
+          .append("\n");
       for (var check : result.offendingCiChecks()) {
         String status = check.isFailing() ? "failed" : CI_PENDING;
         sb.append("- Check **").append(check.name()).append("** is ").append(status).append("\n");
       }
-      ciHeld = true;
     }
     if (result.ciUnreadable()) {
-      sb.append(ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN).append("\n");
-      ciHeld = true;
+      sb.append(
+              previousOpen
+                  ? ReviewResult.CI_UNREADABLE_ALSO_LEAD_IN
+                  : ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN)
+          .append("\n");
     }
-    if (unresolved > 0) {
-      sb.append(ciHeld ? "\nAdditionally, " : "")
-          .append(ReviewResult.unresolvedPreviousMessage(unresolved));
-      appendReopenedDeclineNotes(sb, result);
-    }
-    appendSection(sb, ClosedFindingNames.reviewBodySection(result, previousFindings));
-    appendSection(sb, result.truncated() ? result.truncationNotice() : "");
     return sb.toString();
   }
 
