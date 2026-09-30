@@ -47,7 +47,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - Every finding can be closed by a maintainer: reply on its review thread, or — for one raised below the inline-posting bar, which has no thread — comment `@thrillhousebot resolved <path>:<line> — <title>` on the PR
 - Maintainer 👍/👎 (and "not useful" replies) on finding comments are recorded for a future learnings pipeline — see [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/)
 - Conversational replies: `@thrillhousebot` it in a PR thread or finding reply and the bot answers in context
-- One summary comment per PR, with a risk breakdown and a changed-files walkthrough: posted on the first run and edited in place on every later round, so it always describes the current head. Its risk counts, Key Findings and "Things to double-check" cover every finding still open, the round's new ones plus those carried from earlier rounds (marked "open since an earlier review"), counted once each by the thread they opened, with Key Findings ranked by severity across both; a finding leaves it once it is resolved, declined or cleared (inline findings and the follow-up delta comment stay per round)
+- One summary comment per PR, with a risk breakdown and a changed-files walkthrough: posted on the first run and edited in place on every later round, so it always describes the current head. Its risk counts, Key Findings and "Things to double-check" cover every finding still open, the round's new ones plus those carried from earlier rounds (marked "open since an earlier review"), counted once each by the thread they opened, with Key Findings ranked by severity across both; a finding leaves it once it is resolved, declined or cleared (inline findings and the follow-up delta comment stay per round). The review verdict is computed over the same set, so an earlier CRITICAL still open keeps a follow-up round at `REQUEST_CHANGES` under the blocking strictness below
 - A Description vs. Implementation section in the summary when the PR description and the change disagree. It is omitted when they match. The check is part of the model summary, so a summary that carries model prose ("What this PR does", per-file walkthrough summaries) and no such section means the check ran and found no mismatch; a counts-only summary means it did not run, and a degraded one says why. A follow-up round on the head the previous round reviewed whose summary call answers without any overview keeps that round's overview and per-file summaries, since nothing they describe has changed
 - Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`, and (with learnings on) `/learnings`, `/remember`, `/forget`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
@@ -448,8 +448,19 @@ of being recorded justified. It is deliberately conservative:
   keep re-opening the same finding round after round.
 - The re-opened finding is never re-posted as a new comment — it stays tracked in
   *Previous Findings Status*, so nobody is asked to answer the same comment twice.
-- The override holds approval (`APPROVE` → `COMMENT`) exactly like any other
-  unresolved previous finding; it never invents a new blocking finding.
+- The re-opened finding counts toward the verdict exactly like any other
+  previous finding still open, at its own severity; it never invents a new
+  finding.
+
+A follow-up round's model reports on the findings of the newest round that
+raised any. Once a later round has raised something new, a decline on the
+thread of a finding from an older round is weighed here instead, under the same
+one-push-back rule: a lone reply the reviewed diff contradicts keeps the
+finding open, and so does a lone "this cannot run concurrently" reply to a
+concurrency finding, because what runs a path concurrently (a server that
+handles each request on its own thread or goroutine, an executor in another
+file) is rarely in the diff. Any other reply, or a second one, stands, and the
+finding is counted as *Justified*.
 
 Set it to `false` to make a maintainer's reply final, unconditionally.
 

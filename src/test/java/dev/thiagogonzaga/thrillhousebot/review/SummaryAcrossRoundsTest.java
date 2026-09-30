@@ -450,6 +450,274 @@ class SummaryAcrossRoundsTest {
 
   // #934: the carried set is the still-open set by identity.
 
+  // #947 / #948: a round older than the effective previous one. Once round two raises anything,
+  // round one's findings have no id this round's model reports on; only the backstop keeps them.
+
+  private static final ReviewResponse.Finding RACE =
+      new ReviewResponse.Finding(
+          "high",
+          "high",
+          FILE,
+          11,
+          "Concurrent requests race on the shared order total",
+          "Every request thread writes the shared total with no synchronization, so concurrent"
+              + " requests corrupt it.",
+          "int total = count * price;",
+          "guard the update with a lock");
+
+  private static final ReviewResponse.Finding LOW_NOTE =
+      new ReviewResponse.Finding(
+          "low",
+          "high",
+          FILE,
+          13,
+          "Placeholder string has no explaining comment",
+          "The empty placeholder is not explained.",
+          "String unused = \"\";",
+          null);
+
+  /** Round one: CRITICAL (1), HIGH (2), a double-check item (3) and a concurrency HIGH (4). */
+  private static final ReviewResponse ROUND_ONE_WITH_RACE =
+      new ReviewResponse(List.of(CRITICAL, HIGH, DOUBLE_CHECK, RACE), List.of(), null);
+
+  /** Round two raised one finding and reported every round-one finding still open. */
+  private static final ReviewResponse ROUND_TWO_RAISED_ONE =
+      new ReviewResponse(
+          List.of(NEW_IN_ROUND_TWO),
+          List.of(
+              new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there"),
+              new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there"),
+              new ReviewResponse.PreviousFindingStatus(3, "unresolved", "still there"),
+              new ReviewResponse.PreviousFindingStatus(4, "unresolved", "still there")),
+          null);
+
+  /** Round three: one LOW finding, and round two's finding reported still open. */
+  private static final ReviewResponse ROUND_THREE =
+      new ReviewResponse(
+          List.of(LOW_NOTE),
+          List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+          null);
+
+  private static final String WRONG_DECLINE =
+      "Declining: this cannot run concurrently. Requests are handled one at a time, so there is"
+          + " no race here.";
+
+  /** The bot's root comment for round one's finding {@code id}, as it posts one. */
+  private static GitHubReviewClient.PullRequestComment rootComment(
+      long commentId, ReviewResponse.Finding finding, int id) {
+    return new GitHubReviewClient.PullRequestComment(
+        commentId,
+        null,
+        finding.file(),
+        "**🟠 "
+            + finding.risk().toUpperCase(java.util.Locale.ROOT)
+            + " — "
+            + finding.title()
+            + "**\n\n"
+            + finding.description()
+            + "\n\n"
+            + SuggestionFormatter.findingMarker(id),
+        BOT_USER,
+        null);
+  }
+
+  private static GitHubReviewClient.PullRequestComment maintainerReply(
+      long commentId, long rootId, String body) {
+    return new GitHubReviewClient.PullRequestComment(
+        commentId,
+        rootId,
+        FILE,
+        body,
+        new GitHubReviewClient.ReviewResponse.User("maintainer"),
+        "OWNER");
+  }
+
+  private ReviewResult roundThree(
+      List<GitHubReviewClient.PullRequestComment> threads, String diff) {
+    return builder.build(
+        followUp(List.of(ROUND_TWO_RAISED_ONE, ROUND_ONE_WITH_RACE), threads, diff),
+        ROUND_THREE,
+        CI_CLEAR,
+        plan);
+  }
+
+  private static long statusCount(ReviewResult result, String status) {
+    return result.previousStatuses().stream().filter(s -> status.equals(s.status())).count();
+  }
+
+  /**
+   * #947: the evidence's exact shape. Round one raised a concurrency finding, round two raised
+   * something new, a maintainer then declined the round-one finding on its thread with a premise
+   * that is wrong, and round three ran. The finding used to leave the summary with no status at
+   * all; the decline was not upheld, so it stays open in the counts, Key Findings and the verdict.
+   */
+  @Test
+  void anEarlierRoundFindingWhoseDeclineIsNotUpheldStaysOpen() {
+    var first = publishFirstRound(ROUND_ONE_WITH_RACE);
+    var threads = List.of(rootComment(104L, RACE, 4), maintainerReply(204L, 104L, WRONG_DECLINE));
+
+    var result = roundThree(threads, PATCH);
+    var edited = publishFollowUp(result, first);
+
+    // Carried in: round one's four and round two's one — all five still present.
+    assertEquals(5, result.unresolvedPreviousCount());
+    assertEquals(0, statusCount(result, "justified"));
+    assertEquals(result.unresolvedPreviousCount(), result.openPreviousFindings().size());
+    assertTrue(
+        result.openPreviousFindings().stream().anyMatch(f -> RACE.title().equals(f.title())));
+    assertOpenCount(edited, 5);
+    assertTrue(edited.contains("| 💬 Justified | 0 |"), edited);
+    assertRisk(edited, 1, 2, 2, 1);
+    assertTrue(section(edited, "### Key Findings").contains(RACE.title()), edited);
+    assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
+    // The review body carries every unresolved note that opens with the re-check's lead-in, as it
+    // does for a decline on the previous round's finding: it says why the decline was not taken.
+    var note =
+        result.previousStatuses().stream()
+            .filter(s -> "unresolved".equals(s.status()))
+            .map(ReviewResult.PreviousFindingStatus::note)
+            .filter(n -> n.startsWith(RebuttalContradiction.NOTE_LEAD_IN))
+            .findFirst()
+            .orElseThrow();
+    assertTrue(note.contains("cannot run concurrently"), note);
+    assertTrue(note.endsWith("Reply again to keep the decline."), note);
+  }
+
+  /**
+   * The regression the change must not break: the same wrong decline on a finding of the effective
+   * previous round (no round raised anything since), which the model weighs and reports unresolved
+   * — rc3's behaviour. The finding is still present, and it counts the same as in the shape above.
+   */
+  @Test
+  void aDeclineTheModelDidNotUpholdOnThePreviousRoundStaysOpen() {
+    var first = publishFirstRound(ROUND_ONE_WITH_RACE);
+    var threads = List.of(rootComment(104L, RACE, 4), maintainerReply(204L, 104L, WRONG_DECLINE));
+    var round =
+        new ReviewResponse(
+            List.of(LOW_NOTE),
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there"),
+                new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there"),
+                new ReviewResponse.PreviousFindingStatus(3, "unresolved", "still there"),
+                new ReviewResponse.PreviousFindingStatus(4, "unresolved", "the decline is wrong")),
+            null);
+
+    var result =
+        builder.build(
+            followUp(List.of(ROUND_ONE_WITH_RACE), threads, PATCH), round, CI_CLEAR, plan);
+    var edited = publishFollowUp(result, first);
+
+    assertEquals(4, result.unresolvedPreviousCount());
+    assertOpenCount(edited, 4);
+    assertTrue(section(edited, "### Key Findings").contains(RACE.title()), edited);
+    assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
+  }
+
+  /**
+   * #947's other half: a decline on an earlier round's finding that stands is reported justified,
+   * so the summary's counts still add up to the findings carried in — and its status names no
+   * finding of the previous round, so nothing keyed by id resolves or learns from the wrong one.
+   */
+  @Test
+  void anEarlierRoundDeclineThatStandsIsCountedJustified() {
+    var first = publishFirstRound(ROUND_ONE_WITH_RACE);
+    var threads =
+        List.of(
+            rootComment(102L, HIGH, 2),
+            maintainerReply(
+                202L,
+                102L,
+                "Declining: the storefront caps a cart at 100 items, so this product stays far"
+                    + " below the int range."));
+
+    var result = roundThree(threads, PATCH);
+    var edited = publishFollowUp(result, first);
+
+    assertEquals(4, result.unresolvedPreviousCount());
+    assertEquals(1, statusCount(result, "justified"));
+    assertOpenCount(edited, 4);
+    assertTrue(edited.contains("| 💬 Justified | 1 |"), edited);
+    assertFalse(section(edited, "### Key Findings").contains(HIGH.title()), edited);
+    var justified =
+        result.previousStatuses().stream()
+            .filter(s -> "justified".equals(s.status()))
+            .findFirst()
+            .orElseThrow();
+    assertEquals(FollowUpAnalyzer.EARLIER_ROUND_ID, justified.id());
+  }
+
+  /** One push-back, then defer: a second reply keeps a decline the re-check would hold. */
+  @Test
+  void aSecondReplyKeepsAnEarlierRoundDecline() {
+    var threads =
+        List.of(
+            rootComment(104L, RACE, 4),
+            maintainerReply(204L, 104L, WRONG_DECLINE),
+            maintainerReply(205L, 104L, "Still declining: the handler is behind a global lock."));
+
+    var result = roundThree(threads, PATCH);
+
+    assertEquals(4, result.unresolvedPreviousCount());
+    assertEquals(1, statusCount(result, "justified"));
+    assertTrue(
+        result.openPreviousFindings().stream().noneMatch(f -> RACE.title().equals(f.title())));
+  }
+
+  /**
+   * A standing decline's {@code justified} status names no finding, and it must not hold approval:
+   * once everything else is closed, a pull request whose only earlier finding was validly declined
+   * approves, with the decline still counted.
+   */
+  @Test
+  void anEarlierRoundDeclineThatStandsDoesNotHoldApproval() {
+    var roundOne = new ReviewResponse(List.of(RACE), List.of(), null);
+    var roundTwo =
+        new ReviewResponse(
+            List.of(NEW_IN_ROUND_TWO),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+            null);
+    var roundThree =
+        new ReviewResponse(
+            List.of(),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "removed")),
+            null);
+    var threads =
+        List.of(
+            rootComment(101L, RACE, 1),
+            maintainerReply(201L, 101L, WRONG_DECLINE),
+            maintainerReply(202L, 101L, "Still declining: the handler holds a global lock."));
+
+    var result =
+        builder.build(
+            followUp(List.of(roundTwo, roundOne), threads, PATCH), roundThree, CI_CLEAR, plan);
+
+    assertEquals(0, result.unresolvedPreviousCount());
+    assertEquals(1, statusCount(result, "justified"));
+    assertTrue(result.openPreviousFindings().isEmpty());
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+  }
+
+  /**
+   * #948: a follow-up whose new findings are all below the blocking bar, while an earlier round's
+   * CRITICAL is still open and listed as still present. The verdict is computed over the same open
+   * set, so it requests changes rather than ending as a comment.
+   */
+  @Test
+  void anEarlierCriticalStillOpenRequestsChangesWhenTheNewFindingsAreLow() {
+    var first = publishFirstRound(ROUND_ONE_WITH_RACE);
+
+    var result = roundThree(List.of(), PATCH);
+    var edited = publishFollowUp(result, first);
+
+    assertEquals(1, result.totalFindings());
+    assertEquals(RiskLevel.LOW, result.highestRisk());
+    assertTrue(
+        result.openPreviousFindings().stream().anyMatch(f -> CRITICAL.title().equals(f.title())));
+    assertRisk(edited, 1, 2, 2, 1);
+    assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
+    assertEquals("failure", VerdictBuilder.conclusionForResult(result));
+  }
+
   private static ReviewResponse allUnresolved(List<ReviewResponse.Finding> raised, int count) {
     var statuses = new ArrayList<ReviewResponse.PreviousFindingStatus>();
     for (var id = 1; id <= count; id++) {
@@ -508,7 +776,8 @@ class SummaryAcrossRoundsTest {
 
     // Two threads each: the backstop must not fold a round's own findings into one hold.
     assertEquals(4, result.unresolvedPreviousCount());
-    assertEquals(ReviewState.COMMENT, result.reviewState());
+    // The held CRITICAL is listed as still present, so it blocks as the model's own would (#948).
+    assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
     assertRisk(edited, 1, 1, 1, 1);
     assertOpenCount(edited, 4);
     assertTrue(section(edited, "### Key Findings").contains(SQL_INJECTION.title()), edited);
@@ -754,6 +1023,27 @@ class SummaryAcrossRoundsTest {
       List<GitHubCommentClient.IssueComment> conversation,
       boolean firstReview,
       boolean hasContext) {
+    return context(priorRounds, conversation, firstReview, hasContext, List.of(), "");
+  }
+
+  /**
+   * A follow-up context whose pull request carries the review threads {@code threads} and whose
+   * review call saw {@code reviewedDiff} — the text a maintainer's decline is re-checked against.
+   */
+  private ReviewContextLoader.ReviewContext followUp(
+      List<ReviewResponse> priorRounds,
+      List<GitHubReviewClient.PullRequestComment> threads,
+      String reviewedDiff) {
+    return context(priorRounds, List.of(), false, true, threads, reviewedDiff);
+  }
+
+  private ReviewContextLoader.ReviewContext context(
+      List<ReviewResponse> priorRounds,
+      List<GitHubCommentClient.IssueComment> conversation,
+      boolean firstReview,
+      boolean hasContext,
+      List<GitHubReviewClient.PullRequestComment> threads,
+      String reviewedDiff) {
     var jsons = new ArrayList<String>();
     for (var round : priorRounds) {
       jsons.add(mapper.valueToTree(round).toString());
@@ -762,7 +1052,7 @@ class SummaryAcrossRoundsTest {
     PATCHES.forEach((path, patch) -> files.add(new FileDiff(path, "modified", 4, 0, 4, patch)));
     return new ReviewContextLoader.ReviewContext(
         files,
-        "",
+        reviewedDiff,
         "",
         0,
         List.of(),
@@ -771,7 +1061,7 @@ class SummaryAcrossRoundsTest {
         firstReview,
         hasContext,
         jsons.isEmpty() ? null : jsons.get(0),
-        List.of(),
+        threads,
         "",
         new InstructionsResolver.ResolvedInstructions("", ""),
         PathScopedInstructions.NONE,
