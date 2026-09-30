@@ -184,7 +184,8 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
     if (prBody == null || prBody.isBlank()) {
       return List.of();
     }
-    var visible = withoutNonLinkRegions(prBody);
+    // GitHub keeps the CRLF a browser form submits; normalize so a blank line reads as one.
+    var visible = withoutNonLinkRegions(prBody.replace("\r\n", "\n").replace('\r', '\n'));
     var numbers = new LinkedHashSet<Integer>();
     var keywords = CLOSING_KEYWORD.matcher(visible);
     while (keywords.find()) {

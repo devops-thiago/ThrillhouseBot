@@ -181,6 +181,14 @@ class GitHubIssuesProviderTest {
     }
 
     @Test
+    void aCrlfBlankLineEndsAParagraphLikeAnLfOne() {
+      assertEquals(
+          List.of(2), GitHubIssuesProvider.bodyReferences("x ` y\r\n\r\nFixes #2 ` b", "o", "r"));
+      assertEquals(
+          List.of(3), GitHubIssuesProvider.bodyReferences("x ` y\r\rCloses #3 ` b", "o", "r"));
+    }
+
+    @Test
     void stripsLongRunsOfSpansInOnePass() {
       var body = "` ".repeat(50_000) + "Closes #7";
       assertEquals(List.of(7), GitHubIssuesProvider.bodyReferences(body, "o", "r"));
