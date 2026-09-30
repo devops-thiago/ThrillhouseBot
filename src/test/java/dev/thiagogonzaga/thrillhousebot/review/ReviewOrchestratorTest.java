@@ -8439,6 +8439,54 @@ class ReviewOrchestratorTest {
           "the learnings sit inside the untrusted-data fence");
     }
 
+    /**
+     * #940, ThrillhouseBot-test#147: a decline stored on one Dockerfile reaches the review prompt
+     * of a pull request that changes a Dockerfile in another directory, through the real recall.
+     */
+    @Test
+    void aDeclineOnOneDockerfileRidesTheReviewOfAnotherDockerfile() {
+      var store = mock(ReviewLearningService.class);
+      when(store.listActive(123L, "owner/repo", 100))
+          .thenReturn(
+              List.of(
+                  new ReviewLearningService.LearningView(
+                      51,
+                      ReviewLearning.KIND_DECLINE,
+                      "Base image pinned to a mutable tag",
+                      "medium",
+                      "a/Dockerfile",
+                      "Tags are pinned by the release process.",
+                      136,
+                      "https://github.com/owner/repo/pull/136#discussion_r1",
+                      "maintainer",
+                      java.time.Instant.parse("2026-09-01T00:00:00Z"),
+                      true,
+                      null,
+                      null)));
+      learnings =
+          new ReviewLearnings(
+              store,
+              followUpAnalyzer,
+              BOT_ID,
+              mock(GitHubInstallationClient.class),
+              new ReviewLearnings.Settings(true, 100, 10, 3000));
+      orchestrator = newOrchestrator();
+
+      runReview(
+          new GitHubPullRequestClient.FileDiff(
+              "b/Dockerfile", "modified", 1, 1, 2, "@@ -1 +1 @@\n-FROM x:1\n+FROM python:3-slim"));
+
+      var inputs = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+      verify(aiReviewService).review(any(ReviewSession.class), inputs.capture());
+      var guidance = inputs.getValue().repoInstructions();
+      assertTrue(guidance.contains(PrReviewPrompts.LEARNINGS_REQUEST), guidance);
+      assertTrue(
+          guidance.contains(
+              "[L51] Declined finding \"Base image pinned to a mutable tag\" (medium) on"
+                  + " a/Dockerfile"),
+          guidance);
+    }
+
     @Test
     void aPostedReviewHandsItsFinalStatusesToTheLearningsCapture() {
       when(learnings.enabled()).thenReturn(true);
