@@ -30,12 +30,12 @@ import java.util.Locale;
  * GitHubCommentClient}, {@link GitHubReviewClient} and {@link GitHubCheckRunClient}, so every
  * poster is protected the same way and a future post path inherits the guard for free.
  */
-final class CommentBodyLimit {
+public final class CommentBodyLimit {
 
   /**
    * GitHub's hard maximum comment-body length, in characters. A longer body is rejected with 422.
    */
-  static final int MAX_LENGTH = 65_536;
+  public static final int MAX_LENGTH = 65_536;
 
   /**
    * Appended when a comment body is truncated. Self-explanatory so the maintainer learns the output

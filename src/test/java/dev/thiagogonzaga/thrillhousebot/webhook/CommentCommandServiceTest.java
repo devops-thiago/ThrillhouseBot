@@ -22,6 +22,7 @@ import static org.mockito.Mockito.*;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestComment;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse;
@@ -59,8 +60,10 @@ class CommentCommandServiceTest {
   @Mock private DocGenerationService docGenerationService;
   @Mock private PrImprovementService improvementService;
   @Mock private UnitTestGenerator testGenerator;
+  @Mock private GitHubPullRequestClient prClient;
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
+  @Mock private ThrillhouseConfig.DescribeConfig describeConfig;
 
   private CommentCommandService service;
 
@@ -72,6 +75,8 @@ class CommentCommandServiceTest {
     when(reviewConfig.addDocsEnabled()).thenReturn(true);
     when(reviewConfig.improveEnabled()).thenReturn(true);
     when(reviewConfig.generateTestsEnabled()).thenReturn(true);
+    when(reviewConfig.describe()).thenReturn(describeConfig);
+    when(describeConfig.apply()).thenReturn(false);
     // Run submitted work inline so the async handoff is exercised synchronously in tests.
     doAnswer(
             inv -> {
@@ -85,6 +90,7 @@ class CommentCommandServiceTest {
             executor,
             authClient,
             commentClient,
+            prClient,
             reviewClient,
             reviewThreadService,
             reviewDispatcher,
@@ -238,6 +244,92 @@ class CommentCommandServiceTest {
     verifyNoInteractions(descriptionGenerator);
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
     verifyNoInteractions(prPauseService);
+  }
+
+  @Test
+  void describeSuggestOnlyNeverTouchesThePr() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(descriptionGenerator.generate("owner", "repo", 7, "main", 12345L, "token"))
+        .thenReturn("## suggestion body");
+
+    service.handle(ctx(CommentCommand.DESCRIBE));
+
+    // apply is off (the default), so the suggest-only contract holds: comment posted, PR untouched.
+    assertEquals("## suggestion body", postedBody());
+    verifyNoInteractions(prClient);
+  }
+
+  @Test
+  void describeAppliesSuggestionToThePrWhenApplyIsOptedIn() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(describeConfig.apply()).thenReturn(true);
+    when(descriptionGenerator.generateSuggestion("owner", "repo", 7, "main", 12345L, "token"))
+        .thenReturn(
+            new PrDescriptionGenerator.Suggestion(
+                "feat: new title", "New description.", "suggest body", "applied body"));
+
+    service.handle(ctx(CommentCommand.DESCRIBE));
+
+    verify(prClient)
+        .updatePullRequest(
+            eq("token"),
+            any(),
+            eq("owner"),
+            eq("repo"),
+            eq(7),
+            eq(
+                new GitHubPullRequestClient.UpdatePullRequestRequest(
+                    "feat: new title", "New description.")));
+    // The confirmation comment (which preserves the replaced title/body) is the one visible reply.
+    assertEquals("applied body", postedBody());
+  }
+
+  @Test
+  void describeApplyFallsBackToSuggestionWhenOutputDoesNotParse() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(describeConfig.apply()).thenReturn(true);
+    when(descriptionGenerator.generateSuggestion("owner", "repo", 7, "main", 12345L, "token"))
+        .thenReturn(new PrDescriptionGenerator.Suggestion(null, null, "suggest body", null));
+
+    service.handle(ctx(CommentCommand.DESCRIBE));
+
+    verifyNoInteractions(prClient);
+    assertEquals("suggest body", postedBody());
+  }
+
+  @Test
+  void describeApplyFallsBackToSuggestionWhenThePrUpdateFails() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(describeConfig.apply()).thenReturn(true);
+    when(descriptionGenerator.generateSuggestion("owner", "repo", 7, "main", 12345L, "token"))
+        .thenReturn(
+            new PrDescriptionGenerator.Suggestion(
+                "feat: new title", "New description.", "suggest body", "applied body"));
+    when(prClient.updatePullRequest(any(), any(), any(), any(), anyInt(), any()))
+        .thenThrow(new RuntimeException("boom"));
+
+    service.handle(ctx(CommentCommand.DESCRIBE));
+
+    // Never confirm an edit that did not happen: the run degrades to the plain suggestion comment.
+    assertEquals("suggest body", postedBody());
+  }
+
+  @Test
+  void describeApplySaysSoWhenGeneratorReturnsNothing() {
+    authorize(true);
+    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(describeConfig.apply()).thenReturn(true);
+    when(descriptionGenerator.generateSuggestion("owner", "repo", 7, "main", 12345L, "token"))
+        .thenReturn(null);
+
+    service.handle(ctx(CommentCommand.DESCRIBE));
+
+    verifyNoInteractions(prClient);
+    assertTrue(postedBody().contains("no `/describe` output to post"), postedBody());
   }
 
   @Test

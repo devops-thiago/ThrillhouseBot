@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in apply mode for `/describe`** (#325): with `REVIEW_DESCRIBE_APPLY=true`, a write-authorized `/describe` replaces the PR's title and body with the generated suggestion instead of only posting it as a comment. Off by default — suggest-only stays the released behaviour. The confirmation comment preserves the previous title and description so the overwrite is never destructive, the apply is logged for audit, and a run whose output doesn't parse or whose GitHub update fails falls back to the plain suggestion comment
+
 ## [0.6.9] — 2026-09-21
 
 What the reviewer knows when it judges a finding drove this release. The second-pass verifier saw only the findings and the diff, so a finding raised from the coverage report or a path-scoped rule read to it as a claim about material it could not see, and it demoted them; a finding's cited location was never checked against the file it named; and a claim the verifier had already rejected could be re-raised and published by a later round on the same commit. The rest is what production showed on 0.6.8: one call could spend a whole review's retry budget at the streaming deadline, a review killed by a restart stayed marked as running for good, and a walkthrough could lose every file summary with nothing recorded about why.
