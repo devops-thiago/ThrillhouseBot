@@ -109,6 +109,15 @@ class ReviewWriteBudgetTest {
     assertTrue(body.contains("1s"), body);
     assertTrue(body.contains("First bug"), body);
     assertTrue(body.contains("Second bug"), body);
+    // #919 review: both findings were throttled, and neither was retried to exhaustion — the
+    // second went out once after the budget was spent. The note must not claim every retry.
+    assertTrue(body.contains("All of these were refused by GitHub's rate limit"), body);
+    assertTrue(
+        body.contains(
+            "each either until its retries ran out or, once this review's write-retry budget was"
+                + " spent, on its only attempt"),
+        body);
+    assertFalse(body.contains("every retry"), body);
   }
 
   /** Control: a review that never crosses the ceiling discloses its lost findings as before. */
@@ -123,6 +132,11 @@ class ReviewWriteBudgetTest {
     var body = reviewClient.reviewBodies.getLast();
     assertTrue(body.contains("1 issue(s) GitHub accepted no review thread for:"), body);
     assertFalse(body.contains("write-retry budget"), body);
+    assertTrue(
+        body.contains(
+            "refused by GitHub's rate limit, not for their content or their line — each"
+                + " until its retries ran out."),
+        body);
     assertTrue(body.contains("Only bug"), body);
   }
 

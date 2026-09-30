@@ -541,9 +541,9 @@ public class ReviewPublisher {
    * spent its write-retry budget, the writes after that point were given up on without a repeat,
    * and a re-run posts what they carried. Stated once for the section rather than per finding — the
    * budget is the review's, and every finding below it that was refused after the crossing shares
-   * the reason (#734). And a finding GitHub throttled through every retry is not a finding whose
-   * line or file GitHub refused: it is the kind a re-run can post, so the section ends by saying
-   * how many of its findings that was (#919).
+   * the reason (#734). And a finding GitHub's rate limit refused is not a finding whose line or
+   * file GitHub refused: it is the kind a re-run can post, so the section ends by saying how many
+   * of its findings that was (#919).
    */
   private static String unanchoredFindingsBody(List<Finding> findings, int throttled) {
     var sb = new StringBuilder();
@@ -567,8 +567,14 @@ public class ReviewPublisher {
       sb.append("\n_")
           .append(throttled == findings.size() ? "All of these" : throttled + " of these")
           .append(
-              " were refused by GitHub's rate limit on every retry, not for their content or"
-                  + " their line. Without a thread they cannot be replied to, declined or resolved;"
+              " were refused by GitHub's rate limit, not for their content or their line — "
+                  // Only claim retries that happened: once the budget is spent a throttled write
+                  // goes out once and is not repeated (#734), so that case is named instead.
+                  + (GitHubWriteBudget.exhausted().isPresent()
+                      ? "each either until its retries ran out or, once this review's write-retry"
+                          + " budget was spent, on its only attempt"
+                      : "each until its retries ran out")
+                  + ". Without a thread they cannot be replied to, declined or resolved;"
                   + " re-running `/review` once GitHub stops throttling may post them._\n");
     }
     return sb.toString();
@@ -762,8 +768,9 @@ public class ReviewPublisher {
    * route could give a thread lands in {@code unanchored}.
    *
    * <p>{@code throttled} is how many of the {@code unanchored} findings GitHub's rate limit refused
-   * through every retry, as opposed to refusing their line and their file (#919). Those are the
-   * ones a re-run can post, so the review body says so.
+   * — until the retries ran out, or on the only attempt once the review's write-retry budget was
+   * spent — as opposed to refusing their line and their file (#919). Those are the ones a re-run
+   * can post, so the review body says so.
    */
   record InlineCommentResult(
       int posted,
@@ -835,7 +842,8 @@ public class ReviewPublisher {
     }
     Log.warnf(
         "%d of %d finding(s) on %s/%s #%d ended without a review thread (%d refused by GitHub's"
-            + " rate limit through every retry) — the review body lists them",
+            + " rate limit, after their retries ran out or unretried once the write-retry budget"
+            + " was spent) — the review body lists them",
         withoutThread, attempted, target.owner(), target.repo(), target.prNumber(), throttled);
   }
 
@@ -845,7 +853,10 @@ public class ReviewPublisher {
     THREADED,
     /** GitHub refused the line and the file for the payload or the anchor. */
     REFUSED,
-    /** GitHub's rate limit refused it through every retry; a re-run can post it (#919). */
+    /**
+     * GitHub's rate limit refused it, after its retries or unretried once the review's write-retry
+     * budget was spent; a re-run can post it (#919).
+     */
     THROTTLED
   }
 
@@ -890,8 +901,9 @@ public class ReviewPublisher {
    * a throttled finding lost its line, its suggestion and then its thread within milliseconds: in
    * the round-9 corpus, 42 findings across twelve pull requests. A throttle is instead retried on
    * the same payload and anchor by {@code GitHubWriteRetry}, which waits it out before the
-   * rejection ever reaches here; one that reaches here has outlasted every retry, and the next
-   * route would only be refused the same way.
+   * rejection ever reaches here; one that reaches here has outlasted every retry — or was not
+   * retried at all because the review's write-retry budget was spent (#734) — and the next route
+   * would only be refused the same way.
    */
   private Delivery postFindingComment(
       CommentTarget target, Finding finding, int findingId, DiffLineResolver lineResolver) {
@@ -973,13 +985,15 @@ public class ReviewPublisher {
   }
 
   /**
-   * Ends a finding's routes on a throttle that outlasted every retry — without the suggestion-less
-   * or file-level route, which answer a different failure (#919). See {@link #postFindingComment}.
+   * Ends a finding's routes on a throttle that outlasted its retries, or was not retried because
+   * the review's write-retry budget was spent — without the suggestion-less or file-level route,
+   * which answer a different failure (#919). See {@link #postFindingComment}.
    */
   private static Delivery throttledOut(Finding finding, String reason) {
     Log.warnf(
-        "GitHub throttled the inline comment for %s:%d through every retry (%s) — not falling back"
-            + " to another route, which the same limit would refuse; the finding keeps no thread",
+        "GitHub throttled the inline comment for %s:%d and it was not retried further (%s) — its"
+            + " retries ran out or the review's write-retry budget was spent; not falling back to"
+            + " another route, which the same limit would refuse, so the finding keeps no thread",
         LogSafe.oneLine(finding.file()), finding.line(), reason);
     return Delivery.THROTTLED;
   }

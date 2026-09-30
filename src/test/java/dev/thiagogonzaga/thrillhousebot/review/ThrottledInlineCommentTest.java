@@ -178,8 +178,9 @@ class ThrottledInlineCommentTest {
         List.of(
             "1 of 1 finding(s) on owner/repo #"
                 + prNumber
-                + " ended without a review thread (1 refused by GitHub's rate limit through every"
-                + " retry) — the review body lists them"),
+                + " ended without a review thread (1 refused by GitHub's rate limit, after their"
+                + " retries ran out or unretried once the write-retry budget was spent) — the"
+                + " review body lists them"),
         summaries.toList());
   }
 
