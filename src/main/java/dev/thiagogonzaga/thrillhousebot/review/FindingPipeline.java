@@ -554,7 +554,7 @@ public class FindingPipeline {
       ReviewContextLoader.ReviewContext ctx,
       DiffLineResolver lineResolver) {
     return FollowUpAnalyzer.withoutOpenThreadDuplicates(
-        securityScan.merge(refined, ctx),
+        securityScan.merge(refined, ctx, botIdentity),
         ctx.priorAiResponses(),
         ctx.inlineComments(),
         lineResolver,
@@ -1021,7 +1021,7 @@ public class FindingPipeline {
     // #60: the deterministic scan reads patches, not the budgeted batches, so it still runs.
     return withSummary(
         session,
-        securityScan.merge(new ReviewResponse(List.of(), List.of(), null), ctx),
+        securityScan.merge(new ReviewResponse(List.of(), List.of(), null), ctx, botIdentity),
         promptInputs,
         ctx,
         plan);

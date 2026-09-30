@@ -252,13 +252,27 @@ class OpenThreadDuplicateGuardTest {
   void theEarlierRoundsOpenFindingsAreTheOnesTheEffectiveRoundDoesNotNumber() {
     assertEquals(
         List.of(offByOne, pagination),
-        FollowUpAnalyzer.openEarlierRoundFindings(priors, resolver, Map.of()));
+        FollowUpAnalyzer.openEarlierRoundFindings(priors, resolver, Map.of(), threads, BOT));
     assertEquals(
         List.of(),
-        FollowUpAnalyzer.openEarlierRoundFindings(List.of(roundOne), resolver, Map.of()),
+        FollowUpAnalyzer.openEarlierRoundFindings(
+            List.of(roundOne), resolver, Map.of(), threads, BOT),
         "with one round there is nothing older than the effective one");
-    assertEquals(List.of(), FollowUpAnalyzer.openEarlierRoundFindings(null, resolver, Map.of()));
-    assertEquals(List.of(), FollowUpAnalyzer.openEarlierRoundFindings(priors, null, Map.of()));
+    assertEquals(
+        List.of(),
+        FollowUpAnalyzer.openEarlierRoundFindings(null, resolver, Map.of(), threads, BOT));
+    assertEquals(
+        List.of(), FollowUpAnalyzer.openEarlierRoundFindings(priors, null, Map.of(), threads, BOT));
+  }
+
+  @Test
+  void anEarlierFindingWithNoThreadOfItsOwnIsNotListedAsPosted() {
+    // Round one's off-by-one never got a thread (summary-only, or refused by GitHub): a re-raise
+    // is the only way it can still get one, so nothing may call it already posted.
+    assertEquals(
+        List.of(pagination),
+        FollowUpAnalyzer.openEarlierRoundFindings(
+            priors, resolver, Map.of(), List.of(threads.get(1), threads.get(2)), BOT));
   }
 
   @Test
@@ -276,9 +290,10 @@ class OpenThreadDuplicateGuardTest {
     assertEquals(
         List.of(offByOne),
         FollowUpAnalyzer.openEarlierRoundFindings(
-            List.of(resolving, roundOne), resolver, Map.of()));
+            List.of(resolving, roundOne), resolver, Map.of(), threads, BOT));
     assertEquals(
-        List.of(pagination), FollowUpAnalyzer.openEarlierRoundFindings(priors, moved, Map.of()));
+        List.of(pagination),
+        FollowUpAnalyzer.openEarlierRoundFindings(priors, moved, Map.of(), threads, BOT));
   }
 
   @Test

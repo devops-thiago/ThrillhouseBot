@@ -24,8 +24,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
@@ -42,6 +44,8 @@ class SecurityScanTest {
 
   private static final List<String> SKIPPED =
       List.of("**/fixtures/**", "**/testdata/**", "**/*.snap");
+
+  private static final BotIdentity BOT = BotIdentity.from(List.of("thrillhousebot[bot]"));
 
   private final FakeCredentials fake = new FakeCredentials(6060);
 
@@ -89,7 +93,7 @@ class SecurityScanTest {
   void bothHalvesOffLeavesTheResponseUntouched() {
     var response = response(modelFinding("a.java", 1, "t", "d"));
     var ctx = context(List.of(added("a.env", "KEY=" + fake.githubToken())), List.of());
-    assertSame(response, SecurityScan.disabled().merge(response, ctx));
+    assertSame(response, SecurityScan.disabled().merge(response, ctx, BOT));
     assertFalse(SecurityScan.disabled().enabled());
   }
 
@@ -280,7 +284,7 @@ class SecurityScanTest {
             List.of(),
             ctx.lineResolverSupplier(),
             ctx.prTotals());
-    assertTrue(scan(true, false).merge(response(), withIgnored).findings().isEmpty());
+    assertTrue(scan(true, false).merge(response(), withIgnored, BOT).findings().isEmpty());
   }
 
   // --- model duplicates and scrubbing ---
@@ -575,38 +579,60 @@ class SecurityScanTest {
     assertTrue(merged.findings().isEmpty(), "no second thread: " + merged.findings());
     assertTrue(merged.previousFindingsStatus().isEmpty(), "they have no id in round two");
 
-    // The same merge driven from a review's context reads the earlier rounds itself.
-    var ctx =
-        new ReviewContextLoader.ReviewContext(
-            files,
-            "",
-            "",
-            0,
-            List.of(),
-            List.of("{}", "{}"),
-            List.of(roundTwo, roundOne),
-            false,
-            true,
-            "{}",
-            List.of(),
-            "",
-            new InstructionsResolver.ResolvedInstructions("", ""),
-            PathScopedInstructions.NONE,
-            List.of(),
-            "",
-            "",
-            "",
-            "",
-            files,
-            () ->
-                new DiffLineResolver(
-                    Map.of(
-                        files.get(0).filename(),
-                        files.get(0).patch(),
-                        files.get(1).filename(),
-                        files.get(1).patch())),
-            null);
-    assertTrue(s.merge(response(), ctx).findings().isEmpty());
+    // The same merge driven from a review's context reads the earlier rounds and their threads.
+    var threads = new java.util.ArrayList<GitHubReviewClient.PullRequestComment>();
+    for (int i = 0; i < roundOne.findings().size(); i++) {
+      var posted = roundOne.findings().get(i);
+      threads.add(
+          new GitHubReviewClient.PullRequestComment(
+              100L + i,
+              null,
+              posted.file(),
+              new SuggestionFormatter()
+                  .formatReviewComment(Finding.fromAiResponse(posted), true, i + 1),
+              new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")));
+    }
+    var rounds = List.of(roundTwo, roundOne);
+    assertTrue(s.merge(response(), context(files, rounds, threads), BOT).findings().isEmpty());
+
+    // With no thread of their own (summary-only, or refused by GitHub) they are raised again: a
+    // re-raise is the only way they can still get one.
+    assertEquals(
+        roundOne.findings().stream().map(ReviewResponse.Finding::title).toList(),
+        s.merge(response(), context(files, rounds, List.of()), BOT).findings().stream()
+            .map(ReviewResponse.Finding::title)
+            .toList());
+  }
+
+  private static ReviewContextLoader.ReviewContext context(
+      List<FileDiff> files,
+      List<ReviewResponse> rounds,
+      List<GitHubReviewClient.PullRequestComment> threads) {
+    var patches = new java.util.HashMap<String, String>();
+    files.forEach(file -> patches.put(file.filename(), file.patch()));
+    return new ReviewContextLoader.ReviewContext(
+        files,
+        "",
+        "",
+        0,
+        List.of(),
+        List.of("{}", "{}"),
+        rounds,
+        false,
+        true,
+        "{}",
+        threads,
+        "",
+        new InstructionsResolver.ResolvedInstructions("", ""),
+        PathScopedInstructions.NONE,
+        List.of(),
+        "",
+        "",
+        "",
+        "",
+        files,
+        () -> new DiffLineResolver(patches),
+        null);
   }
 
   @Test
@@ -858,10 +884,10 @@ class SecurityScanTest {
     var token = fake.githubToken();
     var files = List.of(added("app.env", "T=" + token));
     var s = scan(true, false);
-    var firstRound = s.merge(response(), context(files, List.of()));
+    var firstRound = s.merge(response(), context(files, List.of()), BOT);
     assertEquals(1, firstRound.findings().size());
 
-    var secondRound = s.merge(response(), context(files, List.of(firstRound)));
+    var secondRound = s.merge(response(), context(files, List.of(firstRound)), BOT);
     assertTrue(secondRound.findings().isEmpty());
     assertEquals("unresolved", secondRound.previousFindingsStatus().get(0).status());
   }

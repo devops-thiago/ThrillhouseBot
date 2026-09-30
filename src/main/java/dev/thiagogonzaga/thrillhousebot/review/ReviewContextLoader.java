@@ -612,7 +612,9 @@ public class ReviewContextLoader {
                     : FollowUpAnalyzer.openEarlierRoundFindings(
                         priorAiResponses,
                         lineResolverSupplier.get(),
-                        VerdictBuilder.renameTargets(files)))
+                        VerdictBuilder.renameTargets(files),
+                        inlineComments,
+                        botIdentity))
             : "";
 
     var instructions =

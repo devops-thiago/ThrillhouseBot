@@ -2673,25 +2673,33 @@ public class FollowUpAnalyzer {
 
   /**
    * The findings raised in rounds <em>older</em> than the effective previous round that no later
-   * round closed and whose code is still in the diff (#939).
+   * round closed, whose code is still in the diff, and that are posted on a review thread of their
+   * own (#939).
    *
    * <p>A follow-up round is shown one round's findings by number — the newest round that raised any
    * ({@link #effectivePreviousFindings}). Once a follow-up raises even one new finding, it becomes
    * that round, and every finding the rounds before it left open drops out of the numbered list,
    * out of the security scan's "already raised" set, and out of the prompt, unless a maintainer
    * happened to reply on it. The next review then sees those findings as never reported and raises
-   * them again, each on a new thread beside the one still open. This set is what the prompt, the
-   * scan and {@link #withoutOpenThreadDuplicates} use to keep them reported once.
+   * them again, each on a new thread beside the one still open. This set is what the prompt and the
+   * scan use to keep them reported once, and {@link #withoutOpenThreadDuplicates} applies the same
+   * three conditions to every round.
    *
    * <p>A finding whose code left the diff is not in the set: a defect that moved may be raised
-   * again at its new location, where the old thread no longer points.
+   * again at its new location, where the old thread no longer points. Nor is one with no thread of
+   * its own — a summary-only finding, or one GitHub refused to thread — located as {@link
+   * #rootCommentId} locates it: a re-raise of it is the only way it can still get a thread, so
+   * nothing may tell the model or the scan it is already posted.
    *
    * @param priorAiResponses every completed prior round's parsed response, newest first
    */
+  @SuppressWarnings("java:S107")
   public static List<ReviewResponse.Finding> openEarlierRoundFindings(
       List<ReviewResponse> priorAiResponses,
       DiffLineResolver lineResolver,
-      Map<String, String> renameTargets) {
+      Map<String, String> renameTargets,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity) {
     if (priorAiResponses == null || lineResolver == null) {
       return List.of();
     }
@@ -2700,7 +2708,11 @@ public class FollowUpAnalyzer {
     replay.reportedRound().forEach(finding -> effective.add(findingKey(finding)));
     return replay.open().entrySet().stream()
         .filter(entry -> !effective.contains(entry.getKey()))
-        .map(entry -> entry.getValue().finding())
+        .map(Map.Entry::getValue)
+        .filter(
+            prior ->
+                rootCommentId(prior.finding(), prior.id(), inlineComments, botIdentity) != null)
+        .map(OpenFinding::finding)
         .filter(finding -> isStillPresent(finding, lineResolver, renameTargets))
         .toList();
   }

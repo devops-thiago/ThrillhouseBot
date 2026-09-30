@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
@@ -179,10 +180,12 @@ public class SecurityScan {
   /**
    * Merges the scan's findings into a refined review response: drops model findings that report the
    * same defect, scrubs every matched secret out of what remains, sets the status of prior scan
-   * findings from the scan, and appends the findings the effective previous round did not already
-   * raise. Returns the response untouched when both halves are off.
+   * findings from the scan, and appends the findings neither the effective previous round nor an
+   * earlier round still open on its own thread (located by {@code botIdentity}'s comments) already
+   * raised. Returns the response untouched when both halves are off.
    */
-  public ReviewResponse merge(ReviewResponse response, ReviewContextLoader.ReviewContext ctx) {
+  public ReviewResponse merge(
+      ReviewResponse response, ReviewContextLoader.ReviewContext ctx, BotIdentity botIdentity) {
     if (!enabled()) {
       return response;
     }
@@ -192,7 +195,11 @@ public class SecurityScan {
         ctx.previousFindingsList(),
         FollowUpAnalyzer.settledPreviousIds(ctx.priorAiResponses()),
         FollowUpAnalyzer.openEarlierRoundFindings(
-            ctx.priorAiResponses(), ctx.lineResolver(), VerdictBuilder.renameTargets(ctx.files())));
+            ctx.priorAiResponses(),
+            ctx.lineResolver(),
+            VerdictBuilder.renameTargets(ctx.files()),
+            ctx.inlineComments(),
+            botIdentity));
   }
 
   ReviewResponse merge(
@@ -204,12 +211,12 @@ public class SecurityScan {
   }
 
   /**
-   * As {@link #merge(ReviewResponse, ReviewContextLoader.ReviewContext)}, with {@code earlierOpen}
-   * the findings rounds older than the effective previous one left open ({@link
-   * FollowUpAnalyzer#openEarlierRoundFindings}). A detection that repeats one of them is not raised
-   * again (#939): it was posted in that round, its thread is still open, and the verdict backstop
-   * holds it while its code is present. It has no id in the effective previous round, so it is
-   * neither tracked nor closed here.
+   * As {@link #merge(ReviewResponse, ReviewContextLoader.ReviewContext, BotIdentity)}, with {@code
+   * earlierOpen} the findings rounds older than the effective previous one left open on their own
+   * threads ({@link FollowUpAnalyzer#openEarlierRoundFindings}). A detection that repeats one of
+   * them is not raised again (#939): it was posted in that round, its thread is still open, and the
+   * verdict backstop holds it while its code is present. It has no id in the effective previous
+   * round, so it is neither tracked nor closed here.
    */
   ReviewResponse merge(
       ReviewResponse response,

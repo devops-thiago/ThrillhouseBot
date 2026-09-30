@@ -283,7 +283,7 @@ class RetriedFollowUpRoundTest {
             BOT,
             Set.of(),
             FollowUpAnalyzer.openEarlierRoundFindings(
-                ctx.priorAiResponses(), ctx.lineResolver(), Map.of()));
+                ctx.priorAiResponses(), ctx.lineResolver(), Map.of(), threads, BOT));
     var session = ReviewSession.create("owner/repo", 146, "Cold chain", "1d16c26");
     session.id = 5428L;
 
