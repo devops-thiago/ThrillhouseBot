@@ -470,6 +470,21 @@ class TicketContextResolverTest {
     }
 
     @Test
+    void onlyTheOpenersMarkerClosesAFence() {
+      assertEquals(
+          List.of("[ ] real"),
+          TicketContextResolver.extract(
+                  "## Acceptance criteria\n```\n~~~ example ~~~\n- [ ] inside code\n``\n"
+                      + "````\n- [ ] real\n")
+              .criteria());
+      assertEquals(
+          List.of("[ ] real"),
+          TicketContextResolver.extract(
+                  "## Acceptance criteria\n~~~~\n```\n- [ ] inside code\n~~~\n~~~~\n- [ ] real\n")
+              .criteria());
+    }
+
+    @Test
     void anEmptyBodyHasNoCriteria() {
       var extracted = TicketContextResolver.extract("  ");
       assertEquals(List.of(), extracted.criteria());

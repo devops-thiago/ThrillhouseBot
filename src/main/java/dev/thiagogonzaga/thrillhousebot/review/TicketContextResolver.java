@@ -97,7 +97,8 @@ public class TicketContextResolver {
   /** Leading spaces that make a line after a blank one, outside a list, indented code. */
   private static final int INDENTED_CODE = 4;
 
-  private static final Pattern FENCE = Pattern.compile("^\\s{0,3}(?:```|~~~)");
+  // A fence line: up to three spaces, then a run of three or more backticks or tildes (group 1).
+  private static final Pattern FENCE = Pattern.compile("^ {0,3}(`{3,}|~{3,})");
 
   private final IssueTrackerProvider provider;
   private final int maxIssues;
@@ -274,7 +275,7 @@ public class TicketContextResolver {
 
   /** Where a line sits in the body: inside a fenced block, and under which heading. */
   private static final class SectionTracker {
-    private boolean inFence;
+    private String fence = ""; // the marker run that opened the current fence; "" outside one
     private boolean inIndentedCode;
     private boolean inList;
     private boolean afterBlank = true;
@@ -287,11 +288,18 @@ public class TicketContextResolver {
      * or a heading.
      */
     boolean isContent(String line) {
-      if (FENCE.matcher(line).find()) {
-        inFence = !inFence;
+      var marker = FENCE.matcher(line);
+      if (marker.find()) {
+        // As in Markdown, only a run of the opener's character, at least as long, closes a fence.
+        var run = marker.group(1);
+        if (fence.isEmpty()) {
+          fence = run;
+        } else if (run.charAt(0) == fence.charAt(0) && run.length() >= fence.length()) {
+          fence = "";
+        }
         return false;
       }
-      if (inFence || isIndentedCode(line)) {
+      if (!fence.isEmpty() || isIndentedCode(line)) {
         return false;
       }
       var heading = Heading.parse(line);
