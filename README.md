@@ -712,7 +712,7 @@ second-pass verifier and the summary call do not get the section.
 **Governance.** `/learnings` lists the active learnings with their ids, what each is about, who
 taught it and a link to the comment. `/forget <id>` retracts one: it stops reaching reviews
 at once, and the row is kept with who retracted it and when. All three commands need write
-access. The dashboard serves the full history, retracted learnings included, at
+access. The dashboard serves the newest 200 learnings, retracted ones included, at
 `GET /api/dashboard/learnings?repository=owner/repo` for signed-in users with access to the
 repository.
 

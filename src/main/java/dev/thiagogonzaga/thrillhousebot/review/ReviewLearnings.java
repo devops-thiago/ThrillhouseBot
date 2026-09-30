@@ -185,13 +185,6 @@ public class ReviewLearnings {
     return chosen;
   }
 
-  /**
-   * How close a learning is to this pull request: 3 for a changed file itself, 2 for a file in the
-   * same directory as one, or for a repository-wide convention, 1 for a file of a changed file's
-   * type, 0 otherwise. A platform fact learned on one Java file (GitHub review threads are flat)
-   * still reaches a pull request that changes other Java files, while a decline about a workflow
-   * file stays out of a documentation-only change.
-   */
   /** Whether any replayed field of the learning — text, title or path — is credential-shaped. */
   private static boolean carriesCredential(ReviewLearningService.LearningView learning) {
     return LearningText.containsCredential(learning.text())
@@ -201,6 +194,13 @@ public class ReviewLearnings {
 
   private record Scored(ReviewLearningService.LearningView learning, int score) {}
 
+  /**
+   * How close a learning is to this pull request: 3 for a changed file itself, 2 for a file in the
+   * same directory as one, or for a repository-wide convention, 1 for a file of a changed file's
+   * type, 0 otherwise. A platform fact learned on one Java file (GitHub review threads are flat)
+   * still reaches a pull request that changes other Java files, while a decline about a workflow
+   * file stays out of a documentation-only change.
+   */
   static int relevance(
       ReviewLearningService.LearningView learning,
       Set<String> paths,

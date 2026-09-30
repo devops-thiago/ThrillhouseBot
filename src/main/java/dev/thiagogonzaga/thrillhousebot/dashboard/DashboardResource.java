@@ -335,9 +335,10 @@ public class DashboardResource {
   }
 
   /**
-   * The review learnings of one repository (#38), retracted ones included, newest first — the audit
-   * view: what is remembered, the comment that taught it, and who retracted it. {@code repository}
-   * is required and access-checked like {@link #getFeedback}; retraction stays with the {@code
+   * The newest review learnings of one repository (#38, at most {@link
+   * ReviewLearningService#MAX_AUDIT_ROWS}), retracted ones included, newest first — the audit view:
+   * what is remembered, the comment that taught it, and who retracted it. {@code repository} is
+   * required and access-checked like {@link #getFeedback}; retraction stays with the {@code
    * /forget} command, which re-checks write access on the repository itself.
    */
   @GET
@@ -364,7 +365,8 @@ public class DashboardResource {
                 FIELD_REPOSITORY,
                 normalizedRepository,
                 "learnings",
-                reviewLearningService.listForAudit(normalizedRepository, 200)))
+                reviewLearningService.listForAudit(
+                    normalizedRepository, ReviewLearningService.MAX_AUDIT_ROWS)))
         .build();
   }
 

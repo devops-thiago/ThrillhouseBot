@@ -36,6 +36,9 @@ public class ReviewLearningService {
 
   private static final String SCOPE = "installationId = ?1 and repository = ?2";
 
+  /** Most rows one audit read returns; retracted learnings are kept, so history is unbounded. */
+  public static final int MAX_AUDIT_ROWS = 200;
+
   private final ReviewLearningRepository repository;
 
   @Inject
@@ -179,9 +182,10 @@ public class ReviewLearningService {
   }
 
   /**
-   * Every learning of a repository, retracted ones included, newest first — the dashboard's audit
-   * view. Not installation-scoped: the dashboard has already checked the viewer can read the
-   * repository, and an operator auditing it wants the whole history.
+   * The newest {@code limit} learnings of a repository (at most {@value #MAX_AUDIT_ROWS}),
+   * retracted ones included, newest first — the dashboard's audit view. Not installation-scoped:
+   * the dashboard has already checked the viewer can read the repository, and an operator auditing
+   * it wants the whole history.
    */
   @Transactional
   public List<LearningView> listForAudit(String repositoryKey, int limit) {
@@ -191,7 +195,7 @@ public class ReviewLearningService {
     return repository
         .find(
             "repository = ?1 order by createdAt desc, id desc", normalizeRepository(repositoryKey))
-        .page(0, Math.min(limit, 200))
+        .page(0, Math.min(limit, MAX_AUDIT_ROWS))
         .list()
         .stream()
         .map(ReviewLearningService::view)
