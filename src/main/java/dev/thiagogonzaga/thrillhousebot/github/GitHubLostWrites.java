@@ -198,8 +198,9 @@ public final class GitHubLostWrites {
       }
       return result;
     } catch (WebApplicationException e) {
-      // Only a throttle: a permission refusal or a 422 is a defect to fix, not a post to re-run,
-      // and announcing it on the PR would be noise on every single comment.
+      // Only a throttle: a permission refusal or a 422 about the payload is a defect to fix, not a
+      // post to re-run, and announcing it on the PR would be noise on every single comment. A 422
+      // that is GitHub's content-creation limit is a throttle (#919), and is counted as one.
       if (GitHubApiError.of(e).filter(GitHubApiError::isThrottled).isPresent()) {
         if (scope == null) {
           remember(target);

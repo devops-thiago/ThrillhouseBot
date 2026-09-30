@@ -112,10 +112,13 @@ class RescuedFindingLostWriteTest {
   }
 
   /**
-   * The production sequence: GitHub is refusing comment creation, the line-anchored comment burns
-   * its whole retry budget, the file-level thread lands on the far side of the window, and the
+   * GitHub refuses the line-anchored comment for its anchor, the file-level thread lands, and the
    * review body goes out moments later. The finding has a working thread, so the body must not open
    * with "an earlier reply on this pull request was never posted … run the command again".
+   *
+   * <p>This used to be a throttle that the line route outlasted and the file route did not. Since
+   * #919 a throttle takes no fallback route at all, so the rescue this pins is the one the
+   * fallbacks are now for: a refusal of the anchor.
    */
   @Test
   void aFindingTheFileLevelFallbackRescuedIsNotAnnouncedAsLost() {
@@ -132,7 +135,7 @@ class RescuedFindingLostWriteTest {
    * The same for a finding carrying a suggestion block. The line-anchored route is tried twice —
    * with the suggestion and without — and each attempt was its own piece of accounting, so one
    * rescued finding was charged two losses and the body read "2 earlier replies … were never
-   * posted".
+   * posted". Both line routes are refused for the anchor here, for the reason the test above gives.
    */
   @Test
   void aRescuedFindingWithASuggestionIsNotAnnouncedTwiceEither() {
@@ -151,10 +154,11 @@ class RescuedFindingLostWriteTest {
   }
 
   /**
-   * The other direction, which the fix must not cost: when the throttle outlasts every route the
+   * The other direction, which the fix must not cost: when the throttle outlasts every retry the
    * finding really is gone, and the maintainer does have to run the command again. Said once, for
-   * one finding, rather than once per refused route — the over-count is not confined to the rescued
-   * case, and a review that lost three findings to a wide window should say three, not nine.
+   * one finding, rather than once per refused attempt — a review that lost three findings to a wide
+   * window should say three, not nine. Since #919 the throttle ends the finding's routes, so the
+   * file-level thread is never tried.
    */
   @Test
   void aFindingNoRouteCouldDeliverIsStillAnnouncedAsLost() {
@@ -165,6 +169,8 @@ class RescuedFindingLostWriteTest {
 
     assertEquals(0, inline.posted());
     assertEquals(List.of(finding), inline.unanchored());
+    assertEquals(1, inline.throttled());
+    assertTrue(reviewClient.landed.isEmpty(), () -> "nothing should land: " + reviewClient.landed);
     var body = postReviewBody();
     assertTrue(
         body.startsWith("> [!WARNING]"),
@@ -267,7 +273,7 @@ class RescuedFindingLostWriteTest {
         lineAnchoredBodies.add(request.body());
       }
       if (fileLevel ? blockFileLevel : blockLineAnchored) {
-        throw blocked();
+        throw blockFileLevel ? blocked() : unresolvable();
       }
       var body = fileLevel ? FILE_LEVEL_THREAD : request.body();
       landed.add(body);
@@ -284,6 +290,18 @@ class RescuedFindingLostWriteTest {
         CreateReviewRequest request) {
       reviewBodies.add(request.body());
       return new ReviewResponse(1L, request.body(), request.event(), request.commitId(), null);
+    }
+
+    /** GitHub refusing the comment's anchor — the rejection the fallback routes exist for. */
+    private static WebApplicationException unresolvable() {
+      return new WebApplicationException(
+          Response.status(422)
+              .entity(
+                  "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":"
+                      + "\"PullRequestReviewComment\",\"code\":\"custom\",\"field\":"
+                      + "\"pull_request_review_thread.line\",\"message\":\"could not be"
+                      + " resolved\"}]}")
+              .build());
     }
 
     /** GitHub throttling the post, naming a deadline of "now" so the test does not sleep. */

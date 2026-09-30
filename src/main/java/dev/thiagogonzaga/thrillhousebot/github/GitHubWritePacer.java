@@ -165,8 +165,48 @@ public final class GitHubWritePacer {
     }
   }
 
+  /**
+   * Holds every slot not yet claimed until {@code pause} from now, because GitHub has just
+   * throttled a write and will throttle the next one too until the wait it asked for has passed
+   * (#919).
+   *
+   * <p>GitHub counts its secondary limits per installation, and this pacer is process-wide, so it
+   * already spaces every review's writes on every installation as one queue. What it did not do is
+   * learn from a refusal: the throttled call backed off on its own while every other review went on
+   * claiming one-second slots and drawing refusals of its own. In the round-9 corpus that was
+   * twelve reviews finishing together, 118 refused writes and 42 findings left with no thread.
+   * Moving the cursor to the end of the wait makes the next caller — whichever review it belongs to
+   * — queue behind it, and the ones after that keep their spacing from there.
+   *
+   * <p>Only ever moves the cursor later: a hold shorter than the queue already waiting changes
+   * nothing, so two reviews throttled at once do not shorten each other's wait. Process-wide rather
+   * than per installation, for the same reason the pacing is: the bot serves few installations, and
+   * a hold that also delays another installation's write by at most one retry wait is cheaper than
+   * the refusals a missed hold costs. A no-op while pacing is disabled.
+   *
+   * @param operation what was throttled, for the log — never credentials or comment text
+   */
+  public void holdFor(String operation, Duration pause) {
+    if (intervalNanos <= 0 || !pause.isPositive()) {
+      return;
+    }
+    long until = nanoClock.getAsLong() + pause.toNanos();
+    nextSlot.accumulateAndGet(until, GitHubWritePacer::later);
+    log.debug(
+        "GitHub throttled {} — holding every content-creation slot for {}ms",
+        operation,
+        pause.toMillis());
+  }
+
+  /**
+   * The later of two {@code nanoTime} instants, wraparound-safe for the reason {@link #claim} is.
+   */
+  private static long later(long cursor, long until) {
+    return cursor - until > 0 ? cursor : until;
+  }
+
   /** Subtraction rather than {@code >} so the comparison survives a {@code nanoTime} wraparound. */
   private long claim(long cursor, long now) {
-    return (cursor - now > 0 ? cursor : now) + intervalNanos;
+    return later(cursor, now) + intervalNanos;
   }
 }

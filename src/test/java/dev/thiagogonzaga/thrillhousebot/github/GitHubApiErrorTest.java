@@ -55,6 +55,21 @@ class GitHubApiErrorTest {
       "{\"message\":\"You have exceeded a secondary rate limit and have been temporarily blocked"
           + " from content creation. Please retry your request again later.\"}";
 
+  /**
+   * The 422 recorded 118 times in the round-9 corpus (#919), verbatim: GitHub's content-creation
+   * limit, reported as a validation failure rather than a 403 or a 429.
+   */
+  private static final String SUBMITTED_TOO_QUICKLY_BODY =
+      "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":\"PullRequestReviewComment\","
+          + "\"code\":\"custom\",\"field\":\"pull_request_review_thread.base\","
+          + "\"message\":\"was submitted too quickly\"}]}";
+
+  /** A 422 about the anchor, also seen in round 9: a real refusal, which no wait can change. */
+  private static final String UNRESOLVABLE_LINE_BODY =
+      "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":\"PullRequestReviewComment\","
+          + "\"code\":\"custom\",\"field\":\"pull_request_review_thread.line\","
+          + "\"message\":\"could not be resolved\"}]}";
+
   private static final String PERMISSION_BODY =
       "{\"message\":\"Resource not accessible by integration\",\"status\":\"403\"}";
 
@@ -125,7 +140,7 @@ class GitHubApiErrorTest {
       // 5xx and connection-level failures may have written the comment already — never repeated.
       assertFalse(GitHubApiError.from(outbound(500, "boom", "Retry-After", "5")).isThrottled());
       assertFalse(GitHubApiError.from(outbound(404, "{}")).isThrottled());
-      assertFalse(GitHubApiError.from(outbound(422, SECONDARY_LIMIT_BODY)).isThrottled());
+      assertFalse(GitHubApiError.from(outbound(422, UNRESOLVABLE_LINE_BODY)).isThrottled());
     }
 
     @Test
@@ -218,13 +233,20 @@ class GitHubApiErrorTest {
     }
 
     @Test
-    void isReadOffA403Only() {
-      // A 429 is a throttle whatever it says, and a 422 about rate limiting is a payload problem.
+    void isReadOffA403OrA422Only() {
+      // A 429 is a throttle whatever it says. A 422 about rate limiting used to be read as a
+      // payload
+      // problem and pinned as such here; #919 recorded GitHub's content-creation limit arriving as
+      // a 422, so a 422 in throttle-like words that match no known wording is now reported, the
+      // same way a 403's is, and still fails fast.
       assertFalse(
           GitHubApiError.from(outbound(429, REWORDED_THROTTLE_BODY))
               .hasUnrecognisedThrottleWording());
+      var reworded422 = GitHubApiError.from(outbound(422, REWORDED_THROTTLE_BODY));
+      assertFalse(reworded422.isThrottled());
+      assertTrue(reworded422.hasUnrecognisedThrottleWording());
       assertFalse(
-          GitHubApiError.from(outbound(422, REWORDED_THROTTLE_BODY))
+          GitHubApiError.from(outbound(500, REWORDED_THROTTLE_BODY))
               .hasUnrecognisedThrottleWording());
     }
 
@@ -1015,6 +1037,98 @@ class GitHubApiErrorTest {
           "*** and more", loggedBody(outbound(401, "BEARER abcdefghij0123456789 and more")));
       assertEquals(
           "*** and more", loggedBody(outbound(401, "bearer abcdefghij0123456789 and more")));
+    }
+  }
+
+  /**
+   * #919. GitHub's content-creation limit also arrives as {@code 422 Validation Failed}, and a
+   * classifier that read only 403 and 429 as throttles sent it down the payload fallbacks instead
+   * of the wait: 118 refused writes and 42 findings with no thread in one corpus run.
+   */
+  @Nested
+  class ValidationFailedThrottle {
+
+    private static final Instant NOW = Instant.ofEpochSecond(1_800_000_000L);
+
+    @Test
+    void theRecordedSubmittedTooQuicklyBodyIsAThrottle() {
+      var error = GitHubApiError.from(outbound(422, SUBMITTED_TOO_QUICKLY_BODY));
+
+      assertTrue(error.isThrottled());
+      assertTrue(error.isSevere(), "a throttle is worth a warning whatever its status");
+      assertFalse(error.hasUnrecognisedThrottleWording());
+    }
+
+    @Test
+    void itIsReadOffTheStreamTheRestClientHandsOverToo() {
+      assertTrue(GitHubApiError.from(inbound(422, SUBMITTED_TOO_QUICKLY_BODY)).isThrottled());
+    }
+
+    @Test
+    void anAnchoringRefusalIsStillARefusal() {
+      var error = GitHubApiError.from(outbound(422, UNRESOLVABLE_LINE_BODY));
+
+      assertFalse(error.isThrottled(), "a line GitHub cannot resolve fails identically forever");
+      assertFalse(error.isSevere());
+      assertFalse(error.hasUnrecognisedThrottleWording());
+    }
+
+    @Test
+    void theDocumentedSecondaryLimitWordingIsAThrottleOnA422Too() {
+      // The content-creation limit picks its status; its documented sentences are the same.
+      assertTrue(GitHubApiError.from(outbound(422, SECONDARY_LIMIT_BODY)).isThrottled());
+      assertTrue(GitHubApiError.from(outbound(422, CONTENT_CREATION_BLOCK_BODY)).isThrottled());
+    }
+
+    @Test
+    void headersAloneDoNotMakeA422AThrottle() {
+      // A 422 is a statement about the payload; only GitHub's words say otherwise.
+      assertFalse(
+          GitHubApiError.from(
+                  outbound(
+                      422,
+                      UNRESOLVABLE_LINE_BODY,
+                      "Retry-After",
+                      "5",
+                      "x-ratelimit-remaining",
+                      "0"))
+              .isThrottled());
+    }
+
+    @Test
+    void wordingPastTheLoggedCapStillClassifies() {
+      // #732, #747: the log's 512-character cap must not decide whether the write is repeated.
+      var padded =
+          "{\"message\":\"Validation Failed\",\"detail\":\""
+              + "x".repeat(2_000)
+              + "\",\"errors\":[{\"message\":\"was submitted too quickly\"}]}";
+      var error = GitHubApiError.from(outbound(422, padded));
+
+      assertFalse(loggedBody(outbound(422, padded)).contains("too quickly"));
+      assertTrue(error.isThrottled());
+    }
+
+    @Test
+    void theWaitIsTheLinearBackoffWithNoContentCreationFloor() {
+      // No Retry-After and no reset header: 5s, then 10s. The recorded wording names no block, so
+      // the 30s floor sized against the 72-second block (#722) does not apply to it.
+      var error = GitHubApiError.from(outbound(422, SUBMITTED_TOO_QUICKLY_BODY));
+
+      assertEquals(Duration.ofSeconds(5), error.retryDelay(1, NOW));
+      assertEquals(Duration.ofSeconds(10), error.retryDelay(2, NOW));
+    }
+
+    @Test
+    void anotherTooQuicklyWordingIsReportedRatherThanGuessedAt() {
+      var error =
+          GitHubApiError.from(
+              outbound(
+                  422,
+                  "{\"message\":\"Validation Failed\",\"errors\":[{\"message\":\"was sent too"
+                      + " quickly\"}]}"));
+
+      assertFalse(error.isThrottled());
+      assertTrue(error.hasUnrecognisedThrottleWording());
     }
   }
 

@@ -4591,7 +4591,8 @@ class ReviewOrchestratorTest {
      * production, so a run recorded only that the comment "could not be anchored" — a claim about
      * line numbers. Twenty-nine rejections in one dogfood round are undiagnosable because of it,
      * and #712 was filed against the wrong layer on the strength of that wording. The status and
-     * body GitHub sent have to reach the warning an operator actually sees.
+     * body GitHub sent have to reach the warning an operator actually sees — since #919 the one
+     * that says the throttle ended the finding's routes.
      */
     @Test
     void shouldLogWhatGitHubSaidWhenTheLineAnchoredCommentIsRefused() {
@@ -4649,7 +4650,7 @@ class ReviewOrchestratorTest {
       var warning =
           logged.stream()
               .map(java.util.logging.LogRecord::getMessage)
-              .filter(m -> m.contains("GitHub rejected inline comment"))
+              .filter(m -> m.contains("GitHub throttled the inline comment"))
               .findFirst()
               .orElse("");
       assertTrue(
@@ -4662,9 +4663,13 @@ class ReviewOrchestratorTest {
 
     /**
      * #722. The two attempts fail for different causes often enough to matter: a suggestion block
-     * GitHub will not take is a 422 about the payload, a content-creation block is a 403 about the
-     * moment. Reporting only the second names the payload for a finding a throttle actually
-     * refused, which is the class of wrong diagnosis this change exists to stop.
+     * GitHub will not take is a refusal of the payload, a content-creation limit a refusal of the
+     * moment — a 403 here, though since #919 it can also be a 422 saying "was submitted too
+     * quickly", so the status alone does not separate the two. Reporting only the second names the
+     * throttle for a finding whose payload was refused first, which is the class of wrong diagnosis
+     * #722 exists to stop. Since #919 a throttle on the first attempt ends the routes, so the
+     * payload refusal comes first here, and the throttle that follows it still keeps the finding
+     * off the file-level route.
      */
     @Test
     void shouldLogBothReasonsWhenTheSuggestionRetryFailsDifferently() {
@@ -4678,12 +4683,12 @@ class ReviewOrchestratorTest {
           .thenReturn("body");
       doThrow(
               new WebApplicationException(
-                  Response.status(403)
-                      .entity("{\"message\":\"You have exceeded a secondary rate limit.\"}")
-                      .build()),
-              new WebApplicationException(
                   Response.status(422)
                       .entity("{\"message\":\"line must be part of the diff\"}")
+                      .build()),
+              new WebApplicationException(
+                  Response.status(403)
+                      .entity("{\"message\":\"You have exceeded a secondary rate limit.\"}")
                       .build()))
           .when(reviewClient)
           .createPullRequestComment(
@@ -4724,15 +4729,23 @@ class ReviewOrchestratorTest {
       var warning =
           logged.stream()
               .map(java.util.logging.LogRecord::getMessage)
-              .filter(m -> m.contains("GitHub rejected inline comment"))
+              .filter(m -> m.contains("GitHub throttled the inline comment"))
               .findFirst()
               .orElse("");
       assertTrue(
           warning.contains("status=403") && warning.contains("secondary rate limit"),
-          "the throttle that refused the first attempt must not be dropped: " + warning);
+          "the throttle that refused the second attempt must be named: " + warning);
       assertTrue(
           warning.contains("status=422"),
-          "the second attempt's reason belongs there too: " + warning);
+          "the first attempt's reason must not be dropped: " + warning);
+      verify(reviewClient, never())
+          .createPullRequestComment(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(req -> GitHubReviewClient.SUBJECT_TYPE_FILE.equals(req.subjectType())));
     }
 
     @Test
