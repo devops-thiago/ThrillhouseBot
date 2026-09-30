@@ -734,6 +734,62 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
+  void boundingThePreviousFindingsKeepsTheRoutedSystemPrompt() {
+    // #665: the bounded inputs are what the calls are made with, so dropping the routed prompt here
+    // would silently send the monolith while the plan was sized for the routed one.
+    budget(20_000);
+    var inputs =
+        new AiReviewService.PromptInputs(
+            "d",
+            "ctx",
+            "base",
+            "s",
+            "t",
+            PromptTemplateEscaper.fence(previousFindingsBlock(40, 6)),
+            "review guidance",
+            "summary guidance",
+            "ROUTED_PROMPT");
+
+    var bounded = planner.boundPreviousFindings(inputs);
+
+    assertNotSame(inputs, bounded, "the block was over its share, so new inputs are returned");
+    assertEquals("ROUTED_PROMPT", bounded.reviewSystemPrompt());
+  }
+
+  @Test
+  void theOverheadIsSizedFromTheSystemPromptTheInputsCarry() {
+    // #665: with routing on the inputs carry the pull request's routed prompt, which is shorter
+    // than the monolith; the diff budget is what that prompt leaves, so both files fit one call
+    // here, which the monolith's larger overhead does not allow.
+    var f1 = file("dir/f1.java", 5, patch(5));
+    var f2 = file("dir/f2.java", 5, patch(5));
+    var routed = PrReviewPrompts.reviewSystemPrompt(java.util.Set.of());
+    var routedOverhead =
+        tokenCounter.estimateTokens(
+            routed
+                + PrReviewPrompts.USER
+                + PromptTemplateEscaper.fenceForBudgeting()
+                + "ctx"
+                + "base"
+                + "s"
+                + "t");
+    budget(routedOverhead + sectionTokens(f1) + sectionTokens(f2) + 30);
+    var monolith = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", "");
+    var routedInputs =
+        new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", "", "", routed);
+
+    var routedPlan = planner.plan(List.of(f1, f2), routedInputs);
+    assertEquals(1, routedPlan.batches().size());
+    assertTrue(routedPlan.omittedFiles().isEmpty() && routedPlan.clippedFiles().isEmpty());
+    var monolithPlan = planner.plan(List.of(f1, f2), monolith);
+    assertFalse(
+        monolithPlan.batches().size() == 1
+            && monolithPlan.omittedFiles().isEmpty()
+            && monolithPlan.clippedFiles().isEmpty(),
+        "the monolith's overhead must not leave room for both files in one call");
+  }
+
+  @Test
   void planningTheSameInputRepeatedlyGivesTheSameBatches() {
     // #604: fence() mints a CSPRNG token per call, and a 32-hex token has no fixed BPE width: the
     // two fence lines ran 51 to 87 tokens over 200,000 draws. The overhead used to be sized from a

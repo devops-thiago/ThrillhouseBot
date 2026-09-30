@@ -1,0 +1,21 @@
+{
+  "kind": "generator",
+  "sourcePr": 647,
+  "why": "Real shape fixed in PR #647: the BudgetPlan recorders test membership with the accumulator's own contains() once per name, and the accumulator is a CopyOnWriteArrayList whose contains and add are both linear, so one recording pass is quadratic in the batch's file count, which nothing bounds. Dimension 5 (code quality and algorithmic complexity) is the block that makes the added shape itself the evidence; with dimension routing on, this case fails if a source batch stops carrying it.",
+  "expectation": "must-find",
+  "targetFile": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/DiffBudgetPlanner.java",
+  "keywords": [
+    "quadratic",
+    "o(n^2)",
+    "o(n²)",
+    "o(n*m)",
+    "hashset",
+    "linear scan",
+    "linear-time"
+  ],
+  "prTitle": "fix(review): disclose files of failed and cut batches",
+  "prDescription": "Records the files of a batch that failed every retry or whose response was cut, so the verdict can disclose them.",
+  "dimensions": [
+    "CODE_QUALITY_AND_COMPLEXITY"
+  ]
+}

@@ -177,6 +177,7 @@ class ReviewOrchestratorTest {
             new TokenCounter(),
             mock(ReviewTokenLedger.class),
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper),
+            ReviewDimensionRouter.disabled(),
             SecurityScan.disabled());
     orchestrator = newOrchestrator();
     when(config.review()).thenReturn(reviewConfig);
@@ -268,7 +269,7 @@ class ReviewOrchestratorTest {
         new CiStatusEvaluator(checkRunClient, BOT_ID),
         new CheckRunManager(checkRunClient),
         newContextLoader(),
-        new ReviewPromptAssembler(config, labeler, diffFormatter),
+        new ReviewPromptAssembler(config, labeler, diffFormatter, ReviewDimensionRouter.disabled()),
         new DiffBudgetPlanner(
             diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
         reviewPublisher,
@@ -5842,6 +5843,7 @@ class ReviewOrchestratorTest {
               new TokenCounter(),
               mock(ReviewTokenLedger.class),
               new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper),
+              ReviewDimensionRouter.disabled(),
               SecurityScan.disabled());
 
       var response = new ReviewResponse(List.of(), List.of(), null);

@@ -225,7 +225,15 @@ class ChatModelWiringTest {
     ReviewSessionContext.bind(7L, 1, reasoningDisabled);
     try {
       prReviewer
-          .reviewStream(diff, "prContext", "baseComparison", "stack", "tests", "previous", "instr")
+          .reviewStream(
+              diff,
+              "prContext",
+              "baseComparison",
+              "stack",
+              "tests",
+              "previous",
+              "instr",
+              PrReviewPrompts.SYSTEM)
           .onPartialResponse(token -> {})
           .onCompleteResponse(response -> done.complete(null))
           .onError(done::completeExceptionally)

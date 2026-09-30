@@ -1,0 +1,26 @@
+### internal/config/config.go (modified, +5 -0)
+```diff
+@@ -12,8 +12,13 @@ type Config struct {
+ 	ListenAddr string
+ 	Secret     string
++	// AllowedTopics limits which webhook topics are relayed; empty relays every topic.
++	AllowedTopics []string
+ }
+ 
+ func Load() Config {
+ 	cfg := Config{ListenAddr: envOr("WEBHOOKRELAY_LISTEN_ADDR", ":8080"), Secret: os.Getenv("WEBHOOKRELAY_SECRET")}
++	if raw := os.Getenv("WEBHOOKRELAY_ALLOWED_TOPICS"); raw != "" {
++		cfg.AllowedTopics = strings.Split(raw, ",")
++	}
+ 	return cfg
+ }
+```
+
+### README.md (modified, +1 -0)
+```diff
+@@ -20,3 +20,4 @@ Configuration is read from the environment:
+ | `WEBHOOKRELAY_LISTEN_ADDR` | Address the relay listens on | `:8080` |
+ | `WEBHOOKRELAY_SECRET` | Shared secret used to verify incoming webhooks | _(required)_ |
++| `WEBHOOKRELAY_ALLOWED_TOPICS` | Topics the relay forwards, e.g. `push` | _(all topics)_ |
+ | `WEBHOOKRELAY_LOG_LEVEL` | Log verbosity | `info` |
+```

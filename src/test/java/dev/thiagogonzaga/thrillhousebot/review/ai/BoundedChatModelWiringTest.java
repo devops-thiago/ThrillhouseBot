@@ -73,7 +73,8 @@ class BoundedChatModelWiringTest {
     QuarkusMock.installMockForType(model, ChatModel.class, ModelName.Literal.of("concise"));
 
     var calls = new LinkedHashMap<String, Runnable>();
-    calls.put("FindingVerifier#verify", () -> findingVerifier.verify("f", "c", "d", "s", "p"));
+    calls.put(
+        "FindingVerifier#verify", () -> findingVerifier.verify("f", "c", "d", "s", "p", "sys"));
     calls.put("ReplyAssistant#reply", () -> replyAssistant.reply("q", "c", "f", "d", "t"));
     calls.put("ChangelogAssistant#draft", () -> changelogAssistant.draft("d", "7", "t", "b", "i"));
     calls.put("ChangelogAssistant#merge", () -> changelogAssistant.merge("c", "7", "t", "b", "i"));

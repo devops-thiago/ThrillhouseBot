@@ -1,0 +1,29 @@
+### src/main/java/dev/thiagogonzaga/thrillhousebot/review/DiffBudgetPlanner.java (modified, +22 -0)
+```diff
+@@ -380,3 +380,25 @@ public class DiffBudgetPlanner {
+     private final List<String> runtimeUncoveredFiles = new CopyOnWriteArrayList<>();
++    private final List<String> responseCutFiles = new CopyOnWriteArrayList<>();
+ 
++    /**
++     * Records the files of a batch that failed every retry, so the verdict discloses them as not
++     * reviewed. Keeps first-seen order and never records a name twice.
++     */
++    public void recordUncoveredFiles(List<String> filenames) {
++      for (var name : filenames) {
++        if (name != null && !runtimeUncoveredFiles.contains(name)) {
++          runtimeUncoveredFiles.add(name);
++        }
++      }
++    }
++
++    /** Records the files of a batch whose response was cut at the length cap. */
++    public void recordResponseCutFiles(List<String> filenames) {
++      for (var name : filenames) {
++        if (name != null && !responseCutFiles.contains(name)) {
++          responseCutFiles.add(name);
++        }
++      }
++    }
++
+     public List<String> effectiveOmittedFiles() {
+```

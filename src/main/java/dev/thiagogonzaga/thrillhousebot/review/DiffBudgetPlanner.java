@@ -462,7 +462,9 @@ public class DiffBudgetPlanner {
    * still plans its one review call, and {@link #callCapLeavesNoSummaryCall()} tells the pipeline
    * to skip the summary rather than exceed the cap. The overhead is the review call's own: {@code
    * summaryInstructions} rides the summary call, whose overview and findings the pipeline clamps
-   * against {@link #perCallInputBudget()} with that guidance counted.
+   * against {@link #perCallInputBudget()} with that guidance counted. The system prompt counted is
+   * {@code inputs.reviewSystemPrompt()} — the monolith with dimension routing off, the pull
+   * request's routed prompt with it on (#665).
    */
   public BudgetPlan plan(
       List<GitHubPullRequestClient.FileDiff> reviewable, AiReviewService.PromptInputs inputs) {
@@ -479,8 +481,14 @@ public class DiffBudgetPlanner {
     // margin should absorb estimate error, not known constants. Sized from the fixed-width stand-in
     // rather than a live fence(" "): a random token's BPE width varies by tens of tokens, which
     // made the diff budget for one input a random variable and the plan non-reproducible (#604).
+    // The system prompt is the one the inputs carry (#665): with routing on, the whole pull
+    // request's — never smaller than any batch's, since routing a subset of the files can only
+    // leave more out — so no batch overshoots on its prompt, and a pull request with no
+    // configuration, test or API code gets that much more diff per call. Sizing each batch from its
+    // own prompt would make the packing circular (the prompt depends on the files, the files on
+    // the budget) for a saving that only exists on pull requests whose batches differ in kind.
     var sharedOverhead =
-        PrReviewPrompts.SYSTEM
+        bounded.reviewSystemPrompt()
             + PrReviewPrompts.USER
             + PromptTemplateEscaper.fenceForBudgeting()
             + bounded.prContext()
@@ -570,7 +578,8 @@ public class DiffBudgetPlanner {
         inputs.relatedTests(),
         bounded.text(),
         inputs.repoInstructions(),
-        inputs.summaryInstructions());
+        inputs.summaryInstructions(),
+        inputs.reviewSystemPrompt());
   }
 
   /** A bounded previous-findings block: its text and what the bounding cost. */

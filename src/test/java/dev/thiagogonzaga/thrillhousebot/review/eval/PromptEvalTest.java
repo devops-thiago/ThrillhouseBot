@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import dev.thiagogonzaga.thrillhousebot.review.PromptSections;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
+import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewer;
@@ -47,6 +48,16 @@ import org.junit.jupiter.api.Test;
  * QUARKUS_LANGCHAIN4J_OPENAI_API_KEY=... ./mvnw test -Peval -Dtest=PromptEvalTest
  * }</pre>
  *
+ * <p>Both prompts follow {@code REVIEW_DIMENSION_ROUTING_ENABLED} exactly as production does
+ * (#665): off, every case runs against the monolithic prompts; on, each generator case gets the
+ * system prompt routed from its own diff's files and each verifier case the carve-outs routed from
+ * its candidate's file. Run it with routing on before turning routing on anywhere:
+ *
+ * <pre>{@code
+ * REVIEW_DIMENSION_ROUTING_ENABLED=true QUARKUS_LANGCHAIN4J_OPENAI_API_KEY=... \
+ *     ./mvnw test -Peval -Dtest=PromptEvalTest
+ * }</pre>
+ *
  * <p>LLM nondeterminism is absorbed two ways: each case is sampled {@code -Deval.samples} times
  * (default 3) and judged by majority, and the suite tolerates {@code -Deval.tolerated} failing
  * cases (default 0) so a known-unfixed corpus label (an open prompt-hardening issue) can be carried
@@ -67,6 +78,7 @@ class PromptEvalTest {
   @Inject FindingVerificationService findingVerificationService;
   @Inject PrReviewer prReviewer;
   @Inject ReviewResponseParser reviewResponseParser;
+  @Inject ReviewDimensionRouter dimensionRouter;
 
   @Test
   void promptsReproduceLabeledDogfoodOutcomes() throws Exception {
@@ -168,7 +180,7 @@ class PromptEvalTest {
     var raw = new CompletableFuture<String>();
     // Mirror production trailing guidance for mock-fidelity cases: when the fixture diff
     // changes tests, inject MOCK_FIDELITY_REQUEST so the live eval exercises the same block
-    // ReviewPromptAssembler adds on the review path (SYSTEM dimension 8 is always present).
+    // ReviewPromptAssembler adds on the review path.
     var relatedTests =
         evalCase.diff().contains("Test.java")
             ? "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java"
@@ -194,7 +206,8 @@ class PromptEvalTest {
             "",
             PromptTemplateEscaper.escape(relatedTests),
             "",
-            repoInstructions)
+            repoInstructions,
+            dimensionRouter.systemPromptFor(evalCase.files()))
         .onPartialResponse(token -> {})
         .onCompleteResponse(response -> raw.complete(response.aiMessage().text()))
         .onError(raw::completeExceptionally)

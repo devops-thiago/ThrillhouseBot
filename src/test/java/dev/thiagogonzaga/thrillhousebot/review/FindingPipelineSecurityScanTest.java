@@ -113,6 +113,7 @@ class FindingPipelineSecurityScanTest {
             new TokenCounter(),
             tokenLedger,
             new TruncatedResponseSalvager(new ObjectMapper()),
+            ReviewDimensionRouter.disabled(),
             new SecurityScan(true, true, 3.5, List.of()));
   }
 
