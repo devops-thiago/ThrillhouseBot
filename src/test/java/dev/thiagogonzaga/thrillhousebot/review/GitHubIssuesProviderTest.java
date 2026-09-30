@@ -116,6 +116,9 @@ class GitHubIssuesProviderTest {
     void acceptsSameRepositoryQualifiedAndUrlReferencesIgnoringCase() {
       var body = "Closes O/R#11\nFixes https://github.com/o/R/issues/12";
       assertEquals(List.of(11, 12), GitHubIssuesProvider.bodyReferences(body, "o", "r"));
+      assertEquals(
+          List.of(13),
+          GitHubIssuesProvider.bodyReferences("FIXES HTTPS://GitHub.COM/O/r/issues/13", "o", "r"));
     }
 
     @Test

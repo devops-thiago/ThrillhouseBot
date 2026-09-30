@@ -99,7 +99,7 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
    */
   private static final Pattern ISSUE_REFERENCE =
       Pattern.compile(
-          "(?:([\\w.-]+/[\\w.-]+)#|https?://github\\.com/([\\w.-]+/[\\w.-]+)/issues/|#)"
+          "(?i)(?:([\\w.-]+/[\\w.-]+)#|https?://github\\.com/([\\w.-]+/[\\w.-]+)/issues/|#)"
               + "(\\d{1,9})(?!\\d)");
 
   /**
