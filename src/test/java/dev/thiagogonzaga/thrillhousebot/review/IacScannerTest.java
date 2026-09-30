@@ -496,6 +496,10 @@ class IacScannerTest {
     assertEquals(
         List.of(SecurityRule.PRIVILEGED_CONTAINER, SecurityRule.HOST_NAMESPACE),
         rules(scanNew("pod.yaml", "  privileged: True", "  hostPID: TRUE")));
+    assertEquals(
+        List.of(SecurityRule.PRIVILEGED_CONTAINER, SecurityRule.HOST_NAMESPACE),
+        rules(scanNew("pod.yaml", "  privileged: yes", "  hostNetwork: On")));
+    assertTrue(scanNew("pod.yaml", "  privileged: only-in-tests").isEmpty());
     assertTrue(scanNew("deploy.yaml", "          privileged: false").isEmpty());
     assertTrue(scanNew("deploy.yaml", "          allowPrivilegeEscalation: false").isEmpty());
     assertTrue(scanNew("main.tf", "  privileged = true").isEmpty());

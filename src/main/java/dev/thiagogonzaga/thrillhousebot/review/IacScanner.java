@@ -100,13 +100,16 @@ final class IacScanner {
       Pattern.compile("(?i)\"?effect\"?\\s*[=:]\\s*[\"']?deny");
 
   /**
-   * YAML 1.1, which Kubernetes manifests are parsed as, reads {@code True} and {@code TRUE} too.
+   * YAML 1.1, which Kubernetes manifests are parsed as, reads {@code yes}, {@code on} and {@code y}
+   * as true too, in any case. In JSON those spellings are strings and only the quoted form is
+   * valid, so the widening only reaches YAML.
    */
   private static final Pattern PRIVILEGED =
-      Pattern.compile("^\\s*(?:-\\s*)?\"?privileged\"?\\s*:\\s*(?i:true)\\b");
+      Pattern.compile("^\\s*(?:-\\s*)?\"?privileged\"?\\s*:\\s*(?i:true|yes|on|y)\\b");
 
   private static final Pattern HOST_NAMESPACE =
-      Pattern.compile("^\\s*(?:-\\s*)?\"?(?:hostNetwork|hostPID|hostIPC)\"?\\s*:\\s*(?i:true)\\b");
+      Pattern.compile(
+          "^\\s*(?:-\\s*)?\"?(?:hostNetwork|hostPID|hostIPC)\"?\\s*:\\s*(?i:true|yes|on|y)\\b");
 
   private static final Pattern ROOT_USER =
       Pattern.compile("(?i)^\\s*USER\\s+(?:root|0)(?::(?:root|0))?\\s*$");

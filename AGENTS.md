@@ -222,7 +222,7 @@ live `fence(...)` (#604).
 - **A detected secret is never echoed.** Only `SecretScanner.redact` output (first characters and
   length) goes into a scan finding's title and description, and a secret finding has no
   `suggestion_old`, because the anchor is persisted with the session and shown on the dashboard.
-  `SecurityScan.Scrubber` replaces every matched value in the same response's model findings,
+  `SecurityScan.Scrubber` replaces every verbatim occurrence of a matched value in the same response's model findings,
   status notes and summary before it is persisted, posted or handed to the summary call.
   `SecurityScan` logs counts only. Never log, persist or post `SecretScanner.Hit.literal()`, and
   keep test credentials generated at run time (`FakeCredentials`), never as literals.

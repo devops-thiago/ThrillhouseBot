@@ -647,8 +647,8 @@ IaC rules (high confidence unless noted):
 | Admin port open to the internet | `.tf`, `.yaml`/`.yml`, `.json` | an ingress rule admitting `0.0.0.0/0` or `::/0` to port 22, 23, 3389, 5985 or 5986, to a port range containing one, or to every protocol | high |
 | S3 bucket made public | `.tf`, `.yaml`/`.yml`, `.json` | a `public-read`/`public-read-write` ACL (`AccessControl: PublicRead…`), or a Block Public Access setting set to `false` | high |
 | IAM wildcard | `.tf`, `.yaml`/`.yml`, `.json` | `Action: "*"` with `Resource: "*"` in the same statement and no `Effect: Deny` | high |
-| Privileged container | `.yaml`/`.yml`, `.json` | `privileged: true` | high |
-| Host namespace | `.yaml`/`.yml`, `.json` | `hostNetwork`, `hostPID` or `hostIPC` set to `true` | high |
+| Privileged container | `.yaml`/`.yml`, `.json` | `privileged: true` (in YAML, also `yes`, `on`, `y` in any case) | high |
+| Host namespace | `.yaml`/`.yml`, `.json` | `hostNetwork`, `hostPID` or `hostIPC` set to `true` (in YAML, also `yes`, `on`, `y`) | high |
 | Final stage runs as root | Dockerfiles | `USER root` (or `0`) with no later `FROM` or `USER`, in a new file or in a last hunk that reaches the end of the file | medium, medium confidence (the grade the reviewer's own missing-privilege-drop class gets) |
 | Storage encryption off | `.tf` | `encrypted = false` or `storage_encrypted = false` | medium |
 
@@ -675,9 +675,11 @@ the value's first characters and its length — four for a known format, which i
 the provider prefix (`ghp_…, 40 chars`), and at most one character in four of a
 generic value. It carries no quoted code, so nothing in the inline comment, the
 check run, the notification, the stored session or the dashboard holds the
-value, and nothing is logged but counts. When the scan matches a value, it is
-also replaced with its redacted form in every model finding and status note of
-the same review, so a model finding that quoted the line cannot post it either.
+value, and nothing is logged but counts. When the scan matches a value, every
+verbatim occurrence of it is also replaced with its redacted form in the model
+findings, status notes and summary of the same review, so a model finding that
+quoted the line cannot post it either. A fragment or an altered copy of the
+value is not recognized.
 Treat a reported credential as leaked whatever happens to the pull request:
 removing it from the branch does not remove it from the git history.
 
