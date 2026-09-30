@@ -351,7 +351,9 @@ public class WebhookController {
             repo.defaultBranch(),
             payload.installation().id(),
             payload.comment().user().login(),
-            payload.comment().authorAssociation());
+            payload.comment().authorAssociation(),
+            payload.comment().id(),
+            payload.comment().body());
 
     if (command == CommentCommand.REVIEW) {
       return handleReviewCommand(ctx);

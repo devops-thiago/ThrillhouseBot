@@ -2,11 +2,13 @@
 
 <!-- docs:feedback:start -->
 
-ThrillhouseBot records lightweight maintainer signals about review findings so a
-future cross-review learnings store ([#38](https://github.com/devops-thiago/ThrillhouseBot/issues/38))
-has training data. This is the precursor shipped for
-[#324](https://github.com/devops-thiago/ThrillhouseBot/issues/324); it does **not**
-yet inject preferences into review prompts.
+ThrillhouseBot records lightweight maintainer signals about review findings. This
+shipped for [#324](https://github.com/devops-thiago/ThrillhouseBot/issues/324) and
+does **not** inject preferences into review prompts. The opt-in review learnings
+store ([#38](https://github.com/devops-thiago/ThrillhouseBot/issues/38), see
+"Review learnings" in the README) is separate: it remembers a maintainer's decline
+only with its reason and only after it survives the decline re-check. A 👍/👎 or a
+"not useful" reply carries no reason, so it never becomes a learning on its own.
 
 ## Why poll instead of a reaction webhook?
 

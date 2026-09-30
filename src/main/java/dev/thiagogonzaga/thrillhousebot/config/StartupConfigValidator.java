@@ -119,6 +119,7 @@ public class StartupConfigValidator {
     validateReviewBudget(problems, config.review());
     validateCiGating(problems, config.review());
     validateCiContext(problems, config.review().ciContext());
+    validateLearnings(problems, config.review());
     validateBlockingStrictness(problems, config.review());
     validateModelSettings(problems, config.ai().models());
     validateEffectiveBudget(problems);
@@ -600,6 +601,52 @@ public class StartupConfigValidator {
               + ThrillhouseConfig.CiContextConfig.MAX_MAX_CHARS
               + " (thrillhousebot.review.ci-context.max-chars): "
               + maxChars);
+    }
+  }
+
+  /**
+   * Validates the opt-in learnings store (#38), only while it is on. A learning is safe to keep
+   * only because it survived the decline re-check (#169) — with the re-check off, a decline the
+   * code contradicts (PR #160's race) would be remembered and suppress a valid finding on every
+   * later review — so the store refuses to start without it. The three caps are bounded so a typo
+   * cannot turn the section into one that crowds out the diff or one too small to hold a learning.
+   */
+  private static void validateLearnings(
+      List<String> problems, ThrillhouseConfig.ReviewConfig review) {
+    var learnings = review.learnings();
+    if (!learnings.enabled()) {
+      return;
+    }
+    if (!review.declineRecheckEnabled()) {
+      problems.add(
+          "REVIEW_LEARNINGS_ENABLED=true requires REVIEW_DECLINE_RECHECK_ENABLED=true: only a"
+              + " decline that survives the re-check may become a learning"
+              + " (thrillhousebot.review.learnings.enabled)");
+    }
+    requireBetween(
+        problems,
+        learnings.maxPerRepo(),
+        ThrillhouseConfig.LearningsConfig.MIN_MAX_PER_REPO,
+        ThrillhouseConfig.LearningsConfig.MAX_MAX_PER_REPO,
+        "REVIEW_LEARNINGS_MAX_PER_REPO (thrillhousebot.review.learnings.max-per-repo)");
+    requireBetween(
+        problems,
+        learnings.promptMaxItems(),
+        ThrillhouseConfig.LearningsConfig.MIN_PROMPT_MAX_ITEMS,
+        ThrillhouseConfig.LearningsConfig.MAX_PROMPT_MAX_ITEMS,
+        "REVIEW_LEARNINGS_PROMPT_MAX_ITEMS (thrillhousebot.review.learnings.prompt-max-items)");
+    requireBetween(
+        problems,
+        learnings.promptMaxChars(),
+        ThrillhouseConfig.LearningsConfig.MIN_PROMPT_MAX_CHARS,
+        ThrillhouseConfig.LearningsConfig.MAX_PROMPT_MAX_CHARS,
+        "REVIEW_LEARNINGS_PROMPT_MAX_CHARS (thrillhousebot.review.learnings.prompt-max-chars)");
+  }
+
+  private static void requireBetween(
+      List<String> problems, int value, int min, int max, String name) {
+    if (value < min || value > max) {
+      problems.add(name + " must be between " + min + " and " + max + ": " + value);
     }
   }
 

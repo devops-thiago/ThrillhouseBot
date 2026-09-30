@@ -203,6 +203,26 @@ final class RebuttalContradiction {
   }
 
   /**
+   * Whether {@code rebuttal} rests on a premise of the kind {@link #find} exists to refute — a
+   * "this cannot run concurrently" claim against a concurrency finding — or is too long to be read
+   * at all. {@link #find} can only refute such a premise from the code in the reviewed diff, and
+   * the dispatch that makes it false often lives outside it (PR #160's unbounded executor sat in a
+   * file the pull request never touched). A decline that stands this round is therefore still not
+   * safe to remember across pull requests when this is true: the learnings store (#38) keeps only
+   * declines whose premise is not one the code could contradict.
+   */
+  static boolean assertsRefutablePremise(ReviewResponse.Finding finding, String rebuttal) {
+    if (finding == null || rebuttal == null) {
+      return false;
+    }
+    if (rebuttal.length() > MAX_REBUTTAL_CHARS) {
+      return true;
+    }
+    return CONCURRENCY_FINDING.matcher(findingText(finding)).find()
+        && earliestMatch(NO_CONCURRENCY_CLAIMS, assertedText(rebuttal)) != null;
+  }
+
+  /**
    * The reviewed patch reduced to the code the revision actually runs: removed ({@code -}) lines
    * are dropped and every remaining line is passed through {@link LiveCodeScanner}, so a dispatch
    * construct that was deleted, or that survives only inside a comment or a string literal, cannot

@@ -49,7 +49,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - Conversational replies: `@thrillhousebot` it in a PR thread or finding reply and the bot answers in context
 - One summary comment per PR, with a risk breakdown and a changed-files walkthrough: posted on the first run and edited in place on every later round, so it always describes the current head (inline findings and the follow-up delta comment stay per round)
 - A Description vs. Implementation section in the summary when the PR description and the change disagree. It is omitted when they match. The check is part of the model summary, so a summary that carries model prose ("What this PR does", per-file walkthrough summaries) and no such section means the check ran and found no mismatch; a counts-only summary means it did not run, and a degraded one says why
-- Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`
+- Operable from the PR with comment commands — `/help`, `/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`, and (with learnings on) `/learnings`, `/remember`, `/forget`
 - Live dashboard (Next.js) with a WebSocket activity feed, cost charts, and token tracking
 - OpenTelemetry traces, token histograms, cost counters, and latency metrics
 - Optional outgoing notification when a review completes or fails — structured JSON or a Slack/Discord message, HMAC-signed, metadata only unless you opt in
@@ -107,6 +107,9 @@ not a reaction.
 | `/resolve` | Resolve ThrillhouseBot's outstanding finding threads on the PR | write |
 | `/pause` | Silence the bot on the PR | write |
 | `/resume` | Re-enable the bot on a paused PR | write |
+| `/learnings` | List what the bot remembers about this repository, with ids and source links (see [Review learnings](#review-learnings)) | write |
+| `/remember <text>` | Remember a convention for later reviews of this repository | write |
+| `/forget <id>` | Retract one remembered learning | write |
 | `@thrillhousebot resolved <path>:<line> — <title>` | Close a previous finding that has no review thread to reply on, so it stops holding approval (see **Clearing a finding with no thread** under Configuration) | write |
 | `@thrillhousebot declined <path>:<line> — <title>` | Decline a previous finding that has no review thread to reply on, with the reason on the lines that follow; the reason is re-checked against the code the way a reply on a thread is (see **Declining a finding with no thread** under Configuration) | write |
 
@@ -324,6 +327,10 @@ will change per provider:
 | `REVIEW_CI_CONTEXT_ENABLED` | Feed the head commit's failing CI checks into the review context: check name, conclusion, output title and summary, and a page of annotations, fenced as untrusted data (see [CI-failure context](#ci-failure-context)) | `false` |
 | `REVIEW_CI_CONTEXT_INCLUDE_LOGS` | With `REVIEW_CI_CONTEXT_ENABLED`, also read the tail of up to two failing GitHub Actions job logs. Uses the `Actions: Read` permission the app already has | `false` |
 | `REVIEW_CI_CONTEXT_MAX_CHARS` | Character cap on the whole CI-failure section, validated at boot to 500–20000 while the feature is on | `4000` |
+| `REVIEW_LEARNINGS_ENABLED` | Remember maintainer decisions across pull requests: a decline that survives the decline re-check, and `/remember` conventions, are stored per repository and fed to later reviews of the files they concern as fenced, untrusted data (see [Review learnings](#review-learnings)). Requires `REVIEW_DECLINE_RECHECK_ENABLED=true`; startup fails otherwise | `false` |
+| `REVIEW_LEARNINGS_MAX_PER_REPO` | Active learnings one repository may hold (1–1000). At the cap a new learning is refused, not evicted; `/forget` frees room | `100` |
+| `REVIEW_LEARNINGS_PROMPT_MAX_ITEMS` | Most learnings one review prompt carries (1–50) | `10` |
+| `REVIEW_LEARNINGS_PROMPT_MAX_CHARS` | Character cap on the learnings section of one review prompt (500–20000), counted in the per-call token budget | `3000` |
 | `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | Post a short delta comment on follow-up reviews with the new-finding, resolved, and still-open counts. The full summary is a single comment the bot edits in place each round, so this is the per-round record of what moved; a follow-up pass with no delta (nothing new, nothing resolved) posts nothing | `false` |
 | `REVIEW_LARGE_PR_NUDGE_ENABLED` | Add a note to the PR summary when a large PR's review opened **no inline finding** — it may be genuinely clean, or the pass may have been shallow — pointing at `/review` and `/improve`. Costs no extra AI call and never changes the verdict; a PR under both thresholds below is unaffected | `false` |
 | `REVIEW_LARGE_PR_NUDGE_MIN_FILES` | Changed files at or above which the nudge applies (PR-level total, so ignored files still count). `0` switches this dimension off | `20` |
@@ -655,6 +662,54 @@ review usually starts before CI finishes, so in practice the section shows up on
 with their count. The CI-hold revisit does not run a new review when CI later fails:
 it re-reads the gate and nothing else, as described under
 [CI gating](#ci-gating). Comment `/review` to get a review that sees the failure.
+
+### Review learnings
+
+`REVIEW_LEARNINGS_ENABLED=true` lets the bot remember what maintainers taught it on one pull
+request when it reviews the next. Without it, a finding a maintainer declined with a stable
+reason (PR #159's "GitHub review threads are flat, every reply's `in_reply_to_id` is the thread
+root") can be raised again on every later pull request. `.github/thrillhousebot.md` remains the
+place for facts you want to write down yourself; learnings capture them from the review.
+
+**What becomes a learning.** Two things, and nothing else:
+
+- A decline of a previous finding, with the maintainer's reason, but only once it has survived
+  the [decline re-check](#re-checking-declines). The review must record the finding
+  `justified`, the re-check must have run against the reviewed code, and the reason must not rest
+  on a premise the code could refute. A "this cannot run concurrently" decline of a race finding
+  is never remembered, even when it stands this round, because the code that refutes it (PR #160's
+  unbounded executor) can sit outside the diff. A decline that stood only because the maintainer
+  answered the re-check's push-back a second time is not remembered either. The author must hold
+  write access, confirmed against the collaborator-permission API.
+- A convention stated explicitly with `/remember <text>` on the PR conversation.
+
+A 👍/👎 reaction or a bare "not useful" reply is not a learning. It says the finding was unwelcome,
+not why, and a learning without a reason cannot be applied to new code. Those signals are still
+recorded for [finding feedback](docs/FEEDBACK.md).
+
+**How it is used.** Before each review, the repository's active learnings are ranked by how close
+their file is to the files the pull request changes: the same file, then the same directory (and
+repository-wide conventions), then files of the same type. A learning about a file of an
+unrelated type is left out. The best ones, at most `REVIEW_LEARNINGS_PROMPT_MAX_ITEMS` and
+`REVIEW_LEARNINGS_PROMPT_MAX_CHARS`, are added to the review call inside the untrusted-data
+fence, with guidance to not raise a declined finding again while its stated reason still holds
+for the code in the diff, and to name the learning (`[L12]`) when the diff breaks that reason. The
+second-pass verifier and the summary call do not get the section.
+
+**Governance.** `/learnings` lists the active learnings with their ids, what each is about, who
+taught it and a link to the comment. `/forget <id>` retracts one: it stops reaching reviews
+at once, and the row is kept with who retracted it and when. All three commands need write
+access. The dashboard serves the full history, retracted learnings included, at
+`GET /api/dashboard/learnings?repository=owner/repo` for signed-in users with access to the
+repository.
+
+**Safety.** Learnings are scoped to one repository under one GitHub App installation and never
+read by any other. Text with anything shaped like a credential (GitHub, AWS, Slack, OpenAI and
+Google keys, private-key headers, JWTs, bearer values, `password=`-style assignments) is refused
+rather than stored, and is filtered again before a learning is replayed. Quoted lines, control
+and bidi characters are dropped and each learning is clipped to 1000 characters.
+`REVIEW_LEARNINGS_MAX_PER_REPO` caps how many one repository holds. The table
+(`review_learning`) is created on first start like every other table.
 
 ### Per-model AI settings
 

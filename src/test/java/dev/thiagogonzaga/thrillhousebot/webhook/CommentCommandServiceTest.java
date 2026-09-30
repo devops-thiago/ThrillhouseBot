@@ -61,6 +61,7 @@ class CommentCommandServiceTest {
   @Mock private UnitTestGenerator testGenerator;
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
+  @Mock private LearningCommands learningCommands;
 
   private CommentCommandService service;
 
@@ -97,7 +98,8 @@ class CommentCommandServiceTest {
             docGenerationService,
             improvementService,
             testGenerator,
-            config);
+            config,
+            learningCommands);
   }
 
   private CommentCommandService.CommandContext ctx(CommentCommand command) {
@@ -662,6 +664,50 @@ class CommentCommandServiceTest {
 
     assertDoesNotThrow(() -> service.notifyPaused(ctx(CommentCommand.REVIEW)));
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void learningsCommandsAreSilentForAnUnauthorizedCommenter() {
+    authorize(false);
+
+    for (var command :
+        List.of(CommentCommand.LEARNINGS, CommentCommand.FORGET, CommentCommand.REMEMBER)) {
+      service.handle(ctx(command));
+    }
+
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+    verifyNoInteractions(learningCommands);
+  }
+
+  @Test
+  void learningsCommandsNameTheSwitchWhenTheStoreIsOff() {
+    authorize(true);
+    when(learningCommands.enabled()).thenReturn(false);
+
+    service.handle(ctx(CommentCommand.FORGET));
+
+    assertTrue(postedBody().contains("`/forget` is disabled"), postedBody());
+    assertTrue(postedBody().contains("thrillhousebot.review.learnings.enabled=true"), postedBody());
+    verify(learningCommands, never()).reply(any());
+  }
+
+  @Test
+  void learningsCommandsPostTheirReplyWhenAuthorizedAndOn() {
+    authorize(true);
+    when(learningCommands.enabled()).thenReturn(true);
+    var context = ctx(CommentCommand.LEARNINGS);
+    when(learningCommands.reply(context)).thenReturn("the list");
+
+    service.handle(context);
+
+    assertEquals("the list", postedBody());
+  }
+
+  @Test
+  void helpListsTheLearningsCommands() {
+    assertTrue(CommentCommandService.HELP_TEXT.contains("`/learnings`"));
+    assertTrue(CommentCommandService.HELP_TEXT.contains("`/remember <text>`"));
+    assertTrue(CommentCommandService.HELP_TEXT.contains("`/forget <id>`"));
   }
 
   private static PullRequestComment comment(long id, Long inReplyToId, String login) {

@@ -473,7 +473,7 @@ public class VerdictBuilder {
    * the legacy single diff is it. Resolved lazily by {@link FollowUpAnalyzer#recheckDeclines}, so a
    * round with no declined finding never pays for the concatenation.
    */
-  private static String reviewedCode(
+  static String reviewedCode(
       ReviewContextLoader.ReviewContext ctx, DiffBudgetPlanner.BudgetPlan plan) {
     if (!plan.budgeted() || plan.batches().isEmpty()) {
       return ctx.diff();

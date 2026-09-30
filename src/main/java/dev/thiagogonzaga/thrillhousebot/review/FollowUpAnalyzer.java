@@ -29,6 +29,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -36,6 +37,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -1972,6 +1974,158 @@ public class FollowUpAnalyzer {
         recheckThreadDeclines(previous, statuses, inlineComments, botIdentity, reviewedCode);
     return declineNamedInConversation(
         previous, rechecked, conversationComments, botIdentity, reviewedCode);
+  }
+
+  /**
+   * A maintainer decline that may become a durable learning (#38): the finding it declined, the
+   * maintainer's reason, and the comment that gave it.
+   *
+   * @param sourceCommentId the thread reply, or the PR-conversation comment, that declined it
+   * @param onThread whether {@code sourceCommentId} is a review-thread reply (else a conversation
+   *     comment), which decides the link a learning cites
+   * @param author the maintainer's GitHub login
+   */
+  public record SurvivingDecline(
+      ReviewResponse.Finding finding,
+      String reason,
+      long sourceCommentId,
+      boolean onThread,
+      String author) {}
+
+  /** One maintainer comment that declined a finding, and the reason it gave. */
+  private record DeclineSource(long commentId, boolean onThread, String author, String reason) {}
+
+  /**
+   * The declines of this round that are safe to remember across pull requests (#38) — the safeguard
+   * #169 exists to provide. A decline recorded {@code justified} only means it stood this round; a
+   * learning outlives the round, the pull request and the code it was argued against, so the bar
+   * here is higher than the re-check's:
+   *
+   * <ul>
+   *   <li>the decline re-check is enabled and had reviewed code to check against this round, so the
+   *       {@code justified} it left standing was actually re-checked;
+   *   <li>the finding is still {@code justified} after the re-check ({@code justifiedIds} is read
+   *       off the round's final statuses, so a decline the code contradicted — PR #160's — is
+   *       already {@code unresolved} and never arrives here);
+   *   <li>every maintainer reply that declined it rests on a premise the code could not contradict
+   *       ({@link RebuttalContradiction#assertsRefutablePremise}). That excludes a decline which
+   *       stood only because the maintainer answered the re-check's push-back a second time, and a
+   *       "this cannot run concurrently" decline whose refuting dispatch sat outside the diff — PR
+   *       #160's exact shape — since the store would otherwise suppress a valid finding on every
+   *       later pull request;
+   *   <li>there is a non-blank reason to remember. A bare decline, like a bare 👎, says the finding
+   *       was unwelcome but not why, and a learning without a why cannot be applied to new code.
+   * </ul>
+   *
+   * <p>The reason is read where the re-check reads it: the finding's own thread first (every
+   * write-capable human reply), else the {@code @thrillhousebot declined} directives naming it on
+   * the PR conversation.
+   *
+   * @param justifiedIds ids (1-based, over {@code previous}) the round finally recorded justified
+   */
+  public List<SurvivingDecline> survivingDeclines(
+      List<ReviewResponse.Finding> previous,
+      Collection<Integer> justifiedIds,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      BotIdentity botIdentity,
+      Supplier<String> reviewedCode) {
+    if (!declineRecheckEnabled
+        || previous == null
+        || justifiedIds == null
+        || justifiedIds.isEmpty()
+        || reviewedCode == null) {
+      return List.of();
+    }
+    var code = reviewedCode.get();
+    if (code == null || code.isBlank()) {
+      return List.of();
+    }
+    var surviving = new ArrayList<SurvivingDecline>();
+    for (int id : new TreeSet<>(justifiedIds)) {
+      if (id < 1 || id > previous.size()) {
+        continue;
+      }
+      var finding = previous.get(id - 1);
+      var sources =
+          declineSources(
+              finding,
+              id,
+              inlineComments == null ? List.of() : inlineComments,
+              conversationComments,
+              botIdentity);
+      if (sources.isEmpty()
+          || !sources.stream().allMatch(source -> isRememberable(finding, source.reason()))) {
+        continue;
+      }
+      var first = sources.get(0);
+      surviving.add(
+          new SurvivingDecline(
+              finding,
+              sources.stream().map(DeclineSource::reason).collect(Collectors.joining("\n\n")),
+              first.commentId(),
+              first.onThread(),
+              first.author()));
+    }
+    return surviving;
+  }
+
+  private static boolean isRememberable(ReviewResponse.Finding finding, String reason) {
+    return reason != null
+        && !reason.isBlank()
+        && !RebuttalContradiction.assertsRefutablePremise(finding, reason);
+  }
+
+  /**
+   * The maintainer comments that declined {@code finding}: its thread's write-capable human replies
+   * when it has any, else the conversation directives naming it. Empty when neither surface holds a
+   * decline — a {@code justified} the model reported with no maintainer text behind it.
+   */
+  private static List<DeclineSource> declineSources(
+      ReviewResponse.Finding finding,
+      int id,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      BotIdentity botIdentity) {
+    Long rootId = rootCommentId(finding, id, inlineComments, botIdentity);
+    if (rootId != null) {
+      var replies =
+          inlineComments.stream()
+              .filter(c -> rootId.equals(c.inReplyToId()))
+              .filter(c -> c.user() != null && !botIdentity.matches(c.user().login()))
+              .filter(c -> mayHoldWriteAccess(c.authorAssociation()))
+              .filter(c -> c.body() != null && !c.body().isBlank())
+              .map(c -> new DeclineSource(c.id(), true, c.user().login(), c.body()))
+              .toList();
+      if (!replies.isEmpty()) {
+        return replies;
+      }
+    }
+    return conversationDeclineSources(finding, conversationComments, botIdentity);
+  }
+
+  private static List<DeclineSource> conversationDeclineSources(
+      ReviewResponse.Finding finding,
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      BotIdentity botIdentity) {
+    String anchor = ownContentAnchor(finding);
+    if (conversationComments == null || finding.file() == null || anchor == null) {
+      return List.of();
+    }
+    String locator = finding.file() + ":" + finding.line();
+    var sources = new ArrayList<DeclineSource>();
+    for (var comment : conversationComments) {
+      if (!isMaintainerConversationComment(comment, botIdentity)) {
+        continue;
+      }
+      for (var decline : conversationDeclines(comment.body(), botIdentity)) {
+        if (namesFinding(decline.naming(), locator, anchor)) {
+          sources.add(
+              new DeclineSource(comment.id(), false, comment.user().login(), decline.reason()));
+        }
+      }
+    }
+    return sources;
   }
 
   /** The review-thread half of {@link #recheckDeclines}: the model's {@code justified} statuses. */

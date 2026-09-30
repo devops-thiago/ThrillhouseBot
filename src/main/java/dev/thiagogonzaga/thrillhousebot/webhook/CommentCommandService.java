@@ -33,6 +33,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.slf4j.Logger;
@@ -41,8 +42,9 @@ import org.slf4j.LoggerFactory;
 /**
  * Executes the comment commands beyond {@code /review} — {@code /help}, {@code /summary}, {@code
  * /describe}, {@code /changelog}, {@code /add-docs}, {@code /improve}, {@code /generate-tests},
- * {@code /resolve}, {@code /pause}, {@code /resume}. Work runs on the shared review executor so the
- * webhook 200-ack thread is never blocked by GitHub API calls.
+ * {@code /resolve}, {@code /pause}, {@code /resume}, {@code /learnings}, {@code /forget}, {@code
+ * /remember}. Work runs on the shared review executor so the webhook 200-ack thread is never
+ * blocked by GitHub API calls.
  *
  * <p>Every recognized command is acknowledged with a 👀 reaction before it reaches here, so a path
  * that ends without posting reads on the PR as a hang. The rule these handlers follow is therefore:
@@ -87,6 +89,9 @@ public class CommentCommandService {
       | `/resolve` | Resolve ThrillhouseBot's open finding threads on this PR |
       | `/pause` | Silence the bot on this PR (no automatic or manual reviews) |
       | `/resume` | Re-enable the bot on a paused PR |
+      | `/learnings` | List what the bot remembers about this repository (when learnings are on) |
+      | `/remember <text>` | Remember a convention for later reviews of this repository |
+      | `/forget <id>` | Retract one remembered learning |
       | `/help` | Show this list |
 
       You can also use the mention form, e.g. `@Thrillhousebot review`. \
@@ -108,6 +113,7 @@ public class CommentCommandService {
   private final PrImprovementService improvementService;
   private final UnitTestGenerator testGenerator;
   private final ThrillhouseConfig config;
+  private final LearningCommands learningCommands;
 
   @Inject
   public CommentCommandService(
@@ -126,7 +132,8 @@ public class CommentCommandService {
       DocGenerationService docGenerationService,
       PrImprovementService improvementService,
       UnitTestGenerator testGenerator,
-      ThrillhouseConfig config) {
+      ThrillhouseConfig config,
+      LearningCommands learningCommands) {
     this.executor = executor;
     this.authClient = authClient;
     this.commentClient = commentClient;
@@ -143,9 +150,13 @@ public class CommentCommandService {
     this.improvementService = improvementService;
     this.testGenerator = testGenerator;
     this.config = config;
+    this.learningCommands = learningCommands;
   }
 
-  /** PR coordinates and commenter identity for one command. */
+  /**
+   * PR coordinates and commenter identity for one command, plus the comment itself: its id (for a
+   * source link) and body (for a command that takes an argument, such as {@code /forget 12}).
+   */
   public record CommandContext(
       CommentCommand command,
       String owner,
@@ -154,7 +165,33 @@ public class CommentCommandService {
       String defaultBranch,
       long installationId,
       String login,
-      String authorAssociation) {}
+      String authorAssociation,
+      long commentId,
+      String body) {
+
+    /** A context for a command that reads no argument and cites no comment. */
+    public CommandContext(
+        CommentCommand command,
+        String owner,
+        String repo,
+        int prNumber,
+        String defaultBranch,
+        long installationId,
+        String login,
+        String authorAssociation) {
+      this(
+          command,
+          owner,
+          repo,
+          prNumber,
+          defaultBranch,
+          installationId,
+          login,
+          authorAssociation,
+          0L,
+          "");
+    }
+  }
 
   /** Runs the command's effect asynchronously. */
   public void handle(CommandContext ctx) {
@@ -189,6 +226,7 @@ public class CommentCommandService {
         case RESOLVE -> handleResolve(ctx, auth);
         case PAUSE -> handlePause(ctx, auth);
         case RESUME -> handleResume(ctx, auth);
+        case LEARNINGS, FORGET, REMEMBER -> handleLearnings(ctx, auth);
         default -> log.debug("CommentCommandService ignoring command {}", ctx.command());
       }
     } catch (RuntimeException e) {
@@ -461,6 +499,25 @@ public class CommentCommandService {
         wasPaused
             ? "▶️ ThrillhouseBot resumed on this PR. Comment `/review` to run a review now."
             : "ThrillhouseBot was not paused on this PR.");
+  }
+
+  /**
+   * {@code /learnings}, {@code /forget <id>} and {@code /remember <text>} (#38). Write access is
+   * required for all three — listing too, for the same reason every other command requires it: a
+   * reply to anyone would let any commenter make the bot post — and a deployment with the store off
+   * says so, naming the switch.
+   */
+  private void handleLearnings(CommandContext ctx, String auth) {
+    var command = "/" + ctx.command().name().toLowerCase(Locale.ROOT);
+    if (!authorized(ctx)) {
+      log.info("Ignoring unauthorized {} from @{} on PR #{}", command, ctx.login(), num(ctx));
+      return;
+    }
+    if (!learningCommands.enabled()) {
+      declineAsDisabled(ctx, auth, command, "learnings.enabled");
+      return;
+    }
+    postComment(auth, ctx, learningCommands.reply(ctx));
   }
 
   /**

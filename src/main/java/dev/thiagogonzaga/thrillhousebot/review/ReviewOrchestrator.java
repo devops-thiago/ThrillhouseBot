@@ -92,6 +92,7 @@ public class ReviewOrchestrator {
 
   private final CiStatusEvaluator ciStatusEvaluator;
   private final CiFailureContextResolver ciFailureContext;
+  private final ReviewLearnings learnings;
 
   private final CheckRunManager checkRunManager;
 
@@ -239,13 +240,15 @@ public class ReviewOrchestrator {
       CiHoldRegistry ciHoldRegistry,
       @ReviewExecutor ExecutorService reviewExecutor,
       ReviewNotifier notifier,
-      CiFailureContextResolver ciFailureContext) {
+      CiFailureContextResolver ciFailureContext,
+      ReviewLearnings learnings) {
     this.config = config;
     this.authClient = authClient;
     this.broadcaster = broadcaster;
     this.sessionPersistence = sessionPersistence;
     this.ciStatusEvaluator = ciStatusEvaluator;
     this.ciFailureContext = ciFailureContext;
+    this.learnings = learnings;
     this.checkRunManager = checkRunManager;
     this.contextLoader = contextLoader;
     this.promptAssembler = promptAssembler;
@@ -327,8 +330,19 @@ public class ReviewOrchestrator {
 
       // Bound the one prompt section that grows every round before anything is sized or sent, so
       // the plan's overhead estimate and the text the calls actually carry are the same (#583).
+      // #38: what maintainers taught the review on earlier pull requests, bounded and relevant to
+      // the files this one changes; blank when the feature is off.
+      var learned =
+          learnings.promptSection(
+              req.installationId(),
+              req.owner(),
+              req.repo(),
+              ctx.reviewableFiles().stream()
+                  .map(GitHubPullRequestClient.FileDiff::filename)
+                  .toList());
       var promptInputs =
-          budgetPlanner.boundPreviousFindings(promptAssembler.assemble(ctx, req, ciFailures));
+          budgetPlanner.boundPreviousFindings(
+              promptAssembler.assemble(ctx, req, ciFailures, learned));
       var plan = budgetPlanner.plan(ctx.reviewableFiles(), promptInputs);
 
       if (ciFuture == null) {
@@ -420,6 +434,24 @@ public class ReviewOrchestrator {
           () ->
               findingFeedbackCapture.captureOnPriorFindings(
                   auth, doneReq.owner(), doneReq.repo(), doneReq.prNumber(), inlineComments));
+      if (learnings.enabled()) {
+        runPostResultStep(
+            doneReq,
+            "capture review learnings",
+            () ->
+                learnings.captureSurvivingDeclines(
+                    new ReviewLearnings.DeclineCapture(
+                        auth,
+                        doneReq.installationId(),
+                        doneReq.owner(),
+                        doneReq.repo(),
+                        doneReq.prNumber(),
+                        previousFindings,
+                        result.previousStatuses(),
+                        inlineComments,
+                        ctx.conversationComments(),
+                        () -> VerdictBuilder.reviewedCode(ctx, plan))));
+      }
       runPostResultStep(
           doneReq,
           "apply labels",

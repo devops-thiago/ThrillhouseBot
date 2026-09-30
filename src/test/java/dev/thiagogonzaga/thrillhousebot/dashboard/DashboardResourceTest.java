@@ -23,6 +23,8 @@ import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.review.FindingFeedback;
 import dev.thiagogonzaga.thrillhousebot.review.FindingFeedbackService;
+import dev.thiagogonzaga.thrillhousebot.review.ReviewLearning;
+import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService;
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.common.http.TestHTTPEndpoint;
 import io.quarkus.test.junit.QuarkusTest;
@@ -45,6 +47,8 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
 
   @Inject FindingFeedbackService findingFeedbackService;
 
+  @Inject ReviewLearningService reviewLearningService;
+
   @BeforeEach
   void setUp() {
     when(sessionValidator.isValidSession(anyString())).thenReturn(true);
@@ -56,6 +60,7 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   void cleanupFeedback() throws Exception {
     tx.begin();
     FindingFeedback.deleteAll();
+    ReviewLearning.deleteAll();
     tx.commit();
   }
 
@@ -155,6 +160,68 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
         .then()
         .statusCode(200)
         .body("repositories", not(empty()));
+  }
+
+  @Test
+  void learningsNeedASessionARepositoryAndAccessToIt() {
+    given().when().get("/learnings").then().statusCode(401);
+    given()
+        .cookie(COOKIE_NAME, VALID_TOKEN)
+        .when()
+        .get("/learnings")
+        .then()
+        .statusCode(400)
+        .body("error", equalTo("repository is required"));
+    given()
+        .cookie(COOKIE_NAME, VALID_TOKEN)
+        .queryParam("repository", " ")
+        .when()
+        .get("/learnings")
+        .then()
+        .statusCode(400);
+    when(sessionValidator.hasRepositoryAccess(VALID_TOKEN, "private/repo")).thenReturn(false);
+    given()
+        .cookie(COOKIE_NAME, VALID_TOKEN)
+        .queryParam("repository", "private/repo")
+        .when()
+        .get("/learnings")
+        .then()
+        .statusCode(403);
+  }
+
+  @Test
+  void learningsListEveryLearningWithItsSourceIncludingRetractedOnes() {
+    reviewLearningService.record(
+        new ReviewLearningService.LearningInput(
+            1L,
+            "owner/repo",
+            ReviewLearning.KIND_DECLINE,
+            "renderThread misses deeper nested replies",
+            "medium",
+            "src/A.java",
+            "GitHub PR review threads are flat.",
+            159,
+            "https://github.com/owner/repo/pull/159#discussion_r1",
+            "maintainer"),
+        10);
+    var id = reviewLearningService.listActive(1L, "owner/repo", 10).get(0).id();
+    reviewLearningService.retract(1L, "owner/repo", id, "admin");
+
+    given()
+        .cookie(COOKIE_NAME, VALID_TOKEN)
+        .queryParam("repository", "owner/repo")
+        .when()
+        .get("/learnings")
+        .then()
+        .statusCode(200)
+        .body("repository", equalTo("owner/repo"))
+        .body("learnings", hasSize(1))
+        .body("learnings[0].text", equalTo("GitHub PR review threads are flat."))
+        .body(
+            "learnings[0].sourceUrl",
+            equalTo("https://github.com/owner/repo/pull/159#discussion_r1"))
+        .body("learnings[0].active", equalTo(false))
+        .body("learnings[0].retractedBy", equalTo("admin"));
   }
 
   @Test

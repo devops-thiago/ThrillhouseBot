@@ -84,6 +84,25 @@ class TriggerDetectorTest {
   }
 
   @Test
+  void shouldDetectTheLearningsCommands() {
+    assertEquals(CommentCommand.LEARNINGS, detector.detectCommand("/learnings"));
+    assertEquals(CommentCommand.LEARNINGS, detector.detectCommand("@thrillhousebot learnings"));
+    assertEquals(CommentCommand.FORGET, detector.detectCommand("/forget 12"));
+    assertEquals(CommentCommand.FORGET, detector.detectCommand("@thrillhousebot forget L12"));
+    assertEquals(CommentCommand.REMEMBER, detector.detectCommand("/remember threads are flat"));
+    assertEquals(
+        CommentCommand.REMEMBER, detector.detectCommand("@thrillhousebot remember use UTC"));
+    assertEquals(CommentCommand.NONE, detector.detectCommand("I will remember that"));
+  }
+
+  @Test
+  void rememberWinsOverACommandNamedInItsText() {
+    assertEquals(
+        CommentCommand.REMEMBER,
+        detector.detectCommand("/remember never /pause or /review from a test"));
+  }
+
+  @Test
   void shouldNotConfuseSimilarCommandWords() {
     // /resume and /resolve must not match the /review pattern, and vice versa.
     assertEquals(CommentCommand.RESUME, detector.detectCommand("/resume"));

@@ -703,6 +703,39 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
+  void theLearningsSectionIsChargedToTheReviewCallsSharedOverhead() {
+    // #38: the fenced learnings list rides every review call's trailing guidance, so it must
+    // shrink the diff budget exactly like the other shared sections.
+    var f1 = file("dir/f1.java", 5, patch(5));
+    var f2 = file("dir/f2.java", 5, patch(5));
+    var overhead =
+        tokenCounter.estimateTokens(
+            PrReviewPrompts.SYSTEM
+                + PrReviewPrompts.USER
+                + PromptTemplateEscaper.fenceForBudgeting()
+                + "ctx"
+                + "base"
+                + "s"
+                + "t");
+    budget(overhead + sectionTokens(f1) + sectionTokens(f2) + 30);
+    var without = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", "");
+    var learnings =
+        ReviewPromptAssembler.learningsSection(
+            "- [L1] Convention on the whole repository — @m, PR #1:\n  "
+                + "threads are flat ".repeat(200));
+    var with = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", learnings);
+
+    var plain = planner.plan(List.of(f1, f2), without);
+    var withLearnings = planner.plan(List.of(f1, f2), with);
+
+    assertEquals(1, plain.batches().size(), "without the section both files fit one call");
+    assertTrue(plain.omittedFiles().isEmpty());
+    assertFalse(
+        withLearnings.batches().size() == 1 && withLearnings.omittedFiles().isEmpty(),
+        "the section's tokens came off the diff budget");
+  }
+
+  @Test
   void aCallAllowanceOfOneLeavesNoCallForTheSummary() {
     // #664: every review ends with the summary call, so both lanes reserve it; only the allowance
     // of one — the smallest the validator accepts — cannot hold the review call and the summary.

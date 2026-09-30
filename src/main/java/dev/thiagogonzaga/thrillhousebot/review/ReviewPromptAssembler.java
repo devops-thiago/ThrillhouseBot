@@ -86,6 +86,20 @@ public class ReviewPromptAssembler {
       ReviewContextLoader.ReviewContext ctx,
       ReviewOrchestrator.ReviewRequest req,
       String ciFailures) {
+    return assemble(ctx, req, ciFailures, "");
+  }
+
+  /**
+   * Assembles the prompt inputs with the opt-in CI-failure section (#59) and the opt-in learnings
+   * section (#38): {@code learnings} is the unfenced list {@link ReviewLearnings#promptSection}
+   * built, or blank. Both ride the review call's trailing guidance, so every batch carries them and
+   * the planner counts them in the shared overhead with the rest of that slot.
+   */
+  AiReviewService.PromptInputs assemble(
+      ReviewContextLoader.ReviewContext ctx,
+      ReviewOrchestrator.ReviewRequest req,
+      String ciFailures,
+      String learnings) {
     String fencedDiff = PromptTemplateEscaper.fence(ctx.diff());
     String fencedStack = PromptTemplateEscaper.fence(ctx.projectStack());
     String labelGuidance = PrLabeler.buildLabelGuidance(ctx.repoLabels(), labeler.allowNewLabels());
@@ -111,7 +125,8 @@ public class ReviewPromptAssembler {
                         heuristicFailureModesSection(ctx.diff()),
                         combineSections(
                             patchCoverageSection(ctx.patchCoverage()),
-                            ciFailuresSection(ciFailures))))),
+                            combineSections(
+                                ciFailuresSection(ciFailures), learningsSection(learnings)))))),
             // Global instructions first, then the scopes that matched a file in this PR — the
             // scoped blocks read as refinements of the project-wide rules, not replacements.
             combineSections(
@@ -219,6 +234,19 @@ public class ReviewPromptAssembler {
       return "";
     }
     return PrReviewPrompts.CI_FAILURES_REQUEST + "\n\n" + PromptTemplateEscaper.fence(ciFailures);
+  }
+
+  /**
+   * The learnings guidance plus the list itself (#38) — empty when the feature is off or nothing
+   * the repository remembers is relevant to this pull request. Every entry is a maintainer's own
+   * words, so the list is fenced and framed as data, and the guidance travels with it or not at
+   * all.
+   */
+  static String learningsSection(String learnings) {
+    if (learnings == null || learnings.isBlank()) {
+      return "";
+    }
+    return PrReviewPrompts.LEARNINGS_REQUEST + "\n\n" + PromptTemplateEscaper.fence(learnings);
   }
 
   /** Joins two optional prompt sections with a blank line, dropping any that are blank. */
