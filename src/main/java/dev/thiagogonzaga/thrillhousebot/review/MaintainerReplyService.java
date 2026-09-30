@@ -259,7 +259,7 @@ public class MaintainerReplyService {
     return "Clearing a finding takes write access on this repository, so nothing will be cleared"
         + " by that comment. Ask someone with write access to post the same `@"
         + botIdentity.primaryMention()
-        + " resolved path/to/File.java:42 — <title>` directive.";
+        + " resolved <path>:<line> — <title>` directive.";
   }
 
   /**
@@ -296,7 +296,7 @@ public class MaintainerReplyService {
     return "Declining a finding takes write access on this repository, so nothing will be declined"
         + " by that comment. Ask someone with write access to post the same `@"
         + botIdentity.primaryMention()
-        + " declined path/to/File.java:42 — <title>` directive.";
+        + " declined <path>:<line> — <title>` directive.";
   }
 
   private void handleMention(String auth, ReplyTask task) {

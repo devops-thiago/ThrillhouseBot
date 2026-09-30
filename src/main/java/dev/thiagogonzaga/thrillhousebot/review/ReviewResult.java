@@ -477,6 +477,17 @@ public record ReviewResult(
   private static final String UNRESOLVED_PREVIOUS_SUFFIX =
       " previous finding(s) remain unresolved — fix them, or reply on their review thread with why"
           + " they are deferred. A finding listed only under \"Things to double-check\" has no"
+          + " thread: clear it by commenting `@thrillhousebot resolved <path>:<line> — <the"
+          + " finding's title>` on this PR, with the path and line the summary prints for it.";
+
+  /**
+   * The wording every release from #548 until #918 emitted: the same sentence with a Java-shaped
+   * example locator, which read as a real file on every pull request in another language. Kept
+   * verbatim for the same reason as {@link #UNRESOLVED_PREVIOUS_SUFFIX_LEGACY}.
+   */
+  private static final String UNRESOLVED_PREVIOUS_SUFFIX_EXAMPLE_PATH =
+      " previous finding(s) remain unresolved — fix them, or reply on their review thread with why"
+          + " they are deferred. A finding listed only under \"Things to double-check\" has no"
           + " thread: clear it by commenting `@thrillhousebot resolved path/to/File.java:42 —"
           + " <the finding's title>` on this PR.";
 
@@ -511,6 +522,7 @@ public record ReviewResult(
     var stripped = text.strip();
     return stripped.startsWith(UNRESOLVED_PREVIOUS_PREFIX)
         && (stripped.endsWith(UNRESOLVED_PREVIOUS_SUFFIX)
+            || stripped.endsWith(UNRESOLVED_PREVIOUS_SUFFIX_EXAMPLE_PATH)
             || stripped.endsWith(UNRESOLVED_PREVIOUS_SUFFIX_LEGACY));
   }
 

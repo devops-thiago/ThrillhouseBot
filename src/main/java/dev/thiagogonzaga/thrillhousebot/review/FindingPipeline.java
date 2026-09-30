@@ -684,10 +684,17 @@ public class FindingPipeline {
         || Throwables.findCause(failure, InterruptedException.class).isPresent();
   }
 
-  /** Persists and returns the refined findings/statuses under the given (possibly null) summary. */
+  /**
+   * Persists and returns the refined findings/statuses under the given (possibly null) summary —
+   * the one exit every lane and every degradation takes, so it is where the prompt's own labels are
+   * removed from what the model wrote (#918): the stored round then matches what is posted, and the
+   * next round's previous findings are read back clean.
+   */
   private ReviewResponse persistWithSummary(
       ReviewSession session, ReviewResponse refined, ReviewResponse.Summary summary) {
-    var merged = new ReviewResponse(refined.findings(), refined.previousFindingsStatus(), summary);
+    var merged =
+        PromptLabelScrubber.scrub(
+            new ReviewResponse(refined.findings(), refined.previousFindingsStatus(), summary));
     persistAiResponse(session, merged);
     return merged;
   }

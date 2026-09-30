@@ -18,6 +18,11 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -449,7 +454,7 @@ class PrReviewPromptsContentTest {
         "an ordinary local change must not be turned into a data-flow essay");
     assertContains(
         PrReviewPrompts.CORE_SELF_CHECK,
-        "producer→consumer contract claim (dimension 9) must quote BOTH ends",
+        "producer→consumer contract claim must quote BOTH ends",
         "the self-check must require both ends quoted before a contract claim is emitted");
     assertContains(
         PrReviewPrompts.CORE_SELF_CHECK,
@@ -462,7 +467,7 @@ class PrReviewPromptsContentTest {
     String sys = PrReviewPrompts.CORE_SELF_CHECK;
     assertContains(
         sys,
-        "does not apply to a producer→consumer contract claim (dimension 9)",
+        "does not apply to a producer→consumer contract claim, whose",
         "the same-enclosing-unit self-check must exempt a dimension-9 claim (audit F4)");
     assertContains(
         sys,
@@ -475,7 +480,7 @@ class PrReviewPromptsContentTest {
     String sys = FindingVerifierPrompts.CARVE_OUT_PRODUCER_CONSUMER;
     assertContains(
         sys,
-        "A producer→consumer contract finding (dimension 9)",
+        "A producer→consumer contract finding — one tracing a value",
         "the verifier must judge a dimension-9 producer→consumer finding on its own terms (audit F4)");
     assertContains(
         sys,
@@ -513,7 +518,7 @@ class PrReviewPromptsContentTest {
     String sys = PrReviewPrompts.CORE_FINDING_FIELDS_AND_SEVERITY;
     assertContains(
         sys,
-        "ask for that level of detail, or it is a config-key documentation gap under",
+        "ask for that level of detail, or it is a config-key documentation gap.",
         "the 'prefer omitting' low-severity clause must except a dimension-10 doc gap (audit F5)");
   }
 
@@ -522,7 +527,7 @@ class PrReviewPromptsContentTest {
     String sys = PrReviewPrompts.CORE_FINDING_FIELDS_AND_SEVERITY;
     assertContains(
         sys,
-        "a config-key documentation gap under dimension 10",
+        "So is a config-key documentation gap:",
         "the low-severity nitpick exclusion must carve out config-key documentation gaps (#109)");
     assertContains(
         sys,
@@ -539,7 +544,7 @@ class PrReviewPromptsContentTest {
         "the dimension must exclude prose-style omissions from the carve-out");
     assertContains(
         sys,
-        "config-key documentation-completeness claim (dimension 10) must quote",
+        "config-key documentation-completeness claim must quote",
         "a self-check must require both the documented line and the definition to be quoted");
     assertContains(
         sys,
@@ -779,7 +784,7 @@ class PrReviewPromptsContentTest {
     String sys = PrReviewPrompts.DIMENSION_COMMENT_CONTRADICTS_CODE;
     assertContains(
         sys,
-        "4. COMMENT CONTRADICTS CODE",
+        "- COMMENT CONTRADICTS CODE: a comment that states",
         "dimension 4 must lead with the contradiction claim class, not the comment-style list");
     assertContains(
         sys,
@@ -1147,7 +1152,7 @@ class PrReviewPromptsContentTest {
     // Precision came in at zero false positives; each widened class carries its own self-check.
     assertContains(
         sys,
-        "A comment-contradiction claim (dimension 4) must quote the comment and the code line",
+        "A comment-contradiction claim must quote the comment and the code line",
         "a comment-contradiction claim must quote both halves (#537)");
     assertContains(
         sys,
@@ -1155,7 +1160,7 @@ class PrReviewPromptsContentTest {
         "a terse or unshown comment must not become a contradiction claim (#537)");
     assertContains(
         sys,
-        "An algorithmic-complexity claim (dimension 5) must quote both levels from the diff",
+        "An algorithmic-complexity claim must quote both levels from the diff",
         "a complexity claim must quote the outer loop and the inner scan (#537)");
     assertContains(
         sys,
@@ -1500,5 +1505,69 @@ class PrReviewPromptsContentTest {
         PrReviewPrompts.DIAGRAM_REQUEST,
         "components and calls that material names",
         "the diagram must be limited to components its material names");
+  }
+
+  /**
+   * #918: a model shown numbered or named guidance blocks cites them back — "Dimension 7
+   * artifact-name mismatch", "Comment-contradiction (dimension 4)" — in findings a maintainer
+   * reads. No prompt the model sees may number its blocks or cite one by number, in any routing.
+   */
+  @Test
+  void noModelVisiblePromptNumbersItsGuidanceBlocks() {
+    var numbered =
+        Pattern.compile("(?i)\\bdimensions?\\s+\\d|^\\s*\\d+\\.\\s+[A-Z]{3}", Pattern.MULTILINE);
+    var prompts =
+        new ArrayList<>(
+            List.of(
+                PrReviewPrompts.SYSTEM,
+                PrReviewPrompts.USER,
+                PrReviewPrompts.SUMMARY_SYSTEM,
+                PrReviewPrompts.SUMMARY_USER,
+                PrReviewPrompts.ROUTED_OUT_NOTE,
+                PrReviewPrompts.BUG_FIX_EFFICACY_REQUEST,
+                PrReviewPrompts.MOCK_FIDELITY_REQUEST,
+                PrReviewPrompts.PATCH_COVERAGE_REQUEST,
+                PrReviewPrompts.CI_FAILURES_REQUEST,
+                PrReviewPrompts.LEARNINGS_REQUEST,
+                PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST,
+                FindingVerifierPrompts.SYSTEM,
+                FindingVerifierPrompts.USER));
+    for (var dimension : ReviewDimension.values()) {
+      var alone = EnumSet.of(dimension);
+      prompts.add(PrReviewPrompts.reviewSystemPrompt(alone));
+      prompts.add(FindingVerifierPrompts.verifierSystemPrompt(alone));
+    }
+    prompts.add(PrReviewPrompts.reviewSystemPrompt(Set.of()));
+    for (var prompt : prompts) {
+      var match = numbered.matcher(prompt);
+      var found = match.find();
+      assertFalse(found, () -> "numbered guidance label in a prompt: \"" + match.group() + "\"");
+    }
+  }
+
+  /** #918: the explicit rule behind the unnumbered headings, and its reason. */
+  @Test
+  void reviewPromptForbidsCitingItsOwnGuidanceInAFinding() {
+    String sys = PrReviewPrompts.CORE_FINDING_FIELDS_AND_SEVERITY;
+    assertContains(
+        sys,
+        "its readers have never seen them, so\nnever name, number or quote them",
+        "a finding must not cite the prompt's own blocks (#918)");
+    assertContains(
+        sys,
+        "no heading or section names\nof these instructions",
+        "section names are covered, not only numbers (#918)");
+    assertContains(
+        sys,
+        "\"which this finding must quote\"",
+        "restating the prompt's own rule is named as a leak (#918)");
+    assertContains(
+        sys,
+        "no example path, name or value taken from these\ninstructions",
+        "an example from the prompt must not be echoed as if it were the PR's (#918)");
+    assertContains(
+        sys,
+        "the way a reader of the pull request knows it",
+        "a grounded finding names its source as the reader knows it, not the prompt's section");
   }
 }
