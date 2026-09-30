@@ -345,6 +345,30 @@ class DescriptionGapCarryoverTest {
     }
 
     @Test
+    void aKeyThatPrefixesAnotherFindsItsOwnSection() {
+      // "#12" is a prefix of "#123", rendered first; #12 has no title, so its heading ends the
+      // line.
+      var section =
+          """
+          Issues this pull request is linked to: #123, #12
+
+          ### Issue #123: Archive size
+          - [ ] refuse archives larger than 64 MiB when unpacking
+          ### Issue #12
+          - [ ] reject request bodies over the limit with 413
+          """;
+      var gap = "Linked issue #9: reject request bodies over the limit with 413 — no check.";
+
+      assertEquals(
+          List.of(gap.replace("#9", "#12")),
+          DescriptionGapCarryover.withLinkedIssueNumbers(List.of(gap), section));
+      var archive = "Linked issue #9: refuse archives larger than 64 MiB — no check.";
+      assertEquals(
+          List.of(archive.replace("#9", "#123")),
+          DescriptionGapCarryover.withLinkedIssueNumbers(List.of(archive), section));
+    }
+
+    @Test
     void withSeveralLinkedAndNoClearMatchEveryLinkedIssueIsNamed() {
       var gap = "Linked issue #9: documentation — nothing added.";
 

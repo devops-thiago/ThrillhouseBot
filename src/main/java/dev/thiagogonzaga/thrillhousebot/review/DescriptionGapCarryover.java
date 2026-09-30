@@ -399,11 +399,16 @@ final class DescriptionGapCarryover {
 
   /** The part of the linked-issue section under {@code key}'s own heading; "" when absent. */
   private static String issueSection(String key, String linkedIssues) {
-    var heading = "\n" + TicketContextResolver.ISSUE_HEADING + key;
-    var start = linkedIssues.indexOf(heading);
-    if (start < 0) {
+    // The key must end the heading's key: a titled heading goes on with ':', an untitled one ends
+    // the line. A bare prefix search would take "#12" to "#123: …".
+    var heading =
+        Pattern.compile(
+                "\n" + Pattern.quote(TicketContextResolver.ISSUE_HEADING + key) + "(?=[:\n]|$)")
+            .matcher(linkedIssues);
+    if (!heading.find()) {
       return "";
     }
+    var start = heading.start();
     var end = linkedIssues.indexOf("\n" + TicketContextResolver.ISSUE_HEADING, start + 1);
     return linkedIssues.substring(start, end < 0 ? linkedIssues.length() : end);
   }
