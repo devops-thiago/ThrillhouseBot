@@ -330,6 +330,21 @@ class DescriptionGapCarryoverTest {
     }
 
     @Test
+    void anIssueScoringBelowTyingLeadersIsNotNamed() {
+      // #120 and #124 both carry the criterion's words; #122, between them, carries none of them.
+      var three =
+          LINKED_TWO.replace("#120, #122", "#120, #122, #124")
+              + "### Issue #124: Upload limits again\n"
+              + "- [ ] reject request bodies over the limit with 413\n";
+      var gap = "Linked issue #9: reject request bodies over the limit with 413 — no check.";
+
+      assertEquals(
+          List.of(
+              "Linked issue #120 or #124: reject request bodies over the limit with 413 — no check."),
+          DescriptionGapCarryover.withLinkedIssueNumbers(List.of(gap), three));
+    }
+
+    @Test
     void withSeveralLinkedAndNoClearMatchEveryLinkedIssueIsNamed() {
       var gap = "Linked issue #9: documentation — nothing added.";
 

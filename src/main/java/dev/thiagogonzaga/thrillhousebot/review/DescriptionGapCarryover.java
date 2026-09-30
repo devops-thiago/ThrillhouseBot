@@ -376,25 +376,25 @@ final class DescriptionGapCarryover {
 
   /**
    * The linked issue whose part of the section shares the most content words with {@code
-   * criterion}, or every key joined with "or" when no single one leads.
+   * criterion}; when several share that most, all of those joined with "or" (every key, when none
+   * shares any). An issue scoring below the leaders is never named.
    */
   private static String closestIssue(String criterion, List<String> keys, String linkedIssues) {
     var words = SummarySurfaceDeduplicator.claim(criterion).wordSet();
-    String best = null;
-    var bestScore = 0L;
-    var tied = false;
+    var leaders = new ArrayList<String>();
+    var bestScore = -1L;
     for (var key : keys) {
       var issueWords = SummarySurfaceDeduplicator.claim(issueSection(key, linkedIssues)).wordSet();
       var score = words.stream().filter(issueWords::contains).count();
       if (score > bestScore) {
-        best = key;
+        leaders.clear();
         bestScore = score;
-        tied = false;
-      } else if (score == bestScore) {
-        tied = true;
+      }
+      if (score == bestScore) {
+        leaders.add(key);
       }
     }
-    return best == null || tied ? String.join(" or ", keys) : best;
+    return String.join(" or ", leaders);
   }
 
   /** The part of the linked-issue section under {@code key}'s own heading; "" when absent. */
