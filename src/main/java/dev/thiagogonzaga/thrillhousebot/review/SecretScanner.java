@@ -81,7 +81,7 @@ final class SecretScanner {
                 + TOKEN_END));
     formats.put(
         SecurityRule.SLACK_TOKEN,
-        Pattern.compile(TOKEN_START + "(xox[abposr]-\\d{8,13}-[A-Za-z0-9-]{16,})" + TOKEN_END));
+        Pattern.compile(TOKEN_START + "(xox[abposr]-\\d{1,13}-[A-Za-z0-9-]{16,})" + TOKEN_END));
     formats.put(
         SecurityRule.GOOGLE_API_KEY,
         Pattern.compile(TOKEN_START + "(AIza[0-9A-Za-z_-]{35})" + TOKEN_END));

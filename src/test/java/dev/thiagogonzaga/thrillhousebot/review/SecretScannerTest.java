@@ -64,6 +64,9 @@ class SecretScannerTest {
   void slackToken() {
     var token = fake.slackToken();
     assertSingleHit(SecurityRule.SLACK_TOKEN, token, "slack: " + token);
+    // The versioned shape: a one-digit segment after the prefix.
+    var versioned = "xo" + "xa-2-" + fake.random("0123456789", 13) + "-" + fake.alnum(32);
+    assertSingleHit(SecurityRule.SLACK_TOKEN, versioned, "slack: " + versioned);
   }
 
   @Test
