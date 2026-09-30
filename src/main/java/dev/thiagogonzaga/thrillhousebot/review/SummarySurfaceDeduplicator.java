@@ -183,12 +183,34 @@ final class SummarySurfaceDeduplicator {
     // reduces it to a claim with no words, which matches nothing.
     var candidateClaim = claim(candidate.title());
     for (Finding finding : published) {
-      if (restates(candidateClaim, claimsOf(finding))) {
+      var claims =
+          sameLocation(candidate, finding) ? claimsOf(finding) : List.of(claim(finding.title()));
+      if (restates(candidateClaim, claims)) {
         return Optional.of(finding);
       }
     }
     return Optional.empty();
   }
+
+  /**
+   * Whether two findings flag the same place: the same file and a line within {@value
+   * #SAME_LOCATION_LINES} of each other.
+   *
+   * <p>A bullet's title is weighed against an inline finding's description only there (#951). A
+   * description names far more than its own defect — the config keys a Dockerfile finding lists
+   * while explaining a token, the table a scheduler finding mentions on its way to the poll loop —
+   * so matching a title against it anywhere linked bullets to unrelated findings: a
+   * configuration-doc item "Same issue as" {@code java/Dockerfile:10}, an events-table item "Same
+   * issue as" the poll finding twelve lines away. Away from the bullet's location only a title that
+   * restates the finding's own title links.
+   */
+  private static boolean sameLocation(Finding candidate, Finding published) {
+    return FilePaths.same(candidate.file(), published.file())
+        && Math.abs(candidate.line() - published.line()) <= SAME_LOCATION_LINES;
+  }
+
+  /** How far apart two findings' lines may sit and still flag the same place. */
+  private static final int SAME_LOCATION_LINES = 3;
 
   /**
    * Collapses {@code descriptionGaps} and {@code fileSummaries} against the findings already

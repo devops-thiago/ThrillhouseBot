@@ -30,8 +30,10 @@ import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -2880,8 +2882,14 @@ public class FollowUpAnalyzer {
    *
    * <p>The thread is located as the approve backstop locates it ({@link #rootCommentId}): the
    * finding's own {@code finding=N} marker in its round with its own title in the header, and the
-   * title scan only for pre-marker comments. A finding that never got a thread (a summary-only
-   * finding) is not guarded here; nothing would be duplicated on the diff.
+   * title scan only for pre-marker comments.
+   *
+   * <p>A prior "Things to double-check" item ({@link #isListedOnly}) has no thread but is still
+   * open on the summary, so restating it there again counts one defect twice (#951). A new finding
+   * that would itself be listed there and {@link #duplicatesOpenThread duplicates} such a prior is
+   * dropped the same way. One that would post inline is kept: a re-raise is the only way such a
+   * finding can get a thread, and the prior copy it restates at no lower severity leaves the open
+   * set instead ({@link #replacedPriors}).
    *
    * @param priorAiResponses every completed prior round's parsed response, newest first
    */
@@ -2895,31 +2903,36 @@ public class FollowUpAnalyzer {
     if (response.findings().isEmpty()
         || priorAiResponses == null
         || priorAiResponses.isEmpty()
-        || inlineComments.isEmpty()
         || lineResolver == null) {
       return response;
     }
     var replay = replayRounds(toChronological(priorAiResponses));
     closeAddressed(replay.open(), replay.reportedRound(), response.previousFindingsStatus());
-    var threaded =
-        replay.open().values().stream()
-            .filter(prior -> isStillPresent(prior.finding(), lineResolver, renameTargets))
-            .filter(
-                prior ->
-                    rootCommentId(prior.finding(), prior.id(), inlineComments, botIdentity) != null)
-            .map(OpenFinding::finding)
-            .toList();
+    var threaded = new ArrayList<ReviewResponse.Finding>();
+    var listed = new ArrayList<ReviewResponse.Finding>();
+    for (var prior : replay.open().values()) {
+      if (!isStillPresent(prior.finding(), lineResolver, renameTargets)) {
+        continue;
+      }
+      if (rootCommentId(prior.finding(), prior.id(), inlineComments, botIdentity) != null) {
+        threaded.add(prior.finding());
+      } else if (isListedOnly(prior.finding())) {
+        listed.add(prior.finding());
+      }
+    }
     var kept = new ArrayList<ReviewResponse.Finding>();
     for (var finding : response.findings()) {
       var duplicateOf =
-          threaded.stream().filter(prior -> duplicatesOpenThread(finding, prior)).findFirst();
+          Stream.concat(threaded.stream(), isListedOnly(finding) ? listed.stream() : Stream.empty())
+              .filter(prior -> duplicatesOpenThread(finding, prior))
+              .findFirst();
       if (duplicateOf.isEmpty()) {
         kept.add(finding);
         continue;
       }
       Log.infof(
           "Dropping re-raised finding '%s' (%s:%d) — the prior finding '%s' (%s:%d) is still open"
-              + " on its own review thread",
+              + " on its own review thread or in the summary",
           LogSafe.oneLine(finding.title()),
           LogSafe.oneLine(finding.file()),
           finding.line(),
@@ -2934,6 +2947,106 @@ public class FollowUpAnalyzer {
         kept,
         response.previousFindingsStatus(),
         FindingVerificationService.recount(response.summary(), kept));
+  }
+
+  /**
+   * The prior "Things to double-check" items ({@link #isListedOnly}) that a later finding replaced
+   * (#951), by identity: each such item a round raised that a finding of a later round, or of
+   * {@code current}, {@link #replacesUnthreaded replaces}.
+   *
+   * <p>An item listed only under "Things to double-check" can get a thread only by being raised
+   * again, and a later round that raises it inline — the verifier now confident enough to post it,
+   * or the model rating it higher — promotes it. The two are one defect: the later copy is the one
+   * the pull request shows on the diff, and it is the one counted, so the earlier copy leaves the
+   * open set. Before this, both were listed and counted, and the summary cross-referenced the
+   * double-check copy to the inline one it duplicated. A later copy that is listed too replaces it
+   * the same way, so a restatement a round raised before the guard dropped such duplicates ({@link
+   * #withoutOpenThreadDuplicates}) is counted once from then on.
+   *
+   * <p>A finding that posted inline is never replaced: its thread stays open until something closes
+   * it, and the guard keeps a restatement of it from being posted at all.
+   *
+   * @param priorAiResponses every completed prior round's parsed response, newest first
+   * @param current this round's findings
+   */
+  public static Set<ReviewResponse.Finding> replacedPriors(
+      List<ReviewResponse> priorAiResponses, List<ReviewResponse.Finding> current) {
+    Set<ReviewResponse.Finding> replaced = Collections.newSetFromMap(new IdentityHashMap<>());
+    if (priorAiResponses == null) {
+      return replaced;
+    }
+    var chrono = toChronological(priorAiResponses);
+    for (var r = 0; r < chrono.size(); r++) {
+      if (chrono.get(r) == null) {
+        continue;
+      }
+      var later = laterFindings(chrono, r, current);
+      for (var prior : chrono.get(r).findings()) {
+        if (isListedOnly(prior)
+            && later.stream().anyMatch(finding -> replacesUnthreaded(finding, prior))) {
+          replaced.add(prior);
+        }
+      }
+    }
+    return replaced;
+  }
+
+  /**
+   * Whether a finding is published only as a "Things to double-check" item, with no review thread
+   * ({@link Finding#postsInline} false).
+   */
+  private static boolean isListedOnly(ReviewResponse.Finding finding) {
+    return !Finding.fromAiResponse(finding).postsInline();
+  }
+
+  /** The findings every round after {@code round} raised, then {@code current}. */
+  private static List<ReviewResponse.Finding> laterFindings(
+      List<ReviewResponse> chrono, int round, List<ReviewResponse.Finding> current) {
+    var later = new ArrayList<ReviewResponse.Finding>();
+    for (var r = round + 1; r < chrono.size(); r++) {
+      if (chrono.get(r) != null) {
+        later.addAll(chrono.get(r).findings());
+      }
+    }
+    later.addAll(current);
+    return later;
+  }
+
+  /**
+   * Whether {@code finding} replaces {@code prior}, an earlier double-check item (#951): it
+   * restates it — the summary's exact identity ({@link PrSummaryGenerator#reRaises}) or the
+   * tolerant {@link #isSameFinding} — at no lower severity. A less severe restatement does not
+   * replace it: the prior says more, and it stays listed.
+   */
+  static boolean replacesUnthreaded(ReviewResponse.Finding finding, ReviewResponse.Finding prior) {
+    var raised = Finding.fromAiResponse(finding);
+    var earlier = Finding.fromAiResponse(prior);
+    return (PrSummaryGenerator.reRaises(raised, earlier) || isSameFinding(finding, prior))
+        && raised.risk().compareTo(earlier.risk()) <= 0;
+  }
+
+  /**
+   * {@code statuses} without the {@code unresolved} entries naming a finding in {@code replaced}
+   * (#951): the finding that replaced it is counted in its place, so counting both listed one
+   * defect twice. Every other entry is kept, in order.
+   *
+   * @param previous the effective previous round's findings, the id space of {@code statuses}
+   */
+  public static List<ReviewResponse.PreviousFindingStatus> withoutReplaced(
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      Set<ReviewResponse.Finding> replaced) {
+    if (replaced.isEmpty()) {
+      return statuses;
+    }
+    return statuses.stream()
+        .filter(
+            status ->
+                !STATUS_UNRESOLVED.equalsIgnoreCase(status.status())
+                    || status.id() < 1
+                    || status.id() > previous.size()
+                    || !replaced.contains(previous.get(status.id() - 1)))
+        .toList();
   }
 
   /**

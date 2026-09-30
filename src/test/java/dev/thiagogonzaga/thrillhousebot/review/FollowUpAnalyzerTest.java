@@ -4841,4 +4841,54 @@ class FollowUpAnalyzerTest {
                 () -> "+counter.bump();")
             .isEmpty());
   }
+
+  // #951: double-check items a later finding replaced.
+
+  private static final ReviewResponse.Finding LISTED =
+      new ReviewResponse.Finding(
+          "medium", "low", "src/A.java", 10, "Possible null user before logging", "d", null, null);
+
+  private static final ReviewResponse.Finding LISTED_INLINE =
+      new ReviewResponse.Finding(
+          "high", "high", "src/A.java", 10, "Possible null user before logging", "d", null, null);
+
+  @Test
+  void replacedPriorsNamesOnlyListedItemsALaterFindingRestates() {
+    var inline =
+        new ReviewResponse.Finding(
+            "medium", "high", "src/B.java", 5, "Missing null check", "may NPE", null, null);
+    var roundOne = new ReviewResponse(List.of(LISTED, inline), List.of(), null);
+    var lessSevere =
+        new ReviewResponse.Finding(
+            "low", "low", "src/A.java", 10, "Possible null user before logging", "d", null, null);
+
+    assertTrue(FollowUpAnalyzer.replacedPriors(null, List.of(LISTED_INLINE)).isEmpty());
+    assertTrue(
+        FollowUpAnalyzer.replacedPriors(List.of(roundOne), List.of(lessSevere)).isEmpty(),
+        "a less severe restatement says less and replaces nothing");
+    var replaced =
+        FollowUpAnalyzer.replacedPriors(
+            java.util.Arrays.asList(null, roundOne), List.of(LISTED_INLINE, inline));
+    assertEquals(1, replaced.size());
+    assertTrue(replaced.contains(LISTED), "the inline finding restated exactly is never replaced");
+  }
+
+  @Test
+  void withoutReplacedDropsOnlyTheUnresolvedStatusOfAReplacedItem() {
+    var previous = List.of(LISTED, LISTED_INLINE);
+    Set<ReviewResponse.Finding> replaced =
+        java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    replaced.add(LISTED);
+    var statuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there"),
+            new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"),
+            new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there"),
+            new ReviewResponse.PreviousFindingStatus(0, "unresolved", "no id"),
+            new ReviewResponse.PreviousFindingStatus(3, "unresolved", "out of range"));
+
+    assertEquals(
+        statuses.subList(1, 5), FollowUpAnalyzer.withoutReplaced(previous, statuses, replaced));
+    assertSame(statuses, FollowUpAnalyzer.withoutReplaced(previous, statuses, Set.of()));
+  }
 }

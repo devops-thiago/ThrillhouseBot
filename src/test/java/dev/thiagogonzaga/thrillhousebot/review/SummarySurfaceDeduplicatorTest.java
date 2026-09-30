@@ -407,4 +407,98 @@ class SummarySurfaceDeduplicatorTest {
         Optional.empty(),
         SummarySurfaceDeduplicator.restatedBy(titleless, List.of(paginationFinding())));
   }
+
+  // #951: a bullet's title is weighed against an inline finding's description only at its own
+  // location. The inline findings below are ThrillhouseBot-test's, verbatim.
+
+  private static final Finding BED_API_TOKEN =
+      new Finding(
+          RiskLevel.MEDIUM,
+          Confidence.HIGH,
+          "java/Dockerfile",
+          10,
+          "BED_API_TOKEN build arg is persisted into the image and is never read by the service",
+          "The final stage declares `ARG BED_API_TOKEN` (line 9) and then `ENV"
+              + " BED_API_TOKEN=${BED_API_TOKEN}` (line 10). At the same time the wiring is dead: no"
+              + " code in this change reads BED_API_TOKEN. Config.fromEnv has no field for it (only"
+              + " BED_WARDS, BED_HOLD_TIMEOUT, BED_PAGE_SIZE and BED_DB_URL), and the token consumer"
+              + " HttpDirectoryClient does not use the environment at all.",
+          null,
+          null);
+
+  private static final Finding POLL =
+      new Finding(
+          RiskLevel.HIGH,
+          Confidence.HIGH,
+          "scala/src/main/scala/port/Main.scala",
+          58,
+          "First failed poll permanently kills the carrier-feed schedule",
+          "A periodic ScheduledExecutorService task whose execution throws suppresses all"
+              + " subsequent executions, so the very first carrier blip permanently stops polling"
+              + " for the life of the process. After that, GET /containers/{id} and the demurrage"
+              + " endpoint keep serving stale data with no error.",
+          null,
+          null);
+
+  private static Finding bullet(String file, int line, String title) {
+    return new Finding(RiskLevel.MEDIUM, Confidence.LOW, file, line, title, "d", null, null);
+  }
+
+  @Test
+  void aBulletIsNotLinkedToAnUnrelatedFindingWhoseDescriptionMentionsItsSubject() {
+    var holdTimeout =
+        bullet(
+            "java/docs/CONFIG-JAVA.md",
+            8,
+            "BED_HOLD_TIMEOUT documentation is missing its unit and its default");
+    var pageSize =
+        bullet(
+            "java/docs/CONFIG-JAVA.md", 9, "BED_PAGE_SIZE documentation omits its default value");
+    var eventsTable =
+        bullet(
+            "scala/src/main/scala/port/Main.scala",
+            46,
+            "GET /containers/{id}/events reads a table nothing in this service writes or creates");
+
+    assertEquals(
+        Optional.empty(),
+        SummarySurfaceDeduplicator.restatedBy(holdTimeout, List.of(BED_API_TOKEN)));
+    assertEquals(
+        Optional.empty(), SummarySurfaceDeduplicator.restatedBy(pageSize, List.of(BED_API_TOKEN)));
+    assertEquals(
+        Optional.empty(), SummarySurfaceDeduplicator.restatedBy(eventsTable, List.of(POLL)));
+  }
+
+  @Test
+  void aBulletAtTheFindingsOwnLocationIsStillWeighedAgainstItsDescription() {
+    var sameLine =
+        bullet(
+            "scala/src/main/scala/port/Main.scala",
+            56,
+            "GET /containers/{id} keeps serving stale data after a failed poll");
+
+    assertEquals(Optional.of(POLL), SummarySurfaceDeduplicator.restatedBy(sameLine, List.of(POLL)));
+  }
+
+  /** ThrillhouseBot-test#156: the double-check copy of a finding a later round posted inline. */
+  @Test
+  void aBulletRestatingAnInlineFindingsTitleIsLinkedAnywhere() {
+    var inline =
+        new Finding(
+            RiskLevel.HIGH,
+            Confidence.HIGH,
+            "kotlin/src/main/kotlin/pod/Scheduler.kt",
+            23,
+            "dueEpisodes excludes an episode scheduled for exactly now, failing the in-diff test",
+            "desc",
+            null,
+            null);
+    var copy =
+        bullet(
+            "kotlin/src/main/kotlin/pod/Scheduler.kt",
+            40,
+            "Episode scheduled for exactly now is never due, failing the in-diff test");
+
+    assertEquals(Optional.of(inline), SummarySurfaceDeduplicator.restatedBy(copy, List.of(inline)));
+  }
 }
