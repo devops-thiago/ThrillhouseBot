@@ -595,6 +595,8 @@ public class ReviewContextLoader {
     // Findings a round newer than the effective previous round already closed are settled: not
     // re-shown to the model as still open, and never re-superseded downstream (#470).
     var settledPreviousIds = FollowUpAnalyzer.settledPreviousIds(priorAiResponses);
+    // Findings the rounds before the effective one left open are listed too, or a round after one
+    // that raised something new is shown them as never reported and raises them again (#939).
     String previousFindings =
         hasContext
             ? followUpAnalyzer.buildPreviousFindingsContext(
@@ -604,7 +606,15 @@ public class ReviewContextLoader {
                 inlineComments,
                 olderAiResponses,
                 botIdentity,
-                settledPreviousIds)
+                settledPreviousIds,
+                olderAiResponses.isEmpty()
+                    ? List.of()
+                    : FollowUpAnalyzer.openEarlierRoundFindings(
+                        priorAiResponses,
+                        lineResolverSupplier.get(),
+                        VerdictBuilder.renameTargets(files),
+                        inlineComments,
+                        botIdentity))
             : "";
 
     var instructions =

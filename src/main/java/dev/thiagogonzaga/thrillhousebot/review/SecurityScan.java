@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
@@ -179,10 +180,12 @@ public class SecurityScan {
   /**
    * Merges the scan's findings into a refined review response: drops model findings that report the
    * same defect, scrubs every matched secret out of what remains, sets the status of prior scan
-   * findings from the scan, and appends the findings the effective previous round did not already
-   * raise. Returns the response untouched when both halves are off.
+   * findings from the scan, and appends the findings neither the effective previous round nor an
+   * earlier round still open on its own thread (located by {@code botIdentity}'s comments) already
+   * raised. Returns the response untouched when both halves are off.
    */
-  public ReviewResponse merge(ReviewResponse response, ReviewContextLoader.ReviewContext ctx) {
+  public ReviewResponse merge(
+      ReviewResponse response, ReviewContextLoader.ReviewContext ctx, BotIdentity botIdentity) {
     if (!enabled()) {
       return response;
     }
@@ -190,7 +193,13 @@ public class SecurityScan {
         response,
         scan(ctx.reviewableFiles()),
         ctx.previousFindingsList(),
-        FollowUpAnalyzer.settledPreviousIds(ctx.priorAiResponses()));
+        FollowUpAnalyzer.settledPreviousIds(ctx.priorAiResponses()),
+        FollowUpAnalyzer.openEarlierRoundFindings(
+            ctx.priorAiResponses(),
+            ctx.lineResolver(),
+            VerdictBuilder.renameTargets(ctx.files()),
+            ctx.inlineComments(),
+            botIdentity));
   }
 
   ReviewResponse merge(
@@ -198,6 +207,23 @@ public class SecurityScan {
       Result result,
       List<ReviewResponse.Finding> previous,
       Set<Integer> settledIds) {
+    return merge(response, result, previous, settledIds, List.of());
+  }
+
+  /**
+   * As {@link #merge(ReviewResponse, ReviewContextLoader.ReviewContext, BotIdentity)}, with {@code
+   * earlierOpen} the findings rounds older than the effective previous one left open on their own
+   * threads ({@link FollowUpAnalyzer#openEarlierRoundFindings}). A detection that repeats one of
+   * them is not raised again (#939): it was posted in that round, its thread is still open, and the
+   * verdict backstop holds it while its code is present. It has no id in the effective previous
+   * round, so it is neither tracked nor closed here.
+   */
+  ReviewResponse merge(
+      ReviewResponse response,
+      Result result,
+      List<ReviewResponse.Finding> previous,
+      Set<Integer> settledIds,
+      List<ReviewResponse.Finding> earlierOpen) {
     var scanPriors = openScanPriors(previous, settledIds);
     var scrubber =
         secretsEnabled
@@ -205,10 +231,13 @@ public class SecurityScan {
             : Scrubber.of(result.redactions());
     var tracked = new LinkedHashMap<Integer, Detection>();
     var raised = new ArrayList<ReviewResponse.Finding>();
+    int earlier = 0;
     for (var detection : result.detections()) {
       int priorId = priorIdOf(detection.finding(), scanPriors, tracked.keySet());
       if (priorId > 0) {
         tracked.put(priorId, detection);
+      } else if (repeatsEarlierRound(detection.finding(), earlierOpen)) {
+        earlier++;
       } else {
         raised.add(detection.finding());
       }
@@ -229,9 +258,10 @@ public class SecurityScan {
     // A duplicate needs a detection, so these two cover every merge that changed anything.
     if (!result.detections().isEmpty() || !cleared.isEmpty()) {
       Log.infof(
-          "Security scan: raised %d finding(s), kept %d from the previous round open, closed %d"
-              + " no longer detected, dropped %d model duplicate(s)",
-          raised.size(), tracked.size(), cleared.size(), duplicates);
+          "Security scan: raised %d finding(s), kept %d from the previous round open, left %d"
+              + " open from an earlier round, closed %d no longer detected, dropped %d model"
+              + " duplicate(s)",
+          raised.size(), tracked.size(), earlier, cleared.size(), duplicates);
     }
     return new ReviewResponse(
         kept,
@@ -439,6 +469,21 @@ public class SecurityScan {
       }
     }
     return best;
+  }
+
+  /**
+   * Whether a detection repeats a scan finding an earlier round raised and left open: same file,
+   * title and anchor, the key {@link #priorIdOf} matches a previous-round finding by.
+   */
+  private static boolean repeatsEarlierRound(
+      ReviewResponse.Finding detection, List<ReviewResponse.Finding> earlierOpen) {
+    return earlierOpen.stream()
+        .anyMatch(
+            prior ->
+                FilePaths.same(prior.file(), detection.file())
+                    && Objects.equals(prior.title(), detection.title())
+                    && Objects.equals(
+                        stripped(prior.suggestionOld()), stripped(detection.suggestionOld())));
   }
 
   /**

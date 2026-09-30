@@ -155,6 +155,53 @@ class AiReviewServiceTest {
   }
 
   @Test
+  void aRetryAfterAnInvalidResponseSendsTheFirstAttemptsInputsAndFollowUpContextAgain() {
+    // #939: a follow-up round whose first answer was not review JSON is retried with the same
+    // prompt, previous findings included — the retry is not a first review.
+    ReviewSession session = reviewSession();
+    var followUp =
+        new AiReviewService.PromptInputs(
+            "DIFF",
+            "PR_CONTEXT",
+            "BASE",
+            "STACK",
+            "TESTS",
+            "1. [HIGH] src/a.rs:22 — sync fetches only the first page",
+            "REPO_INSTRUCTIONS",
+            "SUMMARY_INSTRUCTIONS",
+            "SYSTEM_PROMPT");
+    when(prReviewer.reviewStream(
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyString()))
+        .thenAnswer(inv -> new FakeTokenStream("not json"))
+        .thenAnswer(inv -> new FakeTokenStream("{\"findings\":[]}"));
+    var parsed = new ReviewResponse(List.of(), List.of(), null);
+    when(parser.parse(anyString()))
+        .thenThrow(new IllegalArgumentException("Model response is not valid review JSON"))
+        .thenReturn(parsed);
+
+    assertSame(parsed, service.review(session, followUp));
+
+    verify(prReviewer, times(2))
+        .reviewStream(
+            "DIFF",
+            "PR_CONTEXT",
+            "BASE",
+            "STACK",
+            "TESTS",
+            "1. [HIGH] src/a.rs:22 — sync fetches only the first page",
+            "REPO_INSTRUCTIONS",
+            "SYSTEM_PROMPT");
+    verifyNoMoreInteractions(prReviewer);
+  }
+
+  @Test
   void shouldUseUnknownErrorReasonOnRetryAfterNullMessageFailure() {
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(
