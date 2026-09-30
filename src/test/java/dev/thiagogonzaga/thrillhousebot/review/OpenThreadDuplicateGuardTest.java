@@ -161,6 +161,51 @@ class OpenThreadDuplicateGuardTest {
   }
 
   @Test
+  void aMoreSevereRestatementIsPostedButTheSameFindingAtAnySeverityIsNot() {
+    // Identity (file, line, title) is PrSummaryGenerator.reRaises, the summary's fold: always a
+    // duplicate. A reworded restatement is one only when it is no more severe than the open thread.
+    var escalated =
+        new ReviewResponse.Finding(
+            "critical",
+            "high",
+            offByOneAgain.file(),
+            offByOneAgain.line(),
+            offByOneAgain.title(),
+            offByOneAgain.description(),
+            offByOneAgain.suggestionOld(),
+            null);
+    var identical =
+        new ReviewResponse.Finding(
+            "critical",
+            "high",
+            offByOne.file(),
+            offByOne.line(),
+            "  " + offByOne.title().toUpperCase(java.util.Locale.ROOT) + " ",
+            "Different words entirely.",
+            null,
+            null);
+    var lower =
+        new ReviewResponse.Finding(
+            "low",
+            "high",
+            offByOneAgain.file(),
+            offByOneAgain.line(),
+            offByOneAgain.title(),
+            offByOneAgain.description(),
+            offByOneAgain.suggestionOld(),
+            null);
+
+    var guarded =
+        guard(new ReviewResponse(List.of(escalated, identical, lower), List.of(), null), threads);
+
+    assertEquals(List.of(escalated), guarded.findings());
+    assertTrue(FollowUpAnalyzer.duplicatesOpenThread(identical, offByOne));
+    assertFalse(FollowUpAnalyzer.duplicatesOpenThread(escalated, offByOne));
+    assertTrue(FollowUpAnalyzer.duplicatesOpenThread(lower, offByOne));
+    assertFalse(FollowUpAnalyzer.duplicatesOpenThread(nan, offByOne));
+  }
+
+  @Test
   void aFindingTheCurrentRoundResolvesIsNotGuarded() {
     // Its thread is about to close, so a finding on the same defect is not a second open thread.
     var response =

@@ -2748,9 +2748,31 @@ public class FollowUpAnalyzer {
   }
 
   /**
+   * Whether a new finding would be a second thread for {@code prior}'s defect (#939). Identity is
+   * the one definition the summary folds a re-raise by, {@link PrSummaryGenerator#reRaises} — the
+   * same file, line and title — and an identical finding is always a duplicate.
+   *
+   * <p>Identity alone does not stop the duplicates this guard exists for: the model rewords a
+   * finding it raises again and anchors it a line or two away, which is what re-posted the threads
+   * on ThrillhouseBot-test#146. So a {@link #isSameFinding restatement} of the prior is a duplicate
+   * too, but only when it is <em>no more severe</em> than the prior. The summary's fold stays exact
+   * because folding a distinct finding there removes an open one from the list (#934); here the
+   * direction that loses something is dropping a finding that says more than the open thread does,
+   * and an escalation — a critical whose text overlaps an open low — is the case where a
+   * restatement may be a distinct, worse defect. That one is posted.
+   */
+  static boolean duplicatesOpenThread(
+      ReviewResponse.Finding finding, ReviewResponse.Finding prior) {
+    var raised = Finding.fromAiResponse(finding);
+    var earlier = Finding.fromAiResponse(prior);
+    return PrSummaryGenerator.reRaises(raised, earlier)
+        || (isSameFinding(finding, prior) && raised.risk().compareTo(earlier.risk()) >= 0);
+  }
+
+  /**
    * Deterministic guard against re-posting a finding that already has an open thread (#939): drops
-   * a new finding that {@link #isSameFinding restates} a prior finding, from any round, that has
-   * its own review thread, that no round closed, and whose code is still in the diff.
+   * a new finding that {@link #duplicatesOpenThread duplicates} a prior finding, from any round,
+   * that has its own review thread, that no round closed, and whose code is still in the diff.
    *
    * <p>The prompt tells the model not to raise a prior finding again, and the scan does not raise
    * what it raised before, but both only ever knew the effective previous round. The guard is the
@@ -2797,7 +2819,7 @@ public class FollowUpAnalyzer {
     var kept = new ArrayList<ReviewResponse.Finding>();
     for (var finding : response.findings()) {
       var duplicateOf =
-          threaded.stream().filter(prior -> isSameFinding(finding, prior)).findFirst();
+          threaded.stream().filter(prior -> duplicatesOpenThread(finding, prior)).findFirst();
       if (duplicateOf.isEmpty()) {
         kept.add(finding);
         continue;
