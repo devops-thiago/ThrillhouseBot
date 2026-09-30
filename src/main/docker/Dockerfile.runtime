@@ -2,7 +2,7 @@
 # Expects target/<TARGETARCH>/*-runner from a buildx multi-arch build.
 # Hardened variant: Dockerfile.runtime-distroless. Local dev: Dockerfile.multistage.
 
-FROM quay.io/quarkus/ubi9-quarkus-micro-image@sha256:7d40f354792f52079213107a50b88a3381da34058b77672925307d9ca377da2e
+FROM quay.io/quarkus/ubi9-quarkus-micro-image@sha256:f268e0a3729d77e62ea811c43a19ed1b2689b9ba9f6cfeb1184d6a3469cf255c
 
 ARG TARGETARCH
 WORKDIR /work/
