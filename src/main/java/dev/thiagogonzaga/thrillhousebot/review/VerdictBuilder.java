@@ -242,6 +242,12 @@ public class VerdictBuilder {
     // reported unresolved twice, or one naming no finding, must not be counted either (#934).
     effectiveStatuses =
         FollowUpAnalyzer.withoutPhantomUnresolved(ctx.previousFindingsList(), effectiveStatuses);
+    // A double-check item that a later round, or this one, raised again at no lower severity is
+    // one defect with its later copy, which is the one counted (#951): the earlier copy leaves
+    // the statuses here and the backstop's holds below.
+    var replaced = FollowUpAnalyzer.replacedPriors(ctx.priorAiResponses(), aiResponse.findings());
+    effectiveStatuses =
+        FollowUpAnalyzer.withoutReplaced(ctx.previousFindingsList(), effectiveStatuses, replaced);
     var effectiveResponse =
         new ReviewResponse(aiResponse.findings(), effectiveStatuses, aiResponse.summary());
     // Lazily resolve the shared DiffLineResolver only when the backstop runs — first reviews and
@@ -249,15 +255,19 @@ public class VerdictBuilder {
     // still share the same memoized supplier when they need it).
     var held =
         ctx.hasContext()
-            ? followUpAnalyzer.heldPreviousFindings(
-                ctx.priorAiResponses(),
-                effectiveStatuses,
-                ctx.inlineComments(),
-                ctx.conversationComments(),
-                ctx.lineResolver(),
-                botIdentity,
-                currentRenameTargets,
-                reviewedCode)
+            ? followUpAnalyzer
+                .heldPreviousFindings(
+                    ctx.priorAiResponses(),
+                    effectiveStatuses,
+                    ctx.inlineComments(),
+                    ctx.conversationComments(),
+                    ctx.lineResolver(),
+                    botIdentity,
+                    currentRenameTargets,
+                    reviewedCode)
+                .stream()
+                .filter(hold -> !replaced.contains(hold.finding()))
+                .toList()
             : List.<FollowUpAnalyzer.HeldPrevious>of();
     var backstopStatuses = held.stream().map(FollowUpAnalyzer.HeldPrevious::status).toList();
     // The summary is edited in place every round (#868), so it must describe the pull request as
