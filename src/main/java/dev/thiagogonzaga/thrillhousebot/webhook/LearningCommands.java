@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.webhook;
 
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.review.MarkdownSafe;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearning;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService;
@@ -23,6 +24,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.List;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,10 +52,6 @@ public class LearningCommands {
   private static final Pattern FORGET_ID =
       Pattern.compile("(?i)\\bforget\\s{1,8}\\[?[L#]?(\\d{1,18})\\]?(?!\\w)");
 
-  /** The command word of {@code /remember} or {@code @<bot> remember}; the text follows it. */
-  private static final Pattern REMEMBER_WORD =
-      Pattern.compile("(?i)(?:^|\\s)(?:/|@[\\w-]{1,64}(?:\\[bot\\])?\\s{1,8})remember\\b");
-
   static final String FORGET_USAGE =
       "Name the learning to retract by its id, e.g. `/forget 12`. `/learnings` lists the ids.";
 
@@ -63,9 +61,22 @@ public class LearningCommands {
 
   private final ReviewLearnings learnings;
 
+  /**
+   * The command word of {@code /remember} or {@code @<bot> remember}; the text follows it. The
+   * mention alternative is built from the bot's own {@link BotIdentity#mentionNames()}, as {@link
+   * TriggerDetector} builds it, so another user's "@alice remember …" never supplies the text.
+   */
+  private final Pattern rememberWord;
+
   @Inject
-  public LearningCommands(ReviewLearnings learnings) {
+  public LearningCommands(ReviewLearnings learnings, BotIdentity botIdentity) {
     this.learnings = learnings;
+    var mentions =
+        botIdentity.mentionNames().stream().map(Pattern::quote).collect(Collectors.joining("|"));
+    this.rememberWord =
+        Pattern.compile(
+            "(?:^|\\s)(?:/|(?<![\\w@])@(?:" + mentions + ")\\s{1,8})remember\\b",
+            Pattern.CASE_INSENSITIVE);
   }
 
   /** Whether the learnings store is switched on for this deployment. */
@@ -170,7 +181,7 @@ public class LearningCommands {
   private String remember(CommentCommandService.CommandContext ctx) {
     var body = bodyOf(ctx);
     // Located where it is not quoted, read from the body itself so inline code in the text stays.
-    var matcher = REMEMBER_WORD.matcher(TriggerDetector.maskQuotedContext(body));
+    var matcher = rememberWord.matcher(TriggerDetector.maskQuotedContext(body));
     var text = matcher.find() ? body.substring(matcher.end()).strip() : "";
     if (text.isEmpty()) {
       return REMEMBER_USAGE;

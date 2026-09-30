@@ -38,6 +38,12 @@ final class LearningText {
    * assignment shape needs eight value characters so "password: yes" in an explanation is not a
    * secret.
    */
+  /**
+   * An assigned value that looks like a secret rather than a word: eight or more characters with at
+   * least one that is not a letter, so "password: required" in an explanation is not refused.
+   */
+  private static final String SECRET_VALUE = "(?=[^\\s'\"]*[^\\sA-Za-z'\"])[^\\s'\"]{8,}";
+
   private static final List<Pattern> CREDENTIAL_SHAPES =
       List.of(
           Pattern.compile("(?i)\\b(?:gh[pousr]_|github_pat_)\\w{4,}"),
@@ -47,11 +53,13 @@ final class LearningText {
           Pattern.compile("\\bxox[abposr]-[\\w-]{8,}"),
           Pattern.compile("\\bsk-(?:ant-|proj-)?[\\w-]{16,}"),
           Pattern.compile("\\bAIza[\\w-]{30,}"),
-          Pattern.compile("(?i)\\bbearer\\s+[\\w.~+/=-]{12,}"),
+          // A token, unlike the word after "bearer" in prose, carries a digit.
+          Pattern.compile("(?i)\\bbearer\\s+(?=[\\w.~+/=-]*\\d)[\\w.~+/=-]{12,}"),
           Pattern.compile(
-              "(?i)\\b(?:password|passwd|secret)\\s{0,4}[:=]\\s{0,4}['\"]?[^\\s'\"]{8,}"),
+              "(?i)\\b(?:password|passwd|secret)\\s{0,4}[:=]\\s{0,4}['\"]?" + SECRET_VALUE),
           Pattern.compile(
-              "(?i)\\b(?:api|access|client)[_-]?(?:key|token|secret)\\s{0,4}[:=]\\s{0,4}['\"]?[^\\s'\"]{8,}"));
+              "(?i)\\b(?:api|access|client)[_-]?(?:key|token|secret)\\s{0,4}[:=]\\s{0,4}['\"]?"
+                  + SECRET_VALUE));
 
   private static final Pattern BLOCKQUOTE_LINE = Pattern.compile("(?m)^[ \\t]{0,8}>.*$");
   private static final Pattern ANSI_CSI = Pattern.compile("\u001B\\[[0-?]*[ -/]*[@-~]");

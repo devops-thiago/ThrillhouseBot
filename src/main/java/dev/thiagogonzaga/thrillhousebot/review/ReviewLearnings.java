@@ -247,7 +247,11 @@ public class ReviewLearnings {
   static String entry(ReviewLearningService.LearningView learning) {
     var head = new StringBuilder("- [L").append(learning.id()).append("] ");
     if (ReviewLearning.KIND_DECLINE.equals(learning.kind())) {
-      head.append("Declined finding \"").append(learning.findingTitle()).append('"');
+      if (learning.findingTitle() == null || learning.findingTitle().isBlank()) {
+        head.append("Declined an untitled finding");
+      } else {
+        head.append("Declined finding \"").append(learning.findingTitle()).append('"');
+      }
       if (learning.findingRisk() != null) {
         head.append(" (").append(learning.findingRisk()).append(')');
       }

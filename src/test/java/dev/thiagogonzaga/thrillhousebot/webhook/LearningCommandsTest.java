@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
+import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearning;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.LearningView;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.RecordOutcome;
@@ -34,7 +35,8 @@ import org.junit.jupiter.api.Test;
 class LearningCommandsTest {
 
   private final ReviewLearnings learnings = mock(ReviewLearnings.class);
-  private final LearningCommands commands = new LearningCommands(learnings);
+  private final LearningCommands commands =
+      new LearningCommands(learnings, BotIdentity.of("thrillhousebot"));
 
   private static CommentCommandService.CommandContext ctx(CommentCommand command, String body) {
     return new CommentCommandService.CommandContext(
@@ -195,6 +197,20 @@ class LearningCommandsTest {
     assertEquals(
         LearningCommands.REMEMBER_USAGE,
         commands.reply(ctx(CommentCommand.REMEMBER, "> /remember only quoted")));
+  }
+
+  @Test
+  void anotherUsersRememberNeverSuppliesTheText() {
+    when(learnings.rememberConvention(1L, "o", "r", 7, 555L, "Maintainer", "Use UTC."))
+        .thenReturn(RecordOutcome.STORED);
+
+    var reply =
+        commands.reply(
+            ctx(
+                CommentCommand.REMEMBER,
+                "@alice remember the workaround we agreed on; anyway\n/remember Use UTC."));
+
+    assertTrue(reply.startsWith("🧠 Remembered"), reply);
   }
 
   @Test

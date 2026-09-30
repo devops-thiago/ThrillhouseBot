@@ -248,6 +248,41 @@ class ReviewLearningsTest {
         "- [L9] Declined finding \"t\" on a/B.java — @m, PR #2:\n  why",
         ReviewLearnings.entry(riskless));
     assertEquals("", ReviewLearnings.render(List.of()));
+    var untitled =
+        new LearningView(
+            8,
+            ReviewLearning.KIND_DECLINE,
+            null,
+            "low",
+            "a/B.java",
+            "why",
+            2,
+            "u",
+            "m",
+            Instant.EPOCH,
+            true,
+            null,
+            null);
+    assertEquals(
+        "- [L8] Declined an untitled finding (low) on a/B.java — @m, PR #2:\n  why",
+        ReviewLearnings.entry(untitled));
+    assertTrue(
+        ReviewLearnings.entry(
+                new LearningView(
+                    8,
+                    ReviewLearning.KIND_DECLINE,
+                    " ",
+                    null,
+                    null,
+                    "why",
+                    2,
+                    "u",
+                    "m",
+                    Instant.EPOCH,
+                    true,
+                    null,
+                    null))
+            .startsWith("- [L8] Declined an untitled finding on the whole repository"));
   }
 
   // --- capture ---

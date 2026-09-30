@@ -49,6 +49,9 @@ class LearningTextTest {
             "GitHub PR review threads are flat",
             "the password: yes",
             "a bearer token is read from the env",
+            "Endpoints use Bearer authentication with env-provided tokens",
+            "password: required here",
+            "api_key: mandatory",
             "ask-for-review is fine",
             "")) {
       assertFalse(LearningText.containsCredential(prose), prose);
