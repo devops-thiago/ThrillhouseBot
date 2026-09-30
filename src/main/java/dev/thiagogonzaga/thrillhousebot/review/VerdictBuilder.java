@@ -259,7 +259,7 @@ public class VerdictBuilder {
                 currentRenameTargets,
                 reviewedCode)
             : List.<FollowUpAnalyzer.HeldPrevious>of();
-    var backstopUnresolved = held.stream().map(FollowUpAnalyzer.HeldPrevious::status).toList();
+    var backstopStatuses = held.stream().map(FollowUpAnalyzer.HeldPrevious::status).toList();
     // The summary is edited in place every round (#868), so it must describe the pull request as
     // it stands, not only this round: every earlier finding still open, beside the new ones (#917).
     // Taken from the same statuses and holds the gate and the "Still present" count use, one entry
@@ -283,7 +283,7 @@ public class VerdictBuilder {
             reasoningStepDownNote(plan.reasoningStepDown()),
             openPrevious),
         ciEvaluation,
-        backstopUnresolved);
+        backstopStatuses);
   }
 
   /**
@@ -625,14 +625,14 @@ public class VerdictBuilder {
       List<PrSummaryGenerator.ChangedFile> changedFiles,
       List<Finding> unresolvedPrevious,
       CiStatusEvaluator.CiEvaluation ciEvaluation,
-      List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
+      List<ReviewResult.PreviousFindingStatus> backstopStatuses) {
     return buildResult(
         aiResponse,
         isFirstReview,
         diffStats,
         new SummaryInputs(changedFiles, "", "", "", "", "", unresolvedPrevious),
         ciEvaluation,
-        backstopUnresolved);
+        backstopStatuses);
   }
 
   private ReviewResult buildResult(
@@ -641,7 +641,7 @@ public class VerdictBuilder {
       DiffStats diffStats,
       SummaryInputs summaryInputs,
       CiStatusEvaluator.CiEvaluation ciEvaluation,
-      List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
+      List<ReviewResult.PreviousFindingStatus> backstopStatuses) {
     var changedFiles = summaryInputs.changedFiles();
     var offendingCiChecks = ciEvaluation.offendingChecks();
     var ciUnreadable = ciEvaluation.unreadable();
@@ -662,12 +662,14 @@ public class VerdictBuilder {
             ? 0
             : (int) outstanding.stream().filter(blockingStrictness::withheldByConfidence).count();
     // The backstop's findings are already in `outstanding` on the review path (#948): the caller
-    // passes the whole still-open set the summary lists. Its statuses also reach the gate, which
-    // holds APPROVE for a malformed or unmapped status. Keep the toStatuses list as-is on the
-    // common no-backstop path — no ArrayList wrap/copy when there is nothing to append.
+    // passes the whole still-open set the summary lists. Its statuses join the model's for the
+    // counts and the gate below, which keys on the status value alone: its `unresolved` holds hold
+    // APPROVE, and a `justified` standing decline (#947) counts in the table and holds nothing.
+    // Keep the toStatuses list as-is on the common no-backstop path — no ArrayList wrap/copy when
+    // there is nothing to append.
     var previousStatuses =
         mergePreviousStatuses(
-            followUpAnalyzer.toStatuses(aiResponse.previousFindingsStatus()), backstopUnresolved);
+            followUpAnalyzer.toStatuses(aiResponse.previousFindingsStatus()), backstopStatuses);
     if (state == ReviewState.APPROVE && followUpAnalyzer.hasUnresolved(previousStatuses)) {
       state = ReviewState.COMMENT;
     }
@@ -798,12 +800,12 @@ public class VerdictBuilder {
    */
   static List<ReviewResult.PreviousFindingStatus> mergePreviousStatuses(
       List<ReviewResult.PreviousFindingStatus> modelStatuses,
-      List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
-    if (backstopUnresolved == null || backstopUnresolved.isEmpty()) {
+      List<ReviewResult.PreviousFindingStatus> backstopStatuses) {
+    if (backstopStatuses == null || backstopStatuses.isEmpty()) {
       return modelStatuses;
     }
     var merged = new ArrayList<>(modelStatuses);
-    merged.addAll(backstopUnresolved);
+    merged.addAll(backstopStatuses);
     return merged;
   }
 

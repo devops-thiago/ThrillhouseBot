@@ -664,6 +664,40 @@ class SummaryAcrossRoundsTest {
   }
 
   /**
+   * A standing decline's {@code justified} status names no finding, and it must not hold approval:
+   * once everything else is closed, a pull request whose only earlier finding was validly declined
+   * approves, with the decline still counted.
+   */
+  @Test
+  void anEarlierRoundDeclineThatStandsDoesNotHoldApproval() {
+    var roundOne = new ReviewResponse(List.of(RACE), List.of(), null);
+    var roundTwo =
+        new ReviewResponse(
+            List.of(NEW_IN_ROUND_TWO),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+            null);
+    var roundThree =
+        new ReviewResponse(
+            List.of(),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "removed")),
+            null);
+    var threads =
+        List.of(
+            rootComment(101L, RACE, 1),
+            maintainerReply(201L, 101L, WRONG_DECLINE),
+            maintainerReply(202L, 101L, "Still declining: the handler holds a global lock."));
+
+    var result =
+        builder.build(
+            followUp(List.of(roundTwo, roundOne), threads, PATCH), roundThree, CI_CLEAR, plan);
+
+    assertEquals(0, result.unresolvedPreviousCount());
+    assertEquals(1, statusCount(result, "justified"));
+    assertTrue(result.openPreviousFindings().isEmpty());
+    assertEquals(ReviewState.APPROVE, result.reviewState());
+  }
+
+  /**
    * #948: a follow-up whose new findings are all below the blocking bar, while an earlier round's
    * CRITICAL is still open and listed as still present. The verdict is computed over the same open
    * set, so it requests changes rather than ending as a comment.
