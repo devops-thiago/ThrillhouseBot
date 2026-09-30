@@ -4490,4 +4490,60 @@ class FollowUpAnalyzerTest {
         FollowUpAnalyzer.withoutPreviouslyLitigated(
             firstRound, List.of(), List.of(), bothCleared(), BOT_ID));
   }
+
+  private static ReviewResponse.Finding openFinding(int line, String title, String description) {
+    return new ReviewResponse.Finding(
+        "high", "high", "src/Open.java", line, title, description, "anchor" + line + "();", null);
+  }
+
+  @Test
+  void stillOpenFindingsListsTheModelsUnresolvedThenTheBackstopsHoldsOnceEach() {
+    var first = openFinding(10, "Missing null check on the account", "The account may be absent.");
+    var second = openFinding(40, "Retry loop never backs off", "The loop spins on failure.");
+    var third = openFinding(70, "Cache key ignores the tenant", "Two tenants share entries.");
+    var held = openFinding(100, "Timeout is never applied", "The client waits forever.");
+    var restatedHold =
+        openFinding(11, "Missing null check on account", "The account may be absent.");
+    var newFinding = openFinding(71, "Cache key ignores tenant", "Two tenants share entries.");
+
+    var open =
+        FollowUpAnalyzer.stillOpenFindings(
+            List.of(first, second, third),
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(3, "unresolved", "re-raised this round"),
+                new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed"),
+                new ReviewResponse.PreviousFindingStatus(1, "UNRESOLVED", "still there"),
+                new ReviewResponse.PreviousFindingStatus(0, "unresolved", "no such finding"),
+                new ReviewResponse.PreviousFindingStatus(9, "unresolved", "no such finding")),
+            List.of(
+                new FollowUpAnalyzer.HeldPrevious(
+                    new ReviewResult.PreviousFindingStatus(1, "unresolved", "held"), held),
+                new FollowUpAnalyzer.HeldPrevious(
+                    new ReviewResult.PreviousFindingStatus(2, "unresolved", "held"), restatedHold)),
+            List.of(newFinding));
+
+    // The resolved one and the ids naming nothing are gone; the re-raise is listed once, as the
+    // round's own finding; the hold restating a kept finding is not listed twice.
+    assertEquals(List.of(Finding.fromAiResponse(first), Finding.fromAiResponse(held)), open);
+  }
+
+  @Test
+  void heldPreviousFindingsKeepsTheHeldFindingBesideItsStatus() {
+    var prior = analyzer.parsePreviousResponses(List.of(PREVIOUS_JSON));
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    var held =
+        analyzer.heldPreviousFindings(
+            prior, List.of(), List.of(), List.of(), resolver, BOT_ID, Map.of());
+
+    assertEquals(
+        backstopWith(List.of()), held.stream().map(FollowUpAnalyzer.HeldPrevious::status).toList());
+    assertEquals(2, held.size());
+    for (var hold : held) {
+      assertEquals(
+          prior.get(0).findings().get(hold.status().id() - 1),
+          hold.finding(),
+          "the held finding is the one its round-relative id names");
+    }
+  }
 }
