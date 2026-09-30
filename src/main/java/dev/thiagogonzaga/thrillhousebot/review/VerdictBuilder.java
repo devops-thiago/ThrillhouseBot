@@ -327,6 +327,9 @@ public class VerdictBuilder {
           + truncationSuffix;
     }
     boolean approvedDespiteCi = result.reviewState() == ReviewState.APPROVE;
+    // "No new issues found, but CI …" alone read as the whole story on a follow-up round whose
+    // earlier findings are still open (#933); the open count rides along on every held branch.
+    var openSuffix = openPreviousSuffix(result.unresolvedPreviousCount());
     String unreadableSuffix = "";
     if (result.ciUnreadable()) {
       unreadableSuffix =
@@ -348,6 +351,7 @@ public class VerdictBuilder {
               "No new issues found, but %d %s are still pending or failing.",
               result.offendingCiChecks().size(), checkLabel)
           + unreadableSuffix
+          + openSuffix
           + truncationSuffix;
     }
     if (result.ciUnreadable()) {
@@ -356,18 +360,29 @@ public class VerdictBuilder {
       }
       return "No new issues found, but the CI status could not be read — holding approval until it"
           + " can be confirmed."
+          + openSuffix
           + truncationSuffix;
     }
     if (result.truncated()) {
       return "No new issues found, but the diff was too large to review in full ("
           + result.coverageGapBrief()
-          + ") — this is a partial review, so approval is held.";
+          + ") — this is a partial review, so approval is held."
+          + openSuffix;
     }
     var unresolved = result.unresolvedPreviousCount();
     if (unresolved == 0) {
       return PrSummaryGenerator.ZERO_ISSUES_MESSAGE + truncationSuffix;
     }
     return ReviewResult.unresolvedPreviousMessage(unresolved) + truncationSuffix;
+  }
+
+  /**
+   * The still-open clause of a held check-run summary, or an empty string when nothing earlier is
+   * open. The count is {@link ReviewResult#unresolvedPreviousCount()}, the one the review body and
+   * the delta comment state.
+   */
+  private static String openPreviousSuffix(long unresolved) {
+    return unresolved == 0 ? "" : " " + unresolved + " previous finding(s) remain unresolved.";
   }
 
   /**

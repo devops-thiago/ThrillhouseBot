@@ -538,6 +538,18 @@ public record ReviewResult(
       "ThrillhouseBot found no issues in this PR, but the CI status could not be read, so approval"
           + " is held until it can be confirmed.";
 
+  /**
+   * Lead-in of the CI-hold section of a no-new-findings review body when earlier findings are still
+   * open. That body opens with {@link #unresolvedPreviousMessage(long)}, so this one states only
+   * the CI hold: {@link #NO_ISSUES_CI_PENDING_LEAD_IN} says the PR has no issues, which is false
+   * while any finding is open (#933).
+   */
+  static final String CI_PENDING_ALSO_LEAD_IN = "Some checks are also still pending or failed:";
+
+  /** The unreadable-CI sibling of {@link #CI_PENDING_ALSO_LEAD_IN}. */
+  static final String CI_UNREADABLE_ALSO_LEAD_IN =
+      "The CI status could not be read either, so approval is held until it can be confirmed.";
+
   /** Lead-in of {@link #truncationNotice(int, TruncationDetail)}'s partial-review banner. */
   static final String TRUNCATION_NOTICE_LEAD_IN = "> ⚠️ **Large PR — partial review.**";
 
