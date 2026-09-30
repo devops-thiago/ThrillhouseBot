@@ -2043,11 +2043,17 @@ public class FollowUpAnalyzer {
     }
     var comments =
         inlineComments == null ? List.<GitHubReviewClient.PullRequestComment>of() : inlineComments;
+    // Review threads are flat — every reply carries its root's id — so one pass groups them all.
+    var repliesByRoot =
+        comments.stream()
+            .filter(c -> c.inReplyToId() != null)
+            .collect(Collectors.groupingBy(GitHubReviewClient.PullRequestComment::inReplyToId));
     var surviving = new ArrayList<SurvivingDecline>();
     for (int id : new TreeSet<>(justifiedIds)) {
       if (id >= 1 && id <= previous.size()) {
         var finding = previous.get(id - 1);
-        var sources = declineSources(finding, id, comments, conversationComments, botIdentity);
+        var sources =
+            declineSources(finding, id, comments, repliesByRoot, conversationComments, botIdentity);
         if (!sources.isEmpty()
             && sources.stream().allMatch(source -> isRememberable(finding, source.reason()))) {
           surviving.add(survivingDecline(finding, sources));
@@ -2082,13 +2088,13 @@ public class FollowUpAnalyzer {
       ReviewResponse.Finding finding,
       int id,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
+      Map<Long, List<GitHubReviewClient.PullRequestComment>> repliesByRoot,
       List<GitHubCommentClient.IssueComment> conversationComments,
       BotIdentity botIdentity) {
     Long rootId = rootCommentId(finding, id, inlineComments, botIdentity);
     if (rootId != null) {
       var replies =
-          inlineComments.stream()
-              .filter(c -> rootId.equals(c.inReplyToId()))
+          repliesByRoot.getOrDefault(rootId, List.of()).stream()
               .filter(c -> c.user() != null && !botIdentity.matches(c.user().login()))
               .filter(c -> mayHoldWriteAccess(c.authorAssociation()))
               .filter(c -> c.body() != null && !c.body().isBlank())

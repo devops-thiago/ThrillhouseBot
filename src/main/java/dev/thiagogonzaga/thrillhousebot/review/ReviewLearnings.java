@@ -150,24 +150,25 @@ public class ReviewLearnings {
       List<String> changedPaths,
       int maxItems,
       int maxChars) {
-    var paths = changedPaths == null ? List.<String>of() : changedPaths;
+    var paths = changedPaths == null ? Set.<String>of() : new HashSet<>(changedPaths);
     var dirs = new HashSet<String>();
     var extensions = new HashSet<String>();
     for (var path : paths) {
       dirs.add(directoryOf(path));
       extensions.add(extensionOf(path));
     }
+    // Scored once per learning, so the sort compares stored scores instead of re-deriving them.
     var ranked =
         active.stream()
             .filter(l -> !LearningText.containsCredential(l.text()))
-            .filter(l -> relevance(l, paths, dirs, extensions) > 0)
+            .map(l -> new Scored(l, relevance(l, paths, dirs, extensions)))
+            .filter(scored -> scored.score() > 0)
             .sorted(
-                Comparator.comparingInt(
-                        (ReviewLearningService.LearningView l) ->
-                            relevance(l, paths, dirs, extensions))
+                Comparator.comparingInt(Scored::score)
                     .reversed()
                     .thenComparing(
-                        ReviewLearningService.LearningView::createdAt, Comparator.reverseOrder()))
+                        scored -> scored.learning().createdAt(), Comparator.reverseOrder()))
+            .map(Scored::learning)
             .toList();
     var chosen = new ArrayList<ReviewLearningService.LearningView>();
     var used = 0;
@@ -191,9 +192,11 @@ public class ReviewLearnings {
    * still reaches a pull request that changes other Java files, while a decline about a workflow
    * file stays out of a documentation-only change.
    */
+  private record Scored(ReviewLearningService.LearningView learning, int score) {}
+
   static int relevance(
       ReviewLearningService.LearningView learning,
-      List<String> paths,
+      Set<String> paths,
       Set<String> dirs,
       Set<String> extensions) {
     var path = learning.path();

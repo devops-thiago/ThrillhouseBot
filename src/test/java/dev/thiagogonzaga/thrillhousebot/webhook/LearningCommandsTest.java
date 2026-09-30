@@ -176,6 +176,24 @@ class LearningCommandsTest {
   }
 
   @Test
+  void aQuotedOrDocumentedRememberNeverSuppliesTheText() {
+    when(learnings.rememberConvention(1L, "o", "r", 7, 555L, "Maintainer", "Use `UTC` times."))
+        .thenReturn(RecordOutcome.STORED);
+
+    var reply =
+        commands.reply(
+            ctx(
+                CommentCommand.REMEMBER,
+                "> /remember quoted\n```\n/remember fenced\n```\nsee `/remember x`\n"
+                    + "/remember Use `UTC` times."));
+
+    assertTrue(reply.startsWith("🧠 Remembered"), reply);
+    assertEquals(
+        LearningCommands.REMEMBER_USAGE,
+        commands.reply(ctx(CommentCommand.REMEMBER, "> /remember only quoted")));
+  }
+
+  @Test
   void rememberExplainsEveryRefusal() {
     when(learnings.maxPerRepo()).thenReturn(100);
     when(learnings.rememberConvention(1L, "o", "r", 7, 555L, "Maintainer", "secret"))

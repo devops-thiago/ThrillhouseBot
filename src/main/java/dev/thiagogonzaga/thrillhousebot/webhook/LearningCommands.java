@@ -166,7 +166,8 @@ public class LearningCommands {
 
   private String remember(CommentCommandService.CommandContext ctx) {
     var body = bodyOf(ctx);
-    var matcher = REMEMBER_WORD.matcher(body);
+    // Located where it is not quoted, read from the body itself so inline code in the text stays.
+    var matcher = REMEMBER_WORD.matcher(TriggerDetector.maskQuotedContext(body));
     var text = matcher.find() ? body.substring(matcher.end()).strip() : "";
     if (text.isEmpty()) {
       return REMEMBER_USAGE;

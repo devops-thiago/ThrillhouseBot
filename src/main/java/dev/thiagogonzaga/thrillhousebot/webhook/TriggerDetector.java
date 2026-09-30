@@ -126,6 +126,32 @@ public class TriggerDetector {
   }
 
   /**
+   * {@code body} with the same quoted context {@link #stripQuotedContext} removes blanked to spaces
+   * in place, line feeds kept, so an offset into the result is an offset into the body. A command
+   * whose argument is read from the body ({@code /remember}) locates its word here and reads the
+   * argument from the body itself, so a command quoted or documented in the comment never supplies
+   * it.
+   */
+  static String maskQuotedContext(String body) {
+    var masked = blank(FENCED_CODE, body);
+    masked = blank(BLOCKQUOTE_LINE, masked);
+    return blank(INLINE_CODE, masked);
+  }
+
+  private static String blank(Pattern pattern, String text) {
+    var sb = new StringBuilder(text);
+    var matcher = pattern.matcher(text);
+    while (matcher.find()) {
+      for (var i = matcher.start(); i < matcher.end(); i++) {
+        if (sb.charAt(i) != '\n') {
+          sb.setCharAt(i, ' ');
+        }
+      }
+    }
+    return sb.toString();
+  }
+
+  /**
    * Parses the first recognized command from a comment body. Each command matches either its slash
    * form ("/review") or its mention form ("@Thrillhousebot review"). Returns {@link
    * CommentCommand#NONE} when the comment carries no command.
