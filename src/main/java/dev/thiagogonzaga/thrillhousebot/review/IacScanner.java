@@ -97,11 +97,14 @@ final class IacScanner {
   private static final Pattern DENY_EFFECT =
       Pattern.compile("(?i)\"?effect\"?\\s*[=:]\\s*[\"']?deny");
 
+  /**
+   * YAML 1.1, which Kubernetes manifests are parsed as, reads {@code True} and {@code TRUE} too.
+   */
   private static final Pattern PRIVILEGED =
-      Pattern.compile("^\\s*(?:-\\s*)?\"?privileged\"?\\s*:\\s*true\\b");
+      Pattern.compile("^\\s*(?:-\\s*)?\"?privileged\"?\\s*:\\s*(?i:true)\\b");
 
   private static final Pattern HOST_NAMESPACE =
-      Pattern.compile("^\\s*(?:-\\s*)?\"?(?:hostNetwork|hostPID|hostIPC)\"?\\s*:\\s*true\\b");
+      Pattern.compile("^\\s*(?:-\\s*)?\"?(?:hostNetwork|hostPID|hostIPC)\"?\\s*:\\s*(?i:true)\\b");
 
   private static final Pattern ROOT_USER =
       Pattern.compile("(?i)^\\s*USER\\s+(?:root|0)(?::(?:root|0))?\\s*$");
