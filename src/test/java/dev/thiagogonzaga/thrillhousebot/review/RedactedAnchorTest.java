@@ -76,6 +76,20 @@ class RedactedAnchorTest {
   }
 
   @Test
+  void everyRulesRedactedFormIsRecognized() {
+    // The marker's prefix cap is SecretScanner's own, so no rule can show a prefix it misses.
+    var value = fake.alnum(60);
+    for (var rule : SecurityRule.values()) {
+      if (rule.category() != SecurityRule.Category.SECRET || rule == SecurityRule.PRIVATE_KEY) {
+        continue;
+      }
+      var marker =
+          "[redacted: " + SecretScanner.redact(new SecretScanner.Hit(rule, value, null)) + "]";
+      assertTrue(RedactedAnchor.lineMatcher("k = " + marker).test("k = " + value), rule.name());
+    }
+  }
+
+  @Test
   void theMarkerStandsOnlyForAValueOfItsPrefixAndLength() {
     var matcher = RedactedAnchor.lineMatcher("key = \"[redacted: zKXq…, 10 chars]\";");
 

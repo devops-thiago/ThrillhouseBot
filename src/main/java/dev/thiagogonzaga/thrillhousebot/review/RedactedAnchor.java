@@ -43,11 +43,14 @@ final class RedactedAnchor {
 
   /**
    * The two forms the scrub writes: a matched or assigned value's {@link SecretScanner#redact}
-   * form, and the fixed replacement for a private key's base64 body.
+   * form, whose shown prefix is never longer than {@link SecretScanner#REDACTED_PREFIX}, and the
+   * fixed replacement for a private key's base64 body.
    */
   private static final Pattern MARKER =
       Pattern.compile(
-          "\\[redacted: (.{0,4}?)…, (\\d{1,4}) chars]|"
+          "\\[redacted: (.{0,"
+              + SecretScanner.REDACTED_PREFIX
+              + "}?)…, (\\d{1,4}) chars]|"
               + Pattern.quote(SecurityScan.PEM_MATERIAL_REDACTION));
 
   /** What {@link SecurityScan} scrubs as private key material. */
