@@ -834,9 +834,9 @@ public final class PrReviewPrompts {
   public static final String ROUTED_OUT_NOTE =
       """
 
-            The numbering above skips the dimensions left out of this call: none of its files is of
-            a kind they cover. A rule that cites a skipped dimension still applies if you meet
-            material it covers.
+            The numbering above skips the dimensions left out of this call: neither the kinds of its
+            files nor the code in its patches pointed to material they cover. A rule that cites a
+            skipped dimension still applies if you meet material it covers.
             """;
 
   /**
