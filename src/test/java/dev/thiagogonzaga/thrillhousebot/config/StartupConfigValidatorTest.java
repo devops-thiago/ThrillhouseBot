@@ -82,6 +82,8 @@ class StartupConfigValidatorTest {
     private double tokenSafetyMargin = 0.9;
     private long maxTokensPerReview = 0;
     private String ciGating = "strict";
+    private boolean ciContextEnabled = false;
+    private int ciContextMaxChars = 4000;
     private int maxConcurrentCalls = 0;
     private boolean reasoningEnabled = false;
     private String reasoningEffort = "low";
@@ -160,6 +162,12 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder ciContext(boolean enabled, int maxChars) {
+      this.ciContextEnabled = enabled;
+      this.ciContextMaxChars = maxChars;
+      return this;
+    }
+
     ConfigBuilder maxConcurrentCalls(int v) {
       this.maxConcurrentCalls = v;
       return this;
@@ -226,6 +234,10 @@ class StartupConfigValidatorTest {
       lenient().when(review.tokenSafetyMargin()).thenReturn(tokenSafetyMargin);
       lenient().when(review.maxTokensPerReview()).thenReturn(maxTokensPerReview);
       lenient().when(review.ciGating()).thenReturn(ciGating);
+      var ciContext = mock(ThrillhouseConfig.CiContextConfig.class);
+      lenient().when(review.ciContext()).thenReturn(ciContext);
+      lenient().when(ciContext.enabled()).thenReturn(ciContextEnabled);
+      lenient().when(ciContext.maxChars()).thenReturn(ciContextMaxChars);
       lenient().when(review.blockingStrictness()).thenReturn(blockingStrictness);
       lenient().when(ai.models()).thenReturn(models);
       lenient().when(ai.maxConcurrentCalls()).thenReturn(maxConcurrentCalls);
@@ -1047,6 +1059,23 @@ class StartupConfigValidatorTest {
     assertTrue(
         ex.getMessage().contains("REVIEW_CI_GATING must be one of strict, warn, off"),
         ex.getMessage());
+  }
+
+  @Test
+  void failsFastWhenAnEnabledCiContextCapIsOutOfBounds() {
+    for (var maxChars : List.of(499, 20_001, 0, -1)) {
+      var ex = assertFailsValidation(new ConfigBuilder().ciContext(true, maxChars).build());
+      assertTrue(
+          ex.getMessage().contains("REVIEW_CI_CONTEXT_MAX_CHARS must be between 500 and 20000"),
+          ex.getMessage());
+    }
+  }
+
+  @Test
+  void acceptsCiContextCapsAtTheBoundsAndIgnoresTheCapWhileDisabled() {
+    new ConfigBuilder().ciContext(true, 500).build().validate();
+    new ConfigBuilder().ciContext(true, 20_000).build().validate();
+    new ConfigBuilder().ciContext(false, -1).build().validate();
   }
 
   @Test

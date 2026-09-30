@@ -451,4 +451,59 @@ class GitHubReadTokenRefreshTest {
     verify(client, times(1))
         .downloadArtifactOnce(anyString(), anyString(), anyString(), anyString(), anyLong());
   }
+
+  @Test
+  void checkRunAnnotationsRejectedForTheirCredentialAreRepeatedWithAFreshOne() {
+    var client = mock(GitHubCheckRunClient.class);
+    doCallRealMethod()
+        .when(client)
+        .listAnnotations(anyString(), anyString(), anyString(), anyString(), anyLong(), anyInt());
+    var annotations =
+        List.of(new GitHubCheckRunClient.Annotation("a.java", 3, "failure", "t", "m"));
+    when(client.listAnnotationsOnce(DEAD, "json", "o", "r", 9L, 20)).thenThrow(badCredentials());
+    when(client.listAnnotationsOnce(FRESH, "json", "o", "r", 9L, 20)).thenReturn(annotations);
+
+    assertSame(annotations, client.listAnnotations(DEAD, "json", "o", "r", 9L, 20));
+  }
+
+  @Test
+  void aJobLogDownloadAnswered401IsRepeatedWithAFreshToken() {
+    var client = mock(GitHubActionsClient.class);
+    doCallRealMethod()
+        .when(client)
+        .downloadJobLogs(anyString(), anyString(), anyString(), anyString(), anyLong());
+    var rejected = Response.status(401).entity("{\"message\":\"Bad credentials\"}").build();
+    var redirect = Response.status(302).header("Location", "https://blob.example/log").build();
+    when(client.downloadJobLogsOnce(DEAD, "json", "o", "r", 9L)).thenReturn(rejected);
+    when(client.downloadJobLogsOnce(FRESH, "json", "o", "r", 9L)).thenReturn(redirect);
+
+    assertSame(redirect, client.downloadJobLogs(DEAD, "json", "o", "r", 9L));
+  }
+
+  @Test
+  void aJobLogDownload401NoFreshTokenCanFixIsReturnedAsIs() {
+    GitHubTokenRefresh.SHARED.bind(null);
+    var client = mock(GitHubActionsClient.class);
+    doCallRealMethod()
+        .when(client)
+        .downloadJobLogs(anyString(), anyString(), anyString(), anyString(), anyLong());
+    var rejected = Response.status(401).entity("{\"message\":\"Bad credentials\"}").build();
+    when(client.downloadJobLogsOnce(DEAD, "json", "o", "r", 9L)).thenReturn(rejected);
+
+    assertSame(rejected, client.downloadJobLogs(DEAD, "json", "o", "r", 9L));
+    verify(client, times(1))
+        .downloadJobLogsOnce(anyString(), anyString(), anyString(), anyString(), anyLong());
+  }
+
+  @Test
+  void aJobLogDownloadRedirectPassesThroughUntouched() {
+    var client = mock(GitHubActionsClient.class);
+    doCallRealMethod()
+        .when(client)
+        .downloadJobLogs(anyString(), anyString(), anyString(), anyString(), anyLong());
+    var redirect = Response.status(302).header("Location", "https://blob.example/log").build();
+    when(client.downloadJobLogsOnce(FRESH, "json", "o", "r", 9L)).thenReturn(redirect);
+
+    assertSame(redirect, client.downloadJobLogs(FRESH, "json", "o", "r", 9L));
+  }
 }

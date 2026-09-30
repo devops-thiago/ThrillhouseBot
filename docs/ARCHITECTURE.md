@@ -207,7 +207,7 @@ sequenceDiagram
 | Package | Responsibility | Notable classes |
 |---|---|---|
 | `webhook/` | Receives GitHub events, verifies the HMAC signature, decides whether an event triggers a review (trigger filters, per-PR pause state, auto-review rate limit), acks slash/mention commands with 👀, re-reads CI for a verdict held on pending CI when a `check_suite` or `status` event reports on its head, runs the comment commands (`/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`), and schedules finding-feedback capture on review-thread replies | `WebhookController`, `WebhookVerifier`, `TriggerDetector`, `ReviewTriggerFilter`, `AckReactionService`, `CommentCommandService`, `PrPauseService` |
-| `review/` | Orchestrates a review: plans the token budget and the per-review spend ceiling, calls the AI layer (single-call or map-reduce), maps findings to a risk level and review state, re-checks a maintainer's decline against the reviewed code, writes the summary comment, optionally labels the PR, answers maintainer replies/mentions in PR threads, and persists maintainer finding feedback (👍/👎 / reply heuristics) for a future learnings pipeline | `ReviewOrchestrator`, `ReviewDispatcher`, `DiffBudgetPlanner`, `FindingPipeline`, `AutoReviewRateLimiter`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `FindingFeedbackCaptureService`, `FindingFeedbackService`, `PrSummaryGenerator`, `PrLabeler`, `MaintainerReplyService`, `MaintainerReplyDispatcher`, `PrImprovementService`, `PatchCoverage`, `ConfigKeyContextResolver`, `RebuttalContradiction`, `SummarySurfaceDeduplicator`, `VerdictBuilder` |
+| `review/` | Orchestrates a review: plans the token budget and the per-review spend ceiling, calls the AI layer (single-call or map-reduce), maps findings to a risk level and review state, re-checks a maintainer's decline against the reviewed code, writes the summary comment, optionally labels the PR, answers maintainer replies/mentions in PR threads, and persists maintainer finding feedback (👍/👎 / reply heuristics) for a future learnings pipeline | `ReviewOrchestrator`, `ReviewDispatcher`, `DiffBudgetPlanner`, `FindingPipeline`, `AutoReviewRateLimiter`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `FindingFeedbackCaptureService`, `FindingFeedbackService`, `PrSummaryGenerator`, `PrLabeler`, `MaintainerReplyService`, `MaintainerReplyDispatcher`, `PrImprovementService`, `PatchCoverage`, `CiFailureContextResolver`, `ConfigKeyContextResolver`, `RebuttalContradiction`, `SummarySurfaceDeduplicator`, `VerdictBuilder` |
 | `review/ai/` | The LangChain4j layer: streams or batches model responses, parses findings, runs a second pass to verify them, applies generation/reasoning customizers, and writes conversational replies | `PrReviewer`, `AiReviewService`, `ChatModelCustomizers`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant`, `TruncatedResponseSalvager`, `FindingVerifierPrompts` |
 | `github/` | Talks to the GitHub REST and GraphQL APIs: app auth, pull requests, reviews, check runs, comments, labels, reactions (create + list), and reading the repo instructions file | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubLabelClient`, `GitHubReactionClient`, `InstructionsResolver`, `GitHubWriteRetry` |
 | `dashboard/` | The live UI backend: OAuth login (in-memory sessions), WebSocket broadcaster (`review.stream` / `review.batch`), review session persistence, and finding-feedback aggregates | `AuthResource`, `DashboardSessionStore`, `SessionEventBroadcaster`, `ReviewSessionRepository`, `DashboardResource` |
@@ -268,6 +268,17 @@ completed before the cut rather than being discarded whole.
 report, `PatchCoverage` reads the changed lines it does not cover and gives them
 to the review, so new code with no test behind it can be named as such. Off
 unless `REVIEW_PATCH_COVERAGE_ENABLED` is set.
+
+**CI failures as review context** — with `REVIEW_CI_CONTEXT_ENABLED`, the CI
+gate's early reading of the head commit is taken alongside the context load
+instead of alongside the model call. `CiStatusEvaluator` keeps the failing and
+pending checks it walks (required or not, the bot's own excluded), and
+`CiFailureContextResolver` renders the failures, one annotations page each and
+optionally a job-log tail, into a capped section. `ReviewPromptAssembler` fences
+it into the review call's trailing guidance, so every batch carries it and
+`DiffBudgetPlanner` counts it as shared overhead. The summary and verifier calls
+do not get it. Pending checks only contribute a count, and the CI-hold revisit
+does not start a new review when CI later fails.
 
 **Repository-supplied configuration** — `.github/thrillhousebot.yml` carries a
 repository's own ignore globs and path-scoped review instructions, read from the

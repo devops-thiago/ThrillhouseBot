@@ -23,9 +23,11 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -56,12 +58,20 @@ public class CiStatusEvaluator {
 
   private final CiGatingMode ciGating;
 
+  // Whether CI is read for the opt-in CI-failure review context (#59) even when the gate itself is
+  // off; with the gate on, the checks it reads already carry everything the context needs.
+  private final boolean readForContext;
+
   @Inject
   public CiStatusEvaluator(
       @RestClient GitHubCheckRunClient checkRunClient,
       BotIdentity botIdentity,
       ThrillhouseConfig config) {
-    this(checkRunClient, botIdentity, CiGatingMode.parse(config.review().ciGating()));
+    this(
+        checkRunClient,
+        botIdentity,
+        CiGatingMode.parse(config.review().ciGating()),
+        config.review().ciContext().enabled());
   }
 
   /** Visible for tests; defaults to fail-closed {@link CiGatingMode#STRICT}. */
@@ -71,6 +81,15 @@ public class CiStatusEvaluator {
 
   CiStatusEvaluator(
       GitHubCheckRunClient checkRunClient, BotIdentity botIdentity, CiGatingMode ciGating) {
+    this(checkRunClient, botIdentity, ciGating, false);
+  }
+
+  CiStatusEvaluator(
+      GitHubCheckRunClient checkRunClient,
+      BotIdentity botIdentity,
+      CiGatingMode ciGating,
+      boolean readForContext) {
+    this.readForContext = readForContext;
     this.checkRunClient = checkRunClient;
     this.botTokens =
         botIdentity.logins().stream()
@@ -179,7 +198,20 @@ public class CiStatusEvaluator {
   record CiEvaluation(
       List<ReviewResult.CiCheck> offendingChecks,
       boolean unreadable,
-      boolean requiredContextsKnown) {
+      boolean requiredContextsKnown,
+      CiFailures failures) {
+
+    CiEvaluation {
+      failures = failures == null ? CiFailures.NONE : failures;
+    }
+
+    /** An evaluation that carries no CI-failure detail for the review context. */
+    CiEvaluation(
+        List<ReviewResult.CiCheck> offendingChecks,
+        boolean unreadable,
+        boolean requiredContextsKnown) {
+      this(offendingChecks, unreadable, requiredContextsKnown, CiFailures.NONE);
+    }
 
     /**
      * Convenience for callers/tests that predate the required-context flag: assumes the required
@@ -187,6 +219,36 @@ public class CiStatusEvaluator {
      */
     CiEvaluation(List<ReviewResult.CiCheck> offendingChecks, boolean unreadable) {
       this(offendingChecks, unreadable, true);
+    }
+  }
+
+  /**
+   * A check that had completed without passing when CI was read, with what it reported about itself
+   * — the raw material of the opt-in CI-failure review context (#59). {@code checkRunId} is {@code
+   * 0} for a commit status, which has no annotations or log to fetch; {@code appSlug} names the
+   * check run's app ({@code github-actions} for an Actions job) and is {@code null} for a status.
+   * Every text field is written by the checked code's own tooling and is untrusted.
+   */
+  record FailedCheck(
+      String name,
+      String conclusion,
+      long checkRunId,
+      String appSlug,
+      String title,
+      String summary,
+      int annotationsCount) {}
+
+  /**
+   * The failing and still-pending checks one CI read saw, required or not, the bot's own excluded,
+   * deduplicated by name across the Check Runs and Commit Status APIs. Unlike the offending list,
+   * this is not filtered to the required contexts: an optional lint job that fails still explains a
+   * defect.
+   */
+  record CiFailures(List<FailedCheck> failed, int pending) {
+    static final CiFailures NONE = new CiFailures(List.of(), 0);
+
+    CiFailures {
+      failed = List.copyOf(failed);
     }
   }
 
@@ -210,7 +272,7 @@ public class CiStatusEvaluator {
    */
   CiEvaluation evaluateCiChecks(
       String auth, String owner, String repo, String commitSha, List<String> requiredContexts) {
-    if (!ciGating.evaluatesCi()) {
+    if (!ciGating.evaluatesCi() && !readForContext) {
       return new CiEvaluation(List.of(), false, true);
     }
     var offending = new ArrayList<ReviewResult.CiCheck>();
@@ -221,7 +283,14 @@ public class CiStatusEvaluator {
     // and the Commit Status API is not listed twice.
     var offendingNames = new HashSet<String>();
 
-    var tracker = new OffendingTracker(requiredContexts, seen, offendingNames, offending);
+    var tracker =
+        new OffendingTracker(
+            requiredContexts,
+            seen,
+            offendingNames,
+            offending,
+            new LinkedHashMap<>(),
+            new HashSet<>());
     var checkRunsReadable =
         collectReadable(
             () -> checkRunClient.getAllCheckRuns(auth, ACCEPT, owner, repo, commitSha),
@@ -234,12 +303,18 @@ public class CiStatusEvaluator {
             status -> addOffendingStatus(status, tracker),
             "combined status for commit " + commitSha);
 
+    var failures = tracker.failures();
+    if (!ciGating.evaluatesCi()) {
+      // Read only for the review context: the gate is off, so nothing here may hold approval.
+      return new CiEvaluation(List.of(), false, true, failures);
+    }
+
     addMissingRequiredChecks(requiredContexts, seen, offending);
 
     // GitHub returns an empty list, never null, past the last page — an exception or null body
     // means the source was unreadable, which must hold approval even in gate-specific mode.
     boolean unreadable = !checkRunsReadable || !statusReadable;
-    return new CiEvaluation(offending, unreadable, requiredContexts != null);
+    return new CiEvaluation(offending, unreadable, requiredContexts != null, failures);
   }
 
   /**
@@ -269,28 +344,69 @@ public class CiStatusEvaluator {
       List<String> requiredContexts,
       Set<String> seen,
       Set<String> offendingNames,
-      List<ReviewResult.CiCheck> offending) {}
+      List<ReviewResult.CiCheck> offending,
+      Map<String, FailedCheck> failed,
+      Set<String> pending) {
+
+    /**
+     * Records a non-bot check for the review context, required or not: its failure detail the first
+     * time a name fails (the check-run source is walked first and carries the richer detail), or
+     * its name while it is still pending.
+     */
+    void noteForContext(String name, String ciStatus, Supplier<FailedCheck> failure) {
+      if (name == null) {
+        return;
+      }
+      if (CI_FAILING.equals(ciStatus)) {
+        failed.computeIfAbsent(name, ignored -> failure.get());
+      } else if (CI_PENDING.equals(ciStatus)) {
+        pending.add(name);
+      }
+    }
+
+    /** The context snapshot; a name that failed in one source is not also counted pending. */
+    CiFailures failures() {
+      var stillPending = new HashSet<>(pending);
+      stillPending.removeAll(failed.keySet());
+      return new CiFailures(List.copyOf(failed.values()), stillPending.size());
+    }
+  }
 
   private void addOffendingCheckRun(
       GitHubCheckRunClient.CheckRunsResponse.CheckRun run, OffendingTracker tracker) {
-    addOffending(
-        run.name(),
-        isThrillhouseBotCheck(run.name(), run.app()),
-        classifyCheckRun(run.status(), run.conclusion()),
-        "check-run",
-        run.conclusion(),
-        tracker);
+    var isBotCheck = isThrillhouseBotCheck(run.name(), run.app());
+    var ciStatus = classifyCheckRun(run.status(), run.conclusion());
+    if (!isBotCheck) {
+      tracker.noteForContext(run.name(), ciStatus, () -> failedCheck(run));
+    }
+    addOffending(run.name(), isBotCheck, ciStatus, "check-run", run.conclusion(), tracker);
   }
 
   private void addOffendingStatus(
       GitHubCheckRunClient.CombinedStatus.StatusDetail status, OffendingTracker tracker) {
-    addOffending(
-        status.context(),
-        isThrillhouseBotCheck(status.context(), null),
-        classifyStatus(status.state()),
-        "status",
-        status.state(),
-        tracker);
+    var isBotCheck = isThrillhouseBotCheck(status.context(), null);
+    var ciStatus = classifyStatus(status.state());
+    if (!isBotCheck) {
+      tracker.noteForContext(
+          status.context(),
+          ciStatus,
+          () ->
+              new FailedCheck(
+                  status.context(), status.state(), 0L, null, null, status.description(), 0));
+    }
+    addOffending(status.context(), isBotCheck, ciStatus, "status", status.state(), tracker);
+  }
+
+  private static FailedCheck failedCheck(GitHubCheckRunClient.CheckRunsResponse.CheckRun run) {
+    var output = run.output();
+    return new FailedCheck(
+        run.name(),
+        run.conclusion(),
+        run.id(),
+        run.app() == null ? null : run.app().slug(),
+        output == null ? null : output.title(),
+        output == null ? null : output.summary(),
+        output == null ? 0 : output.annotationsCount());
   }
 
   /**

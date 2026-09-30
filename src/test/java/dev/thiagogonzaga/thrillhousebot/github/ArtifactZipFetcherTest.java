@@ -282,4 +282,89 @@ class ArtifactZipFetcherTest {
       assertEquals(0, fetcher.transfer(URI.create(uri + "/missing")).length);
     }
   }
+
+  @Nested
+  class TailTransfer {
+
+    @Test
+    void refusesAMissingOrPlaintextLocationOrAnEmptyTail() {
+      assertEquals(0, fetcher.fetchTail(null, 10).length);
+      assertEquals(0, fetcher.fetchTail(URI.create("http://blob.example/log"), 10).length);
+      assertEquals(0, fetcher.fetchTail(URI.create("https://blob.example/log"), 0).length);
+    }
+
+    @Test
+    void anHttpsLocationReachesTheTransfer() throws IOException {
+      int closedPort;
+      try (var socket = new ServerSocket(0)) {
+        closedPort = socket.getLocalPort();
+      }
+
+      assertEquals(
+          0, fetcher.fetchTail(URI.create("https://127.0.0.1:" + closedPort + "/log"), 10).length);
+    }
+
+    @Test
+    void returnsOnlyTheEndOfTheBody() throws IOException {
+      var payload = "line one\nline two\nthe failure".getBytes(StandardCharsets.UTF_8);
+      var uri = serve(exchange -> respond(exchange, 200, payload));
+
+      assertEquals(
+          "the failure",
+          new String(fetcher.transferTail(uri, "the failure".length()), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void degradesToNothingOnAnErrorStatus() throws IOException {
+      var uri = serve(exchange -> respond(exchange, 404, new byte[0]));
+
+      assertEquals(0, fetcher.transferTail(uri, 10).length);
+    }
+
+    @Test
+    void keepsTheTailAcrossManyWindowCompactions() throws IOException {
+      var sb = new StringBuilder();
+      for (var i = 0; i < 5_000; i++) {
+        sb.append("row ").append(i).append('\n');
+      }
+      var bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+
+      var tail = ArtifactZipFetcher.readTail(new ByteArrayInputStream(bytes), 9);
+
+      assertEquals("row 4999\n", new String(tail, StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void aBodyShorterThanTheTailIsReturnedWhole() throws IOException {
+      var tail =
+          ArtifactZipFetcher.readTail(
+              new ByteArrayInputStream("short".getBytes(StandardCharsets.UTF_8)), 100);
+
+      assertEquals("short", new String(tail, StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void aStreamPastTheScanCeilingYieldsNothing() throws IOException {
+      var endless =
+          new InputStream() {
+            private long served;
+
+            @Override
+            public int read() {
+              return served++ > ArtifactZipFetcher.MAX_TAIL_SCAN_BYTES ? -1 : 'x';
+            }
+
+            @Override
+            public int read(byte[] b, int off, int len) {
+              if (served > ArtifactZipFetcher.MAX_TAIL_SCAN_BYTES) {
+                return -1;
+              }
+              served += len;
+              return len;
+            }
+          };
+
+      assertEquals(0, ArtifactZipFetcher.readTail(endless, 16).length);
+    }
+  }
 }
