@@ -58,9 +58,9 @@ import java.util.stream.Stream;
  * dashboard; and every other finding and status note in the response has the matched values
  * scrubbed out, so a model finding that quoted the line cannot post it either. With the secret half
  * on, the scrub also redacts a secret-looking quoted literal that a line of that text assigns to a
- * credential-named key, whether or not the scan matched it, so a declaration form the scan does not
- * know cannot become an echo (#916). Nothing here logs a value. The summary call that follows is
- * code-blind and only reads the findings, so its text is built from the scrubbed set.
+ * credential-named key, whether or not the scan matched it, so an assignment in a form the scan
+ * does not know cannot become an echo (#916). Nothing here logs a value. The summary call that
+ * follows is code-blind and only reads the findings, so its text is built from the scrubbed set.
  *
  * <p><b>Across rounds.</b> A detection whose finding the effective previous round already raised
  * (same file, title and anchor) is not raised again, so a push that leaves the secret in place does
@@ -590,8 +590,8 @@ public class SecurityScan {
    * compiled into a single alternation once per merge, longest first so a value that contains
    * another is replaced whole, instead of rebuilding each text once per value. With the secret half
    * on, it then redacts any quoted literal a line of the text assigns to a credential-named key
-   * ({@link SecretScanner#redactAssignedLiterals}), so a value the scan did not match — a
-   * declaration form it does not know — is not echoed either (#916).
+   * ({@link SecretScanner#redactAssignedLiterals}), so a value the scan did not match — an
+   * assignment in a form it does not know — is not echoed either (#916).
    */
   static final class Scrubber {
     private static final Scrubber NONE = new Scrubber(null, Map.of(), Double.NaN);

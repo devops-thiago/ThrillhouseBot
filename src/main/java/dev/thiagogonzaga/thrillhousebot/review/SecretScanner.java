@@ -149,7 +149,9 @@ final class SecretScanner {
    * the first {@code =} or {@code :} after it, then within 40 characters a quoted literal (double
    * or single quotes or backticks). It does not care what sits between the name and the operator or
    * between the operator and the quote ({@code &'static str = "…"}, {@code = b"…"}, {@code =
-   * Some("…")}), so a declaration form the scan does not know still cannot be echoed.
+   * Some("…")}), so an assignment in a form the scan does not know still cannot be echoed. A
+   * declaration with no {@code =} or {@code :} before the literal (Kotlin {@code by lazy { "…" }})
+   * is outside it.
    */
   private static final Pattern ASSIGNED_LITERAL =
       Pattern.compile(
@@ -342,7 +344,7 @@ final class SecretScanner {
    * The text with every quoted literal that is assigned to a credential-named key on its line, and
    * that {@link #looksLikeSecret} at the threshold, replaced with its redacted form (#916). The
    * defence in depth for model text: the scan scrubs the values it matched, and this catches a
-   * value it did not, so a declaration form the scan misses cannot become an echo.
+   * value it did not, so an assignment in a form the scan misses cannot become an echo.
    */
   static String redactAssignedLiterals(String text, double entropyThreshold) {
     return ASSIGNED_LITERAL

@@ -692,11 +692,14 @@ verbatim occurrence of it is also replaced with its redacted form in the model
 findings, status notes and summary of the same review, so a model finding that
 quoted the line cannot post it either. The same texts also have any
 secret-looking quoted literal redacted when its line assigns it to a
-credential-named key, whatever the declaration looks like
-(`static API_TOKEN: Lazy<&str> = Lazy::new(|| "…")`), so a form the scan does
-not match still cannot be echoed by a model finding; the literal must pass the
-same placeholder, identifier and entropy checks as a scan match. Otherwise a
-fragment or an altered copy of the value is not recognized.
+credential-named key through the first `=` or `:` after the name, whatever sits
+between the name, the operator and the quote
+(`static API_TOKEN: Lazy<&str> = Lazy::new(|| "…")`), so such an assignment in a
+form the scan does not match still cannot be echoed by a model finding; the
+literal must pass the same placeholder, identifier and entropy checks as a scan
+match. A declaration with no `=` or `:` before the literal (Kotlin
+`val apiToken by lazy { "…" }`) is not covered, nor is a fragment or an altered
+copy of the value.
 Treat a reported credential as leaked whatever happens to the pull request:
 removing it from the branch does not remove it from the git history.
 
