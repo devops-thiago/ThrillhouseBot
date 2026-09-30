@@ -35,14 +35,17 @@ import java.util.regex.Pattern;
  *
  * <p>Every rule matches only a shape the prompt itself produces, because a false positive rewrites
  * a maintainer-facing sentence about their code. So the word "dimension" on its own is never
- * touched, nor a number after it that reads as a tensor or array axis ("dimension 1 of the
- * output"); a numbered label is removed only as a parenthetical, as the label that opens a
- * sentence, or after the few verbs that cite it ("this is dimension 5", "under dimension 10"), and
- * only for the numbers the prompt used, 1 through 10. Code — a fenced block, an inline code span —
- * and HTML comments (the bot's own markers) are left exactly as written; the one exception is the
- * prompt's example locator, which is rewritten to a placeholder wherever it appears unless it is
- * one of the real paths the caller passes — the files the findings are filed on and the summary
- * describes, which are the paths of this pull request the text can be about.
+ * touched, nor a number after it that reads as a tensor or array axis ("dimension 1 of the output",
+ * "Dimension 3 indexes the batch"); a numbered label is removed only as a parenthetical, as the
+ * label that opens a sentence when the prompt's own class vocabulary follows it, or after the few
+ * verbs that cite it ("this is dimension 5", "under dimension 10"), and only for the numbers the
+ * prompt used, 1 through 10. A heading name is removed only in the capitals the prompt prints it
+ * in. Citations in other shapes are left in place: a leftover label is the cheaper mistake. Code —
+ * a fenced block, an inline code span — and HTML comments (the bot's own markers) are left exactly
+ * as written; the one exception is the prompt's example locator, which is rewritten to a
+ * placeholder wherever it appears unless it is one of the real paths the caller passes — the files
+ * the findings are filed on and the summary describes, which are the paths of this pull request the
+ * text can be about.
  */
 public final class PromptLabelScrubber {
 
@@ -62,19 +65,22 @@ public final class PromptLabelScrubber {
   /** Separates the numbers of "(dimensions 4, 5 and 8)". */
   private static final Pattern NUMBER_SEPARATOR = Pattern.compile(" ?(?:,|/|&) ?| and | or ");
 
-  /** The block names the prompt prints as headings, lower-cased, as cited in parentheses. */
+  /**
+   * The block names exactly as the prompt prints them, capitals included. Matched case-sensitively:
+   * "(security)" or "(regressions)" is an ordinary aside about the code, "(SECURITY)" is the label.
+   */
   private static final Set<String> HEADING_NAMES =
       Set.of(
-          "functional correctness",
-          "security",
-          "regressions",
-          "comment contradicts code",
-          "code quality and algorithmic complexity",
-          "pagination / truncation",
-          "config / iac correctness",
-          "mock fidelity",
-          "producer → consumer contract",
-          "config key documentation completeness");
+          "FUNCTIONAL CORRECTNESS",
+          "SECURITY",
+          "REGRESSIONS",
+          "COMMENT CONTRADICTS CODE",
+          "CODE QUALITY AND ALGORITHMIC COMPLEXITY",
+          "PAGINATION / TRUNCATION",
+          "CONFIG / IaC CORRECTNESS",
+          "MOCK FIDELITY",
+          "PRODUCER → CONSUMER CONTRACT",
+          "CONFIG KEY DOCUMENTATION COMPLETENESS");
 
   /** The heuristic block's name, as cited in parentheses. */
   private static final Set<String> SECTION_NAMES =
@@ -89,6 +95,48 @@ public final class PromptLabelScrubber {
       Set.of(
           "of", "is", "was", "has", "in", "at", "to", "and", "or", "for", "with", "along", "size",
           "index", "axis");
+
+  /**
+   * The words a label opening a clause is followed by: the prompt's own class vocabulary, as in
+   * "Dimension 7 artifact-name mismatch" or "Dimension 10 documentation completeness". Anything
+   * else — "Dimension 3 indexes the batch" — is a sentence about an axis and stays.
+   */
+  private static final Set<String> LABEL_WORDS =
+      Set.of(
+          "artifact",
+          "documentation",
+          "doc",
+          "supply",
+          "comment",
+          "stale",
+          "config",
+          "configuration",
+          "mock",
+          "stub",
+          "producer",
+          "contract",
+          "pagination",
+          "truncation",
+          "security",
+          "regression",
+          "regressions",
+          "functional",
+          "correctness",
+          "code",
+          "quality",
+          "algorithmic",
+          "complexity",
+          "quadratic",
+          "trace",
+          "description",
+          "iac",
+          "heuristic",
+          "parsing",
+          "injection",
+          "infrastructure",
+          "mismatch",
+          "class",
+          "check");
 
   /** Verbs that cite a label mid-sentence and stay: "This is dimension 5, class (c)". */
   private static final List<String> CITING_VERBS =
@@ -346,6 +394,9 @@ public final class PromptLabelScrubber {
 
   /** Whether a parenthetical's content is one of the prompt's labels. */
   private static boolean isLabel(String content) {
+    if (HEADING_NAMES.contains(content.strip())) {
+      return true;
+    }
     var c = content.strip().toLowerCase(Locale.ROOT);
     for (var lead : List.of("see ", "per ", "under ")) {
       if (c.startsWith(lead)) {
@@ -356,7 +407,7 @@ public final class PromptLabelScrubber {
     if (c.startsWith("review ")) {
       c = c.substring("review ".length()).strip();
     }
-    if (HEADING_NAMES.contains(c) || SECTION_NAMES.contains(c)) {
+    if (SECTION_NAMES.contains(c)) {
       return true;
     }
     String numbers;
@@ -406,7 +457,7 @@ public final class PromptLabelScrubber {
         after = skipBlanks(s, after + 1);
       }
       if (opensClause(s, start, at)) {
-        if (after >= s.length() || !Character.isLetter(s.charAt(after))) {
+        if (!LABEL_WORDS.contains(wordAt(s, after))) {
           continue;
         }
         out.append(s, at, start).append(Character.toUpperCase(s.charAt(after)));

@@ -151,6 +151,11 @@ class PromptLabelScrubberTest {
         "The shape (dimension 12) exceeds the configured maximum.",
         "The test covers every section, including the heuristic section of the parser.",
         "Check dimensions 3 x 4 against the layout grid.",
+        "Dimension 3 indexes the batch.",
+        "Dimension 5 counts the rows.",
+        "Fixes the flaky auth check (security).",
+        "Touches existing flows (regressions).",
+        "A dependency pin (Security) is fine.",
         "",
       })
   void ordinaryTextAndCodeAreLeftExactlyAsWritten(String text) {
@@ -249,7 +254,7 @@ class PromptLabelScrubberTest {
                     "c/linkc.c",
                     12,
                     "Overflow (dimension 1)",
-                    "Dimension 1 bounds check missing.",
+                    "Dimension 1 correctness gap: no bounds check.",
                     "strcpy(buf, (dimension 1));",
                     "")),
             List.of(
@@ -272,7 +277,7 @@ class PromptLabelScrubberTest {
 
     var finding = scrubbed.findings().getFirst();
     assertEquals("Overflow", finding.title());
-    assertEquals("Bounds check missing.", finding.description());
+    assertEquals("Correctness gap: no bounds check.", finding.description());
     assertEquals("strcpy(buf, (dimension 1));", finding.suggestionOld());
     assertEquals("Still open.", scrubbed.previousFindingsStatus().getFirst().note());
     var summary = scrubbed.summary();
