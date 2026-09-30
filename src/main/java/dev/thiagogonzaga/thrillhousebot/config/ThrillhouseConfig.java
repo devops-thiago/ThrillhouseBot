@@ -439,6 +439,9 @@ public interface ThrillhouseConfig {
     @WithName("ci-context")
     CiContextConfig ciContext();
 
+    @WithName("ticket-context")
+    TicketContextConfig ticketContext();
+
     @WithName("follow-up-summary")
     FollowUpSummaryConfig followUpSummary();
 
@@ -579,6 +582,68 @@ public interface ThrillhouseConfig {
     @WithName("max-chars")
     @WithDefault("4000")
     int maxChars();
+  }
+
+  /**
+   * Opt-in linked-issue context (#58). When {@link #enabled()}, the review resolves the issue(s)
+   * the pull request says it implements and gives their title, body and acceptance criteria to the
+   * review call (as intent) and to the summary call (which lists unmet acceptance criteria under
+   * Description vs. Implementation). The issue is only read, never commented on, labelled or
+   * closed. Off by default: it adds prompt tokens and, per review, up to one GraphQL read and one
+   * REST read per candidate issue until {@link #maxIssues()} are read — at most ten, since an
+   * unreadable candidate lets the next one in.
+   */
+  interface TicketContextConfig {
+    /** The GitHub Issues provider, and the only one this build ships. */
+    String GITHUB_PROVIDER = "github";
+
+    /** Values accepted by {@link #provider()}; an external tracker adds its name here. */
+    List<String> ALLOWED_PROVIDERS = List.of(GITHUB_PROVIDER);
+
+    /** Lower bound accepted for {@link #maxIssues()}. */
+    int MIN_MAX_ISSUES = 1;
+
+    /** Upper bound accepted for {@link #maxIssues()}. */
+    int MAX_MAX_ISSUES = 5;
+
+    /** Lower bound accepted for {@link #maxChars()}: room for a title and a few criteria. */
+    int MIN_MAX_CHARS = 1_000;
+
+    /** Upper bound accepted for {@link #maxChars()}, so issue text can never rival the diff. */
+    int MAX_MAX_CHARS = 20_000;
+
+    /** Master switch — no issue is read unless this is {@code true}. */
+    @WithDefault("false")
+    boolean enabled();
+
+    /**
+     * The issue tracker the linked issues are read from. Only {@value #GITHUB_PROVIDER} exists
+     * today; validated at boot against {@link #ALLOWED_PROVIDERS}.
+     */
+    @WithDefault(GITHUB_PROVIDER)
+    String provider();
+
+    /** Linked issues used per review; once this many are read, later references are ignored. */
+    @WithName("max-issues")
+    @WithDefault("3")
+    int maxIssues();
+
+    /**
+     * Character cap on the whole linked-issue section, before fencing. It rides both the review
+     * call (counted in the planner's shared overhead) and the summary call (counted in its clamp).
+     */
+    @WithName("max-chars")
+    @WithDefault("6000")
+    int maxChars();
+
+    /**
+     * Also take the issue number from the head branch name ({@code issue-57}, {@code fix/57-...})
+     * when neither the PR body nor GitHub's closing references link any issue. Off by default: a
+     * branch name is a guess, and a wrong guess puts an unrelated issue in front of the model.
+     */
+    @WithName("from-branch")
+    @WithDefault("false")
+    boolean fromBranch();
   }
 
   /**

@@ -202,4 +202,22 @@ class GitHubCommentClientTest {
     assertSame(edited, client.updateComment("auth", "json", "o", "r", 99L, request));
     verify(client, times(2)).updateCommentOnce("auth", "json", "o", "r", 99L, request);
   }
+
+  @Test
+  void anIssueReadTellsAPullRequestNumberFromAnIssue() throws Exception {
+    // #58: the issues endpoint serves pull requests too, marked by a pull_request object.
+    var json = new com.fasterxml.jackson.databind.ObjectMapper();
+    var pr =
+        json.readValue(
+            "{\"number\":5,\"title\":\"t\",\"body\":\"b\",\"pull_request\":{\"url\":\"u\"}}",
+            GitHubCommentClient.IssueDetails.class);
+    var issue =
+        json.readValue(
+            "{\"number\":6,\"title\":\"t\",\"body\":null}", GitHubCommentClient.IssueDetails.class);
+
+    assertTrue(pr.isPullRequest());
+    assertEquals("u", pr.pullRequest().url());
+    assertEquals(false, issue.isPullRequest());
+    assertEquals(false, new GitHubCommentClient.IssueDetails(1, "t", "b").isPullRequest());
+  }
 }

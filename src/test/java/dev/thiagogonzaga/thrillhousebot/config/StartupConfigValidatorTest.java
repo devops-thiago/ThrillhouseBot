@@ -84,6 +84,10 @@ class StartupConfigValidatorTest {
     private String ciGating = "strict";
     private boolean ciContextEnabled = false;
     private int ciContextMaxChars = 4000;
+    private boolean ticketContextEnabled = false;
+    private String ticketContextProvider = "github";
+    private int ticketContextMaxIssues = 3;
+    private int ticketContextMaxChars = 6000;
     private int maxConcurrentCalls = 0;
     private boolean reasoningEnabled = false;
     private String reasoningEffort = "low";
@@ -160,6 +164,14 @@ class StartupConfigValidatorTest {
 
     ConfigBuilder ciGating(String v) {
       this.ciGating = v;
+      return this;
+    }
+
+    ConfigBuilder ticketContext(boolean enabled, String provider, int maxIssues, int maxChars) {
+      this.ticketContextEnabled = enabled;
+      this.ticketContextProvider = provider;
+      this.ticketContextMaxIssues = maxIssues;
+      this.ticketContextMaxChars = maxChars;
       return this;
     }
 
@@ -244,6 +256,12 @@ class StartupConfigValidatorTest {
       lenient().when(review.ciContext()).thenReturn(ciContext);
       lenient().when(ciContext.enabled()).thenReturn(ciContextEnabled);
       lenient().when(ciContext.maxChars()).thenReturn(ciContextMaxChars);
+      var ticketContext = mock(ThrillhouseConfig.TicketContextConfig.class);
+      lenient().when(review.ticketContext()).thenReturn(ticketContext);
+      lenient().when(ticketContext.enabled()).thenReturn(ticketContextEnabled);
+      lenient().when(ticketContext.provider()).thenReturn(ticketContextProvider);
+      lenient().when(ticketContext.maxIssues()).thenReturn(ticketContextMaxIssues);
+      lenient().when(ticketContext.maxChars()).thenReturn(ticketContextMaxChars);
       lenient().when(review.blockingStrictness()).thenReturn(blockingStrictness);
       var securityScan = mock(ThrillhouseConfig.SecurityScanConfig.class);
       lenient().when(review.securityScan()).thenReturn(securityScan);
@@ -1085,6 +1103,45 @@ class StartupConfigValidatorTest {
     new ConfigBuilder().ciContext(true, 500).build().validate();
     new ConfigBuilder().ciContext(true, 20_000).build().validate();
     new ConfigBuilder().ciContext(false, -1).build().validate();
+  }
+
+  @Test
+  void failsFastWhenAnEnabledTicketContextNamesAnUnknownProvider() {
+    for (var provider : java.util.Arrays.asList("jira", "", null)) {
+      var ex =
+          assertFailsValidation(new ConfigBuilder().ticketContext(true, provider, 3, 6000).build());
+      assertTrue(
+          ex.getMessage().contains("REVIEW_TICKET_CONTEXT_PROVIDER must be one of [github]"),
+          ex.getMessage());
+    }
+  }
+
+  @Test
+  void failsFastWhenAnEnabledTicketContextBoundIsOutOfRange() {
+    for (var maxIssues : List.of(0, 6, -1)) {
+      var ex =
+          assertFailsValidation(
+              new ConfigBuilder().ticketContext(true, "github", maxIssues, 6000).build());
+      assertTrue(
+          ex.getMessage().contains("REVIEW_TICKET_CONTEXT_MAX_ISSUES must be between 1 and 5"),
+          ex.getMessage());
+    }
+    for (var maxChars : List.of(999, 20_001, 0)) {
+      var ex =
+          assertFailsValidation(
+              new ConfigBuilder().ticketContext(true, "github", 3, maxChars).build());
+      assertTrue(
+          ex.getMessage()
+              .contains("REVIEW_TICKET_CONTEXT_MAX_CHARS must be between 1000 and 20000"),
+          ex.getMessage());
+    }
+  }
+
+  @Test
+  void acceptsTicketContextAtTheBoundsAndIgnoresItWhileDisabled() {
+    new ConfigBuilder().ticketContext(true, "github", 1, 1000).build().validate();
+    new ConfigBuilder().ticketContext(true, " GitHub ", 5, 20_000).build().validate();
+    new ConfigBuilder().ticketContext(false, "jira", 0, -1).build().validate();
   }
 
   @Test

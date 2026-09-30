@@ -119,6 +119,7 @@ public class StartupConfigValidator {
     validateReviewBudget(problems, config.review());
     validateCiGating(problems, config.review());
     validateCiContext(problems, config.review().ciContext());
+    validateTicketContext(problems, config.review().ticketContext());
     validateBlockingStrictness(problems, config.review());
     validateSecurityScan(problems, config.review().securityScan());
     validateModelSettings(problems, config.ai().models());
@@ -618,6 +619,51 @@ public class StartupConfigValidator {
               + ThrillhouseConfig.CiContextConfig.MAX_MAX_CHARS
               + " (thrillhousebot.review.ci-context.max-chars): "
               + maxChars);
+    }
+  }
+
+  /**
+   * Rejects an unknown {@code REVIEW_TICKET_CONTEXT_PROVIDER} and an out-of-bounds issue count or
+   * character cap at boot (#58) — only when the feature is on, since a disabled section is never
+   * built — so a typo cannot silently leave the review without the ticket it was configured to
+   * read, or let issue text crowd out the diff.
+   */
+  private static void validateTicketContext(
+      List<String> problems, ThrillhouseConfig.TicketContextConfig ticketContext) {
+    if (!ticketContext.enabled()) {
+      return;
+    }
+    var provider = ticketContext.provider();
+    if (provider == null
+        || !ThrillhouseConfig.TicketContextConfig.ALLOWED_PROVIDERS.contains(
+            provider.strip().toLowerCase(Locale.ROOT))) {
+      problems.add(
+          "REVIEW_TICKET_CONTEXT_PROVIDER must be one of "
+              + ThrillhouseConfig.TicketContextConfig.ALLOWED_PROVIDERS
+              + " (thrillhousebot.review.ticket-context.provider): "
+              + provider);
+    }
+    requireWithin(
+        problems,
+        ticketContext.maxIssues(),
+        ThrillhouseConfig.TicketContextConfig.MIN_MAX_ISSUES,
+        ThrillhouseConfig.TicketContextConfig.MAX_MAX_ISSUES,
+        "REVIEW_TICKET_CONTEXT_MAX_ISSUES",
+        "thrillhousebot.review.ticket-context.max-issues");
+    requireWithin(
+        problems,
+        ticketContext.maxChars(),
+        ThrillhouseConfig.TicketContextConfig.MIN_MAX_CHARS,
+        ThrillhouseConfig.TicketContextConfig.MAX_MAX_CHARS,
+        "REVIEW_TICKET_CONTEXT_MAX_CHARS",
+        "thrillhousebot.review.ticket-context.max-chars");
+  }
+
+  /** Adds a problem naming {@code env} and {@code key} when {@code value} is outside min..max. */
+  private static void requireWithin(
+      List<String> problems, int value, int min, int max, String env, String key) {
+    if (value < min || value > max) {
+      problems.add(env + " must be between " + min + " and " + max + " (" + key + "): " + value);
     }
   }
 
