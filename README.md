@@ -650,7 +650,7 @@ Secret rules (each finding is graded as listed, at high confidence):
 | Stripe live key | `sk_live_` / `rk_live_` keys (test keys are ignored) | critical |
 | Private key | a PEM `BEGIN … PRIVATE KEY` header followed by a key body (a header alone is code that parses keys) | critical |
 | JSON Web Token | three base64url segments whose first two start `eyJ` | high |
-| Credential assignment | a quoted literal assigned to a key named like `password`, `secret`, `token`, `api_key`, `access_key`, `private_key` or `client_secret`, when the literal has at least 8 characters, a non-letter, two character classes and entropy at or above `REVIEW_SECRET_SCAN_ENTROPY_THRESHOLD`, and is not a URL, a path or an identifier such as `DB_PASSWORD` | high |
+| Credential assignment | a quoted literal assigned to a key named like `password`, `secret`, `token`, `api_key`, `access_key`, `private_key` or `client_secret` (with `=`, `:`, `:=` or `=>`, and also through a typed or array declaration: C `char API_TOKEN[] =`, Rust `const API_TOKEN: &str =`, TypeScript, Kotlin, Scala, Swift and Python `apiToken: String =`, Go `var apiToken string =`), when the literal has at least 8 characters, a non-letter, two character classes and entropy at or above `REVIEW_SECRET_SCAN_ENTROPY_THRESHOLD`, and is not a URL, a path or an identifier such as `DB_PASSWORD` | high |
 
 IaC rules (high confidence unless noted):
 
@@ -690,8 +690,13 @@ check run, the notification, the stored session or the dashboard holds the
 value, and nothing is logged but counts. When the scan matches a value, every
 verbatim occurrence of it is also replaced with its redacted form in the model
 findings, status notes and summary of the same review, so a model finding that
-quoted the line cannot post it either. A fragment or an altered copy of the
-value is not recognized.
+quoted the line cannot post it either. The same texts also have any
+secret-looking quoted literal redacted when its line assigns it to a
+credential-named key, whatever the declaration looks like
+(`static API_TOKEN: Lazy<&str> = Lazy::new(|| "…")`), so a form the scan does
+not match still cannot be echoed by a model finding; the literal must pass the
+same placeholder, identifier and entropy checks as a scan match. Otherwise a
+fragment or an altered copy of the value is not recognized.
 Treat a reported credential as leaked whatever happens to the pull request:
 removing it from the branch does not remove it from the git history.
 

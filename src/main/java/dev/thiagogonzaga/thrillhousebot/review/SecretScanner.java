@@ -100,18 +100,64 @@ final class SecretScanner {
     return formats;
   }
 
+  /** The words that mark a key as naming a credential. */
+  private static final String CREDENTIAL_WORD =
+      "(?:password|passwd|secret|token|api[_-]?key|apikey"
+          + "|access[_-]?key|private[_-]?key|client[_-]?secret)";
+
+  /**
+   * A type name after a {@code :} annotation: TypeScript {@code string}, Kotlin and Swift {@code
+   * String} or {@code String?}, Python {@code str} or {@code Final[str]}, Rust {@code &str}, {@code
+   * &'static str} or {@code &mut str}. One word at most 40 characters long, taken possessively like
+   * every run in the rule, so a failed match gives nothing back and the rule stays linear.
+   */
+  private static final String ANNOTATED_TYPE =
+      "&?(?:'[A-Za-z_]{1,20}\\s{1,4})?(?:mut\\s{1,4})?[A-Za-z_][A-Za-z0-9_.\\[\\]]{0,40}+\\??";
+
+  /**
+   * What a declaration may put between the key and the operator (#916): a C array suffix ({@code
+   * API_TOKEN[]}, {@code API_TOKEN[41]}), a TypeScript optional mark, then either a {@code :} type
+   * annotation (Rust, TypeScript, Kotlin, Scala, Swift, Python) or a whitespace-separated Go type
+   * ({@code var apiToken string =}). A type written before the name — C {@code const char
+   * *API_TOKEN}, Java {@code String apiToken} — needs nothing here, since the key is the last word
+   * before the operator. Every part is optional and bounded.
+   */
+  private static final String DECLARATOR =
+      "(?:\\[\\s{0,4}[A-Za-z0-9_]{0,40}+\\s{0,4}\\])?\\??[\"']?"
+          + "(?:\\s{0,4}:\\s{0,4}"
+          + ANNOTATED_TYPE
+          + "|\\s{1,4}[A-Za-z_][A-Za-z0-9_.]{0,40}+)?";
+
   /**
    * {@code <key> = "<literal>"} and its YAML/JSON/Go/Ruby spellings, where the key names a
-   * credential. The literal must be quoted: an unquoted right-hand side is a variable or a call,
-   * which is where the credential is supposed to come from.
+   * credential, with an optional {@link #DECLARATOR} between the key and the operator. The literal
+   * must be quoted: an unquoted right-hand side is a variable or a call, which is where the
+   * credential is supposed to come from.
    */
   private static final Pattern GENERIC_ASSIGNMENT =
       Pattern.compile(
-          "(?i)([A-Za-z0-9_.-]{0,40}(?:password|passwd|secret|token|api[_-]?key|apikey"
-              + "|access[_-]?key|private[_-]?key|client[_-]?secret)[A-Za-z0-9_.-]{0,40})"
-              + "[\"']?\\s*(?::=|=>|=|:)\\s*([\"'])([^\"'\\s]{"
+          "(?i)([A-Za-z0-9_.-]{0,40}"
+              + CREDENTIAL_WORD
+              + "[A-Za-z0-9_.-]{0,40}+)"
+              + DECLARATOR
+              + "\\s*(?::=|=>|=|:)\\s*([\"'])([^\"'\\s]{"
               + MIN_GENERIC_LENGTH
               + ",256})\\2");
+
+  /**
+   * The looser shape the model-text scrub reads (#916): a credential word, then on the same line
+   * the first {@code =} or {@code :} after it, then within 40 characters a quoted literal (double
+   * or single quotes or backticks). It does not care what sits between the name and the operator or
+   * between the operator and the quote ({@code &'static str = "…"}, {@code = b"…"}, {@code =
+   * Some("…")}), so a declaration form the scan does not know still cannot be echoed.
+   */
+  private static final Pattern ASSIGNED_LITERAL =
+      Pattern.compile(
+          "(?i)"
+              + CREDENTIAL_WORD
+              + "[^=:\\n]{0,60}+(?::=|=>|=|:)[^\"`\\n;]{0,40}?([\"'`])([^\"'`\\s]{"
+              + MIN_GENERIC_LENGTH
+              + ",256})\\1");
 
   /**
    * Case-insensitive fragments that mark a value as a placeholder rather than a credential. Each is
@@ -290,6 +336,33 @@ final class SecretScanner {
       entropy -= p * (Math.log(p) / Math.log(2));
     }
     return entropy;
+  }
+
+  /**
+   * The text with every quoted literal that is assigned to a credential-named key on its line, and
+   * that {@link #looksLikeSecret} at the threshold, replaced with its redacted form (#916). The
+   * defence in depth for model text: the scan scrubs the values it matched, and this catches a
+   * value it did not, so a declaration form the scan misses cannot become an echo.
+   */
+  static String redactAssignedLiterals(String text, double entropyThreshold) {
+    return ASSIGNED_LITERAL
+        .matcher(text)
+        .replaceAll(
+            match -> {
+              var value = match.group(2);
+              var whole = match.group();
+              if (!looksLikeSecret(value, entropyThreshold)) {
+                return Matcher.quoteReplacement(whole);
+              }
+              int start = match.start(2) - match.start();
+              var redacted = redact(new Hit(SecurityRule.GENERIC_SECRET, value, null));
+              return Matcher.quoteReplacement(
+                  whole.substring(0, start)
+                      + "[redacted: "
+                      + redacted
+                      + "]"
+                      + whole.substring(start + value.length()));
+            });
   }
 
   /**

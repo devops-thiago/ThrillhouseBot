@@ -56,9 +56,11 @@ import java.util.stream.Stream;
  * first characters and its length ({@link SecretScanner#redact}); it carries no {@code
  * suggestion_old}, because the content anchor is persisted with the session and shown on the
  * dashboard; and every other finding and status note in the response has the matched values
- * scrubbed out, so a model finding that quoted the line cannot post it either. Nothing here logs a
- * value. The summary call that follows is code-blind and only reads the findings, so its text is
- * built from the scrubbed set.
+ * scrubbed out, so a model finding that quoted the line cannot post it either. With the secret half
+ * on, the scrub also redacts a secret-looking quoted literal that a line of that text assigns to a
+ * credential-named key, whether or not the scan matched it, so a declaration form the scan does not
+ * know cannot become an echo (#916). Nothing here logs a value. The summary call that follows is
+ * code-blind and only reads the findings, so its text is built from the scrubbed set.
  *
  * <p><b>Across rounds.</b> A detection whose finding the effective previous round already raised
  * (same file, title and anchor) is not raised again, so a push that leaves the secret in place does
@@ -195,7 +197,10 @@ public class SecurityScan {
       List<ReviewResponse.Finding> previous,
       Set<Integer> settledIds) {
     var scanPriors = openScanPriors(previous, settledIds);
-    var scrubber = Scrubber.of(result.redactions());
+    var scrubber =
+        secretsEnabled
+            ? Scrubber.of(result.redactions(), entropyThreshold)
+            : Scrubber.of(result.redactions());
     var tracked = new LinkedHashMap<Integer, Detection>();
     var raised = new ArrayList<ReviewResponse.Finding>();
     for (var detection : result.detections()) {
@@ -583,23 +588,41 @@ public class SecurityScan {
   /**
    * Replaces every matched value in a text with its redacted form in one pass: the values are
    * compiled into a single alternation once per merge, longest first so a value that contains
-   * another is replaced whole, instead of rebuilding each text once per value.
+   * another is replaced whole, instead of rebuilding each text once per value. With the secret half
+   * on, it then redacts any quoted literal a line of the text assigns to a credential-named key
+   * ({@link SecretScanner#redactAssignedLiterals}), so a value the scan did not match — a
+   * declaration form it does not know — is not echoed either (#916).
    */
   static final class Scrubber {
-    private static final Scrubber NONE = new Scrubber(null, Map.of());
+    private static final Scrubber NONE = new Scrubber(null, Map.of(), Double.NaN);
 
     private final Pattern values;
     private final Map<String, String> replacements;
 
-    private Scrubber(Pattern values, Map<String, String> replacements) {
+    /** Entropy threshold of the assigned-literal pass, or NaN when that pass is off. */
+    private final double assignedLiteralThreshold;
+
+    private Scrubber(
+        Pattern values, Map<String, String> replacements, double assignedLiteralThreshold) {
       this.values = values;
       this.replacements = replacements;
+      this.assignedLiteralThreshold = assignedLiteralThreshold;
     }
 
     /** Built from redactions already ordered longest first ({@link Result#redactions()}). */
     static Scrubber of(List<Redaction> redactions) {
+      return of(redactions, Double.NaN);
+    }
+
+    /**
+     * As {@link #of(List)}, plus the assigned-literal pass at the given entropy threshold (NaN
+     * leaves it off).
+     */
+    static Scrubber of(List<Redaction> redactions, double assignedLiteralThreshold) {
       if (redactions.isEmpty()) {
-        return NONE;
+        return Double.isNaN(assignedLiteralThreshold)
+            ? NONE
+            : new Scrubber(null, Map.of(), assignedLiteralThreshold);
       }
       var replacements = new LinkedHashMap<String, String>();
       for (var redaction : redactions) {
@@ -607,16 +630,22 @@ public class SecurityScan {
       }
       var alternation =
           replacements.keySet().stream().map(Pattern::quote).collect(Collectors.joining("|"));
-      return new Scrubber(Pattern.compile(alternation), replacements);
+      return new Scrubber(Pattern.compile(alternation), replacements, assignedLiteralThreshold);
     }
 
     String scrub(String text) {
-      if (text == null || values == null) {
-        return text;
+      if (text == null) {
+        return null;
       }
-      return values
-          .matcher(text)
-          .replaceAll(match -> Matcher.quoteReplacement(replacements.get(match.group())));
+      var scrubbed =
+          values == null
+              ? text
+              : values
+                  .matcher(text)
+                  .replaceAll(match -> Matcher.quoteReplacement(replacements.get(match.group())));
+      return Double.isNaN(assignedLiteralThreshold)
+          ? scrubbed
+          : SecretScanner.redactAssignedLiterals(scrubbed, assignedLiteralThreshold);
     }
   }
 
