@@ -1938,6 +1938,89 @@ class PrSummaryGeneratorTest {
     var round =
         new ReviewResult(
             List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, false, "", List.of(), List.of(), 0);
-    assertSame(round, PrSummaryGenerator.currentState(round));
+    var state = PrSummaryGenerator.currentState(round);
+    assertSame(round, state.result());
+    assertTrue(state.carried().isEmpty());
+  }
+
+  private static Finding finding(RiskLevel risk, String file, int line, String title) {
+    return new Finding(risk, Confidence.HIGH, file, line, title, "d", null, null);
+  }
+
+  private static ReviewResult roundWith(List<Finding> own, List<Finding> open) {
+    return new ReviewResult(
+        own,
+        0,
+        0,
+        0,
+        0,
+        null,
+        ReviewState.COMMENT,
+        false,
+        "",
+        List.of(),
+        List.of(),
+        0,
+        false,
+        false,
+        null,
+        0,
+        open);
+  }
+
+  @Test
+  void anExactReRaiseIsFoldedIntoTheRoundsEntryAtTheHigherSeverityAndMarkedCarried() {
+    var earlier = finding(RiskLevel.CRITICAL, "src/A.java", 12, "Null body crashes the handler");
+    var raised = finding(RiskLevel.LOW, "src/A.java", 12, "  null body crashes the handler ");
+    var other = finding(RiskLevel.MEDIUM, "src/A.java", 12, "Unbounded body size");
+
+    var state =
+        PrSummaryGenerator.currentState(roundWith(List.of(raised), List.of(earlier, other)));
+
+    assertEquals(2, state.result().findings().size());
+    var folded = state.result().findings().get(0);
+    assertEquals(RiskLevel.CRITICAL, folded.risk());
+    assertEquals(raised.title(), folded.title());
+    assertEquals(1, state.result().criticalCount());
+    assertEquals(1, state.result().mediumCount());
+    assertEquals(0, state.result().lowCount());
+    assertEquals(2, state.carried().size());
+    assertTrue(state.carried().contains(folded));
+  }
+
+  @Test
+  void aRoundFindingAbsorbsAtMostOneEarlierFindingAndKeepsItsOwnHigherSeverity() {
+    var first = finding(RiskLevel.LOW, "src/A.java", 3, "Same title");
+    var second = finding(RiskLevel.LOW, "src/A.java", 3, "Same title");
+    var raised = finding(RiskLevel.HIGH, "src/A.java", 3, "Same title");
+
+    var state = PrSummaryGenerator.currentState(roundWith(List.of(raised), List.of(first, second)));
+
+    assertSame(raised, state.result().findings().get(0));
+    assertSame(second, state.result().findings().get(1));
+    assertEquals(2, state.carried().size());
+    assertEquals(1, state.result().highCount());
+    assertEquals(1, state.result().lowCount());
+  }
+
+  @Test
+  void reRaisesRequiresTheSameFileLineAndTitle() {
+    var earlier = finding(RiskLevel.HIGH, "src/A.java", 5, "Title");
+    assertTrue(
+        PrSummaryGenerator.reRaises(finding(RiskLevel.LOW, "src/A.java", 5, "title"), earlier));
+    assertFalse(
+        PrSummaryGenerator.reRaises(finding(RiskLevel.HIGH, "src/A.java", 6, "Title"), earlier));
+    assertFalse(
+        PrSummaryGenerator.reRaises(finding(RiskLevel.HIGH, "src/B.java", 5, "Title"), earlier));
+    assertFalse(
+        PrSummaryGenerator.reRaises(finding(RiskLevel.HIGH, "src/A.java", 5, "Other"), earlier));
+    assertFalse(
+        PrSummaryGenerator.reRaises(finding(RiskLevel.HIGH, "src/A.java", 5, null), earlier));
+    assertFalse(
+        PrSummaryGenerator.reRaises(finding(RiskLevel.HIGH, "src/A.java", 5, " "), earlier));
+    assertFalse(
+        PrSummaryGenerator.reRaises(
+            finding(RiskLevel.HIGH, "src/A.java", 5, "Title"),
+            finding(RiskLevel.HIGH, "src/A.java", 5, null)));
   }
 }

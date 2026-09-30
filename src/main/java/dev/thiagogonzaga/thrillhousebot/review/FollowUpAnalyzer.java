@@ -2574,46 +2574,75 @@ public class FollowUpAnalyzer {
   }
 
   /**
+   * {@code statuses} without the {@code unresolved} entries that name no finding: an id outside the
+   * previous round, or an id an earlier entry already reported {@code unresolved}. Every other
+   * entry is kept as it is, in order.
+   *
+   * <p>The "Still present" count, the review body's unresolved line and the delta comment count
+   * these statuses, while the summary lists one finding per distinct in-range id ({@link
+   * #stillOpenFindings}); a phantom entry made the count exceed the list beside it (#934). Dropping
+   * one cannot let APPROVE past an open finding: a previous finding the model did not report under
+   * its own id is held by the backstop ({@link #heldPreviousFindings}). With no previous findings
+   * to map ids onto (the review-body fallback, where nothing was persisted) the statuses are the
+   * only hold there is, so they are returned unchanged.
+   *
+   * @param previous the effective previous round's findings, the id space of {@code statuses}
+   */
+  public static List<ReviewResponse.PreviousFindingStatus> withoutPhantomUnresolved(
+      List<ReviewResponse.Finding> previous, List<ReviewResponse.PreviousFindingStatus> statuses) {
+    if (previous.isEmpty()) {
+      return statuses;
+    }
+    var seen = new HashSet<Integer>();
+    var kept = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
+    for (var status : statuses) {
+      var id = status.id();
+      if (!STATUS_UNRESOLVED.equalsIgnoreCase(status.status())
+          || (id >= 1 && id <= previous.size() && seen.add(id))) {
+        kept.add(status);
+      }
+    }
+    return kept.size() == statuses.size() ? statuses : kept;
+  }
+
+  /**
    * Every prior finding still open after this round, as the summary edited in place must list them
    * (#917): the effective previous round's findings this round reports {@code unresolved} (after
    * the supersede, decline re-check and conversation-clear passes rewrote the statuses), then the
    * findings the backstop holds from any earlier round. A finding the round resolved, a maintainer
    * declined or cleared, or whose code left the diff is in neither list, so it leaves the summary.
    *
-   * <p>One defect is listed once: an entry that {@link #isSameFinding restates} one already kept,
-   * or one of this round's own findings (a re-raise), is skipped, so the summary's counts are the
-   * distinct open set rather than a drifted duplicate counted twice. Model ids outside the previous
-   * round name no finding and are skipped, as {@link #unresolvedFindings} skips them. The
-   * comparison is pairwise because {@link #isSameFinding} is a tolerant predicate no key can index,
-   * the same trade {@link #clusterByIdentity} makes over the same set in the backstop; the set is
-   * bounded by the findings earlier rounds posted (19 on the largest PR in #917's evidence).
+   * <p>The list is the still-open set by identity, one entry per status that holds a finding open:
+   * a distinct in-range id the model reports {@code unresolved}, and each backstop hold. Nothing is
+   * dropped for resembling another entry. The "Still present" count is taken over those same
+   * statuses, and a similarity pass here — two findings on one line, a critical whose text overlaps
+   * a low — made the summary's counts and Key Findings lose an open finding the count still named,
+   * sometimes the more severe one (#934). The two sources cannot name one finding twice: the
+   * backstop drops every finding the round reported on before it holds anything ({@link
+   * #closeReported}). A finding the round re-raised is folded into the round's own entry where the
+   * summary merges the two sets ({@code PrSummaryGenerator#currentState}), by exact identity. Model
+   * ids outside the previous round name no finding and are skipped, as {@link #unresolvedFindings}
+   * skips them.
    *
    * @param previous the effective previous round's findings, the id space of {@code statuses}
    * @param statuses the round's effective {@code previous_findings_status}
    * @param held the backstop's holds ({@link #heldPreviousFindings})
-   * @param newFindings this round's own findings
    */
   public static List<Finding> stillOpenFindings(
       List<ReviewResponse.Finding> previous,
       List<ReviewResponse.PreviousFindingStatus> statuses,
-      List<HeldPrevious> held,
-      List<ReviewResponse.Finding> newFindings) {
+      List<HeldPrevious> held) {
     var unresolvedIds =
         statuses.stream()
             .filter(status -> STATUS_UNRESOLVED.equalsIgnoreCase(status.status()))
             .map(ReviewResponse.PreviousFindingStatus::id)
             .filter(id -> id >= 1 && id <= previous.size())
             .collect(Collectors.toCollection(TreeSet::new));
-    var kept = new ArrayList<ReviewResponse.Finding>();
-    Stream.concat(
+    return Stream.concat(
             unresolvedIds.stream().map(id -> previous.get(id - 1)),
             held.stream().map(HeldPrevious::finding))
-        .filter(
-            candidate ->
-                Stream.concat(newFindings.stream(), kept.stream())
-                    .noneMatch(seen -> isSameFinding(candidate, seen)))
-        .forEachOrdered(kept::add);
-    return kept.stream().map(Finding::fromAiResponse).toList();
+        .map(Finding::fromAiResponse)
+        .toList();
   }
 
   /**
@@ -2657,9 +2686,10 @@ public class FollowUpAnalyzer {
   private static RoundReplay replayRounds(List<ReviewResponse> chrono) {
     var open = new LinkedHashMap<String, OpenFinding>();
     var reportedRound = List.<ReviewResponse.Finding>of();
-    for (var round : chrono) {
+    for (var r = 0; r < chrono.size(); r++) {
+      var round = chrono.get(r);
       closeAddressed(open, reportedRound, round.previousFindingsStatus());
-      addOpenFindings(open, round.findings());
+      addOpenFindings(open, round.findings(), r);
       if (!round.findings().isEmpty()) {
         reportedRound = round.findings();
       }
@@ -2791,14 +2821,25 @@ public class FollowUpAnalyzer {
         FindingVerificationService.recount(response.summary(), kept));
   }
 
-  /** Groups the open findings into clusters of tolerant ({@link #isSameFinding}) identity. */
+  /**
+   * Groups the open findings into clusters of tolerant ({@link #isSameFinding}) identity: one
+   * defect the model raised again in a later round, reworded or drifted.
+   *
+   * <p>Two findings one round raised are two findings, however alike they read: the round posted
+   * each under its own marker and thread, and the tolerant predicate cannot tell a re-raise from a
+   * second defect on the same line (#934). A cluster therefore never takes a second member from a
+   * round it already has one from. Merging them held one of the two, so the other left the "Still
+   * present" count and the summary while its thread stayed open, and a reply on either thread
+   * cleared both.
+   */
   private static List<List<OpenFinding>> clusterByIdentity(Map<String, OpenFinding> open) {
     var clusters = new ArrayList<List<OpenFinding>>();
     for (var openFinding : open.values()) {
       List<OpenFinding> home = null;
       for (var cluster : clusters) {
-        if (cluster.stream()
-            .anyMatch(member -> isSameFinding(member.finding(), openFinding.finding()))) {
+        if (cluster.stream().noneMatch(member -> member.round() == openFinding.round())
+            && cluster.stream()
+                .anyMatch(member -> isSameFinding(member.finding(), openFinding.finding()))) {
           home = cluster;
           break;
         }
@@ -2846,17 +2887,21 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * The first still-present member of the cluster to hold, or {@code null} when its code is gone, a
-   * maintainer has replied on its thread, or a maintainer cleared or declined it from the PR
-   * conversation ({@link #dispositionedInConversation} — the only hatches a finding with no thread
-   * has, #548, #709). The reply is located by the round-relative marker ({@link OpenFinding#id()})
-   * plus the finding's own content rather than by title, so a null-title finding's thread is still
-   * seen and a thread-less finding cannot bind to a different finding that reused the same marker
-   * index in another round.
+   * The most severe still-present member of the cluster to hold (the earliest among equals), or
+   * {@code null} when its code is gone, a maintainer has replied on its thread, or a maintainer
+   * cleared or declined it from the PR conversation ({@link #dispositionedInConversation} — the
+   * only hatches a finding with no thread has, #548, #709). The reply is located by the
+   * round-relative marker ({@link OpenFinding#id()}) plus the finding's own content rather than by
+   * title, so a null-title finding's thread is still seen and a thread-less finding cannot bind to
+   * a different finding that reused the same marker index in another round.
    *
    * <p>Presence is resolved through {@code renameTargets} the same way {@link #hasVanished} does:
    * the finding's flagged code lives at its rename target, not its pre-rename path, when the file
    * was renamed-and-edited (F5).
+   *
+   * <p>The members are one defect raised again, and a round may re-rate it. The summary lists the
+   * held member, so holding the first one let a later CRITICAL re-rating be listed and counted as
+   * the LOW it once was (#934); the higher severity wins.
    */
   private OpenFinding holdableTarget(
       List<OpenFinding> cluster,
@@ -2870,7 +2915,8 @@ public class FollowUpAnalyzer {
     boolean answered = false;
     for (var member : cluster) {
       var finding = member.finding();
-      if (target == null && isStillPresent(finding, lineResolver, renameTargets)) {
+      if ((target == null || moreSevere(finding, target.finding()))
+          && isStillPresent(finding, lineResolver, renameTargets)) {
         target = member;
       }
       if (answeredRootComment(finding, member.id(), inlineComments, botIdentity) != null
@@ -2907,15 +2953,23 @@ public class FollowUpAnalyzer {
     return lineResolver.isFindingPresent(currentPath, finding.suggestionOld());
   }
 
-  /** A still-open prior finding and the 1-based id it carried within the round that raised it. */
-  private record OpenFinding(ReviewResponse.Finding finding, int id) {}
+  /** Whether {@code finding} is rated strictly more severe than {@code than}. */
+  private static boolean moreSevere(ReviewResponse.Finding finding, ReviewResponse.Finding than) {
+    return RiskLevel.fromString(finding.risk()).compareTo(RiskLevel.fromString(than.risk())) < 0;
+  }
+
+  /**
+   * A still-open prior finding, the 1-based id it carried within the round that raised it, and that
+   * round's position (oldest first).
+   */
+  private record OpenFinding(ReviewResponse.Finding finding, int id, int round) {}
 
   private static void addOpenFindings(
-      Map<String, OpenFinding> open, List<ReviewResponse.Finding> findings) {
+      Map<String, OpenFinding> open, List<ReviewResponse.Finding> findings, int round) {
     for (var i = 0; i < findings.size(); i++) {
       var key = findingKey(findings.get(i));
       if (key != null) {
-        open.put(key, new OpenFinding(findings.get(i), i + 1));
+        open.put(key, new OpenFinding(findings.get(i), i + 1, round));
       }
     }
   }

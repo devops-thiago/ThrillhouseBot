@@ -17,7 +17,9 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.function.Predicate;
 
 /** Aggregated result of a full review orchestration. */
 @RegisterForReflection
@@ -396,9 +398,19 @@ public record ReviewResult(
    * "Things to double-check" instead ({@link #doubleCheckFindings()}).
    */
   public List<Finding> keyFindings() {
+    return keyFindings(f -> false);
+  }
+
+  /**
+   * {@link #keyFindings()}, ranked over every finding together by severity alone, with {@code
+   * preferred} breaking a tie. The summary passes the findings open since an earlier review: the
+   * cap then never cuts one of them for a finding of lower severity, and at equal severity it keeps
+   * the one no fresh inline comment on this round already points at (#934).
+   */
+  public List<Finding> keyFindings(Predicate<Finding> preferred) {
     return findings.stream()
         .filter(Finding::postsInline)
-        .sorted((a, b) -> a.risk().compareTo(b.risk()))
+        .sorted(Comparator.comparing(Finding::risk).thenComparing(f -> preferred.test(f) ? 0 : 1))
         .limit(KEY_FINDINGS_COUNT)
         .toList();
   }
