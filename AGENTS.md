@@ -58,6 +58,7 @@ same diff.
 | Load diff, prior reviews/findings, instructions, labels, project stack, config-key and patch-coverage context | `review/ReviewContextLoader` (with `PatchCoverageResolver`, `ConfigKeyContextResolver`, `BugFixContextResolver`) |
 | Early CI reading and the opt-in CI-failure section | `review/CiStatusEvaluator`, `review/CiFailureContextResolver` |
 | Opt-in review learnings: recall before the call (ranked, capped section) | `review/ReviewLearnings.promptSection` (reads `ReviewLearningService.listActive`) |
+| Opt-in linked-issue context: resolve the PR's linked issues, read them, extract acceptance criteria, sanitize and cap | `review/TicketContextResolver.resolve` over an `review/IssueTrackerProvider` (`review/GitHubIssuesProvider.linkedTickets`: PR-body closing keywords, then `closingIssuesReferences`, then optionally the branch name), called from `ReviewOrchestrator` and handed to `ReviewPromptAssembler.assemble(ctx, req, ciFailures, linkedIssues)` |
 | Fence untrusted input, build review and summary guidance, pick the system prompt | `review/ReviewPromptAssembler` (with `PromptSections`, `PromptTemplateEscaper`, `ReviewDimensionRouter`) |
 | Token budget and batches | `review/DiffBudgetPlanner` (`plan`, `boundPreviousFindings`, `perCallInputBudget`) |
 | Model calls: single call, batches, retries, sequential retry, truncation salvage, summary call | `review/FindingPipeline.run` → `review/ai/AiReviewService` (`review`, `reviewBatch`, `summarize`) |
@@ -148,13 +149,20 @@ Two patterns. Pick the first unless the section must sit somewhere else in the u
 1. **Trailing-guidance slot (the default).** Review-only guidance and data ride
    `PromptInputs.repoInstructions`, which `ReviewPromptAssembler.assemble` builds with
    `combineSections` (mock fidelity, bug-fix efficacy with linked issue text, config-key context,
-   heuristic failure modes, patch coverage, CI failures, learnings, then repo instructions). Add a static
-   `…Section` method that returns `""` when there is no data and emits the guidance constant only
-   together with its fenced data (see `patchCoverageSection`, `ciFailuresSection`,
-   `learningsSection`). Every batch
-   carries the slot, and `DiffBudgetPlanner.plan` already counts it as shared overhead. No new
-   `@V`, record component or planner change is needed. Guidance for the summary call goes in
-   `summaryInstructions` instead, which `FindingPipeline` counts when it clamps the summary input.
+   heuristic failure modes, patch coverage, then CI failures, linked issues and learnings in that
+   fixed order, then repo instructions). The three opt-in sections arrive together as one
+   `ReviewPromptAssembler.TrailingContext` passed to `assemble(ctx, req, extra)`; add a component
+   there rather than another overload. Add a static `…Section` method that returns `""` when there
+   is no data and emits the guidance constant only together with its fenced data (see
+   `patchCoverageSection`, `ciFailuresSection`, `learningsSection`). Every batch carries the slot,
+   and `DiffBudgetPlanner.plan` already counts it as shared overhead
+   (`DiffBudgetPlannerTest.ciFailuresLinkedIssuesAndLearningsTogetherAreAllChargedToTheSharedOverhead`).
+   No new `@V`, record component of `PromptInputs` or planner change is needed. Guidance for the
+   summary call goes in `summaryInstructions` instead, which `FindingPipeline` counts when it clamps
+   the summary input.
+   A section can ride both slots with a different request in each: the linked-issue section
+   (`linkedIssuesSection`) gives the review call `TicketContextPrompts.REVIEW_REQUEST` and the
+   summary call `TicketContextPrompts.SUMMARY_REQUEST`, each with its own fence.
 
    A section triggered by the diff text cannot be decided in the assembler: with budgeting on
    (the default) `ReviewContextLoader` leaves `ctx.diff()` empty. Decide it per batch in
@@ -198,7 +206,8 @@ live `fence(...)` (#604).
   to both.
 - **Prompt-content tests pin guidance** that specific issues fought for:
   `PrReviewPromptsContentTest`, `FindingVerifierPromptsContentTest`,
-  `PrImproveAssistantPromptsContentTest`, `UnitTestAssistantPromptsContentTest`. Update a pin
+  `PrImproveAssistantPromptsContentTest`, `UnitTestAssistantPromptsContentTest`,
+  `TicketContextPromptsContentTest`. Update a pin
   deliberately when you reword it. Never delete one to make a build pass.
 - **The eval corpus is the recall gate.** `src/test/resources/evalcorpus/` holds labeled cases.
   `EvalCorpusTest` validates the schema and routing coverage in every build. The live
@@ -217,6 +226,15 @@ live `fence(...)` (#604).
   path-scoped). Use `PromptTemplateEscaper.fence`, which wraps text in per-call CSPRNG fence
   lines and passes it byte-exact, and give it a heading in the prompt that calls it untrusted data.
   `escape` / `neutralizeMarkers` only rewrite legacy markers. They are not an injection defense.
+- **Linked issues are read, never written, and their text is untrusted.** An
+  `IssueTrackerProvider` only reads: no comment, label or state change on the issue, ever
+  (`GitHubIssuesProviderTest.onlyReadsNeverWrites`). Only issues of the PR's own repository are
+  read. Issue title and body are attacker-editable, so `TicketContextResolver` strips them with
+  `CiFailureContextResolver.clean`, clips them and caps the section, and the assembler fences it
+  in both calls. An acceptance criterion the change does not address is a summary
+  `description_gaps` entry (`Linked issue #N: …`), never a finding: a finding claims a defect on
+  a changed line, a missing criterion is scope. The bug-fix efficacy section drops its own copy
+  of the issue text when the linked-issue section is present.
 - **Sanitize model and GitHub text before logging it.** Wrap every such value in
   `LogSafe.oneLine` at the point where the accessor is read. `LogSafeInvariantTest` derives the
   untrusted accessors from the `*Response` records in `review.ai` and fails on a log call that

@@ -92,6 +92,7 @@ public class ReviewOrchestrator {
 
   private final CiStatusEvaluator ciStatusEvaluator;
   private final CiFailureContextResolver ciFailureContext;
+  private final TicketContextResolver ticketContext;
   private final ReviewLearnings learnings;
 
   private final CheckRunManager checkRunManager;
@@ -241,6 +242,7 @@ public class ReviewOrchestrator {
       @ReviewExecutor ExecutorService reviewExecutor,
       ReviewNotifier notifier,
       CiFailureContextResolver ciFailureContext,
+      TicketContextResolver ticketContext,
       ReviewLearnings learnings) {
     this.config = config;
     this.authClient = authClient;
@@ -248,6 +250,7 @@ public class ReviewOrchestrator {
     this.sessionPersistence = sessionPersistence;
     this.ciStatusEvaluator = ciStatusEvaluator;
     this.ciFailureContext = ciFailureContext;
+    this.ticketContext = ticketContext;
     this.learnings = learnings;
     this.checkRunManager = checkRunManager;
     this.contextLoader = contextLoader;
@@ -327,9 +330,10 @@ public class ReviewOrchestrator {
           ciFuture == null
               ? ""
               : ciFailureContext.resolve(auth, req.owner(), req.repo(), ciFuture.join());
+      // #58: the linked issues' text, read-only and best-effort; "" when the feature is off.
+      var linkedIssues =
+          ticketContext.resolve(auth, req.owner(), req.repo(), req.prNumber(), req.prDescription());
 
-      // Bound the one prompt section that grows every round before anything is sized or sent, so
-      // the plan's overhead estimate and the text the calls actually carry are the same (#583).
       // #38: what maintainers taught the review on earlier pull requests, bounded and relevant to
       // the files this one changes; blank when the feature is off.
       var learned =
@@ -340,9 +344,14 @@ public class ReviewOrchestrator {
               ctx.reviewableFiles().stream()
                   .map(GitHubPullRequestClient.FileDiff::filename)
                   .toList());
+      // Bound the one prompt section that grows every round before anything is sized or sent, so
+      // the plan's overhead estimate and the text the calls actually carry are the same (#583).
       var promptInputs =
           budgetPlanner.boundPreviousFindings(
-              promptAssembler.assemble(ctx, req, ciFailures, learned));
+              promptAssembler.assemble(
+                  ctx,
+                  req,
+                  new ReviewPromptAssembler.TrailingContext(ciFailures, linkedIssues, learned)));
       var plan = budgetPlanner.plan(ctx.reviewableFiles(), promptInputs);
 
       if (ciFuture == null) {

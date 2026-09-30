@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TicketContextPrompts;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -77,35 +78,54 @@ public class ReviewPromptAssembler {
     this.dimensionRouter = dimensionRouter;
   }
 
+  /**
+   * The opt-in, per-review sections the orchestrator resolves before assembly, each the unfenced
+   * text its resolver built or blank when there is none: the CI-failure list (#59, {@link
+   * CiFailureContextResolver}), the linked issues (#58, {@link TicketContextResolver}) and the
+   * learnings (#38, {@link ReviewLearnings#promptSection}). One record rather than an overload per
+   * section, so a new section is one component and every caller is visible to the compiler.
+   */
+  record TrailingContext(String ciFailures, String linkedIssues, String learnings) {
+
+    /** No opt-in section: the review as it is with every feature off. */
+    static final TrailingContext NONE = new TrailingContext("", "", "");
+
+    TrailingContext {
+      ciFailures = ciFailures == null ? "" : ciFailures;
+      linkedIssues = linkedIssues == null ? "" : linkedIssues;
+      learnings = learnings == null ? "" : learnings;
+    }
+
+    boolean hasLinkedIssues() {
+      return !linkedIssues.isBlank();
+    }
+  }
+
   AiReviewService.PromptInputs assemble(
       ReviewContextLoader.ReviewContext ctx, ReviewOrchestrator.ReviewRequest req) {
-    return assemble(ctx, req, "");
+    return assemble(ctx, req, TrailingContext.NONE);
   }
 
   /**
-   * Assembles the prompt inputs with the opt-in CI-failure section (#59): {@code ciFailures} is the
-   * unfenced list {@link CiFailureContextResolver} built, or blank when there is none. It rides the
-   * review call's trailing guidance, so every batch carries it and the planner counts it in the
-   * shared overhead with the rest of that slot.
+   * Assembles the prompt inputs with the opt-in sections in {@code extra}. All three ride the
+   * review call's trailing guidance, so every batch carries them and the planner counts them in the
+   * shared overhead with the rest of that slot; the linked issues also ride the summary call's
+   * guidance (with a different request), counted in its clamp, and when they are present the
+   * bug-fix efficacy section drops its own copy of the linked issues' text.
+   *
+   * <p>Order in the review call's slot, fixed and pinned by a test: CI failures, then linked
+   * issues, then learnings, then the repository instructions. Evidence about this commit comes
+   * first, then what the change is meant to do, then the repository's standing maintainer guidance
+   * — learnings next to the instructions they refine. Each section is fenced separately with its
+   * own request above its fence, so none can read as part of another.
    */
   AiReviewService.PromptInputs assemble(
       ReviewContextLoader.ReviewContext ctx,
       ReviewOrchestrator.ReviewRequest req,
-      String ciFailures) {
-    return assemble(ctx, req, ciFailures, "");
-  }
-
-  /**
-   * Assembles the prompt inputs with the opt-in CI-failure section (#59) and the opt-in learnings
-   * section (#38): {@code learnings} is the unfenced list {@link ReviewLearnings#promptSection}
-   * built, or blank. Both ride the review call's trailing guidance, so every batch carries them and
-   * the planner counts them in the shared overhead with the rest of that slot.
-   */
-  AiReviewService.PromptInputs assemble(
-      ReviewContextLoader.ReviewContext ctx,
-      ReviewOrchestrator.ReviewRequest req,
-      String ciFailures,
-      String learnings) {
+      TrailingContext extra) {
+    var ciFailures = extra.ciFailures();
+    var linkedIssues = extra.linkedIssues();
+    var hasLinkedIssues = extra.hasLinkedIssues();
     String fencedDiff = PromptTemplateEscaper.fence(ctx.diff());
     String fencedStack = PromptTemplateEscaper.fence(ctx.projectStack());
     String labelGuidance = PrLabeler.buildLabelGuidance(ctx.repoLabels(), labeler.allowNewLabels());
@@ -124,7 +144,8 @@ public class ReviewPromptAssembler {
             combineSections(
                 combineSections(
                     mockFidelitySection(relatedTests),
-                    bugFixEfficacySection(req.prDescription(), ctx.linkedIssuesContext())),
+                    bugFixEfficacySection(
+                        req.prDescription(), hasLinkedIssues ? "" : ctx.linkedIssuesContext())),
                 combineSections(
                     configKeyContextSection(ctx.configKeyContext()),
                     combineSections(
@@ -132,7 +153,11 @@ public class ReviewPromptAssembler {
                         combineSections(
                             patchCoverageSection(ctx.patchCoverage()),
                             combineSections(
-                                ciFailuresSection(ciFailures), learningsSection(learnings)))))),
+                                ciFailuresSection(ciFailures),
+                                combineSections(
+                                    linkedIssuesSection(
+                                        TicketContextPrompts.REVIEW_REQUEST, linkedIssues),
+                                    learningsSection(extra.learnings()))))))),
             // Global instructions first, then the scopes that matched a file in this PR — the
             // scoped blocks read as refinements of the project-wide rules, not replacements.
             combineSections(
@@ -147,7 +172,9 @@ public class ReviewPromptAssembler {
             combineSections(
                 labelGuidance.isBlank() ? "" : PromptTemplateEscaper.escape(labelGuidance),
                 diagramGuidance),
-            globalInstructions);
+            combineSections(
+                globalInstructions,
+                linkedIssuesSection(TicketContextPrompts.SUMMARY_REQUEST, linkedIssues)));
     return new AiReviewService.PromptInputs(
         fencedDiff,
         PromptTemplateEscaper.fence(PromptSections.prContext(req.prTitle(), req.prDescription())),
@@ -257,6 +284,19 @@ public class ReviewPromptAssembler {
       return "";
     }
     return PrReviewPrompts.LEARNINGS_REQUEST + "\n\n" + PromptTemplateEscaper.fence(learnings);
+  }
+
+  /**
+   * One call's linked-issue request plus the issue text (#58) — empty when no linked issue could be
+   * read or the feature is off. Issue text is written by anyone who can edit the issue, so it is
+   * fenced and framed as data like the PR description, and the request travels with it or not at
+   * all.
+   */
+  static String linkedIssuesSection(String request, String linkedIssues) {
+    if (linkedIssues == null || linkedIssues.isBlank()) {
+      return "";
+    }
+    return request + "\n\n" + PromptTemplateEscaper.fence(linkedIssues);
   }
 
   /** Joins two optional prompt sections with a blank line, dropping any that are blank. */

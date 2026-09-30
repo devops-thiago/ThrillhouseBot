@@ -119,6 +119,7 @@ public class StartupConfigValidator {
     validateReviewBudget(problems, config.review());
     validateCiGating(problems, config.review());
     validateCiContext(problems, config.review().ciContext());
+    validateTicketContext(problems, config.review().ticketContext());
     validateLearnings(problems, config.review());
     validateBlockingStrictness(problems, config.review());
     validateSecurityScan(problems, config.review().securityScan());
@@ -623,6 +624,51 @@ public class StartupConfigValidator {
   }
 
   /**
+   * Rejects an unknown {@code REVIEW_TICKET_CONTEXT_PROVIDER} and an out-of-bounds issue count or
+   * character cap at boot (#58) — only when the feature is on, since a disabled section is never
+   * built — so a typo cannot silently leave the review without the ticket it was configured to
+   * read, or let issue text crowd out the diff.
+   */
+  private static void validateTicketContext(
+      List<String> problems, ThrillhouseConfig.TicketContextConfig ticketContext) {
+    if (!ticketContext.enabled()) {
+      return;
+    }
+    var provider = ticketContext.provider();
+    if (provider == null
+        || !ThrillhouseConfig.TicketContextConfig.ALLOWED_PROVIDERS.contains(
+            provider.strip().toLowerCase(Locale.ROOT))) {
+      problems.add(
+          "REVIEW_TICKET_CONTEXT_PROVIDER must be one of "
+              + ThrillhouseConfig.TicketContextConfig.ALLOWED_PROVIDERS
+              + " (thrillhousebot.review.ticket-context.provider): "
+              + provider);
+    }
+    requireWithin(
+        problems,
+        ticketContext.maxIssues(),
+        ThrillhouseConfig.TicketContextConfig.MIN_MAX_ISSUES,
+        ThrillhouseConfig.TicketContextConfig.MAX_MAX_ISSUES,
+        "REVIEW_TICKET_CONTEXT_MAX_ISSUES",
+        "thrillhousebot.review.ticket-context.max-issues");
+    requireWithin(
+        problems,
+        ticketContext.maxChars(),
+        ThrillhouseConfig.TicketContextConfig.MIN_MAX_CHARS,
+        ThrillhouseConfig.TicketContextConfig.MAX_MAX_CHARS,
+        "REVIEW_TICKET_CONTEXT_MAX_CHARS",
+        "thrillhousebot.review.ticket-context.max-chars");
+  }
+
+  /** Adds a problem naming {@code env} and {@code key} when {@code value} is outside min..max. */
+  private static void requireWithin(
+      List<String> problems, int value, int min, int max, String env, String key) {
+    if (value < min || value > max) {
+      problems.add(env + " must be between " + min + " and " + max + " (" + key + "): " + value);
+    }
+  }
+
+  /**
    * Validates the opt-in learnings store (#38), only while it is on. A learning is safe to keep
    * only because it survived the decline re-check (#169) — with the re-check off, a decline the
    * code contradicts (PR #160's race) would be remembered and suppress a valid finding on every
@@ -641,31 +687,27 @@ public class StartupConfigValidator {
               + " decline that survives the re-check may become a learning"
               + " (thrillhousebot.review.learnings.enabled)");
     }
-    requireBetween(
+    requireWithin(
         problems,
         learnings.maxPerRepo(),
         ThrillhouseConfig.LearningsConfig.MIN_MAX_PER_REPO,
         ThrillhouseConfig.LearningsConfig.MAX_MAX_PER_REPO,
-        "REVIEW_LEARNINGS_MAX_PER_REPO (thrillhousebot.review.learnings.max-per-repo)");
-    requireBetween(
+        "REVIEW_LEARNINGS_MAX_PER_REPO",
+        "thrillhousebot.review.learnings.max-per-repo");
+    requireWithin(
         problems,
         learnings.promptMaxItems(),
         ThrillhouseConfig.LearningsConfig.MIN_PROMPT_MAX_ITEMS,
         ThrillhouseConfig.LearningsConfig.MAX_PROMPT_MAX_ITEMS,
-        "REVIEW_LEARNINGS_PROMPT_MAX_ITEMS (thrillhousebot.review.learnings.prompt-max-items)");
-    requireBetween(
+        "REVIEW_LEARNINGS_PROMPT_MAX_ITEMS",
+        "thrillhousebot.review.learnings.prompt-max-items");
+    requireWithin(
         problems,
         learnings.promptMaxChars(),
         ThrillhouseConfig.LearningsConfig.MIN_PROMPT_MAX_CHARS,
         ThrillhouseConfig.LearningsConfig.MAX_PROMPT_MAX_CHARS,
-        "REVIEW_LEARNINGS_PROMPT_MAX_CHARS (thrillhousebot.review.learnings.prompt-max-chars)");
-  }
-
-  private static void requireBetween(
-      List<String> problems, int value, int min, int max, String name) {
-    if (value < min || value > max) {
-      problems.add(name + " must be between " + min + " and " + max + ": " + value);
-    }
+        "REVIEW_LEARNINGS_PROMPT_MAX_CHARS",
+        "thrillhousebot.review.learnings.prompt-max-chars");
   }
 
   /**
