@@ -1562,6 +1562,7 @@ class AiReviewServiceTest {
             anyString(),
             anyString(),
             anyString(),
+            anyString(),
             anyString()))
         .thenAnswer(
             invocation ->
@@ -1657,6 +1658,7 @@ class AiReviewServiceTest {
     ReviewSession session = reviewSession();
     var content = deliberation(2 * InlinedDeliberationGuard.BOUND_CHARS);
     when(prReviewer.reviewStream(
+            anyString(),
             anyString(),
             anyString(),
             anyString(),
