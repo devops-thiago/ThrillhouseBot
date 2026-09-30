@@ -718,6 +718,168 @@ class SummaryAcrossRoundsTest {
     assertEquals("failure", VerdictBuilder.conclusionForResult(result));
   }
 
+  // #951: a "Things to double-check" item raised again. Round one's DOUBLE_CHECK has no thread;
+  // round two raised a new finding, so in round three round one's findings are the backstop's.
+
+  /** DOUBLE_CHECK raised again, confident and higher-rated: it now posts inline. */
+  private static final ReviewResponse.Finding PROMOTED =
+      new ReviewResponse.Finding(
+          "high",
+          "high",
+          FILE,
+          30,
+          "Null user dereferenced before logging",
+          "The logger dereferences a user that may be absent on anonymous requests, so every"
+              + " anonymous request throws.",
+          "log(user.name());",
+          null);
+
+  /** DOUBLE_CHECK reworded, still low confidence at the same rating: a second bullet. */
+  private static final ReviewResponse.Finding RESTATED_BULLET =
+      new ReviewResponse.Finding(
+          "medium",
+          "low",
+          FILE,
+          30,
+          "Possible null user dereference before logging",
+          "The logger dereferences a user that may be absent on anonymous requests.",
+          "log(user.name());",
+          null);
+
+  private static final ReviewResponse ROUND_TWO_OVER_ROUND_ONE =
+      allUnresolved(List.of(NEW_IN_ROUND_TWO), 3);
+
+  /** Round three's response as the pipeline's guard leaves it, before the verdict. */
+  private ReviewResponse guarded(ReviewResponse raw, List<ReviewResponse> priors) {
+    return FollowUpAnalyzer.withoutOpenThreadDuplicates(
+        raw, priors, List.of(), new DiffLineResolver(PATCHES), Map.of(), BOT);
+  }
+
+  private static boolean lists(ReviewResult result, ReviewResponse.Finding finding) {
+    return result.openPreviousFindings().stream().anyMatch(f -> finding.title().equals(f.title()));
+  }
+
+  /**
+   * ThrillhouseBot-test#156: a later round posts inline what an earlier round listed under "Things
+   * to double-check". The inline copy replaces the listed one — counted once, in this round and the
+   * next.
+   */
+  @Test
+  void aDoubleCheckItemPromotedInlineReplacesTheEarlierCopy() {
+    assertTrue(FollowUpAnalyzer.isSameFinding(PROMOTED, DOUBLE_CHECK));
+    var first = publishFirstRound();
+    var priors = List.of(ROUND_TWO_OVER_ROUND_ONE, ROUND_ONE);
+    var raw =
+        new ReviewResponse(
+            List.of(PROMOTED),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+            null);
+    var roundThree = guarded(raw, priors);
+    assertEquals(List.of(PROMOTED), roundThree.findings());
+
+    var result = builder.build(followUp(priors, List.of()), roundThree, CI_CLEAR, plan);
+    var edited = publishFollowUp(result, first);
+
+    assertEquals(3, result.unresolvedPreviousCount());
+    assertFalse(lists(result, DOUBLE_CHECK));
+    assertOpenCount(edited, 3);
+    assertRisk(edited, 1, 2, 1, 0);
+    assertFalse(edited.contains(DOUBLE_CHECK.title()), edited);
+    assertFalse(edited.contains("### Things to double-check"), edited);
+
+    // Round four says nothing new: the promoted finding is the one held, the listed copy is not.
+    var roundFour =
+        builder.build(
+            followUp(List.of(roundThree, ROUND_TWO_OVER_ROUND_ONE, ROUND_ONE), List.of()),
+            new ReviewResponse(
+                List.of(),
+                List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+                null),
+            CI_CLEAR,
+            plan);
+    assertEquals(4, roundFour.unresolvedPreviousCount());
+    assertTrue(lists(roundFour, PROMOTED));
+    assertFalse(lists(roundFour, DOUBLE_CHECK));
+  }
+
+  /** The same promotion of an item the model still reports on by id: its status is not counted. */
+  @Test
+  void aDoubleCheckItemPromotedFromThePreviousRoundIsNotAlsoCountedStillPresent() {
+    var result =
+        builder.build(
+            followUp(List.of(ROUND_ONE), List.of()),
+            allUnresolved(List.of(PROMOTED), 3),
+            CI_CLEAR,
+            plan);
+
+    assertEquals(2, result.unresolvedPreviousCount());
+    assertEquals(2, result.openPreviousFindings().size());
+    assertFalse(lists(result, DOUBLE_CHECK));
+    assertEquals(1, result.totalFindings());
+  }
+
+  /**
+   * ThrillhouseBot-test#151: a follow-up restates an open double-check item as a new double-check
+   * item. The restatement is dropped, and the item is listed once, as open since an earlier review.
+   */
+  @Test
+  void aDoubleCheckItemRestatedAsAnotherIsDroppedAndListedOnce() {
+    var first = publishFirstRound();
+    var priors = List.of(ROUND_TWO_OVER_ROUND_ONE, ROUND_ONE);
+    var roundThree =
+        guarded(
+            new ReviewResponse(
+                List.of(RESTATED_BULLET),
+                List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+                null),
+            priors);
+    assertTrue(roundThree.findings().isEmpty());
+
+    var result = builder.build(followUp(priors, List.of()), roundThree, CI_CLEAR, plan);
+    var edited = publishFollowUp(result, first);
+
+    assertEquals(4, result.unresolvedPreviousCount());
+    var doubleCheck = section(edited, "### Things to double-check");
+    assertTrue(doubleCheck.contains("1 lower-confidence finding<"), doubleCheck);
+    assertTrue(doubleCheck.contains(DOUBLE_CHECK.title()), doubleCheck);
+    assertFalse(doubleCheck.contains(RESTATED_BULLET.title()), doubleCheck);
+  }
+
+  /**
+   * #151's re-rated doc items (a LOW bullet raised again as a MEDIUM one): a restatement rated
+   * higher says more, so the guard keeps it, and it replaces the earlier bullet — one bullet, at
+   * the higher rating.
+   */
+  @Test
+  void aDoubleCheckItemRestatedAtAHigherRatingReplacesTheEarlierBullet() {
+    var lowBullet =
+        new ReviewResponse.Finding(
+            "low",
+            "low",
+            FILE,
+            30,
+            DOUBLE_CHECK.title(),
+            DOUBLE_CHECK.description(),
+            DOUBLE_CHECK.suggestionOld(),
+            null);
+    var roundOne = new ReviewResponse(List.of(CRITICAL, HIGH, lowBullet), List.of(), null);
+    var priors = List.of(allUnresolved(List.of(NEW_IN_ROUND_TWO), 3), roundOne);
+    var roundThree =
+        guarded(
+            new ReviewResponse(
+                List.of(RESTATED_BULLET),
+                List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+                null),
+            priors);
+    assertEquals(List.of(RESTATED_BULLET), roundThree.findings());
+
+    var result = builder.build(followUp(priors, List.of()), roundThree, CI_CLEAR, plan);
+
+    assertEquals(3, result.unresolvedPreviousCount());
+    assertFalse(result.openPreviousFindings().stream().anyMatch(f -> f.risk() == RiskLevel.LOW));
+    assertEquals(1, result.doubleCheckFindings().size());
+  }
+
   private static ReviewResponse allUnresolved(List<ReviewResponse.Finding> raised, int count) {
     var statuses = new ArrayList<ReviewResponse.PreviousFindingStatus>();
     for (var id = 1; id <= count; id++) {
