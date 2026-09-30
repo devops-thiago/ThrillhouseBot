@@ -86,8 +86,8 @@ public final class DiffLineResolver {
    * <p>One residual the content test cannot resolve: a single generic anchor line (e.g. {@code
    * return null;}) that was changed away at the finding's location but recurs verbatim elsewhere in
    * the same file still reads as present. The stale prior-revision line cannot disambiguate it
-   * (that is the drift the check exists to tolerate), so this errs toward holding — a needless
-   * APPROVE→COMMENT, the safe direction for a downgrade-only backstop, never the under-block.
+   * (that is the drift the check exists to tolerate), so this errs toward holding — a finding kept
+   * open that a maintainer can clear by replying on its thread, never the under-block.
    *
    * <p>An anchor the security scan redacted ({@code [redacted: zKXq…, 40 chars]} where a quoted
    * credential stood) is compared in that redacted form ({@link RedactedAnchor}): the diff still
@@ -96,8 +96,8 @@ public final class DiffLineResolver {
    *
    * <p>When the finding has no anchor (a suggestion-less finding, or one whose suggestion was
    * stripped), it falls back to checking whether the file has any changes in the diff. This leans
-   * toward holding (returning true) for the downgrade-only backstop, avoiding the drift-fragile
-   * under-blocking behavior of a raw line check.
+   * toward holding (returning true) for the backstop, avoiding the drift-fragile under-blocking
+   * behavior of a raw line check.
    */
   public boolean isFindingPresent(String file, String anchor) {
     if (file == null) {
@@ -195,9 +195,9 @@ public final class DiffLineResolver {
    * <p>The fallback inspects <em>every</em> matching variant rather than the first the backing
    * {@link HashMap} happens to iterate, so an ambiguous shortened path — two changed files sharing
    * a suffix — yields the same answer regardless of map order (no more flaky wrong-file binding)
-   * and leans toward "present in any candidate". That lean is the safe direction for the
-   * downgrade-only approve backstop, which prefers a needless APPROVE→COMMENT over silently
-   * approving over a still-open finding.
+   * and leans toward "present in any candidate". That lean is the safe direction for the approve
+   * backstop, which prefers a finding kept open (and clearable by a reply on its thread) over
+   * silently approving over a still-open finding.
    */
   private static <V extends Collection<?>> boolean presentInFileOrVariant(
       Map<String, V> byFile, String file, Predicate<V> predicate) {

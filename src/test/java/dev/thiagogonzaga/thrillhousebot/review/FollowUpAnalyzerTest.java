@@ -4608,4 +4608,199 @@ class FollowUpAnalyzerTest {
           "the held finding is the one its round-relative id names");
     }
   }
+
+  // #947: a maintainer's reply on the thread of a finding an older round raised.
+
+  private static final String RACE_ROUND_JSON =
+      """
+      {"findings": [
+        {"risk": "high", "file": "src/A.java", "line": 10, "title": "Race on shared counter",
+         "description": "concurrent requests race on the counter"},
+        {"risk": "medium", "file": "src/B.java", "line": 5, "title": "Missing null check",
+         "description": "may NPE"}
+      ]}
+      """;
+
+  private static final String RACE_WRONG_DECLINE =
+      "Declining: it cannot run concurrently, requests are serialized.";
+
+  private static List<GitHubReviewClient.PullRequestComment> earlierRaceThread(String... replies) {
+    var comments = new ArrayList<GitHubReviewClient.PullRequestComment>();
+    comments.add(
+        comment(
+            100L,
+            null,
+            "src/A.java",
+            "**🟠 HIGH — Race on shared counter**\n\n" + SuggestionFormatter.findingMarker(1),
+            BOT));
+    for (var i = 0; i < replies.length; i++) {
+      comments.add(comment(101L + i, 100L, "src/A.java", replies[i], "maintainer"));
+    }
+    return comments;
+  }
+
+  private List<FollowUpAnalyzer.HeldPrevious> raceBackstop(
+      FollowUpAnalyzer backstop,
+      List<GitHubReviewClient.PullRequestComment> threads,
+      Supplier<String> code) {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+    return backstop.heldPreviousFindings(
+        backstop.parsePreviousResponses(List.of(RACE_ROUND_JSON)),
+        List.of(),
+        threads,
+        List.of(),
+        resolver,
+        BOT_ID,
+        Map.of(),
+        code);
+  }
+
+  private static FollowUpAnalyzer.HeldPrevious race(List<FollowUpAnalyzer.HeldPrevious> entries) {
+    return entries.stream()
+        .filter(e -> "Race on shared counter".equals(e.finding().title()))
+        .findFirst()
+        .orElseThrow();
+  }
+
+  private static void assertStands(FollowUpAnalyzer.HeldPrevious entry) {
+    assertFalse(entry.holdsOpen());
+    assertEquals(
+        new ReviewResult.PreviousFindingStatus(
+            FollowUpAnalyzer.EARLIER_ROUND_ID, "justified", FollowUpAnalyzer.STANDING_DECLINE_NOTE),
+        entry.status());
+  }
+
+  @Test
+  void earlierRoundDeclineWithAnUnconfirmedConcurrencyPremiseIsHeld() {
+    var entries =
+        raceBackstop(analyzer, earlierRaceThread(RACE_WRONG_DECLINE), () -> "+counter.bump();");
+
+    assertEquals(2, entries.size());
+    var entry = race(entries);
+    assertTrue(entry.holdsOpen());
+    assertEquals(1, entry.status().id());
+    assertTrue(entry.status().note().startsWith(RebuttalContradiction.NOTE_LEAD_IN));
+    assertTrue(entry.status().note().contains("no review has weighed"), entry.status().note());
+  }
+
+  @Test
+  void earlierRoundDeclineTheCodeContradictsIsHeldUnderTheContradiction() {
+    var entry =
+        race(
+            raceBackstop(
+                analyzer,
+                earlierRaceThread(RACE_WRONG_DECLINE),
+                () -> "+    executor.submit(() -> counter.bump());"));
+
+    assertTrue(entry.holdsOpen());
+    assertTrue(
+        entry.status().note().contains("dispatches this path concurrently"), entry.status().note());
+  }
+
+  @Test
+  void earlierRoundDeclineStandsWhenItIsNotAConcurrencyPremise() {
+    assertStands(
+        race(
+            raceBackstop(
+                analyzer,
+                earlierRaceThread("Declining: the counter is advisory and a lost update is fine."),
+                () -> "+counter.bump();")));
+  }
+
+  @Test
+  void earlierRoundDeclineStandsAfterASecondReply() {
+    assertStands(
+        race(
+            raceBackstop(
+                analyzer,
+                earlierRaceThread(RACE_WRONG_DECLINE, "Still declining, see the lock in Server."),
+                () -> "+counter.bump();")));
+  }
+
+  @Test
+  void earlierRoundDeclineStandsWhenNothingCanReCheckIt() {
+    var threads = earlierRaceThread(RACE_WRONG_DECLINE);
+    assertStands(race(raceBackstop(analyzer, threads, null)));
+    assertStands(race(raceBackstop(analyzer, threads, () -> " ")));
+    assertStands(race(raceBackstop(analyzer, threads, () -> null)));
+    assertStands(
+        race(
+            raceBackstop(
+                new FollowUpAnalyzer(new ObjectMapper(), false),
+                threads,
+                () -> "+counter.bump();")));
+  }
+
+  @Test
+  void earlierRoundDeclineStatusesNeverReachTheUnresolvedOnlyBackstopView() {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+    var statuses =
+        analyzer.unreportedUnresolvedStatusesFromParsed(
+            analyzer.parsePreviousResponses(List.of(RACE_ROUND_JSON)),
+            List.of(),
+            earlierRaceThread(RACE_WRONG_DECLINE),
+            List.of(),
+            resolver,
+            BOT_ID,
+            Map.of());
+
+    assertEquals(List.of(2), heldIds(statuses));
+  }
+
+  @Test
+  void earlierRoundDeclinesReadTheReviewedCodeOnce() {
+    var json =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": "Race on shared counter",
+           "description": "concurrent requests race on the counter"},
+          {"risk": "high", "file": "src/B.java", "line": 5, "title": "Race on shared cache",
+           "description": "concurrent requests race on the cache"}
+        ]}
+        """;
+    var threads = new ArrayList<>(earlierRaceThread(RACE_WRONG_DECLINE));
+    threads.add(
+        comment(
+            200L,
+            null,
+            "src/B.java",
+            "**🟠 HIGH — Race on shared cache**\n\n" + SuggestionFormatter.findingMarker(2),
+            BOT));
+    threads.add(comment(201L, 200L, "src/B.java", RACE_WRONG_DECLINE, "maintainer"));
+    var reads = new int[1];
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    var entries =
+        analyzer.heldPreviousFindings(
+            analyzer.parsePreviousResponses(List.of(json)),
+            List.of(),
+            threads,
+            List.of(),
+            resolver,
+            BOT_ID,
+            Map.of(),
+            () -> {
+              reads[0]++;
+              return "+counter.bump();";
+            });
+
+    assertEquals(2, entries.size());
+    assertTrue(entries.stream().allMatch(FollowUpAnalyzer.HeldPrevious::holdsOpen));
+    assertEquals(1, reads[0]);
+  }
+
+  @Test
+  void stillOpenFindingsSkipsADeclineThatStands() {
+    var finding = new ReviewResponse.Finding("high", "src/A.java", 10, "Race", "d", null, null);
+    var standing =
+        new FollowUpAnalyzer.HeldPrevious(
+            new ReviewResult.PreviousFindingStatus(
+                FollowUpAnalyzer.EARLIER_ROUND_ID,
+                "justified",
+                FollowUpAnalyzer.STANDING_DECLINE_NOTE),
+            finding);
+
+    assertTrue(
+        FollowUpAnalyzer.stillOpenFindings(List.of(), List.of(), List.of(standing)).isEmpty());
+  }
 }

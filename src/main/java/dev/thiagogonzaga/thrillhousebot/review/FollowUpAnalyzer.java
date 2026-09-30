@@ -2445,12 +2445,15 @@ public class FollowUpAnalyzer {
    *       a fixed one is not kept alive by surviving context.
    * </ul>
    *
-   * <p>It is downgrade-only — these statuses reach the APPROVE gate but never {@code outstanding},
-   * so they can turn APPROVE into COMMENT, never into REQUEST_CHANGES. A maintainer reply on the
-   * thread clears the hold (the human is engaged; defer to them, matching {@link
-   * #dropRepliedDuplicates}), as does the model marking the finding resolved/justified, as does an
-   * {@code @thrillhousebot resolved} comment naming the finding on the PR conversation — the hatch
-   * for a finding that has no thread to reply on ({@link #clearedInConversation}).
+   * <p>These statuses reach the APPROVE gate. The verdict path also counts the held findings among
+   * the outstanding ones, as it counts the model's own {@code unresolved} ones (#948): the summary
+   * lists them as still present at their severity, so a held CRITICAL requests changes. A
+   * maintainer reply on the thread settles the hold (the human is engaged; defer to them, matching
+   * {@link #dropRepliedDuplicates}) unless it is a lone decline that does not hold up ({@link
+   * #heldPreviousFindings(List, List, List, List, DiffLineResolver, BotIdentity, Map, Supplier)}),
+   * as does the model marking the finding resolved/justified, as does an {@code @thrillhousebot
+   * resolved} comment naming the finding on the PR conversation — the hatch for a finding that has
+   * no thread to reply on ({@link #clearedInConversation}).
    *
    * @param priorAiResponseJsons every completed prior round's persisted AI response, newest first
    *     (as {@link
@@ -2538,6 +2541,7 @@ public class FollowUpAnalyzer {
             renameTargets)
         .stream()
         .map(HeldPrevious::status)
+        .filter(status -> STATUS_UNRESOLVED.equals(status.status()))
         .toList();
   }
 
@@ -2548,12 +2552,34 @@ public class FollowUpAnalyzer {
    * the summary, which lists every finding still open (#917), needs the finding itself.
    */
   public record HeldPrevious(
-      ReviewResult.PreviousFindingStatus status, ReviewResponse.Finding finding) {}
+      ReviewResult.PreviousFindingStatus status, ReviewResponse.Finding finding) {
+
+    /** Whether this entry holds its finding open, as opposed to a decline that stands (#947). */
+    public boolean holdsOpen() {
+      return STATUS_UNRESOLVED.equals(status.status());
+    }
+  }
+
+  /**
+   * The id of a backstop status that names no finding of the effective previous round (#947). Ids
+   * start at 1, so every consumer that maps an id onto that round skips it.
+   */
+  public static final int EARLIER_ROUND_ID = 0;
+
+  /** Note on the {@code justified} status of an earlier round's decline that stands (#947). */
+  static final String STANDING_DECLINE_NOTE =
+      "Raised in an earlier review and declined on its review thread; the decline stands.";
+
+  /** Note on the {@code unresolved} status of a finding the backstop holds without a reply. */
+  static final String HELD_NOTE =
+      "Flagged in an earlier round and still present; not addressed in this revision.";
 
   /**
    * The same backstop computation as {@link #unreportedUnresolvedStatusesFromParsed}, keeping the
    * held finding beside each status so the verdict path can render what it holds, not only count it
-   * (#917).
+   * (#917). With no reviewed code a decline on an earlier round's thread cannot be re-checked, so
+   * it stands ({@link #heldPreviousFindings(List, List, List, List, DiffLineResolver, BotIdentity,
+   * Map, Supplier)}).
    */
   public List<HeldPrevious> heldPreviousFindings(
       List<ReviewResponse> priorAiResponses,
@@ -2563,6 +2589,50 @@ public class FollowUpAnalyzer {
       DiffLineResolver lineResolver,
       BotIdentity botIdentity,
       Map<String, String> renameTargets) {
+    return heldPreviousFindings(
+        priorAiResponses,
+        currentStatuses,
+        inlineComments,
+        conversationComments,
+        lineResolver,
+        botIdentity,
+        renameTargets,
+        null);
+  }
+
+  /**
+   * The backstop over every earlier round, as the verdict path runs it: each still-present prior
+   * finding no round accounted for, as an {@code unresolved} hold, and each one a maintainer
+   * declined on its review thread, as the decline's outcome (#947).
+   *
+   * <p>A finding raised in a round older than the effective previous one has no id this round's
+   * model can report on: once a maintainer replies on its thread, the prompt lists it as answered
+   * and asks the model to leave it out of {@code previous_findings_status}. Nothing weighed the
+   * reply, and the finding left the open set with no status at all — not still present, not
+   * justified — whether or not the decline held. The reply is weighed here instead, under the rule
+   * {@link #recheckDeclines} applies to the effective previous round's declines: a lone decline
+   * whose premise the reviewed code contradicts, or whose "this cannot run concurrently" premise no
+   * review weighed ({@link RebuttalContradiction#unconfirmedPremise}), stays held for one more
+   * round with a note saying why; any other reply, or a second one, is a decline that stands and is
+   * reported {@code justified}. Either way the finding is accounted for.
+   *
+   * <p>A standing decline's status carries id {@link #EARLIER_ROUND_ID}: its round-relative id
+   * would name an unrelated finding of the effective previous round to everything keyed by id —
+   * thread resolution and the learnings capture — so it names none. It still counts as "Justified".
+   *
+   * @param reviewedCode the diff text the review call saw, or {@code null} when there is none to
+   *     re-check against; read at most once per decline
+   */
+  @SuppressWarnings("java:S107")
+  public List<HeldPrevious> heldPreviousFindings(
+      List<ReviewResponse> priorAiResponses,
+      List<ReviewResponse.PreviousFindingStatus> currentStatuses,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      DiffLineResolver lineResolver,
+      BotIdentity botIdentity,
+      Map<String, String> renameTargets,
+      Supplier<String> reviewedCode) {
     if (priorAiResponses == null || priorAiResponses.isEmpty() || lineResolver == null) {
       return List.of();
     }
@@ -2570,8 +2640,24 @@ public class FollowUpAnalyzer {
     var open = openFindingsAcrossRounds(chrono, currentStatuses);
     var clusters = clusterByIdentity(open);
     return heldFromClusters(
-        clusters, inlineComments, conversationComments, lineResolver, botIdentity, renameTargets);
+        clusters,
+        new BackstopInputs(
+            inlineComments,
+            conversationComments,
+            lineResolver,
+            botIdentity,
+            renameTargets,
+            reviewedCode));
   }
+
+  /** What {@link #heldFromClusters} reads besides the clusters themselves. */
+  private record BackstopInputs(
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      DiffLineResolver lineResolver,
+      BotIdentity botIdentity,
+      Map<String, String> renameTargets,
+      Supplier<String> reviewedCode) {}
 
   /**
    * {@code statuses} without the {@code unresolved} entries that name no finding: an id outside the
@@ -2626,7 +2712,8 @@ public class FollowUpAnalyzer {
    *
    * @param previous the effective previous round's findings, the id space of {@code statuses}
    * @param statuses the round's effective {@code previous_findings_status}
-   * @param held the backstop's holds ({@link #heldPreviousFindings})
+   * @param held the backstop's entries ({@link #heldPreviousFindings}); a decline that stands is
+   *     not open and is skipped
    */
   public static List<Finding> stillOpenFindings(
       List<ReviewResponse.Finding> previous,
@@ -2640,7 +2727,7 @@ public class FollowUpAnalyzer {
             .collect(Collectors.toCollection(TreeSet::new));
     return Stream.concat(
             unresolvedIds.stream().map(id -> previous.get(id - 1)),
-            held.stream().map(HeldPrevious::finding))
+            held.stream().filter(HeldPrevious::holdsOpen).map(HeldPrevious::finding))
         .map(Finding::fromAiResponse)
         .toList();
   }
@@ -2875,47 +2962,34 @@ public class FollowUpAnalyzer {
     return clusters;
   }
 
-  /** Holds one unresolved status per cluster whose code is still present and unanswered. */
-  private List<HeldPrevious> heldFromClusters(
-      List<List<OpenFinding>> clusters,
-      List<GitHubReviewClient.PullRequestComment> inlineComments,
-      List<GitHubCommentClient.IssueComment> conversationComments,
-      DiffLineResolver lineResolver,
-      BotIdentity botIdentity,
-      Map<String, String> renameTargets) {
+  /**
+   * One entry per cluster whose code is still present and that no maintainer dispositioned from the
+   * PR conversation: an {@code unresolved} hold, or the outcome of a decline on its thread.
+   */
+  private List<HeldPrevious> heldFromClusters(List<List<OpenFinding>> clusters, BackstopInputs in) {
     var held = new ArrayList<HeldPrevious>();
-    var directives = maintainerDeclines(conversationComments, botIdentity);
+    var directives = maintainerDeclines(in.conversationComments(), in.botIdentity());
+    var code = in.reviewedCode() == null ? null : ReviewContextLoader.memoize(in.reviewedCode());
     for (var cluster : clusters) {
-      OpenFinding target =
-          holdableTarget(
-              cluster,
-              inlineComments,
-              conversationComments,
-              directives,
-              lineResolver,
-              botIdentity,
-              renameTargets);
-      if (target != null) {
-        held.add(
-            new HeldPrevious(
-                new ReviewResult.PreviousFindingStatus(
-                    target.id(),
-                    STATUS_UNRESOLVED,
-                    "Flagged in an earlier round and still present; not addressed in this revision."),
-                target.finding()));
+      var entry = backstopEntry(cluster, directives, in, code);
+      if (entry != null) {
+        held.add(entry);
       }
     }
     return held;
   }
 
   /**
-   * The most severe still-present member of the cluster to hold (the earliest among equals), or
-   * {@code null} when its code is gone, a maintainer has replied on its thread, or a maintainer
+   * The backstop's entry for one cluster, or {@code null} when its code is gone or a maintainer
    * cleared or declined it from the PR conversation ({@link #dispositionedInConversation} — the
-   * only hatches a finding with no thread has, #548, #709). The reply is located by the
-   * round-relative marker ({@link OpenFinding#id()}) plus the finding's own content rather than by
-   * title, so a null-title finding's thread is still seen and a thread-less finding cannot bind to
-   * a different finding that reused the same marker index in another round.
+   * only hatches a finding with no thread has, #548, #709). The entry is about the most severe
+   * still-present member (the earliest among equals): an {@code unresolved} hold when no member's
+   * thread carries a maintainer reply, else the outcome of that reply ({@link
+   * #heldPreviousFindings(List, List, List, List, DiffLineResolver, BotIdentity, Map, Supplier)}).
+   * The reply is located by the round-relative marker ({@link OpenFinding#id()}) plus the finding's
+   * own content rather than by title, so a null-title finding's thread is still seen and a
+   * thread-less finding cannot bind to a different finding that reused the same marker index in
+   * another round.
    *
    * <p>Presence is resolved through {@code renameTargets} the same way {@link #hasVanished} does:
    * the finding's flagged code lives at its rename target, not its pre-rename path, when the file
@@ -2925,28 +2999,93 @@ public class FollowUpAnalyzer {
    * held member, so holding the first one let a later CRITICAL re-rating be listed and counted as
    * the LOW it once was (#934); the higher severity wins.
    */
-  private OpenFinding holdableTarget(
+  private HeldPrevious backstopEntry(
       List<OpenFinding> cluster,
-      List<GitHubReviewClient.PullRequestComment> inlineComments,
-      List<GitHubCommentClient.IssueComment> conversationComments,
       List<ConversationDecline> directives,
-      DiffLineResolver lineResolver,
-      BotIdentity botIdentity,
-      Map<String, String> renameTargets) {
+      BackstopInputs in,
+      Supplier<String> code) {
     OpenFinding target = null;
-    boolean answered = false;
+    OpenFinding answered = null;
+    Long answeredRoot = null;
+    boolean dispositioned = false;
     for (var member : cluster) {
       var finding = member.finding();
       if ((target == null || moreSevere(finding, target.finding()))
-          && isStillPresent(finding, lineResolver, renameTargets)) {
+          && isStillPresent(finding, in.lineResolver(), in.renameTargets())) {
         target = member;
       }
-      if (answeredRootComment(finding, member.id(), inlineComments, botIdentity) != null
-          || dispositionedInConversation(finding, conversationComments, directives, botIdentity)) {
-        answered = true;
+      var root =
+          answered == null
+              ? answeredRootComment(finding, member.id(), in.inlineComments(), in.botIdentity())
+              : null;
+      if (root != null) {
+        answered = member;
+        answeredRoot = root;
       }
+      dispositioned |=
+          dispositionedInConversation(
+              finding, in.conversationComments(), directives, in.botIdentity());
     }
-    return answered ? null : target;
+    if (target == null || dispositioned) {
+      return null;
+    }
+    if (answered == null) {
+      return hold(target, HELD_NOTE);
+    }
+    var reopened = reopenedEarlierDecline(answered, answeredRoot, in, code);
+    return reopened != null
+        ? hold(target, reopened)
+        : new HeldPrevious(
+            new ReviewResult.PreviousFindingStatus(
+                EARLIER_ROUND_ID, STATUS_JUSTIFIED, STANDING_DECLINE_NOTE),
+            target.finding());
+  }
+
+  private static HeldPrevious hold(OpenFinding target, String note) {
+    return new HeldPrevious(
+        new ReviewResult.PreviousFindingStatus(target.id(), STATUS_UNRESOLVED, note),
+        target.finding());
+  }
+
+  /**
+   * The note an earlier round's decline is held open under, or {@code null} when the decline stands
+   * (#947). One push-back, then defer, as {@link #recheckDeclines} does: only a lone write-capable
+   * reply is weighed, and only while the re-check is enabled and there is reviewed code to weigh it
+   * against. A premise that code contradicts is held under the contradiction's note. A "this cannot
+   * run concurrently" premise on a concurrency finding that code does not contradict is held too:
+   * on this path no model call weighs the reply against the finding, which on the effective
+   * previous round is what catches the dispatch the diff does not show (a server that handles each
+   * request on its own thread or goroutine), so the premise is not taken on faith until the
+   * maintainer answers the push-back.
+   */
+  private String reopenedEarlierDecline(
+      OpenFinding answered, Long rootId, BackstopInputs in, Supplier<String> code) {
+    if (!declineRecheckEnabled || code == null) {
+      return null;
+    }
+    var replies = humanReplies(rootId, in.inlineComments(), in.botIdentity());
+    if (replies.size() != 1) {
+      return null;
+    }
+    var reviewed = code.get();
+    if (reviewed == null || reviewed.isBlank()) {
+      return null;
+    }
+    var finding = answered.finding();
+    var note =
+        RebuttalContradiction.find(finding, replies.get(0), reviewed)
+            .map(RebuttalContradiction.Contradiction::note)
+            .or(
+                () ->
+                    RebuttalContradiction.unconfirmedPremise(finding, replies.get(0))
+                        .map(RebuttalContradiction::unconfirmedPremiseNote))
+            .orElse(null);
+    if (note != null) {
+      Log.infof(
+          "Holding earlier-round finding '%s' (%s:%d) open: its decline was not upheld",
+          LogSafe.oneLine(finding.title()), LogSafe.oneLine(finding.file()), finding.line());
+    }
+    return note;
   }
 
   /**
@@ -2955,7 +3094,7 @@ public class FollowUpAnalyzer {
    * target) leaves the anchor resolvable at neither path but the finding unchanged, so it counts as
    * present — the same way {@link #addUnreportedVanished} keeps it {@code unresolved}.
    *
-   * <p>The {@code file() == null} guard is defensive: {@link #holdableTarget} only passes cluster
+   * <p>The {@code file() == null} guard is defensive: {@link #backstopEntry} only passes cluster
    * members, and {@link #addOpenFindings} admits a finding to a cluster only when {@link
    * #findingKey} is non-null — which it never is for a null-file finding — so no production caller
    * can reach it with a null file. Package-private (not {@code private}) so that contract can be
@@ -3063,12 +3202,12 @@ public class FollowUpAnalyzer {
    * two sites — so neither evicts the other from the open set; collapsing them would drop a
    * still-open silent finding and let APPROVE sail over it (the missed hold). The cost is that one
    * finding re-raised at a <em>drifted</em> line is keyed twice and held twice — a duplicate,
-   * downgrade-only over-count in the "Still present" summary. That is accepted on purpose: a
-   * drifted re-raise and two distinct same-anchor findings present the identical signal (same
-   * file+title, different line), so any key that deduplicates the former necessarily collapses the
-   * latter, and an over-count is the safe direction where a missed hold is not. (The anchor is
-   * still used for <em>presence</em> via {@link DiffLineResolver#isFindingPresent}; it just does
-   * not define identity.)
+   * over-count in the "Still present" summary. That is accepted on purpose: a drifted re-raise and
+   * two distinct same-anchor findings present the identical signal (same file+title, different
+   * line), so any key that deduplicates the former necessarily collapses the latter, and an
+   * over-count is the safe direction where a missed hold is not. (The anchor is still used for
+   * <em>presence</em> via {@link DiffLineResolver#isFindingPresent}; it just does not define
+   * identity.)
    */
   private static String findingKey(ReviewResponse.Finding finding) {
     if (finding.file() == null) {

@@ -222,6 +222,8 @@ public class VerdictBuilder {
     // reviewed code plainly contradicts goes back to "unresolved" for one more round (#169). A
     // decline written on the PR conversation — the only place a finding with no thread can be
     // declined — is applied and re-checked the same way here (#709).
+    // Read at most once for the re-check here and the backstop's own below (#947).
+    var reviewedCode = ReviewContextLoader.memoize(() -> reviewedCode(ctx, plan));
     effectiveStatuses =
         followUpAnalyzer.recheckDeclines(
             ctx.previousFindingsList(),
@@ -229,7 +231,7 @@ public class VerdictBuilder {
             ctx.inlineComments(),
             ctx.conversationComments(),
             botIdentity,
-            () -> reviewedCode(ctx, plan));
+            reviewedCode);
     // A finding that never posted inline has no thread to reply on, so the only maintainer action
     // that can close it is an "@thrillhousebot resolved" comment naming it on the PR conversation
     // (#548). The model never sees that conversation, so its "unresolved" is rewritten here.
@@ -242,8 +244,6 @@ public class VerdictBuilder {
         FollowUpAnalyzer.withoutPhantomUnresolved(ctx.previousFindingsList(), effectiveStatuses);
     var effectiveResponse =
         new ReviewResponse(aiResponse.findings(), effectiveStatuses, aiResponse.summary());
-    var unresolvedPrevious =
-        followUpAnalyzer.unresolvedFindings(ctx.previousFindingsList(), effectiveStatuses);
     // Lazily resolve the shared DiffLineResolver only when the backstop runs — first reviews and
     // other no-context paths never pay for a patch re-parse here (FindingPipeline / postReview
     // still share the same memoized supplier when they need it).
@@ -256,14 +256,17 @@ public class VerdictBuilder {
                 ctx.conversationComments(),
                 ctx.lineResolver(),
                 botIdentity,
-                currentRenameTargets)
+                currentRenameTargets,
+                reviewedCode)
             : List.<FollowUpAnalyzer.HeldPrevious>of();
     var backstopUnresolved = held.stream().map(FollowUpAnalyzer.HeldPrevious::status).toList();
     // The summary is edited in place every round (#868), so it must describe the pull request as
     // it stands, not only this round: every earlier finding still open, beside the new ones (#917).
     // Taken from the same statuses and holds the gate and the "Still present" count use, one entry
     // per open finding by identity, so the lists and that count cannot disagree about what is open
-    // (#934).
+    // (#934). The verdict is computed over this same set (#948): the model's unresolved ids alone
+    // missed every finding only the backstop holds — all of an older round's, once a later round
+    // raised anything — so a round could list an open CRITICAL and still end as COMMENT.
     var openPrevious =
         FollowUpAnalyzer.stillOpenFindings(ctx.previousFindingsList(), effectiveStatuses, held);
     return buildResult(
@@ -279,7 +282,6 @@ public class VerdictBuilder {
             SupersededFindingsCarryover.formatScopeNote(ctx.carried()),
             reasoningStepDownNote(plan.reasoningStepDown()),
             openPrevious),
-        unresolvedPrevious,
         ciEvaluation,
         backstopUnresolved);
   }
@@ -604,7 +606,8 @@ public class VerdictBuilder {
    * unmatched-ignore-glob note, the refused-coverage-artifact note, the superseded-run carry-over
    * note, the reasoning step-down note, and the earlier rounds' findings still open. The notes
    * share the review-scope blockquote — each answers "what did this review look at, or not, and
-   * why".
+   * why". The still-open findings shape the verdict too: it is computed over the same set the
+   * summary lists (#948).
    */
   private record SummaryInputs(
       List<PrSummaryGenerator.ChangedFile> changedFiles,
@@ -628,7 +631,6 @@ public class VerdictBuilder {
         isFirstReview,
         diffStats,
         new SummaryInputs(changedFiles, "", "", "", "", "", unresolvedPrevious),
-        unresolvedPrevious,
         ciEvaluation,
         backstopUnresolved);
   }
@@ -638,7 +640,6 @@ public class VerdictBuilder {
       boolean isFirstReview,
       DiffStats diffStats,
       SummaryInputs summaryInputs,
-      List<Finding> unresolvedPrevious,
       CiStatusEvaluator.CiEvaluation ciEvaluation,
       List<ReviewResult.PreviousFindingStatus> backstopUnresolved) {
     var changedFiles = summaryInputs.changedFiles();
@@ -647,8 +648,9 @@ public class VerdictBuilder {
     var requiredContextsKnown = ciEvaluation.requiredContextsKnown();
     var tally = tallyFindings(aiResponse);
 
+    // This round's findings and every earlier one still open — the set the summary lists (#948).
     var outstanding = new ArrayList<Finding>(tally.findings());
-    outstanding.addAll(unresolvedPrevious);
+    outstanding.addAll(summaryInputs.openPrevious());
     ReviewState state = ReviewState.fromFindings(outstanding, blockingStrictness);
     // #645: count the outstanding findings whose severity cleared the mode's bar but whose
     // confidence did not, and only when the review is not requesting changes anyway — that is
@@ -659,9 +661,10 @@ public class VerdictBuilder {
         state == ReviewState.REQUEST_CHANGES
             ? 0
             : (int) outstanding.stream().filter(blockingStrictness::withheldByConfidence).count();
-    // Backstop statuses reach the gate but never `outstanding`, keeping the hold downgrade-only
-    // (APPROVE → COMMENT, never REQUEST_CHANGES). Keep the toStatuses list as-is on the common
-    // no-backstop path — no ArrayList wrap/copy when there is nothing to append.
+    // The backstop's findings are already in `outstanding` on the review path (#948): the caller
+    // passes the whole still-open set the summary lists. Its statuses also reach the gate, which
+    // holds APPROVE for a malformed or unmapped status. Keep the toStatuses list as-is on the
+    // common no-backstop path — no ArrayList wrap/copy when there is nothing to append.
     var previousStatuses =
         mergePreviousStatuses(
             followUpAnalyzer.toStatuses(aiResponse.previousFindingsStatus()), backstopUnresolved);

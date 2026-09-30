@@ -53,6 +53,10 @@ import java.util.regex.Pattern;
  * <p>Everything else — house style, intent, accepted risk, priority, "we'll do it later", or any
  * premise that is not refutable from code text — matches nothing here and keeps the decline.
  *
+ * <p>{@link #unconfirmedPremise} reads legs 1 and 2 alone, for the one path where no model call
+ * weighs a decline against its finding: a finding raised in a round older than the effective
+ * previous one (#947).
+ *
  * <p><b>Known limitation.</b> The evidence must be inside the material the review call saw (the
  * reviewed diff). When the contradicting mechanism lives in an unchanged file — the executor
  * producer of the dogfood PR, say — this check cannot see it and stays silent; only the
@@ -177,13 +181,10 @@ final class RebuttalContradiction {
     if (finding == null || rebuttal == null || reviewedCode == null || reviewedCode.isBlank()) {
       return Optional.empty();
     }
-    if (rebuttal.length() > MAX_REBUTTAL_CHARS) {
+    var asserted = concurrencyDeclineText(finding, rebuttal);
+    if (asserted == null) {
       return Optional.empty();
     }
-    if (!CONCURRENCY_FINDING.matcher(findingText(finding)).find()) {
-      return Optional.empty();
-    }
-    var asserted = assertedText(rebuttal);
     Matcher claim = earliestMatch(NO_CONCURRENCY_CLAIMS, asserted);
     if (claim == null) {
       return Optional.empty();
@@ -200,6 +201,57 @@ final class RebuttalContradiction {
     return Optional.of(
         new Contradiction(
             sentenceAround(asserted, claim.start()), lineAround(rightSide, evidence.start())));
+  }
+
+  /**
+   * The reply's asserted text when legs 1 and 2 can apply — a readable reply to a concurrency
+   * finding — or {@code null}. An overlong reply is not analyzed, so its decline stands.
+   */
+  private static String concurrencyDeclineText(ReviewResponse.Finding finding, String rebuttal) {
+    if (rebuttal.length() > MAX_REBUTTAL_CHARS
+        || !CONCURRENCY_FINDING.matcher(findingText(finding)).find()) {
+      return null;
+    }
+    return assertedText(rebuttal);
+  }
+
+  /**
+   * The sentence in which {@code rebuttal} argues a concurrency finding away with a "this cannot
+   * run concurrently" premise — legs 1 and 2 of {@link #find} — whether or not the reviewed code
+   * refutes it, or empty (#947).
+   *
+   * <p>For a decline on a finding the effective previous round raised, the model weighs the reply
+   * against the finding each round, and {@link #find} only adds the refutation the code plainly
+   * shows. A finding raised in an older round has no such weighing, and the code refutes this
+   * premise only when the dispatch is in the diff: a server that handles each request on its own
+   * thread or goroutine never is. So on that path the premise is held for one more round rather
+   * than taken on faith — the one push-back a lone decline gets — and a second reply keeps it.
+   */
+  static Optional<String> unconfirmedPremise(ReviewResponse.Finding finding, String rebuttal) {
+    if (finding == null || rebuttal == null) {
+      return Optional.empty();
+    }
+    var asserted = concurrencyDeclineText(finding, rebuttal);
+    if (asserted == null) {
+      return Optional.empty();
+    }
+    Matcher claim = earliestMatch(NO_CONCURRENCY_CLAIMS, asserted);
+    return claim == null ? Optional.empty() : Optional.of(sentenceAround(asserted, claim.start()));
+  }
+
+  /**
+   * The status note of a decline held by {@link #unconfirmedPremise}: the claim, why it is not
+   * taken on faith, and how to keep the decline. Opens with {@link #NOTE_LEAD_IN}, so the review
+   * body carries it as it carries a contradiction's note.
+   */
+  static String unconfirmedPremiseNote(String claim) {
+    return NOTE_LEAD_IN
+        + " the reply argues \""
+        + claim
+        + "\", but no review has weighed that against this finding, which an earlier review"
+        + " raised, and the reviewed code cannot confirm it: what runs a path concurrently (a server"
+        + " that handles each request on its own thread or goroutine, an executor in a file outside"
+        + " the diff) is often not in the diff. Reply again to keep the decline.";
   }
 
   /**

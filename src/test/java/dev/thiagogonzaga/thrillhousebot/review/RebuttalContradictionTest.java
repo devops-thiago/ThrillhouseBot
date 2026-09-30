@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.Optional;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -1563,5 +1564,41 @@ class RebuttalContradictionTest {
             + " it is live: "
             + heading);
     assertEquals("executor.submit(task)", contradiction.get().evidence());
+  }
+
+  // #947: legs 1 and 2 alone, for a decline no model call weighed.
+
+  @Test
+  void unconfirmedPremiseNamesTheClaimSentenceWithoutAnyCode() {
+    var claim =
+        RebuttalContradiction.unconfirmedPremise(
+            RACE_FINDING, "Declining. This cannot run concurrently; there is one caller.");
+
+    assertEquals(Optional.of("This cannot run concurrently;"), claim);
+    var note = RebuttalContradiction.unconfirmedPremiseNote(claim.orElseThrow());
+    assertTrue(note.startsWith(RebuttalContradiction.NOTE_LEAD_IN), note);
+    assertTrue(note.contains("\"This cannot run concurrently;\""), note);
+    assertTrue(note.endsWith("Reply again to keep the decline."), note);
+  }
+
+  @Test
+  void unconfirmedPremiseIsEmptyWhenAnyLegIsMissing() {
+    var notConcurrency =
+        new ReviewResponse.Finding("low", "src/A.java", 1, "Typo in log line", "typo", null, null);
+
+    assertTrue(RebuttalContradiction.unconfirmedPremise(null, "it runs serially").isEmpty());
+    assertTrue(RebuttalContradiction.unconfirmedPremise(RACE_FINDING, null).isEmpty());
+    assertTrue(
+        RebuttalContradiction.unconfirmedPremise(notConcurrency, "it runs serially").isEmpty());
+    assertTrue(
+        RebuttalContradiction.unconfirmedPremise(RACE_FINDING, "We accept the risk.").isEmpty());
+    assertTrue(
+        RebuttalContradiction.unconfirmedPremise(
+                RACE_FINDING, "it runs serially " + "x".repeat(20_001))
+            .isEmpty());
+    // A quoted claim is not the maintainer asserting it.
+    assertTrue(
+        RebuttalContradiction.unconfirmedPremise(RACE_FINDING, "> it cannot run concurrently")
+            .isEmpty());
   }
 }
