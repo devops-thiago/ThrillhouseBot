@@ -413,6 +413,65 @@ class SecurityScanTest {
   }
 
   @Test
+  void twoValuesOfOneFormatInOneFileEachKeepTheirOwnPrior() {
+    var first = fake.githubToken();
+    var second = fake.githubToken();
+    var s = scan(true, false);
+    var previous =
+        s.merge(
+                response(),
+                s.scan(List.of(added("app.env", "X=1", "A=" + first, "Y=2", "Z=3", "B=" + second))),
+                List.of(),
+                Set.of())
+            .findings();
+    assertEquals(2, previous.size());
+    assertEquals(previous.get(0).title(), previous.get(1).title(), "the redaction shows no more");
+
+    // Both still present, one line lower: both stay open, neither is re-posted.
+    var bothStay =
+        s.merge(
+            response(),
+            s.scan(
+                List.of(added("app.env", "W=0", "X=1", "A=" + first, "Y=2", "Z=3", "B=" + second))),
+            previous,
+            Set.of());
+    assertTrue(bothStay.findings().isEmpty());
+    assertEquals(
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "unresolved", stillDetectedNote()),
+            new ReviewResponse.PreviousFindingStatus(2, "unresolved", stillDetectedNote())),
+        bothStay.previousFindingsStatus());
+
+    // The first is removed: the one left keeps the nearer prior open and the other is resolved.
+    var firstGone =
+        s.merge(
+            response(),
+            s.scan(List.of(added("app.env", "X=1", "Y=2", "Z=3", "B=" + second))),
+            previous,
+            Set.of());
+    assertEquals(
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "resolved", noLongerDetectedNote()),
+            new ReviewResponse.PreviousFindingStatus(2, "unresolved", stillDetectedNote())),
+        firstGone.previousFindingsStatus());
+  }
+
+  @Test
+  void aPrivateKeyHeaderEndingOneHunkDoesNotReadTheNextHunksFirstLine() {
+    var patch =
+        String.join(
+                "\n",
+                "@@ -1,1 +1,2 @@",
+                " class Keys {",
+                "+  static final String HEADER = \"" + FakeCredentials.pemHeader("RSA") + "\";",
+                "@@ -40,1 +41,1 @@",
+                " " + fake.pemBodyLine())
+            + "\n";
+    var file = new FileDiff("Keys.java", "modified", 1, 0, 1, patch);
+    assertTrue(scan(true, false).scan(List.of(file)).detections().isEmpty());
+  }
+
+  @Test
   void aTrackedFindingTheModelDidNotReportIsAppendedUnresolved() {
     var files = List.of(added("app.env", "T=" + fake.githubToken()));
     var s = scan(true, false);

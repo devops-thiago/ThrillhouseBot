@@ -190,9 +190,9 @@ public class SecurityScan {
     var tracked = new LinkedHashMap<Integer, Detection>();
     var raised = new ArrayList<ReviewResponse.Finding>();
     for (var detection : result.detections()) {
-      int priorId = priorIdOf(detection.finding(), scanPriors);
+      int priorId = priorIdOf(detection.finding(), scanPriors, tracked.keySet());
       if (priorId > 0) {
-        tracked.putIfAbsent(priorId, detection);
+        tracked.put(priorId, detection);
       } else {
         raised.add(detection.finding());
       }
@@ -251,7 +251,12 @@ public class SecurityScan {
       if (!line.added() || allowed(lines, i, ALLOW_SECRET_MARKER)) {
         continue;
       }
-      var next = i + 1 < lines.size() ? lines.get(i + 1).text() : null;
+      // The body must follow in the same hunk: the next patch line of another hunk is not what
+      // follows the header in the file.
+      var next =
+          i + 1 < lines.size() && lines.get(i + 1).hunk() == line.hunk()
+              ? lines.get(i + 1).text()
+              : null;
       for (var hit : SecretScanner.scan(line.text(), next, entropyThreshold)) {
         var redacted = SecretScanner.redact(hit);
         detections.add(new Detection(hit.rule(), secretFinding(filename, line.number(), hit)));
@@ -387,18 +392,33 @@ public class SecurityScan {
     return priors;
   }
 
-  /** The id of the open scan prior this detection repeats (same file, title, anchor), or 0. */
+  /**
+   * The id of the open scan prior this detection repeats, or 0: same file, title and anchor, not
+   * already claimed by an earlier detection of this scan, and the nearest by line among those. A
+   * secret finding carries no anchor and its title names only the value's prefix and length, so two
+   * values of one format in one file share every other key; letting both detections claim the same
+   * prior would leave the second prior unclaimed and close it as resolved while its value is still
+   * there.
+   */
   private static int priorIdOf(
-      ReviewResponse.Finding detection, Map<Integer, ReviewResponse.Finding> scanPriors) {
+      ReviewResponse.Finding detection,
+      Map<Integer, ReviewResponse.Finding> scanPriors,
+      Set<Integer> claimed) {
+    int best = 0;
+    int bestDistance = Integer.MAX_VALUE;
     for (var entry : scanPriors.entrySet()) {
       var prior = entry.getValue();
-      if (FilePaths.same(prior.file(), detection.file())
+      int distance = Math.abs(prior.line() - detection.line());
+      if (!claimed.contains(entry.getKey())
+          && distance < bestDistance
+          && FilePaths.same(prior.file(), detection.file())
           && Objects.equals(prior.title(), detection.title())
           && Objects.equals(stripped(prior.suggestionOld()), stripped(detection.suggestionOld()))) {
-        return entry.getKey();
+        best = entry.getKey();
+        bestDistance = distance;
       }
     }
-    return 0;
+    return best;
   }
 
   /**
