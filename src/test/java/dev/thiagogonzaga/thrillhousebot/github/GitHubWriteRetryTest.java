@@ -1141,4 +1141,117 @@ class GitHubWriteRetryTest {
           warnings().toString());
     }
   }
+
+  /**
+   * #919. GitHub's content-creation limit also answers with {@code 422 Validation Failed}, and
+   * twelve reviews posting at once drew 118 of them in the round-9 corpus. None was repeated, and
+   * while one write was refused the others kept arriving at GitHub inside the same window.
+   */
+  @Nested
+  class SubmittedTooQuickly {
+
+    /** The recorded body, verbatim. */
+    private static final String SUBMITTED_TOO_QUICKLY_BODY =
+        "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":"
+            + "\"PullRequestReviewComment\",\"code\":\"custom\",\"field\":"
+            + "\"pull_request_review_thread.base\",\"message\":\"was submitted too quickly\"}]}";
+
+    private static final String UNRESOLVABLE_LINE_BODY =
+        "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":"
+            + "\"PullRequestReviewComment\",\"code\":\"custom\",\"field\":"
+            + "\"pull_request_review_thread.line\",\"message\":\"could not be resolved\"}]}";
+
+    @Test
+    void theRecordedBodyIsWaitedOutAndTheSamePayloadRepeated() {
+      var payloads = new ArrayList<String>();
+      var payload = "the finding on src/Main.java:10";
+
+      var result =
+          retry.call(
+              "an inline comment on o/r #7",
+              () -> {
+                payloads.add(payload);
+                if (payloads.size() == 1) {
+                  throw failure(422, SUBMITTED_TOO_QUICKLY_BODY);
+                }
+                return "posted on line 10";
+              });
+
+      assertEquals("posted on line 10", result);
+      assertEquals(List.of(payload, payload), payloads);
+      // No Retry-After and no reset header: the linear backoff's first step.
+      assertEquals(List.of(Duration.ofSeconds(5)), slept);
+    }
+
+    @Test
+    void anAnchoringRefusalIsNotRepeated() {
+      var calls = new AtomicInteger();
+      var refusal = failure(422, UNRESOLVABLE_LINE_BODY);
+
+      var thrown =
+          assertThrows(
+              WebApplicationException.class,
+              () ->
+                  retry.call(
+                      "an inline comment on o/r #7",
+                      () -> {
+                        calls.incrementAndGet();
+                        throw refusal;
+                      }));
+
+      assertSame(refusal, thrown);
+      assertEquals(1, calls.get());
+      assertEquals(List.of(), slept);
+    }
+
+    /**
+     * Two reviews on one installation, sharing the process-wide pacer. Review A is refused with the
+     * recorded body; while it backs off, review B's write claims its slot. Before #919 B's slot was
+     * one second after A's refused attempt — inside the window GitHub had just refused A in — so
+     * twelve reviews each drew their own refusal. Now the refusal holds the queue, and B's write
+     * waits for the end of A's wait, with A's repeat queued behind it.
+     *
+     * <p>No real sleeping: the pacer runs on a fake nanosecond clock and records its waits, and the
+     * backoff's sleeper runs B's write and then advances the clock by the wait it was asked for.
+     */
+    @Test
+    void aThrottleOneReviewDrawsHoldsTheOtherReviewsWritesUntilItsWaitIsOver() {
+      var nanos = new AtomicLong();
+      var paced = new ArrayList<Duration>();
+      var pacer =
+          new GitHubWritePacer(
+              Duration.ofSeconds(1), Duration.ofSeconds(90), paced::add, nanos::get);
+      var landed = new ArrayList<String>();
+      var reviewB =
+          new GitHubWriteRetry(slept::add, () -> Instant.ofEpochSecond(1_800_000_000L), pacer);
+      var reviewA =
+          new GitHubWriteRetry(
+              delay -> {
+                slept.add(delay);
+                // Review B reaches its write while review A is backing off.
+                landed.add(reviewB.call("an inline comment on o/r #8", () -> "B on #8"));
+                nanos.addAndGet(delay.toNanos());
+              },
+              () -> Instant.ofEpochSecond(1_800_000_000L),
+              pacer);
+      var attemptsA = new AtomicInteger();
+
+      landed.add(
+          reviewA.call(
+              "an inline comment on o/r #7",
+              () -> {
+                if (attemptsA.incrementAndGet() == 1) {
+                  throw failure(422, SUBMITTED_TOO_QUICKLY_BODY);
+                }
+                return "A on #7";
+              }));
+
+      assertEquals(List.of("B on #8", "A on #7"), landed);
+      assertEquals(2, attemptsA.get());
+      assertEquals(List.of(Duration.ofSeconds(5)), slept, "only A was throttled");
+      // B waited out A's five seconds rather than going out one second after A's refusal; A's
+      // repeat, at t=5s, then queued one interval behind B.
+      assertEquals(List.of(Duration.ofSeconds(5), Duration.ofSeconds(1)), paced);
+    }
+  }
 }

@@ -195,7 +195,35 @@ public final class GitHubApiError {
    * #THROTTLE_WORDING} did not match is worth a warning, so the next wording GitHub adopts is a
    * one-line fix on evidence rather than another guess. A false positive here costs one log line.
    */
-  private static final Pattern THROTTLE_HINT = Pattern.compile("(?i)rate.?limit|blocked|abuse");
+  private static final Pattern THROTTLE_HINT =
+      Pattern.compile("(?i)rate.?limit|blocked|abuse|too quickly");
+
+  /**
+   * The wording of GitHub's content-creation limit when it arrives as a {@code 422 Validation
+   * Failed} rather than a 403 (#919). Recorded verbatim in the round-9 corpus, 118 times across
+   * twelve pull requests opened together:
+   *
+   * <pre>{@code
+   * {"message":"Validation Failed","errors":[{"resource":"PullRequestReviewComment",
+   *  "code":"custom","field":"pull_request_review_thread.base","message":"was submitted too quickly"}]}
+   * }</pre>
+   *
+   * <p>A 422 is otherwise a statement about the payload — a line outside the diff, a stale commit —
+   * and repeating it verbatim can never work, so only wording decides here and only wording GitHub
+   * is on record as sending: the phrase above, and {@link #THROTTLE_WORDING}'s documented
+   * secondary-limit sentences, which GitHub's content-creation limit uses whichever status it
+   * picks. The whole phrase is matched rather than {@code too quickly} alone, for the reason {@link
+   * #CONTENT_CREATION_BLOCK} gives: the body is attacker-influenced text, and {@code too quickly}
+   * alone is loose enough to sit in a validation message about something else. A 422 that says
+   * {@code too quickly} in other words is reported by {@link #hasUnrecognisedThrottleWording()}
+   * rather than guessed at.
+   *
+   * <p>The response carries neither {@code Retry-After} nor an exhausted {@code
+   * x-ratelimit-remaining}, and a 422 that carried either would still be a payload refusal as far
+   * as this class can tell, so the headers decide nothing for this status; they only size the wait
+   * once the wording has classified it ({@link #retryDelay}).
+   */
+  private static final Pattern SUBMITTED_TOO_QUICKLY = Pattern.compile("(?i)submitted too quickly");
 
   /**
    * The same reading for the block: a throttle whose body says something is blocked but not in the
@@ -327,7 +355,9 @@ public final class GitHubApiError {
    * Whether GitHub is throttling this call rather than refusing it, which is the whole difference
    * between "post it again in a moment" and "this will never work". 429 says so outright; a 403
    * says so only through a {@code Retry-After}, an exhausted {@code x-ratelimit-remaining}, or the
-   * rate-limit wording in the body. A permission 403 carries none of the three and so fails fast.
+   * rate-limit wording in the body. A permission 403 carries none of the three and so fails fast. A
+   * 422 says so only in words ({@link #SUBMITTED_TOO_QUICKLY}, #919): every other 422 is a refusal
+   * of the payload and fails fast exactly as before.
    *
    * <p>The order is the headers first and the words last, and it is the whole of what the headers
    * can decide (#784). {@code Retry-After} is the header GitHub documents for a secondary limit,
@@ -350,6 +380,10 @@ public final class GitHubApiError {
     if (status == 429) {
       return true;
     }
+    if (status == 422) {
+      return SUBMITTED_TOO_QUICKLY.matcher(body.classified()).find()
+          || THROTTLE_WORDING.matcher(body.classified()).find();
+    }
     if (status != 403) {
       return false;
     }
@@ -359,14 +393,17 @@ public final class GitHubApiError {
   }
 
   /**
-   * Whether this is a 403 that {@link #isThrottled()} read as a refusal while its body talks about
-   * rate limiting, blocking or abuse — a throttle worded in a way the classification does not know
-   * (#784). The call still fails fast, since the hint is far too loose to spend three repeats on;
-   * what changes is that {@link GitHubWriteRetry} writes the body down at warning level, so the
-   * miss is a one-line fix instead of a permission refusal nobody can tell from a lost generation.
+   * Whether this is a 403 or a 422 that {@link #isThrottled()} read as a refusal while its body
+   * talks about rate limiting, blocking, abuse or submitting too quickly — a throttle worded in a
+   * way the classification does not know (#784, #919). The call still fails fast, since the hint is
+   * far too loose to spend three repeats on; what changes is that {@link GitHubWriteRetry} writes
+   * the body down at warning level, so the miss is a one-line fix instead of a permission refusal
+   * nobody can tell from a lost generation.
    */
   public boolean hasUnrecognisedThrottleWording() {
-    return status == 403 && !isThrottled() && THROTTLE_HINT.matcher(body.classified()).find();
+    return (status == 403 || status == 422)
+        && !isThrottled()
+        && THROTTLE_HINT.matcher(body.classified()).find();
   }
 
   /**
@@ -400,7 +437,7 @@ public final class GitHubApiError {
    * traffic and only clutters the log at warning level; an auth, throttle or server failure is not.
    */
   public boolean isSevere() {
-    return status == 401 || status == 403 || status == 429 || status >= 500;
+    return status == 401 || status == 403 || status == 429 || status >= 500 || isThrottled();
   }
 
   /**

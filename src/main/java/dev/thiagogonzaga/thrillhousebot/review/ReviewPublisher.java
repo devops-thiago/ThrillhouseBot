@@ -375,9 +375,10 @@ public class ReviewPublisher {
    * comments, their file-level fallbacks and the review body all run inside one ledger, so a review
    * GitHub refuses throughout stops waiting once the budget is spent rather than holding its pull
    * request's dispatcher slot for the sum of every route's backoff. A write refused after that
-   * point takes the path a write GitHub outlasted already takes — the next route, then the review
-   * body — and {@link #unanchoredFindingsBody} says the budget is why. The ceiling is {@code
-   * thrillhousebot.github.write-retry-budget}; zero turns it off.
+   * point takes the path a write GitHub outlasted already takes — straight to the review body,
+   * since a throttle takes no fallback route (#919) — and {@link #unanchoredFindingsBody} says the
+   * budget is why. The ceiling is {@code thrillhousebot.github.write-retry-budget}; zero turns it
+   * off.
    */
   void postReview(PostReviewRequest post) {
     GitHubWriteBudget.within(
@@ -509,7 +510,7 @@ public class ReviewPublisher {
   private static List<String> skippedFindingsBodyParts(InlineCommentResult inline) {
     var parts = new ArrayList<String>();
     if (!inline.unanchored().isEmpty()) {
-      parts.add(unanchoredFindingsBody(inline.unanchored()));
+      parts.add(unanchoredFindingsBody(inline.unanchored(), inline.throttled()));
     }
     if (!inline.capSkipped().isEmpty()) {
       parts.add(capSkippedFindingsBody(inline.capSkipped()));
@@ -530,13 +531,15 @@ public class ReviewPublisher {
    * second. Two independent scorers read it as a line-attribution defect and went looking for an
    * off-by-N that was not there, so the text now states only what happened.
    *
-   * <p>One cause is named, because it is the one the maintainer can act on (#734): when the review
+   * <p>Two causes are named, because they are the ones the maintainer can act on. When the review
    * spent its write-retry budget, the writes after that point were given up on without a repeat,
    * and a re-run posts what they carried. Stated once for the section rather than per finding — the
    * budget is the review's, and every finding below it that was refused after the crossing shares
-   * the reason.
+   * the reason (#734). And a finding GitHub throttled through every retry is not a finding whose
+   * line or file GitHub refused: it is the kind a re-run can post, so the section ends by saying
+   * how many of its findings that was (#919).
    */
-  private static String unanchoredFindingsBody(List<Finding> findings) {
+  private static String unanchoredFindingsBody(List<Finding> findings, int throttled) {
     var sb = new StringBuilder();
     sb.append("ThrillhouseBot found ")
         .append(findings.size())
@@ -554,6 +557,14 @@ public class ReviewPublisher {
                             + " after that was not retried, so re-running `/review` may post it"));
     sb.append(":\n\n");
     appendFindingList(sb, findings);
+    if (throttled > 0) {
+      sb.append("\n_")
+          .append(throttled == findings.size() ? "All of these" : throttled + " of these")
+          .append(
+              " were refused by GitHub's rate limit on every retry, not for their content or"
+                  + " their line. Without a thread they cannot be replied to, declined or resolved;"
+                  + " re-running `/review` once GitHub stops throttling may post them._\n");
+    }
     return sb.toString();
   }
 
@@ -743,12 +754,17 @@ public class ReviewPublisher {
    * comment cannot land is retried on the file, and a thread on the file is still a thread — the
    * decline path, the status notes and the attribution all reach it. Only a finding that neither
    * route could give a thread lands in {@code unanchored}.
+   *
+   * <p>{@code throttled} is how many of the {@code unanchored} findings GitHub's rate limit refused
+   * through every retry, as opposed to refusing their line and their file (#919). Those are the
+   * ones a re-run can post, so the review body says so.
    */
   record InlineCommentResult(
       int posted,
       List<Finding> unanchored,
       List<Finding> capSkipped,
-      List<Finding> confidenceSkipped) {}
+      List<Finding> confidenceSkipped,
+      int throttled) {}
 
   /**
    * Posts each finding as its own pull request review comment on the diff. Individual comments
@@ -771,6 +787,7 @@ public class ReviewPublisher {
     var unanchored = new ArrayList<Finding>();
     var capSkipped = new ArrayList<Finding>();
     var confidenceSkipped = new ArrayList<Finding>();
+    var throttled = 0;
     var maxComments = config.review().maxReviewComments();
     for (var i = 0; i < result.findings().size(); i++) {
       // The 1-based index doubles as the finding's id in the persisted response and the hidden
@@ -780,14 +797,50 @@ public class ReviewPublisher {
         confidenceSkipped.add(finding);
       } else if (posted >= maxComments) {
         capSkipped.add(finding);
-      } else if (postFindingComment(target, finding, i + 1, lineResolver)) {
-        posted++;
       } else {
-        unanchored.add(finding);
+        var delivery = postFindingComment(target, finding, i + 1, lineResolver);
+        if (delivery == Delivery.THREADED) {
+          posted++;
+        } else {
+          unanchored.add(finding);
+          throttled += delivery == Delivery.THROTTLED ? 1 : 0;
+        }
       }
     }
+    logFindingsWithoutThread(target, posted + unanchored.size(), unanchored.size(), throttled);
     return new InlineCommentResult(
-        posted, List.copyOf(unanchored), List.copyOf(capSkipped), List.copyOf(confidenceSkipped));
+        posted,
+        List.copyOf(unanchored),
+        List.copyOf(capSkipped),
+        List.copyOf(confidenceSkipped),
+        throttled);
+  }
+
+  /**
+   * The one line per review that says how many findings ended without a thread (#919). The
+   * per-route warnings name each refusal as it happens, but twelve reviews interleave them in the
+   * log, and the round-9 count — 42 findings with no thread across twelve pull requests — had to be
+   * reassembled from them by hand.
+   */
+  private static void logFindingsWithoutThread(
+      CommentTarget target, int attempted, int withoutThread, int throttled) {
+    if (withoutThread == 0) {
+      return;
+    }
+    Log.warnf(
+        "%d of %d finding(s) on %s/%s #%d ended without a review thread (%d refused by GitHub's"
+            + " rate limit through every retry) — the review body lists them",
+        withoutThread, attempted, target.owner(), target.repo(), target.prNumber(), throttled);
+  }
+
+  /** How one finding's routes ended. */
+  private enum Delivery {
+    /** A thread opened, on the finding's line or on its file. */
+    THREADED,
+    /** GitHub refused the line and the file for the payload or the anchor. */
+    REFUSED,
+    /** GitHub's rate limit refused it through every retry; a re-run can post it (#919). */
+    THROTTLED
   }
 
   /** PR coordinates shared by every inline comment of one review. */
@@ -823,8 +876,18 @@ public class ReviewPublisher {
    * was received — announcing it as lost told the maintainer to re-run a command whose output was
    * sitting on the pull request already, and said it twice when a suggestion block earned the
    * line-anchored route a second attempt (#729).
+   *
+   * <p>A throttle ends the routes rather than taking the next one (#919). The suggestion-less
+   * comment and the file-level thread answer a refusal of the payload or the anchor — a suggestion
+   * block GitHub will not take, a line it cannot resolve — and neither changes anything about a
+   * refusal of the moment. Spent on a throttle they were two more requests into the same window, so
+   * a throttled finding lost its line, its suggestion and then its thread within milliseconds: in
+   * the round-9 corpus, 42 findings across twelve pull requests. A throttle is instead retried on
+   * the same payload and anchor by {@code GitHubWriteRetry}, which waits it out before the
+   * rejection ever reaches here; one that reaches here has outlasted every retry, and the next
+   * route would only be refused the same way.
    */
-  private boolean postFindingComment(
+  private Delivery postFindingComment(
       CommentTarget target, Finding finding, int findingId, DiffLineResolver lineResolver) {
     return GitHubReviewClient.asOneComment(
         target.owner(),
@@ -834,7 +897,7 @@ public class ReviewPublisher {
   }
 
   /** The routes themselves, in preference order. See {@link #postFindingComment}. */
-  private boolean postFindingCommentRoutes(
+  private Delivery postFindingCommentRoutes(
       CommentTarget target, Finding finding, int findingId, DiffLineResolver lineResolver) {
     var line = lineResolver.resolveRightSideLine(finding.file(), finding.line());
     if (line.isEmpty()) {
@@ -868,28 +931,49 @@ public class ReviewPublisher {
     var rejection =
         tryPostInlineComment(target, finding, findingId, resolvedLine, range, includeSuggestion);
     if (rejection.isEmpty()) {
-      return true;
+      return Delivery.THREADED;
     }
-    var reason = rejection.get();
+    var first = rejection.get();
+    if (first.throttled()) {
+      return throttledOut(finding, first.diagnostics());
+    }
+    var reason = first.diagnostics();
     if (includeSuggestion) {
       var withoutSuggestion =
           tryPostInlineComment(target, finding, findingId, resolvedLine, Optional.empty(), false);
       if (withoutSuggestion.isEmpty()) {
-        return true;
+        return Delivery.THREADED;
       }
       // Both reasons, when they differ. The two attempts fail for different causes often enough to
       // matter: a suggestion block GitHub will not take is a 422 about the payload, while a
       // content-creation block is a 403 about the moment. Reporting only the second would name the
-      // payload for a finding that was actually refused by a throttle, which is the class of wrong
-      // diagnosis this whole change exists to stop.
+      // throttle for a finding whose payload was refused first, or the other way round, which is
+      // the class of wrong diagnosis #722 exists to stop.
       var second = withoutSuggestion.get();
       reason =
-          reason.equals(second) ? second : "with suggestion: " + reason + "; without: " + second;
+          reason.equals(second.diagnostics())
+              ? second.diagnostics()
+              : "with suggestion: " + reason + "; without: " + second.diagnostics();
+      if (second.throttled()) {
+        return throttledOut(finding, reason);
+      }
     }
     Log.warnf(
         "GitHub rejected inline comment for %s:%d (%s) — filing it on the file instead",
         LogSafe.oneLine(finding.file()), finding.line(), reason);
     return postFileLevelComment(target, finding, findingId);
+  }
+
+  /**
+   * Ends a finding's routes on a throttle that outlasted every retry — without the suggestion-less
+   * or file-level route, which answer a different failure (#919). See {@link #postFindingComment}.
+   */
+  private static Delivery throttledOut(Finding finding, String reason) {
+    Log.warnf(
+        "GitHub throttled the inline comment for %s:%d through every retry (%s) — not falling back"
+            + " to another route, which the same limit would refuse; the finding keeps no thread",
+        LogSafe.oneLine(finding.file()), finding.line(), reason);
+    return Delivery.THROTTLED;
   }
 
   /**
@@ -906,12 +990,27 @@ public class ReviewPublisher {
    * response to read a status off.
    */
   private static String rejectionReason(RuntimeException e) {
-    if (e instanceof WebApplicationException w) {
-      return GitHubApiError.of(w)
-          .map(GitHubApiError::diagnostics)
-          .orElseGet(() -> LogSafe.oneLine(e.toString()));
+    return apiError(e)
+        .map(GitHubApiError::diagnostics)
+        .orElseGet(() -> LogSafe.oneLine(e.toString()));
+  }
+
+  /** What GitHub said, when the failure carries a response to read it off. */
+  private static Optional<GitHubApiError> apiError(RuntimeException e) {
+    return e instanceof WebApplicationException w ? GitHubApiError.of(w) : Optional.empty();
+  }
+
+  /**
+   * One refused route: what GitHub said, for the log, and whether it was GitHub's rate limit rather
+   * than a refusal of the payload or the anchor — the one thing that decides whether the next route
+   * is worth trying (#919).
+   */
+  private record Rejection(String diagnostics, boolean throttled) {
+
+    static Rejection of(RuntimeException e) {
+      return new Rejection(
+          rejectionReason(e), apiError(e).filter(GitHubApiError::isThrottled).isPresent());
     }
-    return LogSafe.oneLine(e.toString());
   }
 
   /**
@@ -934,7 +1033,7 @@ public class ReviewPublisher {
    * with, so the decline path, the status notes and the resolved-finding attribution all keep
    * working on a finding that never reached its line.
    */
-  private boolean postFileLevelComment(CommentTarget target, Finding finding, int findingId) {
+  private Delivery postFileLevelComment(CommentTarget target, Finding finding, int findingId) {
     var body =
         fileLevelLeadIn(finding)
             + "\n\n"
@@ -948,12 +1047,13 @@ public class ReviewPublisher {
           target.prNumber(),
           GitHubReviewClient.CreatePullRequestCommentRequest.onFile(
               target.commitSha(), body, finding.file()));
-      return true;
+      return Delivery.THREADED;
     } catch (RuntimeException e) {
+      var rejection = Rejection.of(e);
       Log.warnf(
           "GitHub rejected the file-level thread for %s (%s) — the finding keeps no thread at all",
-          LogSafe.oneLine(finding.file()), rejectionReason(e));
-      return false;
+          LogSafe.oneLine(finding.file()), rejection.diagnostics());
+      return rejection.throttled() ? Delivery.THROTTLED : Delivery.REFUSED;
     }
   }
 
@@ -968,7 +1068,7 @@ public class ReviewPublisher {
    * is ordinary — it is how a rejected suggestion block is discovered — so it stays at debug; only
    * the attempt the caller gives up on is worth a warning.
    */
-  private Optional<String> tryPostInlineComment(
+  private Optional<Rejection> tryPostInlineComment(
       CommentTarget target,
       Finding finding,
       int findingId,
@@ -995,15 +1095,15 @@ public class ReviewPublisher {
               startSide));
       return Optional.empty();
     } catch (RuntimeException e) {
-      var reason = rejectionReason(e);
+      var rejection = Rejection.of(e);
       Log.debugf(
           e,
           "Inline comment rejected for %s:%d (suggestion=%s): %s",
           LogSafe.oneLine(finding.file()),
           endLine,
           includeSuggestion,
-          reason);
-      return Optional.of(reason);
+          rejection.diagnostics());
+      return Optional.of(rejection);
     }
   }
 

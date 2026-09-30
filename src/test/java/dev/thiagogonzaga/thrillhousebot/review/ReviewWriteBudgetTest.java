@@ -99,9 +99,10 @@ class ReviewWriteBudgetTest {
             "Bearer tok", "owner", "repo", prNumber, "sha", result(first, second), resolver());
 
     // First finding, line route: one refusal, the one-second wait that spends the budget, a
-    // second refusal that is not waited on. Its file route and both routes of the second finding
-    // go out once each and are given up on. Five attempts in all, where sixteen were possible.
-    assertEquals(5, reviewClient.attempts.get(), "attempts: " + reviewClient.attempts);
+    // second refusal that is not waited on. The second finding's line route goes out once and is
+    // given up on. Neither finding tries its file route, since a throttle takes no fallback route
+    // (#919). Three attempts in all, where eight were possible.
+    assertEquals(3, reviewClient.attempts.get(), "attempts: " + reviewClient.attempts);
     var body = reviewClient.reviewBodies.getLast();
     assertTrue(body.contains("2 issue(s) GitHub accepted no review thread for"), body);
     assertTrue(body.contains("write-retry budget"), body);

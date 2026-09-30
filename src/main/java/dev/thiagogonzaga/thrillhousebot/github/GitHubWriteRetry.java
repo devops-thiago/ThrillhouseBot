@@ -36,14 +36,15 @@ import org.slf4j.LoggerFactory;
  *
  * A retry is attempted only when {@link GitHubApiError#isThrottled()} holds — a 429, or a 403 that
  * carries a {@code Retry-After}, an exhausted {@code x-ratelimit-remaining}, or GitHub's rate-limit
- * wording in the body — or when {@link GitHubApiError#isExpiredCredential()} holds and a fresher
- * installation token can be minted. GitHub rejects a throttled content-creating request at the
- * edge, before the comment exists, and rejects an unauthenticated one earlier still; the response
- * is the rejection itself, not a report about a write that happened. The ambiguous failures — a
- * connection reset, a read timeout, a 5xx — are the ones where a write may well have landed, and
- * those are deliberately <em>not</em> retried here: they propagate on the first attempt exactly as
- * they did before. That is the whole duplicate-suppression argument, and it is why the throttle
- * test is a positive signal rather than "not a success".
+ * wording in the body, or a 422 whose body says GitHub's content-creation limit refused it (#919) —
+ * or when {@link GitHubApiError#isExpiredCredential()} holds and a fresher installation token can
+ * be minted. GitHub rejects a throttled content-creating request at the edge, before the comment
+ * exists, and rejects an unauthenticated one earlier still; the response is the rejection itself,
+ * not a report about a write that happened. The ambiguous failures — a connection reset, a read
+ * timeout, a 5xx — are the ones where a write may well have landed, and those are deliberately
+ * <em>not</em> retried here: they propagate on the first attempt exactly as they did before. That
+ * is the whole duplicate-suppression argument, and it is why the throttle test is a positive signal
+ * rather than "not a success".
  *
  * <h2>Why a repeat alone was not enough</h2>
  *
@@ -63,6 +64,13 @@ import org.slf4j.LoggerFactory;
  * Retry-After} asks for. One call therefore waits at most {@link #TOTAL_BUDGET}. Once the attempts
  * are spent the failure propagates unchanged, and the log says the generated content was lost so an
  * operator can see the command needs re-running.
+ *
+ * <p>A wait is also shared (#919). Secondary limits are counted per installation, not per call, so
+ * a throttle one write draws is a throttle every concurrent write is about to draw: in the round-9
+ * corpus twelve reviews posting at once drew 118 refusals while each backed off on its own. So the
+ * wait is handed to {@link GitHubWritePacer#holdFor}, and every write that claims a pacing slot
+ * after it — any review's, any pull request's — queues behind the end of the wait rather than
+ * inside it.
  *
  * <p>That bound is per call, and a review makes one call per route per finding, so a review GitHub
  * refuses throughout could still hold its slot for the sum of every route's backoff — hours, at the
@@ -202,6 +210,10 @@ public final class GitHubWriteRetry {
             delay.get().toSeconds(),
             attempt + 1,
             MAX_ATTEMPTS);
+        // The limit GitHub is enforcing is the installation's, not this call's, so every other
+        // write waiting on the pacer — another finding, another pull request's review — waits it
+        // out too instead of being refused in turn while this one backs off (#919).
+        pacer.holdFor(operation, delay.get());
         try {
           sleeper.sleep(delay.get());
         } catch (InterruptedException _) {
@@ -295,7 +307,8 @@ public final class GitHubWriteRetry {
     }
     if (error.hasUnrecognisedThrottleWording()) {
       log.warn(
-          "GitHub refused {} with a 403 that reads like a rate limit but matched no known throttle"
+          "GitHub refused {} with a response that reads like a rate limit but matched no known"
+              + " throttle"
               + " wording — not retried, so the generated content is lost; if this is a throttle,"
               + " its wording needs adding to GitHubApiError. {}",
           operation,

@@ -98,6 +98,46 @@ class GitHubWritePacerTest {
   }
 
   @Test
+  void aHoldPushesTheNextSlotToTheEndOfGitHubsWait() {
+    var pacer = pacer(ONE_SECOND, ONE_MINUTE);
+
+    pacer.acquire("a comment on o/r #7");
+    pacer.holdFor("a comment on o/r #7", Duration.ofSeconds(5));
+    pacer.acquire("a comment on o/r #8");
+    pacer.acquire("a comment on o/r #9");
+
+    // #919: whichever review writes next waits the throttle out, and the rest keep their spacing.
+    assertEquals(List.of(Duration.ofSeconds(5), Duration.ofSeconds(6)), waited);
+  }
+
+  @Test
+  void aHoldShorterThanTheQueueChangesNothing() {
+    var pacer = pacer(ONE_SECOND, ONE_MINUTE);
+
+    pacer.acquire("a comment on o/r #7");
+    pacer.acquire("a comment on o/r #8");
+    pacer.acquire("a comment on o/r #9");
+    pacer.holdFor("a comment on o/r #7", Duration.ofMillis(500));
+    pacer.acquire("a comment on o/r #10");
+
+    // Two throttles at once never shorten each other's wait: the cursor only moves later.
+    assertEquals(List.of(ONE_SECOND, Duration.ofSeconds(2), Duration.ofSeconds(3)), waited);
+  }
+
+  @Test
+  void aHoldIsANoOpWhilePacingIsOffOrTheWaitIsZero() {
+    var off = pacer(Duration.ZERO, ONE_MINUTE);
+    off.holdFor("a comment on o/r #7", Duration.ofSeconds(5));
+    off.acquire("a comment on o/r #7");
+
+    var on = pacer(ONE_SECOND, ONE_MINUTE);
+    on.holdFor("a comment on o/r #7", Duration.ZERO);
+    on.acquire("a comment on o/r #7");
+
+    assertEquals(List.of(), waited);
+  }
+
+  @Test
   void aZeroIntervalTurnsPacingOffEntirely() {
     var pacer = pacer(Duration.ZERO, ONE_MINUTE);
 
