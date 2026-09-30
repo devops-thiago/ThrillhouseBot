@@ -27,9 +27,10 @@ import jakarta.inject.Inject;
  * prose slot in an unforgeable CSPRNG boundary, and assembling the trailing guidance of each call.
  * The review call's ({@code repoInstructions}) carries the review-only requests (mock fidelity, bug
  * fix efficacy, config-key definitions, heuristic failure modes, patch coverage) and the repository
- * instructions, global then path-scoped. The summary call's ({@code summaryInstructions}) carries
- * the label and diagram requests — they gate {@code suggested_labels} and {@code
- * walkthrough_diagram}, which only the summary call writes (#664) — and the project-wide
+ * instructions, global then path-scoped; its system prompt is the one the {@link
+ * ReviewDimensionRouter} picks for the pull request's files (#665). The summary call's ({@code
+ * summaryInstructions}) carries the label and diagram requests — they gate {@code suggested_labels}
+ * and {@code walkthrough_diagram}, which only the summary call writes (#664) — and the project-wide
  * instructions. Extracted from {@code ReviewOrchestrator} as the pure prompt-shaping transform.
  */
 @ApplicationScoped
@@ -61,13 +62,18 @@ public class ReviewPromptAssembler {
   private final ThrillhouseConfig config;
   private final PrLabeler labeler;
   private final ReviewDiffFormatter diffFormatter;
+  private final ReviewDimensionRouter dimensionRouter;
 
   @Inject
   public ReviewPromptAssembler(
-      ThrillhouseConfig config, PrLabeler labeler, ReviewDiffFormatter diffFormatter) {
+      ThrillhouseConfig config,
+      PrLabeler labeler,
+      ReviewDiffFormatter diffFormatter,
+      ReviewDimensionRouter dimensionRouter) {
     this.config = config;
     this.labeler = labeler;
     this.diffFormatter = diffFormatter;
+    this.dimensionRouter = dimensionRouter;
   }
 
   AiReviewService.PromptInputs assemble(
@@ -119,7 +125,11 @@ public class ReviewPromptAssembler {
         PromptTemplateEscaper.fence(relatedTests),
         PromptTemplateEscaper.fence(ctx.previousFindings()),
         reviewGuidance,
-        summaryGuidance);
+        summaryGuidance,
+        // The whole pull request's system prompt (#665): the largest any batch of it can get, so
+        // the planner sizes the shared overhead from a prompt no batch's own exceeds. The pipeline
+        // swaps in each batch's own; budgeting off, the one call reviews exactly these files.
+        dimensionRouter.systemPromptFor(ctx.reviewableFiles()));
   }
 
   /**

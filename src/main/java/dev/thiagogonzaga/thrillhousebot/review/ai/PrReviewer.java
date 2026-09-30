@@ -46,12 +46,17 @@ import jakarta.enterprise.context.ApplicationScoped;
     streamingChatLanguageModelSupplier = ReasoningStepDownStreamingModel.ActiveSupplier.class)
 public interface PrReviewer {
 
-  // {{repoInstructions}} carries the pre-rendered trailing guidance: available repository labels
-  // (when labelling is on) followed by any repo instructions file.
+  // {{repoInstructions}} carries the pre-rendered trailing guidance: the review-only requests
+  // followed by any repo instructions file.
+  //
+  // {{reviewSystemPrompt}} is the whole system prompt, assembled per call from the core and the
+  // dimension blocks that call's files use (#665) — PrReviewPrompts.reviewSystemPrompt. A @V value
+  // is inserted verbatim, never re-parsed as a template, so the model receives exactly that string;
+  // with routing off it is PrReviewPrompts.SYSTEM, which is what this annotation carried before.
   //
   // @UserMessage MUST stay on the method: on a parameter, quarkus-langchain4j sends only that
   // parameter's raw value and silently drops every other @V.
-  @SystemMessage(PrReviewPrompts.SYSTEM)
+  @SystemMessage("{{reviewSystemPrompt}}")
   @UserMessage(PrReviewPrompts.USER)
   TokenStream reviewStream(
       @V("diff") String diff,
@@ -60,5 +65,6 @@ public interface PrReviewer {
       @V("projectStack") String projectStack,
       @V("relatedTests") String relatedTests,
       @V("previousFindings") String previousFindings,
-      @V("repoInstructions") String repoInstructions);
+      @V("repoInstructions") String repoInstructions,
+      @V("reviewSystemPrompt") String reviewSystemPrompt);
 }

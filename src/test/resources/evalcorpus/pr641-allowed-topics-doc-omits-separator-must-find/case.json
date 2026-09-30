@@ -1,0 +1,17 @@
+{
+  "kind": "generator",
+  "sourcePr": 641,
+  "why": "Corpus miss recorded in PR #641 (go #40): the diff documents WEBHOOKRELAY_ALLOWED_TOPICS with a single example value and never says it is a comma-separated list, while the same diff parses it with strings.Split(raw, \",\"). An operator who writes a space- or semicolon-separated value gets one topic that matches nothing. Dimension 10 (config-key documentation) is the block that reads the diff's own parsing line against its documentation line; with dimension routing on, this case fails if a batch holding the README and the parsing code stops carrying it.",
+  "expectation": "must-find",
+  "targetFile": "README.md",
+  "keywords": [
+    "comma",
+    "separat",
+    "split"
+  ],
+  "prTitle": "feat: relay only allow-listed topics",
+  "prDescription": "Adds WEBHOOKRELAY_ALLOWED_TOPICS so an operator can restrict which webhook topics are forwarded.",
+  "dimensions": [
+    "CONFIG_KEY_DOCUMENTATION"
+  ]
+}

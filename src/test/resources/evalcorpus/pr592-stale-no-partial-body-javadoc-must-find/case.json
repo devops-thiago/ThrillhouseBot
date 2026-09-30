@@ -1,0 +1,20 @@
+{
+  "kind": "generator",
+  "sourcePr": 592,
+  "why": "Real shape from PR #592, recorded in issue #600 and fixed by #831: the change starts handing the blocking lanes' cut body to AiResponseTruncatedException so it can be salvaged, and leaves the javadoc directly above saying the exception carries no partial body because the blocking lanes do not buffer one. The next reader is told salvage is impossible exactly where it now runs. Dimension 4 (comment contradicts code) is the block that makes the stale comment a finding; with dimension routing on, this case fails if a source batch stops carrying it.",
+  "expectation": "must-find",
+  "targetFile": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/ai/AiResponses.java",
+  "keywords": [
+    "javadoc",
+    "comment",
+    "no partial body",
+    "do not buffer",
+    "stale",
+    "contradict"
+  ],
+  "prTitle": "fix(review): salvage a cut response on the blocking lanes",
+  "prDescription": "Passes the partial body of a length-capped blocking call to the truncation so its complete findings can be salvaged.",
+  "dimensions": [
+    "COMMENT_CONTRADICTS_CODE"
+  ]
+}

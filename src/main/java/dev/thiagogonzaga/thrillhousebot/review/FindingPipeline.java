@@ -116,9 +116,13 @@ public class FindingPipeline {
    *
    * <p>The trailing guidance is extended per batch with the {@linkplain
    * #heuristicFailureModesFor(DiffBudgetPlanner.DiffBatch) heuristic failure-mode dimension}, whose
-   * trigger is the diff — so it can only be decided once the batch's own text is known.
+   * trigger is the diff — so it can only be decided once the batch's own text is known. The system
+   * prompt is picked per batch the same way, by the {@linkplain ReviewDimensionRouter router} over
+   * the batch's own files (#665): the template carries the whole pull request's, which the planner
+   * sized the overhead from, and a batch's is never larger than that.
    */
-  private record BatchPrompts(AiReviewService.PromptInputs template, String withheldNotice) {
+  private record BatchPrompts(
+      AiReviewService.PromptInputs template, String withheldNotice, ReviewDimensionRouter router) {
 
     AiReviewService.PromptInputs forBatch(
         DiffBudgetPlanner.DiffBatch batch, String baseComparison) {
@@ -127,7 +131,8 @@ public class FindingPipeline {
           PromptTemplateEscaper.fence(withheldNotice + batch.text()),
           baseComparison,
           ReviewPromptAssembler.combineSections(
-              template.repoInstructions(), heuristicFailureModesFor(batch)));
+              template.repoInstructions(), heuristicFailureModesFor(batch)),
+          router.systemPromptFor(batch.files()));
     }
 
     /**
@@ -171,13 +176,14 @@ public class FindingPipeline {
 
     /**
      * Copies the shared prompt context, swapping the diff, base-comparison and trailing-guidance
-     * slots.
+     * slots and the system prompt.
      */
     private static AiReviewService.PromptInputs withDiff(
         AiReviewService.PromptInputs base,
         String diff,
         String baseComparison,
-        String repoInstructions) {
+        String repoInstructions,
+        String reviewSystemPrompt) {
       return new AiReviewService.PromptInputs(
           diff,
           base.prContext(),
@@ -186,7 +192,8 @@ public class FindingPipeline {
           base.relatedTests(),
           base.previousFindings(),
           repoInstructions,
-          base.summaryInstructions());
+          base.summaryInstructions(),
+          reviewSystemPrompt);
     }
   }
 
@@ -203,6 +210,7 @@ public class FindingPipeline {
   private final TokenCounter tokenCounter;
   private final ReviewTokenLedger tokenLedger;
   private final TruncatedResponseSalvager salvager;
+  private final ReviewDimensionRouter dimensionRouter;
 
   @Inject
   public FindingPipeline(
@@ -218,7 +226,8 @@ public class FindingPipeline {
       DiffBudgetPlanner budgetPlanner,
       TokenCounter tokenCounter,
       ReviewTokenLedger tokenLedger,
-      TruncatedResponseSalvager salvager) {
+      TruncatedResponseSalvager salvager,
+      ReviewDimensionRouter dimensionRouter) {
     this.aiReviewService = aiReviewService;
     this.quoteValidator = quoteValidator;
     this.frameworkFilter = frameworkFilter;
@@ -232,6 +241,7 @@ public class FindingPipeline {
     this.tokenCounter = tokenCounter;
     this.tokenLedger = tokenLedger;
     this.salvager = salvager;
+    this.dimensionRouter = dimensionRouter;
   }
 
   /**
@@ -286,11 +296,15 @@ public class FindingPipeline {
     DiffBudgetPlanner.DiffBatch budgetedBatch = null;
     if (plan.budgeted() && !plan.batches().isEmpty()) {
       budgetedBatch = plan.batches().get(0);
+      logDimensionRouting(session, "single review call", budgetedBatch.files());
       // The base comparison stays: the planner counted it in the shared overhead.
       singleInputs =
-          new BatchPrompts(promptInputs, withheldMaterialNotice(ctx, plan))
+          new BatchPrompts(promptInputs, withheldMaterialNotice(ctx, plan), dimensionRouter)
               .forBatch(budgetedBatch, promptInputs.baseComparison());
       quoteSource = budgetedBatch.text();
+    } else {
+      // Budgeting off: the call reviews the whole pull request, whose routing the assembler set.
+      logDimensionRouting(session, "single review call", ctx.reviewableFiles());
     }
     ReviewResponse aiResponse;
     try {
@@ -445,10 +459,14 @@ public class FindingPipeline {
         new BatchRun(
             batches,
             session,
-            new BatchPrompts(promptInputs, withheldMaterialNotice(ctx, plan)),
+            new BatchPrompts(promptInputs, withheldMaterialNotice(ctx, plan), dimensionRouter),
             plan,
             previousFilesById,
             evidence);
+    for (int i = 0; i < batches.size(); i++) {
+      logDimensionRouting(
+          session, "batch " + (i + 1) + "/" + batches.size(), batches.get(i).files());
+    }
     var outcomesByIndex = new BatchOutcome[batches.size()];
     var failedIndices = new ArrayList<Integer>();
     try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -671,6 +689,26 @@ public class FindingPipeline {
    */
   private static long ledgerSessionId(ReviewSession session) {
     return ReviewTokenLedger.keyFor(session);
+  }
+
+  /**
+   * Logs, at INFO, which review dimension blocks one review call carries and why (#665): each
+   * routed dimension with the file that brought it in, and the ones left out. A dimension missing
+   * from a call is a recall loss nothing else records, so this line is what makes one diagnosable
+   * from production logs. Logged once per planned call, before it is made; nothing is logged with
+   * routing off, when every call carries every dimension.
+   */
+  private void logDimensionRouting(
+      ReviewSession session, String call, List<GitHubPullRequestClient.FileDiff> files) {
+    if (!dimensionRouter.enabled()) {
+      return;
+    }
+    Log.infof(
+        "Review session %d %s over %d file(s): dimension routing %s",
+        ledgerSessionId(session),
+        call,
+        files.size(),
+        ReviewDimensionRouter.routeFiles(files).describe());
   }
 
   /**

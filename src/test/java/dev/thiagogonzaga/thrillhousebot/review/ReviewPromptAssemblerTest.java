@@ -229,7 +229,11 @@ class ReviewPromptAssemblerTest {
       var labeler = mock(PrLabeler.class);
       when(labeler.allowNewLabels()).thenReturn(false);
       var assembler =
-          new ReviewPromptAssembler(config, labeler, new ReviewDiffFormatter(List.of(), 5000));
+          new ReviewPromptAssembler(
+              config,
+              labeler,
+              new ReviewDiffFormatter(List.of(), 5000),
+              ReviewDimensionRouter.disabled());
       var ctx =
           new ReviewContextLoader.ReviewContext(
               files,
@@ -258,6 +262,72 @@ class ReviewPromptAssemblerTest {
           new ReviewOrchestrator.ReviewRequest(
               "o", "r", 1, "headsha", title, body, "basesha", "main", 1L, false, "main", false);
       return assembler.assemble(ctx, req).prContext();
+    }
+  }
+
+  /**
+   * The review call's system prompt (#665): the whole pull request's routed prompt with dimension
+   * routing on — what the budget planner sizes the shared overhead from — and the monolith with it
+   * off.
+   */
+  @Nested
+  class SystemPromptRouting {
+
+    private final List<GitHubPullRequestClient.FileDiff> docsOnly =
+        List.of(
+            new GitHubPullRequestClient.FileDiff(
+                "README.md", "modified", 1, 0, 1, "@@ -1 +1 @@\n+| `X` | y | `z` |"));
+
+    @Test
+    void routingOnSendsThePullRequestsRoutedPrompt() {
+      var router = mock(ReviewDimensionRouter.class);
+      when(router.systemPromptFor(docsOnly)).thenReturn("ROUTED_PROMPT");
+
+      assertEquals("ROUTED_PROMPT", assembleWith(router).reviewSystemPrompt());
+    }
+
+    @Test
+    void routingOffSendsTheMonolith() {
+      assertEquals(
+          PrReviewPrompts.SYSTEM,
+          assembleWith(ReviewDimensionRouter.disabled()).reviewSystemPrompt());
+    }
+
+    private AiReviewService.PromptInputs assembleWith(ReviewDimensionRouter router) {
+      var config = mock(ThrillhouseConfig.class, RETURNS_DEEP_STUBS);
+      when(config.review().diagram().enabled()).thenReturn(false);
+      var labeler = mock(PrLabeler.class);
+      var assembler =
+          new ReviewPromptAssembler(
+              config, labeler, new ReviewDiffFormatter(List.of(), 5000), router);
+      var ctx =
+          new ReviewContextLoader.ReviewContext(
+              docsOnly,
+              "diff",
+              "",
+              0,
+              List.of(),
+              List.of(),
+              List.of(),
+              true,
+              false,
+              null,
+              List.of(),
+              "",
+              InstructionsResolver.ResolvedInstructions.EMPTY,
+              PathScopedInstructions.NONE,
+              List.of(),
+              "",
+              "",
+              "",
+              "",
+              docsOnly,
+              () -> new DiffLineResolver(Map.of()),
+              null);
+      var req =
+          new ReviewOrchestrator.ReviewRequest(
+              "o", "r", 1, "headsha", "t", "", "basesha", "main", 1L, false, "main", false);
+      return assembler.assemble(ctx, req);
     }
   }
 
@@ -358,7 +428,11 @@ class ReviewPromptAssemblerTest {
       var labeler = mock(PrLabeler.class);
       when(labeler.allowNewLabels()).thenReturn(false);
       var assembler =
-          new ReviewPromptAssembler(config, labeler, new ReviewDiffFormatter(List.of(), 5000));
+          new ReviewPromptAssembler(
+              config,
+              labeler,
+              new ReviewDiffFormatter(List.of(), 5000),
+              ReviewDimensionRouter.disabled());
       var ctx =
           new ReviewContextLoader.ReviewContext(
               files,
@@ -447,7 +521,11 @@ class ReviewPromptAssemblerTest {
       var labeler = mock(PrLabeler.class);
       when(labeler.allowNewLabels()).thenReturn(false);
       var assembler =
-          new ReviewPromptAssembler(config, labeler, new ReviewDiffFormatter(List.of(), 5000));
+          new ReviewPromptAssembler(
+              config,
+              labeler,
+              new ReviewDiffFormatter(List.of(), 5000),
+              ReviewDimensionRouter.disabled());
       var scoped =
           new RepoSettings(
               List.of(),
@@ -548,7 +626,11 @@ class ReviewPromptAssemblerTest {
       var labeler = mock(PrLabeler.class);
       when(labeler.allowNewLabels()).thenReturn(false);
       var assembler =
-          new ReviewPromptAssembler(config, labeler, new ReviewDiffFormatter(List.of(), 5000));
+          new ReviewPromptAssembler(
+              config,
+              labeler,
+              new ReviewDiffFormatter(List.of(), 5000),
+              ReviewDimensionRouter.disabled());
       var ctx =
           new ReviewContextLoader.ReviewContext(
               files,
