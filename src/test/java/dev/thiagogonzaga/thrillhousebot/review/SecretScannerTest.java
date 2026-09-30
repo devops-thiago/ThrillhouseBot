@@ -17,8 +17,10 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -201,6 +203,175 @@ class SecretScannerTest {
     assertTrue(scan("secret = \"a1!B\"").isEmpty());
     // Not a credential name.
     assertTrue(scan("checksum = \"q8#Lm2!vRt9Z\"").isEmpty());
+  }
+
+  // --- typed and array declarations (#916) ---
+
+  /** One generic hit whose literal is {@code value} and whose key is {@code key}. */
+  private static void assertGenericHit(String key, String value, String line) {
+    var hits = scan(line);
+    assertEquals(1, hits.size(), () -> "expected one hit on: " + line + " got " + hits);
+    assertEquals(SecurityRule.GENERIC_SECRET, hits.get(0).rule(), line);
+    assertEquals(value, hits.get(0).literal(), line);
+    assertEquals(key, hits.get(0).keyName(), line);
+  }
+
+  @Test
+  void roundNineCArrayDeclaration() {
+    var value = fake.genericSecret(40);
+    assertGenericHit("API_TOKEN", value, "static const char API_TOKEN[] = \"" + value + "\";");
+  }
+
+  @Test
+  void roundNineRustStrConstant() {
+    var value = fake.genericSecret(40);
+    assertGenericHit("API_TOKEN", value, "pub const API_TOKEN: &str = \"" + value + "\";");
+  }
+
+  @Test
+  void cArrayWithASize() {
+    var value = fake.genericSecret(40);
+    assertGenericHit("API_TOKEN", value, "char API_TOKEN[41] = \"" + value + "\";");
+    assertGenericHit("kApiKey", value, "constexpr char kApiKey[ ] = \"" + value + "\";");
+  }
+
+  @Test
+  void cPointerDeclarations() {
+    var value = fake.genericSecret(32);
+    assertGenericHit("API_TOKEN", value, "const char *API_TOKEN = \"" + value + "\";");
+    assertGenericHit("api_token", value, "char* api_token = \"" + value + "\";");
+    assertGenericHit("api_token", value, "char * const api_token = \"" + value + "\";");
+  }
+
+  @Test
+  void rustStaticWithALifetime() {
+    var value = fake.genericSecret(32);
+    assertGenericHit("API_TOKEN", value, "static API_TOKEN: &'static str = \"" + value + "\";");
+  }
+
+  @Test
+  void typeScriptAnnotation() {
+    var value = fake.genericSecret(32);
+    assertGenericHit("apiToken", value, "const apiToken: string = '" + value + "';");
+    assertGenericHit("apiToken", value, "  private apiToken?: string = \"" + value + "\";");
+  }
+
+  @Test
+  void goVarWithATypeAndShortDeclaration() {
+    var value = fake.genericSecret(32);
+    assertGenericHit("apiToken", value, "var apiToken string = \"" + value + "\"");
+    assertGenericHit("apiToken", value, "\tapiToken := \"" + value + "\"");
+  }
+
+  @Test
+  void kotlinAndScalaValWithAType() {
+    var value = fake.genericSecret(32);
+    assertGenericHit("apiToken", value, "val apiToken: String = \"" + value + "\"");
+    assertGenericHit("apiToken", value, "private val apiToken: String? = \"" + value + "\"");
+  }
+
+  @Test
+  void swiftLetWithAType() {
+    var value = fake.genericSecret(32);
+    assertGenericHit("apiToken", value, "let apiToken: String = \"" + value + "\"");
+  }
+
+  @Test
+  void pythonAnnotation() {
+    var value = fake.genericSecret(32);
+    assertGenericHit("API_TOKEN", value, "API_TOKEN: Final[str] = \"" + value + "\"");
+  }
+
+  @Test
+  void javaAndCSharpTypeBeforeTheName() {
+    var value = fake.genericSecret(32);
+    assertGenericHit(
+        "API_TOKEN", value, "private static final String API_TOKEN = \"" + value + "\";");
+    assertGenericHit("ApiToken", value, "public const string ApiToken = \"" + value + "\";");
+  }
+
+  @Test
+  void typedDeclarationsKeepThePlaceholderExclusions() {
+    for (var value : List.of("changeme-9f!Q", "${API_TOKEN}", "<your-token>", "{{ vault_tok }}")) {
+      assertTrue(scan("static const char API_TOKEN[] = \"" + value + "\";").isEmpty(), value);
+      assertTrue(scan("pub const API_TOKEN: &str = \"" + value + "\";").isEmpty(), value);
+      assertTrue(scan("val apiToken: String = \"" + value + "\"").isEmpty(), value);
+      assertTrue(scan("var apiToken string = \"" + value + "\"").isEmpty(), value);
+    }
+  }
+
+  @Test
+  void typedDeclarationsOfAnUnquotedValueAreNotReported() {
+    assertTrue(scan("val apiToken: String = BuildConfig.API_TOKEN").isEmpty());
+    assertTrue(scan("var apiToken string = os.Getenv(\"API_TOKEN\")").isEmpty());
+    assertTrue(scan("pub static API_TOKEN: &str = env!(\"API_TOKEN\");").isEmpty());
+    // A comparison, not an assignment.
+    assertTrue(scan("if apiToken string == \"" + fake.genericSecret(32) + "\" {").isEmpty());
+  }
+
+  @Test
+  void theDeclarationSuffixStaysLinearOnAdversarialLines() {
+    int length = SecretScanner.MAX_GENERIC_LINE_LENGTH;
+    var lines =
+        List.of(
+            "token".repeat(length / 5),
+            ("token: " + "a".repeat(45) + " ").repeat(length / 53),
+            ("token[" + "a".repeat(45)).repeat(length / 51),
+            ("token " + "a".repeat(45) + " ").repeat(length / 52),
+            ("token: &'" + "a".repeat(25) + "    mut    ").repeat(length / 45),
+            "a".repeat(40) + "token" + "a".repeat(length - 45));
+    assertTimeoutPreemptively(
+        Duration.ofSeconds(5),
+        () -> {
+          for (int i = 0; i < 20; i++) {
+            for (var line : lines) {
+              assertTrue(line.length() <= length, "the line must reach the generic rule");
+              assertTrue(scan(line).isEmpty());
+              assertEquals(line, SecretScanner.redactAssignedLiterals(line, THRESHOLD));
+            }
+          }
+        });
+  }
+
+  // --- the model-text scrub's assignment shape (#916) ---
+
+  @Test
+  void anAssignedLiteralIsRedactedWhateverTheDeclarationForm() {
+    var value = fake.genericSecret(40);
+    var redacted = "[redacted: " + value.substring(0, 4) + "…, 40 chars]";
+    // A form the scan itself does not read.
+    var line = "pub static API_TOKEN: Lazy<&str> = Lazy::new(|| \"" + value + "\");";
+    assertTrue(scan(line).isEmpty());
+    assertEquals(
+        "pub static API_TOKEN: Lazy<&str> = Lazy::new(|| \"" + redacted + "\");",
+        SecretScanner.redactAssignedLiterals(line, THRESHOLD));
+    assertEquals(
+        "static API_TOKEN: &'static str = \"" + redacted + "\";",
+        SecretScanner.redactAssignedLiterals(
+            "static API_TOKEN: &'static str = \"" + value + "\";", THRESHOLD));
+    assertEquals(
+        "Remove `api_key := `" + redacted + "`` and\nrotate it.",
+        SecretScanner.redactAssignedLiterals(
+            "Remove `api_key := `" + value + "`` and\nrotate it.", THRESHOLD));
+  }
+
+  @Test
+  void theModelTextScrubLeavesEverythingElseAlone() {
+    var value = fake.genericSecret(40);
+    for (var text :
+        List.of(
+            // No credential name before the literal on its line.
+            "checksum = \"" + value + "\" // token",
+            "token handling\nchecksum = \"" + value + "\"",
+            // No operator between the name and the literal.
+            "The token is \"" + value + "\"",
+            // Not secret-looking: a placeholder, an identifier, a URL, low entropy.
+            "API_TOKEN: &str = \"<your-token-here>\"",
+            "api_token = \"API_TOKEN_NAME\"",
+            "token_url = \"https://auth.local/oauth2/t0ken\"",
+            "password = \"hunter2hunter2\"")) {
+      assertEquals(text, SecretScanner.redactAssignedLiterals(text, THRESHOLD), text);
+    }
   }
 
   @Test
