@@ -63,6 +63,19 @@ public class ReviewLearnings {
   private static final Set<String> WRITE_PERMISSIONS = Set.of("admin", "maintain", "write");
   private static final String STATUS_JUSTIFIED = "justified";
 
+  /** Name segments that make a file a container build file, in any position of its name. */
+  private static final Set<String> CONTAINER_FILE_SEGMENTS = Set.of("dockerfile", "containerfile");
+
+  /** Make build files: the two names make reads by default, and included {@code *.mk} files. */
+  private static final Set<String> MAKEFILE_NAMES = Set.of("makefile", "gnumakefile", "mk");
+
+  /**
+   * Terminal extensions that make a file ABOUT a container build file rather than one: {@code
+   * Dockerfile.md} is documentation and takes the {@code md} type.
+   */
+  private static final Set<String> DOCUMENTARY_EXTENSIONS =
+      Set.of("md", "markdown", "txt", "rst", "adoc", "html");
+
   /** The switches and caps, from {@link ThrillhouseConfig.LearningsConfig}. */
   record Settings(boolean enabled, int maxPerRepo, int promptMaxItems, int promptMaxChars) {}
 
@@ -152,16 +165,16 @@ public class ReviewLearnings {
       int maxChars) {
     var paths = changedPaths == null ? Set.<String>of() : new HashSet<>(changedPaths);
     var dirs = new HashSet<String>();
-    var extensions = new HashSet<String>();
+    var types = new HashSet<String>();
     for (var path : paths) {
       dirs.add(directoryOf(path));
-      extensions.add(extensionOf(path));
+      types.add(typeOf(path));
     }
     // Scored once per learning, so the sort compares stored scores instead of re-deriving them.
     var ranked =
         active.stream()
             .filter(l -> !carriesCredential(l))
-            .map(l -> new Scored(l, relevance(l, paths, dirs, extensions)))
+            .map(l -> new Scored(l, relevance(l, paths, dirs, types)))
             .filter(scored -> scored.score() > 0)
             .sorted(
                 Comparator.comparingInt(Scored::score)
@@ -197,15 +210,16 @@ public class ReviewLearnings {
   /**
    * How close a learning is to this pull request: 3 for a changed file itself, 2 for a file in the
    * same directory as one, or for a repository-wide convention, 1 for a file of a changed file's
-   * type, 0 otherwise. A platform fact learned on one Java file (GitHub review threads are flat)
-   * still reaches a pull request that changes other Java files, while a decline about a workflow
-   * file stays out of a documentation-only change.
+   * type ({@link #typeOf}), 0 otherwise. A platform fact learned on one Java file (GitHub review
+   * threads are flat) still reaches a pull request that changes other Java files, a decline about
+   * one Dockerfile reaches a pull request that changes another (#940), while a decline about a
+   * workflow file stays out of a documentation-only change.
    */
   static int relevance(
       ReviewLearningService.LearningView learning,
       Set<String> paths,
       Set<String> dirs,
-      Set<String> extensions) {
+      Set<String> types) {
     var path = learning.path();
     if (path == null || path.isBlank()) {
       return 2;
@@ -216,8 +230,8 @@ public class ReviewLearnings {
     if (dirs.contains(directoryOf(path))) {
       return 2;
     }
-    var extension = extensionOf(path);
-    return !extension.isEmpty() && extensions.contains(extension) ? 1 : 0;
+    var type = typeOf(path);
+    return !type.isEmpty() && types.contains(type) ? 1 : 0;
   }
 
   private static String directoryOf(String path) {
@@ -225,10 +239,40 @@ public class ReviewLearnings {
     return slash < 0 ? "" : path.substring(0, slash);
   }
 
-  private static String extensionOf(String path) {
-    var name = path.substring(path.lastIndexOf('/') + 1);
+  /**
+   * The file type a learning is matched by at rank 1, lowercased; blank when the file has none.
+   *
+   * <ul>
+   *   <li>A container build file in any spelling ({@code Dockerfile}, {@code Dockerfile.prod},
+   *       {@code prod.Dockerfile}, {@code Containerfile}) is {@code dockerfile}. {@code
+   *       Dockerfile.prod} has the extension {@code prod}, which says which image, not what kind of
+   *       file, so the name segment wins over the extension; a documentary extension ({@code
+   *       Dockerfile.md}) still wins over the name.
+   *   <li>{@code Makefile}, {@code GNUmakefile} and {@code *.mk} are {@code makefile}.
+   *   <li>Any other name without a dot is its own type: {@code Jenkinsfile}, {@code Procfile},
+   *       {@code CODEOWNERS}, {@code LICENSE}. Such a name is a fixed, well-known file whose format
+   *       the name defines, so two files of that name are the same kind of file.
+   *   <li>Otherwise the extension ({@code A.java} is {@code java}).
+   *   <li>A dotfile with no further dot ({@code .env}, {@code .gitignore}) has no type, as before
+   *       #940: the directory rank already reaches it, and its name is not a format shared across
+   *       directories the way a Dockerfile's is.
+   * </ul>
+   */
+  static String typeOf(String path) {
+    var name = path.substring(path.lastIndexOf('/') + 1).toLowerCase(Locale.ROOT);
     var dot = name.lastIndexOf('.');
-    return dot <= 0 ? "" : name.substring(dot + 1).toLowerCase(Locale.ROOT);
+    if (dot == 0) {
+      return "";
+    }
+    var extension = dot < 0 ? name : name.substring(dot + 1);
+    if (!DOCUMENTARY_EXTENSIONS.contains(extension)) {
+      for (var segment : name.split("\\.")) {
+        if (CONTAINER_FILE_SEGMENTS.contains(segment)) {
+          return "dockerfile";
+        }
+      }
+    }
+    return MAKEFILE_NAMES.contains(extension) ? "makefile" : extension;
   }
 
   /** The chosen learnings as the lines the prompt carries; blank when there are none. */

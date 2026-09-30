@@ -801,8 +801,13 @@ recorded for [finding feedback](https://github.com/devops-thiago/ThrillhouseBot/
 
 **How it is used.** Before each review, the repository's active learnings are ranked by how close
 their file is to the files the pull request changes: the same file, then the same directory (and
-repository-wide conventions), then files of the same type. A learning about a file of an
-unrelated type is left out. The best ones, at most `REVIEW_LEARNINGS_PROMPT_MAX_ITEMS` and
+repository-wide conventions), then files of the same type. A file's type is its extension, except
+that a container build file in any spelling (`Dockerfile`, `Dockerfile.prod`, `prod.Dockerfile`,
+`Containerfile`) is one type, `Makefile`, `GNUmakefile` and `*.mk` are one type, and any other
+name without a dot (`Jenkinsfile`, `Procfile`, `CODEOWNERS`) is its own type, so a decline on one
+Dockerfile reaches a pull request that changes another. A dotfile such as `.env` or `.gitignore`
+has no type and is matched by file and directory only. A learning about a file of an unrelated
+type is left out. The best ones, at most `REVIEW_LEARNINGS_PROMPT_MAX_ITEMS` and
 `REVIEW_LEARNINGS_PROMPT_MAX_CHARS`, are added to the review call inside the untrusted-data
 fence, with guidance to not raise a declined finding again while its stated reason still holds
 for the code in the diff, and to name the learning (`[L12]`) when the diff breaks that reason. In

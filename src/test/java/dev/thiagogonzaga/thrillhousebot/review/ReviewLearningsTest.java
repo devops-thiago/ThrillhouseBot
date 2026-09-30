@@ -30,11 +30,15 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.LearningInput;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.LearningView;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.RecordOutcome;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 
 class ReviewLearningsTest {
@@ -57,6 +61,23 @@ class ReviewLearningsTest {
 
   private ReviewLearnings enabled() {
     return learnings(true, 10, 3000);
+  }
+
+  private static LearningView declineOn(long id, String path, String title, long age) {
+    return new LearningView(
+        id,
+        ReviewLearning.KIND_DECLINE,
+        title,
+        "medium",
+        path,
+        "The tag is pinned by the release process, not in the file.",
+        136,
+        "https://github.com/o/r/pull/136#discussion_r" + id,
+        "maintainer",
+        Instant.parse("2026-09-01T00:00:00Z").minusSeconds(age),
+        true,
+        null,
+        null);
   }
 
   private static LearningView view(long id, String kind, String path, String text, long age) {
@@ -144,6 +165,123 @@ class ReviewLearningsTest {
 
     assertEquals(
         List.of(1L, 2L, 3L, 7L, 4L), chosen.stream().map(LearningView::id).toList(), "" + chosen);
+  }
+
+  @ParameterizedTest(name = "{0} -> \"{1}\"")
+  @CsvSource({
+    // Container build files, every spelling (#940).
+    "docker/Dockerfile, dockerfile",
+    "Dockerfile.prod, dockerfile",
+    "deploy/prod.Dockerfile, dockerfile",
+    "images/Containerfile, dockerfile",
+    "a/dockerfile, dockerfile",
+    // A documentary extension wins over the name: the file is about the image, not the image.
+    "docs/Dockerfile.md, md",
+    // Make.
+    "Makefile, makefile",
+    "tools/GNUmakefile, makefile",
+    "build/rules.mk, makefile",
+    // Any other extensionless name is its own type.
+    "Jenkinsfile, jenkinsfile",
+    "ops/Procfile, procfile",
+    ".github/CODEOWNERS, codeowners",
+    // Extensions, as before.
+    "src/A.java, java",
+    "README.MD, md",
+    "a/.env.local, local",
+    // A dotfile with no further dot has no type, as before.
+    ".env, ''",
+    "a/.gitignore, ''",
+    "a/b., ''",
+  })
+  void everyFileShapeHasItsType(String path, String type) {
+    assertEquals(type, ReviewLearnings.typeOf(path));
+  }
+
+  @Test
+  void aDockerfileDeclineReachesAnotherDockerfileInAnotherDirectoryAtTheTypeRank() {
+    var learning = view(51, ReviewLearning.KIND_DECLINE, "java/Dockerfile", "pinned", 0);
+
+    assertEquals(
+        1,
+        ReviewLearnings.relevance(
+            learning,
+            Set.of("healthcheck/Dockerfile"),
+            Set.of("healthcheck"),
+            Set.of("dockerfile")));
+  }
+
+  /**
+   * ThrillhouseBot-test#147 (#940): three declines of the unpinned-base-image finding on three
+   * Dockerfiles, then a pull request adding a fourth in a new directory. All three reach it at the
+   * type rank, which is enough to be included.
+   */
+  @Test
+  void theRound11DeclinesReachANewDockerfileInTheReviewPrompt() {
+    var title = "Base image pinned to a mutable tag, so builds can change without a commit";
+    when(store.listActive(1L, "o/r", 100))
+        .thenReturn(
+            List.of(
+                declineOn(53, "kotlin/Dockerfile", title, 0),
+                declineOn(52, "go/Dockerfile", title, 10),
+                declineOn(51, "java/Dockerfile", title, 20)));
+
+    var section = enabled().promptSection(1L, "o", "r", List.of("healthcheck/Dockerfile"));
+    var prompt = ReviewPromptAssembler.learningsSection(section);
+
+    for (var id : List.of("[L51]", "[L52]", "[L53]")) {
+      assertTrue(prompt.contains(id), id + " missing from:\n" + prompt);
+    }
+    assertTrue(prompt.contains("Declined finding \"" + title + "\""), prompt);
+    assertTrue(prompt.startsWith(PrReviewPrompts.LEARNINGS_REQUEST), prompt);
+  }
+
+  @Test
+  void aLearningOnADockerfileReachesAReviewOfAnotherDockerfile() {
+    when(store.listActive(1L, "o/r", 100))
+        .thenReturn(List.of(view(9, ReviewLearning.KIND_DECLINE, "a/Dockerfile", "pinned", 0)));
+
+    var section = enabled().promptSection(1L, "o", "r", List.of("b/Dockerfile"));
+
+    assertTrue(section.startsWith("- [L9] "), section);
+  }
+
+  @Test
+  void aDockerfileLearningStaysOutOfADocumentationOnlyChange() {
+    when(store.listActive(1L, "o/r", 100))
+        .thenReturn(
+            List.of(
+                view(9, ReviewLearning.KIND_DECLINE, "a/Dockerfile", "pinned", 0),
+                view(10, ReviewLearning.KIND_DECLINE, "b/Dockerfile.prod", "pinned", 0),
+                view(11, ReviewLearning.KIND_DECLINE, "Makefile", "phony", 0)));
+
+    var section =
+        enabled().promptSection(1L, "o", "r", List.of("docs/guide.md", "c/Dockerfile.md"));
+
+    assertEquals("", section);
+  }
+
+  @Test
+  void variantSpellingsOfOneFileTypeReachEachOther() {
+    var chosen =
+        ReviewLearnings.select(
+            List.of(
+                view(1, ReviewLearning.KIND_DECLINE, "a/Dockerfile.prod", "x", 0),
+                view(2, ReviewLearning.KIND_DECLINE, "b/prod.Dockerfile", "x", 1),
+                view(3, ReviewLearning.KIND_DECLINE, "c/Containerfile", "x", 2),
+                view(4, ReviewLearning.KIND_DECLINE, "d/GNUmakefile", "x", 3),
+                view(5, ReviewLearning.KIND_DECLINE, "e/Jenkinsfile", "x", 4),
+                view(6, ReviewLearning.KIND_DECLINE, "f/Procfile", "x", 5),
+                view(7, ReviewLearning.KIND_DECLINE, ".github/CODEOWNERS", "x", 6),
+                view(8, ReviewLearning.KIND_DECLINE, "g/.env", "x", 7)),
+            List.of("x/Dockerfile", "y/Makefile", "Jenkinsfile", "docs/CODEOWNERS", "z/.env"),
+            10,
+            10_000);
+
+    assertEquals(
+        List.of(1L, 2L, 3L, 4L, 5L, 7L),
+        chosen.stream().map(LearningView::id).toList(),
+        "" + chosen);
   }
 
   @Test
