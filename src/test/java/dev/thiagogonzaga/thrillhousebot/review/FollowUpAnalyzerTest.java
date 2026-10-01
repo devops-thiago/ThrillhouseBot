@@ -1096,6 +1096,56 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void justifiedPriorFindingsPairsEachDeclineWithTheRoundItReportedOn() {
+    // #982, newest-first. Round A raised a and b; round B (no findings) declined a, resolved b and
+    // named ids no round has; round C raised c and, reporting on A, declined b; round D declined c.
+    var a = new ReviewResponse.Finding("high", "high", "src/A.java", 1, "a", "d", null, null);
+    var b = new ReviewResponse.Finding("high", "high", "src/B.java", 2, "b", "d", null, null);
+    var c = new ReviewResponse.Finding("high", "high", "src/C.java", 3, "c", "d", null, null);
+    var roundA =
+        new ReviewResponse(
+            List.of(a, b),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "justified", "no prior round")),
+            null);
+    var roundB =
+        new ReviewResponse(
+            List.of(),
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "Justified", "a fixture"),
+                new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed"),
+                new ReviewResponse.PreviousFindingStatus(0, "justified", "earlier round"),
+                new ReviewResponse.PreviousFindingStatus(3, "justified", "out of range")),
+            null);
+    var roundC =
+        new ReviewResponse(
+            List.of(c),
+            List.of(new ReviewResponse.PreviousFindingStatus(2, "justified", "intended")),
+            null);
+    var roundD =
+        new ReviewResponse(
+            List.of(),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "justified", "by design")),
+            null);
+
+    assertEquals(
+        List.of(a, b, c),
+        FollowUpAnalyzer.justifiedPriorFindings(List.of(roundD, roundC, roundB, roundA)));
+    assertEquals(List.of(), FollowUpAnalyzer.justifiedPriorFindings(List.of(roundA)));
+    assertEquals(List.of(), FollowUpAnalyzer.justifiedPriorFindings(List.of()));
+
+    // Only the newest round's statuses: D declined c (C's finding); B's and C's declines are older.
+    assertEquals(
+        List.of(c),
+        FollowUpAnalyzer.justifiedByLatestRound(List.of(roundD, roundC, roundB, roundA)));
+    assertEquals(
+        List.of(b), FollowUpAnalyzer.justifiedByLatestRound(List.of(roundC, roundB, roundA)));
+    // B skips its resolved and out-of-range statuses and keeps the decline of a.
+    assertEquals(List.of(a), FollowUpAnalyzer.justifiedByLatestRound(List.of(roundB, roundA)));
+    assertEquals(List.of(), FollowUpAnalyzer.justifiedByLatestRound(List.of(roundA)));
+    assertEquals(List.of(), FollowUpAnalyzer.justifiedByLatestRound(List.of()));
+  }
+
+  @Test
   void settledPreviousIdsShouldCollectClosuresFromRoundsNewerThanTheEffectiveOne() {
     // newest-first: two zero-finding rounds close #1 (resolved) and #2 (justified); the effective
     // previous round raised #1..#3. #3 stays open.

@@ -2843,6 +2843,70 @@ public class FollowUpAnalyzer {
   }
 
   /**
+   * The prior findings a later round recorded {@code justified} — a maintainer's decline the round
+   * that reported on it accepted — oldest first (#982). Each round's {@code
+   * previous_findings_status} is paired with the round it reported on, as {@link #replayRounds}
+   * pairs them. The deterministic security scan reads this list: its findings are not model output,
+   * so without it a decline lasts one round and the scan raises the finding again on the next.
+   *
+   * <p>The persisted status is the one read: the model's report after the scan's merge. A decline
+   * written on the PR conversation and an {@code @thrillhousebot resolved} clear are applied by the
+   * verdict and not persisted, so a finding closed either way stays {@code unresolved} in the
+   * stored round; the scan keeps tracking it and the verdict applies the clear or decline again
+   * each round.
+   *
+   * @param priorAiResponses every completed prior round's parsed response, newest first
+   */
+  public static List<ReviewResponse.Finding> justifiedPriorFindings(
+      List<ReviewResponse> priorAiResponses) {
+    var justified = new ArrayList<ReviewResponse.Finding>();
+    var reportedRound = List.<ReviewResponse.Finding>of();
+    for (var round : toChronological(priorAiResponses)) {
+      for (var status : round.previousFindingsStatus()) {
+        var id = status.id();
+        if (STATUS_JUSTIFIED.equalsIgnoreCase(status.status())
+            && id >= 1
+            && id <= reportedRound.size()) {
+          justified.add(reportedRound.get(id - 1));
+        }
+      }
+      if (!round.findings().isEmpty()) {
+        reportedRound = round.findings();
+      }
+    }
+    return justified;
+  }
+
+  /**
+   * The findings the newest prior round recorded justified: {@link #justifiedPriorFindings} limited
+   * to the statuses that round wrote. A decline older than that round has been reviewed past at
+   * least once, so nothing ties it to the head this review sees (#982).
+   */
+  public static List<ReviewResponse.Finding> justifiedByLatestRound(
+      List<ReviewResponse> priorAiResponses) {
+    var chrono = toChronological(priorAiResponses);
+    if (chrono.isEmpty()) {
+      return List.of();
+    }
+    var reportedRound = List.<ReviewResponse.Finding>of();
+    for (var round : chrono.subList(0, chrono.size() - 1)) {
+      if (!round.findings().isEmpty()) {
+        reportedRound = round.findings();
+      }
+    }
+    var justified = new ArrayList<ReviewResponse.Finding>();
+    for (var status : chrono.getLast().previousFindingsStatus()) {
+      var id = status.id();
+      if (STATUS_JUSTIFIED.equalsIgnoreCase(status.status())
+          && id >= 1
+          && id <= reportedRound.size()) {
+        justified.add(reportedRound.get(id - 1));
+      }
+    }
+    return justified;
+  }
+
+  /**
    * Whether a new finding would be a second thread for {@code prior}'s defect (#939). Identity is
    * the one definition the summary folds a re-raise by, {@link PrSummaryGenerator#reRaises} — the
    * same file, line and title — and an identical finding is always a duplicate.

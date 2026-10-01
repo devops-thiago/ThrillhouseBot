@@ -23,10 +23,16 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.HexFormat;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -73,6 +79,19 @@ import java.util.stream.Stream;
  * direction, cleared by a reply or {@code @thrillhousebot resolved} like any finding with no
  * anchor.
  *
+ * <p><b>A standing decline.</b> A detection that repeats a scan finding a later round recorded
+ * {@code justified} — a maintainer's decline the bot accepted ({@link
+ * FollowUpAnalyzer#justifiedPriorFindings}) — is not raised again while the rule still matches the
+ * same content (#982): same file, title and anchor, and for a secret the same {@linkplain
+ * #contentFingerprint fingerprint} of the flagged line, so a new value on that line is raised
+ * whatever prefix and length it shares with the old one (a decline recorded before secret findings
+ * carried the fingerprint covers its line only until the head moves). Without this the scan, which
+ * is not model output and reads no learning, raised a declined finding again on the next round and
+ * blocked the pull request on every push. A decline matches one detection, the nearest by line, so
+ * a second identical line added later is raised. A finding the effective previous round raised
+ * again before the decline was remembered is reported {@code justified} under the same rule, so its
+ * thread closes with the decline it repeats.
+ *
  * <p><b>Duplicates.</b> A model finding within {@link FindingDeduplicator#LINE_TOLERANCE} lines of
  * a detection in the same file is dropped when it is the same defect by {@link
  * FindingDeduplicator#sameDefect} or its title uses at least two of the rule's own words ({@link
@@ -117,6 +136,24 @@ public class SecurityScan {
   private static final String NO_LONGER_DETECTED_NOTE =
       "No longer detected by the deterministic security scan: the line was removed or changed, or"
           + " carries the allow marker.";
+
+  static final String DECLINE_STANDS_NOTE =
+      "A maintainer's decline of this scan finding on an earlier round stands: the rule still"
+          + " matches the same content.";
+
+  /**
+   * Hidden line a secret finding's description ends with: a fingerprint of the content it flagged,
+   * which is what tells a later round whether a declined finding's line still carries the same
+   * value. The title shows only the value's first characters and length, which a known format
+   * shares across every value.
+   */
+  private static final Pattern CONTENT_MARKER =
+      Pattern.compile("<!-- thrillhousebot:scan-content=([0-9a-f]+) -->");
+
+  /** Hex digits of the content fingerprint kept: enough to tell two values apart, no more. */
+  private static final int FINGERPRINT_HEX = 8;
+
+  private static final String FINGERPRINT_ALGORITHM = "SHA-256";
 
   private static final String STATUS_UNRESOLVED = "unresolved";
   private static final String STATUS_RESOLVED = "resolved";
@@ -199,7 +236,11 @@ public class SecurityScan {
             ctx.lineResolver(),
             VerdictBuilder.renameTargets(ctx.files()),
             ctx.inlineComments(),
-            botIdentity));
+            botIdentity),
+        new Declines(
+            FollowUpAnalyzer.justifiedPriorFindings(ctx.priorAiResponses()),
+            FollowUpAnalyzer.justifiedByLatestRound(ctx.priorAiResponses()),
+            ctx.previousRoundHeadUnchanged()));
   }
 
   ReviewResponse merge(
@@ -224,18 +265,67 @@ public class SecurityScan {
       List<ReviewResponse.Finding> previous,
       Set<Integer> settledIds,
       List<ReviewResponse.Finding> earlierOpen) {
+    return merge(response, result, previous, settledIds, earlierOpen, Declines.NONE);
+  }
+
+  /**
+   * The findings later rounds recorded justified ({@link FollowUpAnalyzer#justifiedPriorFindings}),
+   * those the newest round recorded ({@link FollowUpAnalyzer#justifiedByLatestRound}), and whether
+   * this review's head is the one that round reviewed — the only case in which a decline recorded
+   * before secret findings carried a fingerprint may still cover one.
+   */
+  record Declines(
+      List<ReviewResponse.Finding> justified,
+      List<ReviewResponse.Finding> latestRound,
+      boolean headUnchanged) {
+    static final Declines NONE = new Declines(List.of(), List.of(), false);
+
+    Declines {
+      justified = List.copyOf(justified);
+      latestRound = List.copyOf(latestRound);
+    }
+
+    /** Declines all recorded by the newest round, as when there is only one round to report on. */
+    Declines(List<ReviewResponse.Finding> justified, boolean headUnchanged) {
+      this(justified, justified, headUnchanged);
+    }
+  }
+
+  /**
+   * As {@link #merge(ReviewResponse, Result, List, Set, List)}, with the maintainer declines later
+   * rounds recorded. A detection that repeats a declined scan finding on the same content is not
+   * raised again (#982), and a previous-round finding it is tracked as is reported justified.
+   */
+  ReviewResponse merge(
+      ReviewResponse response,
+      Result result,
+      List<ReviewResponse.Finding> previous,
+      Set<Integer> settledIds,
+      List<ReviewResponse.Finding> earlierOpen,
+      Declines declined) {
     var scanPriors = openScanPriors(previous, settledIds);
+    var declines =
+        scanFindings(declined.justified(), declined.latestRound(), declined.headUnchanged());
     var scrubber =
         secretsEnabled
             ? Scrubber.of(result.redactions(), entropyThreshold)
             : Scrubber.of(result.redactions());
     var tracked = new LinkedHashMap<Integer, Detection>();
+    var standing = new HashSet<Integer>();
     var raised = new ArrayList<ReviewResponse.Finding>();
     int earlier = 0;
+    int settled = 0;
+    var claimed = claimDeclines(result.detections(), declines);
     for (var detection : result.detections()) {
       int priorId = priorIdOf(detection.finding(), scanPriors, tracked.keySet());
+      boolean repeatsDecline = claimed.contains(detection.finding());
       if (priorId > 0) {
         tracked.put(priorId, detection);
+        if (repeatsDecline) {
+          standing.add(priorId);
+        }
+      } else if (repeatsDecline) {
+        settled++;
       } else if (repeatsEarlierRound(detection.finding(), earlierOpen)) {
         earlier++;
       } else {
@@ -254,14 +344,23 @@ public class SecurityScan {
       }
     }
     kept.addAll(raised);
-    var statuses = statuses(response.previousFindingsStatus(), tracked.keySet(), cleared, scrubber);
+    var statuses =
+        statuses(
+            response.previousFindingsStatus(),
+            new ScanVerdicts(tracked.keySet(), standing, cleared),
+            scrubber);
     // A duplicate needs a detection, so these two cover every merge that changed anything.
     if (!result.detections().isEmpty() || !cleared.isEmpty()) {
       Log.infof(
           "Security scan: raised %d finding(s), kept %d from the previous round open, left %d"
-              + " open from an earlier round, closed %d no longer detected, dropped %d model"
-              + " duplicate(s)",
-          raised.size(), tracked.size(), earlier, cleared.size(), duplicates);
+              + " open from an earlier round, left %d declined by a maintainer, closed %d no longer"
+              + " detected, dropped %d model duplicate(s)",
+          raised.size(),
+          tracked.size() - standing.size(),
+          earlier,
+          settled + standing.size(),
+          cleared.size(),
+          duplicates);
     }
     return new ReviewResponse(
         kept,
@@ -307,7 +406,9 @@ public class SecurityScan {
               : null;
       for (var hit : SecretScanner.scan(line.text(), next, entropyThreshold)) {
         var redacted = SecretScanner.redact(hit);
-        detections.add(new Detection(hit.rule(), secretFinding(filename, line.number(), hit)));
+        var fingerprint = contentFingerprint(hit.rule(), flaggedContent(lines, i, hit.rule()));
+        detections.add(
+            new Detection(hit.rule(), secretFinding(filename, line.number(), hit, fingerprint)));
         if (hit.rule() == SecurityRule.PRIVATE_KEY) {
           addPemMaterial(lines, i, redactions);
         } else {
@@ -318,23 +419,42 @@ public class SecurityScan {
   }
 
   /**
+   * What a secret finding on line {@code index} flagged, for its fingerprint: the line, stripped,
+   * or for a private key its whole block, since the header line is the same for every key.
+   */
+  private static String flaggedContent(List<PatchLines.Line> lines, int index, SecurityRule rule) {
+    var flagged =
+        rule == SecurityRule.PRIVATE_KEY ? pemBlock(lines, index) : List.of(lines.get(index));
+    return flagged.stream().map(line -> line.text().strip()).collect(Collectors.joining("\n"));
+  }
+
+  /**
    * Records the base64 runs of a private key — on its header line and on the added body lines that
    * follow — so a model finding quoting the key body is scrubbed as well as one quoting the header.
    */
   private static void addPemMaterial(
       List<PatchLines.Line> lines, int headerIndex, List<Redaction> redactions) {
-    int hunk = lines.get(headerIndex).hunk();
-    for (int i = headerIndex; i < lines.size(); i++) {
-      var line = lines.get(i);
-      if (i > headerIndex
-          && (line.hunk() != hunk || !line.added() || !SecretScanner.isPemBodyLine(line.text()))) {
-        return;
-      }
+    for (var line : pemBlock(lines, headerIndex)) {
       var material = PEM_MATERIAL.matcher(line.text());
       while (material.find()) {
         redactions.add(new Redaction(material.group(), PEM_MATERIAL_REDACTION));
       }
     }
+  }
+
+  /** A private key's header line and the added body lines that follow it in the same hunk. */
+  private static List<PatchLines.Line> pemBlock(List<PatchLines.Line> lines, int headerIndex) {
+    var block = new ArrayList<PatchLines.Line>();
+    int hunk = lines.get(headerIndex).hunk();
+    for (int i = headerIndex; i < lines.size(); i++) {
+      var line = lines.get(i);
+      if (i > headerIndex
+          && (line.hunk() != hunk || !line.added() || !SecretScanner.isPemBodyLine(line.text()))) {
+        break;
+      }
+      block.add(line);
+    }
+    return block;
   }
 
   private static void scanIac(
@@ -365,7 +485,7 @@ public class SecurityScan {
   }
 
   private static ReviewResponse.Finding secretFinding(
-      String filename, int line, SecretScanner.Hit hit) {
+      String filename, int line, SecretScanner.Hit hit, String fingerprint) {
     var rule = hit.rule();
     var redacted = SecretScanner.redact(hit);
     var key = rule == SecurityRule.GENERIC_SECRET ? keyName(hit.keyName()) : null;
@@ -391,7 +511,10 @@ public class SecurityScan {
             + " add a `"
             + ALLOW_SECRET_MARKER
             + "` comment on the same line or the line above it.\n\n"
-            + PROVENANCE;
+            + PROVENANCE
+            + "\n\n<!-- thrillhousebot:scan-content="
+            + fingerprint
+            + " -->";
     return new ReviewResponse.Finding(
         rule.risk(), rule.confidence(), filename, line, title, description, null, null);
   }
@@ -487,6 +610,108 @@ public class SecurityScan {
   }
 
   /**
+   * The scan's own declined findings a detection can claim, in a list it claims them from. A secret
+   * finding persisted before it carried a fingerprint has nothing that tells its value from another
+   * of the same prefix and length, so its decline counts only when the newest round recorded it and
+   * this review's head is the one that round reviewed: nothing on the line can have changed since
+   * the decline was weighed. Once a later round has run, or after a push, it lapses, and the
+   * finding raised again carries a fingerprint the next decline keeps. An IaC finding's anchor is
+   * its line, so its decline needs no fingerprint.
+   */
+  private static List<ReviewResponse.Finding> scanFindings(
+      List<ReviewResponse.Finding> findings,
+      List<ReviewResponse.Finding> latestRound,
+      boolean headUnchanged) {
+    var scan = new ArrayList<ReviewResponse.Finding>();
+    for (var finding : findings) {
+      var rule = finding.file() == null ? null : SecurityRule.fromTitle(finding.title());
+      if (rule != null
+          && (rule.category() == SecurityRule.Category.IAC
+              || fingerprintOf(finding.description()) != null
+              || (headUnchanged && latestRound.contains(finding)))) {
+        scan.add(finding);
+      }
+    }
+    return scan;
+  }
+
+  /**
+   * The detections that repeat a declined scan finding: same file, title and anchor, and the same
+   * content fingerprint when the declined finding carries one (an IaC finding, or a secret finding
+   * {@link #scanFindings} admitted on an unchanged head, is matched by the other keys). Each
+   * decline covers one detection, and pairs are made nearest by line first across all detections,
+   * so a copy of a declined line added elsewhere does not take the decline from the line it was
+   * written on.
+   */
+  private static Set<ReviewResponse.Finding> claimDeclines(
+      List<Detection> detections, List<ReviewResponse.Finding> declines) {
+    record Pair(int detection, int decline, int distance) {}
+    var pairs = new ArrayList<Pair>();
+    for (int d = 0; d < detections.size(); d++) {
+      var detection = detections.get(d).finding();
+      for (int k = 0; k < declines.size(); k++) {
+        var declined = declines.get(k);
+        if (sameContent(declined, detection)) {
+          pairs.add(new Pair(d, k, Math.abs(declined.line() - detection.line())));
+        }
+      }
+    }
+    pairs.sort(Comparator.comparingInt(Pair::distance));
+    Set<ReviewResponse.Finding> claimed = Collections.newSetFromMap(new IdentityHashMap<>());
+    var usedDeclines = new HashSet<Integer>();
+    for (var pair : pairs) {
+      var detection = detections.get(pair.detection()).finding();
+      if (!claimed.contains(detection) && usedDeclines.add(pair.decline())) {
+        claimed.add(detection);
+      }
+    }
+    return claimed;
+  }
+
+  private static boolean sameContent(
+      ReviewResponse.Finding prior, ReviewResponse.Finding detection) {
+    var priorFingerprint = fingerprintOf(prior.description());
+    return FilePaths.same(prior.file(), detection.file())
+        && Objects.equals(prior.title(), detection.title())
+        && Objects.equals(stripped(prior.suggestionOld()), stripped(detection.suggestionOld()))
+        && (priorFingerprint == null
+            || priorFingerprint.equals(fingerprintOf(detection.description())));
+  }
+
+  /** The content fingerprint a scan finding's description carries, or {@code null}. */
+  static String fingerprintOf(String description) {
+    if (description == null) {
+      return null;
+    }
+    var marker = CONTENT_MARKER.matcher(description);
+    return marker.find() ? marker.group(1) : null;
+  }
+
+  /**
+   * A short fingerprint of the content a secret finding flagged, the rule's name included: the
+   * first {@value #FINGERPRINT_HEX} hex digits of its SHA-256. It tells one value from another
+   * without holding either; the value itself is on the pull request's own diff.
+   */
+  static String contentFingerprint(SecurityRule rule, String content) {
+    return contentFingerprint(FINGERPRINT_ALGORITHM, rule, content);
+  }
+
+  /**
+   * As {@link #contentFingerprint(SecurityRule, String)}; the algorithm is a parameter for tests.
+   */
+  static String contentFingerprint(String algorithm, SecurityRule rule, String content) {
+    try {
+      var digest = MessageDigest.getInstance(algorithm);
+      digest.update(rule.name().getBytes(StandardCharsets.UTF_8));
+      digest.update((byte) 0);
+      var hash = digest.digest(content.getBytes(StandardCharsets.UTF_8));
+      return HexFormat.of().formatHex(hash).substring(0, FINGERPRINT_HEX);
+    } catch (GeneralSecurityException e) {
+      throw new IllegalStateException(algorithm + " is not available", e);
+    }
+  }
+
+  /**
    * The open scan priors this scan provably no longer sees: raised by a rule whose half is on, in a
    * file the scan read, and not repeated by any detection.
    */
@@ -511,49 +736,55 @@ public class SecurityScan {
   }
 
   /**
+   * What the scan decided about the effective previous round's own findings, by id: still detected,
+   * still detected on content a maintainer's decline covers (a subset of {@code stillDetected}),
+   * and no longer detected.
+   */
+  private record ScanVerdicts(
+      Set<Integer> stillDetected, Set<Integer> declineStands, Set<Integer> noLongerDetected) {}
+
+  /**
    * The previous-round statuses with the scan's verdicts applied: a still-detected finding is
-   * {@code unresolved} unless the model reported a maintainer's {@code justified}; a finding no
-   * longer detected is {@code resolved}. Ids the model did not report are appended in id order.
+   * {@code unresolved} unless the model reported a maintainer's {@code justified}, or {@code
+   * justified} when it repeats a decline that stands; a finding no longer detected is {@code
+   * resolved}. Ids the model did not report are appended in id order.
    */
   private static List<ReviewResponse.PreviousFindingStatus> statuses(
       List<ReviewResponse.PreviousFindingStatus> reported,
-      Set<Integer> stillDetected,
-      Set<Integer> noLongerDetected,
+      ScanVerdicts verdicts,
       Scrubber scrubber) {
     var result = new ArrayList<ReviewResponse.PreviousFindingStatus>(reported.size());
     var seen = new HashSet<Integer>();
     for (var status : reported) {
       seen.add(status.id());
-      result.add(applyScan(status, stillDetected, noLongerDetected, scrubber));
+      result.add(applyScan(status, verdicts, scrubber));
     }
-    Stream.concat(stillDetected.stream(), noLongerDetected.stream())
+    Stream.concat(verdicts.stillDetected().stream(), verdicts.noLongerDetected().stream())
         .filter(id -> !seen.contains(id))
         .sorted()
-        .map(
-            id ->
-                stillDetected.contains(id)
-                    ? new ReviewResponse.PreviousFindingStatus(
-                        id, STATUS_UNRESOLVED, STILL_DETECTED_NOTE)
-                    : new ReviewResponse.PreviousFindingStatus(
-                        id, STATUS_RESOLVED, NO_LONGER_DETECTED_NOTE))
+        .map(id -> scanStatus(id, verdicts))
         .forEach(result::add);
     return result;
   }
 
-  private static ReviewResponse.PreviousFindingStatus applyScan(
-      ReviewResponse.PreviousFindingStatus status,
-      Set<Integer> stillDetected,
-      Set<Integer> noLongerDetected,
-      Scrubber scrubber) {
-    var note = scrubber.scrub(status.note());
-    if (stillDetected.contains(status.id())
-        && !STATUS_JUSTIFIED.equalsIgnoreCase(status.status())) {
-      return new ReviewResponse.PreviousFindingStatus(
-          status.id(), STATUS_UNRESOLVED, STILL_DETECTED_NOTE);
+  private static ReviewResponse.PreviousFindingStatus scanStatus(int id, ScanVerdicts verdicts) {
+    if (verdicts.declineStands().contains(id)) {
+      return new ReviewResponse.PreviousFindingStatus(id, STATUS_JUSTIFIED, DECLINE_STANDS_NOTE);
     }
-    if (noLongerDetected.contains(status.id())) {
-      return new ReviewResponse.PreviousFindingStatus(
-          status.id(), STATUS_RESOLVED, NO_LONGER_DETECTED_NOTE);
+    return verdicts.stillDetected().contains(id)
+        ? new ReviewResponse.PreviousFindingStatus(id, STATUS_UNRESOLVED, STILL_DETECTED_NOTE)
+        : new ReviewResponse.PreviousFindingStatus(id, STATUS_RESOLVED, NO_LONGER_DETECTED_NOTE);
+  }
+
+  private static ReviewResponse.PreviousFindingStatus applyScan(
+      ReviewResponse.PreviousFindingStatus status, ScanVerdicts verdicts, Scrubber scrubber) {
+    var note = scrubber.scrub(status.note());
+    if (verdicts.stillDetected().contains(status.id())
+        && !STATUS_JUSTIFIED.equalsIgnoreCase(status.status())) {
+      return scanStatus(status.id(), verdicts);
+    }
+    if (verdicts.noLongerDetected().contains(status.id())) {
+      return scanStatus(status.id(), verdicts);
     }
     return Objects.equals(note, status.note())
         ? status

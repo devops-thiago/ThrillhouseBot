@@ -726,9 +726,20 @@ comment, the redacted one; a duplicate worded differently is still scrubbed. On 
 later push, a scan finding the previous round already raised is not posted
 again: its status is kept `unresolved` while the pattern is still on an added
 line (a maintainer's `justified` stands), and set `resolved` once the line is
-gone or carries the allow marker. Under the default `balanced` strictness a
-critical or high scan finding requests changes on its own, like any
-high-confidence finding.
+gone or carries the allow marker. A scan finding a maintainer declined, once a
+round has recorded the decline `justified`, is not raised again on later rounds
+while the rule matches the same content: the same file, title and anchor, and
+for a secret the same line content. A secret finding's text ends with a hidden
+`thrillhousebot:scan-content` marker, the first eight hex digits of a SHA-256 of
+the flagged line (for a private key, its block), which is how a later round
+tells a new value with the same prefix and length from the declined one; a new
+value, or any other change to the line's text (leading and trailing whitespace
+aside), is raised again. A secret finding declined
+before the marker existed has no fingerprint, so its decline holds only on the
+review right after the round that recorded it, on the head that round reviewed;
+after a push or a later round it is raised once more, with the marker. Under the default
+`balanced` strictness a critical or high scan finding requests changes on its
+own, like any high-confidence finding.
 
 ### CI gating
 

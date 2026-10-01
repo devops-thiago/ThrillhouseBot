@@ -1063,6 +1063,302 @@ class SecurityScanTest {
     assertEquals(3, merged.findings().size());
   }
 
+  // --- a standing decline (#982) ---
+
+  private static ReviewResponse.Finding at(ReviewResponse.Finding finding, String file, int line) {
+    return new ReviewResponse.Finding(
+        finding.risk(),
+        finding.confidence(),
+        file,
+        line,
+        finding.title(),
+        finding.description(),
+        finding.suggestionOld(),
+        finding.suggestionNew());
+  }
+
+  private static ReviewResponse mergeAfterDecline(
+      SecurityScan scan,
+      ReviewResponse response,
+      List<FileDiff> files,
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.Finding> declined) {
+    // The head moved since the previous round: only what a decline carries can match.
+    return scan.merge(
+        response,
+        scan.scan(files),
+        previous,
+        Set.of(),
+        List.of(),
+        new SecurityScan.Declines(declined, false));
+  }
+
+  @Test
+  void aDeclinedSecretIsNotRaisedAgainUntilItsValueChanges() {
+    var token = fake.githubToken();
+    var s = scan(true, false);
+    var declined =
+        s.merge(
+                response(),
+                s.scan(List.of(added("app.env", "X=1", "T=" + token))),
+                List.of(),
+                Set.of())
+            .findings();
+    assertEquals(1, declined.size());
+    assertTrue(declined.get(0).description().contains("<!-- thrillhousebot:scan-content="));
+
+    var same =
+        mergeAfterDecline(
+            s, response(), List.of(added("app.env", "X=1", "T=" + token)), List.of(), declined);
+    assertTrue(same.findings().isEmpty(), same.findings().toString());
+    assertTrue(same.previousFindingsStatus().isEmpty());
+
+    // The anchor is the content, not the line number: a push above it moves it, nothing more.
+    var moved = List.of(added("app.env", "X=1", "Y=2", "T=" + token));
+    assertTrue(mergeAfterDecline(s, response(), moved, List.of(), declined).findings().isEmpty());
+
+    // Another token of the format has the same title — prefix and length are all it shows — but
+    // it is not the value the maintainer declined.
+    var rotated = List.of(added("app.env", "X=1", "T=" + fake.githubToken()));
+    var raised = mergeAfterDecline(s, response(), rotated, List.of(), declined).findings();
+    assertEquals(1, raised.size());
+    assertEquals(declined.get(0).title(), raised.get(0).title());
+  }
+
+  @Test
+  void aDeclineFromBeforeTheFingerprintCoversItsTitleAndAnchorOnlyOnAnUnchangedHead() {
+    var token = fake.githubToken();
+    var s = scan(true, false);
+    var raised =
+        s.merge(response(), s.scan(List.of(added("app.env", "T=" + token))), List.of(), Set.of())
+            .findings()
+            .get(0);
+    var legacy =
+        new ReviewResponse.Finding(
+            raised.risk(),
+            raised.confidence(),
+            raised.file(),
+            raised.line(),
+            raised.title(),
+            raised.description().substring(0, raised.description().indexOf("\n\n<!--")),
+            null,
+            null);
+    assertNull(SecurityScan.fingerprintOf(legacy.description()));
+    assertNull(SecurityScan.fingerprintOf(null));
+
+    // On the head the round it reports on reviewed, nothing on the line can have changed since.
+    var files = List.of(added("app.env", "T=" + token));
+    assertTrue(
+        s.merge(
+                response(),
+                s.scan(files),
+                List.of(),
+                Set.of(),
+                List.of(),
+                new SecurityScan.Declines(List.of(legacy), true))
+            .findings()
+            .isEmpty());
+
+    // After a push it cannot tell a rotated value from the one declined, so it lapses: the finding
+    // is raised again, now with the fingerprint a new decline keeps.
+    var rotated = List.of(added("app.env", "T=" + fake.githubToken()));
+    var raisedAgain =
+        mergeAfterDecline(s, response(), rotated, List.of(), List.of(legacy)).findings();
+    assertEquals(1, raisedAgain.size());
+    assertTrue(SecurityScan.fingerprintOf(raisedAgain.get(0).description()) != null);
+    assertEquals(
+        1, mergeAfterDecline(s, response(), files, List.of(), List.of(legacy)).findings().size());
+
+    // A later round on the same head revives nothing: the newest round did not record the decline,
+    // so a value rotated before that round (here, the same line) is not covered by it.
+    assertEquals(
+        1,
+        s.merge(
+                response(),
+                s.scan(rotated),
+                List.of(),
+                Set.of(),
+                List.of(),
+                new SecurityScan.Declines(List.of(legacy), List.of(), true))
+            .findings()
+            .size());
+  }
+
+  @Test
+  void aDeclineCoversOneDetectionTheNearestByLine() {
+    var token = fake.githubToken();
+    var s = scan(true, false);
+    var declined =
+        s.merge(
+                response(),
+                s.scan(List.of(added("app.env", "X=1", "T=" + token))),
+                List.of(),
+                Set.of())
+            .findings()
+            .get(0);
+    // The same line added a second time, two lines further down.
+    var twice = List.of(added("app.env", "X=1", "T=" + token, "Y=2", "T=" + token));
+
+    var oneDecline = mergeAfterDecline(s, response(), twice, List.of(), List.of(declined));
+    assertEquals(
+        List.of(4), oneDecline.findings().stream().map(ReviewResponse.Finding::line).toList());
+
+    // Two declines of that content: each detection claims the nearest one left.
+    var farther = at(declined, declined.file(), 9);
+    var both = mergeAfterDecline(s, response(), twice, List.of(), List.of(declined, farther));
+    assertTrue(both.findings().isEmpty(), both.findings().toString());
+  }
+
+  @Test
+  void aCopyAddedAboveTheDeclinedLineDoesNotTakeItsDecline() {
+    var token = fake.githubToken();
+    var s = scan(true, false);
+    var declined =
+        s.merge(
+                response(),
+                s.scan(List.of(added("app.env", "X=1", "T=" + token))),
+                List.of(),
+                Set.of())
+            .findings()
+            .get(0);
+    // The declined line stays at line 2; a verbatim copy is added above it, at line 1. The copy is
+    // scanned first, but the decline goes to the nearest line, the one it was written on.
+    var copyAbove = List.of(added("app.env", "T=" + token, "T=" + token));
+
+    var merged = mergeAfterDecline(s, response(), copyAbove, List.of(), List.of(declined));
+    assertEquals(List.of(1), merged.findings().stream().map(ReviewResponse.Finding::line).toList());
+  }
+
+  @Test
+  void aDeclineOfAnotherFileTitleOrAnchorDoesNotCoverADetection() {
+    var files = List.of(added("rust/Dockerfile", "FROM rust:1.80", "USER root"));
+    var s = scan(false, true);
+    var raised = s.merge(response(), s.scan(files), List.of(), Set.of()).findings().get(0);
+    var otherAnchor =
+        new ReviewResponse.Finding(
+            raised.risk(),
+            raised.confidence(),
+            raised.file(),
+            raised.line(),
+            raised.title(),
+            raised.description(),
+            "USER 0",
+            null);
+    var otherTitle =
+        new ReviewResponse.Finding(
+            raised.risk(),
+            raised.confidence(),
+            raised.file(),
+            raised.line(),
+            SecurityRule.PUBLIC_BUCKET.iacTitle(),
+            raised.description(),
+            raised.suggestionOld(),
+            null);
+    var modelOwn = modelFinding(raised.file(), raised.line(), "Runs as root", "USER root");
+    var noFile = at(raised, null, raised.line());
+
+    var merged =
+        mergeAfterDecline(
+            s,
+            response(),
+            files,
+            List.of(),
+            List.of(at(raised, "go/Dockerfile", 2), otherAnchor, otherTitle, modelOwn, noFile));
+    assertEquals(List.of(raised), merged.findings());
+
+    // The setting itself, declined, is not raised again.
+    assertTrue(
+        mergeAfterDecline(s, response(), files, List.of(), List.of(raised)).findings().isEmpty());
+  }
+
+  @Test
+  void aChangedPrivateKeyBodyIsRaisedAgainAfterADecline() {
+    var s = scan(true, false);
+    var body = fake.pemBodyLine();
+    var key =
+        List.of(
+            added(
+                "certs/key.pem",
+                FakeCredentials.pemHeader("RSA"),
+                body,
+                "-----END RSA PRIVATE KEY-----"));
+    var declined = s.merge(response(), s.scan(key), List.of(), Set.of()).findings();
+    assertEquals(1, declined.size());
+
+    assertTrue(mergeAfterDecline(s, response(), key, List.of(), declined).findings().isEmpty());
+    var another =
+        List.of(
+            added(
+                "certs/key.pem",
+                FakeCredentials.pemHeader("RSA"),
+                fake.pemBodyLine(),
+                "-----END RSA PRIVATE KEY-----"));
+    assertEquals(
+        1, mergeAfterDecline(s, response(), another, List.of(), declined).findings().size());
+  }
+
+  @Test
+  void aPreviousRoundRaiseOfADeclinedFindingIsReportedJustified() {
+    // A round that raised the finding again before declines were remembered: its copy is the
+    // effective previous round's, tracked by id, and closes under the decline it repeats.
+    var first = fake.githubToken();
+    var second = fake.githubToken();
+    var files = List.of(added("app.env", "A=" + first, "B=" + second));
+    var s = scan(true, false);
+    var raisedAgain = s.merge(response(), s.scan(files), List.of(), Set.of()).findings();
+    var declined = List.of(raisedAgain.get(0), raisedAgain.get(1));
+
+    var unreported = mergeAfterDecline(s, response(), files, raisedAgain, declined);
+    assertTrue(unreported.findings().isEmpty());
+    assertEquals(
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(
+                1, "justified", SecurityScan.DECLINE_STANDS_NOTE),
+            new ReviewResponse.PreviousFindingStatus(
+                2, "justified", SecurityScan.DECLINE_STANDS_NOTE)),
+        unreported.previousFindingsStatus());
+
+    // A maintainer's own decline on the new thread, as the model reports it, is kept as written.
+    var reported =
+        new ReviewResponse(
+            List.of(),
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "justified", "a fixture"),
+                new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there")),
+            null);
+    assertEquals(
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "justified", "a fixture"),
+            new ReviewResponse.PreviousFindingStatus(
+                2, "justified", SecurityScan.DECLINE_STANDS_NOTE)),
+        mergeAfterDecline(s, reported, files, raisedAgain, declined).previousFindingsStatus());
+
+    // Without a decline the same round keeps both open, as before.
+    assertEquals(
+        List.of("unresolved", "unresolved"),
+        mergeAfterDecline(s, response(), files, raisedAgain, List.of())
+            .previousFindingsStatus()
+            .stream()
+            .map(ReviewResponse.PreviousFindingStatus::status)
+            .toList());
+  }
+
+  @Test
+  void theContentFingerprintNamesAMissingAlgorithm() {
+    var thrown =
+        org.junit.jupiter.api.Assertions.assertThrows(
+            IllegalStateException.class,
+            () -> SecurityScan.contentFingerprint("NO-SUCH-DIGEST", SecurityRule.JWT, "x"));
+    assertTrue(thrown.getMessage().contains("NO-SUCH-DIGEST"));
+    assertEquals(
+        SecurityScan.contentFingerprint(SecurityRule.JWT, "x"),
+        SecurityScan.contentFingerprint("SHA-256", SecurityRule.JWT, "x"));
+    assertFalse(
+        SecurityScan.contentFingerprint(SecurityRule.JWT, "x")
+            .equals(SecurityScan.contentFingerprint(SecurityRule.GITHUB_TOKEN, "x")),
+        "the rule is part of the fingerprint");
+  }
+
   private static String stillDetectedNote() {
     return "Still detected by the deterministic security scan on an added line.";
   }
