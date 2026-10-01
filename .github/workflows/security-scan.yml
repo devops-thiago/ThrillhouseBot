@@ -29,7 +29,9 @@ jobs:
         with:
           image-ref: ghcr.io/devops-thiago/thrillhousebot:latest
           category: trivy-scheduled
+          trivyignores: .trivyignore
       - uses: ./.github/actions/trivy-scan
         with:
           image-ref: ghcr.io/devops-thiago/thrillhousebot:latest-distroless
           category: trivy-scheduled-distroless
+          trivyignores: .trivyignore
