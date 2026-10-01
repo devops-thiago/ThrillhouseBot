@@ -36,14 +36,15 @@ public final class DescriptionGapLabels {
   private DescriptionGapLabels() {}
 
   /**
-   * A leading carried-gap label: bracketed or parenthesized, with an optional colon or dash after
-   * it; or bare, followed by a colon, a dash that ends the gap or is followed by a space, or the
-   * end of the gap.
+   * The leading label shapes, each kept simple on its own: "[G1]" and "(G1)", either followed by an
+   * optional colon or dash; and a bare "G1" followed by a colon, a dash that ends the gap or is
+   * followed by a space, or nothing at all.
    */
-  private static final Pattern LEADING_LABEL =
-      Pattern.compile(
-          "^\\s*(?:(?:\\[\\s*G\\d{1,3}\\s*]|\\(\\s*G\\d{1,3}\\s*\\))\\s*(?:[:\\-–—]\\s*)?"
-              + "|G\\d{1,3}\\s*(?::\\s*|[-–—](?:\\s+|$)|$))");
+  private static final List<Pattern> LEADING_LABELS =
+      List.of(
+          Pattern.compile("^\\s*\\[\\s*G\\d{1,3}\\s*]\\s*[:\\-–—]?"),
+          Pattern.compile("^\\s*\\(\\s*G\\d{1,3}\\s*\\)\\s*[:\\-–—]?"),
+          Pattern.compile("^\\s*G\\d{1,3}\\s*(?::|[-–—](?=\\s|$)|$)"));
 
   /**
    * {@code gaps} in order, each without its leading label; a gap that was only a label is dropped.
@@ -52,16 +53,27 @@ public final class DescriptionGapLabels {
   public static List<String> stripAll(List<String> gaps) {
     var stripped = new ArrayList<String>(gaps.size());
     for (var gap : gaps) {
-      var label = LEADING_LABEL.matcher(gap);
-      if (!label.find()) {
+      var end = labelEnd(gap);
+      if (end < 0) {
         stripped.add(gap);
         continue;
       }
-      var text = gap.substring(label.end()).strip();
+      var text = gap.substring(end).strip();
       if (!text.isEmpty()) {
         stripped.add(text);
       }
     }
     return stripped;
+  }
+
+  /** Where the leading label of {@code gap} ends, or -1 when it has none. */
+  private static int labelEnd(String gap) {
+    for (var shape : LEADING_LABELS) {
+      var label = shape.matcher(gap);
+      if (label.find()) {
+        return label.end();
+      }
+    }
+    return -1;
   }
 }
