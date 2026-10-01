@@ -116,7 +116,12 @@ class DescriptionGapLabelsTest {
         "The TTL is a constant (not configurable).|The TTL is a constant (not configurable).",
         "The cap is missing, same as G1; the TTL too.|The cap is missing; the TTL too.",
         "Unlike G2, the TTL half is covered.|Unlike a previously listed gap, the TTL half is"
-            + " covered."
+            + " covered.",
+        "Unlike G1 and G3, the TTL half is covered.|Unlike a previously listed gap and G3, the"
+            + " TTL half is covered.",
+        "G1 and G3 remain open here.|A previously listed gap and G3 remain open here.",
+        "The cap is missing, same as G2 and G3.|The cap is missing, same as a previously listed"
+            + " gap and G3."
       })
   void anIssuedLabelUsedAsASubjectOrAReferenceIsRewritten(String gap, String expected) {
     assertEquals(List.of(expected), DescriptionGapLabels.stripIssued(List.of(gap), 2));

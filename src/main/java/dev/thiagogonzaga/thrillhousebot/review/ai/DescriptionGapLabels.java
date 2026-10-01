@@ -93,7 +93,7 @@ public final class DescriptionGapLabels {
 
   /** One label or several joined ("G1 and G2", "G1, G3", "G1/G2"). */
   private static final String LABELS =
-      LABEL + "(?:\\s*(?:,|/|&|and|or)\\s*G\\d{1,3})*(?!\\w)(?!-\\w)";
+      LABEL + "(?:\\s*+(?:[,/&]|and|or)\\s*+G\\d{1,3}){0,9}+(?!\\w)(?!-\\w)";
 
   /**
    * Not followed by an all-caps word: "G1 GC", "G1 JVM" name the garbage collector, not a gap, even
@@ -103,7 +103,7 @@ public final class DescriptionGapLabels {
 
   private static final Pattern LABEL_NUMBER = Pattern.compile("G(\\d{1,3})");
 
-  /** A parenthetical, group 1 its content: "(see G1)", "(G1, still not addressed)". */
+  /** A parenthetical: group 1 the space before "(", group 2 its content, as in "(see G1)". */
   private static final Pattern PARENTHETICAL = Pattern.compile("(\\s*)\\(([^()\\n]*)\\)");
 
   /** A label cited inside a parenthetical, with the pointer word before it: "see G1", "G1". */
@@ -111,18 +111,20 @@ public final class DescriptionGapLabels {
       Pattern.compile("(?:(?:see|cf\\.?|as in|like|per|same as)\\s+)?(" + LABELS + ")");
 
   /** What a parenthetical keeps at either end once its labels are gone: separators only. */
-  private static final Pattern EDGE_SEPARATORS = Pattern.compile("^[\\s,;:—–-]+|[\\s,;:—–-]+$");
+  private static final Pattern EDGE_SEPARATORS =
+      Pattern.compile("(?:^[\\s,;:—–-]+)|(?:[\\s,;:—–-]+$)");
+
+  /** Labels that close their clause: "G2." in ", as in G2.", "G1;" in "same as G1;". */
+  private static final Pattern CLAUSE_END_LABELS =
+      Pattern.compile("(" + LABELS + ")(?=\\s*+(?:[.,;:)]|$))");
 
   /**
-   * A trailing reference phrase that ends its clause: ", as in G2.", "same as G1;", "see G3". The
-   * phrase only points the reader at the label, so the sentence stands without it.
+   * The pointer words right before a label, with the comma or space in front of them: ", as in ", "
+   * same as ", " see ". With the label they make a reference phrase, which only points the reader
+   * at the label, so the sentence stands without it.
    */
-  private static final Pattern REFERENCE_PHRASE =
-      Pattern.compile(
-          "(?:,\\s*|\\s+)\\b(?:as\\s+(?:in|with|per|for|noted\\s+in|listed\\s+in)|same\\s+as"
-              + "|like|see|cf\\.|per)\\s+("
-              + LABELS
-              + ")(?=\\s*(?:[.,;:)]|$))");
+  private static final Pattern POINTER_BEFORE =
+      Pattern.compile("(?:,\\s*+|\\s++)(?:as in|as with|as per|same as|like|see|cf\\.|per)\\s++$");
 
   /**
    * A gap led by a label and a short status clause about it, then a colon or a spaced dash: "G2
@@ -227,7 +229,7 @@ public final class DescriptionGapLabels {
         PARENTHETICAL
             .matcher(gap)
             .replaceAll(m -> Matcher.quoteReplacement(withoutCitedLabels(m, issued)));
-    text = replace(REFERENCE_PHRASE, text, issued, m -> "");
+    text = withoutReferencePhrases(text, issued);
     var status = LEADING_STATUS.matcher(text);
     if (status.matches()
         && allIssued(status.group(2), issued)
@@ -240,7 +242,9 @@ public final class DescriptionGapLabels {
       var lead = verb ? referent(subject.group(1)) + " " : "";
       text = lead + text.substring(subject.start(2));
     }
-    text = replace(BARE, text, issued, m -> referent(m.group(1)));
+    text =
+        BARE.matcher(text)
+            .replaceAll(m -> Matcher.quoteReplacement(rewrittenInPlace(m.group(1), issued)));
     if (text.equals(gap)) {
       return null;
     }
@@ -260,6 +264,35 @@ public final class DescriptionGapLabels {
     }
     rest = EDGE_SEPARATORS.matcher(rest).replaceAll("");
     return rest.isEmpty() ? "" : parenthetical.group(1) + "(" + rest + ")";
+  }
+
+  /** {@code text} without the reference phrases that cite issued labels and close a clause. */
+  private static String withoutReferencePhrases(String text, int issued) {
+    var kept = new StringBuilder(text.length());
+    var from = 0;
+    var labels = CLAUSE_END_LABELS.matcher(text);
+    while (labels.find()) {
+      var pointer = POINTER_BEFORE.matcher(text).region(from, labels.start());
+      if (allIssued(labels.group(1), issued) && pointer.find()) {
+        kept.append(text, from, pointer.start());
+        from = labels.end();
+      }
+    }
+    return kept.append(text, from, text.length()).toString();
+  }
+
+  /**
+   * A label cluster left after the other rewrites, said in words: the referent when every label in
+   * it was issued, otherwise each issued label on its own ("G1 and G3" with only G1 issued becomes
+   * "a previously listed gap and G3"), so an issued label never survives next to one that was not.
+   */
+  private static String rewrittenInPlace(String cluster, int issued) {
+    if (allIssued(cluster, issued)) {
+      return referent(cluster);
+    }
+    return LABEL_NUMBER
+        .matcher(cluster)
+        .replaceAll(m -> allIssued(m.group(), issued) ? REFERENT : m.group());
   }
 
   /** {@code text} with each match whose labels were all issued replaced as {@code with} says. */
