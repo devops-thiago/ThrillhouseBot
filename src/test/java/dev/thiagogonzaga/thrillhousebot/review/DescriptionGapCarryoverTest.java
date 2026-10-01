@@ -580,11 +580,14 @@ class DescriptionGapCarryoverTest {
                       List.of(
                           "G2 stands partially unaddressed: the description omits the"
                               + " deployment/CI half (Dockerfile, workflow).",
-                          "The TTL is a constant, as in G1."),
+                          "The TTL is a constant, as in G1.",
+                          "The TTL is never read (G1, still not addressed)."),
                       List.of())));
 
       assertTrue(rendered.contains("- " + ciGap + "\n"), rendered);
       assertTrue(rendered.contains("- The TTL is a constant.\n"), rendered);
+      // #974: ThrillhouseBot-test#206 round 2 put the label in a parenthetical with a remark.
+      assertTrue(rendered.contains("- The TTL is never read (still not addressed).\n"), rendered);
       assertFalse(rendered.contains("G2"), rendered);
       assertFalse(rendered.contains("G1"), rendered);
     }

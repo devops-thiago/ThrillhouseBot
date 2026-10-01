@@ -103,10 +103,15 @@ public final class DescriptionGapLabels {
 
   private static final Pattern LABEL_NUMBER = Pattern.compile("G(\\d{1,3})");
 
-  /** A parenthetical that only points at labels: "(G2)", "(see G1)", "(as in G1 and G2)". */
-  private static final Pattern PARENTHETICAL =
-      Pattern.compile(
-          "\\s*\\(\\s*(?:(?:see|cf\\.?|as in|like|per|same as)\\s+)?(" + LABELS + ")\\s*\\)");
+  /** A parenthetical, group 1 its content: "(see G1)", "(G1, still not addressed)". */
+  private static final Pattern PARENTHETICAL = Pattern.compile("(\\s*)\\(([^()\\n]*)\\)");
+
+  /** A label cited inside a parenthetical, with the pointer word before it: "see G1", "G1". */
+  private static final Pattern CITED_LABEL =
+      Pattern.compile("(?:(?:see|cf\\.?|as in|like|per|same as)\\s+)?(" + LABELS + ")");
+
+  /** What a parenthetical keeps at either end once its labels are gone: separators only. */
+  private static final Pattern EDGE_SEPARATORS = Pattern.compile("^[\\s,;:—–-]+|[\\s,;:—–-]+$");
 
   /**
    * A trailing reference phrase that ends its clause: ", as in G2.", "same as G1;", "see G3". The
@@ -191,13 +196,14 @@ public final class DescriptionGapLabels {
    * issued the gaps are returned as they are, so "G1 GC is…" in a round that carried nothing is
    * never touched; a label past {@code issued} is not one of this round's and is left as well.
    *
-   * <p>The rewrites, in order: a parenthetical that only cites labels is dropped; a reference
-   * phrase that closes its clause (", as in G2") is dropped; a leading label with a short status
-   * clause before a colon or dash ("G2 stands partially unaddressed: X") leaves only the gap
-   * itself, "X", since the clause describes the label's status, which the carried gap listed next
-   * to it already shows; a leading label that is a sentence's subject ("G2 remains open because …")
-   * becomes "A previously listed gap"; any other label becomes "a previously listed gap" in place.
-   * A gap left with nothing but punctuation is dropped.
+   * <p>The rewrites, in order: a parenthetical loses the labels it cites, and is dropped when
+   * nothing else was in it ("(see G1)"), while "(G1, still not addressed)" keeps "(still not
+   * addressed)"; a reference phrase that closes its clause (", as in G2") is dropped; a leading
+   * label with a short status clause before a colon or dash ("G2 stands partially unaddressed: X")
+   * leaves only the gap itself, "X", since the clause describes the label's status, which the
+   * carried gap listed next to it already shows; a leading label that is a sentence's subject ("G2
+   * remains open because …") becomes "A previously listed gap"; any other label becomes "a
+   * previously listed gap" in place. A gap left with nothing but punctuation is dropped.
    */
   public static List<String> stripIssued(List<String> gaps, int issued) {
     if (issued <= 0) {
@@ -217,7 +223,10 @@ public final class DescriptionGapLabels {
 
   /** {@code gap} rewritten without its issued labels; {@code null} when it cites none. */
   private static String withoutIssuedLabels(String gap, int issued) {
-    var text = replace(PARENTHETICAL, gap, issued, m -> "");
+    var text =
+        PARENTHETICAL
+            .matcher(gap)
+            .replaceAll(m -> Matcher.quoteReplacement(withoutCitedLabels(m, issued)));
     text = replace(REFERENCE_PHRASE, text, issued, m -> "");
     var status = LEADING_STATUS.matcher(text);
     if (status.matches()
@@ -236,6 +245,21 @@ public final class DescriptionGapLabels {
       return null;
     }
     return capitalized(tidy(text));
+  }
+
+  /**
+   * A parenthetical without the issued labels it cites: gone when nothing else was in it ("(see
+   * G1)"), otherwise kept with the rest of its words ("(G1, still not addressed)" → "(still not
+   * addressed)"). One that cites no issued label is returned as it was.
+   */
+  private static String withoutCitedLabels(MatchResult parenthetical, int issued) {
+    var content = parenthetical.group(2);
+    var rest = replace(CITED_LABEL, content, issued, m -> "");
+    if (rest.equals(content)) {
+      return parenthetical.group();
+    }
+    rest = EDGE_SEPARATORS.matcher(rest).replaceAll("");
+    return rest.isEmpty() ? "" : parenthetical.group(1) + "(" + rest + ")";
   }
 
   /** {@code text} with each match whose labels were all issued replaced as {@code with} says. */

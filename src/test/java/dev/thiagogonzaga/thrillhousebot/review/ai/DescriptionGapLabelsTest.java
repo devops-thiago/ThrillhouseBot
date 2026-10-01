@@ -111,6 +111,9 @@ class DescriptionGapLabelsTest {
         "The TTL is a constant, as in G2.|The TTL is a constant.",
         "The TTL is a constant (see G1) and never read.|The TTL is a constant and never read.",
         "The TTL is a constant (G1, G2).|The TTL is a constant.",
+        "The TTL is a constant (G3, see G1).|The TTL is a constant (G3).",
+        "The TTL is a constant (per the issue; see G2).|The TTL is a constant (per the issue).",
+        "The TTL is a constant (not configurable).|The TTL is a constant (not configurable).",
         "The cap is missing, same as G1; the TTL too.|The cap is missing; the TTL too.",
         "Unlike G2, the TTL half is covered.|Unlike a previously listed gap, the TTL half is"
             + " covered."
@@ -149,5 +152,29 @@ class DescriptionGapLabelsTest {
   void aGapThatWasOnlyAReferenceIsDropped() {
     assertEquals(
         List.of(ISSUE_GAP), DescriptionGapLabels.stripIssued(List.of("(see G1)", ISSUE_GAP), 1));
+  }
+
+  /**
+   * ThrillhouseBot-test#206, round 2: the carried gap reported again with its label in a trailing
+   * parenthetical next to a status remark; the remark stays, the label goes.
+   */
+  @Test
+  void aLabelInsideAParentheticalWithARemarkLeavesTheRemark() {
+    var gap =
+        "Linked issue #31: abstracts over 200 characters are rejected — the endpoint accepts"
+            + " over-long abstracts with 201 instead of rejecting them (G1, still not addressed).";
+
+    assertEquals(
+        List.of(
+            "Linked issue #31: abstracts over 200 characters are rejected — the endpoint accepts"
+                + " over-long abstracts with 201 instead of rejecting them (still not addressed)."),
+        DescriptionGapLabels.stripIssued(List.of(gap), 1));
+    assertEquals(
+        List.of("The endpoint accepts over-long abstracts with 201."),
+        DescriptionGapLabels.stripIssued(
+            List.of("The endpoint accepts over-long abstracts with 201 (G1)."), 1));
+    assertEquals(
+        List.of(gap.replace("G1", "G2")),
+        DescriptionGapLabels.stripIssued(List.of(gap.replace("G1", "G2")), 1));
   }
 }
