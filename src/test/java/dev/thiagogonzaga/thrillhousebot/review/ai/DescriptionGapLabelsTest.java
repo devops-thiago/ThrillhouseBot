@@ -112,6 +112,8 @@ class DescriptionGapLabelsTest {
         "The TTL is a constant (see G1) and never read.|The TTL is a constant and never read.",
         "The TTL is a constant (G1, G2).|The TTL is a constant.",
         "The TTL is a constant (G3, see G1).|The TTL is a constant (G3).",
+        "The cap is missing (as with G1).|The cap is missing.",
+        "The cap is missing, cf G2.|The cap is missing.",
         "The TTL is a constant (per the issue; see G2).|The TTL is a constant (per the issue).",
         "The TTL is a constant (not configurable).|The TTL is a constant (not configurable).",
         "The cap is missing, same as G1; the TTL too.|The cap is missing; the TTL too.",
