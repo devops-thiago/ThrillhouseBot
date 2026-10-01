@@ -662,6 +662,12 @@ class PromptLabelScrubberTest {
         PromptLabelScrubber.scrub(
             "The suite will confirm; I am rating this claim at the required confidence, so check"
                 + " the logs for the failure."));
+    // A colon or dash after the clause ends it too, so what follows is kept.
+    assertEquals(
+        "The suite will confirm: check the logs for the failure.",
+        PromptLabelScrubber.scrub(
+            "The suite will confirm; I am rating this claim at the required confidence: check the"
+                + " logs for the failure."));
     // Opening a sentence that goes on past a comma, the narration carries more and stays.
     var goesOn =
         "I am rating this claim at the required confidence, so check the logs for the failure.";
