@@ -847,7 +847,7 @@ class DiffBudgetPlannerTest {
 
     var bounded = planner.boundPreviousFindings(inputs);
 
-    assertFalse(bounded == inputs, "the block was over its share, so new inputs are returned");
+    assertNotSame(inputs, bounded, "the block was over its share, so new inputs are returned");
     assertEquals("review guidance", bounded.repoInstructions());
     assertEquals("summary guidance", bounded.summaryInstructions());
   }

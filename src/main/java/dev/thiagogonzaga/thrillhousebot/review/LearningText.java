@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import java.util.List;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /**
  * Shapes maintainer prose into the text a {@link ReviewLearning} stores, and decides whether it may
@@ -40,27 +41,37 @@ final class LearningText {
   private static final String ASSIGNED_VALUE = "(?=[^\\s'\"]*[^\\sa-z'\"])[^\\s'\"]{8,}";
 
   /**
+   * Any credential-named key, prefixed or suffixed ("secret_key", "authToken"), assigned an
+   * unquoted or quoted value-like value: one pattern per family of key names, so each stays inside
+   * the regex complexity budget. They are only ever searched for any match, so splitting the names'
+   * alternation across patterns changes nothing found.
+   */
+  static final List<Pattern> CREDENTIAL_ASSIGNMENTS =
+      List.of(
+          assignedTo("passw(?:or)?d|pwd"),
+          assignedTo("secret|token"),
+          assignedTo("(?:api|access|private)[_-]?key"));
+
+  /**
    * Credential shapes, one small pattern each so every one stays readable and inside the regex
    * complexity budget. The sigils are distinctive enough that prose never carries them; the
-   * assignment shapes need a value-like value ({@link #ASSIGNED_VALUE}).
+   * assignment shapes ({@link #CREDENTIAL_ASSIGNMENTS}) need a value-like value ({@link
+   * #ASSIGNED_VALUE}).
    */
   private static final List<Pattern> CREDENTIAL_SHAPES =
-      List.of(
-          Pattern.compile("(?i)\\b(?:gh[pousr]_|github_pat_)\\w{4,}"),
-          Pattern.compile("\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b"),
-          Pattern.compile("-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----"),
-          Pattern.compile("(?<![\\w-])eyJ[\\w-]{8,}\\.[\\w-]{4,}"),
-          Pattern.compile("\\bxox[abposr]-[\\w-]{8,}"),
-          Pattern.compile("\\bsk-(?:ant-|proj-)?[\\w-]{16,}"),
-          Pattern.compile("\\bAIza[\\w-]{30,}"),
-          // A token, unlike the word after "bearer" in prose, carries a digit.
-          Pattern.compile("(?i)\\bbearer\\s+(?=[\\w.~+/=-]*\\d)[\\w.~+/=-]{12,}"),
-          // Any credential-named key, prefixed or suffixed ("secret_key", "authToken"), assigned an
-          // unquoted or quoted value-like value.
-          Pattern.compile(
-              "(?i)[\\w.-]{0,40}(?:passw(?:or)?d|pwd|secret|token|api[_-]?key|access[_-]?key"
-                  + "|private[_-]?key)[\\w.-]{0,40}\\s{0,4}(?::=|=>|[:=])\\s{0,4}['\"]?"
-                  + ASSIGNED_VALUE));
+      Stream.concat(
+              Stream.of(
+                  Pattern.compile("(?i)\\b(?:gh[pousr]_|github_pat_)\\w{4,}"),
+                  Pattern.compile("\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b"),
+                  Pattern.compile("-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----"),
+                  Pattern.compile("(?<![\\w-])eyJ[\\w-]{8,}\\.[\\w-]{4,}"),
+                  Pattern.compile("\\bxox[abposr]-[\\w-]{8,}"),
+                  Pattern.compile("\\bsk-(?:ant-|proj-)?[\\w-]{16,}"),
+                  Pattern.compile("\\bAIza[\\w-]{30,}"),
+                  // A token, unlike the word after "bearer" in prose, carries a digit.
+                  Pattern.compile("(?i)\\bbearer\\s+(?=[\\w.~+/=-]*\\d)[\\w.~+/=-]{12,}")),
+              CREDENTIAL_ASSIGNMENTS.stream())
+          .toList();
 
   private static final Pattern BLOCKQUOTE_LINE = Pattern.compile("(?m)^[ \\t]{0,8}>.*$");
   private static final Pattern ANSI_CSI = Pattern.compile("\u001B\\[[0-?]*[ -/]*[@-~]");
@@ -73,6 +84,18 @@ final class LearningText {
   private static final double SCANNER_ENTROPY_THRESHOLD = 3.5;
 
   private LearningText() {}
+
+  /**
+   * A key named by {@code keyNames} (an alternation, case-insensitive), prefixed or suffixed, then
+   * an assignment operator and a value-like value ({@link #ASSIGNED_VALUE}).
+   */
+  private static Pattern assignedTo(String keyNames) {
+    return Pattern.compile(
+        "(?i)[\\w.-]{0,40}(?:"
+            + keyNames
+            + ")[\\w.-]{0,40}\\s{0,4}(?::=|=>|[:=])\\s{0,4}['\"]?"
+            + ASSIGNED_VALUE);
+  }
 
   /** Whether {@code text} carries anything credential-shaped; such a text is never stored. */
   static boolean containsCredential(String text) {

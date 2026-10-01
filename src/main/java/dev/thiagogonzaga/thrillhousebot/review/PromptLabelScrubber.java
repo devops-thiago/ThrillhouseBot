@@ -75,7 +75,7 @@ public final class PromptLabelScrubber {
       Pattern.compile("\\b(?:review )?dimension (\\d{1,2})\\b", Pattern.CASE_INSENSITIVE);
 
   /** Separates the numbers of "(dimensions 4, 5 and 8)". */
-  private static final Pattern NUMBER_SEPARATOR = Pattern.compile(" ?(?:,|/|&) ?| and | or ");
+  static final Pattern NUMBER_SEPARATOR = Pattern.compile(" ?[,/&] ?| and | or ");
 
   /**
    * The block names exactly as the prompt prints them, capitals included. Matched case-sensitively:
@@ -623,21 +623,37 @@ public final class PromptLabelScrubber {
       if (blank > at && hangsFromSeparator(text, blank, m.start(), at)) {
         out.append(text, at, skipBlanksBack(text, blank - 1, at));
         at = clauseEnd;
-      } else if (opensSentence(text, m.start(), at)
-          && (clauseEnd == text.length() || ",;".indexOf(text.charAt(clauseEnd)) < 0)) {
-        // A rating sentence that goes on past a comma carries more than the narration: it stays.
-        int end = clauseEnd;
-        if (end < text.length() && ".!?".indexOf(text.charAt(end)) >= 0) {
-          end++;
-        }
-        end = skipBlanks(text, end);
+      } else if (opensSentence(text, m.start(), at) && endsWithoutGoingOn(text, clauseEnd)) {
+        int end = ratingSentenceEnd(text, clauseEnd);
         // The last sentence of a line takes the blanks before it, so the line does not end in one.
-        int start = end == text.length() || text.charAt(end) == '\n' ? blank : m.start();
+        int start = endsLine(text, end) ? blank : m.start();
         out.append(text, at, start);
         at = end;
       }
     }
     return out.append(text, at, text.length()).toString();
+  }
+
+  /**
+   * Whether a rating clause ending at {@code clauseEnd} ends there rather than going on past a
+   * comma or semicolon: a rating sentence that goes on carries more than the narration, and stays.
+   */
+  private static boolean endsWithoutGoingOn(String text, int clauseEnd) {
+    return clauseEnd == text.length() || ",;".indexOf(text.charAt(clauseEnd)) < 0;
+  }
+
+  /** Where a rating sentence whose clause ends at {@code clauseEnd} ends, with the blanks after. */
+  private static int ratingSentenceEnd(String text, int clauseEnd) {
+    int end = clauseEnd;
+    if (end < text.length() && ".!?".indexOf(text.charAt(end)) >= 0) {
+      end++;
+    }
+    return skipBlanks(text, end);
+  }
+
+  /** Whether {@code at} is the end of {@code text} or of one of its lines. */
+  private static boolean endsLine(String text, int at) {
+    return at == text.length() || text.charAt(at) == '\n';
   }
 
   /**
@@ -708,17 +724,27 @@ public final class PromptLabelScrubber {
       if (article.find()) {
         start = at + article.start();
         phrase = afterArticle(article.group(1), plural);
-      } else if (DETERMINER_BEFORE.matcher(s.substring(at, start)).find()) {
-        // "its [L12]", "this [L12]", "the decision's [L12]": the determiner stays, so no article.
-        phrase = plural ? "earlier maintainer decisions" : "earlier maintainer decision";
       } else {
-        phrase = plural ? "maintainers' earlier decisions" : "a maintainer's earlier decision";
-        phrase = opensSentence(s, start, at) ? capitalize(phrase) : phrase;
+        phrase = withoutArticle(s, start, at, plural);
       }
       out.append(s, at, start).append(phrase);
       at = m.end();
     }
     return out.append(s, at, s.length()).toString();
+  }
+
+  /**
+   * A learning id's phrase at {@code start} when no article stands before it: after another
+   * determiner, which stays; otherwise with an article of its own, capitalized where it opens a
+   * sentence.
+   */
+  private static String withoutArticle(String s, int start, int at, boolean plural) {
+    if (DETERMINER_BEFORE.matcher(s.substring(at, start)).find()) {
+      // "its [L12]", "this [L12]", "the decision's [L12]": the determiner stays, so no article.
+      return plural ? "earlier maintainer decisions" : "earlier maintainer decision";
+    }
+    var phrase = plural ? "maintainers' earlier decisions" : "a maintainer's earlier decision";
+    return opensSentence(s, start, at) ? capitalize(phrase) : phrase;
   }
 
   /** A learning id's phrase in place of the article before it, in that article's case. */
@@ -814,39 +840,48 @@ public final class PromptLabelScrubber {
     var out = new StringBuilder(s.length());
     int at = 0;
     while (m.find()) {
-      int start = m.start();
-      int end = m.end();
-      if (!isPromptNumber(m.group(1)) || AXIS_WORDS.contains(wordAt(s, skipBlanks(s, end)))) {
-        continue;
-      }
-      var before = s.substring(Math.max(at, start - 40), start).toLowerCase(Locale.ROOT).strip();
-      int after = skipBlanks(s, end);
-      if (after < s.length() && ":,—–-".indexOf(s.charAt(after)) >= 0) {
-        after = skipBlanks(s, after + 1);
-      }
-      if (opensClause(s, start, at)) {
-        if (!LABEL_WORDS.contains(wordAt(s, after))) {
-          continue;
-        }
-        out.append(s, at, start).append(Character.toUpperCase(s.charAt(after)));
-        at = after + 1;
-      } else if (endingWord(before, CITING_VERBS) != null) {
-        out.append(s, at, start);
-        at = after;
-      } else {
-        var preposition = endingWord(before, CITING_PREPOSITIONS);
-        if (preposition == null) {
-          continue;
-        }
-        int cut = skipBlanksBack(s, skipBlanksBack(s, start, at) - preposition.length(), at);
-        if (cut > at && s.charAt(cut - 1) == ',') {
-          cut--;
-        }
-        out.append(s, at, cut);
-        at = end;
-      }
+      at = removeNumberedLabel(s, m, at, out);
     }
     return out.append(s, at, s.length()).toString();
+  }
+
+  /**
+   * Appends to {@code out} the text from {@code at} up to the citation {@code m} found, without the
+   * citation when its context makes it a label (see {@link #removeNumberedLabels}), and returns
+   * where the text after it resumes; {@code at} itself when the citation stays.
+   */
+  private static int removeNumberedLabel(String s, Matcher m, int at, StringBuilder out) {
+    int start = m.start();
+    int end = m.end();
+    if (!isPromptNumber(m.group(1)) || AXIS_WORDS.contains(wordAt(s, skipBlanks(s, end)))) {
+      return at;
+    }
+    var before = s.substring(Math.max(at, start - 40), start).toLowerCase(Locale.ROOT).strip();
+    int after = skipBlanks(s, end);
+    if (after < s.length() && ":,—–-".indexOf(s.charAt(after)) >= 0) {
+      after = skipBlanks(s, after + 1);
+    }
+    if (opensClause(s, start, at)) {
+      if (!LABEL_WORDS.contains(wordAt(s, after))) {
+        return at;
+      }
+      out.append(s, at, start).append(Character.toUpperCase(s.charAt(after)));
+      return after + 1;
+    }
+    if (endingWord(before, CITING_VERBS) != null) {
+      out.append(s, at, start);
+      return after;
+    }
+    var preposition = endingWord(before, CITING_PREPOSITIONS);
+    if (preposition == null) {
+      return at;
+    }
+    int cut = skipBlanksBack(s, skipBlanksBack(s, start, at) - preposition.length(), at);
+    if (cut > at && s.charAt(cut - 1) == ',') {
+      cut--;
+    }
+    out.append(s, at, cut);
+    return end;
   }
 
   /** The one of {@code words} that {@code before} ends with as a whole word, else null. */

@@ -58,6 +58,8 @@ public interface PrReviewer {
   // parameter's raw value and silently drops every other @V.
   @SystemMessage("{{reviewSystemPrompt}}")
   @UserMessage(PrReviewPrompts.USER)
+  // One parameter per template variable: a parameter object would rename every {{variable}}.
+  @SuppressWarnings("java:S107")
   TokenStream reviewStream(
       @V("diff") String diff,
       @V("prContext") String prContext,

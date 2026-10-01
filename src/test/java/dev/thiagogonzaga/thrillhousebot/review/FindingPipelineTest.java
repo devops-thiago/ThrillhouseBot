@@ -3513,8 +3513,13 @@ class FindingPipelineTest {
 
   /** #923: the linked-issue section a round's prompt carries, linking #113. */
   private static final String LINKED_113 =
-      "Issues this pull request is linked to: #113\n\n### Issue #113: Resale marketplace\n"
-          + "Acceptance criteria (from the issue):\n- [ ] at most 8 open listings per seller\n";
+      """
+      Issues this pull request is linked to: #113
+
+      ### Issue #113: Resale marketplace
+      Acceptance criteria (from the issue):
+      - [ ] at most 8 open listings per seller
+      """;
 
   private static final String CARRIED_GAP =
       "Linked issue #113: at most 8 open listings per seller — no changed file implements it.";

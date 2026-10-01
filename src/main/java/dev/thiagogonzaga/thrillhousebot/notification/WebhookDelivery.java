@@ -84,6 +84,7 @@ final class WebhookDelivery {
    * What to send: the rendered body and the headers that identify it. A class rather than a record
    * because it carries an array, which a record would compare and print by identity.
    */
+  @SuppressWarnings("java:S6206") // a record would compare and print the body array by identity
   static final class Request {
     private final String event;
     private final String deliveryId;

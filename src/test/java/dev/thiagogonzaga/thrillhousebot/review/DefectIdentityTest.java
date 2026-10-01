@@ -17,13 +17,21 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.time.Duration;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Random;
 import java.util.Set;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** #961: a later finding replaces an earlier double-check item only when it is the same defect. */
 class DefectIdentityTest {
@@ -266,6 +274,74 @@ class DefectIdentityTest {
     assertTrue(DefectIdentity.identifiers("GET /containers/{id}/events queries a table").isEmpty());
     assertTrue(DefectIdentity.identifiers("an empty `` span").isEmpty());
     assertTrue(DefectIdentity.identifiers("a blank `   ` span").isEmpty());
+  }
+
+  /**
+   * The single alternation {@link DefectIdentity#identifiers} read titles with before it was split
+   * into one pattern per shape: the reference the split scan must agree with.
+   */
+  private static final Pattern ORIGINAL_IDENTIFIER =
+      Pattern.compile(
+          "`([^`\\n]{1,120})`"
+              + "|\\b([A-Za-z][A-Za-z0-9]{0,63}(?:_[A-Za-z0-9]{1,64}){1,16})\\b"
+              + "|\\b([a-z][a-z0-9]{0,63}(?:[A-Z][a-z0-9]{0,63}){1,16})\\b");
+
+  private static Set<String> originalIdentifiers(String title) {
+    var names = new HashSet<String>();
+    var matcher = ORIGINAL_IDENTIFIER.matcher(title);
+    while (matcher.find()) {
+      for (var group = 1; group <= matcher.groupCount(); group++) {
+        var name = matcher.group(group);
+        if (name != null && !name.isBlank()) {
+          names.add(name.strip().toLowerCase(Locale.ROOT));
+        }
+      }
+    }
+    return names;
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "TRACKED_PORTS and port_events read by findByContainer with `x y`",
+        "`foo_bar` then fooBar",
+        "foo_bar`baz`qux",
+        "fooBar_baz is one name",
+        "a`b_c`d and x_y`z` and aB`c`",
+        "`fooBar` `` `a` `unclosed fooBar",
+        "snake_x_y_z_1_2 and camelCaseNameHere",
+        "aBcDeFgHiJkLmNoPqRsTuVwXyZaBcDeFgHiJ is past the hump bound",
+        "a_b_c_d_e_f_g_h_i_j_k_l_m_n_o_p_q_r is past the segment bound",
+        "x1_ _y 1_a a_ _ __ a__b",
+        "`multi\nline` is not a span",
+      })
+  void identifiersMatchTheSingleAlternation(String title) {
+    assertEquals(originalIdentifiers(title), DefectIdentity.identifiers(title), title);
+  }
+
+  @Test
+  void identifiersMatchTheSingleAlternationOnGeneratedTitles() {
+    String[] parts = {
+      "a", "b", "Ab", "fooBar", "x_y", "X_Y", "_", "`", "``", "1", " ", "\n", "-", ".", "aB", "zz_",
+      "Q", "qQ", "(", "é"
+    };
+    var random = new Random(42);
+    for (var n = 0; n < 20_000; n++) {
+      var title = new StringBuilder();
+      for (var k = random.nextInt(14); k > 0; k--) {
+        title.append(parts[random.nextInt(parts.length)]);
+      }
+      var text = title.toString();
+      assertEquals(originalIdentifiers(text), DefectIdentity.identifiers(text), text);
+    }
+  }
+
+  @Test
+  void identifiersOfALongTitleAreFoundInOnePass() {
+    var title = "aB_c `x` dE ".repeat(20_000);
+    var names =
+        assertTimeoutPreemptively(Duration.ofSeconds(5), () -> DefectIdentity.identifiers(title));
+    assertEquals(originalIdentifiers(title), names);
   }
 
   @Test

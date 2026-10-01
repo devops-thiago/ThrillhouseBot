@@ -403,26 +403,34 @@ public class TicketContextResolver {
         return null; // indented code, not a heading
       }
       if (t.startsWith("#")) {
-        var level = 0;
-        while (level < t.length() && t.charAt(level) == '#') {
-          level++;
-        }
-        var rest = t.substring(level);
-        if (level > 6 || !(rest.isEmpty() || Character.isWhitespace(rest.charAt(0)))) {
-          return null;
-        }
-        var end = rest.length();
-        while (end > 0
-            && (rest.charAt(end - 1) == '#' || Character.isWhitespace(rest.charAt(end - 1)))) {
-          end--;
-        }
-        return new Heading(level, rest.substring(0, end).strip());
+        return parseAtx(t);
       }
       var bold = t.endsWith(":") ? t.substring(0, t.length() - 1) : t;
       if (bold.length() > 4 && bold.startsWith("**") && bold.endsWith("**")) {
         return new Heading(BOLD_LEVEL, bold.substring(2, bold.length() - 2));
       }
       return null;
+    }
+
+    /**
+     * The ATX heading the stripped line {@code t}, which starts with {@code #}, is: one to six
+     * {@code #} then a blank or nothing, the closing {@code #} run dropped; {@code null} otherwise.
+     */
+    private static Heading parseAtx(String t) {
+      var level = 0;
+      while (level < t.length() && t.charAt(level) == '#') {
+        level++;
+      }
+      var rest = t.substring(level);
+      if (level > 6 || !(rest.isEmpty() || Character.isWhitespace(rest.charAt(0)))) {
+        return null;
+      }
+      var end = rest.length();
+      while (end > 0
+          && (rest.charAt(end - 1) == '#' || Character.isWhitespace(rest.charAt(end - 1)))) {
+        end--;
+      }
+      return new Heading(level, rest.substring(0, end).strip());
     }
   }
 
