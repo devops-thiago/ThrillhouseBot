@@ -146,7 +146,8 @@ final class DescriptionGapCarryover {
         return gaps.isEmpty() ? null : new ReviewResponse.Summary(0, 0, 0, 0, 0, null, null, gaps);
       }
       // The call saw the first carried gaps as G1…Gk, so in its own gaps a G<n> up to k is one of
-      // them, whatever words follow it (#974); the summary's context-free strip cannot know that.
+      // them even when words follow it (#974), short of a name such as "G1 GC" or "G1-specific";
+      // the summary's context-free strip cannot know which labels were issued.
       var issued = Math.min(gaps.size(), MAX_PROMPTED_GAPS);
       var current =
           withLinkedIssueNumbers(

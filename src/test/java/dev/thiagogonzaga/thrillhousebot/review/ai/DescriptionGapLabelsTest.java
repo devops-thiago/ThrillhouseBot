@@ -136,6 +136,7 @@ class DescriptionGapLabelsTest {
         "The TTL is a constant, as in G3.",
         "G1 GC is named in the description, but the JVM flags select ZGC.",
         "The flags select the G1 GC, not ZGC.",
+        "The flags select ZGC (see G1 GC).",
         "G1-specific pause targets are documented but never set.",
         "Gateway retries are described as bounded, but the loop has no limit.",
         "The description says G12 is supported.",

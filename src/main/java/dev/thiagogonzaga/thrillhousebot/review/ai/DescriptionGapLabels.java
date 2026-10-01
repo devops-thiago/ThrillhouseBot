@@ -40,7 +40,8 @@ import java.util.regex.Pattern;
  * round put carried gaps labelled G1…Gk to the call, a label {@code G<n>} with {@code n ≤ k} is a
  * reference to one of them wherever it sits (#974), so a gap that uses it as its subject ("G2
  * stands partially unaddressed: …") or cites it mid-sentence ("as in G2", "(see G1)") is rewritten
- * too.
+ * too. Two shapes stay names even then: a label followed by an all-caps word ("G1 GC", "G1 JVM")
+ * and one joined to a word by a hyphen ("G1-specific").
  */
 public final class DescriptionGapLabels {
 
@@ -111,7 +112,7 @@ public final class DescriptionGapLabels {
 
   /** A label cited inside a parenthetical, with the pointer word before it: "see G1", "G1". */
   private static final Pattern CITED_LABEL =
-      Pattern.compile("(?:(?:" + POINTERS + ")\\s+)?(" + LABELS + ")");
+      Pattern.compile("(?:(?:" + POINTERS + ")\\s+)?(" + LABELS + ")" + NOT_A_NAME);
 
   /** What a parenthetical keeps at its start once its labels are gone: separators only. */
   private static final Pattern LEADING_SEPARATORS = Pattern.compile("^[\\s,;:—–-]+");
