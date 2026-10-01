@@ -1183,8 +1183,8 @@ public class ReviewResponseParser {
       while (at < to) {
         if (text.startsWith("```", at)) {
           at += 3;
-          // The tag stops at the next document's opening character at the latest, since {@code to}
-          // is one and is neither a letter nor a digit.
+          // No bound check is needed: the range ends where the next document opens, on a brace or
+          // a bracket, which ends the tag at the latest.
           while (Character.isLetterOrDigit(chars[at])) {
             at++;
           }
