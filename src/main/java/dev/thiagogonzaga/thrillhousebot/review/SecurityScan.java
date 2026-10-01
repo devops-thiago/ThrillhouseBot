@@ -28,9 +28,11 @@ import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.HexFormat;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -313,9 +315,10 @@ public class SecurityScan {
     var raised = new ArrayList<ReviewResponse.Finding>();
     int earlier = 0;
     int settled = 0;
+    var claimed = claimDeclines(result.detections(), declines);
     for (var detection : result.detections()) {
       int priorId = priorIdOf(detection.finding(), scanPriors, tracked.keySet());
-      boolean repeatsDecline = claimDecline(detection.finding(), declines);
+      boolean repeatsDecline = claimed.contains(detection.finding());
       if (priorId > 0) {
         tracked.put(priorId, detection);
         if (repeatsDecline) {
@@ -633,28 +636,36 @@ public class SecurityScan {
   }
 
   /**
-   * Whether a detection repeats a declined scan finding, claiming the nearest one by line so it
-   * covers no second detection: same file, title and anchor, and the same content fingerprint when
-   * the declined finding carries one. One that carries none (an IaC finding, or a secret finding
-   * {@link #scanFindings} admitted on an unchanged head) is matched by the other keys.
+   * The detections that repeat a declined scan finding: same file, title and anchor, and the same
+   * content fingerprint when the declined finding carries one (an IaC finding, or a secret finding
+   * {@link #scanFindings} admitted on an unchanged head, is matched by the other keys). Each
+   * decline covers one detection, and pairs are made nearest by line first across all detections,
+   * so a copy of a declined line added elsewhere does not take the decline from the line it was
+   * written on.
    */
-  private static boolean claimDecline(
-      ReviewResponse.Finding detection, List<ReviewResponse.Finding> declines) {
-    int best = -1;
-    int bestDistance = Integer.MAX_VALUE;
-    for (int i = 0; i < declines.size(); i++) {
-      var declined = declines.get(i);
-      int distance = Math.abs(declined.line() - detection.line());
-      if (distance < bestDistance && sameContent(declined, detection)) {
-        best = i;
-        bestDistance = distance;
+  private static Set<ReviewResponse.Finding> claimDeclines(
+      List<Detection> detections, List<ReviewResponse.Finding> declines) {
+    record Pair(int detection, int decline, int distance) {}
+    var pairs = new ArrayList<Pair>();
+    for (int d = 0; d < detections.size(); d++) {
+      var detection = detections.get(d).finding();
+      for (int k = 0; k < declines.size(); k++) {
+        var declined = declines.get(k);
+        if (sameContent(declined, detection)) {
+          pairs.add(new Pair(d, k, Math.abs(declined.line() - detection.line())));
+        }
       }
     }
-    if (best < 0) {
-      return false;
+    pairs.sort(Comparator.comparingInt(Pair::distance));
+    Set<ReviewResponse.Finding> claimed = Collections.newSetFromMap(new IdentityHashMap<>());
+    var usedDeclines = new HashSet<Integer>();
+    for (var pair : pairs) {
+      var detection = detections.get(pair.detection()).finding();
+      if (!claimed.contains(detection) && usedDeclines.add(pair.decline())) {
+        claimed.add(detection);
+      }
     }
-    declines.remove(best);
-    return true;
+    return claimed;
   }
 
   private static boolean sameContent(

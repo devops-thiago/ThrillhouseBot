@@ -1210,6 +1210,26 @@ class SecurityScanTest {
   }
 
   @Test
+  void aCopyAddedAboveTheDeclinedLineDoesNotTakeItsDecline() {
+    var token = fake.githubToken();
+    var s = scan(true, false);
+    var declined =
+        s.merge(
+                response(),
+                s.scan(List.of(added("app.env", "X=1", "T=" + token))),
+                List.of(),
+                Set.of())
+            .findings()
+            .get(0);
+    // The declined line stays at line 2; a verbatim copy is added above it, at line 1. The copy is
+    // scanned first, but the decline goes to the nearest line, the one it was written on.
+    var copyAbove = List.of(added("app.env", "T=" + token, "T=" + token));
+
+    var merged = mergeAfterDecline(s, response(), copyAbove, List.of(), List.of(declined));
+    assertEquals(List.of(1), merged.findings().stream().map(ReviewResponse.Finding::line).toList());
+  }
+
+  @Test
   void aDeclineOfAnotherFileTitleOrAnchorDoesNotCoverADetection() {
     var files = List.of(added("rust/Dockerfile", "FROM rust:1.80", "USER root"));
     var s = scan(false, true);
