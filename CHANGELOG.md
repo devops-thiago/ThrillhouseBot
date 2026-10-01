@@ -63,7 +63,7 @@ There are no migration scripts; the schema is still managed by Hibernate. The fi
 
 ### Documentation
 
-- `AGENTS.md` records the invariants the build and tests enforce, where each review pipeline stage lives, and the alternatives that were tried and rejected, and `CONTRIBUTING.md` points to it before a change to the review pipeline, prompts or model calls. `docs/ARCHITECTURE.md` now names the patch-coverage class correctly, `PatchCoverageResolver` (#673)
+- `AGENTS.md` records the invariants the build and tests enforce, where each review pipeline stage lives, and the alternatives that were tried and rejected, and `CONTRIBUTING.md` points to it before a change to the review pipeline, prompts or model calls. `docs/ARCHITECTURE.md` now names the patch-coverage class correctly, `PatchCoverageResolver` (#673, #910)
 
 ### Dependencies
 
