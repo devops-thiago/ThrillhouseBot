@@ -2,88 +2,101 @@
 
 <!-- docs:feedback:start -->
 
-ThrillhouseBot records lightweight maintainer signals about review findings. This
-shipped for [#324](https://github.com/devops-thiago/ThrillhouseBot/issues/324) and
-does **not** inject preferences into review prompts. The opt-in review learnings
-store ([#38](https://github.com/devops-thiago/ThrillhouseBot/issues/38), see
-"Review learnings" in the README) is separate: it remembers a maintainer's decline
-only with its reason and only after it survives the decline re-check. A 👍/👎 or a
-"not useful" reply carries no reason, so it never becomes a learning on its own.
+ThrillhouseBot records a maintainer's 👍 or 👎 on a finding comment, and a
+"not useful" style reply, as feedback on that finding
+([#324](https://github.com/devops-thiago/ThrillhouseBot/issues/324)). The
+feedback is counted and shown on the dashboard. It does not change later
+reviews.
 
-## Why poll instead of a reaction webhook?
+Review learnings ([#38](https://github.com/devops-thiago/ThrillhouseBot/issues/38),
+see "Review learnings" in the README) are a separate, opt-in store. A learning
+comes from a maintainer's decline that gives a reason and survives the decline
+re-check, or from `/remember`. A reaction or a "not useful" reply has no reason,
+so it never becomes a learning.
 
-GitHub Apps do not receive a `reaction` webhook event. The bot therefore lists
-👍 (`+1`) and 👎 (`-1`) on finding comments via the
-[Reactions REST API](https://docs.github.com/en/rest/reactions/reactions) when:
+## When feedback is collected
 
-1. A human **replies** on an inline review thread (`pull_request_review_comment`
-   with `in_reply_to_id`), or
-2. A **follow-up review** already loaded inline comments — every bot finding-root
-   comment across prior rounds is scanned (capped, ordered by comment id), not
-   only findings from the immediately previous AI response.
+GitHub Apps do not receive a `reaction` webhook event, so the bot polls the
+[Reactions REST API](https://docs.github.com/en/rest/reactions/reactions) for
+👍 (`+1`) and 👎 (`-1`) on finding comments at two points:
 
-Capture is best-effort and never fails the webhook `200` or the review.
+1. When someone replies on an inline review thread
+   (`pull_request_review_comment` with `in_reply_to_id`).
+2. After a review of a pull request that already has bot finding comments, for
+   those comments from every earlier round, newest first, up to 40 per review.
+
+Capture is best-effort. A failure is logged and never fails the webhook
+response or the review.
 
 ## Signals
 
 | Signal | Source | Meaning |
 |--------|--------|---------|
-| `useful` | `reaction` (`+1`) | Maintainer marked the finding comment 👍 |
-| `not_useful` | `reaction` (`-1`) | Maintainer marked the finding comment 👎 |
-| `not_useful` | `reply_heuristic` | Reply body matched a conservative phrase (`not useful`, `false positive`, `noise`, 👎, `:-1:`) |
+| `useful` | `reaction` (`+1`) | A 👍 on the finding comment |
+| `not_useful` | `reaction` (`-1`) | A 👎 on the finding comment |
+| `not_useful` | `reply_heuristic` | A reply containing `not useful`, `false positive`, `not a bug`, `not a real bug`, `not a real issue`, `noise`, 👎 or `:-1:` |
 
-Only comments that carry the hidden `<!-- thrillhousebot:finding=N -->` marker are
-eligible. The bot's own reactions (e.g. 👀 command ack) are ignored.
+Only comments with the hidden `<!-- thrillhousebot:finding=N -->` marker count,
+and only reactions and replies from people with write access to the repository.
+The bot's own reactions, such as the 👀 it adds to acknowledge a command, are
+ignored.
 
 ## Data model
 
-Table `finding_feedback` (Hibernate schema-update; no Flyway):
+Rows go in the `finding_feedback` table. Hibernate creates and updates the
+schema; there are no migration scripts.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `id` | bigint | Panache / sequence PK |
+| `id` | bigint | Primary key from a sequence |
 | `repository` | string | `owner/repo` |
-| `prNumber` | int | PR on that repository |
-| `githubCommentId` | bigint | Finding root review-comment id |
-| `findingIndex` | int (nullable) | 1-based index from the marker |
+| `prNumber` | int | Pull request number in that repository |
+| `githubCommentId` | bigint | ID of the finding's root review comment |
+| `findingIndex` | int, nullable | 1-based index from the marker |
 | `signal` | string | `useful` or `not_useful` |
 | `source` | string | `reaction` or `reply_heuristic` |
-| `reactorLogin` | string | GitHub login only (lower-cased) |
-| `githubReactionId` | bigint (nullable) | Unique when present (idempotent re-poll) |
+| `reactorLogin` | string | GitHub login, lower-cased |
+| `githubReactionId` | bigint, nullable | Unique when set, so polling the same reaction again adds nothing |
 | `createdAt` | instant | Insert time |
 
-Unique constraints:
+Two unique constraints keep the table free of duplicates:
 
-- `githubReactionId` (when non-null) — reaction redeliveries / re-polls
-- `(githubCommentId, reactorLogin, signal, source)` — one logical event per actor
+- `githubReactionId`, when set, covers redelivered and re-polled reactions.
+- `(githubCommentId, reactorLogin, signal, source)` keeps one event per person,
+  signal and source on a comment.
 
 ## Privacy
 
-Stored PII is limited to the **GitHub login** already present on webhook and API
-payloads. No email, display name, IP, or reaction text beyond the fixed emoji
-content codes (`+1` / `-1`) is persisted. Finding title/description are not
-copied into this table.
+The only personal data stored is the GitHub login, which is already in webhook
+and API payloads. No email, display name, IP address or reply text is kept; a
+reaction is stored only as its `+1` or `-1` code. The finding's title and
+description are not copied into the table.
 
 ## Retention
 
-Rows are retained for the lifetime of the deployment database. There is no
-automatic purge. Operators may `DELETE` rows or drop the table when
-decommissioning an installation. Uninstalling the GitHub App does not currently
-auto-delete feedback rows (same posture as `ReviewSession` history).
+Rows stay for the life of the database; nothing purges them automatically. An
+operator can delete rows or drop the table when retiring an installation.
+Uninstalling the GitHub App does not delete feedback rows, the same as review
+session history.
 
-## Aggregation API (ContextProvider seam)
+## Dashboard API
 
-`FindingFeedbackService.summarize(repository)` and `summarizeAll()` return
-per-repo `useful` / `not_useful` counts for a future `ContextProvider`. The
-dashboard exposes the same aggregates at `GET /api/dashboard/feedback` (session
-cookie required; optional `?repository=owner/repo`).
+`GET /api/dashboard/feedback` returns `useful` and `not_useful` counts per
+repository, for the repositories the signed-in user can access. With
+`?repository=owner/repo` it returns that repository's counts and its 50 most
+recent events. It needs a dashboard session cookie, and a repository the user
+cannot access gets `403`.
 
-## Notable classes
+## Main classes
 
-- `FindingFeedback` / `FindingFeedbackRepository` / `FindingFeedbackService`
-- `FindingFeedbackCaptureService` — poll + heuristics
-- `GitHubReactionClient.listReviewCommentReactions`
-- `WebhookController` — schedules capture on review-thread replies
-- `ReviewOrchestrator` — capture pass on follow-up reviews
+- `FindingFeedback`, `FindingFeedbackRepository`, `FindingFeedbackService`:
+  the entity, its queries and the per-repository counts
+  (`summarize(repository)`, `summarizeAll()`).
+- `FindingFeedbackCaptureService`: reaction polling and the reply heuristic.
+- `GitHubReactionClient.listReviewCommentReactions`: the Reactions API call.
+- `WebhookController`: schedules capture when someone replies on a review
+  thread.
+- `ReviewOrchestrator`: runs capture on earlier findings during a follow-up
+  review.
 
 <!-- docs:feedback:end -->
