@@ -479,10 +479,13 @@ public final class PromptLabelScrubber {
   /**
    * Rewrites learning ids — {@code [L51]}, or {@code [L51]/[L52]/[L53]} together — to plain words
    * (#950): the id is the prompt's handle for a stored decision and means nothing to a reader. A
-   * parenthetical holding nothing but ids goes with the blanks before it; ids right after
-   * "decision" or "learning" go alone ("the decision [L12]" reads "the decision"); any other
-   * becomes "a maintainer's earlier decision", or "maintainers' earlier decisions" for several,
-   * taking the place of an article before it and capitalized when it opens a clause.
+   * parenthetical holding nothing but ids, or ids after a citing lead ("see", "e.g."), goes with
+   * the blanks before it; ids right after "decision" or "learning" go alone ("the decision [L12]"
+   * reads "the decision"); any other becomes "a maintainer's earlier decision", or "maintainers'
+   * earlier decisions" for several, taking the place of an article before it, or "earlier
+   * maintainer decision(s)" after another determiner ("its", "this"), which stays. It is
+   * capitalized when it opens a sentence or its article was capitalized; a clause after a colon,
+   * semicolon or dash stays lower-case.
    */
   private static String rewriteLearningIds(String text) {
     if (!text.contains("[L")) {
