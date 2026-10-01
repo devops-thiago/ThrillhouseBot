@@ -26,11 +26,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntFunction;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,6 +89,10 @@ public class DashboardAccessChecker {
 
   private final ConcurrentHashMap<String, AccessCacheEntry> accessCache = new ConcurrentHashMap<>();
 
+  private record ScopeCacheEntry(RepositoryScope scope, RepoSnapshot snapshot, Instant cachedAt) {}
+
+  private final ConcurrentHashMap<String, ScopeCacheEntry> scopeCache = new ConcurrentHashMap<>();
+
   @Inject
   public DashboardAccessChecker(
       ThrillhouseConfig config,
@@ -114,7 +120,9 @@ public class DashboardAccessChecker {
   /**
    * Checks access to one installed repository rather than treating access to any installation as
    * account-wide data access. The requested repository must belong to the configured account and be
-   * present in the current installation snapshot.
+   * present in the current installation snapshot, and the login must be the account owner or a
+   * collaborator on it (answered from {@link #repositoryScope}, so repeated checks within its TTL
+   * cost no GitHub call).
    */
   public boolean hasRepositoryAccess(String githubLogin, String repository) {
     if (githubLogin == null || githubLogin.isBlank() || repository == null) {
@@ -126,25 +134,75 @@ public class DashboardAccessChecker {
         || separator == repository.length() - 1) {
       return false;
     }
-    var requested =
-        new RepoRef(repository.substring(0, separator), repository.substring(separator + 1));
     var accountOwner = accountOwner();
-    if (accountOwner.isEmpty() || !accountOwner.get().equalsIgnoreCase(requested.owner())) {
+    if (accountOwner.isEmpty()
+        || !accountOwner.get().equalsIgnoreCase(repository.substring(0, separator))) {
       return false;
+    }
+    return repositoryScope(githubLogin).allows(repository);
+  }
+
+  /**
+   * The installed repositories {@code githubLogin} may read: every repository in the installation
+   * snapshot for the account owner, and for anyone else the ones they collaborate on. A
+   * collaborator's set costs one collaborator check per installed repository and is then cached for
+   * {@code ACCESS_CACHE_TTL} (and only while the snapshot it was computed from is current), so a
+   * dashboard request never makes a GitHub call per row. Fails closed to {@link
+   * RepositoryScope#NONE} when the owner or the installation cannot be resolved.
+   */
+  public RepositoryScope repositoryScope(String githubLogin) {
+    if (githubLogin == null || githubLogin.isBlank()) {
+      return RepositoryScope.NONE;
+    }
+    var accountOwner = accountOwner();
+    if (accountOwner.isEmpty()) {
+      return RepositoryScope.NONE;
     }
     var snapshot = installedRepos(accountOwner.get());
-    var installed =
-        snapshot.repos().stream()
-            .filter(
-                repo ->
-                    repo.owner().equalsIgnoreCase(requested.owner())
-                        && repo.name().equalsIgnoreCase(requested.name()))
-            .findFirst();
-    if (installed.isEmpty() || snapshot.installationAuth() == null) {
-      return false;
+    if (snapshot.installationAuth() == null) {
+      return RepositoryScope.NONE;
     }
-    return accountOwner.get().equalsIgnoreCase(githubLogin)
-        || hasRepoAccess(snapshot.installationAuth(), installed.get(), githubLogin);
+    if (accountOwner.get().equalsIgnoreCase(githubLogin)) {
+      return new RepositoryScope(true, fullNames(snapshot, repo -> true));
+    }
+    var normalizedLogin = githubLogin.toLowerCase(Locale.ROOT);
+    var cached = scopeCache.get(normalizedLogin);
+    if (cached != null
+        && cached.snapshot() == snapshot
+        && cached.cachedAt().isAfter(clock.get().minus(ACCESS_CACHE_TTL))) {
+      return cached.scope();
+    }
+    var scope =
+        new RepositoryScope(
+            false,
+            fullNames(
+                snapshot, repo -> hasRepoAccess(snapshot.installationAuth(), repo, githubLogin)));
+    scopeCache.put(normalizedLogin, new ScopeCacheEntry(scope, snapshot, clock.get()));
+    sweepExpiredScopeEntries();
+    return scope;
+  }
+
+  /** The snapshot's repositories owned by its account (never a foreign entry) that pass. */
+  private static Set<String> fullNames(RepoSnapshot snapshot, Predicate<RepoRef> readable) {
+    return snapshot.repos().stream()
+        .filter(repo -> repo.owner().equalsIgnoreCase(snapshot.owner()))
+        .filter(readable)
+        .map(repo -> repo.owner() + "/" + repo.name())
+        .collect(Collectors.toUnmodifiableSet());
+  }
+
+  /** Same bounded sweep as {@link #sweepExpiredAccessEntries()}, for the per-login scope cache. */
+  void sweepExpiredScopeEntries() {
+    if (scopeCache.size() < ACCESS_CACHE_SWEEP_THRESHOLD) {
+      return;
+    }
+    var cutoff = clock.get().minus(ACCESS_CACHE_TTL);
+    scopeCache.entrySet().removeIf(entry -> !entry.getValue().cachedAt().isAfter(cutoff));
+  }
+
+  /** Visible for tests that assert the scope cache stays bounded. */
+  int scopeCacheSize() {
+    return scopeCache.size();
   }
 
   /**

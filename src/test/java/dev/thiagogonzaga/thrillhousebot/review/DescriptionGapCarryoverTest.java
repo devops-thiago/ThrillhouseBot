@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
@@ -26,11 +27,17 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient.IssueComment;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.time.Duration;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /** Carrying the Description vs. Implementation gaps across rounds (#923). */
 class DescriptionGapCarryoverTest {
@@ -614,6 +621,118 @@ class DescriptionGapCarryoverTest {
           List.of(),
           DescriptionGapCarryover.of(List.of(), BOT, LINKED_113).gaps(),
           "a first round has no summary to carry from");
+    }
+  }
+
+  /**
+   * How linked-issue gaps and gap labels are read: each shape with the reading it must get (the
+   * readings the single backtracking patterns gave before the linked-issue one was split into a
+   * head and an issue-number list and both had their blanks made possessive), and a long run of
+   * blanks read in linear time.
+   */
+  @Nested
+  class ShapeReading {
+
+    private static final Pattern DIGITS = Pattern.compile("\\d+");
+
+    private static String digits(String text) {
+      return text == null
+          ? ""
+          : String.join(" ", DIGITS.matcher(text).results().map(r -> r.group()).toList());
+    }
+
+    static Stream<Arguments> linkedIssueGaps() {
+      return Stream.of(
+          Arguments.of("Linked issue #113: x", true, "113", " x"),
+          Arguments.of("Linked issues #113, #114: x", true, "113 114", " x"),
+          Arguments.of("linked issue 113 or 114: x", true, "113 114", " x"),
+          Arguments.of("Linked issue #1/#2 and #3: x", true, "1 2 3", " x"),
+          Arguments.of("Linked issue: x", true, "", " x"),
+          Arguments.of("Linked issue text says: retries are optional", false, "", ""),
+          Arguments.of("Linked issues#5:x", true, "5", "x"),
+          Arguments.of("  Linked\n issue\t#5 :x\ny", true, "5", "x\ny"),
+          Arguments.of("Linked issue #5,: x", false, "", ""),
+          Arguments.of("Linked issue ,#5: x", false, "", ""),
+          Arguments.of("Linked issue #5 #6: x", false, "", ""),
+          Arguments.of("Linked issue #: x", false, "", ""),
+          Arguments.of("Linked issue ##5: x", false, "", ""),
+          Arguments.of("Linked issue 1,2,3,4,5,6,7,8,9,10: x", true, "1 2 3 4 5 6 7 8 9 10", " x"),
+          Arguments.of("Linked issue 1,2,3,4,5,6,7,8,9,10,11: x", false, "", ""),
+          Arguments.of("Linked issuess #5: x", false, "", ""),
+          Arguments.of("Linked issue #5 OR #6 And #7: x", true, "5 6 7", " x"),
+          Arguments.of("Linked issue #5 order: x", false, "", ""),
+          Arguments.of("Linked issue #5: a: b", true, "5", " a: b"),
+          Arguments.of("linkedissue #5: x", false, "", ""),
+          Arguments.of("Linked issue #5", false, "", ""),
+          Arguments.of("Not a linked issue #5: x", false, "", ""),
+          Arguments.of("Linked issue #5andor#6: x", false, "", ""),
+          Arguments.of("Linked issue 5and6: x", true, "5 6", " x"),
+          Arguments.of("Linked issue 5 / / 6: x", false, "", ""),
+          Arguments.of("Linked issue  :", true, "", ""));
+    }
+
+    @ParameterizedTest
+    @MethodSource("linkedIssueGaps")
+    void linkedIssueGapsAreReadAsExpected(String gap, boolean matches, String issues, String rest) {
+      var read = DescriptionGapCarryover.linkedIssueGap(gap);
+      assertEquals(matches, read != null, gap);
+      if (read != null) {
+        assertEquals(issues, digits(read.group(1)), gap);
+        assertEquals(rest, read.group(2), gap);
+      }
+    }
+
+    static Stream<Arguments> gapLabels() {
+      return Stream.of(
+          Arguments.of("G2", "2"),
+          Arguments.of("[G2]", "2"),
+          Arguments.of(" [ g 12 ] x", "12"),
+          Arguments.of("G1234", null),
+          Arguments.of("G12a", null),
+          Arguments.of("xG2", null),
+          Arguments.of("[[G2]", null),
+          Arguments.of("G 2: done", "2"),
+          Arguments.of("g", null),
+          Arguments.of("", null),
+          Arguments.of(" \n G7", "7"),
+          Arguments.of("[ G", null),
+          Arguments.of("G2-specific", "2"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("gapLabels")
+    void gapLabelsAreReadAsExpected(String entry, String label) {
+      var matcher = DescriptionGapCarryover.LABEL_REFERENCE.matcher(entry);
+      if (label == null) {
+        assertFalse(matcher.find(), entry);
+      } else {
+        assertTrue(matcher.find(), entry);
+        assertEquals(label, matcher.group(1), entry);
+      }
+    }
+
+    @Test
+    void longBlankRunsAreReadInLinearTime() {
+      var blanks = " ".repeat(200_000);
+      assertTimeoutPreemptively(
+          Duration.ofSeconds(5),
+          () -> {
+            assertEquals(
+                Set.of(), DescriptionGapCarryover.keyOf("Linked issue" + blanks + "x").issues());
+            assertEquals(
+                Set.of(), DescriptionGapCarryover.keyOf("Linked issue" + blanks + ":x").issues());
+            assertEquals(
+                Set.of(),
+                DescriptionGapCarryover.keyOf("Linked issue #1" + blanks + "x: y").issues());
+            assertEquals(
+                Set.of("#1", "#2"),
+                DescriptionGapCarryover.keyOf("Linked issue #1" + blanks + "or 2" + blanks + ": y")
+                    .issues());
+            assertEquals(
+                Set.of(),
+                DescriptionGapCarryover.addressedPositions(
+                    List.of(blanks + "x"), List.of("a gap")));
+          });
     }
   }
 }

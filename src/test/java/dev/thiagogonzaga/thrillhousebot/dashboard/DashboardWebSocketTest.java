@@ -46,6 +46,7 @@ class DashboardWebSocketTest {
               String token = inv.getArgument(0);
               return token != null && !token.isBlank();
             });
+    when(sessionValidator.repositoryScope(anyString())).thenReturn(RepositoryScope.NONE);
     webSocket = new DashboardWebSocket(broadcaster, sessionValidator);
   }
 
@@ -163,6 +164,36 @@ class DashboardWebSocketTest {
         .close(
             argThat((CloseReason r) -> r.getCloseCode() == CloseReason.CloseCodes.VIOLATED_POLICY));
     assertEquals(0, broadcaster.getConnectedCount());
+  }
+
+  @Test
+  void liveEventsReachAConnectionOnlyForItsReadableRepositoriesWhileTheSessionIsOpen() {
+    when(sessionValidator.repositoryScope("scoped-token"))
+        .thenReturn(new RepositoryScope(false, java.util.Set.of("acme/allowed")));
+    when(sessionValidator.isSessionOpen("scoped-token")).thenReturn(true);
+    var remote = mock(jakarta.websocket.RemoteEndpoint.Async.class);
+    var session = mock(Session.class);
+    when(session.getId()).thenReturn("ws-scoped");
+    when(session.isOpen()).thenReturn(true);
+    when(session.getAsyncRemote()).thenReturn(remote);
+    when(session.getRequestParameterMap())
+        .thenReturn(Map.of("Cookie", List.of("thrillhouse_session=scoped-token")));
+    webSocket.onOpen(session);
+
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(review(1L, "acme/secret")));
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(review(2L, "Acme/Allowed")));
+    when(sessionValidator.isSessionOpen("scoped-token")).thenReturn(false);
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(review(3L, "acme/allowed")));
+
+    var payload = org.mockito.ArgumentCaptor.forClass(String.class);
+    verify(remote).sendText(payload.capture(), any());
+    assertTrue(payload.getValue().contains("\"sessionId\":2"));
+  }
+
+  private static ReviewSession review(long id, String repository) {
+    var review = ReviewSession.create(repository, 7, "PR", "sha");
+    review.id = id;
+    return review;
   }
 
   @Test

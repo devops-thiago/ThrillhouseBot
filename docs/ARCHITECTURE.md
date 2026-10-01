@@ -1,394 +1,546 @@
 # Architecture
 <!-- docs:architecture:start -->
 
-One-page overview of how the bot is structured and how a review flows through it.
+How the bot is put together and what happens between a GitHub event and a posted review.
 
-ThrillhouseBot is a Quarkus application that runs as a GitHub App. A webhook
-arrives when a pull request changes, the bot builds a review with an
-OpenAI-compatible model, and it posts the result back as a PR review plus a
-check run. A dashboard streams what is happening live.
+ThrillhouseBot is a Quarkus application that runs as a GitHub App. GitHub sends a webhook when a
+pull request changes or someone comments a command. The bot reviews the change with an
+OpenAI-compatible model, posts the result as a PR review, a summary comment and a check run, and
+streams progress to a dashboard. Class names below are under
+`src/main/java/dev/thiagogonzaga/thrillhousebot/`. The engineering rules behind this design
+(invariants, where each stage lives, rejected alternatives) are in
+[AGENTS.md](https://github.com/devops-thiago/ThrillhouseBot/blob/main/AGENTS.md).
 
 ## Components
 
 ```mermaid
-flowchart TB
-    subgraph GH[GitHub.com]
-        IN[PR push, /review, @mention]
-        OUT[PR reviews · check runs · comments]
+flowchart LR
+    subgraph GH[GitHub]
+        EV[PR events, comments, CI results]
+        API[REST and GraphQL API]
     end
 
-    subgraph BOT[ThrillhouseBot · Quarkus]
+    subgraph BOT[ThrillhouseBot]
         WH[webhook/<br/>WebhookController]
+        DSP[review/<br/>ReviewDispatcher]
         RO[review/<br/>ReviewOrchestrator]
+        FP[review/<br/>FindingPipeline]
         AI[review/ai/<br/>AiReviewService]
-        GHC[github/<br/>REST clients]
-        DB[dashboard/ + frontend/]
-
-        WH --> RO --> AI
-        RO --> GHC
-        AI -.->|live tokens / review.batch| DB
+        PUB[review/<br/>ReviewPublisher]
+        DASH[dashboard/<br/>broadcaster and REST]
+        NOTE[notification/<br/>ReviewNotifier]
     end
 
-    IN -->|POST /api/webhook<br/>HMAC-verified| WH
-    GHC --> OUT
+    LLM[(OpenAI-compatible<br/>model endpoint)]
+    DB[(PostgreSQL<br/>H2 in dev)]
+    UI[frontend/<br/>Next.js dashboard]
+    HOOK[(Outgoing webhook<br/>opt-in)]
+
+    EV -->|POST /api/webhook| WH --> DSP --> RO
+    RO --> FP --> AI --> LLM
+    RO --> PUB --> API
+    RO <-->|context reads| API
+    RO <-->|review sessions,<br/>earlier rounds| DB
+    RO --> DASH -->|WebSocket| UI
+    RO --> NOTE --> HOOK
 ```
 
-The `github/` clients wrap the GitHub REST surface the bot uses: installation
-tokens, pull diffs and prior reviews, check runs, PR reviews with inline
-comments, issue comments, and the instructions-file fallback chain
-(`.github/thrillhousebot.md`, `.github/copilot-instructions.md`, `CLAUDE.md`,
-`AGENTS.md`, `AGENT.md`).
+The `github/` clients wrap the GitHub API surface the bot uses: app auth and installation tokens,
+pull request files, reviews and review comments, issue comments, check runs, labels, reactions,
+thread resolution over GraphQL, the instructions file and the repository settings file.
 
 ## Request flow
 
 ```mermaid
 flowchart TD
-    GH[GitHub: PR opened / synced / comment] -->|webhook| WH[webhook/]
-    WH -->|verify HMAC, filters, rate limit, 👀 ack| RO[review/ ReviewOrchestrator]
-    RO -->|fetch diff, instructions, prior findings| GHC[github/ API clients]
-    RO -->|budget plan · stream or batch| AI[review/ai/ LangChain4j]
-    AI -->|parse findings| RO
-    RO -->|verify findings — 2nd AI call per batch, on by default| AI
-    RO -->|post review + check run| GHC --> GH
-    AI -.->|live tokens or review.batch| DB[dashboard/ broadcaster]
-    DB -->|WebSocket| FE[frontend/ Next.js UI]
-    RO -->|persist session, cost, tokens| PG[(H2 / PostgreSQL)]
-    AI -->|traces, token & cost metrics| OT[(OpenTelemetry)]
+    GH[GitHub event] -->|HMAC check, delivery dedupe| WH[WebhookController]
+    WH -->|pull_request: pause, trigger filters,<br/>auto-review window| DSP
+    WH -->|/review: 👀, pause, write access| DSP
+    WH -->|other commands: 👀| CMD[CommentCommandService]
+    WH -->|mention or reply to a finding| REP[MaintainerReplyDispatcher]
+    WH -->|check_suite or status| CIR[CI-hold recheck]
+    WH -->|200 OK| GH
+    CIR --> DSP
+    DSP[ReviewDispatcher<br/>one worker per PR, coalesces] --> RO[ReviewOrchestrator.review]
+    RO --> CTX[ReviewContextLoader<br/>and CI, linked issues, learnings]
+    CTX --> PLAN[ReviewPromptAssembler<br/>DiffBudgetPlanner]
+    PLAN --> FP[FindingPipeline<br/>review, verify, scan, summary]
+    FP --> VB[VerdictBuilder<br/>reconcile earlier rounds, verdict]
+    VB --> HM{Head moved?}
+    HM -->|yes| SKIP[Check run skipped,<br/>findings handed to the next run]
+    HM -->|no| PUB[Summary comment, review,<br/>check run, thread resolution]
+    PUB --> POST[Feedback, learnings, labels,<br/>session saved, notification]
 ```
 
-Automatic triggers (`pull_request` opened / synchronize, and similar) are subject
-to `AUTO_REVIEW_MIN_INTERVAL`: if the same PR was auto-reviewed too recently,
-the webhook path skips the review silently. Manual `/review` always bypasses that
-window. Slash and mention **commands** get a best-effort 👀 reaction before
-pause/authorization; conversational `@thrillhousebot` mentions (no command word)
-are answered without a reaction.
+`WebhookController` verifies the signature, drops a redelivered delivery id, routes the event and
+answers 200 before any review work starts. Only cheap gates run on the request thread: the pause
+lookup, the trigger filters, the 👀 reaction on a command (bounded by `ACK_REACTION_TIMEOUT`, default `3s`) and the
+write-access check for `/review` (bounded by `MANUAL_TRIGGER_AUTH_TIMEOUT`, default `5s`).
 
-## Review lifecycle
+| Event | What it starts |
+|---|---|
+| `pull_request` `opened`, `reopened`, `synchronize`, `ready_for_review` | An automatic review, unless the PR is paused, filtered out by the `WEBHOOK_*` trigger settings (drafts, labels, base branches), or reviewed less than `AUTO_REVIEW_MIN_INTERVAL` ago (default `0`, window off). `ready_for_review` clears that window. |
+| `issue_comment` with `/review` or `@thrillhousebot review` | A manual review. It bypasses the trigger filters and the rate-limit window, and needs write access. |
+| `issue_comment` with another command | The command: `/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`, `/learnings`, `/remember`, `/forget`. `/summary` runs a review that posts a new summary comment. |
+| `issue_comment` mentioning the bot without a command | A conversational reply in the PR conversation. No 👀 reaction. |
+| `pull_request_review_comment` | A reply in the review thread when it mentions the bot, and finding-feedback capture when it answers a finding. |
+| `check_suite` `completed`, `status` | A recheck of any verdict held on pending CI for that commit. |
 
-### First review (PR opened)
+`ReviewDispatcher` keeps one worker per pull request on the review executor. A request that
+arrives while a review of the same PR runs replaces any request already waiting, so only the
+newest head is reviewed next. A CI-hold recheck runs once no review of that PR is queued.
+
+## A review, step by step
+
+`ReviewOrchestrator.review` runs one round:
+
+1. Create the `ReviewSession` row and broadcast `review.started`. Register the head with
+   `CiHoldRegistry` and create the "ThrillhouseBot Review" check run as `in_progress`, linked to
+   the session on the dashboard.
+2. Load the context (`ReviewContextLoader.load`):
+   - the PR files, filtered by the deployment's and the repository's ignore globs;
+   - `.github/thrillhousebot.yml` (ignore globs and path-scoped instructions);
+   - every earlier round of this PR, read back from the stored `ReviewSession` responses;
+   - on a follow-up, the review comments and the PR conversation;
+   - the instructions file (the first of `.github/thrillhousebot.md`,
+     `.github/copilot-instructions.md`, `CLAUDE.md`, `AGENTS.md`, `AGENT.md`), existing labels,
+     project stack, linked bug-fix issue text, config-key definitions and, when enabled, patch
+     coverage.
+3. Read the opt-in context sections: CI failures (`CiFailureContextResolver`), linked issues
+   (`TicketContextResolver`) and review learnings (`ReviewLearnings.promptSection`).
+4. Assemble the prompt inputs (`ReviewPromptAssembler.assemble`) and plan the calls
+   (`DiffBudgetPlanner.plan`). The CI reading for the verdict runs in parallel: from step 2 when CI
+   context is on, from here otherwise.
+5. Run the model calls and the finding chain (`FindingPipeline.run`).
+6. Read CI again if the first reading would hold approval, then build the verdict
+   (`VerdictBuilder.build`).
+7. Read the PR head again. If it moved during the round, mark the check run `skipped`, hand the
+   verified findings to the run queued for the new head (`SupersededFindingsCarryover`) and stop.
+8. Publish the summary comment, the optional delta comment and the PR review, then conclude the
+   check run.
+9. Run the post-result steps. Each may fail without undoing the review: resolve the threads of
+   addressed findings, capture finding feedback, capture review learnings, apply or suggest labels,
+   save the session and broadcast `review.completed`, send the outcome notification.
+
+A failure before anything was published marks the check run `failure` and posts a short notice on
+the PR. For a cut response or a context-window rejection the notice names the cap and the setting
+to change; otherwise it suggests `/review`. The session is saved as failed and the failure
+notification is sent.
 
 ```mermaid
 sequenceDiagram
-    actor Dev
     participant GH as GitHub
     participant TB as ThrillhouseBot
-    participant AI as AI Provider
+    participant DB as Database
+    participant AI as Model endpoint
 
-    Dev->>GH: git push (PR opened)
-    GH->>TB: POST /api/webhook (pull_request: opened)
-
-    Note over TB: Verify HMAC → JWT → install token
-    Note over TB: Auto-review rate limit (skip if within AUTO_REVIEW_MIN_INTERVAL)
-
-    TB->>GH: POST check-runs → status: queued
-    TB->>GH: PATCH check-run → status: in_progress
-
-    par Fetch context
-        TB->>GH: GET /pulls/{pr}/files (diff)
-        TB->>GH: GET /compare/{base}...{head} (regression context)
+    GH->>TB: webhook (PR push or /review)
+    TB-->>GH: 200 OK
+    TB->>DB: create review session
+    TB->>GH: create check run (in_progress)
+    TB->>GH: PR files, comments, instructions, settings
+    TB->>DB: earlier rounds of this PR
+    opt CI gating or CI context on
+        TB->>GH: check runs and statuses on the head
     end
-
-    TB->>GH: GET /pulls/{pr}/reviews (check if already reviewed this SHA)
-    GH-->>TB: no prior reviews → first run
-
-    Note over TB: DiffBudgetPlanner — single-call or token-budgeted batches
 
     alt Diff fits one call
-        TB->>AI: POST chat (diff + base comparison + review prompt) — live tokens to dashboard
-        AI-->>TB: findings + risk levels + suggestions + previous-findings status
-        opt Findings found and REVIEW_VERIFIER_ENABLED (default)
-            TB->>AI: POST chat (re-check each finding against the diff)
-            AI-->>TB: confirmed / downgraded / dropped findings
+        TB->>AI: review call (live tokens to the dashboard)
+        opt Findings and verifier on
+            TB->>AI: verifier call
         end
-        TB->>AI: POST chat (summary rollup of the verified findings)
-        AI-->>TB: PR-level summary
-    else Large diff — multi-call
-        loop Each batch in parallel (up to REVIEW_MAX_AI_CALLS − 1)
-            TB-->>TB: review.batch progress (no per-token stream)
-            TB->>AI: POST chat (batch diff)
-            AI-->>TB: batch findings
+    else Large diff
+        par Each batch
+            TB->>AI: batch review call
             opt Findings and verifier on
-                TB->>AI: POST chat (verify batch findings)
+                TB->>AI: verifier call for the batch
             end
         end
-        TB->>AI: POST chat (summary rollup of aggregated findings)
-        AI-->>TB: PR-level summary
-        Note over TB: Any files that still won't fit are disclosed by name
     end
+    Note over TB: Security scan and open-thread guard
+    TB->>AI: summary call (concise model)
+    Note over TB: Reconcile earlier findings and build the verdict
 
-    alt AI fails
-        TB->>GH: PATCH check-run → conclusion: failure
-        TB->>GH: POST comment: retry hint (no internal details)
-    else AI succeeds + issues found
-        TB->>GH: POST PR review (REQUEST_CHANGES or COMMENT) with inline suggestions
-        TB->>GH: PATCH check-run → conclusion: failure (critical/high) or neutral
-        TB->>GH: POST comment: PR summary (risk table + key findings)
-    else AI succeeds + zero issues
-        TB->>GH: POST PR review → APPROVE (no body)
-        TB->>GH: PATCH check-run → conclusion: success
-        TB->>GH: POST comment: PR summary (celebration inside)
+    TB->>GH: read the head again
+    alt First round or /summary
+        TB->>GH: post the summary comment
+    else Follow-up round
+        TB->>GH: edit the summary comment in place
     end
+    TB->>GH: inline comments, then the PR review
+    TB->>GH: conclude the check run
+    TB->>GH: resolve threads of addressed findings
+    TB->>DB: save the result
 ```
 
-### Follow-up review (new push)
+## Model calls
+
+A review normally makes at least two model calls: one or more review calls, then one summary call.
+Each review call that returned findings adds a verifier call.
+
+| Lane | When | Calls |
+|---|---|---|
+| Single call | The reviewable diff fits one call | Review call, verifier call if it found anything, summary call |
+| Multi call | Token budgeting split the diff into batches | One review call per batch, in parallel; one verifier call per batch with findings; one summary call |
+| Summary only | Every reviewable file was over the per-call budget or had no patch text | The summary call only. The files are disclosed by name. |
+
+Token budgeting is on whenever `REVIEW_MAX_INPUT_TOKENS` is above `0` (default `48000`).
+`DiffBudgetPlanner` then packs files into at most `REVIEW_MAX_AI_CALLS` − 1 batches (default 6
+calls) and reserves one call for the summary. At `REVIEW_MAX_AI_CALLS=1` the single-call lane skips
+the summary call and says so in the summary.
+
+The review call (`PrReviewer`) returns findings and the status of each earlier finding, nothing
+else. The summary call (`PrSummarizer`) writes every summary field (purpose, description gaps, file
+walkthrough, labels, diagram) from the verified findings and the changed-file list. The summary,
+the verifier and the conversational replies run on the `concise` model binding, with their own
+output cap (`REVIEW_CONCISE_MAX_OUTPUT_TOKENS`, default 8192) and reasoning setting.
+
+Review and summary calls stream from the provider. Only the single-call review streams tokens to
+the dashboard; a batch emits `review.batch` progress events instead. Batches run on virtual
+threads. A batch that failed for a reason other than a cut response, a context-window rejection or
+the spend ceiling is retried once, one batch at a time, after the parallel pass.
+
+A failed call attempt is retried with backoff, up to `thrillhousebot.review.max-ai-retries`
+attempts (default 5). A response cut at its length cap is not retried, because the same call would
+be cut the same way: the findings completed before the cut are kept and the affected files are
+disclosed. A length stop with no content (reasoning used the whole cap) is repeated once with
+reasoning off. Each call is bounded by `AI_TIMEOUT` (default 300 s).
+
+`AI_MAX_CONCURRENT_CALLS` caps model calls in flight across the process (default `0`, no cap); a
+call past the cap waits for a slot. `REVIEW_MAX_TOKENS_PER_REVIEW` caps the tokens one review may
+spend across all its calls, retries, verifier and summary included (default `0`, no cap). Once it
+is reached, the remaining batches are disclosed as not reviewed and the summary falls back to
+counts.
+
+## The finding chain
+
+`FindingPipeline` runs the model's findings through a fixed chain before anything is published.
+
+On the single-call lane (`FindingPipeline.refine`), in order:
+
+1. Attach evidence for findings that cite code outside the diff (`ReviewEvidence`).
+2. Check that quoted code exists (`FindingQuoteValidator`).
+3. Drop known framework false positives (`FrameworkFalsePositiveFilter`).
+4. Merge duplicates (`FindingDeduplicator`).
+5. Drop what the verifier already rejected on this head (`VerifierRejectionMemory`).
+6. Verify (`FindingVerificationService`).
+7. Calibrate severity (`SeverityCalibrator`).
+8. Drop restatements of findings a maintainer already answered, and of findings argued out on
+   earlier rounds.
+9. Fill missing code anchors.
+
+On the multi-call lane each batch runs steps 1, 2, 3, 5 and 6 in its own thread. Once every batch
+has finished, the pipeline merges the statuses the batches reported and runs steps 4, 8 and 9 over
+the combined findings. Severity calibration does not run on this lane.
+
+Every lane then ends with the same two steps (`FindingPipeline.finish`): the deterministic security
+scan merge, then the guard that drops a new finding restating one still open on its own thread
+from any earlier round. The summary call runs after that. Carried description gaps are merged
+into its result, prompt vocabulary is scrubbed from the response (`PromptLabelScrubber`) and the
+response is stored on the session.
+
+### Verification
+
+The verifier (`FindingVerifier`, on the concise model) gets the diff and each candidate finding,
+and confirms, downgrades or drops it. It is on by default (`REVIEW_VERIFIER_ENABLED`). Before the
+call, a deterministic pass drops findings that retract themselves and demotes hedged blocking
+claims. That pass still runs with the verifier off.
+
+Verification fails open. An error, an empty or cut response, or a call skipped at the spend
+ceiling keeps the candidates. Those findings are capped at medium confidence and say in their text
+that they were not verified, so under the default blocking strictness they cannot request changes
+on their own. The summary states how much of the round was verified (`VerificationCoverage`).
+
+### Deterministic security scan
+
+With `REVIEW_SECRET_SCAN_ENABLED` or `REVIEW_IAC_SCAN_ENABLED` (both off by default),
+`SecurityScan.merge` reads the added lines of every reviewable file (`PatchLines`) with a fixed
+rule list. `SecretScanner` matches credential formats, private keys, JWTs and credential-named
+assignments whose value passes an entropy threshold (`REVIEW_SECRET_SCAN_ENTROPY_THRESHOLD`,
+default 3.5). `IacScanner` matches admin ports open to the internet, public S3 buckets, wildcard
+IAM, privileged pods, host namespaces, a final Dockerfile stage running as root and disabled
+encryption. `SecurityRule` holds each rule's severity and title. A `thrillhousebot:allow-secret` or
+`thrillhousebot:allow-iac` comment on the line or the line above suppresses a match, and
+`REVIEW_SECURITY_SCAN_SKIPPED_FILES` excludes fixture paths.
+
+The merge runs after verification, so no model grades a pattern match and the verifier's
+fail-open marking never applies to one. A model finding that reports the same defect nearby is
+dropped in favour of the scan's. Every matched value is replaced in the remaining findings, status
+notes and summary before anything is stored or posted. A secret finding shows only the value's
+first characters and length and carries no code anchor, so the value reaches no comment, log line,
+stored session or dashboard view.
+
+The scan also tracks its own findings across rounds:
+
+- A detection that matches a scan finding still open from an earlier round is not raised again.
+  The scan reports that finding `unresolved` while it still matches and `resolved` once it does
+  not.
+- A detection that matches a scan finding a maintainer declined (a round recorded it `justified`)
+  is not raised again while the content is the same: same file, title and anchor, and for a secret
+  the same line, compared through a short hash kept in a hidden `thrillhousebot:scan-content`
+  marker in the finding's text. A new value on that line is raised again.
+
+## Follow-up rounds
+
+A round is a follow-up when an earlier round of the PR was stored. The stored responses are the
+source of truth, not the text of the bot's earlier reviews.
+
+### What the model is shown
+
+Finding ids come from one round: the newest earlier round that raised any findings. Its findings
+are listed by number with their thread replies, and the model reports a status for each:
+`resolved`, `unresolved` or `justified`. Findings a newer round already settled are left out.
+
+Findings the rounds before that one left open, each on its own thread, are listed in a separate
+unnumbered section that the model is told not to raise again or report on. Findings from older
+rounds that a maintainer answered are listed the same way. Without these sections, a round after
+one that raised something new would see the older open findings as never reported and post them
+again.
+
+### Reconciling statuses
+
+`VerdictBuilder.build` turns the model's statuses into the round's final statuses, in this order:
+
+1. A finding whose targeted code left the diff becomes `superseded`, unless the head is the one the
+   finding was raised on.
+2. A maintainer's decline is a claim, not ground truth (`REVIEW_DECLINE_RECHECK_ENABLED`, on by
+   default). When the only write-access reply on a thread rests on a premise the reviewed code
+   contradicts, the finding goes back to `unresolved` for one more round. A second reply always
+   stands. A finding without a thread is declined or cleared from the PR conversation with
+   `@thrillhousebot declined <path>:<line> — <title>` or
+   `@thrillhousebot resolved <path>:<line> — <title>`.
+3. An `unresolved` id that is repeated or names no finding is dropped, so nothing is counted twice.
+4. A "Things to double-check" item (a low-confidence medium or low finding, listed in the summary
+   without a thread) is replaced when this round or a later one raises the same defect at the same
+   or higher severity. Same defect means the same file and either the same title, a similar title
+   within three lines, or the same line with shared title words or a common identifier. Two titles
+   that name different identifiers are never the same defect.
+5. The approval backstop replays every earlier round, oldest first. It keeps open each finding that
+   no round closed and the model did not report on, as long as its code is still in the diff. A
+   decline on a finding from an older round is weighed as in step 2: the finding stays open when
+   the decline is contradicted or rests on an unconfirmed premise, and otherwise counts as
+   justified without holding anything open.
+
+The still-open set is the `unresolved` findings plus the backstop's holds, one entry per finding.
+That one set feeds the summary's counts and lists, the "Still present" count and the verdict.
+
+### The summary comment
+
+The summary is one comment per pull request, marked with `<!-- thrillhousebot:summary -->`. The
+first round posts it. Every later round finds the newest bot comment carrying the marker (or, for
+summaries posted before 0.7.0, the summary heading) and replaces its body. An unchanged body is
+not rewritten. A new comment is posted when the old one was deleted or the edit failed, and when
+`/summary` asks for one.
+
+Because the edit replaces the whole body, each round renders the PR as it stands. The risk counts,
+Key Findings and "Things to double-check" cover the round's new findings plus every earlier finding
+still open, tagged as open since an earlier review. Description gaps the previous summary listed
+are passed to the summary call (`DescriptionGapCarryover`). They stay listed until the call says
+they are addressed, the round reports them again, or their issue is no longer linked. When the
+summary call returns no overview on an unchanged head, the previous round's overview is reused
+(`PriorOverviewCarryover`).
+
+The comment keeps no history of its own. Each round's review and inline comments record that
+round, and the optional delta comment (`REVIEW_FOLLOW_UP_SUMMARY_ENABLED`, off by default) lists
+what changed since the last round.
+
+### Threads
+
+After the review is posted, `ReviewPublisher.resolveAddressedThreads` resolves the review thread of
+every finding of the reported round whose final status is `resolved` or `justified`. A finding
+cleared from the PR conversation gets a short reply on its thread first.
+
+## Verdict and check run
+
+The review state is computed over this round's findings plus the still-open set, so an earlier
+critical finding that is still open requests changes even when every new finding is low.
+
+| State | When | Check run |
+|---|---|---|
+| `REQUEST_CHANGES` | A finding blocks under `REVIEW_BLOCKING_STRICTNESS` | `failure` |
+| `COMMENT` | Findings remain but none blocks, or APPROVE was held back | `neutral` |
+| `APPROVE` | Nothing open and nothing held it back | `success` |
+
+`REVIEW_BLOCKING_STRICTNESS` decides what blocks: `balanced` (default) blocks on a critical or high
+finding with high confidence, `strict` on any critical or high finding, `lenient` only on a
+critical finding with high confidence. APPROVE drops to COMMENT when an earlier finding is still
+`unresolved`, when files went unreviewed, or when CI holds it.
+
+`REVIEW_CI_GATING` decides how CI counts. `strict` (default) holds approval while a required check
+is pending, failing, missing or unreadable; `warn` approves and notes the CI state; `off` ignores
+CI. When pending CI was the only thing between the round and APPROVE, the verdict is held in
+`CiHoldRegistry` and the check run ends `neutral`. The `check_suite` or `status` event that reports
+the head green then posts the approval (`CiHoldRevisit`) without another model call.
+
+A follow-up round with no new findings but earlier findings still open says how many remain
+unresolved rather than calling the PR clean. Findings are posted as individual inline comments, with a committable
+suggestion where the range resolves. A comment GitHub refuses is retried without the suggestion,
+then as a file-level comment. Low-confidence medium and low findings go to the summary's "Things to
+double-check" list instead. At most `thrillhousebot.review.max-review-comments` (default 50)
+findings are posted inline.
+
+## Context sections
+
+These sections ride the review call's trailing guidance, fenced as untrusted data, so every batch
+carries them and `DiffBudgetPlanner` counts them as shared overhead. The summary and verifier
+calls do not get them unless stated. All are off by default.
+
+| Section | Setting | Source |
+|---|---|---|
+| Patch coverage | `REVIEW_PATCH_COVERAGE_ENABLED` | `PatchCoverageResolver` reads the CI coverage report and lists the changed lines no test covers. |
+| CI failures | `REVIEW_CI_CONTEXT_ENABLED` | `CiStatusEvaluator`'s early reading of the head. `CiFailureContextResolver` renders the failing checks, one annotations page each, plus a job-log tail with `REVIEW_CI_CONTEXT_INCLUDE_LOGS`. Pending checks contribute a count only. |
+| Linked issues | `REVIEW_TICKET_CONTEXT_ENABLED` | `TicketContextResolver` over `GitHubIssuesProvider`: PR-body closing keywords, then GitHub's closing references, then optionally the branch name. Same-repository issues only, read and never written. The summary call gets it too and lists unaddressed acceptance criteria as description gaps, never as findings. |
+| Review learnings | `REVIEW_LEARNINGS_ENABLED` | `ReviewLearnings` ranks the repository's active learnings by how close their file is to the changed files, and caps them in count and characters. |
+
+Learnings are captured after a review is posted. `FollowUpAnalyzer.survivingDeclines` keeps only
+the `justified` findings whose decline the re-check ran against and whose every reason rests on no
+premise the code could refute. The author's write access is confirmed before
+`ReviewLearningService` writes a `review_learning` row, scoped to the installation and repository,
+and `LearningText` refuses credential-shaped text. `/learnings`, `/remember` and `/forget` list,
+add and retract rows. Retracting only clears `active`, so the dashboard's audit view keeps the
+history.
+
+### Review dimension routing
+
+The review call's system prompt (`PrReviewPrompts`) is a core plus ten dimension blocks.
+Correctness, security and regressions are always on. With `REVIEW_DIMENSION_ROUTING_ENABLED` off,
+the default, every call carries all ten. With it on, `ReviewDimensionRouter` picks each call's
+blocks from its files' kinds (documentation, configuration or infrastructure, script, source,
+test) and two probes over the patch (API or list code, mocks or stubs). An unrecognized file type
+brings every block in. The core comes first, so it is the prefix a provider's prompt cache can
+match across calls. The verifier routes its own carve-outs by the files its candidates are in.
+
+### Repository configuration
+
+`.github/thrillhousebot.yml` holds a repository's own ignore globs and path-scoped review
+instructions, read from the default branch and cached for five minutes. Its ignore globs add to the
+deployment's list: a repository can narrow its review scope but cannot bring back a file the
+deployment excludes. A missing or invalid file is logged and skipped. A glob that matched nothing
+is disclosed in the summary.
+
+## Coverage disclosures
+
+A file the review never read does not pass silently. A file with no patch text, a file that fit no
+batch, a file skipped at the spend ceiling and a file whose batch failed are named in the summary
+and withhold APPROVE. A cut response keeps the findings completed before the cut. A summary call
+that fails, is cut, or is skipped at a cap leaves a counts-only summary that says so.
+
+## Concurrency and in-memory state
+
+Reviews, CI rechecks, comment commands, replies and notification deliveries share one
+virtual-thread executor with no size limit. Load is bounded by per-PR serialization in
+`ReviewDispatcher`, the model call cap and GitHub write pacing.
+
+| Limit | Setting | Default |
+|---|---|---|
+| Model calls in flight, process-wide (`ModelCallGate`) | `AI_MAX_CONCURRENT_CALLS` | `0` (no cap) |
+| Planned calls per review | `REVIEW_MAX_AI_CALLS` | `6` |
+| Tokens per review (`ReviewTokenLedger`) | `REVIEW_MAX_TOKENS_PER_REVIEW` | `0` (no cap) |
+| Spacing between content-creating GitHub writes, and the longest wait (`GitHubWritePacer`) | `GITHUB_WRITE_MIN_INTERVAL`, `GITHUB_WRITE_MAX_WAIT` | `1s`, `90s` |
+
+The following state lives in memory, per process, and is lost on restart:
+
+| State | Effect of losing it |
+|---|---|
+| Per-PR queue and coalescing (`ReviewDispatcher`) | A queued review does not run; the next push or `/review` starts one. |
+| Verdicts held on CI (`CiHoldRegistry`, up to 256 PRs) | The approval is not posted when CI turns green; `/review` posts it. |
+| Findings handed over by a superseded run (`SupersededFindingsCarryover`) | The next round finds them again from the diff. |
+| Verifier rejections per head (`VerifierRejectionMemory`) | A rejected finding can go through the verifier again. |
+| Webhook delivery ids (24 h) and the auto-review window | A redelivery or an early push can be reviewed. |
+| Dashboard login sessions (8 h) | Users log in again. |
+| Caches: installation tokens, instructions file, repository settings, project stack, dashboard access | Read again from GitHub. |
+
+The summary comment is found by its marker each round, not by an id held in memory, so a restart
+does not lose it. On startup `InterruptedSessionReconciler` marks every session still
+`in_progress` as failed. The bot is designed to run as a single replica.
+
+## Persistence
+
+| Entity | Table | Holds |
+|---|---|---|
+| `ReviewSession` | `ReviewSession` | One row per review round: PR, head commit, model, tokens, cost, duration, finding counts, status, and the final response (`aiResponseJson`) that later rounds read their earlier findings from. |
+| `PausedPr` | `PausedPr` | PRs paused with `/pause`. |
+| `FindingFeedback` | `finding_feedback` | 👍/👎 reactions and reply signals on findings. See [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/). |
+| `ReviewLearning` | `review_learning` | Review learnings, scoped to installation and repository. A retracted row stays, with `active` cleared. |
+
+Production uses PostgreSQL (`DATABASE_URL`); dev mode uses in-memory H2. There are no migration
+scripts: Hibernate updates the schema in production and drops and recreates it in dev.
+
+## Dashboard and notifications
+
+The dashboard backend (`dashboard/`) serves the Next.js static export under `/dashboard/`, a
+GitHub OAuth login whose tokens stay on the server, REST endpoints under `/api/dashboard`
+(sessions, costs, tokens, feedback, learnings, summary) and a WebSocket at `/ws/dashboard`. The
+WebSocket carries `review.started`, `review.stream`, `review.batch`, `review.progress`,
+`review.retry`, `review.completed` and `review.failed` events, and replays an active session's
+events to a client that connects late. Check runs link to `/session/<id>`, which redirects to the
+session page.
+
+Every endpoint and the WebSocket are scoped per repository. `DashboardAccessChecker` resolves a
+login's `RepositoryScope` once per request from the cached installation snapshot: the account
+owner gets every installed repository, anyone else only the installed repositories they
+collaborate on (one collaborator check per repository, cached for five minutes and only while
+the snapshot it came from is current). Session lists, paging totals, costs, tokens, the summary
+and feedback are filtered by that set in the query; `?repository=` naming a repository outside it
+answers 403; a session id from one answers 404, the same as a missing id. The installation-wide
+skip counters in the summary go to the owner only. A WebSocket connection takes the scope it had
+when it opened and receives only events, and late-join replays, of those repositories, until the
+login session ends.
+
+With `NOTIFICATIONS_WEBHOOK_URL` set, `ReviewNotifier` posts each final outcome (completed or
+failed) once, as JSON, Slack or Discord, off the review thread. Requests can be signed with
+HMAC-SHA256 and are retried on timeouts, 429 and 5xx. A superseded run and the approval posted
+when held CI turns green send nothing.
+
+Traces, token counts and cost come from OpenTelemetry. Security reports follow
+[SECURITY.md](https://github.com/devops-thiago/ThrillhouseBot/blob/main/SECURITY.md).
+
+## Conversational replies
 
 ```mermaid
 sequenceDiagram
     actor Dev
     participant GH as GitHub
     participant TB as ThrillhouseBot
-    participant AI as AI Provider
+    participant AI as Model endpoint
 
-    Dev->>GH: git push (PR synchronize)
-    GH->>TB: POST /api/webhook (pull_request: synchronize)
-
-    Note over TB: Verify → auth → rate limit → create check run (in_progress)
-
-    par Fetch context
-        TB->>GH: GET /pulls/{pr}/files (diff)
-        TB->>GH: GET /compare/{base}...{head}
-    and Fetch prior review
-        TB->>GH: GET /pulls/{pr}/reviews (find ThrillhouseBot's last review)
-        GH-->>TB: previous findings + thread status
-    end
-
-    Note over TB: Prompt includes diff + prior findings + "check if each was addressed"
-    Note over TB: Same single-call or map-reduce path as first review
-
-    TB->>AI: POST chat (one or more review calls ± verifier ± summary)
-    AI-->>TB: resolved / unresolved / new findings
-
-    alt AI fails
-        Note over TB: Same sanitized error path as first review
-    else AI succeeds
-        TB->>GH: PATCH comment: PR summary, edited in place (POST a new one if it was deleted or the edit fails)
-        Note over TB,GH: Summary counts and lists = new findings + every earlier finding still open
-        TB->>GH: POST PR review (suggestions for unresolved + new issues)
-        TB->>GH: PATCH check-run → conclusion based on risk
+    Dev->>GH: mentions @thrillhousebot or replies to a finding
+    GH->>TB: webhook (issue_comment or pull_request_review_comment)
+    TB-->>GH: 200 OK
+    Note over TB: Async, after a write-access check
+    alt resolved or declined directive
+        TB->>GH: fixed acknowledgement, applied by the next review
+    else question
+        TB->>AI: reply call (concise model)
+        TB->>GH: reply in the thread or a PR comment
     end
 ```
 
-### Manual trigger (`/review` or `@Thrillhousebot review`)
-
-```mermaid
-sequenceDiagram
-    actor Dev
-    participant GH as GitHub
-    participant TB as ThrillhouseBot
-
-    Dev->>GH: Comments "/review"
-    GH->>TB: POST /api/webhook (issue_comment: created)
-
-    Note over TB: Verify → parse trigger → 👀 ack (bounded wait) → auth
-    Note over TB: Manual /review bypasses AUTO_REVIEW_MIN_INTERVAL
-    Note over TB: Fetch diff, compare, and prior reviews
-    Note over TB: Full re-review even if this SHA was already reviewed
-```
-
-### Conversational reply (`@thrillhousebot` mention)
-
-```mermaid
-sequenceDiagram
-    actor Dev
-    participant GH as GitHub
-    participant TB as ThrillhouseBot
-
-    Dev->>GH: Mentions @thrillhousebot (in a PR thread or finding reply)
-    GH->>TB: POST /api/webhook (pull_request_review_comment or issue_comment: created)
-
-    Note over TB: Bot-loop guard → mention detected (no command) → ACK 200
-    Note over TB: No 👀 reaction — conversational mentions are answered, not reacted to
-    Note over TB: Async on review executor: authorize (write access)
-    Note over TB: Build threaded prompt (finding + diff hunk + thread)
-    TB->>GH: POST reply in the review thread (or a PR comment)
-```
+`REVIEW_CONVERSATIONAL_REPLIES_ENABLED` (default on) controls these replies. A thread reply sends
+the model the finding, its diff hunk and the thread. A mention in the PR conversation sends the
+diff, filtered by the ignore globs.
 
 ## Packages
 
 | Package | Responsibility | Notable classes |
 |---|---|---|
-| `webhook/` | Receives GitHub events, verifies the HMAC signature, decides whether an event triggers a review (trigger filters, per-PR pause state, auto-review rate limit), acks slash/mention commands with 👀, re-reads CI for a verdict held on pending CI when a `check_suite` or `status` event reports on its head, runs the comment commands (`/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`), and schedules finding-feedback capture on review-thread replies | `WebhookController`, `WebhookVerifier`, `TriggerDetector`, `ReviewTriggerFilter`, `AckReactionService`, `CommentCommandService`, `PrPauseService` |
-| `review/` | Orchestrates a review: plans the token budget and the per-review spend ceiling, calls the AI layer (single-call or map-reduce), maps findings to a risk level and review state, optionally scans the added lines for leaked secrets and risky IaC without a model call, re-checks a maintainer's decline against the reviewed code, writes the summary comment, optionally labels the PR, answers maintainer replies/mentions in PR threads, persists maintainer finding feedback (👍/👎 / reply heuristics), and remembers declines that survive the re-check as opt-in review learnings | `ReviewOrchestrator`, `ReviewDispatcher`, `DiffBudgetPlanner`, `FindingPipeline`, `SecurityScan`, `AutoReviewRateLimiter`, `ReviewDiffFormatter`, `FollowUpAnalyzer`, `FindingFeedbackCaptureService`, `FindingFeedbackService`, `PrSummaryGenerator`, `PrLabeler`, `MaintainerReplyService`, `MaintainerReplyDispatcher`, `PrImprovementService`, `PatchCoverageResolver`, `CiFailureContextResolver`, `TicketContextResolver`, `ConfigKeyContextResolver`, `RebuttalContradiction`, `ReviewLearnings`, `ReviewLearningService`, `SummarySurfaceDeduplicator`, `VerdictBuilder` |
-| `review/ai/` | The LangChain4j layer: streams or batches model responses, parses findings, runs a second pass to verify them, applies generation/reasoning customizers, and writes conversational replies | `PrReviewer`, `AiReviewService`, `ChatModelCustomizers`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant`, `TruncatedResponseSalvager`, `FindingVerifierPrompts` |
-| `github/` | Talks to the GitHub REST and GraphQL APIs: app auth, pull requests, reviews, check runs, comments, labels, reactions (create + list), and reading the repo instructions file | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubLabelClient`, `GitHubReactionClient`, `InstructionsResolver`, `GitHubWriteRetry` |
-| `dashboard/` | The live UI backend: OAuth login (in-memory sessions), WebSocket broadcaster (`review.stream` / `review.batch`), review session persistence, and finding-feedback aggregates | `AuthResource`, `DashboardSessionStore`, `SessionEventBroadcaster`, `ReviewSessionRepository`, `DashboardResource` |
-| `notification/` | The opt-in outgoing review-outcome notification: resolves and validates its configuration, renders the JSON / Slack / Discord body (metadata only unless content is opted in), and posts it off the review thread with an HMAC signature and a bounded retry | `ReviewNotifier`, `NotificationSettings`, `NotificationPayloads`, `WebhookDelivery` |
-| `config/` | Wiring: the outbound HTTP client, the review thread pool, typed config, active-model settings (caps, generation params), fail-fast startup validation, and the shared bot-identity used to recognize the bot's own activity | `HttpClientProducer`, `ReviewExecutorProducer`, `ThrillhouseConfig`, `ActiveModelSettings`, `StartupConfigValidator`, `BotIdentity` |
+| `webhook/` | Receives events, verifies the signature, drops redeliveries, applies trigger filters, pause state and the auto-review window, acks commands with 👀, routes commands and replies, starts CI-hold rechecks | `WebhookController`, `WebhookVerifier`, `WebhookDeduplicator`, `TriggerDetector`, `ReviewTriggerFilter`, `ManualReviewAuthorizer`, `AckReactionService`, `CommentCommandService`, `LearningCommands`, `PrPauseService` |
+| `review/` | Everything from "a review was requested" to "the result is on GitHub": dispatch, context, prompt assembly, budgeting, the finding chain, the security scan, follow-up reconciliation, verdict, publishing, CI gating, learnings, replies and the on-request commands | `ReviewDispatcher`, `ReviewOrchestrator`, `ReviewContextLoader`, `ReviewPromptAssembler`, `DiffBudgetPlanner`, `FindingPipeline`, `SecurityScan`, `FollowUpAnalyzer`, `VerdictBuilder`, `ReviewPublisher`, `PrSummaryGenerator`, `CiStatusEvaluator`, `CiHoldRevisit`, `TicketContextResolver`, `ReviewLearnings`, `MaintainerReplyService` |
+| `review/ai/` | The LangChain4j layer: AI service interfaces and prompts, streaming and retries, response parsing and salvage, the verifier, the token ledger and the call gate | `AiReviewService`, `PrReviewer`, `PrSummarizer`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant`, `ModelCallGate`, `ReviewTokenLedger` |
+| `github/` | GitHub REST and GraphQL clients, app auth, write pacing and retry, the instructions file and repository settings | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubWritePacer`, `GitHubWriteRetry`, `InstructionsResolver`, `RepoSettingsResolver`, `ReviewThreadService` |
+| `dashboard/` | OAuth sessions, the WebSocket broadcaster, review session persistence, dashboard REST | `AuthResource`, `DashboardResource`, `SessionEventBroadcaster`, `ReviewSession`, `ReviewSessionPersistence`, `InterruptedSessionReconciler` |
+| `notification/` | The opt-in outgoing review-outcome webhook | `ReviewNotifier`, `NotificationSettings`, `NotificationPayloads`, `WebhookDelivery` |
+| `config/` | Typed configuration, startup validation, the review executor, the HTTP client, model settings, bot identity | `ThrillhouseConfig`, `StartupConfigValidator`, `ReviewExecutorProducer`, `ActiveModelSettings`, `BotIdentity` |
 | `frontend/` | The Next.js dashboard, built to a static export and served by Quarkus | — |
-
-## Notes
-
-PR reviews carry inline comments and suggestions; check runs carry pass/fail
-status for branch protection (no inline annotations on the check run itself).
-
-**AI call budget** — a review normally makes at least two model calls, the review
-call and the summary call (at `REVIEW_MAX_AI_CALLS=1` the summary call is skipped
-after a review call, and a review whose every file exceeded the budget makes only
-the summary call); one that reports findings adds a skeptical verification
-pass (`FindingVerifier`) that re-sends the diff and each candidate finding,
-dropping or downgrading what it can't confirm. The verifier fails open — a verifier error keeps
-the original findings, so a broken verifier can never block a review. A finding
-kept that way is not published as if it had been screened: its confidence is
-capped at medium and its text says it was not verified, so under the default
-blocking strictness it cannot request changes on its own, and the summary banner
-states the round's verification coverage. The review
-call's response is findings and previous-finding statuses only; the PR-level
-summary (counts, purpose, description gaps, file walkthrough, labels, diagram) is
-written by the summary call from the verified findings and the changed-file list,
-on both lanes, so it keeps working when a review response is cut at its length
-cap. Under token-aware budgeting on large PRs this becomes N batch review calls +
-N per-batch verification calls + the same one summary call.
-`REVIEW_VERIFIER_ENABLED=false` skips only the AI pass (a deterministic
-hedging-language guard still runs) and trades cost for more false positives.
-Expect three model spans per flagged single-call review (or N+N+1 under
-budgeting) in the traces and in the dashboard's session totals. Multi-call reviews do not stream tokens to the
-dashboard; they emit `review.batch` progress events instead. Batches run
-concurrently on virtual threads; a failed batch is retried once after the
-parallel pass completes. `AI_MAX_CONCURRENT_CALLS` caps the model calls in
-flight across the whole process, streamed and blocking alike; a call past it
-waits for a slot rather than reaching a provider that limits concurrent requests.
-
-**Cost ceiling** — `REVIEW_MAX_TOKENS_PER_REVIEW` bounds the tokens one review may
-spend across every call it makes, counting retries, the verifier and the summary.
-Once reached, remaining batches are disclosed as not reviewed by name and the
-summary degrades to counts rather than making further calls. `0`, the default,
-leaves it unbounded. The summary, the verifier and maintainer replies run on a
-separate `concise` model binding with its own response cap
-(`REVIEW_CONCISE_MAX_OUTPUT_TOKENS`) and its own reasoning effort, so they never
-share a cap sized for batch review output. A summary call that fails all its
-retries also leaves a counts-only summary, since the review calls were already paid
-for, and the posted review says the summary could not be generated.
-
-**Coverage honesty** — a file the review never read does not pass silently. A
-file GitHub reported with changes but no patch text, a file that did not fit any
-batch, and a file whose batch call failed are each disclosed by name and withhold
-APPROVE. A response the model cut at its length cap keeps the findings that
-completed before the cut rather than being discarded whole.
-
-**Patch coverage as review context** — when a PR's CI publishes a coverage
-report, `PatchCoverageResolver` reads the changed lines it does not cover and gives them
-to the review, so new code with no test behind it can be named as such. Off
-unless `REVIEW_PATCH_COVERAGE_ENABLED` is set.
-
-**Deterministic security scan** — when `REVIEW_SECRET_SCAN_ENABLED` or
-`REVIEW_IAC_SCAN_ENABLED` is set, `SecurityScan` reads the added lines of every
-reviewable file (`PatchLines`) with a fixed rule list: `SecretScanner` for
-credential formats, private keys, JWTs and entropy-gated assignments,
-`IacScanner` for open admin ports, public S3 buckets, wildcard IAM, privileged
-pods, host namespaces, a final-stage `USER root` and disabled encryption
-(`SecurityRule` holds each rule's grade and title). `FindingPipeline` merges the
-result on both lanes, and on the lane that makes no review call, after
-verification and calibration and before the summary call: no model grades these
-findings, the verifier's fail-open marking never applies to them, a model
-finding reporting the same defect nearby is dropped, and the matched values are
-scrubbed out of every other finding and status note. A secret finding shows
-only the value's first characters and length and carries no code anchor, so
-the value reaches no comment, log line, stored session or dashboard. A finding
-the previous round already raised is not posted again; the scan sets its
-status (`unresolved` while it is still matched, `resolved` once it is not).
-
-**Review prompt structure** — the review call's system prompt (`PrReviewPrompts`)
-is a core plus ten dimension blocks. The core holds the identity, the
-untrusted-data rule, the finding fields, severity and confidence calibration,
-the self-check and the response contract. Correctness, security and regressions
-are always on; the other seven (comment contradicts code, quality and
-complexity, pagination, config/IaC, mock fidelity, producer→consumer, config-key
-documentation) are routed. With `REVIEW_DIMENSION_ROUTING_ENABLED` off, the
-default, every call carries all ten blocks exactly as before. With it on,
-`ReviewDimensionRouter` picks each call's blocks from that call's files: their
-kind (documentation, configuration or infrastructure, script, source, test)
-and two probes over the patch (API or list code, mocks or stubs). An
-unrecognized file type brings every block in, and a batch of mixed files gets
-the union. A routed prompt puts the whole core first and the dimensions after
-it, so the core is the prefix a provider's prompt cache matches across calls.
-The assembler sets the whole pull request's prompt, which `DiffBudgetPlanner`
-sizes the shared overhead from; the pipeline narrows it per batch, and a
-batch's prompt is never larger. Each call's routing is logged at INFO with the
-file that brought each block in. The verifier (`FindingVerifierPrompts`) routes
-its dimension carve-outs by the files its candidates are anchored in.
-
-**CI failures as review context** — with `REVIEW_CI_CONTEXT_ENABLED`, the CI
-gate's early reading of the head commit is taken alongside the context load
-instead of alongside the model call. `CiStatusEvaluator` keeps the failing and
-pending checks it walks (required or not, the bot's own excluded), and
-`CiFailureContextResolver` renders the failures, one annotations page each and
-optionally a job-log tail, into a capped section. `ReviewPromptAssembler` fences
-it into the review call's trailing guidance, so every batch carries it and
-`DiffBudgetPlanner` counts it as shared overhead. The summary and verifier calls
-do not get it. Pending checks only contribute a count, and the CI-hold revisit
-does not start a new review when CI later fails.
-
-**Review learnings** — with `REVIEW_LEARNINGS_ENABLED`, a maintainer's decisions
-outlive the pull request they were made on (#38). After a review is posted, a
-post-result step hands the round's final previous-finding statuses to
-`ReviewLearnings`. `FollowUpAnalyzer.survivingDeclines` keeps only the `justified`
-findings whose decline the #169 re-check actually ran against and whose every
-maintainer reason rests on no premise the code could refute
-(`RebuttalContradiction.assertsRefutablePremise`), so PR #160's "cannot race"
-decline is never stored. The author's write access is confirmed through the
-collaborator-permission API before `ReviewLearningService` writes a
-`review_learning` row, scoped to the installation and repository, after
-`LearningText` refuses credential-shaped text and flattens the rest. Before the
-next review call, the active rows are ranked by how close their file is to the
-changed files and the best ones, capped in count and characters, are fenced into
-the review call's trailing guidance after the CI-failure and linked-issue sections, so
-`DiffBudgetPlanner` counts them as shared overhead. The summary and verifier calls
-do not get them. `/learnings`, `/remember` and `/forget` (`LearningCommands`)
-list, add and retract rows; retraction only clears `active`, so the dashboard's
-`/api/dashboard/learnings` audit view keeps the history.
-
-**Linked issues as review context** — with `REVIEW_TICKET_CONTEXT_ENABLED`,
-`TicketContextResolver` asks the configured `IssueTrackerProvider` for the issues
-the PR is linked to. `GitHubIssuesProvider`, the only provider, takes the PR body's
-closing keywords first, then GitHub's `closingIssuesReferences`, then optionally the
-head branch name, keeps same-repository issues only, and reads each one over REST. It
-never writes to the issue. The resolver strips control and bidi characters, pulls out
-the acceptance criteria, and caps the section. `ReviewPromptAssembler` fences it into
-both calls' trailing guidance with different requests: the review call reads it as
-intent (so `DiffBudgetPlanner` counts it as shared overhead), and the summary call
-lists unaddressed criteria as description gaps (so the pipeline counts it in the
-summary clamp). A missing criterion is never a finding. `FindingPipeline` checks each
-`Linked issue #N` entry against the linked set read from the section's first line,
-and `DescriptionGapCarryover` carries the gaps the previous summary comment listed
-into the round: they ride the summary call's guidance, labelled, so the call can name
-the ones now resolved (`addressed_gaps`), and every other one is merged back after
-the call, on the degraded paths as well.
-
-**Repository-supplied configuration** — `.github/thrillhousebot.yml` carries a
-repository's own ignore globs and path-scoped review instructions, read from the
-default branch and cached for five minutes. Ignore globs are additive to the
-deployment list; a repository can narrow its own review scope but cannot restore
-a file the deployment excludes. Globs follow gitignore's reading and go through
-the same matcher as the deployment list. Every failure mode (missing file,
-invalid YAML, unexpected shape, uncompilable glob) is logged and skipped,
-leaving the deployment configuration in force; a repeated key keeps its last
-value, and a read that failed for a reason other than "no such file" is not
-remembered as "no config".
-
-**Write pacing** — content-creating GitHub calls are spaced process-wide by
-`GITHUB_WRITE_MIN_INTERVAL` so a burst of comments never reaches the secondary
-rate limit in the first place, with `GITHUB_WRITE_MAX_WAIT` capping how long any
-one caller waits.
-
-Each AI call is bounded by `AI_TIMEOUT` (LangChain4j) and
-`thrillhousebot.review.ai-timeout-seconds`. Cost and token metrics come from
-OpenTelemetry. OAuth login sessions are opaque IDs in cookies with tokens kept
-server-side; review history persists in the database. Maintainer finding
-feedback (reactions and reply heuristics) is documented in
-[Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/)
-(source: [docs/FEEDBACK.md](https://github.com/devops-thiago/ThrillhouseBot/blob/main/docs/FEEDBACK.md)). See
-[SECURITY.md](https://github.com/devops-thiago/ThrillhouseBot/blob/main/SECURITY.md)
-for the reporting process.
 
 ## Adding an AI provider
 
-There is no provider-specific code. The model is reached through LangChain4j's
-OpenAI-compatible client, so a new provider is configuration: point `AI_BASE_URL`
-and `AI_MODEL` at it. Add a `thrillhousebot.ai.pricing.<model>.*` pair for cost
-tracking (without it the bot warns once and flags sessions as "no pricing"
-instead of `$0`). Optionally set `thrillhousebot.ai.models.<model>.*` for the
-model's input cap and generation parameters, and `AI_REASONING_ENABLED` /
+There is no provider-specific code. The model is reached through LangChain4j's OpenAI-compatible
+client, so a new provider is configuration: point `AI_BASE_URL` and `AI_MODEL` at it. Add a
+`thrillhousebot.ai.pricing.<model>.*` pair for cost tracking (without it the bot warns once and
+marks sessions "no pricing" instead of `$0`). Optionally set `thrillhousebot.ai.models.<model>.*`
+for the model's input cap and generation parameters, and `AI_REASONING_ENABLED` /
 `AI_REASONING_EFFORT` when the model supports reasoning. See the
-[provider table](https://devops-thiago.github.io/ThrillhouseBot/providers/) and
-the [configuration reference](https://devops-thiago.github.io/ThrillhouseBot/configuration/).
+[provider table](https://devops-thiago.github.io/ThrillhouseBot/providers/) and the
+[configuration reference](https://devops-thiago.github.io/ThrillhouseBot/configuration/).
 <!-- docs:architecture:end -->

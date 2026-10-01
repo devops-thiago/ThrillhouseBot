@@ -306,10 +306,7 @@ public class SecurityScan {
     var scanPriors = openScanPriors(previous, settledIds);
     var declines =
         scanFindings(declined.justified(), declined.latestRound(), declined.headUnchanged());
-    var scrubber =
-        secretsEnabled
-            ? Scrubber.of(result.redactions(), entropyThreshold)
-            : Scrubber.of(result.redactions());
+    var scrubber = scrubberFor(result);
     var tracked = new LinkedHashMap<Integer, Detection>();
     var standing = new HashSet<Integer>();
     var raised = new ArrayList<ReviewResponse.Finding>();
@@ -366,6 +363,16 @@ public class SecurityScan {
         kept,
         statuses,
         scrub(FindingVerificationService.recount(response.summary(), kept), scrubber));
+  }
+
+  /**
+   * The scrubber for {@code result}'s redactions, also masking assigned literals past the entropy
+   * bar while the secret rules are on.
+   */
+  private Scrubber scrubberFor(Result result) {
+    return secretsEnabled
+        ? Scrubber.of(result.redactions(), entropyThreshold)
+        : Scrubber.of(result.redactions());
   }
 
   /** Reads every file the review covers, minus the skipped globs and files with no patch text. */

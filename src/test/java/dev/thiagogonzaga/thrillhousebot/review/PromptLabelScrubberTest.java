@@ -21,7 +21,9 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
+import java.util.Random;
 import java.util.Set;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -170,6 +172,9 @@ class PromptLabelScrubberTest {
         "Stale (see dimension 4).|Stale.",
         "Stale (review dimension 4).|Stale.",
         "Two (dimensions 4 / 5) here.|Two here.",
+        "Two (dimensions 4&5) here.|Two here.",
+        "Three (dimensions 4,5 or 8) here.|Three here.",
+        "Three (dimensions 4 & 5 and 8) here.|Three here.",
         "Dimension 7: artifact mismatch.|Artifact mismatch.",
         "* Dimension 4	stale comment.|* Stale comment.",
         "> (dimension 4) Quoted.|> Quoted.",
@@ -828,5 +833,26 @@ class PromptLabelScrubberTest {
         PromptLabelScrubber.scrubMarkdown("## Summary\n" + PROVIDED_WITH_REVIEW_LEAK, List.of()));
     assertEquals(
         SUPPLIED_FROM_CLEAN, PromptLabelScrubber.scrub(SUPPLIED_FROM_LEAK, Set.of("Config.kt")));
+  }
+
+  /** The dimension-number separator as an alternation, before it became a character class. */
+  private static final Pattern ORIGINAL_NUMBER_SEPARATOR =
+      Pattern.compile(" ?(?:,|/|&) ?| and | or ");
+
+  @Test
+  void numberSeparatorSplitsAsTheAlternationDid() {
+    String[] parts = {"4", "10", " ", ",", "/", "&", "and", "or", " and ", " or ", "x", ";"};
+    var random = new Random(975);
+    for (var n = 0; n < 20_000; n++) {
+      var numbers = new StringBuilder();
+      for (var k = random.nextInt(10); k > 0; k--) {
+        numbers.append(parts[random.nextInt(parts.length)]);
+      }
+      var s = numbers.toString();
+      assertEquals(
+          List.of(ORIGINAL_NUMBER_SEPARATOR.split(s, -1)),
+          List.of(PromptLabelScrubber.NUMBER_SEPARATOR.split(s, -1)),
+          s);
+    }
   }
 }

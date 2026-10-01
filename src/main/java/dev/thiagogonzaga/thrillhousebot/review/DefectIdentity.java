@@ -17,9 +17,11 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -57,15 +59,16 @@ final class DefectIdentity {
   static final int SHARED_TITLE_WORDS = 2;
 
   /**
-   * Identifier shapes in a finding title: a backticked span, an underscore-joined name in either
-   * case, or a {@code camelCase} name. Every quantifier is bounded, as in {@code
+   * Identifier shapes in a finding title, in order of preference where two start at the same
+   * character: a backticked span, an underscore-joined name in either case, or a {@code camelCase}
+   * name. Group 1 of each is the name. Every quantifier is bounded, as in {@code
    * ConfigKeyContextResolver}, so a crafted title cannot drive the matcher into deep recursion.
    */
-  private static final Pattern IDENTIFIER =
-      Pattern.compile(
-          "`([^`\\n]{1,120})`"
-              + "|\\b([A-Za-z][A-Za-z0-9]{0,63}(?:_[A-Za-z0-9]{1,64}){1,16})\\b"
-              + "|\\b([a-z][a-z0-9]{0,63}(?:[A-Z][a-z0-9]{0,63}){1,16})\\b");
+  private static final List<Pattern> IDENTIFIER_SHAPES =
+      List.of(
+          Pattern.compile("`([^`\\n]{1,120})`"),
+          Pattern.compile("\\b([A-Za-z][A-Za-z0-9]{0,63}(?:_[A-Za-z0-9]{1,64}){1,16})\\b"),
+          Pattern.compile("\\b([a-z][a-z0-9]{0,63}(?:[A-Z][a-z0-9]{0,63}){1,16})\\b"));
 
   /** Whether {@code finding} and {@code prior}, an earlier finding, describe the same defect. */
   static boolean sameDefect(ReviewResponse.Finding finding, ReviewResponse.Finding prior) {
@@ -117,16 +120,43 @@ final class DefectIdentity {
     if (title == null) {
       return names;
     }
-    var matcher = IDENTIFIER.matcher(title);
-    while (matcher.find()) {
-      for (var group = 1; group <= matcher.groupCount(); group++) {
-        var name = matcher.group(group);
-        if (name != null && !name.isBlank()) {
-          names.add(name.strip().toLowerCase(Locale.ROOT));
-        }
+    var shapes = IDENTIFIER_SHAPES.stream().map(shape -> shape.matcher(title)).toList();
+    var found = new boolean[shapes.size()];
+    for (var i = 0; i < shapes.size(); i++) {
+      found[i] = shapes.get(i).find();
+    }
+    for (var next = firstFrom(shapes, found); next != null; next = firstFrom(shapes, found)) {
+      var name = next.group(1);
+      if (!name.isBlank()) {
+        names.add(name.strip().toLowerCase(Locale.ROOT));
       }
+      skipTo(shapes, found, next.end());
     }
     return names;
+  }
+
+  /**
+   * The match that starts first among {@code shapes}' current ones, the earlier shape winning a
+   * tie, as one pattern alternating the shapes in that order would find it; {@code null} when none
+   * has a match left.
+   */
+  private static Matcher firstFrom(List<Matcher> shapes, boolean[] found) {
+    Matcher first = null;
+    for (var i = 0; i < shapes.size(); i++) {
+      if (found[i] && (first == null || shapes.get(i).start() < first.start())) {
+        first = shapes.get(i);
+      }
+    }
+    return first;
+  }
+
+  /** Moves every shape whose current match starts before {@code at} on to its next one from it. */
+  private static void skipTo(List<Matcher> shapes, boolean[] found, int at) {
+    for (var i = 0; i < shapes.size(); i++) {
+      if (found[i] && shapes.get(i).start() < at) {
+        found[i] = shapes.get(i).find(at);
+      }
+    }
   }
 
   /** Whether {@code finding}'s title or description names an identifier from {@code title}. */

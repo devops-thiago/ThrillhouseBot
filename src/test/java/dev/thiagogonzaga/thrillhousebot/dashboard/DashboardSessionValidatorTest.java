@@ -110,4 +110,29 @@ class DashboardSessionValidatorTest {
     assertFalse(validator.hasRepositoryAccess("unknown", "owner/repo"));
     verify(accessChecker, never()).hasRepositoryAccess(anyString(), anyString());
   }
+
+  @Test
+  void shouldResolveTheRepositoryScopeOfAKnownSession() {
+    var sessionId = sessionStore.createSession("octocat", "gho_secret", "https://a.co", "Octocat");
+    var scope = new RepositoryScope(false, java.util.Set.of("owner/repo"));
+    when(accessChecker.repositoryScope("octocat")).thenReturn(scope);
+
+    assertSame(scope, validator.repositoryScope(sessionId));
+  }
+
+  @Test
+  void shouldGiveAnUnknownSessionAnEmptyScopeWithoutDelegating() {
+    assertSame(RepositoryScope.NONE, validator.repositoryScope("unknown"));
+    verify(accessChecker, never()).repositoryScope(anyString());
+  }
+
+  @Test
+  void shouldReportWhetherASessionIsStillOpenWithoutAnAccessCheck() {
+    var sessionId = sessionStore.createSession("octocat", "gho_secret", "https://a.co", "Octocat");
+
+    assertTrue(validator.isSessionOpen(sessionId));
+    sessionStore.invalidate(sessionId);
+    assertFalse(validator.isSessionOpen(sessionId));
+    verifyNoInteractions(accessChecker);
+  }
 }

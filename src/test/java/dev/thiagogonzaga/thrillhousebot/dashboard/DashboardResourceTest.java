@@ -32,6 +32,7 @@ import jakarta.inject.Inject;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -42,6 +43,27 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
 
   private static final String COOKIE_NAME = "thrillhouse_session";
   private static final String VALID_TOKEN = "valid-session-token";
+  private static final String COLLAB_TOKEN = "collaborator-session-token";
+
+  /** The account owner's scope: every repository these tests persist, except private/repo. */
+  private static final RepositoryScope OWNER_SCOPE =
+      new RepositoryScope(
+          true,
+          Set.of(
+              "owner/repo",
+              "repo/a",
+              "repo/b",
+              "repo/x",
+              "repo/y",
+              "repo/oldest",
+              "repo/newest",
+              "repo/middle",
+              "test/repo",
+              "allowed/repo"));
+
+  /** A collaborator on acme/allowed only, in an installation that also has acme/secret. */
+  private static final RepositoryScope COLLAB_SCOPE =
+      new RepositoryScope(false, Set.of("acme/allowed"));
 
   @InjectMock DashboardSessionValidator sessionValidator;
 
@@ -54,6 +76,8 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
     when(sessionValidator.isValidSession(anyString())).thenReturn(true);
     when(sessionValidator.isValidSession(isNull())).thenReturn(false);
     when(sessionValidator.hasRepositoryAccess(anyString(), anyString())).thenReturn(true);
+    when(sessionValidator.repositoryScope(anyString())).thenReturn(OWNER_SCOPE);
+    when(sessionValidator.repositoryScope(COLLAB_TOKEN)).thenReturn(COLLAB_SCOPE);
   }
 
   @AfterEach
@@ -287,7 +311,6 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
             FindingFeedback.SOURCE_REACTION,
             "alice",
             202L));
-    when(sessionValidator.hasRepositoryAccess(VALID_TOKEN, "private/repo")).thenReturn(false);
 
     given()
         .cookie(COOKIE_NAME, VALID_TOKEN)
@@ -566,6 +589,217 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   @Test
   void shouldRejectBlankCookieForCosts() {
     given().cookie(COOKIE_NAME, "   ").when().get("/costs").then().statusCode(401);
+  }
+
+  @Test
+  void sessionListShowsACollaboratorOnlyTheirRepositoriesWithAMatchingTotal() throws Exception {
+    var base = Instant.now();
+    createPersistedSessionAt("acme/allowed", 1, base.minus(3, ChronoUnit.MINUTES));
+    createPersistedSessionAt("acme/secret", 2, base.minus(2, ChronoUnit.MINUTES));
+    createPersistedSessionAt("ACME/Allowed", 3, base.minus(1, ChronoUnit.MINUTES));
+    createPersistedSessionAt("acme/secret", 4, base);
+
+    given()
+        .cookie(COOKIE_NAME, COLLAB_TOKEN)
+        .queryParam("size", 1)
+        .when()
+        .get("/sessions")
+        .then()
+        .statusCode(200)
+        .body("total", equalTo(2))
+        .body("sessions", hasSize(1))
+        .body("sessions[0].prNumber", equalTo(3));
+
+    given()
+        .cookie(COOKIE_NAME, COLLAB_TOKEN)
+        .when()
+        .get("/sessions")
+        .then()
+        .statusCode(200)
+        .body("total", equalTo(2))
+        .body("sessions.prNumber", contains(3, 1))
+        .body("sessions.repository", not(hasItem("acme/secret")));
+  }
+
+  @Test
+  void sessionListFilteredToAnInaccessibleRepositoryIsForbidden() throws Exception {
+    createPersistedSession("acme/allowed", 1, "Allowed", "sha1");
+    createPersistedSession("acme/secret", 2, "Secret", "sha2");
+
+    given()
+        .cookie(COOKIE_NAME, COLLAB_TOKEN)
+        .queryParam("repository", "acme/secret")
+        .when()
+        .get("/sessions")
+        .then()
+        .statusCode(403)
+        .body("error", equalTo("Repository access denied"));
+
+    given()
+        .cookie(COOKIE_NAME, COLLAB_TOKEN)
+        .queryParam("repository", "ACME/allowed")
+        .when()
+        .get("/sessions")
+        .then()
+        .statusCode(200)
+        .body("total", equalTo(1))
+        .body("sessions[0].prTitle", equalTo("Allowed"));
+  }
+
+  @Test
+  void aBlankRepositoryFilterListsTheWholeScope() throws Exception {
+    createPersistedSession("acme/allowed", 1, "Allowed", "sha1");
+    createPersistedSession("acme/secret", 2, "Secret", "sha2");
+
+    given()
+        .cookie(COOKIE_NAME, COLLAB_TOKEN)
+        .queryParam("repository", "  ")
+        .when()
+        .get("/sessions")
+        .then()
+        .statusCode(200)
+        .body("total", equalTo(1))
+        .body("sessions[0].repository", equalTo("acme/allowed"));
+  }
+
+  @Test
+  void sessionDetailOfAnotherRepositoryAnswersLikeAMissingSession() throws Exception {
+    var allowed = createPersistedSession("acme/allowed", 1, "Allowed", "sha1");
+    var secret = createPersistedSession("acme/secret", 2, "Secret", "sha2");
+
+    given()
+        .cookie(COOKIE_NAME, COLLAB_TOKEN)
+        .when()
+        .get("/sessions/" + secret.id)
+        .then()
+        .statusCode(404)
+        .body("error", equalTo("Session not found"))
+        .body(not(containsString("acme/secret")));
+
+    given()
+        .cookie(COOKIE_NAME, COLLAB_TOKEN)
+        .when()
+        .get("/sessions/" + allowed.id)
+        .then()
+        .statusCode(200)
+        .body("repository", equalTo("acme/allowed"));
+  }
+
+  @Test
+  void costsAndTokensAggregateOnlyTheCollaboratorsRepositories() throws Exception {
+    createCompletedSessionIn("acme/allowed", "deepseek-chat", 100, 200, 0.25);
+    createCompletedSessionIn("acme/secret", "deepseek-chat", 1000, 2000, 4.0);
+    createCompletedSessionIn("acme/secret", "secret-model", 5000, 5000, 8.0);
+
+    given()
+        .cookie(COOKIE_NAME, COLLAB_TOKEN)
+        .when()
+        .get("/costs")
+        .then()
+        .statusCode(200)
+        .body("totalCost", is(0.25f))
+        .body("byModel", hasSize(1))
+        .body("byModel[0].model", equalTo("deepseek-chat"))
+        .body("byModel[0].count", equalTo(1));
+
+    given()
+        .cookie(COOKIE_NAME, COLLAB_TOKEN)
+        .when()
+        .get("/tokens")
+        .then()
+        .statusCode(200)
+        .body("totalTokens", equalTo(300))
+        .body("byModel", hasSize(1))
+        .body("byModel[0].inputTokens", equalTo(100));
+  }
+
+  @Test
+  void summaryCountsOnlyTheCollaboratorsRepositoriesAndHidesInstallationWideSkips()
+      throws Exception {
+    createCompletedSessionIn("acme/allowed", "deepseek-chat", 100, 200, 0.25);
+    createCompletedSessionIn("acme/secret", "secret-model", 1, 1, 4.0);
+    createCompletedSessionIn("acme/secret", "secret-model", 1, 1, 4.0);
+    createPersistedSession("acme/secret", 9, "Secret running", "sha9");
+
+    given()
+        .cookie(COOKIE_NAME, COLLAB_TOKEN)
+        .when()
+        .get("/summary")
+        .then()
+        .statusCode(200)
+        .body("totalReviews", equalTo(1))
+        .body("completedReviews", equalTo(1))
+        .body("failedReviews", equalTo(0))
+        .body("totalCost", is(0.25f))
+        .body("topModel", equalTo("deepseek-chat"))
+        .body("skippedReviewsByReason", anEmptyMap());
+  }
+
+  @Test
+  void aLoginWithNoReadableRepositorySeesNothing() throws Exception {
+    when(sessionValidator.repositoryScope("nothing-token")).thenReturn(RepositoryScope.NONE);
+    createCompletedSessionIn("acme/secret", "secret-model", 10, 10, 1.0);
+
+    given()
+        .cookie(COOKIE_NAME, "nothing-token")
+        .when()
+        .get("/sessions")
+        .then()
+        .statusCode(200)
+        .body("total", equalTo(0))
+        .body("sessions", empty());
+    given()
+        .cookie(COOKIE_NAME, "nothing-token")
+        .when()
+        .get("/costs")
+        .then()
+        .statusCode(200)
+        .body("totalCost", is(0.0f))
+        .body("byModel", empty());
+    given()
+        .cookie(COOKIE_NAME, "nothing-token")
+        .when()
+        .get("/summary")
+        .then()
+        .statusCode(200)
+        .body("totalReviews", equalTo(0))
+        .body("topModel", equalTo("N/A"));
+  }
+
+  @Test
+  void feedbackAggregatesFollowTheRepositoryScope() {
+    findingFeedbackService.recordFeedback(
+        new FindingFeedbackService.FeedbackInput(
+            "acme/secret",
+            1,
+            10L,
+            1,
+            FindingFeedback.SIGNAL_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "octocat",
+            401L));
+
+    given()
+        .cookie(COOKIE_NAME, COLLAB_TOKEN)
+        .when()
+        .get("/feedback")
+        .then()
+        .statusCode(200)
+        .body("repositories", empty());
+  }
+
+  private void createCompletedSessionIn(
+      String repo, String model, int inputTokens, int outputTokens, double cost) throws Exception {
+    tx.begin();
+    ReviewSession s = ReviewSession.create(repo, 50, "Completed", "sha");
+    s.setModel(model);
+    s.setInputTokens(inputTokens);
+    s.setOutputTokens(outputTokens);
+    s.setCost(cost);
+    s.setStatus(ReviewSession.STATUS_COMPLETED);
+    s.persist();
+    s.flush();
+    tx.commit();
   }
 
   private ReviewSession createPersistedSession(String repo, int prNumber, String title, String sha)

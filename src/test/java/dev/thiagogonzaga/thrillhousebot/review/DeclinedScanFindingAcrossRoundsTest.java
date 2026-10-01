@@ -244,7 +244,9 @@ class DeclinedScanFindingAcrossRoundsTest {
                 scan.scan(files),
                 List.of(),
                 Set.of()));
-    assertEquals(List.of(SCANNER, FIXTURE), raised.findings().stream().map(f -> f.file()).toList());
+    assertEquals(
+        List.of(SCANNER, FIXTURE),
+        raised.findings().stream().map(ReviewResponse.Finding::file).toList());
     assertEquals("high", raised.findings().get(0).risk());
     return raised;
   }

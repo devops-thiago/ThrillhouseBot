@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.dashboard;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -31,6 +32,8 @@ class SessionEventBroadcasterTest {
 
   private static final java.time.Instant FIXED_NOW =
       java.time.Instant.parse("2025-06-01T12:00:00Z");
+
+  private static final SessionEventBroadcaster.RepositoryReader READ_ALL = repository -> true;
 
   private SessionEventBroadcaster broadcaster;
   private ObjectMapper mapper;
@@ -48,10 +51,10 @@ class SessionEventBroadcasterTest {
 
     assertEquals(0, broadcaster.getConnectedCount());
 
-    broadcaster.addSession(session1);
+    broadcaster.addSession(session1, READ_ALL);
     assertEquals(1, broadcaster.getConnectedCount());
 
-    broadcaster.addSession(session2);
+    broadcaster.addSession(session2, READ_ALL);
     assertEquals(2, broadcaster.getConnectedCount());
 
     broadcaster.removeSession(session1);
@@ -74,7 +77,7 @@ class SessionEventBroadcasterTest {
     when(wsSession.isOpen()).thenReturn(true);
     when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
 
-    broadcaster.addSession(wsSession);
+    broadcaster.addSession(wsSession, READ_ALL);
 
     var payload = ArgumentCaptor.forClass(String.class);
     verify(asyncRemote).sendText(payload.capture(), any());
@@ -98,7 +101,7 @@ class SessionEventBroadcasterTest {
     when(wsSession.isOpen()).thenReturn(true);
     when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
 
-    broadcaster.addSession(wsSession);
+    broadcaster.addSession(wsSession, READ_ALL);
 
     var payload = ArgumentCaptor.forClass(String.class);
     verify(asyncRemote, times(2)).sendText(payload.capture(), any());
@@ -115,7 +118,7 @@ class SessionEventBroadcasterTest {
     var wsSession = mock(jakarta.websocket.Session.class);
     when(wsSession.isOpen()).thenReturn(false);
 
-    broadcaster.addSession(wsSession);
+    broadcaster.addSession(wsSession, READ_ALL);
 
     verify(wsSession, never()).getAsyncRemote();
   }
@@ -132,7 +135,7 @@ class SessionEventBroadcasterTest {
     when(wsSession.isOpen()).thenReturn(true);
     when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
 
-    broadcaster.addSession(wsSession);
+    broadcaster.addSession(wsSession, READ_ALL);
 
     verify(asyncRemote, never()).sendText(anyString(), any());
   }
@@ -151,7 +154,7 @@ class SessionEventBroadcasterTest {
     when(wsSession.isOpen()).thenReturn(true);
     when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
 
-    broadcaster.addSession(wsSession);
+    broadcaster.addSession(wsSession, READ_ALL);
 
     var payload = ArgumentCaptor.forClass(String.class);
     verify(asyncRemote, times(500)).sendText(payload.capture(), any());
@@ -173,7 +176,7 @@ class SessionEventBroadcasterTest {
     when(wsSession.isOpen()).thenReturn(true);
     when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
 
-    broadcaster.addSession(wsSession);
+    broadcaster.addSession(wsSession, READ_ALL);
 
     var payload = ArgumentCaptor.forClass(String.class);
     verify(asyncRemote, times(2)).sendText(payload.capture(), any());
@@ -197,7 +200,7 @@ class SessionEventBroadcasterTest {
     when(wsSession.isOpen()).thenReturn(true);
     when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
 
-    broadcaster.addSession(wsSession);
+    broadcaster.addSession(wsSession, READ_ALL);
 
     var payload = ArgumentCaptor.forClass(String.class);
     verify(asyncRemote, times(2)).sendText(payload.capture(), any());
@@ -221,7 +224,7 @@ class SessionEventBroadcasterTest {
     when(wsSession.isOpen()).thenReturn(true);
     when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
 
-    broadcaster.addSession(wsSession);
+    broadcaster.addSession(wsSession, READ_ALL);
 
     var payload = ArgumentCaptor.forClass(String.class);
     verify(asyncRemote, times(2)).sendText(payload.capture(), any());
@@ -246,7 +249,7 @@ class SessionEventBroadcasterTest {
     when(wsSession.isOpen()).thenReturn(true);
     when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
 
-    broadcaster.addSession(wsSession);
+    broadcaster.addSession(wsSession, READ_ALL);
 
     verify(asyncRemote, times(1)).sendText(anyString(), any());
   }
@@ -268,7 +271,12 @@ class SessionEventBroadcasterTest {
     broadcaster.setClock(java.time.Clock.fixed(FIXED_NOW, java.time.ZoneOffset.UTC));
     var staleAt = FIXED_NOW.minus(SessionEventBroadcaster.MAX_SESSION_BUFFER_AGE).minusSeconds(1);
     broadcaster.seedReplayState(
-        91L, "review.started", staleAt, java.util.List.of("{\"type\":\"review.started\"}"), null);
+        91L,
+        "test/repo",
+        "review.started",
+        staleAt,
+        java.util.List.of("{\"type\":\"review.started\"}"),
+        null);
 
     broadcaster.evictStaleSessionBuffers();
 
@@ -281,7 +289,8 @@ class SessionEventBroadcasterTest {
     reviewSession.id = 92L;
     broadcaster.setClock(java.time.Clock.fixed(FIXED_NOW, java.time.ZoneOffset.UTC));
     var staleAt = FIXED_NOW.minus(SessionEventBroadcaster.MAX_SESSION_BUFFER_AGE).minusSeconds(1);
-    broadcaster.seedReplayState(92L, "review.started", staleAt, java.util.List.of(), null);
+    broadcaster.seedReplayState(
+        92L, "test/repo", "review.started", staleAt, java.util.List.of(), null);
 
     broadcaster.broadcast(
         SessionEventBroadcaster.SessionEvent.stream(reviewSession, "tok", "tail", 4, 1, 1));
@@ -299,7 +308,7 @@ class SessionEventBroadcasterTest {
     when(wsSession.isOpen()).thenReturn(true);
     when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
 
-    broadcaster.addSession(wsSession);
+    broadcaster.addSession(wsSession, READ_ALL);
 
     verify(asyncRemote, never()).sendText(anyString(), any());
   }
@@ -324,7 +333,7 @@ class SessionEventBroadcasterTest {
         .when(asyncRemote)
         .sendText(anyString(), any());
 
-    assertDoesNotThrow(() -> broadcaster.addSession(wsSession));
+    assertDoesNotThrow(() -> broadcaster.addSession(wsSession, READ_ALL));
     verify(asyncRemote).sendText(anyString(), any());
   }
 
@@ -340,7 +349,7 @@ class SessionEventBroadcasterTest {
     when(wsSession.isOpen()).thenReturn(true);
     when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
 
-    broadcaster.addSession(wsSession);
+    broadcaster.addSession(wsSession, READ_ALL);
 
     verify(asyncRemote, never()).sendText(anyString(), any());
   }
@@ -353,7 +362,7 @@ class SessionEventBroadcasterTest {
     when(wsSession.isOpen()).thenReturn(true);
     when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
 
-    broadcaster.addSession(wsSession);
+    broadcaster.addSession(wsSession, READ_ALL);
     assertEquals(1, broadcaster.getConnectedCount());
 
     var reviewSession = createReviewSession();
@@ -386,7 +395,7 @@ class SessionEventBroadcasterTest {
         .when(asyncRemote)
         .sendText(anyString(), any());
 
-    broadcaster.addSession(wsSession);
+    broadcaster.addSession(wsSession, READ_ALL);
     broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(createReviewSession()));
 
     // An async send failure must not disconnect the (still open) session
@@ -401,7 +410,7 @@ class SessionEventBroadcasterTest {
     when(wsSession.isOpen()).thenReturn(true);
     when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
 
-    broadcaster.addSession(wsSession);
+    broadcaster.addSession(wsSession, READ_ALL);
     broadcaster.sendKeepAlive();
 
     var payload = ArgumentCaptor.forClass(String.class);
@@ -419,8 +428,8 @@ class SessionEventBroadcasterTest {
     var closedSession = mock(jakarta.websocket.Session.class);
     when(closedSession.isOpen()).thenReturn(false);
 
-    broadcaster.addSession(openSession);
-    broadcaster.addSession(closedSession);
+    broadcaster.addSession(openSession, READ_ALL);
+    broadcaster.addSession(closedSession, READ_ALL);
     assertEquals(2, broadcaster.getConnectedCount());
 
     var reviewSession = createReviewSession();
@@ -601,7 +610,7 @@ class SessionEventBroadcasterTest {
 
     var wsSession = mock(jakarta.websocket.Session.class);
     when(wsSession.isOpen()).thenReturn(true);
-    broadcasterWithBrokenMapper.addSession(wsSession);
+    broadcasterWithBrokenMapper.addSession(wsSession, READ_ALL);
 
     var session = createReviewSession();
     var event = SessionEventBroadcaster.SessionEvent.started(session);
@@ -623,8 +632,61 @@ class SessionEventBroadcasterTest {
     assertTrue(json.contains("\"sessionId\":42"));
   }
 
+  @Test
+  void shouldSendReviewEventsOnlyToConnectionsThatCanReadTheRepository() {
+    var reviewSession = createReviewSession();
+    var allowedRemote = mock(RemoteEndpoint.Async.class);
+    var allowed = openSession(allowedRemote);
+    var deniedRemote = mock(RemoteEndpoint.Async.class);
+    var denied = openSession(deniedRemote);
+    broadcaster.addSession(allowed, "TEST/Repo"::equalsIgnoreCase);
+    broadcaster.addSession(denied, "other/repo"::equals);
+
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(reviewSession));
+    broadcaster.sendKeepAlive();
+
+    var payload = ArgumentCaptor.forClass(String.class);
+    verify(allowedRemote, times(2)).sendText(payload.capture(), any());
+    assertTrue(payload.getAllValues().get(0).contains("\"repository\":\"test/repo\""));
+    verify(deniedRemote).sendText(eq("{\"type\":\"keepalive\"}"), any());
+    verifyNoMoreInteractions(deniedRemote);
+    assertEquals(2, broadcaster.getConnectedCount());
+  }
+
+  @Test
+  void shouldReplayOnlyActiveReviewsOfReadableRepositories() {
+    broadcaster.seedReplayState(
+        70L, "test/repo", "review.started", FIXED_NOW, java.util.List.of("{\"a\":1}"), null);
+    broadcaster.seedReplayState(
+        71L, "other/repo", "review.started", FIXED_NOW, java.util.List.of("{\"b\":2}"), null);
+    var remote = mock(RemoteEndpoint.Async.class);
+
+    broadcaster.addSession(openSession(remote), "test/repo"::equals);
+
+    verify(remote).sendText(eq("{\"a\":1}"), any());
+    verifyNoMoreInteractions(remote);
+  }
+
+  @Test
+  void shouldNotReplayAStateThatNeverRecordedAnEvent() {
+    broadcaster.seedReplayState(72L, "test/repo", null, FIXED_NOW, java.util.List.of("{}"), null);
+    var remote = mock(RemoteEndpoint.Async.class);
+
+    broadcaster.addSession(openSession(remote), READ_ALL);
+
+    verifyNoInteractions(remote);
+  }
+
+  private static jakarta.websocket.Session openSession(RemoteEndpoint.Async remote) {
+    var wsSession = mock(jakarta.websocket.Session.class);
+    when(wsSession.isOpen()).thenReturn(true);
+    when(wsSession.getAsyncRemote()).thenReturn(remote);
+    return wsSession;
+  }
+
   private void injectBufferedEvent(long sessionId, String latestType, String json) {
-    broadcaster.seedReplayState(sessionId, latestType, FIXED_NOW, java.util.List.of(json), null);
+    broadcaster.seedReplayState(
+        sessionId, "test/repo", latestType, FIXED_NOW, java.util.List.of(json), null);
   }
 
   private ReviewSession createReviewSession() {
