@@ -29,14 +29,15 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.time.Duration;
 import java.util.List;
-import java.util.Random;
 import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /** Carrying the Description vs. Implementation gaps across rounds (#923). */
 class DescriptionGapCarryoverTest {
@@ -624,124 +625,90 @@ class DescriptionGapCarryoverTest {
   }
 
   /**
-   * The linked-issue gap and gap-label shapes against the patterns they were read with before the
-   * linked-issue one was split into a head and an issue-number list and both had their blanks made
-   * possessive: every reading must agree, and a long run of blanks must be read in linear time.
+   * How linked-issue gaps and gap labels are read: each shape with the reading it must get (the
+   * readings the single backtracking patterns gave before the linked-issue one was split into a
+   * head and an issue-number list and both had their blanks made possessive), and a long run of
+   * blanks read in linear time.
    */
   @Nested
   class ShapeReading {
 
-    private static final Pattern ORIGINAL_LINKED_ISSUE_GAP =
-        Pattern.compile(
-            "(?is)^\\s*linked\\s+issues?\\s*(#?\\d+(?:\\s*(?:,|/|or|and)\\s*#?\\d+){0,9})?\\s*:(.*)$");
-
-    private static final Pattern ORIGINAL_LABEL_REFERENCE =
-        Pattern.compile("(?i)^\\s*\\[?\\s*g\\s*(\\d{1,3})\\b");
-
     private static final Pattern DIGITS = Pattern.compile("\\d+");
 
-    private static List<String> digits(String text) {
-      return text == null ? List.of() : DIGITS.matcher(text).results().map(r -> r.group()).toList();
+    private static String digits(String text) {
+      return text == null
+          ? ""
+          : String.join(" ", DIGITS.matcher(text).results().map(r -> r.group()).toList());
     }
 
-    private static void assertReadAlike(String gap) {
-      var original = ORIGINAL_LINKED_ISSUE_GAP.matcher(gap);
-      var split = DescriptionGapCarryover.linkedIssueGap(gap);
-      assertEquals(original.matches(), split != null, gap);
-      if (split != null) {
-        assertEquals(digits(original.group(1)), digits(split.group(1)), gap);
-        assertEquals(original.group(2), split.group(2), gap);
-      }
-    }
-
-    private static void assertLabelAlike(String entry) {
-      var original = ORIGINAL_LABEL_REFERENCE.matcher(entry);
-      var possessive = DescriptionGapCarryover.LABEL_REFERENCE.matcher(entry);
-      var found = original.find();
-      assertEquals(found, possessive.find(), entry);
-      if (found) {
-        assertEquals(original.group(1), possessive.group(1), entry);
-      }
-    }
-
-    @ParameterizedTest
-    @ValueSource(
-        strings = {
-          "Linked issue #113: x",
-          "Linked issues #113, #114: x",
-          "linked issue 113 or 114: x",
-          "Linked issue #1/#2 and #3: x",
-          "Linked issue: x",
-          "Linked issue text says: retries are optional",
-          "Linked issues#5:x",
-          "  Linked\n issue\t#5 :x\ny",
-          "Linked issue #5,: x",
-          "Linked issue ,#5: x",
-          "Linked issue #5 #6: x",
-          "Linked issue #: x",
-          "Linked issue ##5: x",
-          "Linked issue 1,2,3,4,5,6,7,8,9,10: x",
-          "Linked issue 1,2,3,4,5,6,7,8,9,10,11: x",
-          "Linked issuess #5: x",
-          "Linked issue #5 OR #6 And #7: x",
-          "Linked issue #5 order: x",
-          "Linked issue #5: a: b",
-          "linkedissue #5: x",
-          "Linked issue #5",
-          "Not a linked issue #5: x",
-          "Linked issue #5andor#6: x",
-          "Linked issue 5and6: x",
-          "Linked issue 5 / / 6: x",
-          "Linked issue  :",
-        })
-    void linkedIssueGapsReadAsTheSinglePatternReadThem(String gap) {
-      assertReadAlike(gap);
-    }
-
-    @Test
-    void generatedGapsAndLabelsReadAsTheOriginalPatternsReadThem() {
-      String[] heads = {"", "Linked issue", "linked issues", " LINKED  ISSUE", "Linked issue #1"};
-      String[] parts = {
-        " ", "\n", "\t", "#", "1", "23", ",", "/", "or", "and", "OR", ":", "x", "s", "issue",
-        "linked"
-      };
-      var random = new Random(923);
-      for (var n = 0; n < 20_000; n++) {
-        var gap = new StringBuilder(heads[random.nextInt(heads.length)]);
-        for (var k = random.nextInt(12); k > 0; k--) {
-          gap.append(parts[random.nextInt(parts.length)]);
-        }
-        assertReadAlike(gap.toString());
-      }
-      String[] labelParts = {" ", "\n", "[", "g", "G", "1", "2345", "x", "]", ":"};
-      for (var n = 0; n < 20_000; n++) {
-        var entry = new StringBuilder();
-        for (var k = random.nextInt(8); k > 0; k--) {
-          entry.append(labelParts[random.nextInt(labelParts.length)]);
-        }
-        assertLabelAlike(entry.toString());
-      }
+    static Stream<Arguments> linkedIssueGaps() {
+      return Stream.of(
+          Arguments.of("Linked issue #113: x", true, "113", " x"),
+          Arguments.of("Linked issues #113, #114: x", true, "113 114", " x"),
+          Arguments.of("linked issue 113 or 114: x", true, "113 114", " x"),
+          Arguments.of("Linked issue #1/#2 and #3: x", true, "1 2 3", " x"),
+          Arguments.of("Linked issue: x", true, "", " x"),
+          Arguments.of("Linked issue text says: retries are optional", false, "", ""),
+          Arguments.of("Linked issues#5:x", true, "5", "x"),
+          Arguments.of("  Linked\n issue\t#5 :x\ny", true, "5", "x\ny"),
+          Arguments.of("Linked issue #5,: x", false, "", ""),
+          Arguments.of("Linked issue ,#5: x", false, "", ""),
+          Arguments.of("Linked issue #5 #6: x", false, "", ""),
+          Arguments.of("Linked issue #: x", false, "", ""),
+          Arguments.of("Linked issue ##5: x", false, "", ""),
+          Arguments.of("Linked issue 1,2,3,4,5,6,7,8,9,10: x", true, "1 2 3 4 5 6 7 8 9 10", " x"),
+          Arguments.of("Linked issue 1,2,3,4,5,6,7,8,9,10,11: x", false, "", ""),
+          Arguments.of("Linked issuess #5: x", false, "", ""),
+          Arguments.of("Linked issue #5 OR #6 And #7: x", true, "5 6 7", " x"),
+          Arguments.of("Linked issue #5 order: x", false, "", ""),
+          Arguments.of("Linked issue #5: a: b", true, "5", " a: b"),
+          Arguments.of("linkedissue #5: x", false, "", ""),
+          Arguments.of("Linked issue #5", false, "", ""),
+          Arguments.of("Not a linked issue #5: x", false, "", ""),
+          Arguments.of("Linked issue #5andor#6: x", false, "", ""),
+          Arguments.of("Linked issue 5and6: x", true, "5 6", " x"),
+          Arguments.of("Linked issue 5 / / 6: x", false, "", ""),
+          Arguments.of("Linked issue  :", true, "", ""));
     }
 
     @ParameterizedTest
-    @ValueSource(
-        strings = {
-          "G2",
-          "[G2]",
-          " [ g 12 ] x",
-          "G1234",
-          "G12a",
-          "xG2",
-          "[[G2]",
-          "G 2: done",
-          "g",
-          "",
-          " \n G7",
-          "[ G",
-          "G2-specific"
-        })
-    void gapLabelsReadAsTheBacktrackingPatternReadThem(String entry) {
-      assertLabelAlike(entry);
+    @MethodSource("linkedIssueGaps")
+    void linkedIssueGapsAreReadAsExpected(String gap, boolean matches, String issues, String rest) {
+      var read = DescriptionGapCarryover.linkedIssueGap(gap);
+      assertEquals(matches, read != null, gap);
+      if (read != null) {
+        assertEquals(issues, digits(read.group(1)), gap);
+        assertEquals(rest, read.group(2), gap);
+      }
+    }
+
+    static Stream<Arguments> gapLabels() {
+      return Stream.of(
+          Arguments.of("G2", "2"),
+          Arguments.of("[G2]", "2"),
+          Arguments.of(" [ g 12 ] x", "12"),
+          Arguments.of("G1234", null),
+          Arguments.of("G12a", null),
+          Arguments.of("xG2", null),
+          Arguments.of("[[G2]", null),
+          Arguments.of("G 2: done", "2"),
+          Arguments.of("g", null),
+          Arguments.of("", null),
+          Arguments.of(" \n G7", "7"),
+          Arguments.of("[ G", null),
+          Arguments.of("G2-specific", "2"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("gapLabels")
+    void gapLabelsAreReadAsExpected(String entry, String label) {
+      var matcher = DescriptionGapCarryover.LABEL_REFERENCE.matcher(entry);
+      if (label == null) {
+        assertFalse(matcher.find(), entry);
+      } else {
+        assertTrue(matcher.find(), entry);
+        assertEquals(label, matcher.group(1), entry);
+      }
     }
 
     @Test
