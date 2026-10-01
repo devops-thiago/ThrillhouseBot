@@ -584,6 +584,16 @@ class PromptLabelScrubberTest {
       "The CI run on this commit already completed with a failing test, so the suite itself will"
           + " confirm.";
 
+  @Test
+  void confidenceRuleClauseAfterAStandaloneHyphenGoesWithIt() {
+    assertEquals(
+        CONFIDENCE_RULE_CLEAN,
+        PromptLabelScrubber.scrub(
+            "The CI run on this commit already completed with a failing test, so the suite itself"
+                + " will confirm - I am rating this claim at the required arithmetic-claim"
+                + " confidence until that log names the test."));
+  }
+
   // #975, ThrillhouseBot-test#207 round-3 inline 4152219435.
   static final String IGNORE_LIST_LEAK =
       "The repository does contain a rust/Cargo.lock — the changed-files list for this PR names"

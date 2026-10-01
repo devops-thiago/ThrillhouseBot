@@ -515,18 +515,34 @@ public final class PromptLabelScrubber {
 
   /**
    * Drops the model's account of the confidence rule it applied (#975). After a semicolon, comma or
-   * dash the clause goes with that separator and the sentence keeps its end ("…, so the suite will
-   * confirm; I am rating this claim at the required … confidence." reads "…, so the suite will
-   * confirm."); opening a sentence, the whole sentence goes with the blanks after it. Anywhere else
-   * the sentence leans on it, and it stays.
+   * dash (an em or en dash, or a hyphen standing alone between blanks) the clause goes with that
+   * separator and the sentence keeps its end ("…, so the suite will confirm; I am rating this claim
+   * at the required … confidence." reads "…, so the suite will confirm."); opening a sentence, the
+   * whole sentence goes with the blanks after it. Anywhere else the sentence leans on it, and it
+   * stays.
    */
+  /**
+   * Whether the clause starting at {@code clause} hangs from a separator ending at {@code blank}: a
+   * semicolon, comma, em or en dash, or a plain hyphen that stands alone between blanks — a hyphen
+   * joined to a word ("well-") is part of that word, not a separator.
+   */
+  private static boolean hangsFromSeparator(String text, int blank, int clause, int floor) {
+    char separator = text.charAt(blank - 1);
+    if (";,—–".indexOf(separator) >= 0) {
+      return true;
+    }
+    return separator == '-'
+        && blank < clause
+        && (blank - 1 == floor || Character.isWhitespace(text.charAt(blank - 2)));
+  }
+
   private static String removeSelfRatedConfidence(String text) {
     var m = SELF_RATED_CONFIDENCE.matcher(text);
     var out = new StringBuilder(text.length());
     int at = 0;
     while (m.find()) {
       int blank = skipBlanksBack(text, m.start(), at);
-      if (blank > at && ";,—–".indexOf(text.charAt(blank - 1)) >= 0) {
+      if (blank > at && hangsFromSeparator(text, blank, m.start(), at)) {
         out.append(text, at, skipBlanksBack(text, blank - 1, at));
         at = m.end();
       } else if (opensSentence(text, m.start(), at)) {
