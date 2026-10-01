@@ -58,7 +58,12 @@ public class DashboardWebSocket {
       return;
     }
 
-    broadcaster.addSession(session);
+    // Live events are scoped like the REST endpoints: only repositories this login can read, and
+    // nothing once the dashboard session is logged out or expires.
+    var scope = sessionValidator.repositoryScope(sessionToken);
+    broadcaster.addSession(
+        session,
+        repository -> scope.allows(repository) && sessionValidator.isSessionOpen(sessionToken));
     log.info(
         "Dashboard WebSocket connected: {} (total: {})",
         session.getId(),

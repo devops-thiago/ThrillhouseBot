@@ -753,6 +753,117 @@ class DashboardAccessCheckerTest {
         .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
   }
 
+  private void stubInstalledRepos(String owner, String... repos) {
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(List.of(installationFor(owner, 99L)));
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
+        .thenReturn(
+            new GitHubInstallationClient.InstallationRepositoriesResponse(
+                repos.length, ownerRepos(owner, repos)));
+  }
+
+  private void stubCollaborator(String repo, String login, int status) {
+    Response response = mock(Response.class);
+    when(response.getStatus()).thenReturn(status);
+    when(installationClient.checkCollaborator(
+            eq("Bearer inst-token"), anyString(), eq("myowner"), eq(repo), eq(login)))
+        .thenReturn(response);
+  }
+
+  @Test
+  void repositoryScopeGivesTheOwnerEveryInstalledRepositoryWithoutCollaboratorChecks() {
+    stubInstalledRepos("myowner", "Alpha", "beta");
+
+    var scope = checker.repositoryScope("MyOwner");
+
+    assertTrue(scope.accountOwner());
+    assertEquals(java.util.Set.of("myowner/alpha", "myowner/beta"), scope.repositories());
+    verify(installationClient, never())
+        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
+  }
+
+  @Test
+  void repositoryScopeGivesACollaboratorOnlyTheirRepositoriesAndCachesTheSet() {
+    stubInstalledRepos("myowner", "alpha", "beta", "gamma");
+    stubCollaborator("alpha", "collab", 204);
+    stubCollaborator("beta", "collab", 404);
+    stubCollaborator("gamma", "collab", 204);
+
+    var scope = checker.repositoryScope("collab");
+    assertFalse(scope.accountOwner());
+    assertEquals(java.util.Set.of("myowner/alpha", "myowner/gamma"), scope.repositories());
+
+    // Later requests and per-repository checks within the TTL reuse the set: no GitHub call.
+    assertSame(scope, checker.repositoryScope("COLLAB"));
+    assertTrue(checker.hasRepositoryAccess("collab", "myowner/Alpha"));
+    assertFalse(checker.hasRepositoryAccess("collab", "myowner/beta"));
+    verify(installationClient, times(3))
+        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), eq("collab"));
+
+    now.set(now.get().plus(java.time.Duration.ofMinutes(6)));
+    checker.repositoryScope("collab");
+    verify(installationClient, times(6))
+        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), eq("collab"));
+  }
+
+  @Test
+  void repositoryScopeIsRecomputedWhenTheInstallationSnapshotIsRefreshed() {
+    stubInstalledRepos("myowner", "alpha");
+    stubCollaborator("alpha", "collab", 204);
+    checker.repositoryScope("myowner"); // loads the snapshot at t0
+    now.set(now.get().plus(java.time.Duration.ofMinutes(8)));
+    checker.repositoryScope("collab");
+
+    // At t0+11 the snapshot is reloaded; the collaborator's 3-minute-old set was computed from the
+    // previous one (a repository may have left the installation), so it is recomputed.
+    now.set(now.get().plus(java.time.Duration.ofMinutes(3)));
+    checker.repositoryScope("collab");
+    now.set(now.get().plus(java.time.Duration.ofMinutes(1)));
+    checker.repositoryScope("collab");
+
+    verify(installationClient, times(2))
+        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), eq("collab"));
+  }
+
+  @Test
+  void repositoryScopeFailsClosed() {
+    assertSame(RepositoryScope.NONE, checker.repositoryScope(null));
+    assertSame(RepositoryScope.NONE, checker.repositoryScope("  "));
+
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(List.of());
+    assertSame(RepositoryScope.NONE, checker.repositoryScope("myowner"));
+
+    when(installationClient.getApp(anyString(), anyString()))
+        .thenThrow(new RuntimeException("GitHub App unavailable"));
+    var unresolved = new DashboardAccessChecker(config, authClient, installationClient, now::get);
+    assertSame(RepositoryScope.NONE, unresolved.repositoryScope("myowner"));
+  }
+
+  @Test
+  void repositoryScopeCacheSweepsExpiredLoginsAboveThreshold() {
+    stubInstalledRepos("myowner", "alpha");
+    when(installationClient.checkCollaborator(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenAnswer(
+            inv -> {
+              Response response = mock(Response.class);
+              when(response.getStatus()).thenReturn(404);
+              return response;
+            });
+    for (var i = 0; i < DashboardAccessChecker.ACCESS_CACHE_SWEEP_THRESHOLD - 1; i++) {
+      checker.repositoryScope("stale-" + i);
+    }
+    assertEquals(DashboardAccessChecker.ACCESS_CACHE_SWEEP_THRESHOLD - 1, checker.scopeCacheSize());
+
+    now.set(now.get().plus(java.time.Duration.ofMinutes(6)));
+    checker.repositoryScope("fresh");
+
+    assertEquals(1, checker.scopeCacheSize());
+  }
+
   private void stubInstalledRepo(String owner, String repo) {
     when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
         .thenReturn(List.of(installationFor(owner, 99L)));

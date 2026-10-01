@@ -476,6 +476,17 @@ WebSocket carries `review.started`, `review.stream`, `review.batch`, `review.pro
 events to a client that connects late. Check runs link to `/session/<id>`, which redirects to the
 session page.
 
+Every endpoint and the WebSocket are scoped per repository. `DashboardAccessChecker` resolves a
+login's `RepositoryScope` once per request from the cached installation snapshot: the account
+owner gets every installed repository, anyone else only the installed repositories they
+collaborate on (one collaborator check per repository, cached for five minutes and only while
+the snapshot it came from is current). Session lists, paging totals, costs, tokens, the summary
+and feedback are filtered by that set in the query; `?repository=` naming a repository outside it
+answers 403; a session id from one answers 404, the same as a missing id. The installation-wide
+skip counters in the summary go to the owner only. A WebSocket connection takes the scope it had
+when it opened and receives only events, and late-join replays, of those repositories, until the
+login session ends.
+
 With `NOTIFICATIONS_WEBHOOK_URL` set, `ReviewNotifier` posts each final outcome (completed or
 failed) once, as JSON, Slack or Discord, off the review thread. Requests can be signed with
 HMAC-SHA256 and are retried on timeouts, 429 and 5xx. A superseded run and the approval posted

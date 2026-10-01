@@ -56,14 +56,17 @@ public class DashboardResource {
   private static final String KEY_COUNT = "count";
   private static final String KEY_SINCE = "since";
 
+  /**
+   * Restricts a query to the caller's {@link RepositoryScope} (bound as {@code ?2}, lower-cased).
+   * Filtering in the query rather than after it keeps paging, totals and aggregates exact.
+   */
+  private static final String JPQL_IN_SCOPE = "lower(s." + FIELD_REPOSITORY + ") IN ?2";
+
+  private static final String JPQL_FROM_IN_SCOPE_SINCE =
+      "FROM ReviewSession s WHERE s." + FIELD_TIMESTAMP + " > ?1 AND " + JPQL_IN_SCOPE;
+
   private static final String JPQL_FROM_COMPLETED_SINCE =
-      "FROM ReviewSession s WHERE s."
-          + FIELD_TIMESTAMP
-          + " > ?1 AND s."
-          + FIELD_STATUS
-          + " = '"
-          + STATUS_COMPLETED
-          + "'";
+      JPQL_FROM_IN_SCOPE_SINCE + " AND s." + FIELD_STATUS + " = '" + STATUS_COMPLETED + "'";
 
   private static final String JPQL_COSTS_BY_MODEL =
       "SELECT s.model as model, COUNT(s) as "
@@ -95,6 +98,7 @@ public class DashboardResource {
   private static final String KEY_ERROR = "error";
   private static final String MSG_NOT_AUTHENTICATED = "Not authenticated";
   private static final String MSG_SESSION_NOT_FOUND = "Session not found";
+  private static final String MSG_REPOSITORY_ACCESS_DENIED = "Repository access denied";
 
   private final DashboardSessionValidator sessionValidator;
   private final ReviewSessionRepository reviewSessionRepository;
@@ -126,6 +130,17 @@ public class DashboardResource {
         .build();
   }
 
+  private static Response repositoryDeniedResponse() {
+    return Response.status(Response.Status.FORBIDDEN)
+        .entity(Map.of(KEY_ERROR, MSG_REPOSITORY_ACCESS_DENIED))
+        .build();
+  }
+
+  /** The scope's repositories as the {@code ?2} parameter of {@link #JPQL_IN_SCOPE}. */
+  private static List<String> scopeParameter(RepositoryScope scope) {
+    return List.copyOf(scope.repositories());
+  }
+
   @GET
   @Path("/sessions")
   public Response listSessions(
@@ -137,17 +152,26 @@ public class DashboardResource {
       return unauthorizedResponse();
     }
 
-    return sessionsPage(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE), repository);
+    var scope = sessionValidator.repositoryScope(sessionToken);
+    if (repository != null && !repository.isBlank() && !scope.allows(repository)) {
+      return repositoryDeniedResponse();
+    }
+    return sessionsPage(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE), repository, scope);
   }
 
-  private Response sessionsPage(int page, int size, String repository) {
+  /**
+   * One page of sessions, newest first, from the caller's accessible repositories only — or from
+   * the one requested repository, which the caller has already been checked against.
+   */
+  private Response sessionsPage(int page, int size, String repository, RepositoryScope scope) {
     Sort newestFirst = Sort.descending(FIELD_TIMESTAMP);
-    PanacheQuery<ReviewSession> query;
-    if (repository != null && !repository.isBlank()) {
-      query = reviewSessionRepository.find(FIELD_REPOSITORY, newestFirst, repository);
-    } else {
-      query = reviewSessionRepository.findAll(newestFirst);
-    }
+    var readable =
+        repository != null && !repository.isBlank()
+            ? List.of(RepositoryScope.normalize(repository))
+            : scopeParameter(scope);
+    PanacheQuery<ReviewSession> query =
+        reviewSessionRepository.find(
+            "lower(" + FIELD_REPOSITORY + ") IN ?1", newestFirst, readable);
     var sessions = query.page(page, size).list();
 
     var total = query.count();
@@ -167,7 +191,10 @@ public class DashboardResource {
       return unauthorizedResponse();
     }
     var session = reviewSessionRepository.findById(id);
-    if (session == null) {
+    // A session from a repository the caller cannot read answers exactly like a missing one, so
+    // ids do not reveal which other repositories have reviews.
+    if (session == null
+        || !sessionValidator.repositoryScope(sessionToken).allows(session.getRepository())) {
       return Response.status(Response.Status.NOT_FOUND)
           .entity(Map.of(KEY_ERROR, MSG_SESSION_NOT_FOUND))
           .build();
@@ -217,7 +244,13 @@ public class DashboardResource {
         });
 
     List<Map<String, Object>> rows =
-        reviewSessionRepository.find(JPQL_COSTS_BY_MODEL, since).project(Map.class).list();
+        reviewSessionRepository
+            .find(
+                JPQL_COSTS_BY_MODEL,
+                since,
+                scopeParameter(sessionValidator.repositoryScope(sessionToken)))
+            .project(Map.class)
+            .list();
 
     var totalCost =
         rows.stream()
@@ -254,7 +287,13 @@ public class DashboardResource {
         });
 
     List<Map<String, Object>> rows =
-        reviewSessionRepository.find(JPQL_TOKENS_BY_MODEL, since).project(Map.class).list();
+        reviewSessionRepository
+            .find(
+                JPQL_TOKENS_BY_MODEL,
+                since,
+                scopeParameter(sessionValidator.repositoryScope(sessionToken)))
+            .project(Map.class)
+            .list();
 
     var totalTokens =
         rows.stream()
@@ -290,9 +329,7 @@ public class DashboardResource {
     if (repository != null && !repository.isBlank()) {
       var normalizedRepository = repository.strip();
       if (!sessionValidator.hasRepositoryAccess(sessionToken, normalizedRepository)) {
-        return Response.status(Response.Status.FORBIDDEN)
-            .entity(Map.of(KEY_ERROR, "Repository access denied"))
-            .build();
+        return repositoryDeniedResponse();
       }
       var summary = findingFeedbackService.summarize(normalizedRepository);
       var recent = findingFeedbackService.listRecent(normalizedRepository, 50);
@@ -313,9 +350,10 @@ public class DashboardResource {
                   recent))
           .build();
     }
+    var scope = sessionValidator.repositoryScope(sessionToken);
     var summaries =
         findingFeedbackService.summarizeAll().stream()
-            .filter(s -> sessionValidator.hasRepositoryAccess(sessionToken, s.repository()))
+            .filter(s -> scope.allows(s.repository()))
             .toList();
     var rows =
         summaries.stream()
@@ -356,9 +394,7 @@ public class DashboardResource {
     }
     var normalizedRepository = repository.strip();
     if (!sessionValidator.hasRepositoryAccess(sessionToken, normalizedRepository)) {
-      return Response.status(Response.Status.FORBIDDEN)
-          .entity(Map.of(KEY_ERROR, "Repository access denied"))
-          .build();
+      return repositoryDeniedResponse();
     }
     return Response.ok(
             Map.of(
@@ -378,23 +414,16 @@ public class DashboardResource {
     }
 
     var since = Instant.now().minus(30, ChronoUnit.DAYS);
+    var scope = sessionValidator.repositoryScope(sessionToken);
+    var readable = scopeParameter(scope);
 
-    var totalReviews =
-        nullSafeCount(reviewSessionRepository.count(FIELD_TIMESTAMP + " > ?1", since));
-    var completedReviews =
-        nullSafeCount(
-            reviewSessionRepository.count(
-                FIELD_TIMESTAMP + " > ?1 AND " + FIELD_STATUS + " = '" + STATUS_COMPLETED + "'",
-                since));
-    var failedReviews =
-        nullSafeCount(
-            reviewSessionRepository.count(
-                FIELD_TIMESTAMP + " > ?1 AND " + FIELD_STATUS + " = '" + STATUS_FAILED + "'",
-                since));
+    var totalReviews = countInScopeSince(null, since, readable);
+    var completedReviews = countInScopeSince(STATUS_COMPLETED, since, readable);
+    var failedReviews = countInScopeSince(STATUS_FAILED, since, readable);
 
     var costRow =
         reviewSessionRepository
-            .find(JPQL_SUMMARY_TOTAL_COST, since)
+            .find(JPQL_SUMMARY_TOTAL_COST, since, readable)
             .project(Map.class)
             .singleResult();
     var totalCost = extractTotalCost(costRow, KEY_TOTAL_COST);
@@ -402,12 +431,12 @@ public class DashboardResource {
     var modelRow =
         reviewSessionRepository
             .find(
-                "SELECT s.model as model, COUNT(s) as cnt FROM ReviewSession s WHERE s."
-                    + FIELD_TIMESTAMP
-                    + " > ?1 "
-                    + "GROUP BY s.model"
+                "SELECT s.model as model, COUNT(s) as cnt "
+                    + JPQL_FROM_IN_SCOPE_SINCE
+                    + " GROUP BY s.model"
                     + " ORDER BY COUNT(s) DESC",
-                since)
+                since,
+                readable)
             .project(Map.class)
             .firstResult();
     String topModel = extractTopModel(modelRow);
@@ -425,10 +454,23 @@ public class DashboardResource {
                 "topModel",
                 topModel,
                 "skippedReviewsByReason",
-                reviewSkipEmitter.countsByReason(),
+                // Skip counters are installation-wide and carry no repository, so only the account
+                // owner (who can read every installed repository) sees them.
+                scope.accountOwner() ? reviewSkipEmitter.countsByReason() : Map.of(),
                 KEY_SINCE,
                 since.toString()))
         .build();
+  }
+
+  /** Sessions since {@code since} in the caller's scope, optionally of one status only. */
+  private long countInScopeSince(String status, Instant since, List<String> readable) {
+    var where = FIELD_TIMESTAMP + " > ?1 AND lower(" + FIELD_REPOSITORY + ") IN ?2";
+    if (status == null) {
+      return nullSafeCount(reviewSessionRepository.count(where, since, readable));
+    }
+    return nullSafeCount(
+        reviewSessionRepository.count(
+            where + " AND " + FIELD_STATUS + " = ?3", since, readable, status));
   }
 
   static String extractTopModel(Map<?, ?> modelRow) {

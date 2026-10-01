@@ -2,10 +2,11 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SessionsPage from './page';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { mockSessionDetail, mockSessions } from '@/lib/mock-data';
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   api: vi.fn(),
 }));
 
@@ -145,6 +146,40 @@ describe('SessionsPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Could not load session details.')).toBeInTheDocument();
     });
+  });
+
+  it('shows a not-found message, and nothing of the session, when the API answers 404', async () => {
+    // The API answers 404 for a session in a repository this login cannot read.
+    window.history.replaceState(null, '', '/?id=77');
+    vi.mocked(api).mockReturnValue({
+      sessions: vi.fn().mockResolvedValue({ sessions: [], total: 0, page: 0, size: 20 }),
+      session: vi.fn().mockRejectedValue(new ApiError(404)),
+    } as unknown as ReturnType<typeof api>);
+
+    render(<SessionsPage />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          'Session not found, or it belongs to a repository you do not have access to.',
+        ),
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Repository')).not.toBeInTheDocument();
+    expect(screen.queryByText('Model output')).not.toBeInTheDocument();
+  });
+
+  it('renders exactly the rows and total the API scoped to the login', async () => {
+    const own = mockSessions.filter((s) => s.repository === 'devops-thiago/ThrillhouseBot');
+    vi.mocked(api).mockReturnValue({
+      sessions: vi.fn().mockResolvedValue({ sessions: own.slice(0, 1), total: 1, page: 0, size: 20 }),
+      session: vi.fn().mockResolvedValue(mockSessionDetail),
+    } as unknown as ReturnType<typeof api>);
+
+    render(<SessionsPage />);
+
+    await screen.findByText('Page 1 of 1');
+    expect(screen.getAllByRole('button', { name: 'View' })).toHaveLength(1);
   });
 
   it('pages forward when the total exceeds one page', async () => {

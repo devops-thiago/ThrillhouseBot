@@ -44,6 +44,8 @@ class InterruptedSessionReconcilerTest extends ReviewSessionTestSupport {
   void allowDashboardAccess() {
     when(sessionValidator.isValidSession(anyString())).thenReturn(true);
     when(sessionValidator.isValidSession(isNull())).thenReturn(false);
+    when(sessionValidator.repositoryScope(anyString()))
+        .thenReturn(new RepositoryScope(true, java.util.Set.of("owner/repo")));
   }
 
   @Test
