@@ -657,6 +657,27 @@ class PromptLabelScrubberTest {
     assertEquals(goesOn, PromptLabelScrubber.scrub(goesOn));
   }
 
+  @Test
+  void ratingLookalikesThatAreNotTheRuleStay() {
+    for (var text :
+        List.of(
+            // Not a rule's qualifier.
+            "I am holding this claim at the current confidence until the log names the test.",
+            // "confidence" in a later sentence, not this clause.
+            "I am rating this claim at the required level. Its confidence is low.",
+            // A longer word, not "confidence".
+            "I am rating this claim at the required confidences listed below.",
+            // Not a rating verb.
+            "I am grading this claim at the required confidence for the release notes.",
+            // No "confidence" at all.
+            "I am rating this claim at the required level for now.",
+            // "confidence" too far on to belong to the clause.
+            "I am rating this claim at the required level, which the team agreed on after the"
+                + " incident last spring and wrote into the runbook, with confidence")) {
+      assertEquals(text, PromptLabelScrubber.scrub(text));
+    }
+  }
+
   // #975, ThrillhouseBot-test#207 round-3 inline 4152219435.
   static final String IGNORE_LIST_LEAK =
       "The repository does contain a rust/Cargo.lock — the changed-files list for this PR names"

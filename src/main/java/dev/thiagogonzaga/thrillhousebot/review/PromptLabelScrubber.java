@@ -239,10 +239,19 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern SELF_RATED_CONFIDENCE =
       Pattern.compile(
-          "\\bI(?: am|'m|’m| have|'ve|’ve)? (?:rat(?:e|ed|ing)|keep(?:ing)?|kept|hold(?:ing)?|held"
-              + "|cap(?:ped|ping)?) (?:this|the|it)(?: claim| finding| issue)? (?:at|to) the"
-              + " (?:required|prescribed|mandated|permitted|allowed|maximum|capped)"
-              + " [^.!?\\n]{0,80}?confidence\\b[^.!?\\n,;]{0,200}");
+          "\\bI(?: am|'m|’m| have|'ve|’ve)? (\\p{L}{3,8}) (?:this|the|it)(?: claim| finding| issue)?"
+              + " (?:at|to) the (\\p{L}{6,10}) ");
+
+  /**
+   * The verbs and qualifiers a rating clause uses ("I am <verb> this claim at the <qualifier>").
+   */
+  private static final Set<String> RATING_VERBS =
+      Set.of(
+          "rate", "rated", "rating", "keep", "keeping", "kept", "hold", "holding", "held", "cap",
+          "capped", "capping");
+
+  private static final Set<String> RATING_QUALIFIERS =
+      Set.of("required", "prescribed", "mandated", "permitted", "allowed", "maximum", "capped");
 
   /**
    * The note the review call's withheld-file list puts after an ignored path (#975), quoted as if
@@ -282,7 +291,7 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern PROVIDED_WITH_REVIEW_OPENING =
       Pattern.compile(
-          "(?m)(^[ \\t]*|[.!?][ \\t]+)As (?:provided|supplied|given) (?:with|to|for) this"
+          "(?<![^.!?\\n])([ \\t]*)As (?:provided|supplied|given) (?:with|to|for) this"
               + " review\\b,?[ \\t]*"
               + "(\\p{Ll})?");
 
@@ -563,19 +572,58 @@ public final class PromptLabelScrubber {
    * whole sentence goes with the blanks after it. Anywhere else the sentence leans on it, and it
    * stays.
    */
+  /**
+   * Where the rating clause {@code m} found ends, or -1 when it is not one: the verb and qualifier
+   * must be a rating's, and "confidence" must follow within 80 characters of the same sentence. The
+   * clause ends at the sentence's end, a comma or a semicolon, at most 200 characters on.
+   */
+  private static int ratingClauseEnd(String text, Matcher m) {
+    if (!RATING_VERBS.contains(m.group(1).toLowerCase(Locale.ROOT))
+        || !RATING_QUALIFIERS.contains(m.group(2).toLowerCase(Locale.ROOT))) {
+      return -1;
+    }
+    int word = text.indexOf("confidence", m.end());
+    if (word < 0 || word - m.end() > 80 || hasStop(text, m.end(), word, ".!?\n")) {
+      return -1;
+    }
+    int end = word + "confidence".length();
+    if (end < text.length() && Character.isLetterOrDigit(text.charAt(end))) {
+      return -1;
+    }
+    int limit = Math.min(text.length(), end + 200);
+    while (end < limit && ".!?\n,;".indexOf(text.charAt(end)) < 0) {
+      end++;
+    }
+    return end;
+  }
+
+  /** Whether {@code text} holds one of {@code stops} between {@code from} and {@code to}. */
+  private static boolean hasStop(String text, int from, int to, String stops) {
+    for (int i = from; i < to; i++) {
+      if (stops.indexOf(text.charAt(i)) >= 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private static String removeSelfRatedConfidence(String text) {
     var m = SELF_RATED_CONFIDENCE.matcher(text);
     var out = new StringBuilder(text.length());
     int at = 0;
     while (m.find()) {
+      int clauseEnd = ratingClauseEnd(text, m);
+      if (clauseEnd < 0) {
+        continue;
+      }
       int blank = skipBlanksBack(text, m.start(), at);
       if (blank > at && hangsFromSeparator(text, blank, m.start(), at)) {
         out.append(text, at, skipBlanksBack(text, blank - 1, at));
-        at = m.end();
+        at = clauseEnd;
       } else if (opensSentence(text, m.start(), at)
-          && (m.end() == text.length() || ",;".indexOf(text.charAt(m.end())) < 0)) {
+          && (clauseEnd == text.length() || ",;".indexOf(text.charAt(clauseEnd)) < 0)) {
         // A rating sentence that goes on past a comma carries more than the narration: it stays.
-        int end = m.end();
+        int end = clauseEnd;
         if (end < text.length() && ".!?".indexOf(text.charAt(end)) >= 0) {
           end++;
         }
