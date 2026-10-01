@@ -55,19 +55,23 @@ same diff.
 |---|---|
 | Dispatch, per-PR serialization, coalescing | `review/ReviewDispatcher` |
 | Top-level run: check run, context, plan, pipeline, verdict, publish, head-moved abort | `review/ReviewOrchestrator` |
-| Load diff, prior reviews/findings, instructions, labels, project stack, config-key and patch-coverage context | `review/ReviewContextLoader` (with `PatchCoverageResolver`, `ConfigKeyContextResolver`, `BugFixContextResolver`) |
+| Load diff, every earlier round (from the stored `ReviewSession.aiResponseJson`), threads and conversation, instructions, labels, project stack, config-key and patch-coverage context | `review/ReviewContextLoader` (with `PatchCoverageResolver`, `ConfigKeyContextResolver`, `BugFixContextResolver`, `SupersededFindingsCarryover`) |
+| Previous-findings prompt section: the numbered effective round, then the unnumbered "still open from earlier rounds" and "answered in earlier rounds" sections | `review/FollowUpAnalyzer.buildPreviousFindingsContext` (with `effectivePreviousRoundIndex`, `openEarlierRoundFindings`) |
 | Early CI reading and the opt-in CI-failure section | `review/CiStatusEvaluator`, `review/CiFailureContextResolver` |
 | Opt-in review learnings: recall before the call (ranked, capped section) | `review/ReviewLearnings.promptSection` (reads `ReviewLearningService.listActive`) |
 | Opt-in linked-issue context: resolve the PR's linked issues, read them, extract acceptance criteria, sanitize and cap | `review/TicketContextResolver.resolve` over an `review/IssueTrackerProvider` (`review/GitHubIssuesProvider.linkedTickets`: PR-body closing keywords, then `closingIssuesReferences`, then optionally the branch name), called from `ReviewOrchestrator` and handed to `ReviewPromptAssembler.assemble(ctx, req, ciFailures, linkedIssues)` |
 | Fence untrusted input, build review and summary guidance, pick the system prompt | `review/ReviewPromptAssembler` (with `PromptSections`, `PromptTemplateEscaper`, `ReviewDimensionRouter`) |
 | Token budget and batches | `review/DiffBudgetPlanner` (`plan`, `boundPreviousFindings`, `perCallInputBudget`) |
 | Model calls: single call, batches, retries, sequential retry, truncation salvage, summary call | `review/FindingPipeline.run` → `review/ai/AiReviewService` (`review`, `reviewBatch`, `summarize`) |
-| Post-model chain, in order: evidence, quote validation, framework filter, dedupe, rejection memory, verifier, severity calibration, replied-duplicate and litigated drops, anchors | `review/FindingPipeline.refine` (single call) and the per-batch path in the same class |
+| Post-model chain, single call, in order: evidence, quote validation, framework filter, dedupe, rejection memory, verifier, severity calibration, replied-duplicate and litigated drops, anchors | `review/FindingPipeline.refine` |
+| Post-model chain, multi call: per batch evidence, quote validation, framework filter, rejection memory, verifier (`refineBatchOutcome`); after all batches status merge, dedupe, replied-duplicate and litigated drops, anchors. No severity calibration on this lane | `review/FindingPipeline.runMultiCall` |
 | Verifier | `review/ai/FindingVerificationService`, evidence from `review/ContextEvidenceResolver` and `review/CitedLocationResolver` |
-| Opt-in deterministic security scan (secrets, risky IaC): merged after the post-model chain, before the summary call, on every lane including the one with no review call | `review/SecurityScan.merge` (rules in `SecurityRule`, detection in `SecretScanner` and `IacScanner` over `PatchLines`), called from `FindingPipeline.runWithLedger`, `runMultiCall` and `summarizeWithoutReview` |
-| Verdict and check-run text | `review/VerdictBuilder` |
+| Last steps on every lane, including the one with no review call: the opt-in deterministic security scan (secrets, risky IaC), then the open-thread duplicate guard (#939) | `review/FindingPipeline.finish` → `review/SecurityScan.merge` (rules in `SecurityRule`, detection in `SecretScanner` and `IacScanner` over `PatchLines`) → `FollowUpAnalyzer.withoutOpenThreadDuplicates` |
+| Summary call, carried description gaps, reused overview, prompt-label scrub, persistence | `review/FindingPipeline.withSummary` (with `DescriptionGapCarryover`, `PriorOverviewCarryover`, `PromptLabelScrubber`), `persistWithSummary` |
+| Follow-up status reconciliation, in order: supersede, decline re-check, conversation clears, phantom ids, double-check replacement, approval backstop, still-open set | `review/VerdictBuilder.build` over `FollowUpAnalyzer` (`supersedeVanished`, `recheckDeclines`, `clearNamedInConversation`, `withoutPhantomUnresolved`, `replacedPriors`, `heldPreviousFindings`, `stillOpenFindings`) |
+| Verdict and check-run text | `review/VerdictBuilder.buildResult` |
 | Post review, inline comments, thread resolution | `review/ReviewPublisher`, `review/CheckRunManager` |
-| Summary comment | `review/PrSummaryGenerator` |
+| Summary comment: render over the round plus the still-open set, edit in place by marker | `review/PrSummaryGenerator` (`currentState`), `review/ReviewPublisher.publishSummary` / `upsertSummaryComment` |
 | CI hold and revisit | `review/CiHoldRegistry`, `review/CiHoldRevisit` |
 | Opt-in review learnings: capture after the post, from the round's final statuses | `review/ReviewLearnings.captureSurvivingDeclines` → `review/FollowUpAnalyzer.survivingDeclines` → `review/ReviewLearningService.save` |
 | `/learnings`, `/remember`, `/forget` | `webhook/LearningCommands` (routed by `CommentCommandService`) |
@@ -95,12 +99,17 @@ same diff.
 - **The review call returns findings and `previous_findings_status` only**
   (`PrReviewPrompts.FINDINGS_RESPONSE_CONTRACT`). Every lane ends with the summary call
   (`AiReviewService.summarize` → `PrSummarizer`, on the `concise` model), which writes every
-  summary field from the verified findings. Do not add summary fields back to the review contract.
+  summary field from the verified findings. The call is skipped only at the call cap or the spend
+  ceiling, and a failed, cut or skipped call leaves a counts-only summary that says so
+  (`SummaryDegradation`). Do not add summary fields back to the review contract.
 - **Response extraction anchors on the answer's tail.** `ReviewResponseParser.extractJson(raw,
   rootKeys)` picks the earliest root-keyed object from which the rest of the body reads as JSON
   documents to the end, and its probing is bounded by a small multiple of the body length. Keep
   that bound when you touch it. `TruncatedResponseSalvager` keeps complete elements from a cut
-  body.
+  body. A top-level array whose every element is finding-shaped (`isFindingArray`) is read as that
+  answer's `findings` and merged with the other documents, so a later empty object cannot discard
+  it (#960, `ReviewResponseParserFindingArrayTest`). Any other array, and a lone `[]`, is still
+  refused.
 - **Length stops.** A length stop with content is not retried: the identical call would be cut
   identically (#495). The response is salvaged or disclosed. A length stop with no content (the
   reasoning spent the cap) is repeated once with reasoning off (#839, `ReasoningStepDownStreamingModel`).
@@ -113,13 +122,71 @@ same diff.
   candidates. `FindingVerificationService.markUnscreened` caps them at medium confidence and
   appends the unverified note (#885), and `VerificationCoverage` discloses the round's coverage. Do
   not make a verifier failure drop findings or block a review.
-- **Deterministic scan findings skip the verifier and calibrator.** `SecurityScan.merge` runs
-  after `FindingVerificationService.verify` and `SeverityCalibrator.calibrate`, so no model grades
-  a pattern match, and `markUnscreened` and `VerificationCoverage` never see one. The grade comes
-  from `SecurityRule`. Keep new deterministic findings on that side of the verifier.
+- **Deterministic scan findings skip the verifier and calibrator.** `SecurityScan.merge` runs in
+  `FindingPipeline.finish`, after every verifier call and (on the single-call lane) after
+  `SeverityCalibrator.calibrate`, so no model grades a pattern match, and `markUnscreened` and
+  `VerificationCoverage` never see one. The grade comes from `SecurityRule`. Keep new
+  deterministic findings on that side of the verifier.
+- **`finish` is the one place every lane converges.** The single call, a salvaged cut, the
+  batches and the summary-only lane all pass through `FindingPipeline.finish` before the summary
+  call and persistence. A filter that must hold for every published finding (the scan merge, the
+  open-thread guard) goes there, not in `refine` or the batch path.
 - **AI services are stateless.** Every `@RegisterAiService` sets
   `NoChatMemoryProviderSupplier`. Review state travels in the previous-findings section, never in
   chat history.
+
+## Follow-up round invariants
+
+Earlier rounds are read from the stored responses (`ReviewSession.aiResponseJson`), never from the
+text of the bot's reviews. Finding ids are positions in the effective round, the newest earlier
+round that raised findings (`FollowUpAnalyzer.effectivePreviousRoundIndex`, #455); the same number
+is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
+`OpenThreadDuplicateGuardTest` drive most of the rules below through several rounds.
+
+- **A finding still open on its own thread is never posted again, from any round** (#939).
+  `buildPreviousFindingsContext` lists the older rounds' open findings in an unnumbered section the
+  model must not report on, and `FollowUpAnalyzer.withoutOpenThreadDuplicates` drops a restatement
+  that gets through anyway, in `FindingPipeline.finish` so every lane and retry is covered.
+  `SecurityScan.merge` applies the same rule to scan detections.
+- **The still-open set is one entry per open finding, by identity** (#917, #934).
+  `FollowUpAnalyzer.stillOpenFindings` is the distinct in-range `unresolved` ids plus the backstop's
+  holds; the two cannot overlap because the backstop skips ids the round reported. The summary's
+  counts and lists, the "Still present" count and the verdict all read this one set.
+  `PrSummaryGenerator.currentState` folds a carried finding into a new one only on an exact
+  re-raise (`reRaises`: same file, line and title). Do not fold by similarity.
+- **The verdict is computed over the round's findings plus the still-open set** (#948).
+  `VerdictBuilder.buildResult` passes both to `ReviewState.fromFindings`, so a backstop hold can
+  request changes, not only downgrade an approval
+  (`SummaryAcrossRoundsTest.anEarlierCriticalStillOpenRequestsChangesWhenTheNewFindingsAreLow`).
+- **No "no issues" wording while anything is open** (#933). Every surface reads
+  `ReviewResult.unresolvedPreviousCount()`; `ReviewPublisher.noIssuesBody` leads with the
+  unresolved-previous message and `LargePrNudge` stays silent.
+- **A decline is weighed, on every round it applies to** (#169, #947). One write-access reply whose
+  premise the reviewed code contradicts reopens the finding (`recheckDeclines`); a second reply
+  always stands. A decline on an older round's finding goes through the same test in the backstop
+  (`backstopEntry`, `reopenedEarlierDecline`): held `unresolved` when contradicted or resting on
+  an unconfirmed premise, otherwise `justified` with `EARLIER_ROUND_ID` (0). Id 0 maps to no
+  finding, so it resolves no thread and never becomes a learning.
+- **A "Things to double-check" item is counted once and replaced only by the same defect** (#951,
+  #961). A listed-only repeat at no higher severity is dropped by the open-thread guard
+  (`restatesListed`); a finding at the same or higher severity replaces the item
+  (`replacedPriors`, `withoutReplaced`). Both go through `DefectIdentity.sameDefect`: same file,
+  then the same title, a similar title within three lines, or the same line with two shared title
+  words or a common identifier, and never two titles naming different identifiers
+  (`namesDifferentIdentifiers`). Content overlap alone is not identity (`DefectIdentityTest`).
+- **A declined scan finding stays settled while its content is unchanged** (#982). The scan reads
+  no learning and is not model output, so it needs its own memory:
+  `FollowUpAnalyzer.justifiedPriorFindings` hands every persisted `justified` scan finding to
+  `SecurityScan.merge`, which does not raise a detection with the same file, title, anchor and, for
+  a secret, the same `<!-- thrillhousebot:scan-content=… -->` fingerprint (8 hex digits of a
+  SHA-256 over the rule and the stripped line). Each decline covers one detection
+  (`DeclinedScanFindingAcrossRoundsTest`).
+- **The summary comment is found by its marker every round** (`<!-- thrillhousebot:summary -->`,
+  or the heading for summaries from before #868), never by an id held in memory, so a restart
+  loses nothing. An unchanged body is not rewritten; a failed edit posts a new comment.
+- **A run whose head moved stands down before its first write** (#704, #806) and hands its
+  verified findings to the next run through `SupersededFindingsCarryover`, so two runs never edit
+  the summary at once and nothing is posted against a diff that changed.
 
 ## Prompts
 
@@ -260,10 +327,12 @@ live `fence(...)` (#604).
 - **A detected secret is never echoed.** Only `SecretScanner.redact` output (first characters and
   length) goes into a scan finding's title and description, and a secret finding has no
   `suggestion_old`, because the anchor is persisted with the session and shown on the dashboard.
-  `SecurityScan.Scrubber` replaces every verbatim occurrence of a matched value in the same response's model findings,
-  status notes and summary before it is persisted, posted or handed to the summary call.
-  `SecurityScan` logs counts only. Never log, persist or post `SecretScanner.Hit.literal()`, and
-  keep test credentials generated at run time (`FakeCredentials`), never as literals.
+  `SecurityScan.Scrubber` replaces every verbatim occurrence of a matched value in the same
+  response's model findings, status notes and summary before it is persisted, posted or handed to
+  the summary call. `SecurityScan` logs counts only. The cross-round `scan-content` marker (#982)
+  holds 8 hex digits of a SHA-256 over the rule and the line, never the line itself. Never log,
+  persist or post `SecretScanner.Hit.literal()`, and keep test credentials generated at run time
+  (`FakeCredentials`), never as literals.
 
 ## Native image
 
@@ -297,8 +366,11 @@ No migration tool. Prod runs Hibernate `schema-management.strategy=update`, and 
 `drop-and-create` (`application.properties`). Adding an entity column is picked up
 automatically. A rename or drop is not, so it needs a deliberate plan.
 
-Entities: `ReviewSession` (dashboard), `PausedPr` (webhook), `FindingFeedback` (review, 👍/👎
-signals) and `ReviewLearning` (review, table `review_learning`, #38). A learning is never deleted
+Entities: `ReviewSession` (dashboard), `PausedPr` (webhook), `FindingFeedback` (review, table
+`finding_feedback`, 👍/👎 signals) and `ReviewLearning` (review, table `review_learning`, #38).
+`ReviewSession.aiResponseJson` is more than a dashboard field: it is the record every follow-up
+round reads its earlier findings and statuses from, so a change to the stored `ReviewResponse`
+shape must still parse the rows already stored. A learning is never deleted
 by the bot: `ReviewLearningService.retract` clears `active` and records who and when, and
 `dedupKey` makes a re-reported decline or a redelivered `/remember` idempotent.
 
@@ -315,6 +387,12 @@ by the bot: `ReviewLearningService.retract` clears `active` and records who and 
 | Budgeting from a live random fence | Its token width varies, so plans were not reproducible and tests flaked (#604). |
 | Dropping findings when the verifier fails | Loses the reviewer's work to an outage. Keep them, marked unverified and capped at medium (#623, #885). |
 | Putting deterministic scan findings through the verifier | The verifier sees the same diff the pattern read, so it can only demote or drop a certain match, and a fail-open round would mark it unverified (#60). |
+| Showing a follow-up only the effective round's findings | Once a round raised anything new, the older rounds' open findings were no longer listed, and the next `/review` posted most of them again beside their open threads (#939). |
+| Folding carried findings that read alike into one summary entry | An open HIGH or CRITICAL dropped out of the counts and Key Findings while "Still present" still counted it, and the survivor could be the lower severity (#934). Carry by identity. |
+| Computing the verdict from the round's new findings and the model's `unresolved` ids | Findings only the backstop held could downgrade an approval but never request changes, so a round listing an open CRITICAL ended as COMMENT (#948). |
+| Letting any maintainer reply settle an older round's finding | The model reports only on the effective round, so a wrong "cannot run concurrently" reply on an older finding removed it with no re-check (#947). |
+| Matching double-check items by proximity and shared wording | A finding about one config key replaced the open item about the key on the next row (#961). `DefectIdentity` requires an anchored match and vetoes different identifiers. |
+| Relying on learnings or the model to keep a declined scan finding settled | The scan reads neither, so the decline lasted one round and the next round requested changes on the same head (#982). |
 | A call-graph taint pass in `LogSafeInvariantTest` | Measured: 31 extra reports, sampled ones were name collisions with impossible fixes (#764). |
 
 ## CHANGELOG and docs
