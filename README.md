@@ -733,7 +733,8 @@ for a secret the same line content. A secret finding's text ends with a hidden
 `thrillhousebot:scan-content` marker, the first eight hex digits of a SHA-256 of
 the flagged line (for a private key, its block), which is how a later round
 tells a new value with the same prefix and length from the declined one; a new
-value, or any other change to the line, is raised again. A secret finding declined
+value, or any other change to the line's text (leading and trailing whitespace
+aside), is raised again. A secret finding declined
 before the marker existed has no fingerprint, so its decline holds only while
 the head is the one the previous round reviewed; after a push it is raised once
 more, with the marker. Under the default
