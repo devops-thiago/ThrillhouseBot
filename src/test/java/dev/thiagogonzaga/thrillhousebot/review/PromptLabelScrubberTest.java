@@ -594,6 +594,42 @@ class PromptLabelScrubberTest {
                 + " confidence until that log names the test."));
   }
 
+  @Test
+  void hyphenJoinedToAWordOrOpeningTheTextIsNotASeparator() {
+    // Joined to the word before it, the hyphen is part of that word; the clause stays.
+    var joined =
+        "It fails x-I am rating this claim at the required arithmetic-claim confidence until the"
+            + " log names it.";
+    assertEquals(joined, PromptLabelScrubber.scrub(joined));
+    // A trailing hyphen on a word ("re- I am…") is that word's, so the clause is not detached at
+    // it.
+    var trailing =
+        "It fails on re- I am rating this claim at the required arithmetic-claim confidence.";
+    assertEquals(trailing, PromptLabelScrubber.scrub(trailing));
+    // A hyphen opening the text is a list marker, not a separator: the marker stays and only the
+    // rating sentence after it goes.
+    assertEquals(
+        "-",
+        PromptLabelScrubber.scrub(
+                "- I am rating this claim at the required arithmetic-claim confidence.")
+            .strip());
+  }
+
+  @Test
+  void providedWithThisReviewIsRemovedAtALineStartAndAcrossAWrap() {
+    assertEquals(
+        "The quote above is from issue #117.",
+        PromptLabelScrubber.scrub(
+            "The quote above is from issue #117\nas provided with this review."));
+    assertEquals(
+        "Findings follow.\nThe criterion is unmet.",
+        PromptLabelScrubber.scrub(
+            "Findings follow.\nAs provided with this review, the criterion is unmet."));
+    assertEquals(
+        "The criterion is unmet.",
+        PromptLabelScrubber.scrub("As provided with this review the criterion is unmet."));
+  }
+
   // #975, ThrillhouseBot-test#207 round-3 inline 4152219435.
   static final String IGNORE_LIST_LEAK =
       "The repository does contain a rust/Cargo.lock — the changed-files list for this PR names"
