@@ -183,6 +183,10 @@ final class SummarySurfaceDeduplicator {
     // reduces it to a claim with no words, which matches nothing.
     var candidateClaim = claim(candidate.title());
     for (Finding finding : published) {
+      // #961: a bullet about one config key is never "the same issue as" a finding about another.
+      if (DefectIdentity.namesDifferentIdentifiers(candidate.title(), finding.title())) {
+        continue;
+      }
       var claims =
           sameLocation(candidate, finding) ? claimsOf(finding) : List.of(claim(finding.title()));
       if (restates(candidateClaim, claims)) {

@@ -2854,14 +2854,19 @@ public class FollowUpAnalyzer {
    * because folding a distinct finding there removes an open one from the list (#934); here the
    * direction that loses something is dropping a finding that says more than the open thread does,
    * and an escalation — a critical whose text overlaps an open low — is the case where a
-   * restatement may be a distinct, worse defect. That one is posted.
+   * restatement may be a distinct, worse defect. That one is posted. So is a restatement whose
+   * title names other identifiers than the prior's ({@link
+   * DefectIdentity#namesDifferentIdentifiers} — a different config key on the next row of the same
+   * table, #961): it is a different defect however much the two descriptions share.
    */
   static boolean duplicatesOpenThread(
       ReviewResponse.Finding finding, ReviewResponse.Finding prior) {
     var raised = Finding.fromAiResponse(finding);
     var earlier = Finding.fromAiResponse(prior);
     return PrSummaryGenerator.reRaises(raised, earlier)
-        || (isSameFinding(finding, prior) && raised.risk().compareTo(earlier.risk()) >= 0);
+        || (isSameFinding(finding, prior)
+            && raised.risk().compareTo(earlier.risk()) >= 0
+            && !DefectIdentity.namesDifferentIdentifiers(finding.title(), prior.title()));
   }
 
   /**
@@ -2886,10 +2891,10 @@ public class FollowUpAnalyzer {
    *
    * <p>A prior "Things to double-check" item ({@link #isListedOnly}) has no thread but is still
    * open on the summary, so restating it there again counts one defect twice (#951). A new finding
-   * that would itself be listed there and {@link #duplicatesOpenThread duplicates} such a prior is
-   * dropped the same way. One that would post inline is kept: a re-raise is the only way such a
-   * finding can get a thread, and the prior copy it restates at no lower severity leaves the open
-   * set instead ({@link #replacedPriors}).
+   * that would itself be listed there and {@link #restatesListed restates} such a prior is dropped
+   * the same way. One that would post inline is kept: a re-raise is the only way such a finding can
+   * get a thread, and the prior copy it restates at no lower severity leaves the open set instead
+   * ({@link #replacedPriors}).
    *
    * @param priorAiResponses every completed prior round's parsed response, newest first
    */
@@ -2923,8 +2928,11 @@ public class FollowUpAnalyzer {
     var kept = new ArrayList<ReviewResponse.Finding>();
     for (var finding : response.findings()) {
       var duplicateOf =
-          Stream.concat(threaded.stream(), isListedOnly(finding) ? listed.stream() : Stream.empty())
-              .filter(prior -> duplicatesOpenThread(finding, prior))
+          Stream.concat(
+                  threaded.stream().filter(prior -> duplicatesOpenThread(finding, prior)),
+                  isListedOnly(finding)
+                      ? listed.stream().filter(prior -> restatesListed(finding, prior))
+                      : Stream.empty())
               .findFirst();
       if (duplicateOf.isEmpty()) {
         kept.add(finding);
@@ -3013,16 +3021,32 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * Whether {@code finding} replaces {@code prior}, an earlier double-check item (#951): it
-   * restates it — the summary's exact identity ({@link PrSummaryGenerator#reRaises}) or the
-   * tolerant {@link #isSameFinding} — at no lower severity. A less severe restatement does not
-   * replace it: the prior says more, and it stays listed.
+   * Whether {@code finding} replaces {@code prior}, an earlier double-check item (#951): it is the
+   * same defect ({@link DefectIdentity#sameDefect}) at no lower severity. A less severe restatement
+   * does not replace it: the prior says more, and it stays listed.
+   *
+   * <p>Not {@link #isSameFinding}: its content-overlap arm has no line bound and reads two rows of
+   * one config table as one defect, so a finding about one key replaced the still-open item about
+   * the next (#961). Replacement removes the prior from the counts even when the model reports it
+   * {@code unresolved} this round, so it takes the anchored identity alone.
    */
   static boolean replacesUnthreaded(ReviewResponse.Finding finding, ReviewResponse.Finding prior) {
-    var raised = Finding.fromAiResponse(finding);
-    var earlier = Finding.fromAiResponse(prior);
-    return (PrSummaryGenerator.reRaises(raised, earlier) || isSameFinding(finding, prior))
-        && raised.risk().compareTo(earlier.risk()) <= 0;
+    return DefectIdentity.sameDefect(finding, prior)
+        && Finding.fromAiResponse(finding).risk().compareTo(Finding.fromAiResponse(prior).risk())
+            <= 0;
+  }
+
+  /**
+   * Whether {@code finding}, a new double-check item, restates {@code prior}, an open one, at no
+   * higher severity, so listing it again would count one defect twice (#951). Identity is the one
+   * replacement uses ({@link DefectIdentity#sameDefect}, #961): an item about a different key on a
+   * nearby row is a new item, not a second copy.
+   */
+  private static boolean restatesListed(
+      ReviewResponse.Finding finding, ReviewResponse.Finding prior) {
+    return DefectIdentity.sameDefect(finding, prior)
+        && Finding.fromAiResponse(finding).risk().compareTo(Finding.fromAiResponse(prior).risk())
+            >= 0;
   }
 
   /**
