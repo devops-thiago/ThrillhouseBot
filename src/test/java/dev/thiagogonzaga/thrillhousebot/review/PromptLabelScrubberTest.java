@@ -633,10 +633,28 @@ class PromptLabelScrubberTest {
         "The suite fails. The criterion is unmet.",
         PromptLabelScrubber.scrub(
             "The suite fails. As provided with this review, the criterion is unmet."));
+    // As a parenthetical, the note goes whole.
+    assertEquals(
+        "The quote above says the parser must reject it.",
+        PromptLabelScrubber.scrub(
+            "The quote above (as provided with this review) says the parser must reject it."));
     // Already capitalized after the note: nothing to change but the note itself.
     assertEquals(
         "README.md is renamed.",
         PromptLabelScrubber.scrub("As provided with this review, README.md is renamed."));
+  }
+
+  @Test
+  void confidenceRuleClauseKeepsWhatFollowsItsComma() {
+    assertEquals(
+        "The suite will confirm, so check the logs for the failure.",
+        PromptLabelScrubber.scrub(
+            "The suite will confirm; I am rating this claim at the required confidence, so check"
+                + " the logs for the failure."));
+    // Opening a sentence that goes on past a comma, the narration carries more and stays.
+    var goesOn =
+        "I am rating this claim at the required confidence, so check the logs for the failure.";
+    assertEquals(goesOn, PromptLabelScrubber.scrub(goesOn));
   }
 
   // #975, ThrillhouseBot-test#207 round-3 inline 4152219435.

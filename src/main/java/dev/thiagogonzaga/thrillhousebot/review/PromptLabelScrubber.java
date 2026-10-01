@@ -242,7 +242,7 @@ public final class PromptLabelScrubber {
           "\\bI(?: am|'m|’m| have|'ve|’ve)? (?:rat(?:e|ed|ing)|keep(?:ing)?|kept|hold(?:ing)?|held"
               + "|cap(?:ped|ping)?) (?:this|the|it)(?: claim| finding| issue)? (?:at|to) the"
               + " (?:required|prescribed|mandated|permitted|allowed|maximum|capped)"
-              + " [^.!?\\n]{0,80}?confidence\\b[^.!?\\n]{0,200}");
+              + " [^.!?\\n]{0,80}?confidence\\b[^.!?\\n,;]{0,200}");
 
   /**
    * The note the review call's withheld-file list puts after an ignored path (#975), quoted as if
@@ -262,6 +262,12 @@ public final class PromptLabelScrubber {
   private static final Pattern CONFIG_KEY_DEFINITION_FOR =
       Pattern.compile(
           "(?<![\\w-])config(?:uration)?[- ]keys? (definitions?) (?:for|of)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /** "(as provided with this review)": the same note as a parenthetical, which goes whole. */
+  private static final Pattern PROVIDED_WITH_REVIEW_PARENTHETICAL =
+      Pattern.compile(
+          "[ \\t]*\\((?:as )?(?:provided|supplied|given) (?:with|to|for) this review\\)",
           Pattern.CASE_INSENSITIVE);
 
   /** "from issue #117 as provided with this review": a note on the model's input (#975). */
@@ -507,6 +513,7 @@ public final class PromptLabelScrubber {
     s = SUPPLIED_FROM.matcher(s).replaceAll("(in ");
     // "the criterion, as supplied to this review, says" loses both commas; one comma alone stays
     // only when it closes the clause the note ended.
+    s = PROVIDED_WITH_REVIEW_PARENTHETICAL.matcher(s).replaceAll("");
     s =
         PROVIDED_WITH_REVIEW_OPENING
             .matcher(s)
@@ -565,7 +572,9 @@ public final class PromptLabelScrubber {
       if (blank > at && hangsFromSeparator(text, blank, m.start(), at)) {
         out.append(text, at, skipBlanksBack(text, blank - 1, at));
         at = m.end();
-      } else if (opensSentence(text, m.start(), at)) {
+      } else if (opensSentence(text, m.start(), at)
+          && (m.end() == text.length() || ",;".indexOf(text.charAt(m.end())) < 0)) {
+        // A rating sentence that goes on past a comma carries more than the narration: it stays.
         int end = m.end();
         if (end < text.length() && ".!?".indexOf(text.charAt(end)) >= 0) {
           end++;
