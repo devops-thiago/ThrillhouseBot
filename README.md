@@ -1084,6 +1084,14 @@ access-denied screen. The owner is read from the app registration; set
 `thrillhousebot.dashboard.github.account-owner` when that fails, because the
 dashboard otherwise denies everyone.
 
+Everything the dashboard shows is scoped per repository. The owner sees every
+repository where the app is installed; any other login sees only the installed
+repositories they collaborate on. This covers the session list and its totals,
+session details, costs, tokens, the overview, feedback, learnings and the live
+feed. A `?repository=` you cannot access returns 403, and a session id from such
+a repository returns 404. The overview's installation-wide skip counts are shown
+to the owner only.
+
 A review cut off by a restart or crash would stay marked as running, so on
 startup every session still in progress is marked failed with the reason
 "Review interrupted before it finished (bot restart or crash)". The tokens and
