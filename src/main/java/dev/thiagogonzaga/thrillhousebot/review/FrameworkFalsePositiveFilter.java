@@ -141,12 +141,11 @@ public class FrameworkFalsePositiveFilter {
    */
   private static boolean hasInjectedConstructor(
       List<FindingQuoteValidator.DiffLine> diffLines, String className) {
-    var keptLines = new ArrayList<String>();
-    for (var line : diffLines) {
-      if (line.marker() != '-') {
-        keptLines.add(line.normalizedText());
-      }
-    }
+    var keptLines =
+        diffLines.stream()
+            .filter(line -> line.marker() != '-')
+            .map(FindingQuoteValidator.DiffLine::normalizedText)
+            .toList();
     Pattern constructorDecl = Pattern.compile("(?<![\\w.])" + Pattern.quote(className) + "\\s*\\(");
     for (int i = 0; i < keptLines.size(); i++) {
       if (INJECT_ANNOTATION.matcher(keptLines.get(i)).find()

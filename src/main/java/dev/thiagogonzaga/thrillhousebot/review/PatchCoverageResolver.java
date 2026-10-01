@@ -29,6 +29,7 @@ import java.util.Locale;
 import java.util.NavigableSet;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.stream.Collectors;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
@@ -317,12 +318,10 @@ public class PatchCoverageResolver {
       if (reportedUncovered == null) {
         continue;
       }
-      var uncoveredAdditions = new TreeSet<Integer>();
-      for (var added : addedLines(file.patch())) {
-        if (reportedUncovered.contains(added)) {
-          uncoveredAdditions.add(added);
-        }
-      }
+      var uncoveredAdditions =
+          addedLines(file.patch()).stream()
+              .filter(reportedUncovered::contains)
+              .collect(Collectors.toCollection(TreeSet::new));
       if (!uncoveredAdditions.isEmpty()) {
         result.add(new UncoveredFile(file.filename(), uncoveredAdditions));
       }

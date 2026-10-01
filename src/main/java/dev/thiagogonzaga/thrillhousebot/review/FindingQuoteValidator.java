@@ -26,6 +26,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Deterministic guard against findings that quote code which is not in the diff. The model
@@ -454,13 +455,7 @@ public class FindingQuoteValidator {
 
   /** Diff lines keeping every marker except {@code excluded}, preserving order. */
   private static List<DiffLine> linesExcludingMarker(List<DiffLine> diffLines, char excluded) {
-    var filtered = new ArrayList<DiffLine>();
-    for (DiffLine dl : diffLines) {
-      if (dl.marker() != excluded) {
-        filtered.add(dl);
-      }
-    }
-    return filtered;
+    return diffLines.stream().filter(dl -> dl.marker() != excluded).toList();
   }
 
   /**
@@ -612,11 +607,9 @@ public class FindingQuoteValidator {
   }
 
   private static Set<String> textSet(List<DiffLine> lines) {
-    var set = new HashSet<String>();
-    for (var dl : lines) {
-      set.add(dl.normalizedText());
-    }
-    return set;
+    return lines.stream()
+        .map(DiffLine::normalizedText)
+        .collect(Collectors.toCollection(HashSet::new));
   }
 
   /**

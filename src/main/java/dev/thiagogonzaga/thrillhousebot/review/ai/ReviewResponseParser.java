@@ -661,11 +661,11 @@ public class ReviewResponseParser {
     if (claim != null && claim.isTextual()) {
       parts.add(claim.asText());
     }
-    for (var entry : gap.properties()) {
-      if (entry.getValue().isTextual() && !"claim".equals(entry.getKey())) {
-        parts.add(entry.getValue().asText());
-      }
-    }
+    parts.addAll(
+        gap.properties().stream()
+            .filter(entry -> entry.getValue().isTextual() && !"claim".equals(entry.getKey()))
+            .map(entry -> entry.getValue().asText())
+            .toList());
     return parts.isEmpty() ? gap.toString() : String.join(": ", parts);
   }
 

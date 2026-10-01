@@ -894,13 +894,15 @@ public class FollowUpAnalyzer {
    * tolerance, so collapsing across the list and collapsing within one anchor give the same groups.
    */
   private static List<ReviewResponse.Finding> distinct(List<ReviewResponse.Finding> dispositioned) {
-    var distinct = new ArrayList<ReviewResponse.Finding>(dispositioned.size());
-    for (var prior : dispositioned) {
-      if (distinct.stream().noneMatch(seen -> isSameFinding(prior, seen))) {
-        distinct.add(prior);
-      }
-    }
-    return distinct;
+    return dispositioned.stream()
+        .collect(
+            () -> new ArrayList<ReviewResponse.Finding>(dispositioned.size()),
+            (distinct, prior) -> {
+              if (distinct.stream().noneMatch(seen -> isSameFinding(prior, seen))) {
+                distinct.add(prior);
+              }
+            },
+            ArrayList::addAll);
   }
 
   /** Whether two findings sit at the same location, within the drift a revision may introduce. */
@@ -1497,13 +1499,10 @@ public class FollowUpAnalyzer {
       return List.of();
     }
     String locator = finding.file() + ":" + finding.line();
-    var reasons = new ArrayList<String>();
-    for (var decline : directives) {
-      if (namesFinding(decline.naming(), locator, anchor)) {
-        reasons.add(decline.reason());
-      }
-    }
-    return reasons;
+    return directives.stream()
+        .filter(decline -> namesFinding(decline.naming(), locator, anchor))
+        .map(ConversationDecline::reason)
+        .toList();
   }
 
   /**
@@ -1820,19 +1819,16 @@ public class FollowUpAnalyzer {
     if (previous == null || previous.isEmpty()) {
       return List.of();
     }
-    var unresolvedIds = new HashSet<Integer>();
-    for (var status : statuses) {
-      if (STATUS_UNRESOLVED.equalsIgnoreCase(status.status())) {
-        unresolvedIds.add(status.id());
-      }
-    }
-    var unresolved = new ArrayList<Finding>();
-    for (int id : unresolvedIds) {
-      if (id >= 1 && id <= previous.size()) {
-        unresolved.add(Finding.fromAiResponse(previous.get(id - 1)));
-      }
-    }
-    return unresolved;
+    var unresolvedIds =
+        statuses.stream()
+            .filter(status -> STATUS_UNRESOLVED.equalsIgnoreCase(status.status()))
+            .map(ReviewResponse.PreviousFindingStatus::id)
+            .collect(Collectors.toCollection(HashSet::new));
+    return unresolvedIds.stream()
+        .mapToInt(Integer::intValue)
+        .filter(id -> id >= 1 && id <= previous.size())
+        .mapToObj(id -> Finding.fromAiResponse(previous.get(id - 1)))
+        .toList();
   }
 
   /**
@@ -1934,10 +1930,10 @@ public class FollowUpAnalyzer {
       return statuses == null ? List.of() : statuses;
     }
     var result = new ArrayList<>(statuses == null ? List.of() : statuses);
-    var reportedIds = new HashSet<Integer>();
-    for (var status : result) {
-      reportedIds.add(status.id());
-    }
+    var reportedIds =
+        result.stream()
+            .map(ReviewResponse.PreviousFindingStatus::id)
+            .collect(Collectors.toCollection(HashSet::new));
     for (int index = 0; index < previous.size(); index++) {
       var id = index + 1;
       var finding = previous.get(index);
@@ -3471,11 +3467,7 @@ public class FollowUpAnalyzer {
     if (priorAiResponseJsons == null || priorAiResponseJsons.isEmpty()) {
       return List.of();
     }
-    var parsed = new ArrayList<ReviewResponse>(priorAiResponseJsons.size());
-    for (var json : priorAiResponseJsons) {
-      parsed.add(parseResponse(json));
-    }
-    return List.copyOf(parsed);
+    return List.copyOf(priorAiResponseJsons.stream().map(this::parseResponse).toList());
   }
 
   /**
@@ -3622,13 +3614,11 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.PreviousFindingStatus> aiStatuses) {
     if (aiStatuses == null) return List.of();
 
-    var result = new ArrayList<ReviewResult.PreviousFindingStatus>();
-    for (var s : aiStatuses) {
-      if (isRecognizedStatus(s.status()) || STATUS_SUPERSEDED.equalsIgnoreCase(s.status())) {
-        result.add(new ReviewResult.PreviousFindingStatus(s.id(), s.status(), s.note()));
-      }
-    }
-    return result;
+    return aiStatuses.stream()
+        .filter(
+            s -> isRecognizedStatus(s.status()) || STATUS_SUPERSEDED.equalsIgnoreCase(s.status()))
+        .map(s -> new ReviewResult.PreviousFindingStatus(s.id(), s.status(), s.note()))
+        .toList();
   }
 
   /** Checks if there are any unresolved findings that should be re-flagged. */

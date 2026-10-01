@@ -761,15 +761,14 @@ public class ReviewPublisher {
    * findings must not claim.
    */
   private static List<String> reopenedDeclineNotes(ReviewResult result) {
-    var notes = new ArrayList<String>();
-    for (var status : result.previousStatuses()) {
-      if ("unresolved".equalsIgnoreCase(status.status())
-          && status.note() != null
-          && status.note().startsWith(RebuttalContradiction.NOTE_LEAD_IN)) {
-        notes.add(status.note().strip());
-      }
-    }
-    return notes;
+    return result.previousStatuses().stream()
+        .filter(
+            status ->
+                "unresolved".equalsIgnoreCase(status.status())
+                    && status.note() != null
+                    && status.note().startsWith(RebuttalContradiction.NOTE_LEAD_IN))
+        .map(status -> status.note().strip())
+        .toList();
   }
 
   /** {@link #reopenedDeclineNotes} appended to the no-new-findings body's unresolved line. */

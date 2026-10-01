@@ -370,13 +370,11 @@ public class DiffBudgetPlanner {
      */
     private static void recordDistinct(List<String> into, List<String> filenames) {
       var known = new HashSet<>(into);
-      var added = new ArrayList<String>();
-      for (var name : filenames) {
-        if (name != null && known.add(name)) {
-          added.add(name);
-        }
-      }
-      into.addAll(added);
+      into.addAll(
+          filenames.stream()
+              .filter(name -> name != null && !known.contains(name))
+              .distinct()
+              .toList());
     }
 
     /**
@@ -944,10 +942,7 @@ public class DiffBudgetPlanner {
       binTokens.set(target, binTokens.get(target) + s.tokens());
     }
 
-    var batches = new ArrayList<DiffBatch>(binSections.size());
-    for (var bin : binSections) {
-      batches.add(toBatch(bin));
-    }
+    var batches = binSections.stream().map(DiffBudgetPlanner::toBatch).toList();
     // A clipped file can still overflow every bin and end up omitted; each file must land in
     // exactly one class or the disclosure would list it twice and the verdict double-count it.
     var omittedSet = new HashSet<>(omitted);

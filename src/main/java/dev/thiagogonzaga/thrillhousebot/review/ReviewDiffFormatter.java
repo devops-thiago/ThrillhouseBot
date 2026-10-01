@@ -135,11 +135,7 @@ public class ReviewDiffFormatter {
         return List.of();
       }
       try {
-        var compiled = new ArrayList<GlobMatcher>(forms.size());
-        for (String form : forms) {
-          compiled.add(compileForm(form));
-        }
-        return compiled;
+        return forms.stream().map(IgnoreGlobs::compileForm).toList();
       } catch (InvalidPathException | PatternSyntaxException e) {
         LOG.warnf(e, "Ignoring invalid ignored-files glob pattern: %s", pattern);
         return List.of();

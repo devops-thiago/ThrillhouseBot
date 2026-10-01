@@ -32,11 +32,11 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 @ApplicationScoped
 public class ReviewOrchestrator {
@@ -557,16 +557,17 @@ public class ReviewOrchestrator {
       ReviewContextLoader.ReviewContext ctx, ReviewResponse aiResponse, ReviewResult result) {
     var previous = ctx.previousFindingsList();
     var firstCarriedId = previous.size() - ctx.carried().findings().size() + 1;
-    var carry = new ArrayList<ReviewResponse.Finding>();
-    var seen = new HashSet<Integer>();
-    for (var status : result.previousStatuses()) {
-      if (status.id() >= firstCarriedId
-          && status.id() <= previous.size()
-          && "unresolved".equalsIgnoreCase(status.status())
-          && seen.add(status.id())) {
-        carry.add(previous.get(status.id() - 1));
-      }
-    }
+    var carry =
+        result.previousStatuses().stream()
+            .filter(
+                status ->
+                    status.id() >= firstCarriedId
+                        && status.id() <= previous.size()
+                        && "unresolved".equalsIgnoreCase(status.status()))
+            .map(ReviewResult.PreviousFindingStatus::id)
+            .distinct()
+            .map(id -> previous.get(id - 1))
+            .collect(Collectors.toCollection(ArrayList::new));
     carry.addAll(aiResponse.findings());
     return carry;
   }

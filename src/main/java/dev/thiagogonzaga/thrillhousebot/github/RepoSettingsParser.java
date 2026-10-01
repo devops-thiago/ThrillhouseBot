@@ -437,13 +437,7 @@ final class RepoSettingsParser {
 
   /** The scalar entries of a sequence; a nested mapping or sequence entry is not a glob. */
   private static List<String> scalarEntries(JsonNode array) {
-    var raw = new ArrayList<String>(array.size());
-    for (var element : array) {
-      if (element.isValueNode()) {
-        raw.add(element.asText());
-      }
-    }
-    return raw;
+    return array.valueStream().filter(JsonNode::isValueNode).map(JsonNode::asText).toList();
   }
 
   /** Trims, drops blank/oversized entries, and caps the total a repository may contribute. */

@@ -48,6 +48,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import org.jboss.logging.Logger;
 
@@ -1048,10 +1049,10 @@ public class FindingPipeline {
     if (statuses.isEmpty()) {
       return statuses;
     }
-    var batchFiles = new HashSet<String>();
-    for (var file : batch.files()) {
-      batchFiles.add(file.filename());
-    }
+    var batchFiles =
+        batch.files().stream()
+            .map(GitHubPullRequestClient.FileDiff::filename)
+            .collect(Collectors.toCollection(HashSet::new));
     plan.clippedFiles().forEach(batchFiles::remove);
     var scoped = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
     for (var status : statuses) {
@@ -1286,14 +1287,16 @@ public class FindingPipeline {
     }
     // Planned omissions are reviewable files that did not fit any batch: withheld for a third
     // reason, and just as invisible to this call as the two above.
-    for (var name : plan.omittedFiles()) {
-      rows.add(name + " (exceeded the review call budget)");
-    }
+    rows.addAll(
+        plan.omittedFiles().stream()
+            .map(name -> name + " (exceeded the review call budget)")
+            .toList());
     // Patchless files are withheld for a fourth reason (#628): GitHub returned no patch text for
     // them, so there was never any content to send — not a budget problem.
-    for (var name : plan.patchlessFiles()) {
-      rows.add(name + " (no diff content from GitHub — binary, or too large to display)");
-    }
+    rows.addAll(
+        plan.patchlessFiles().stream()
+            .map(name -> name + " (no diff content from GitHub — binary, or too large to display)")
+            .toList());
     if (rows.isEmpty()) {
       return "";
     }
