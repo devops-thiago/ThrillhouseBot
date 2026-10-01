@@ -190,9 +190,15 @@ public final class PromptLabelScrubber {
   private static final Pattern NAMED_LEARNING_IDS =
       Pattern.compile("\\b((?i:decision|learning)s?) " + LEARNING_ID_GROUP);
 
+  /**
+   * The blanks between a word and what follows it at the end of a text: spaces and tabs, a
+   * non-breaking space, or one hard line wrap — not a paragraph break.
+   */
+  private static final String WRAP_BLANKS = "(?:[ \\t\\u00A0]+|[ \\t\\u00A0]*\\n[ \\t\\u00A0]*)\\z";
+
   /** An article ending the text before a learning id: "the [L12]". */
   private static final Pattern ARTICLE_BEFORE =
-      Pattern.compile("(?<![\\w-])(a|an|the)[ \\t]+$", Pattern.CASE_INSENSITIVE);
+      Pattern.compile("(?<![\\w-])(a|an|the)" + WRAP_BLANKS, Pattern.CASE_INSENSITIVE);
 
   /** The config-key context block's heading, cited by name (#950). */
   private static final Pattern CONFIG_KEY_HEADING =
@@ -206,7 +212,7 @@ public final class PromptLabelScrubber {
   /** A determiner ending the text before the heading's name: "the repository's", "its", "this". */
   private static final Pattern DETERMINER_BEFORE =
       Pattern.compile(
-          "(?:'s|(?<![\\w-])(?:its|this|that|a|an|their|our|your))[ \\t]+$",
+          "(?:'s|(?<![\\w-])(?:its|this|that|a|an|their|our|your))" + WRAP_BLANKS,
           Pattern.CASE_INSENSITIVE);
 
   /** "config-key definitions section", "config key definition block" and the like (#950). */

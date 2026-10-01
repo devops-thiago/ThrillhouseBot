@@ -555,4 +555,22 @@ class PromptLabelScrubberTest {
         SECTION_NAME_CLEAN,
         PromptLabelScrubber.scrubMarkdown(SECTION_NAME_LEAK, result.findings()));
   }
+
+  @Test
+  void anArticleOrDeterminerWrappedOntoTheLineBeforeAnIdIsStillSwapped() {
+    assertEquals(
+        "the maintainer's earlier decision reasoning fails here",
+        PromptLabelScrubber.scrub("the\n[L12] reasoning fails here"));
+    // A determiner stays where it is, wrap included; only the id is rewritten.
+    assertEquals(
+        "its\nearlier maintainer decision says so",
+        PromptLabelScrubber.scrub("its\n[L12] says so"));
+    assertEquals(
+        "the maintainer's earlier decision holds",
+        PromptLabelScrubber.scrub("the\u00A0[L12] holds"));
+    // A paragraph break is not a wrap: the article ends its own paragraph and stays.
+    assertEquals(
+        "Ends with the\n\nA maintainer's earlier decision holds.",
+        PromptLabelScrubber.scrub("Ends with the\n\n[L12] holds."));
+  }
 }
