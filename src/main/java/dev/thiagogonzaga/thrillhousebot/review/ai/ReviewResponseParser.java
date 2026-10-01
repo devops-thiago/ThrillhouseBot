@@ -919,11 +919,6 @@ public class ReviewResponseParser {
   /** Where a JSON object with at least one key may open: a brace, whitespace, then a quote. */
   private static final Pattern OBJECT_START = Pattern.compile("\\{\\s*\"");
 
-  /**
-   * Whitespace and fence markers only: what may separate a finding array from the next document.
-   */
-  private static final Pattern SEPARATORS = Pattern.compile("(?:\\s|```[\\w+-]*)*");
-
   /** Where an array whose first element is an object with at least one key may open. */
   private static final Pattern ARRAY_OF_OBJECTS_START = Pattern.compile("\\[\\s*\\{\\s*\"");
 
@@ -1009,8 +1004,11 @@ public class ReviewResponseParser {
    * excerpt that is not findings, or a complete finding array quoted in the deliberation and
    * followed by prose is not taken for the answer. A finding array written directly ahead of the
    * answer object cannot be told apart from an answer's own first document, and is read as one; a
-   * finding identical to one the answer carries is kept once. Only {@link #parse} reads arrays as
-   * findings, so only it sets the flag; the truncation salvage reads a single object.
+   * finding identical to one the answer carries is kept once. With the flag set, a body with no
+   * root-keyed object at all is probed for a finding array as well, so a {@code [HIGH]} tag in the
+   * prose ahead of a bare findings array does not pull the anchor onto the tag; when none is found
+   * this is {@link #extractJson(String)} unchanged, as without the flag. Only {@link #parse} reads
+   * arrays as findings, so only it sets the flag; the truncation salvage reads a single object.
    */
   static String extractJson(String raw, List<String> rootKeys, boolean findingArrays) {
     if (raw == null) {
@@ -1018,11 +1016,15 @@ public class ReviewResponseParser {
     }
     var trimmed = raw.strip();
     var rootKey = rootAnchorPattern(rootKeys).matcher(trimmed);
-    if (!rootKey.find()) {
+    var rooted = rootKey.find();
+    if (!rooted && !findingArrays) {
       return extractJson(raw);
     }
     var anchor = findAnswer(trimmed, rootKeys, findingArrays).start();
     if (anchor < 0) {
+      if (!rooted) {
+        return extractJson(raw);
+      }
       anchor = rootKey.start();
     }
     var end = trimmed.length();
@@ -1073,10 +1075,11 @@ public class ReviewResponseParser {
     }
 
     AnswerSearch find() {
-      // A candidate past the last root-keyed object can hold none, so it is never the answer.
-      var lastRootObject = -1;
-      while (rootKey.find()) {
-        lastRootObject = rootKey.start();
+      // A candidate past the last root-keyed object, or past the last finding array when those
+      // are read, can open no answer, so it is never probed.
+      var lastRootObject = lastStart(rootKey);
+      if (findingArrays) {
+        lastRootObject = Math.max(lastRootObject, lastStart(ARRAY_OF_OBJECTS_START.matcher(text)));
       }
       var candidates = (findingArrays ? ANSWER_START : OBJECT_START).matcher(text);
       var skipUntil = 0;
@@ -1102,12 +1105,21 @@ public class ReviewResponseParser {
       return new AnswerSearch(-1, charsParsed);
     }
 
+    /** Where the last match of {@code matcher} starts; -1 when it has none. */
+    private static int lastStart(Matcher matcher) {
+      var last = -1;
+      while (matcher.find()) {
+        last = matcher.start();
+      }
+      return last;
+    }
+
     /**
      * Probes the candidate at {@code start}: its first document must open the answer, and the rest
      * of the body must read as documents from there to its end. A cut first array is not the
      * answer: it runs to the end of the body, so the root-keyed object lies inside it, and that
-     * object is the candidate to read. A cut first object is: the run reached the end of the body,
-     * and a root-keyed object lies at or past every candidate find() probes, so it holds one.
+     * object is the candidate to read. A cut first object is when a root-keyed object lies at or
+     * past it: the run reached the end of the body, so that object is inside the one cut.
      */
     private Probe probe(int start) {
       if (dead.contains(start)) {
@@ -1115,7 +1127,7 @@ public class ReviewResponseParser {
       }
       var end = documentEnd(start);
       if (end == CUT) {
-        return new Probe(chars[start] != '[', -1);
+        return new Probe(chars[start] != '[' && holdsRootKey(start, chars.length), -1);
       }
       if (end == BROKEN) {
         return new Probe(false, -1);
@@ -1160,7 +1172,29 @@ public class ReviewResponseParser {
      * whitespace and fence markers lies between them.
      */
     private boolean followsDirectly(int start, int end, int next) {
-      return chars[start] != '[' || SEPARATORS.matcher(text).region(end, next).matches();
+      return chars[start] != '[' || onlySeparators(end, next);
+    }
+
+    /**
+     * Whether {@code [from, to)} holds nothing but whitespace and fence markers with their tags.
+     */
+    private boolean onlySeparators(int from, int to) {
+      var at = from;
+      while (at < to) {
+        if (text.startsWith("```", at)) {
+          at += 3;
+          // The tag stops at the next document's opening character at the latest, since {@code to}
+          // is one and is neither a letter nor a digit.
+          while (Character.isLetterOrDigit(chars[at])) {
+            at++;
+          }
+        } else if (Character.isWhitespace(chars[at])) {
+          at++;
+        } else {
+          return false;
+        }
+      }
+      return true;
     }
 
     /**

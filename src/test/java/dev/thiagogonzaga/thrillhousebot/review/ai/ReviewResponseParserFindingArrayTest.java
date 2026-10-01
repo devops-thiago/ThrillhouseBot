@@ -202,6 +202,27 @@ class ReviewResponseParserFindingArrayTest {
   }
 
   @Test
+  void readsABareFindingsArrayAfterProseWithABracketedTag() {
+    // No root-keyed object anywhere: the first-bracket rule would anchor on the [HIGH] tag.
+    var response =
+        parser.parse("Checked the [HIGH] areas first.\n```json\n" + FINDINGS_ARRAY + "```");
+
+    assertEquals(TITLES, titles(response));
+  }
+
+  @Test
+  void fallsBackToTheFirstBracketWhenNoFindingArrayOpensTheAnswer() {
+    // A cut body with no root key and no complete finding array: nothing is anchored, and the
+    // extraction is the first-bracket rule's, as before.
+    var raw = "Draft {\"a\": [{\"risk\": \"low\", \"file\": \"f.kt\", \"title\": \"t";
+
+    assertEquals(-1, ReviewResponseParser.findAnswer(raw, KEYS, true).start());
+    assertEquals(
+        ReviewResponseParser.extractJson(raw), ReviewResponseParser.extractJson(raw, KEYS, true));
+    assertThrows(IllegalArgumentException.class, () -> parser.parse(raw));
+  }
+
+  @Test
   void keepsAFindingTwoDocumentsCarryOnceAndWarnsOfTheDrop() {
     var repeated =
         """
