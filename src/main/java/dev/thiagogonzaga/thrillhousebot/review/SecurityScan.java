@@ -82,12 +82,13 @@ import java.util.stream.Stream;
  * FollowUpAnalyzer#justifiedPriorFindings}) — is not raised again while the rule still matches the
  * same content (#982): same file, title and anchor, and for a secret the same {@linkplain
  * #contentFingerprint fingerprint} of the flagged line, so a new value on that line is raised
- * whatever prefix and length it shares with the old one. Without this the scan, which is not model
- * output and reads no learning, raised a declined finding again on the next round and blocked the
- * pull request on every push. A decline matches one detection, the nearest by line, so a second
- * identical line added later is raised. A finding the effective previous round raised again before
- * the decline was remembered is reported {@code justified} under the same rule, so its thread
- * closes with the decline it repeats.
+ * whatever prefix and length it shares with the old one (a decline recorded before secret findings
+ * carried the fingerprint covers its line only until the head moves). Without this the scan, which
+ * is not model output and reads no learning, raised a declined finding again on the next round and
+ * blocked the pull request on every push. A decline matches one detection, the nearest by line, so
+ * a second identical line added later is raised. A finding the effective previous round raised
+ * again before the decline was remembered is reported {@code justified} under the same rule, so its
+ * thread closes with the decline it repeats.
  *
  * <p><b>Duplicates.</b> A model finding within {@link FindingDeduplicator#LINE_TOLERANCE} lines of
  * a detection in the same file is dropped when it is the same defect by {@link
@@ -234,7 +235,9 @@ public class SecurityScan {
             VerdictBuilder.renameTargets(ctx.files()),
             ctx.inlineComments(),
             botIdentity),
-        FollowUpAnalyzer.justifiedPriorFindings(ctx.priorAiResponses()));
+        new Declines(
+            FollowUpAnalyzer.justifiedPriorFindings(ctx.priorAiResponses()),
+            ctx.previousRoundHeadUnchanged()));
   }
 
   ReviewResponse merge(
@@ -259,14 +262,26 @@ public class SecurityScan {
       List<ReviewResponse.Finding> previous,
       Set<Integer> settledIds,
       List<ReviewResponse.Finding> earlierOpen) {
-    return merge(response, result, previous, settledIds, earlierOpen, List.of());
+    return merge(response, result, previous, settledIds, earlierOpen, Declines.NONE);
   }
 
   /**
-   * As {@link #merge(ReviewResponse, Result, List, Set, List)}, with {@code justified} the findings
-   * a later round recorded justified ({@link FollowUpAnalyzer#justifiedPriorFindings}). A detection
-   * that repeats a declined scan finding on the same content is not raised again (#982), and a
-   * previous-round finding it is tracked as is reported justified.
+   * The findings later rounds recorded justified ({@link FollowUpAnalyzer#justifiedPriorFindings}),
+   * and whether this review's head is the one the round it reports on reviewed — the only case in
+   * which a decline recorded before secret findings carried a fingerprint may still cover one.
+   */
+  record Declines(List<ReviewResponse.Finding> justified, boolean headUnchanged) {
+    static final Declines NONE = new Declines(List.of(), false);
+
+    Declines {
+      justified = List.copyOf(justified);
+    }
+  }
+
+  /**
+   * As {@link #merge(ReviewResponse, Result, List, Set, List)}, with the maintainer declines later
+   * rounds recorded. A detection that repeats a declined scan finding on the same content is not
+   * raised again (#982), and a previous-round finding it is tracked as is reported justified.
    */
   ReviewResponse merge(
       ReviewResponse response,
@@ -274,9 +289,9 @@ public class SecurityScan {
       List<ReviewResponse.Finding> previous,
       Set<Integer> settledIds,
       List<ReviewResponse.Finding> earlierOpen,
-      List<ReviewResponse.Finding> justified) {
+      Declines declined) {
     var scanPriors = openScanPriors(previous, settledIds);
-    var declines = scanFindings(justified);
+    var declines = scanFindings(declined.justified(), declined.headUnchanged());
     var scrubber =
         secretsEnabled
             ? Scrubber.of(result.redactions(), entropyThreshold)
@@ -285,7 +300,7 @@ public class SecurityScan {
     var standing = new HashSet<Integer>();
     var raised = new ArrayList<ReviewResponse.Finding>();
     int earlier = 0;
-    int declined = 0;
+    int settled = 0;
     for (var detection : result.detections()) {
       int priorId = priorIdOf(detection.finding(), scanPriors, tracked.keySet());
       boolean repeatsDecline = claimDecline(detection.finding(), declines);
@@ -295,7 +310,7 @@ public class SecurityScan {
           standing.add(priorId);
         }
       } else if (repeatsDecline) {
-        declined++;
+        settled++;
       } else if (repeatsEarlierRound(detection.finding(), earlierOpen)) {
         earlier++;
       } else {
@@ -328,7 +343,7 @@ public class SecurityScan {
           raised.size(),
           tracked.size() - standing.size(),
           earlier,
-          declined + standing.size(),
+          settled + standing.size(),
           cleared.size(),
           duplicates);
     }
@@ -579,11 +594,23 @@ public class SecurityScan {
                         stripped(prior.suggestionOld()), stripped(detection.suggestionOld())));
   }
 
-  /** The scan's own findings among {@code findings}, in a list a detection can claim from. */
-  private static List<ReviewResponse.Finding> scanFindings(List<ReviewResponse.Finding> findings) {
+  /**
+   * The scan's own declined findings a detection can claim, in a list it claims them from. A secret
+   * finding persisted before it carried a fingerprint has nothing that tells its value from another
+   * of the same prefix and length, so its decline counts only while the head is the one the round
+   * this review reports on reviewed: nothing on the line can have changed since that round. After a
+   * push it lapses, and the finding raised again carries a fingerprint the next decline keeps. An
+   * IaC finding's anchor is its line, so its decline needs no fingerprint.
+   */
+  private static List<ReviewResponse.Finding> scanFindings(
+      List<ReviewResponse.Finding> findings, boolean headUnchanged) {
     var scan = new ArrayList<ReviewResponse.Finding>();
     for (var finding : findings) {
-      if (finding.file() != null && SecurityRule.fromTitle(finding.title()) != null) {
+      var rule = finding.file() == null ? null : SecurityRule.fromTitle(finding.title());
+      if (rule != null
+          && (headUnchanged
+              || rule.category() == SecurityRule.Category.IAC
+              || fingerprintOf(finding.description()) != null)) {
         scan.add(finding);
       }
     }
@@ -593,8 +620,8 @@ public class SecurityScan {
   /**
    * Whether a detection repeats a declined scan finding, claiming the nearest one by line so it
    * covers no second detection: same file, title and anchor, and the same content fingerprint when
-   * both carry one. A finding raised before the fingerprint existed carries none; its decline
-   * covers the detection by the other keys, the match the scan made before.
+   * the declined finding carries one. One that carries none (an IaC finding, or a secret finding
+   * {@link #scanFindings} admitted on an unchanged head) is matched by the other keys.
    */
   private static boolean claimDecline(
       ReviewResponse.Finding detection, List<ReviewResponse.Finding> declines) {

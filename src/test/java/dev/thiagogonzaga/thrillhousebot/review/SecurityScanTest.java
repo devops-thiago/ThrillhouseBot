@@ -1083,7 +1083,14 @@ class SecurityScanTest {
       List<FileDiff> files,
       List<ReviewResponse.Finding> previous,
       List<ReviewResponse.Finding> declined) {
-    return scan.merge(response, scan.scan(files), previous, Set.of(), List.of(), declined);
+    // The head moved since the previous round: only what a decline carries can match.
+    return scan.merge(
+        response,
+        scan.scan(files),
+        previous,
+        Set.of(),
+        List.of(),
+        new SecurityScan.Declines(declined, false));
   }
 
   @Test
@@ -1119,7 +1126,7 @@ class SecurityScanTest {
   }
 
   @Test
-  void aDeclineFromBeforeTheFingerprintCoversTheSameTitleAndAnchor() {
+  void aDeclineFromBeforeTheFingerprintCoversItsTitleAndAnchorOnlyOnAnUnchangedHead() {
     var token = fake.githubToken();
     var s = scan(true, false);
     var raised =
@@ -1139,9 +1146,28 @@ class SecurityScanTest {
     assertNull(SecurityScan.fingerprintOf(legacy.description()));
     assertNull(SecurityScan.fingerprintOf(null));
 
-    var rotated = List.of(added("app.env", "T=" + fake.githubToken()));
+    // On the head the round it reports on reviewed, nothing on the line can have changed since.
+    var files = List.of(added("app.env", "T=" + token));
     assertTrue(
-        mergeAfterDecline(s, response(), rotated, List.of(), List.of(legacy)).findings().isEmpty());
+        s.merge(
+                response(),
+                s.scan(files),
+                List.of(),
+                Set.of(),
+                List.of(),
+                new SecurityScan.Declines(List.of(legacy), true))
+            .findings()
+            .isEmpty());
+
+    // After a push it cannot tell a rotated value from the one declined, so it lapses: the finding
+    // is raised again, now with the fingerprint a new decline keeps.
+    var rotated = List.of(added("app.env", "T=" + fake.githubToken()));
+    var raisedAgain =
+        mergeAfterDecline(s, response(), rotated, List.of(), List.of(legacy)).findings();
+    assertEquals(1, raisedAgain.size());
+    assertTrue(SecurityScan.fingerprintOf(raisedAgain.get(0).description()) != null);
+    assertEquals(
+        1, mergeAfterDecline(s, response(), files, List.of(), List.of(legacy)).findings().size());
   }
 
   @Test
@@ -1190,7 +1216,7 @@ class SecurityScanTest {
             raised.confidence(),
             raised.file(),
             raised.line(),
-            "Security scan: hardcoded GitHub token (ghp_…, 40 chars)",
+            SecurityRule.PUBLIC_BUCKET.iacTitle(),
             raised.description(),
             raised.suggestionOld(),
             null);
