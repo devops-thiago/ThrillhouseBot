@@ -276,7 +276,8 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern PROVIDED_WITH_REVIEW_OPENING =
       Pattern.compile(
-          "(?m)^([ \\t]*)As (?:provided|supplied|given) (?:with|to|for) this review\\b,?[ \\t]*"
+          "(?m)(^[ \\t]*|[.!?][ \\t]+)As (?:provided|supplied|given) (?:with|to|for) this"
+              + " review\\b,?[ \\t]*"
               + "(\\p{Ll})?");
 
   private PromptLabelScrubber() {}

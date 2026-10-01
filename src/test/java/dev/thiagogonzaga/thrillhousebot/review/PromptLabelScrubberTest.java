@@ -628,6 +628,11 @@ class PromptLabelScrubberTest {
     assertEquals(
         "The criterion is unmet.",
         PromptLabelScrubber.scrub("As provided with this review the criterion is unmet."));
+    // Opening a sentence mid-line: the previous sentence keeps its full stop.
+    assertEquals(
+        "The suite fails. The criterion is unmet.",
+        PromptLabelScrubber.scrub(
+            "The suite fails. As provided with this review, the criterion is unmet."));
     // Already capitalized after the note: nothing to change but the note itself.
     assertEquals(
         "README.md is renamed.",
