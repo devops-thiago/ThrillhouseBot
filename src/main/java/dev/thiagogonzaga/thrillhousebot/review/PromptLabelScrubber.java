@@ -52,6 +52,12 @@ import java.util.regex.Pattern;
  * (#950): a learning id ("[L51]") becomes "a maintainer's earlier decision", the config-key block's
  * name ("the config-key definitions section") becomes "the configuration code", and "the provided
  * material" — the prompts' name for everything they hand the model — becomes "the reviewed code".
+ *
+ * <p>Notes on how the model's input reached it are dropped or reworded too (#975): a withheld
+ * file's "(excluded from review scope by the ignore list)", {@code (supplied from <path>)} (which
+ * reads {@code (in <path>)}), "as provided with this review", "config key definition for" (which
+ * reads "definition of"), and a clause narrating the confidence rule the model applied ("I am
+ * rating this claim at the required … confidence").
  */
 public final class PromptLabelScrubber {
 
@@ -224,6 +230,45 @@ public final class PromptLabelScrubber {
   /** The prompts' name for everything they hand the model (#950). */
   private static final Pattern PROVIDED_MATERIAL =
       Pattern.compile("(?<![\\w-])(the )?provided materials?\\b", Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The model narrating the confidence rule it applied (#975): "I am rating this claim at the
+   * required arithmetic-claim confidence until that log names the test." Only a rating "at the
+   * required" (or prescribed, capped …) level — the prompt's rule, not a reason — so a reply that
+   * answers "why medium?" with "I rated it at medium confidence because …" stays.
+   */
+  private static final Pattern SELF_RATED_CONFIDENCE =
+      Pattern.compile(
+          "\\bI(?: am|'m|’m| have|'ve|’ve)? (?:rat(?:e|ed|ing)|keep(?:ing)?|kept|hold(?:ing)?|held"
+              + "|cap(?:ped|ping)?) (?:this|the|it)(?: claim| finding| issue)? (?:at|to) the"
+              + " (?:required|prescribed|mandated|permitted|allowed|maximum|capped)"
+              + " [^.!?\\n]{0,80}?confidence\\b[^.!?\\n]{0,200}");
+
+  /**
+   * The note the review call's withheld-file list puts after an ignored path (#975), quoted as if
+   * the pull request said it: "rust/Cargo.lock (excluded from review scope by the ignore list)".
+   */
+  private static final Pattern WITHHELD_NOTE =
+      Pattern.compile(
+          "[ \\t]*\\((?:excluded|omitted|withheld)(?: from (?:AI )?review(?: scope)?)? by the"
+              + " ignore list\\)",
+          Pattern.CASE_INSENSITIVE);
+
+  /** "(supplied from kotlin/.../Config.kt)": how a context block reached the model (#975). */
+  private static final Pattern SUPPLIED_FROM =
+      Pattern.compile("\\(supplied from (?=[\\w.-]*[/.]\\w|\\z)", Pattern.CASE_INSENSITIVE);
+
+  /** "config key definition for POLL_INTERVAL": the block's name as a noun phrase (#975). */
+  private static final Pattern CONFIG_KEY_DEFINITION_FOR =
+      Pattern.compile(
+          "(?<![\\w-])config(?:uration)?[- ]keys? (definitions?) (?:for|of)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /** "from issue #117 as provided with this review": a note on the model's input (#975). */
+  private static final Pattern PROVIDED_WITH_REVIEW =
+      Pattern.compile(
+          "(,)?[ \\t]+(?:as )?(?:provided|supplied|given) (?:with|to|for) this review\\b(,)?",
+          Pattern.CASE_INSENSITIVE);
 
   private PromptLabelScrubber() {}
 
@@ -441,12 +486,62 @@ public final class PromptLabelScrubber {
                     opensSentence(headed, m.start(), 0)
                         ? "Configuration code"
                         : "configuration code");
-    return PROVIDED_MATERIAL
-        .matcher(s)
-        .replaceAll(
-            m ->
-                capitalizeLike(
-                    m.group(), m.group(1) == null ? "reviewed code" : "the reviewed code"));
+    s =
+        PROVIDED_MATERIAL
+            .matcher(s)
+            .replaceAll(
+                m ->
+                    capitalizeLike(
+                        m.group(), m.group(1) == null ? "reviewed code" : "the reviewed code"));
+    s = WITHHELD_NOTE.matcher(s).replaceAll("");
+    s = SUPPLIED_FROM.matcher(s).replaceAll("(in ");
+    // "the criterion, as supplied to this review, says" loses both commas; one comma alone stays
+    // only when it closes the clause the note ended.
+    s =
+        PROVIDED_WITH_REVIEW
+            .matcher(s)
+            .replaceAll(m -> m.group(1) == null && m.group(2) != null ? "," : "");
+    var defined = s;
+    s =
+        CONFIG_KEY_DEFINITION_FOR
+            .matcher(defined)
+            .replaceAll(
+                m -> {
+                  var phrase = m.group(1).toLowerCase(Locale.ROOT) + " of";
+                  return opensSentence(defined, m.start(), 0) ? capitalize(phrase) : phrase;
+                });
+    return removeSelfRatedConfidence(s);
+  }
+
+  /**
+   * Drops the model's account of the confidence rule it applied (#975). After a semicolon, comma or
+   * dash the clause goes with that separator and the sentence keeps its end ("…, so the suite will
+   * confirm; I am rating this claim at the required … confidence." reads "…, so the suite will
+   * confirm."); opening a sentence, the whole sentence goes with the blanks after it. Anywhere else
+   * the sentence leans on it, and it stays.
+   */
+  private static String removeSelfRatedConfidence(String text) {
+    var m = SELF_RATED_CONFIDENCE.matcher(text);
+    var out = new StringBuilder(text.length());
+    int at = 0;
+    while (m.find()) {
+      int blank = skipBlanksBack(text, m.start(), at);
+      if (blank > at && ";,—–".indexOf(text.charAt(blank - 1)) >= 0) {
+        out.append(text, at, skipBlanksBack(text, blank - 1, at));
+        at = m.end();
+      } else if (opensSentence(text, m.start(), at)) {
+        int end = m.end();
+        if (end < text.length() && ".!?".indexOf(text.charAt(end)) >= 0) {
+          end++;
+        }
+        end = skipBlanks(text, end);
+        // The last sentence of a line takes the blanks before it, so the line does not end in one.
+        int start = end == text.length() || text.charAt(end) == '\n' ? blank : m.start();
+        out.append(text, at, start);
+        at = end;
+      }
+    }
+    return out.append(text, at, text.length()).toString();
   }
 
   /**

@@ -387,15 +387,20 @@ public final class PrReviewPrompts {
             section", "the provided material"), no id of a prior maintainer decision ("[L12]"), no
             restated rule such as "which this finding must quote",
             and no example path, name or value taken from these
-            instructions. Name the defect in plain words (a stale comment, an artifact-name
-            mismatch, an undocumented list separator) and cite the code itself, by file and line.
+            instructions. Do not explain the confidence you chose or the rule behind it ("I am
+            rating this claim at the required confidence"): the confidence field already says it.
+            Do not describe how material reached you ("supplied from", "as provided with this
+            review", a withheld file's note such as "excluded from review scope by the ignore
+            list"): cite the file, the issue or the report itself. Name the defect in plain words
+            (a stale comment, an artifact-name mismatch, an undocumented list separator) and cite
+            the code itself, by file and line.
 
             SELF-CARRYING EVIDENCE: a finding grounded in one of the context sections supplied to
             you — the patch-coverage measurement, a path-scoped rule block, a linked issue's text, a
             config key definition — must quote the material it rests on in its own description and
             name where it came from the way a reader of the pull request knows it: the coverage
-            report, the linked issue, the repository rule and its glob, the config key's
-            definition. The audit pass that rules on your findings receives your
+            report, the linked issue, the repository rule and its glob, the path of the file that
+            defines the key. The audit pass that rules on your findings receives your
             findings and the diff, not those sections: a grounding you do not carry reads there as a
             claim about material nobody showed it, and the finding is dropped on exactly that
             ground. Quote the measured line, the rule sentence, or the stated requirement itself — a
@@ -733,7 +738,9 @@ public final class PrReviewPrompts {
               not as a finding, and not in a status note. When the PR description claims
               work whose only evidence would live in a withheld path, the claim is unverifiable
               here, not false: say nothing about it. A rename the description states and the
-              withheld list confirms is DONE, not missing.
+              withheld list confirms is DONE, not missing. Those notes are written for you, not
+              by the pull request: when a finding needs such a path, name it as a file this pull
+              request changes and leave its note out.
             - The same rule governs every claim BUILT on a withheld path, not only the claim that
               names it. Deciding that the implementing change is absent licenses a second, worse
               statement: that the documentation, comment, configuration value or test which IS in

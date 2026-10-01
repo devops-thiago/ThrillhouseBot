@@ -1316,6 +1316,10 @@ class PrReviewPromptsContentTest {
         sys,
         "the claim is unverifiable",
         "a claim whose only evidence is withheld must be dropped, not contradicted (#569)");
+    assertContains(
+        sys,
+        "Those notes are written for you, not\n  by the pull request",
+        "a withheld path's note must not be quoted as the PR's own text (#975)");
   }
 
   /**
@@ -1622,5 +1626,17 @@ class PrReviewPromptsContentTest {
         sys,
         "the way a reader of the pull request knows it",
         "a grounded finding names its source as the reader knows it, not the prompt's section");
+    assertContains(
+        sys,
+        "the path of the file that\ndefines the key",
+        "a config key's definition is cited by its file, not as a prompt block (#975)");
+    assertContains(
+        sys,
+        "Do not explain the confidence you chose or the rule behind it",
+        "the model must not narrate its own confidence policy (#975)");
+    assertContains(
+        sys,
+        "Do not describe how material reached you (\"supplied from\", \"as provided with this\nreview\"",
+        "provenance notes about the prompt's input are prompt vocabulary too (#975)");
   }
 }

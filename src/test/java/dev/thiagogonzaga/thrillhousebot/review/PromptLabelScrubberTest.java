@@ -573,4 +573,143 @@ class PromptLabelScrubberTest {
         "Ends with the\n\nA maintainer's earlier decision holds.",
         PromptLabelScrubber.scrub("Ends with the\n\n[L12] holds."));
   }
+
+  // #975, ThrillhouseBot-test#207 inline 4152163062.
+  static final String CONFIDENCE_RULE_LEAK =
+      "The CI run on this commit already completed with a failing test, so the suite itself will"
+          + " confirm; I am rating this claim at the required arithmetic-claim confidence until"
+          + " that log names the test.";
+
+  static final String CONFIDENCE_RULE_CLEAN =
+      "The CI run on this commit already completed with a failing test, so the suite itself will"
+          + " confirm.";
+
+  // #975, ThrillhouseBot-test#207 round-3 inline 4152219435.
+  static final String IGNORE_LIST_LEAK =
+      "The repository does contain a rust/Cargo.lock — the changed-files list for this PR names"
+          + " it, 'rust/Cargo.lock (excluded from review scope by the ignore list)' — but the"
+          + " build context never copies it.";
+
+  static final String IGNORE_LIST_CLEAN =
+      "The repository does contain a rust/Cargo.lock — the changed-files list for this PR names"
+          + " it, 'rust/Cargo.lock' — but the build context never copies it.";
+
+  // #975, ThrillhouseBot-test#204 threads 4152146989, 4152147418, 4152147644.
+  static final String SUPPLIED_FROM_LEAK =
+      "The repository's config key definition for POLL_INTERVAL (supplied from"
+          + " kotlin/src/main/kotlin/pod/Config.kt) is \"val pollIntervalSeconds: Long\".";
+
+  static final String SUPPLIED_FROM_CLEAN =
+      "The repository's definition of POLL_INTERVAL (in kotlin/src/main/kotlin/pod/Config.kt) is"
+          + " \"val pollIntervalSeconds: Long\".";
+
+  // #975, ThrillhouseBot-test#204 round-1 review 5375331841.
+  static final String PROVIDED_WITH_REVIEW_LEAK =
+      "Note the acceptance-criteria quote above is from issue #117 as provided with this review.";
+
+  static final String PROVIDED_WITH_REVIEW_CLEAN =
+      "Note the acceptance-criteria quote above is from issue #117.";
+
+  @Test
+  void everyRound15PhraseIsRemovedOrRewritten() {
+    assertEquals(CONFIDENCE_RULE_CLEAN, PromptLabelScrubber.scrub(CONFIDENCE_RULE_LEAK));
+    assertEquals(IGNORE_LIST_CLEAN, PromptLabelScrubber.scrub(IGNORE_LIST_LEAK));
+    assertEquals(SUPPLIED_FROM_CLEAN, PromptLabelScrubber.scrub(SUPPLIED_FROM_LEAK));
+    assertEquals(PROVIDED_WITH_REVIEW_CLEAN, PromptLabelScrubber.scrub(PROVIDED_WITH_REVIEW_LEAK));
+    for (var clean :
+        List.of(
+            CONFIDENCE_RULE_CLEAN,
+            IGNORE_LIST_CLEAN,
+            SUPPLIED_FROM_CLEAN,
+            PROVIDED_WITH_REVIEW_CLEAN)) {
+      assertEquals(clean, PromptLabelScrubber.scrub(clean));
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          It fails. I am rating this claim at the required arithmetic-claim confidence until CI names the test. Fix it. | It fails. Fix it.
+          It fails. I'm keeping this finding at the capped confidence for counting claims. | It fails.
+          It fails — I am rating this claim at the required confidence. | It fails.
+          It fails, I have held it to the maximum confidence the rule allows. | It fails.
+          I rate this at the required low confidence.\\nNext line. | \\nNext line.
+          It fails. I am rating this claim at the required low confidence | It fails.
+          It fails. I rate it at the required low confidence\\nNext. | It fails.\\nNext.
+          Per issue #117 as provided with this review, the parser must reject it. | Per issue #117, the parser must reject it.
+          Config key definition for ARTWORK_DIR: line 4. | Definition of ARTWORK_DIR: line 4.
+          the configuration key definitions of A and B agree | the definitions of A and B agree
+          ARTWORK_DIR (supplied from `Config.kt`) defaults to a path | ARTWORK_DIR (in `Config.kt`) defaults to a path
+          the criterion, as supplied to this review, says so | the criterion says so
+          the coverage report provided with this review lists line 3 | the coverage report lists line 3
+          go.sum (omitted by the ignore list) also changes | go.sum also changes
+          """)
+  void round15VariantsAreRemovedOrRewritten(String leaked, String clean) {
+    var in = leaked.replace("\\n", "\n");
+    var out = clean.replace("\\n", "\n");
+    assertEquals(out, PromptLabelScrubber.scrub(in));
+    assertEquals(out, PromptLabelScrubber.scrub(out));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "I rated it at medium confidence because CI had not finished.",
+        "The value is supplied from the environment (supplied from the caller).",
+        "The secret is provided with the request, not with this build.",
+        "Files excluded by the ignore list still count toward the total.",
+        "The config key definitions in Config.java read four variables.",
+        "and I am rating this claim at the required confidence as a matter of course"
+      })
+  void round15NearMissesAreLeftAlone(String text) {
+    assertEquals(text, PromptLabelScrubber.scrub(text));
+  }
+
+  @Test
+  void round15PhrasesAreScrubbedOnEveryPostedSurface() {
+    var response =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "high",
+                    "medium",
+                    "rust/src/lib.rs",
+                    12,
+                    "Off-by-one",
+                    CONFIDENCE_RULE_LEAK,
+                    "let start = x + 1;",
+                    "let start = x;")),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", IGNORE_LIST_LEAK)),
+            new ReviewResponse.Summary(
+                1,
+                0,
+                1,
+                0,
+                0,
+                PROVIDED_WITH_REVIEW_LEAK,
+                SUPPLIED_FROM_LEAK,
+                List.of(IGNORE_LIST_LEAK),
+                List.of(),
+                List.of(new ReviewResponse.FileSummary("rust/src/lib.rs", CONFIDENCE_RULE_LEAK)),
+                ""));
+
+    var scrubbed = PromptLabelScrubber.scrub(response);
+
+    assertEquals(CONFIDENCE_RULE_CLEAN, scrubbed.findings().getFirst().description());
+    assertEquals(IGNORE_LIST_CLEAN, scrubbed.previousFindingsStatus().getFirst().note());
+    var summary = scrubbed.summary();
+    assertEquals(PROVIDED_WITH_REVIEW_CLEAN, summary.overallAssessment());
+    assertEquals(SUPPLIED_FROM_CLEAN, summary.prPurpose());
+    assertEquals(List.of(IGNORE_LIST_CLEAN), summary.descriptionGaps());
+    assertEquals(CONFIDENCE_RULE_CLEAN, summary.fileSummaries().getFirst().summary());
+
+    // The publisher's guard and a conversational reply go through the same text scrub.
+    assertEquals(
+        "## Summary\n" + PROVIDED_WITH_REVIEW_CLEAN,
+        PromptLabelScrubber.scrubMarkdown("## Summary\n" + PROVIDED_WITH_REVIEW_LEAK, List.of()));
+    assertEquals(
+        SUPPLIED_FROM_CLEAN, PromptLabelScrubber.scrub(SUPPLIED_FROM_LEAK, Set.of("Config.kt")));
+  }
 }
