@@ -21,11 +21,11 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.ProcessingException;
 import jakarta.ws.rs.WebApplicationException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
+import java.util.stream.Stream;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -83,17 +83,12 @@ public class InstructionsResolver {
   }
 
   private static List<String> buildFallbackChain(ThrillhouseConfig config) {
-    var chain = new ArrayList<String>();
     var configured = config.review().instructionsFile();
-    if (configured != null && !configured.isBlank()) {
-      chain.add(configured.trim());
-    }
-    for (String fallback : DEFAULT_FALLBACK_CHAIN) {
-      if (!chain.contains(fallback)) {
-        chain.add(fallback);
-      }
-    }
-    return List.copyOf(chain);
+    var first =
+        configured != null && !configured.isBlank()
+            ? Stream.of(configured.trim())
+            : Stream.<String>empty();
+    return Stream.concat(first, DEFAULT_FALLBACK_CHAIN.stream()).distinct().toList();
   }
 
   /**

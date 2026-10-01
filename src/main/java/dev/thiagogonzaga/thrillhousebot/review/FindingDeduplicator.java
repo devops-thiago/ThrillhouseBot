@@ -21,11 +21,13 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Collapses duplicate findings within a single review response. The model occasionally reports one
@@ -150,13 +152,9 @@ public class FindingDeduplicator {
     if (title == null || title.isBlank()) {
       return Set.of();
     }
-    var tokens = new HashSet<String>();
-    for (String token : title.toLowerCase(Locale.ROOT).split("[^a-z0-9]+")) {
-      if (!token.isEmpty()) {
-        tokens.add(token);
-      }
-    }
-    return tokens;
+    return Arrays.stream(title.toLowerCase(Locale.ROOT).split("[^a-z0-9]+"))
+        .filter(token -> !token.isEmpty())
+        .collect(Collectors.toCollection(HashSet::new));
   }
 
   /**

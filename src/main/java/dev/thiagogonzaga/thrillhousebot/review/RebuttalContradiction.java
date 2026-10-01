@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
@@ -416,12 +417,10 @@ final class RebuttalContradiction {
    */
   private static String assertedText(String rebuttal) {
     var withoutFences = FENCED_BLOCK.matcher(rebuttal).replaceAll(" ");
-    var kept = new ArrayList<String>();
-    for (var line : withoutFences.split("\n", -1)) {
-      if (!line.stripLeading().startsWith(">")) {
-        kept.add(line);
-      }
-    }
+    var kept =
+        Arrays.stream(withoutFences.split("\n", -1))
+            .filter(line -> !line.stripLeading().startsWith(">"))
+            .toList();
     // Joined, not terminated: a reply that ends mid-sentence must stay unterminated, so
     // sentenceAround's end-of-text bound is a live case rather than an unreachable guard.
     return stripInlineSpans(String.join("\n", kept));

@@ -31,7 +31,6 @@ import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
 import dev.thiagogonzaga.thrillhousebot.review.UnitTestGenerator;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -525,17 +524,16 @@ public class CommentCommandService {
    * Walks every page so a PR with many comments does not leave later-page bot threads unresolved.
    */
   private List<Long> botRootCommentIds(String auth, CommandContext ctx) {
-    var ids = new ArrayList<Long>();
-    for (var c :
-        reviewClient.listPullRequestComments(
-            auth, ACCEPT, ctx.owner(), ctx.repo(), ctx.prNumber())) {
-      if (c.inReplyToId() == null
-          && c.user() != null
-          && triggerDetector.isBotComment(c.user().login())) {
-        ids.add(c.id());
-      }
-    }
-    return ids;
+    return reviewClient
+        .listPullRequestComments(auth, ACCEPT, ctx.owner(), ctx.repo(), ctx.prNumber())
+        .stream()
+        .filter(
+            c ->
+                c.inReplyToId() == null
+                    && c.user() != null
+                    && triggerDetector.isBotComment(c.user().login()))
+        .map(GitHubReviewClient.PullRequestComment::id)
+        .toList();
   }
 
   /**

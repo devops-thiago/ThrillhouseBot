@@ -274,13 +274,9 @@ final class JacocoCoverageReport {
     if (candidates == null) {
       return List.of();
     }
-    var matched = new ArrayList<SourceFile>();
-    for (var candidate : candidates) {
-      if (isSuffixPath(repositoryPath, candidate.path())) {
-        matched.add(candidate);
-      }
-    }
-    return matched;
+    return candidates.stream()
+        .filter(candidate -> isSuffixPath(repositoryPath, candidate.path()))
+        .toList();
   }
 
   /**

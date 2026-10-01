@@ -31,6 +31,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.PatternSyntaxException;
+import java.util.stream.Collectors;
 
 /**
  * Decides whether an automatic {@code pull_request} event should trigger a review. Operators use
@@ -118,13 +119,10 @@ public class ReviewTriggerFilter {
     if (labels == null || labels.isEmpty()) {
       return Set.of();
     }
-    var normalized = new LinkedHashSet<String>();
-    for (String label : labels) {
-      if (label != null && !label.isBlank()) {
-        normalized.add(label.trim().toLowerCase(Locale.ROOT));
-      }
-    }
-    return Set.copyOf(normalized);
+    return labels.stream()
+        .filter(label -> label != null && !label.isBlank())
+        .map(label -> label.trim().toLowerCase(Locale.ROOT))
+        .collect(Collectors.toUnmodifiableSet());
   }
 
   /** Lower-cased names of the labels currently on the PR; empty when the payload omits them. */
@@ -132,13 +130,11 @@ public class ReviewTriggerFilter {
     if (pr.labels().isEmpty()) {
       return Set.of();
     }
-    var names = new LinkedHashSet<String>();
-    for (var label : pr.labels()) {
-      if (label.name() != null && !label.name().isBlank()) {
-        names.add(label.name().trim().toLowerCase(Locale.ROOT));
-      }
-    }
-    return names;
+    return pr.labels().stream()
+        .map(WebhookPayload.Label::name)
+        .filter(name -> name != null && !name.isBlank())
+        .map(name -> name.trim().toLowerCase(Locale.ROOT))
+        .collect(Collectors.toCollection(LinkedHashSet::new));
   }
 
   /**
