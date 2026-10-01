@@ -87,7 +87,9 @@ public record ReviewResponse(
     public Summary {
       // The AI may emit null elements inside these arrays; drop them before List.copyOf. copyOf
       // stays inline so SpotBugs sees the defensive copy (EI_EXPOSE_REP).
-      descriptionGaps = List.copyOf(withoutNulls(descriptionGaps));
+      // Every path that builds a summary — the parsed answer, the carried gaps, the scrubbers —
+      // comes through here, so no carried-gap label the model echoed survives to a surface (#970).
+      descriptionGaps = List.copyOf(DescriptionGapLabels.stripAll(withoutNulls(descriptionGaps)));
       suggestedLabels = List.copyOf(withoutNulls(suggestedLabels));
       fileSummaries = List.copyOf(withoutNulls(fileSummaries));
       addressedGaps = List.copyOf(withoutNulls(addressedGaps));

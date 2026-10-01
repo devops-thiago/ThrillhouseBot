@@ -104,6 +104,22 @@ class DescriptionGapCarryoverTest {
     }
 
     @Test
+    void aSummaryThatEchoedALabelIsReadBackWithoutIt() {
+      // #970: rounds 3 of ThrillhouseBot-test#185 and #186 posted "- G1: <gap>" and a bare "- G1"
+      // bullet; the next round must carry the gap itself, not the label, nor an empty gap.
+      var body =
+          PrSummaryGenerator.GAPS_HEADING
+              + "\nThe PR description or its linked issue does not fully match the change:\n"
+              + "- G1\n- G1: "
+              + CAP_GAP
+              + "\n- Gateway retries are described as bounded, but the loop has no limit.\n";
+
+      assertEquals(
+          List.of(CAP_GAP, "Gateway retries are described as bounded, but the loop has no limit."),
+          DescriptionGapCarryover.listedGaps(body));
+    }
+
+    @Test
     void aSectionThatCollapsedOntoFindingsCarriesNothing() {
       var body =
           PrSummaryGenerator.GAPS_HEADING
@@ -531,6 +547,20 @@ class DescriptionGapCarryoverTest {
           render(
               DescriptionGapCarryover.Carry.NONE.apply(summary(List.of(RESTATING_GAP), List.of())));
       assertTrue(collapsed.contains(PrSummaryGenerator.GAPS_ALL_REPORTED_AS_FINDINGS), collapsed);
+    }
+
+    @Test
+    void anEchoedLabelNeverReachesTheSectionAndTheCarriedGapStaysOnce() {
+      // #970: round 3 echoed the carried gap's label into description_gaps, as "G1: <gap>" (#185)
+      // and as a bare "G1" (#186). Neither label is rendered, and the echoed gap is the carried
+      // one reported again, so it is listed once.
+      var carry = new DescriptionGapCarryover.Carry(List.of(CAP_GAP), LINKED_113);
+
+      var rendered = render(carry.apply(summary(List.of("G1", "G1: " + CAP_GAP), List.of())));
+
+      assertTrue(rendered.contains("- " + CAP_GAP + "\n"), rendered);
+      assertFalse(rendered.contains("G1"), rendered);
+      assertEquals(1, rendered.split(java.util.regex.Pattern.quote(CAP_GAP), -1).length - 1);
     }
 
     @Test

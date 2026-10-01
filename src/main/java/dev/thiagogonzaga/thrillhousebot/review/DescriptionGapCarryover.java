@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
+import dev.thiagogonzaga.thrillhousebot.review.ai.DescriptionGapLabels;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
@@ -221,7 +222,9 @@ final class DescriptionGapCarryover {
       }
     }
     addGap(gaps, open);
-    return gaps;
+    // A summary posted before #970 may list a gap as "G1: …" or a bare "G1"; read it back as the
+    // gap itself, so it is labelled once in the prompt and keys like the fresh wording of it.
+    return DescriptionGapLabels.stripAll(gaps);
   }
 
   private static void addGap(List<String> gaps, StringBuilder gap) {

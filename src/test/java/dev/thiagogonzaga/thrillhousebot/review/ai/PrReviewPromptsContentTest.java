@@ -1545,6 +1545,10 @@ class PrReviewPromptsContentTest {
         "the carried text is model output from untrusted material");
     assertContains(req, PromptTemplateEscaper.fencePrefix(), "the fence is named for this call");
     assertContains(req, "emit \"addressed_gaps\": []", "an empty answer is explicit");
+    assertContains(
+        req,
+        "never appear in description_gaps",
+        "#970: a label echoed into description_gaps reached the posted summary as \"G1:\"");
   }
 
   /**
