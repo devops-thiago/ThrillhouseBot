@@ -54,6 +54,14 @@ export interface SessionDetail extends SessionListItem {
 
 const BASE = '';
 
+/** A non-2xx API answer, keeping the status so pages can tell "not found" from a failure. */
+export class ApiError extends Error {
+  constructor(readonly status: number) {
+    super(`API error: ${status}`);
+    this.name = 'ApiError';
+  }
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(BASE + url, { credentials: 'include' });
   if (res.status === 401) {
@@ -62,7 +70,7 @@ async function fetchJson<T>(url: string): Promise<T> {
     if (typeof window !== 'undefined') window.location.href = '/dashboard/';
     throw new Error('Session expired');
   }
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  if (!res.ok) throw new ApiError(res.status);
   return res.json();
 }
 
@@ -73,7 +81,7 @@ function realApi() {
     tokens: (period = 'month') => fetchJson<TokenData>(`/api/dashboard/tokens?period=${period}`),
     sessions: (page = 0, repo?: string) =>
       fetchJson<{ sessions: SessionListItem[]; total: number; page: number; size: number }>(
-        `/api/dashboard/sessions?page=${page}&size=20${repo ? `&repository=${repo}` : ''}`,
+        `/api/dashboard/sessions?page=${page}&size=20${repo ? `&repository=${encodeURIComponent(repo)}` : ''}`,
       ),
     session: (id: number) => fetchJson<SessionDetail>(`/api/dashboard/sessions/${id}`),
   };

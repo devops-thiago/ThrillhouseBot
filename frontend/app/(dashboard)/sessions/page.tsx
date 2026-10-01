@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { api, SessionDetail, SessionListItem } from '@/lib/api';
+import { api, ApiError, SessionDetail, SessionListItem } from '@/lib/api';
 
 export default function SessionsPage() {
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
@@ -13,6 +13,7 @@ export default function SessionsPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailNotFound, setDetailNotFound] = useState(false);
 
   const selectSession = (id: number | null) => {
     setSelectedId(id);
@@ -60,6 +61,7 @@ export default function SessionsPage() {
       return;
     }
     setDetail(null);
+    setDetailNotFound(false);
     setDetailLoading(true);
     let cancelled = false;
     api()
@@ -69,9 +71,12 @@ export default function SessionsPage() {
         setDetail(data);
         setDetailLoading(false);
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (cancelled) return;
         setDetail(null);
+        // The API answers 404 both for a missing session and for one in a repository this
+        // login cannot read, so the page cannot (and must not) tell the two apart.
+        setDetailNotFound(err instanceof ApiError && err.status === 404);
         setDetailLoading(false);
       });
     return () => {
@@ -230,7 +235,11 @@ export default function SessionsPage() {
             {detailLoading && <p>Loading session details...</p>}
 
             {!detailLoading && !detail && (
-              <p style={{ color: 'var(--text-muted)' }}>Could not load session details.</p>
+              <p style={{ color: 'var(--text-muted)' }}>
+                {detailNotFound
+                  ? 'Session not found, or it belongs to a repository you do not have access to.'
+                  : 'Could not load session details.'}
+              </p>
             )}
 
             {!detailLoading && detail && (

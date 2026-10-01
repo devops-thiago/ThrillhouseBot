@@ -36,6 +36,14 @@ public class DashboardSessionValidator {
     return resolveLogin(sessionId).isPresent();
   }
 
+  /**
+   * Whether the session still exists (not logged out or expired), without re-running the GitHub
+   * access check; cheap enough for a per-event check on an open connection.
+   */
+  public boolean isSessionOpen(String sessionId) {
+    return sessionStore.findSession(sessionId).isPresent();
+  }
+
   public Optional<String> resolveLogin(String sessionId) {
     return sessionStore
         .findSession(sessionId)
@@ -49,5 +57,16 @@ public class DashboardSessionValidator {
         .findSession(sessionId)
         .filter(session -> accessChecker.hasRepositoryAccess(session.login(), repository))
         .isPresent();
+  }
+
+  /**
+   * The repositories this session's login may read, resolved once so a request can filter its
+   * queries by them; {@link RepositoryScope#NONE} for an unknown or expired session.
+   */
+  public RepositoryScope repositoryScope(String sessionId) {
+    return sessionStore
+        .findSession(sessionId)
+        .map(session -> accessChecker.repositoryScope(session.login()))
+        .orElse(RepositoryScope.NONE);
   }
 }

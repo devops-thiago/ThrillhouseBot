@@ -27,9 +27,9 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,7 +45,19 @@ public final class SessionEventBroadcaster {
 
   private Clock clock = Clock.systemUTC();
 
-  private final Set<jakarta.websocket.Session> sessions = ConcurrentHashMap.newKeySet();
+  /**
+   * Decides, per connection, whether a review event of one repository may be sent to it. Fixed when
+   * the connection opens from the dashboard login's {@link RepositoryScope}, so a broadcast never
+   * waits on a GitHub call.
+   */
+  @FunctionalInterface
+  public interface RepositoryReader {
+    boolean canRead(String repository);
+  }
+
+  /** Each open dashboard connection with the repositories it may receive events for. */
+  private final ConcurrentHashMap<jakarta.websocket.Session, RepositoryReader> sessions =
+      new ConcurrentHashMap<>();
 
   private final ConcurrentHashMap<Long, SessionState> sessionStateById = new ConcurrentHashMap<>();
 
@@ -56,9 +68,9 @@ public final class SessionEventBroadcaster {
     this.mapper = mapper;
   }
 
-  public void addSession(jakarta.websocket.Session session) {
-    sessions.add(session);
-    replayActiveSessions(session);
+  public void addSession(jakarta.websocket.Session session, RepositoryReader reader) {
+    sessions.put(session, reader);
+    replayActiveSessions(session, reader);
     log.debug("WebSocket client connected (total: {})", sessions.size());
   }
 
@@ -79,7 +91,7 @@ public final class SessionEventBroadcaster {
       return;
     }
 
-    sendTextToAll(json);
+    sendTextTo(reader -> reader.canRead(event.repository()), json);
   }
 
   /** Application-level heartbeat for connected dashboard clients. */
@@ -87,7 +99,8 @@ public final class SessionEventBroadcaster {
     if (sessions.isEmpty()) {
       return;
     }
-    sendTextToAll("{\"type\":\"keepalive\"}");
+    // The keep-alive carries no review data, so every connection gets it.
+    sendTextTo(reader -> true, "{\"type\":\"keepalive\"}");
   }
 
   /** Evicts replay buffers for sessions with no recent activity and no terminal event. */
@@ -111,7 +124,9 @@ public final class SessionEventBroadcaster {
     }
 
     Instant now = Instant.now(clock);
-    var state = sessionStateById.computeIfAbsent(event.sessionId(), id -> new SessionState(now));
+    var state =
+        sessionStateById.computeIfAbsent(
+            event.sessionId(), id -> new SessionState(now, event.repository()));
     state.latestEventType = event.type();
     state.lastActivityAt = now;
 
@@ -137,7 +152,7 @@ public final class SessionEventBroadcaster {
         || SessionEvent.TYPE_FAILED.equals(eventType);
   }
 
-  private void replayActiveSessions(jakarta.websocket.Session wsSession) {
+  private void replayActiveSessions(jakarta.websocket.Session wsSession, RepositoryReader reader) {
     if (!wsSession.isOpen()) {
       return;
     }
@@ -145,7 +160,9 @@ public final class SessionEventBroadcaster {
     for (var entry : sessionStateById.entrySet()) {
       var state = entry.getValue();
       var latestType = state.latestEventType;
-      if (latestType == null || isTerminalReviewEvent(latestType)) {
+      if (latestType == null
+          || isTerminalReviewEvent(latestType)
+          || !reader.canRead(state.repository)) {
         continue;
       }
 
@@ -157,15 +174,21 @@ public final class SessionEventBroadcaster {
     }
   }
 
-  private void sendTextToAll(String json) {
-    sessions.removeIf(
-        session -> {
-          if (!session.isOpen()) {
-            return true;
-          }
-          sendText(session, json);
-          return false;
-        });
+  /** Sends {@code json} to every open connection whose reader passes {@code recipient}. */
+  private void sendTextTo(Predicate<RepositoryReader> recipient, String json) {
+    sessions
+        .entrySet()
+        .removeIf(
+            entry -> {
+              var session = entry.getKey();
+              if (!session.isOpen()) {
+                return true;
+              }
+              if (recipient.test(entry.getValue())) {
+                sendText(session, json);
+              }
+              return false;
+            });
   }
 
   private void sendText(jakarta.websocket.Session session, String json) {
@@ -192,11 +215,12 @@ public final class SessionEventBroadcaster {
   /** Seeds replay buffer state for tests without exposing the backing map. */
   void seedReplayState(
       long sessionId,
+      String repository,
       String latestEventType,
       Instant lastActivityAt,
       List<String> bufferedEventJson,
       String latestStreamJson) {
-    var state = new SessionState(lastActivityAt);
+    var state = new SessionState(lastActivityAt, repository);
     state.latestEventType = latestEventType;
     state.lastActivityAt = lastActivityAt;
     state.latestStreamJson = latestStreamJson;
@@ -213,12 +237,14 @@ public final class SessionEventBroadcaster {
   private static final class SessionState {
     private final Object bufferLock = new Object();
     private final Deque<String> buffer = new ArrayDeque<>();
+    final String repository;
     String latestEventType;
     Instant lastActivityAt;
     String latestStreamJson;
 
-    SessionState(Instant createdAt) {
+    SessionState(Instant createdAt, String repository) {
       this.lastActivityAt = createdAt;
+      this.repository = repository;
     }
 
     void appendBufferedEvent(String json, int maxSize) {
