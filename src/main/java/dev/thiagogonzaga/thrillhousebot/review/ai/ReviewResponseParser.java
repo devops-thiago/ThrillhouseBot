@@ -23,6 +23,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.introspect.BeanPropertyDefinition;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import io.quarkus.logging.Log;
@@ -70,6 +71,17 @@ public class ReviewResponseParser {
   /** Keys a mis-shaped {@code file_summaries} entry may carry the one-line summary under. */
   private static final List<String> SUMMARY_KEYS =
       List.of(SUMMARY, "description", "change", "changes", "note", "text");
+
+  /**
+   * Fields of {@link ReviewResponse.Finding} that tell a finding apart from every other object a
+   * review response carries. An object holding at least two of them is finding-shaped; a {@code
+   * file_summaries} entry ({@code path}, {@code summary}) or a status ({@code id}, {@code status},
+   * {@code note}) holds none.
+   */
+  private static final List<String> FINDING_KEYS = List.of("risk", "file", "title", "description");
+
+  /** How many of {@link #FINDING_KEYS} an object must hold to be read as a finding. */
+  private static final int MIN_FINDING_KEYS = 2;
 
   /** How many of a dropped entry's field names one warning line lists before it stops. */
   private static final int MAX_LOGGED_FIELD_NAMES = 8;
@@ -124,7 +136,7 @@ public class ReviewResponseParser {
     if (raw == null || raw.isBlank()) {
       throw new IllegalArgumentException("Model returned an empty response");
     }
-    var root = readDocuments(extractJson(raw, REVIEW_ROOT_KEYS));
+    var root = readDocuments(extractJson(raw, REVIEW_ROOT_KEYS, true));
     if (summaryLane) {
       foldSummaryFields(root);
     }
@@ -174,18 +186,36 @@ public class ReviewResponseParser {
    * truncated or malformed further document is content the parser could not read, and it raises the
    * same {@code IllegalArgumentException} a malformed response does, so the caller retries instead
    * of approving from a response it only partly read.
+   *
+   * <p>A document may also be a bare array of finding-shaped objects (#960): a model answered one
+   * review call with its 16 findings as a top-level array followed by {@code {"findings": [],
+   * "previous_findings_status": []}}, and the empty object was read as the whole answer. Such an
+   * array is read as a document whose {@code findings} it is, wherever it falls. A later array that
+   * is not finding-shaped has each of its objects merged as a document of its own, which is how the
+   * scan read one before it recognized arrays. When the merged root ends with fewer findings than
+   * the documents carried, a warning names how many were dropped.
    */
   private ObjectNode readDocuments(String json) {
-    var first = readObject(json, 0);
-    var root = first.node();
+    var first = readDocument(json, 0);
+    var root = asReviewRoot(first.node());
+    if (root == null) {
+      throw new IllegalArgumentException("Model response is not a JSON object");
+    }
+    if (first.node().isArray()) {
+      Log.infof(
+          "Review response opened on a top-level array of %d finding(s) with no findings field"
+              + " around it; read it as the findings",
+          first.node().size());
+    }
     var position = first.end();
     var documents = 1;
     var tally = new MergeTally();
+    tally.carried = findingCount(root);
     for (var next = nextDocumentStart(json, position);
         next >= 0;
         next = nextDocumentStart(json, position)) {
-      var document = readObject(json, next);
-      mergeInto(root, document.node(), tally);
+      var document = readDocument(json, next);
+      mergeDocument(root, document.node(), tally);
       position = document.end();
       documents++;
     }
@@ -201,42 +231,102 @@ public class ReviewResponseParser {
           tally.duplicates,
           tally.conflicts);
     }
+    var held = findingCount(root);
+    if (held < tally.carried) {
+      Log.warnf(
+          "Review response's %d JSON documents carried %d finding(s) but the merged response holds"
+              + " %d — dropped %d finding(s), %d of them identical duplicates",
+          documents, tally.carried, held, tally.carried - held, tally.duplicates);
+    }
     return root;
   }
 
   /** One document read out of the response text: its root and the index just past its close. */
-  private record Document(ObjectNode node, int end) {}
+  private record Document(JsonNode node, int end) {}
 
-  /** What merging the later documents did, for the one warning {@link #readDocuments} logs. */
+  /** What merging the later documents did, for the warnings {@link #readDocuments} logs. */
   private static final class MergeTally {
+    int carried;
     int appended;
     int duplicates;
     int conflicts;
   }
 
   /**
-   * Reads the JSON object starting at {@code start}. The parser is asked for exactly one value, and
-   * where it stopped is what tells the caller whether the response continues.
+   * Reads the JSON document starting at {@code start}. The parser is asked for exactly one value,
+   * and where it stopped is what tells the caller whether the response continues.
    */
-  private Document readObject(String json, int start) {
-    JsonNode node;
-    int end;
+  private Document readDocument(String json, int start) {
     try (var parser = mapper.createParser(json.substring(start))) {
-      node = mapper.readTree(parser);
-      end = start + (int) parser.currentLocation().getCharOffset();
+      JsonNode node = mapper.readTree(parser);
+      return new Document(node, start + (int) parser.currentLocation().getCharOffset());
     } catch (IOException e) {
       throw new IllegalArgumentException("Model response is not valid review JSON", e);
     }
-    if (!(node instanceof ObjectNode object)) {
-      throw new IllegalArgumentException("Model response is not a JSON object");
-    }
-    return new Document(object, end);
   }
 
   /**
-   * The index of the next document's opening brace at or after {@code from}, or -1 when none
-   * remains. Prose ahead of a further brace is skipped, as the prose ahead of the first document
-   * is; prose with no brace after it is discarded, and the discard is logged with its size.
+   * The review root a document stands for: an object is its own root, and a finding-shaped array
+   * (see {@link #isFindingArray}) is the {@code findings} of a root that holds nothing else; {@code
+   * null} for anything else.
+   */
+  private static ObjectNode asReviewRoot(JsonNode document) {
+    if (document instanceof ObjectNode object) {
+      return object;
+    }
+    if (isFindingArray(document)) {
+      var root = JsonNodeFactory.instance.objectNode();
+      root.set(FINDINGS, document);
+      return root;
+    }
+    return null;
+  }
+
+  /**
+   * Whether {@code node} is a non-empty array whose every element is a finding-shaped object — one
+   * holding at least {@link #MIN_FINDING_KEYS} of {@link #FINDING_KEYS}. An empty array is not: it
+   * says nothing about being findings, and a lone {@code []} stays the refusal it always was.
+   */
+  static boolean isFindingArray(JsonNode node) {
+    if (node == null || !node.isArray() || node.isEmpty()) {
+      return false;
+    }
+    for (var element : node) {
+      if (FINDING_KEYS.stream().filter(element::has).count() < MIN_FINDING_KEYS) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** The size of {@code root}'s findings array; 0 when it holds none. */
+  private static int findingCount(ObjectNode root) {
+    return root.get(FINDINGS) instanceof ArrayNode findings ? findings.size() : 0;
+  }
+
+  /**
+   * Folds a later document into {@code root}: a review root through {@link #mergeInto}, and an
+   * array that is not one object by object, as the scan read such an array before it recognized
+   * arrays (each element that is not an object carries nothing a review root can take).
+   */
+  private static void mergeDocument(ObjectNode root, JsonNode document, MergeTally tally) {
+    var asRoot = asReviewRoot(document);
+    if (asRoot != null) {
+      mergeInto(root, asRoot, tally);
+      return;
+    }
+    for (var element : document) {
+      if (element instanceof ObjectNode object) {
+        mergeInto(root, object, tally);
+      }
+    }
+  }
+
+  /**
+   * The index of the next document's opening brace — or the bracket of an array that opens on an
+   * object (#960) — at or after {@code from}, or -1 when none remains. Prose ahead of a further
+   * brace is skipped, as the prose ahead of the first document is; prose with no brace after it is
+   * discarded, and the discard is logged with its size.
    */
   private static int nextDocumentStart(String json, int from) {
     var next = scanForNextDocument(json, from);
@@ -261,7 +351,7 @@ public class ReviewResponseParser {
     var at = from;
     while (at < json.length()) {
       var c = json.charAt(at);
-      if (c == '{') {
+      if (c == '{' || opensArrayOfObjects(json, at)) {
         return new NextDocument(at, -1);
       }
       if (json.startsWith("```", at)) {
@@ -277,10 +367,30 @@ public class ReviewResponseParser {
         if (brace < 0) {
           return new NextDocument(-1, at);
         }
-        at = brace;
+        at = arrayOpeningOn(json, brace);
       }
     }
     return new NextDocument(-1, -1);
+  }
+
+  /** Whether {@code json} opens, at {@code at}, an array whose first element is an object. */
+  private static boolean opensArrayOfObjects(String json, int at) {
+    return ARRAY_OF_OBJECTS_START.matcher(json).region(at, json.length()).lookingAt();
+  }
+
+  /**
+   * The bracket of the array that opens on the object at {@code brace}, when only whitespace
+   * separates the two and the object opens on a key; {@code brace} itself otherwise. The scan jumps
+   * from prose to the next brace, and must land on the array around it rather than inside it.
+   */
+  private static int arrayOpeningOn(String json, int brace) {
+    // The scan stood on a character that is neither whitespace nor a document start ahead of the
+    // brace, so this walk back stops on a character at or after it.
+    var at = brace - 1;
+    while (Character.isWhitespace(json.charAt(at))) {
+      at--;
+    }
+    return opensArrayOfObjects(json, at) ? at : brace;
   }
 
   /**
@@ -289,6 +399,9 @@ public class ReviewResponseParser {
    * non-null value it was given, so two documents that disagree resolve the same way every time.
    */
   private static void mergeInto(ObjectNode root, ObjectNode document, MergeTally tally) {
+    if (document.get(FINDINGS) instanceof ArrayNode carried) {
+      tally.carried += carried.size();
+    }
     for (var entry : document.properties()) {
       var value = entry.getValue();
       if (FINDINGS.equals(entry.getKey())
@@ -806,12 +919,25 @@ public class ReviewResponseParser {
   /** Where a JSON object with at least one key may open: a brace, whitespace, then a quote. */
   private static final Pattern OBJECT_START = Pattern.compile("\\{\\s*\"");
 
+  /** Where an array whose first element is an object with at least one key may open. */
+  private static final Pattern ARRAY_OF_OBJECTS_START = Pattern.compile("\\[\\s*\\{\\s*\"");
+
+  /**
+   * An answer candidate when finding arrays are read (#960): an object as {@link #OBJECT_START}, or
+   * an array as {@link #ARRAY_OF_OBJECTS_START}. Only the opening character is matched, so the
+   * object an array opens on is a candidate of its own.
+   */
+  private static final Pattern ANSWER_START = Pattern.compile("\\{(?=\\s*\")|\\[(?=\\s*\\{\\s*\")");
+
   /**
    * Parser features for the answer probe in {@link #extractJson(String, List)}: a raw control
    * character inside a string is escaped before the real parse, so the probe must not fail on one.
    */
   private static final JsonFactory PROBE_FACTORY =
       JsonFactory.builder().enable(JsonReadFeature.ALLOW_UNESCAPED_CONTROL_CHARS).build();
+
+  /** Reads an array candidate's tree, to tell whether it is finding-shaped. */
+  private static final ObjectMapper PROBE_MAPPER = new ObjectMapper(PROBE_FACTORY);
 
   /**
    * Like {@link #extractJson(String)}, but anchored on the answer rather than on the first bracket
@@ -865,6 +991,19 @@ public class ReviewResponseParser {
    * close before the break, and those do not overlap one another.
    */
   static String extractJson(String raw, List<String> rootKeys) {
+    return extractJson(raw, rootKeys, false);
+  }
+
+  /**
+   * {@link #extractJson(String, List)}, and when {@code findingArrays} is set the answer may also
+   * open on a top-level array of finding-shaped objects (see {@link #isFindingArray}) from which
+   * the rest of the body reads as documents to its end (#960): a model answered with its findings
+   * as a bare array followed by {@code {"findings": []}}, and anchoring on the object discarded
+   * every finding ahead of it. The array must be finding-shaped, so a quoted JSON excerpt or a
+   * severity list in the deliberation is no more an answer than before. Only {@link #parse} reads
+   * arrays as findings, so only it sets the flag; the truncation salvage reads a single object.
+   */
+  static String extractJson(String raw, List<String> rootKeys, boolean findingArrays) {
     if (raw == null) {
       return "";
     }
@@ -873,7 +1012,7 @@ public class ReviewResponseParser {
     if (!rootKey.find()) {
       return extractJson(raw);
     }
-    var anchor = findAnswer(trimmed, rootKeys).start();
+    var anchor = findAnswer(trimmed, rootKeys, findingArrays).start();
     if (anchor < 0) {
       anchor = rootKey.start();
     }
@@ -894,7 +1033,15 @@ public class ReviewResponseParser {
 
   /** Runs the answer probe over {@code text}; see {@link #extractJson(String, List)}. */
   static AnswerSearch findAnswer(String text, List<String> rootKeys) {
-    return new AnswerProbe(text, rootAnchorPattern(rootKeys).matcher(text)).find();
+    return findAnswer(text, rootKeys, false);
+  }
+
+  /**
+   * Runs the answer probe over {@code text}, with finding arrays as candidates when {@code
+   * findingArrays} is set; see {@link #extractJson(String, List, boolean)}.
+   */
+  static AnswerSearch findAnswer(String text, List<String> rootKeys, boolean findingArrays) {
+    return new AnswerProbe(text, rootAnchorPattern(rootKeys).matcher(text), findingArrays).find();
   }
 
   /** One answer search over one body: the candidates, the runs already known to break, the work. */
@@ -902,13 +1049,18 @@ public class ReviewResponseParser {
     private final String text;
     private final char[] chars;
     private final Matcher rootKey;
+    private final boolean findingArrays;
     private final Set<Integer> dead = new HashSet<>();
     private long charsParsed;
 
-    AnswerProbe(String text, Matcher rootKey) {
+    /** Whether the last array {@link #documentEnd} read whole was finding-shaped. */
+    private boolean lastArrayHeldFindings;
+
+    AnswerProbe(String text, Matcher rootKey, boolean findingArrays) {
       this.text = text;
       this.chars = text.toCharArray();
       this.rootKey = rootKey;
+      this.findingArrays = findingArrays;
     }
 
     AnswerSearch find() {
@@ -917,16 +1069,25 @@ public class ReviewResponseParser {
       while (rootKey.find()) {
         lastRootObject = rootKey.start();
       }
-      var candidates = OBJECT_START.matcher(text);
+      var candidates = (findingArrays ? ANSWER_START : OBJECT_START).matcher(text);
       var skipUntil = 0;
+      // An array that is not the answer still has its objects probed: an answer wrapped in an
+      // array, [{"findings": [...]}], has always been read from the object inside. Only arrays
+      // nested in it are skipped, so every array is read at most once.
+      var skipArraysUntil = 0;
       while (candidates.find() && candidates.start() <= lastRootObject) {
         var start = candidates.start();
-        if (start >= skipUntil) {
+        var array = chars[start] == '[';
+        if (start >= skipUntil && (!array || start >= skipArraysUntil)) {
           var probe = probe(start);
           if (probe.answer()) {
             return new AnswerSearch(start, charsParsed);
           }
-          skipUntil = Math.max(skipUntil, probe.firstEnd());
+          if (array) {
+            skipArraysUntil = Math.max(skipArraysUntil, probe.firstEnd());
+          } else {
+            skipUntil = Math.max(skipUntil, probe.firstEnd());
+          }
         }
       }
       return new AnswerSearch(-1, charsParsed);
@@ -945,15 +1106,23 @@ public class ReviewResponseParser {
         visited.add(at);
         var end = documentEnd(at);
         if (end == CUT) {
+          if (at == start && chars[start] == '[') {
+            // A cut array runs to the end of the body, so the root-keyed object lies inside it:
+            // that object is the candidate to read, not the array around it.
+            break;
+          }
           // Cut inside this document: the run reached the end of the body, and a root-keyed object
           // lies at or past every candidate find() probes, so it holds one.
           return new Probe(true, firstEnd);
         }
-        if (firstEnd < 0 && end != BROKEN) {
-          firstEnd = end;
-        }
-        if (end == BROKEN || !holdsRootKey(start, firstEnd)) {
+        if (end == BROKEN) {
           break;
+        }
+        if (firstEnd < 0) {
+          firstEnd = end;
+          if (!opensTheAnswer(start, end)) {
+            break;
+          }
         }
         at = scanForNextDocument(text, end).start();
         if (at < 0) {
@@ -973,8 +1142,12 @@ public class ReviewResponseParser {
      */
     private int documentEnd(int start) {
       try (var parser = PROBE_FACTORY.createParser(chars, start, chars.length - start)) {
-        parser.nextToken();
-        parser.skipChildren();
+        if (chars[start] == '[') {
+          lastArrayHeldFindings = isFindingArray(PROBE_MAPPER.readTree(parser));
+        } else {
+          parser.nextToken();
+          parser.skipChildren();
+        }
         var end = start + (int) parser.currentLocation().getCharOffset();
         charsParsed += end - start;
         return end;
@@ -988,6 +1161,14 @@ public class ReviewResponseParser {
         markObjectsOpenAt(start, failedAt);
         return BROKEN;
       }
+    }
+
+    /**
+     * Whether the first document, read from {@code start} to {@code end}, can open the answer: an
+     * object that opens on or holds a root key, or a finding-shaped array.
+     */
+    private boolean opensTheAnswer(int start, int end) {
+      return chars[start] == '[' ? lastArrayHeldFindings : holdsRootKey(start, end);
     }
 
     /** Whether an object opening on a root key starts within {@code [from, to)}. */
