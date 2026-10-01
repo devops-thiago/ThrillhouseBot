@@ -684,6 +684,10 @@ class PromptLabelScrubberTest {
             "I am rating this claim at the required level, and I have high confidence in it.",
             // No "confidence" at all.
             "I am rating this claim at the required level for now.",
+            // A clause that runs on for more than 200 characters without ending is not narration.
+            "I am rating this claim at the required confidence "
+                + "and then this sentence keeps going ".repeat(8)
+                + "until it finally ends.",
             // "confidence" too far on to belong to the clause.
             "I am rating this claim at the required level, which the team agreed on after the"
                 + " incident last spring and wrote into the runbook, with confidence")) {

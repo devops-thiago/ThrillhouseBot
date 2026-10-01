@@ -567,7 +567,8 @@ public final class PromptLabelScrubber {
   /**
    * Where the rating clause {@code m} found ends, or -1 when it is not one: the verb and qualifier
    * must be a rating's, and "confidence" must follow within 80 characters of the same clause. The
-   * clause ends at the sentence's end, a comma or a semicolon, at most 200 characters on.
+   * clause ends at the sentence's end, a comma or a semicolon within 200 characters, or it is not
+   * one.
    */
   private static int ratingClauseEnd(String text, Matcher m) {
     if (!RATING_VERBS.contains(m.group(1).toLowerCase(Locale.ROOT))
@@ -586,7 +587,8 @@ public final class PromptLabelScrubber {
     while (end < limit && ".!?\n,;".indexOf(text.charAt(end)) < 0) {
       end++;
     }
-    return end;
+    // A clause that runs on past the window without ending is not the short narration: leave it.
+    return end == limit && end < text.length() ? -1 : end;
   }
 
   /** Whether {@code text} holds one of {@code stops} between {@code from} and {@code to}. */
