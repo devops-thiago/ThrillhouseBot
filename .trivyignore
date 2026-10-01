@@ -1,14 +1,17 @@
 # pcre2 / pcre2-syntax 10.40-6.el9 in quay.io/quarkus/ubi9-quarkus-micro-image (el9, RHEL 9.8),
-# CVE-2026-89161 (pcre2_jit_match incorrect free) and CVE-2026-86145 (pcre2_dfa_match out-of-bounds
-# write with a recursive pattern or attacker-controlled regex). Upstream fixed both in 10.48; RHEL
-# has shipped no fixed el9 package and marks CVE-2026-86145 "will not fix", so every micro base tag
-# carries 10.40, including the 2026-09-27 build pinned here. The library is present only because the
+# CVE-2026-89161 (pcre2_jit_match incorrect free), CVE-2026-86145 (pcre2_dfa_match out-of-bounds
+# write with a recursive pattern or attacker-controlled regex) and CVE-2026-103111 (out-of-bounds
+# write through certain JIT API use with an attacker-controlled regex). Upstream fixed the first two
+# in 10.48 and the third in 10.49; RHEL has shipped no fixed el9 package (CVE-2026-86145 is "will not
+# fix", CVE-2026-103111 "affected" with no erratum), so every micro base tag carries 10.40, including
+# the 2026-09-27 build pinned here. The library is present only because the
 # base image's libselinux requires it: the native binary links libz and libc alone (readelf NEEDED)
 # and compiles its regular expressions from java.util.regex, so no PCRE2 code runs in the bot. The
 # micro base has no package manager to apply an update, and the :*-distroless image does not ship
-# pcre2. Remove when RHEL ships pcre2 >= 10.48 for el9.
+# pcre2. Remove when RHEL ships pcre2 >= 10.49 for el9.
 CVE-2026-89161
 CVE-2026-86145
+CVE-2026-103111
 
 # libssl3 3.0.20-1~deb12u2 in the debian12-based images (CVE-2026-14456): unbounded memory
 # growth in the OpenSSL QUIC *server* listener. Per the upstream advisory the issue exists only
