@@ -506,29 +506,35 @@ public final class PromptLabelScrubber {
     while (m.find()) {
       int start = m.start();
       boolean plural = m.group().indexOf("[L", 1) > 0;
-      var phrase = plural ? "maintainers' earlier decisions" : "a maintainer's earlier decision";
       var article = ARTICLE_BEFORE.matcher(s.substring(at, start));
-      boolean capital;
+      String phrase;
       if (article.find()) {
         start = at + article.start();
-        capital = Character.isUpperCase(s.charAt(start));
-        if (!plural && "the".equalsIgnoreCase(article.group(1))) {
-          phrase = "the maintainer's earlier decision";
-        }
+        phrase = afterArticle(article.group(1), plural);
       } else if (DETERMINER_BEFORE.matcher(s.substring(at, start)).find()) {
         // "its [L12]", "this [L12]", "the decision's [L12]": the determiner stays, so no article.
         phrase = plural ? "earlier maintainer decisions" : "earlier maintainer decision";
-        capital = false;
       } else {
-        capital = opensSentence(s, start, at);
-      }
-      if (capital) {
-        phrase = capitalize(phrase);
+        phrase = plural ? "maintainers' earlier decisions" : "a maintainer's earlier decision";
+        phrase = opensSentence(s, start, at) ? capitalize(phrase) : phrase;
       }
       out.append(s, at, start).append(phrase);
       at = m.end();
     }
     return out.append(s, at, s.length()).toString();
+  }
+
+  /** A learning id's phrase in place of the article before it, in that article's case. */
+  private static String afterArticle(String article, boolean plural) {
+    String phrase;
+    if (plural) {
+      phrase = "maintainers' earlier decisions";
+    } else if ("the".equalsIgnoreCase(article)) {
+      phrase = "the maintainer's earlier decision";
+    } else {
+      phrase = "a maintainer's earlier decision";
+    }
+    return capitalizeLike(article, phrase);
   }
 
   /**
