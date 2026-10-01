@@ -357,6 +357,35 @@ class PromptLabelScrubberTest {
     assertEquals(1, scrubbedOpen.size());
     assertEquals("Race.", scrubbedOpen.getFirst().description());
 
+    // A leak only in a carried finding is still scrubbed, not passed through unchanged.
+    var cleanRound =
+        new Finding(RiskLevel.MEDIUM, "go/calendar.go", 32, "No retry", "Gap.", "", "");
+    var onlyCarriedLeaks =
+        new ReviewResult(
+            List.of(cleanRound),
+            0,
+            0,
+            1,
+            0,
+            RiskLevel.MEDIUM,
+            ReviewState.COMMENT,
+            false,
+            "## Summary",
+            List.of(),
+            List.of(),
+            0,
+            false,
+            true,
+            null,
+            0,
+            List.of(carried));
+    assertEquals(
+        "Race.",
+        PromptLabelScrubber.scrub(onlyCarriedLeaks)
+            .openPreviousFindings()
+            .getFirst()
+            .description());
+
     var clean =
         new ReviewResult(
             List.of(),
