@@ -145,7 +145,12 @@ final class DescriptionGapCarryover {
       if (summary == null) {
         return gaps.isEmpty() ? null : new ReviewResponse.Summary(0, 0, 0, 0, 0, null, null, gaps);
       }
-      var current = withLinkedIssueNumbers(summary.descriptionGaps(), linkedIssues);
+      // The call saw the first carried gaps as G1…Gk, so in its own gaps a G<n> up to k is one of
+      // them, whatever words follow it (#974); the summary's context-free strip cannot know that.
+      var issued = Math.min(gaps.size(), MAX_PROMPTED_GAPS);
+      var current =
+          withLinkedIssueNumbers(
+              DescriptionGapLabels.stripIssued(summary.descriptionGaps(), issued), linkedIssues);
       var merged = merge(current, gaps, summary.addressedGaps());
       // Nothing to change leaves the call's own summary as it came.
       return merged.equals(summary.descriptionGaps()) && summary.addressedGaps().isEmpty()

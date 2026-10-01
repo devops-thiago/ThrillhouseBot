@@ -564,6 +564,42 @@ class DescriptionGapCarryoverTest {
     }
 
     @Test
+    void aCarriedLabelUsedAsTheSubjectNeverReachesTheSection() {
+      // #974: ThrillhouseBot-test#203 round 2 carried two gaps and the call answered
+      // "G2 stands partially unaddressed: <gap>"; the label must not reach the reader.
+      var ciGap = "The description omits the deployment/CI half (Dockerfile, workflow).";
+      var carry =
+          new DescriptionGapCarryover.Carry(
+              List.of(CAP_GAP, "The description says CI publishes the image, but no job does."),
+              LINKED_113);
+
+      var rendered =
+          render(
+              carry.apply(
+                  summary(
+                      List.of(
+                          "G2 stands partially unaddressed: the description omits the"
+                              + " deployment/CI half (Dockerfile, workflow).",
+                          "The TTL is a constant, as in G1."),
+                      List.of())));
+
+      assertTrue(rendered.contains("- " + ciGap + "\n"), rendered);
+      assertTrue(rendered.contains("- The TTL is a constant.\n"), rendered);
+      assertFalse(rendered.contains("G2"), rendered);
+      assertFalse(rendered.contains("G1"), rendered);
+    }
+
+    @Test
+    void withNothingCarriedAGapAboutTheG1CollectorIsLeftAsWritten() {
+      // #974: no labels were issued, so "G1" can only be the garbage collector.
+      var gap = "G1 GC is named in the description, but the JVM flags select ZGC.";
+
+      var applied = DescriptionGapCarryover.Carry.NONE.apply(summary(List.of(gap), List.of()));
+
+      assertEquals(List.of(gap), applied.descriptionGaps());
+    }
+
+    @Test
     void aGapWhoseIssueIsNoLongerLinkedIsNotCarried() {
       var round1 = render(summary(List.of(CAP_GAP), List.of()));
       var conversation = List.of(comment("thrillhousebot[bot]", posted(round1)));
