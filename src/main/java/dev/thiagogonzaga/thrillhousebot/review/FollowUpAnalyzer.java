@@ -2857,6 +2857,26 @@ public class FollowUpAnalyzer {
    *
    * @param priorAiResponses every completed prior round's parsed response, newest first
    */
+  public static List<ReviewResponse.Finding> justifiedPriorFindings(
+      List<ReviewResponse> priorAiResponses) {
+    var justified = new ArrayList<ReviewResponse.Finding>();
+    var reportedRound = List.<ReviewResponse.Finding>of();
+    for (var round : toChronological(priorAiResponses)) {
+      for (var status : round.previousFindingsStatus()) {
+        var id = status.id();
+        if (STATUS_JUSTIFIED.equalsIgnoreCase(status.status())
+            && id >= 1
+            && id <= reportedRound.size()) {
+          justified.add(reportedRound.get(id - 1));
+        }
+      }
+      if (!round.findings().isEmpty()) {
+        reportedRound = round.findings();
+      }
+    }
+    return justified;
+  }
+
   /**
    * The findings the newest prior round recorded justified: {@link #justifiedPriorFindings} limited
    * to the statuses that round wrote. A decline older than that round has been reviewed past at
@@ -2881,26 +2901,6 @@ public class FollowUpAnalyzer {
           && id >= 1
           && id <= reportedRound.size()) {
         justified.add(reportedRound.get(id - 1));
-      }
-    }
-    return justified;
-  }
-
-  public static List<ReviewResponse.Finding> justifiedPriorFindings(
-      List<ReviewResponse> priorAiResponses) {
-    var justified = new ArrayList<ReviewResponse.Finding>();
-    var reportedRound = List.<ReviewResponse.Finding>of();
-    for (var round : toChronological(priorAiResponses)) {
-      for (var status : round.previousFindingsStatus()) {
-        var id = status.id();
-        if (STATUS_JUSTIFIED.equalsIgnoreCase(status.status())
-            && id >= 1
-            && id <= reportedRound.size()) {
-          justified.add(reportedRound.get(id - 1));
-        }
-      }
-      if (!round.findings().isEmpty()) {
-        reportedRound = round.findings();
       }
     }
     return justified;
