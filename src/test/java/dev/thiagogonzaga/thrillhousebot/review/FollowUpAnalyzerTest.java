@@ -1132,6 +1132,17 @@ class FollowUpAnalyzerTest {
         FollowUpAnalyzer.justifiedPriorFindings(List.of(roundD, roundC, roundB, roundA)));
     assertEquals(List.of(), FollowUpAnalyzer.justifiedPriorFindings(List.of(roundA)));
     assertEquals(List.of(), FollowUpAnalyzer.justifiedPriorFindings(List.of()));
+
+    // Only the newest round's statuses: D declined c (C's finding); B's and C's declines are older.
+    assertEquals(
+        List.of(c),
+        FollowUpAnalyzer.justifiedByLatestRound(List.of(roundD, roundC, roundB, roundA)));
+    assertEquals(
+        List.of(b), FollowUpAnalyzer.justifiedByLatestRound(List.of(roundC, roundB, roundA)));
+    // B skips its resolved and out-of-range statuses and keeps the decline of a.
+    assertEquals(List.of(a), FollowUpAnalyzer.justifiedByLatestRound(List.of(roundB, roundA)));
+    assertEquals(List.of(), FollowUpAnalyzer.justifiedByLatestRound(List.of(roundA)));
+    assertEquals(List.of(), FollowUpAnalyzer.justifiedByLatestRound(List.of()));
   }
 
   @Test

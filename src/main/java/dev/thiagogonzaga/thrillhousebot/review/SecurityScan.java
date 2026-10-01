@@ -237,6 +237,7 @@ public class SecurityScan {
             botIdentity),
         new Declines(
             FollowUpAnalyzer.justifiedPriorFindings(ctx.priorAiResponses()),
+            FollowUpAnalyzer.justifiedByLatestRound(ctx.priorAiResponses()),
             ctx.previousRoundHeadUnchanged()));
   }
 
@@ -267,14 +268,24 @@ public class SecurityScan {
 
   /**
    * The findings later rounds recorded justified ({@link FollowUpAnalyzer#justifiedPriorFindings}),
-   * and whether this review's head is the one the round it reports on reviewed — the only case in
-   * which a decline recorded before secret findings carried a fingerprint may still cover one.
+   * those the newest round recorded ({@link FollowUpAnalyzer#justifiedByLatestRound}), and whether
+   * this review's head is the one that round reviewed — the only case in which a decline recorded
+   * before secret findings carried a fingerprint may still cover one.
    */
-  record Declines(List<ReviewResponse.Finding> justified, boolean headUnchanged) {
-    static final Declines NONE = new Declines(List.of(), false);
+  record Declines(
+      List<ReviewResponse.Finding> justified,
+      List<ReviewResponse.Finding> latestRound,
+      boolean headUnchanged) {
+    static final Declines NONE = new Declines(List.of(), List.of(), false);
 
     Declines {
       justified = List.copyOf(justified);
+      latestRound = List.copyOf(latestRound);
+    }
+
+    /** Declines all recorded by the newest round, as when there is only one round to report on. */
+    Declines(List<ReviewResponse.Finding> justified, boolean headUnchanged) {
+      this(justified, justified, headUnchanged);
     }
   }
 
@@ -291,7 +302,8 @@ public class SecurityScan {
       List<ReviewResponse.Finding> earlierOpen,
       Declines declined) {
     var scanPriors = openScanPriors(previous, settledIds);
-    var declines = scanFindings(declined.justified(), declined.headUnchanged());
+    var declines =
+        scanFindings(declined.justified(), declined.latestRound(), declined.headUnchanged());
     var scrubber =
         secretsEnabled
             ? Scrubber.of(result.redactions(), entropyThreshold)
@@ -597,20 +609,23 @@ public class SecurityScan {
   /**
    * The scan's own declined findings a detection can claim, in a list it claims them from. A secret
    * finding persisted before it carried a fingerprint has nothing that tells its value from another
-   * of the same prefix and length, so its decline counts only while the head is the one the round
-   * this review reports on reviewed: nothing on the line can have changed since that round. After a
-   * push it lapses, and the finding raised again carries a fingerprint the next decline keeps. An
-   * IaC finding's anchor is its line, so its decline needs no fingerprint.
+   * of the same prefix and length, so its decline counts only when the newest round recorded it and
+   * this review's head is the one that round reviewed: nothing on the line can have changed since
+   * the decline was weighed. Once a later round has run, or after a push, it lapses, and the
+   * finding raised again carries a fingerprint the next decline keeps. An IaC finding's anchor is
+   * its line, so its decline needs no fingerprint.
    */
   private static List<ReviewResponse.Finding> scanFindings(
-      List<ReviewResponse.Finding> findings, boolean headUnchanged) {
+      List<ReviewResponse.Finding> findings,
+      List<ReviewResponse.Finding> latestRound,
+      boolean headUnchanged) {
     var scan = new ArrayList<ReviewResponse.Finding>();
     for (var finding : findings) {
       var rule = finding.file() == null ? null : SecurityRule.fromTitle(finding.title());
       if (rule != null
-          && (headUnchanged
-              || rule.category() == SecurityRule.Category.IAC
-              || fingerprintOf(finding.description()) != null)) {
+          && (rule.category() == SecurityRule.Category.IAC
+              || fingerprintOf(finding.description()) != null
+              || (headUnchanged && latestRound.contains(finding)))) {
         scan.add(finding);
       }
     }

@@ -2857,6 +2857,35 @@ public class FollowUpAnalyzer {
    *
    * @param priorAiResponses every completed prior round's parsed response, newest first
    */
+  /**
+   * The findings the newest prior round recorded justified: {@link #justifiedPriorFindings} limited
+   * to the statuses that round wrote. A decline older than that round has been reviewed past at
+   * least once, so nothing ties it to the head this review sees (#982).
+   */
+  public static List<ReviewResponse.Finding> justifiedByLatestRound(
+      List<ReviewResponse> priorAiResponses) {
+    var chrono = toChronological(priorAiResponses);
+    if (chrono.isEmpty()) {
+      return List.of();
+    }
+    var reportedRound = List.<ReviewResponse.Finding>of();
+    for (var round : chrono.subList(0, chrono.size() - 1)) {
+      if (!round.findings().isEmpty()) {
+        reportedRound = round.findings();
+      }
+    }
+    var justified = new ArrayList<ReviewResponse.Finding>();
+    for (var status : chrono.getLast().previousFindingsStatus()) {
+      var id = status.id();
+      if (STATUS_JUSTIFIED.equalsIgnoreCase(status.status())
+          && id >= 1
+          && id <= reportedRound.size()) {
+        justified.add(reportedRound.get(id - 1));
+      }
+    }
+    return justified;
+  }
+
   public static List<ReviewResponse.Finding> justifiedPriorFindings(
       List<ReviewResponse> priorAiResponses) {
     var justified = new ArrayList<ReviewResponse.Finding>();

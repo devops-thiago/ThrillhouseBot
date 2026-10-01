@@ -735,9 +735,9 @@ the flagged line (for a private key, its block), which is how a later round
 tells a new value with the same prefix and length from the declined one; a new
 value, or any other change to the line's text (leading and trailing whitespace
 aside), is raised again. A secret finding declined
-before the marker existed has no fingerprint, so its decline holds only while
-the head is the one the previous round reviewed; after a push it is raised once
-more, with the marker. Under the default
+before the marker existed has no fingerprint, so its decline holds only on the
+review right after the round that recorded it, on the head that round reviewed;
+after a push or a later round it is raised once more, with the marker. Under the default
 `balanced` strictness a critical or high scan finding requests changes on its
 own, like any high-confidence finding.
 

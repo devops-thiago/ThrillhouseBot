@@ -1168,6 +1168,20 @@ class SecurityScanTest {
     assertTrue(SecurityScan.fingerprintOf(raisedAgain.get(0).description()) != null);
     assertEquals(
         1, mergeAfterDecline(s, response(), files, List.of(), List.of(legacy)).findings().size());
+
+    // A later round on the same head revives nothing: the newest round did not record the decline,
+    // so a value rotated before that round (here, the same line) is not covered by it.
+    assertEquals(
+        1,
+        s.merge(
+                response(),
+                s.scan(rotated),
+                List.of(),
+                Set.of(),
+                List.of(),
+                new SecurityScan.Declines(List.of(legacy), List.of(), true))
+            .findings()
+            .size());
   }
 
   @Test
