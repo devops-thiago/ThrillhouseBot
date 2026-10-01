@@ -171,6 +171,28 @@ class ReviewResponseParserFindingArrayTest {
   }
 
   @Test
+  void readsAFencedFindingsArrayThatFollowsTheAnswerObject() {
+    var response = parser.parse(EMPTY_ANSWER + "\n```json\n" + FINDINGS_ARRAY + "```");
+
+    assertEquals(TITLES, titles(response));
+  }
+
+  @Test
+  void doesNotTakeAFindingArrayQuotedAheadOfProseForTheAnswer() {
+    // A complete finding array quoted in the deliberation and followed by prose is an excerpt:
+    // the answer is the object after it, and the excerpt's findings are not published.
+    var raw =
+        "The format I must follow is "
+            + FINDINGS_ARRAY
+            + " and I will now write the real answer.\n"
+            + EMPTY_ANSWER;
+
+    assertEquals(
+        raw.indexOf(EMPTY_ANSWER), ReviewResponseParser.findAnswer(raw, KEYS, true).start());
+    assertTrue(parser.parse(raw).findings().isEmpty());
+  }
+
+  @Test
   void readsAFindingsArrayOnItsOwnAsTheFindings() {
     var response = parser.parse(FINDINGS_ARRAY);
 
@@ -318,6 +340,16 @@ class ReviewResponseParserFindingArrayTest {
     assertEquals(
         inObject.indexOf(EMPTY_ANSWER),
         ReviewResponseParser.findAnswer(inObject, KEYS, true).start());
+  }
+
+  @Test
+  void stopsAWalkThatReachesADocumentAnEarlierWalkBrokeOn() {
+    // The first walk reads the answer, the object after it and the broken one, and marks them;
+    // the root-keyed object nested in the second reaches the broken one and stops there.
+    var raw = "{\"findings\": []} {\"a\": {\"summary\": 1}} {bad}";
+
+    assertEquals(-1, ReviewResponseParser.findAnswer(raw, KEYS, true).start());
+    assertThrows(IllegalArgumentException.class, () -> parser.parse(raw));
   }
 
   @Test

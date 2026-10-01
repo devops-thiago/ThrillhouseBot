@@ -919,6 +919,11 @@ public class ReviewResponseParser {
   /** Where a JSON object with at least one key may open: a brace, whitespace, then a quote. */
   private static final Pattern OBJECT_START = Pattern.compile("\\{\\s*\"");
 
+  /**
+   * Whitespace and fence markers only: what may separate a finding array from the next document.
+   */
+  private static final Pattern SEPARATORS = Pattern.compile("(?:\\s|```[\\w+-]*)*");
+
   /** Where an array whose first element is an object with at least one key may open. */
   private static final Pattern ARRAY_OF_OBJECTS_START = Pattern.compile("\\[\\s*\\{\\s*\"");
 
@@ -999,9 +1004,13 @@ public class ReviewResponseParser {
    * open on a top-level array of finding-shaped objects (see {@link #isFindingArray}) from which
    * the rest of the body reads as documents to its end (#960): a model answered with its findings
    * as a bare array followed by {@code {"findings": []}}, and anchoring on the object discarded
-   * every finding ahead of it. The array must be finding-shaped, so a quoted JSON excerpt or a
-   * severity list in the deliberation is no more an answer than before. Only {@link #parse} reads
-   * arrays as findings, so only it sets the flag; the truncation salvage reads a single object.
+   * every finding ahead of it. The array must be finding-shaped, and when a document follows it
+   * nothing but whitespace and fence markers may lie between them, so a severity list, a quoted
+   * excerpt that is not findings, or a complete finding array quoted in the deliberation and
+   * followed by prose is not taken for the answer. A finding array written directly ahead of the
+   * answer object cannot be told apart from an answer's own first document, and is read as one; a
+   * finding identical to one the answer carries is kept once. Only {@link #parse} reads arrays as
+   * findings, so only it sets the flag; the truncation salvage reads a single object.
    */
   static String extractJson(String raw, List<String> rootKeys, boolean findingArrays) {
     if (raw == null) {
@@ -1094,43 +1103,64 @@ public class ReviewResponseParser {
     }
 
     /**
-     * Walks the documents from {@code start} to the end of the body. Every document start the walk
-     * passes through on a run that breaks is added to {@link #dead}: any later candidate reaching
-     * one follows the same run and breaks the same way.
+     * Probes the candidate at {@code start}: its first document must open the answer, and the rest
+     * of the body must read as documents from there to its end. A cut first array is not the
+     * answer: it runs to the end of the body, so the root-keyed object lies inside it, and that
+     * object is the candidate to read. A cut first object is: the run reached the end of the body,
+     * and a root-keyed object lies at or past every candidate find() probes, so it holds one.
      */
     private Probe probe(int start) {
+      if (dead.contains(start)) {
+        return new Probe(false, -1);
+      }
+      var end = documentEnd(start);
+      if (end == CUT) {
+        return new Probe(chars[start] != '[', -1);
+      }
+      if (end == BROKEN) {
+        return new Probe(false, -1);
+      }
+      return new Probe(opensTheAnswer(start, end) && runsToTheEnd(start, end), end);
+    }
+
+    /**
+     * Whether the body reads as documents from the first one, which opened at {@code start} and
+     * closed at {@code firstEnd}, to its end. Every document start the walk passes through on a run
+     * that breaks is added to {@link #dead}: any later candidate reaching one follows the same run
+     * and breaks the same way. A finding array must be followed by the next document with nothing
+     * but whitespace and fence markers between them: a complete array quoted in the deliberation
+     * and followed by prose is an excerpt, not the start of the answer (#960).
+     */
+    private boolean runsToTheEnd(int start, int firstEnd) {
       var visited = new ArrayList<Integer>();
-      var firstEnd = -1;
-      var at = start;
-      while (!dead.contains(at)) {
-        visited.add(at);
-        var end = documentEnd(at);
+      visited.add(start);
+      var end = firstEnd;
+      var next = scanForNextDocument(text, end).start();
+      while (next >= 0
+          && end != BROKEN
+          && !dead.contains(next)
+          && (end != firstEnd || followsDirectly(start, end, next))) {
+        visited.add(next);
+        end = documentEnd(next);
         if (end == CUT) {
-          if (at == start && chars[start] == '[') {
-            // A cut array runs to the end of the body, so the root-keyed object lies inside it:
-            // that object is the candidate to read, not the array around it.
-            break;
-          }
-          // Cut inside this document: the run reached the end of the body, and a root-keyed object
-          // lies at or past every candidate find() probes, so it holds one.
-          return new Probe(true, firstEnd);
+          return true;
         }
-        if (end == BROKEN) {
-          break;
-        }
-        if (firstEnd < 0) {
-          firstEnd = end;
-          if (!opensTheAnswer(start, end)) {
-            break;
-          }
-        }
-        at = scanForNextDocument(text, end).start();
-        if (at < 0) {
-          return new Probe(true, firstEnd);
-        }
+        next = end == BROKEN ? next : scanForNextDocument(text, end).start();
+      }
+      if (next < 0) {
+        return true;
       }
       dead.addAll(visited);
-      return new Probe(false, firstEnd);
+      return false;
+    }
+
+    /**
+     * Whether the document at {@code next} follows the first one, closed at {@code end}, as an
+     * answer's next document does: always for an object, and for an array only when nothing but
+     * whitespace and fence markers lies between them.
+     */
+    private boolean followsDirectly(int start, int end, int next) {
+      return chars[start] != '[' || SEPARATORS.matcher(text).region(end, next).matches();
     }
 
     /**
