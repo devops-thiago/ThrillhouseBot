@@ -669,6 +669,8 @@ class PromptLabelScrubberTest {
             "I am rating this claim at the required confidences listed below.",
             // Not a rating verb.
             "I am grading this claim at the required confidence for the release notes.",
+            // "confidence" after a comma belongs to the next clause, not the rating.
+            "I am rating this claim at the required level, and I have high confidence in it.",
             // No "confidence" at all.
             "I am rating this claim at the required level for now.",
             // "confidence" too far on to belong to the clause.
