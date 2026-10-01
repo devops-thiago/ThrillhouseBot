@@ -289,4 +289,31 @@ class WebhookDeliveryTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("HmacNope");
   }
+
+  @Test
+  void aRequestComparesAndPrintsItsBodyByContentAndNeverSharesIt() {
+    var body = "{\"a\":1}".getBytes(StandardCharsets.UTF_8);
+    var request = new WebhookDelivery.Request("review.completed", "d-1", body, "agent/1");
+    var same =
+        new WebhookDelivery.Request(
+            "review.completed", "d-1", "{\"a\":1}".getBytes(StandardCharsets.UTF_8), "agent/1");
+
+    assertThat(request).isEqualTo(same).hasSameHashCodeAs(same);
+    assertThat(request)
+        .isNotEqualTo(
+            new WebhookDelivery.Request("review.completed", "d-1", new byte[] {1}, "agent/1"))
+        .isNotEqualTo("not a request")
+        .isNotEqualTo(new WebhookDelivery.Request("review.failed", "d-1", body.clone(), "agent/1"))
+        .isNotEqualTo(
+            new WebhookDelivery.Request("review.completed", "d-2", body.clone(), "agent/1"))
+        .isNotEqualTo(
+            new WebhookDelivery.Request("review.completed", "d-1", body.clone(), "agent/2"));
+    assertThat(request)
+        .hasToString(
+            "Request[event=review.completed, deliveryId=d-1, body=7 bytes, userAgent=agent/1]");
+
+    body[0] = 'x';
+    request.body()[1] = 'y';
+    assertThat(request).as("the body is copied in and out").isEqualTo(same);
+  }
 }

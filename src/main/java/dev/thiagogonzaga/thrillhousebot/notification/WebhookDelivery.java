@@ -22,7 +22,9 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.Objects;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.slf4j.Logger;
@@ -81,41 +83,50 @@ final class WebhookDelivery {
   }
 
   /**
-   * What to send: the rendered body and the headers that identify it. A class rather than a record
-   * because it carries an array, which a record would compare and print by identity.
+   * What to send: the rendered body and the headers that identify it. The body is copied in and
+   * out, and equality, hash code and the string form go by its content, so the array never leaks or
+   * compares by identity.
    */
-  static final class Request {
-    private final String event;
-    private final String deliveryId;
-    private final byte[] body;
-    private final String userAgent;
-
-    Request(String event, String deliveryId, byte[] body, String userAgent) {
-      this.event = event;
-      this.deliveryId = deliveryId;
-      this.body = body.clone();
-      this.userAgent = userAgent;
+  record Request(String event, String deliveryId, byte[] body, String userAgent) {
+    Request {
+      body = body.clone();
     }
 
-    String event() {
-      return event;
-    }
-
-    String deliveryId() {
-      return deliveryId;
-    }
-
-    byte[] body() {
+    @Override
+    public byte[] body() {
       return body.clone();
-    }
-
-    String userAgent() {
-      return userAgent;
     }
 
     /** {@code <event> notification <id> to <redacted receiver>}, for log lines. */
     String describe(NotificationSettings settings) {
       return event + " notification " + deliveryId + " to " + settings.redactedUrl();
+    }
+
+    @Override
+    public boolean equals(Object other) {
+      return other instanceof Request that
+          && Objects.equals(event, that.event)
+          && Objects.equals(deliveryId, that.deliveryId)
+          && Arrays.equals(body, that.body)
+          && Objects.equals(userAgent, that.userAgent);
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(event, deliveryId, Arrays.hashCode(body), userAgent);
+    }
+
+    @Override
+    public String toString() {
+      return "Request[event="
+          + event
+          + ", deliveryId="
+          + deliveryId
+          + ", body="
+          + body.length
+          + " bytes, userAgent="
+          + userAgent
+          + "]";
     }
   }
 

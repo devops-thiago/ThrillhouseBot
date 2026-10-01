@@ -43,6 +43,8 @@ class RepositoryScopeTest {
   void theRepositorySetCannotBeChangedFromOutside() {
     var scope = new RepositoryScope(true, Set.of("acme/allowed"));
 
-    assertThrows(UnsupportedOperationException.class, () -> scope.repositories().add("x/y"));
+    var repositories = scope.repositories();
+
+    assertThrows(UnsupportedOperationException.class, () -> repositories.add("x/y"));
   }
 }
