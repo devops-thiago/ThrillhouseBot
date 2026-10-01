@@ -74,12 +74,12 @@ flowchart TD
 
 `WebhookController` verifies the signature, drops a redelivered delivery id, routes the event and
 answers 200 before any review work starts. Only cheap gates run on the request thread: the pause
-lookup, the trigger filters, the 👀 reaction on a command (bounded by `ACK_REACTION_TIMEOUT`) and
-the write-access check for `/review` (bounded by `MANUAL_TRIGGER_AUTH_TIMEOUT`).
+lookup, the trigger filters, the 👀 reaction on a command (bounded by `ACK_REACTION_TIMEOUT`, default `3s`) and the
+write-access check for `/review` (bounded by `MANUAL_TRIGGER_AUTH_TIMEOUT`, default `5s`).
 
 | Event | What it starts |
 |---|---|
-| `pull_request` `opened`, `reopened`, `synchronize`, `ready_for_review` | An automatic review, unless the PR is paused, filtered out by the `WEBHOOK_*` trigger settings (drafts, labels, base branches), or reviewed less than `AUTO_REVIEW_MIN_INTERVAL` ago. `ready_for_review` clears that window. |
+| `pull_request` `opened`, `reopened`, `synchronize`, `ready_for_review` | An automatic review, unless the PR is paused, filtered out by the `WEBHOOK_*` trigger settings (drafts, labels, base branches), or reviewed less than `AUTO_REVIEW_MIN_INTERVAL` ago (default `0`, window off). `ready_for_review` clears that window. |
 | `issue_comment` with `/review` or `@thrillhousebot review` | A manual review. It bypasses the trigger filters and the rate-limit window, and needs write access. |
 | `issue_comment` with another command | The command: `/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`, `/learnings`, `/remember`, `/forget`. `/summary` runs a review that posts a new summary comment. |
 | `issue_comment` mentioning the bot without a command | A conversational reply in the PR conversation. No 👀 reaction. |
