@@ -18,7 +18,11 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
+import java.util.Random;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class LearningTextTest {
 
@@ -109,5 +113,89 @@ class LearningTextTest {
     assertEquals("ab…", LearningText.clip("abcd", 3));
     assertEquals("a…", LearningText.clip("a😀bc", 3));
     assertEquals("…", LearningText.clip("abc", 1));
+  }
+
+  /**
+   * The credential-named-key assignment shape as one pattern, before its key names were split
+   * across {@link LearningText#CREDENTIAL_ASSIGNMENTS}: the reference the split must agree with.
+   */
+  private static final Pattern ORIGINAL_ASSIGNMENT =
+      Pattern.compile(
+          "(?i)[\\w.-]{0,40}(?:passw(?:or)?d|pwd|secret|token|api[_-]?key|access[_-]?key"
+              + "|private[_-]?key)[\\w.-]{0,40}\\s{0,4}(?::=|=>|[:=])\\s{0,4}['\"]?"
+              + "(?=[^\\s'\"]*[^\\sa-z'\"])[^\\s'\"]{8,}");
+
+  private static boolean splitAssignmentFound(String text) {
+    return LearningText.CREDENTIAL_ASSIGNMENTS.stream().anyMatch(p -> p.matcher(text).find());
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "password: hunter2!x",
+        "password: required",
+        "secret_key = 'abc123456'",
+        "authToken=>abcdefg1",
+        "api-key := 12345678",
+        "MY_PRIVATE_KEY: \"xxxxxxxx9\"",
+        "passwd=abcdefgh",
+        "pwd     =  abc12345",
+        "accesskey:abc.defgh1",
+        "the token is fine",
+        "Access_Key=ABCDEFGH",
+        "private-key=>'0123456789'",
+      })
+  void credentialAssignmentsAreFoundAsTheSinglePatternFoundThem(String text) {
+    assertEquals(ORIGINAL_ASSIGNMENT.matcher(text).find(), splitAssignmentFound(text), text);
+  }
+
+  @Test
+  void generatedCredentialAssignmentsAreFoundAsTheSinglePatternFoundThem() {
+    String[] parts = {
+      "password",
+      "passwd",
+      "pwd",
+      "secret",
+      "token",
+      "api_key",
+      "api-key",
+      "apikey",
+      "accesskey",
+      "access_key",
+      "private-key",
+      "privatekey",
+      "PASSWORD",
+      "Token",
+      "my_",
+      "auth",
+      ".",
+      "-",
+      " ",
+      "  ",
+      ":",
+      "=",
+      ":=",
+      "=>",
+      "'",
+      "\"",
+      "abc12345",
+      "abcdefgh",
+      "x9",
+      "value1!",
+      "\t",
+      "key",
+      "api",
+      "access",
+      "private"
+    };
+    var random = new Random(38);
+    for (var n = 0; n < 20_000; n++) {
+      var text = new StringBuilder();
+      for (var k = 1 + random.nextInt(8); k > 0; k--) {
+        text.append(parts[random.nextInt(parts.length)]);
+      }
+      var t = text.toString();
+      assertEquals(ORIGINAL_ASSIGNMENT.matcher(t).find(), splitAssignmentFound(t), t);
+    }
   }
 }

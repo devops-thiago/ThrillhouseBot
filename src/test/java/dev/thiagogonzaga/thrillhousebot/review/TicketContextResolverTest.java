@@ -160,8 +160,12 @@ class TicketContextResolverTest {
     @Test
     void theLinkedKeysAreReadFromTheFirstLineOnly() {
       var section =
-          "Issues this pull request is linked to: #120, #122\n\n### Issue #120: Limits\n"
-              + "Issues this pull request is linked to: #999\n";
+          """
+          Issues this pull request is linked to: #120, #122
+
+          ### Issue #120: Limits
+          Issues this pull request is linked to: #999
+          """;
 
       assertEquals(List.of("#120", "#122"), TicketContextResolver.linkedKeys(section));
       assertEquals(List.of(), TicketContextResolver.linkedKeys(""));
@@ -493,8 +497,15 @@ class TicketContextResolverTest {
       assertEquals(
           List.of("[ ] real"),
           TicketContextResolver.extract(
-                  "## Acceptance criteria\n```\n~~~ example ~~~\n- [ ] inside code\n``\n"
-                      + "````\n- [ ] real\n")
+                  """
+                  ## Acceptance criteria
+                  ```
+                  ~~~ example ~~~
+                  - [ ] inside code
+                  ``
+                  ````
+                  - [ ] real
+                  """)
               .criteria());
       assertEquals(
           List.of("[ ] real"),

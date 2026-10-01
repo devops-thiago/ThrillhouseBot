@@ -597,6 +597,16 @@ public class ReviewContextLoader {
     var settledPreviousIds = FollowUpAnalyzer.settledPreviousIds(priorAiResponses);
     // Findings the rounds before the effective one left open are listed too, or a round after one
     // that raised something new is shown them as never reported and raises them again (#939).
+    List<ReviewResponse.Finding> openEarlier = List.of();
+    if (hasContext && !olderAiResponses.isEmpty()) {
+      openEarlier =
+          FollowUpAnalyzer.openEarlierRoundFindings(
+              priorAiResponses,
+              lineResolverSupplier.get(),
+              VerdictBuilder.renameTargets(files),
+              inlineComments,
+              botIdentity);
+    }
     String previousFindings =
         hasContext
             ? followUpAnalyzer.buildPreviousFindingsContext(
@@ -607,14 +617,7 @@ public class ReviewContextLoader {
                 olderAiResponses,
                 botIdentity,
                 settledPreviousIds,
-                olderAiResponses.isEmpty()
-                    ? List.of()
-                    : FollowUpAnalyzer.openEarlierRoundFindings(
-                        priorAiResponses,
-                        lineResolverSupplier.get(),
-                        VerdictBuilder.renameTargets(files),
-                        inlineComments,
-                        botIdentity))
+                openEarlier)
             : "";
 
     var instructions =

@@ -17,6 +17,8 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -1165,7 +1167,7 @@ class SecurityScanTest {
     var raisedAgain =
         mergeAfterDecline(s, response(), rotated, List.of(), List.of(legacy)).findings();
     assertEquals(1, raisedAgain.size());
-    assertTrue(SecurityScan.fingerprintOf(raisedAgain.get(0).description()) != null);
+    assertNotNull(SecurityScan.fingerprintOf(raisedAgain.get(0).description()));
     assertEquals(
         1, mergeAfterDecline(s, response(), files, List.of(), List.of(legacy)).findings().size());
 
@@ -1353,9 +1355,9 @@ class SecurityScanTest {
     assertEquals(
         SecurityScan.contentFingerprint(SecurityRule.JWT, "x"),
         SecurityScan.contentFingerprint("SHA-256", SecurityRule.JWT, "x"));
-    assertFalse(
-        SecurityScan.contentFingerprint(SecurityRule.JWT, "x")
-            .equals(SecurityScan.contentFingerprint(SecurityRule.GITHUB_TOKEN, "x")),
+    assertNotEquals(
+        SecurityScan.contentFingerprint(SecurityRule.JWT, "x"),
+        SecurityScan.contentFingerprint(SecurityRule.GITHUB_TOKEN, "x"),
         "the rule is part of the fingerprint");
   }
 

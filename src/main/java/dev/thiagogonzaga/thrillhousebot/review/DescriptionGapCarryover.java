@@ -21,11 +21,13 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.DescriptionGapLabels;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -77,19 +79,34 @@ final class DescriptionGapCarryover {
   static final String LABEL_PREFIX = "G";
 
   /**
-   * A linked-issue gap as the prompt shapes it: "Linked issue", the issue number(s) or none, a
-   * colon, then the rest (group 2). Group 1 holds the numbers; only numbers may sit between the
-   * words and the colon, so a description gap that merely starts with the words is not one.
+   * A linked-issue gap as the prompt shapes it: "Linked issue", what sits between the words and the
+   * first colon (group 1), then the rest (group 2). Only issue numbers may sit before the colon
+   * ({@link #isIssueNumberList}), so a description gap that merely starts with the words is not
+   * one. Its blank runs and the run before the colon are possessive: nothing they gave back could
+   * let the rest match.
    */
   private static final Pattern LINKED_ISSUE_GAP =
-      Pattern.compile(
-          "(?is)^\\s*linked\\s+issues?\\s*(#?\\d+(?:\\s*(?:,|/|or|and)\\s*#?\\d+){0,9})?\\s*:(.*)$");
+      Pattern.compile("(?is)^\\s*+linked\\s++issues?+([^:]*+):(.*)$");
+
+  /** What joins two issue numbers of a linked-issue gap: "#113, #114", "#113 or #114". */
+  private static final Pattern ISSUE_NUMBER_SEPARATOR = Pattern.compile("(?i)[,/]|or|and");
+
+  /** One issue number of a linked-issue gap, with the blanks around it. */
+  private static final Pattern ISSUE_NUMBER_ITEM = Pattern.compile("\\s*+#?+\\d++\\s*+");
+
+  /** Blanks only, as {@code \s} reads them. */
+  private static final Pattern BLANKS = Pattern.compile("\\s*+");
+
+  /** Issue numbers a linked-issue gap may name before its colon, at most. */
+  private static final int MAX_NAMED_ISSUES = 10;
 
   private static final Pattern ISSUE_NUMBER = Pattern.compile("\\d+");
 
-  /** An addressed-gap entry naming its gap by label: "G2", "[G2]", "G2: the doc now covers it". */
-  private static final Pattern LABEL_REFERENCE =
-      Pattern.compile("(?i)^\\s*\\[?\\s*g\\s*(\\d{1,3})\\b");
+  /**
+   * An addressed-gap entry naming its gap by label: "G2", "[G2]", "G2: the doc now covers it". The
+   * blanks are matched possessively, so a long run of them is read once.
+   */
+  static final Pattern LABEL_REFERENCE = Pattern.compile("(?i)^\\s*+\\[?+\\s*+g\\s*+(\\d{1,3})\\b");
 
   /** Separators the prompt's "criterion — evidence" shape uses between its two halves. */
   private static final Pattern CRITERION_END = Pattern.compile("\\s[—–]\\s|\\s-\\s");
@@ -271,12 +288,35 @@ final class DescriptionGapCarryover {
   }
 
   static GapKey keyOf(String gap) {
-    var linked = LINKED_ISSUE_GAP.matcher(gap);
-    if (!linked.matches()) {
+    var linked = linkedIssueGap(gap);
+    if (linked == null) {
       return new GapKey(Set.of(), normalize(gap));
     }
     var issues = issuesNamed(linked.group(1));
     return new GapKey(issues, normalize(criterionOf(linked.group(2))));
+  }
+
+  /**
+   * {@code gap} matched as a linked-issue gap ({@link #LINKED_ISSUE_GAP}): group 1 the issue
+   * numbers with what joins them, blank when none, and group 2 the text after the colon; {@code
+   * null} when it is not one.
+   */
+  static Matcher linkedIssueGap(String gap) {
+    var linked = LINKED_ISSUE_GAP.matcher(gap);
+    return linked.matches() && isIssueNumberList(linked.group(1)) ? linked : null;
+  }
+
+  /**
+   * Whether {@code text} is blank, or one to {@value #MAX_NAMED_ISSUES} issue numbers ({@code 113}
+   * or {@code #113}) joined by a comma, a slash, "or" or "and", with blanks anywhere between them.
+   */
+  private static boolean isIssueNumberList(String text) {
+    if (BLANKS.matcher(text).matches()) {
+      return true;
+    }
+    var items = ISSUE_NUMBER_SEPARATOR.split(text, -1);
+    return items.length <= MAX_NAMED_ISSUES
+        && Arrays.stream(items).allMatch(item -> ISSUE_NUMBER_ITEM.matcher(item).matches());
   }
 
   /** The criterion half of a linked-issue gap's text after the colon: up to the dash, if any. */
@@ -360,16 +400,12 @@ final class DescriptionGapCarryover {
     if (keys.isEmpty()) {
       return gaps;
     }
-    var checked = new ArrayList<String>(gaps.size());
-    for (var gap : gaps) {
-      checked.add(withLinkedIssueNumber(gap, keys, linkedIssues));
-    }
-    return checked;
+    return gaps.stream().map(gap -> withLinkedIssueNumber(gap, keys, linkedIssues)).toList();
   }
 
   private static String withLinkedIssueNumber(String gap, List<String> keys, String linkedIssues) {
-    var linked = LINKED_ISSUE_GAP.matcher(gap);
-    if (!linked.matches()) {
+    var linked = linkedIssueGap(gap);
+    if (linked == null) {
       return gap;
     }
     var named = issuesNamed(linked.group(1));

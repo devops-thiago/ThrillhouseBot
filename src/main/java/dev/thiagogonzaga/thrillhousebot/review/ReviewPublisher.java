@@ -1021,30 +1021,6 @@ public class ReviewPublisher {
   }
 
   /**
-   * What GitHub said, for the log line an operator reads when a finding loses its line thread.
-   *
-   * <p>Every rejection reason used to be discarded at debug level, which is off in production, so
-   * the only record a run left was that a comment "could not be anchored to the current diff" — a
-   * claim about line numbers the code was in no position to make. That wording sent two scorers and
-   * then #712 hunting an off-by-N that did not exist, and the twenty-nine rejections behind it are
-   * now permanently undiagnosable: the status that separates a throttle from a rejected position
-   * was never written down (#722).
-   *
-   * <p>Falls back to the exception's own text for a connection-level failure, which carries no
-   * response to read a status off.
-   */
-  private static String rejectionReason(RuntimeException e) {
-    return apiError(e)
-        .map(GitHubApiError::diagnostics)
-        .orElseGet(() -> LogSafe.oneLine(e.toString()));
-  }
-
-  /** What GitHub said, when the failure carries a response to read it off. */
-  private static Optional<GitHubApiError> apiError(RuntimeException e) {
-    return e instanceof WebApplicationException w ? GitHubApiError.of(w) : Optional.empty();
-  }
-
-  /**
    * One refused route: what GitHub said, for the log, and whether it was GitHub's rate limit rather
    * than a refusal of the payload or the anchor — the one thing that decides whether the next route
    * is worth trying (#919).
@@ -1054,6 +1030,30 @@ public class ReviewPublisher {
     static Rejection of(RuntimeException e) {
       return new Rejection(
           rejectionReason(e), apiError(e).filter(GitHubApiError::isThrottled).isPresent());
+    }
+
+    /**
+     * What GitHub said, for the log line an operator reads when a finding loses its line thread.
+     *
+     * <p>Every rejection reason used to be discarded at debug level, which is off in production, so
+     * the only record a run left was that a comment "could not be anchored to the current diff" — a
+     * claim about line numbers the code was in no position to make. That wording sent two scorers
+     * and then #712 hunting an off-by-N that did not exist, and the twenty-nine rejections behind
+     * it are now permanently undiagnosable: the status that separates a throttle from a rejected
+     * position was never written down (#722).
+     *
+     * <p>Falls back to the exception's own text for a connection-level failure, which carries no
+     * response to read a status off.
+     */
+    private static String rejectionReason(RuntimeException e) {
+      return apiError(e)
+          .map(GitHubApiError::diagnostics)
+          .orElseGet(() -> LogSafe.oneLine(e.toString()));
+    }
+
+    /** What GitHub said, when the failure carries a response to read it off. */
+    private static Optional<GitHubApiError> apiError(RuntimeException e) {
+      return e instanceof WebApplicationException w ? GitHubApiError.of(w) : Optional.empty();
     }
   }
 
