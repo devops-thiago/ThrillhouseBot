@@ -418,6 +418,26 @@ class ReviewResponseParserTest {
   }
 
   @Test
+  void shouldStripEchoedCarriedGapLabelsFromDescriptionGapsButNotFromAddressedGaps() {
+    // #970: the carried gaps are shown to the call as "G1: …"; an echo of the label in
+    // description_gaps reached the posted summary, while addressed_gaps is where it belongs.
+    var response =
+        parser.parseSummary(
+            """
+            {"summary": {"total_findings": 0, "pr_purpose": "p",
+              "description_gaps": ["G1: Linked issue #119: beds — no check", "G1",
+                "Gateway retries are unbounded"],
+              "addressed_gaps": ["G2: the doc now covers it"]}}
+            """);
+
+    assertEquals(
+        java.util.List.of("Linked issue #119: beds — no check", "Gateway retries are unbounded"),
+        response.summary().descriptionGaps());
+    assertEquals(
+        java.util.List.of("G2: the doc now covers it"), response.summary().addressedGaps());
+  }
+
+  @Test
   void shouldSalvageFindingsWhenSummaryStillDoesNotMap() {
     // A mapping failure confined to the summary must not discard findings that mapped
     // cleanly — the summary degrades to null (every consumer null-guards it).
