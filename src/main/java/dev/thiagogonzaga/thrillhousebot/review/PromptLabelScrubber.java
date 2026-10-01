@@ -549,9 +549,9 @@ public final class PromptLabelScrubber {
 
   /**
    * Whether the clause starting at {@code clause} hangs from a separator ending at {@code blank}: a
-   * semicolon, comma, em or en dash, or a plain hyphen that stands alone between blanks after other
-   * text — a hyphen joined to a word ("well-") is part of that word, and one with nothing before it
-   * is a list marker, not a separator.
+   * semicolon, comma, em or en dash, or a plain hyphen that stands alone between spaces after other
+   * text on the same line — a hyphen joined to a word ("well-") is part of that word, and one that
+   * opens the text or a line is a list marker, not a separator.
    */
   private static boolean hangsFromSeparator(String text, int blank, int clause, int floor) {
     char separator = text.charAt(blank - 1);
@@ -561,17 +561,9 @@ public final class PromptLabelScrubber {
     return separator == '-'
         && blank < clause
         && blank - 1 > floor
-        && Character.isWhitespace(text.charAt(blank - 2));
+        && (text.charAt(blank - 2) == ' ' || text.charAt(blank - 2) == '\t');
   }
 
-  /**
-   * Drops the model's account of the confidence rule it applied (#975). After a semicolon, comma or
-   * dash (an em or en dash, or a hyphen standing alone between blanks) the clause goes with that
-   * separator and the sentence keeps its end ("…, so the suite will confirm; I am rating this claim
-   * at the required … confidence." reads "…, so the suite will confirm."); opening a sentence, the
-   * whole sentence goes with the blanks after it. Anywhere else the sentence leans on it, and it
-   * stays.
-   */
   /**
    * Where the rating clause {@code m} found ends, or -1 when it is not one: the verb and qualifier
    * must be a rating's, and "confidence" must follow within 80 characters of the same clause. The
@@ -607,6 +599,15 @@ public final class PromptLabelScrubber {
     return false;
   }
 
+  /**
+   * Drops the model's account of the confidence rule it applied (#975). After a semicolon, comma or
+   * dash (an em or en dash, or a hyphen standing alone between blanks) the clause goes with that
+   * separator and the sentence keeps its end ("…, so the suite will confirm; I am rating this claim
+   * at the required … confidence." reads "…, so the suite will confirm."); a sentence that is only
+   * the rating goes whole with the blanks after it, while one that goes on past a comma or
+   * semicolon carries more than the narration and stays. Anywhere else the sentence leans on it,
+   * and it stays.
+   */
   private static String removeSelfRatedConfidence(String text) {
     var m = SELF_RATED_CONFIDENCE.matcher(text);
     var out = new StringBuilder(text.length());

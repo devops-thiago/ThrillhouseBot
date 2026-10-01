@@ -601,6 +601,17 @@ class PromptLabelScrubberTest {
         "It fails x-I am rating this claim at the required arithmetic-claim confidence until the"
             + " log names it.";
     assertEquals(joined, PromptLabelScrubber.scrub(joined));
+    // A tab before the standalone hyphen separates as a space does.
+    assertEquals(
+        "It fails.",
+        PromptLabelScrubber.scrub(
+            "It fails\t- I am rating this claim at the required arithmetic-claim confidence."));
+    // A hyphen opening a later line is that line's bullet, not a separator for the line above.
+    assertEquals(
+        "Findings:\n-",
+        PromptLabelScrubber.scrub(
+                "Findings:\n- I am rating this claim at the required arithmetic-claim confidence.")
+            .stripTrailing());
     // A trailing hyphen on a word ("re- I am…") is that word's, so the clause is not detached at
     // it.
     var trailing =
