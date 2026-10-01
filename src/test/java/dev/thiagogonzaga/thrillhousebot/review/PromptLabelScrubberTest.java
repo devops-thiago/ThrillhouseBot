@@ -628,6 +628,10 @@ class PromptLabelScrubberTest {
     assertEquals(
         "The criterion is unmet.",
         PromptLabelScrubber.scrub("As provided with this review the criterion is unmet."));
+    // Already capitalized after the note: nothing to change but the note itself.
+    assertEquals(
+        "README.md is renamed.",
+        PromptLabelScrubber.scrub("As provided with this review, README.md is renamed."));
   }
 
   // #975, ThrillhouseBot-test#207 round-3 inline 4152219435.
