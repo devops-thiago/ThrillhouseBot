@@ -139,8 +139,34 @@ class SummaryAcrossRoundsTest {
       @@ -32,0 +32,1 @@
       +const name = req.body.name;      """;
 
+  /** ThrillhouseBot-test#176 (#961): the config table's rows 7-10 and the events handler. */
+  private static final String DOC_PATCH =
+      """
+      @@ -7,0 +7,4 @@
+      +| `CARRIER_TOKEN` | Carrier API token | |
+      +| `TRACKED_PORTS` | UN/LOCODE port list to keep events for, e.g. `NLRTM SGSIN` | empty |
+      +| `POLL_INTERVAL` | How often the carrier feed is polled | 30 |
+      +| `FREE_DAYS` | Days a container may stay before demurrage starts | |\
+      """;
+
+  private static final String MAIN_PATCH =
+      """
+      @@ -46,0 +46,1 @@
+      +case ("GET", Some("events")) => reply(ex, 200, repo.findByContainer(id, q).mkString("\\n"))\
+      """;
+
   private static final Map<String, String> PATCHES =
-      Map.of(FILE, PATCH, REPO, REPO_PATCH, SERVER, SERVER_PATCH);
+      Map.of(
+          FILE,
+          PATCH,
+          REPO,
+          REPO_PATCH,
+          SERVER,
+          SERVER_PATCH,
+          DefectIdentityTest.DOC,
+          DOC_PATCH,
+          DefectIdentityTest.MAIN,
+          MAIN_PATCH);
 
   private static final ReviewResponse.Finding SQL_INJECTION =
       new ReviewResponse.Finding(
@@ -878,6 +904,75 @@ class SummaryAcrossRoundsTest {
     assertEquals(3, result.unresolvedPreviousCount());
     assertFalse(result.openPreviousFindings().stream().anyMatch(f -> f.risk() == RiskLevel.LOW));
     assertEquals(1, result.doubleCheckFindings().size());
+  }
+
+  // #961: ThrillhouseBot-test#176. Round one listed three double-check items; round two raised a
+  // MEDIUM about another key on the next table row and the schema item's defect inline.
+
+  private static final ReviewResponse.Finding FREE_DAYS =
+      new ReviewResponse.Finding(
+          "low",
+          "low",
+          DefectIdentityTest.DOC,
+          10,
+          "FREE_DAYS default left blank though the code defaults to 5",
+          "The table renders \"FREE_DAYS | Days a container may stay before demurrage starts | |\""
+              + " with an empty default cell, but the definition in Config.scala applies a default.",
+          null,
+          null);
+
+  private static final ReviewResponse ROUND_ONE_176 =
+      new ReviewResponse(
+          List.of(DefectIdentityTest.POLL_INTERVAL, FREE_DAYS, DefectIdentityTest.SCHEMA),
+          List.of(),
+          null);
+
+  /**
+   * The two #176 shapes in one round: the TRACKED_PORTS item on row 8 leaves the POLL_INTERVAL item
+   * on row 9 open, and the events-table finding on Main.scala:46 replaces the schema item there.
+   * Every item carried in is either still present or replaced.
+   */
+  @Test
+  void aNearbyItemAboutAnotherKeyLeavesTheOpenItemAndTheSameLineDefectReplacesIt() {
+    var priors = List.of(ROUND_ONE_176);
+    var roundTwo =
+        guarded(
+            allUnresolved(
+                List.of(DefectIdentityTest.TRACKED_PORTS, DefectIdentityTest.EVENTS_TABLE), 3),
+            priors);
+    assertEquals(2, roundTwo.findings().size());
+
+    var result = builder.build(followUp(priors, List.of()), roundTwo, CI_CLEAR, plan);
+
+    assertTrue(lists(result, DefectIdentityTest.POLL_INTERVAL));
+    assertTrue(lists(result, FREE_DAYS));
+    assertFalse(lists(result, DefectIdentityTest.SCHEMA));
+    // Carried in 3 = Still present 2 + replaced 1; nothing resolved or justified.
+    assertEquals(2, result.unresolvedPreviousCount());
+    assertEquals(2, result.openPreviousFindings().size());
+    assertEquals(2, result.totalFindings());
+  }
+
+  /** A LOW restating another key's open item on a nearby row is a new item: the guard keeps it. */
+  @Test
+  void aLowItemAboutAnotherKeyOnTheNextRowIsNotDroppedAsARepeat() {
+    var trackedPortsLow =
+        new ReviewResponse.Finding(
+            "low",
+            "low",
+            DefectIdentityTest.DOC,
+            8,
+            DefectIdentityTest.TRACKED_PORTS.title(),
+            DefectIdentityTest.TRACKED_PORTS.description(),
+            null,
+            null);
+    var roundTwo = guarded(allUnresolved(List.of(trackedPortsLow), 3), List.of(ROUND_ONE_176));
+    assertEquals(List.of(trackedPortsLow), roundTwo.findings());
+
+    var result =
+        builder.build(followUp(List.of(ROUND_ONE_176), List.of()), roundTwo, CI_CLEAR, plan);
+    assertEquals(3, result.unresolvedPreviousCount());
+    assertTrue(lists(result, DefectIdentityTest.POLL_INTERVAL));
   }
 
   private static ReviewResponse allUnresolved(List<ReviewResponse.Finding> raised, int count) {
