@@ -283,6 +283,40 @@ class SecretScannerTest {
   }
 
   @Test
+  void zigSliceTypeFromTheCorpus() {
+    // The round 12 and 13 shape (#962): zig/src/config.zig:4, with a fake literal.
+    var value = fake.genericSecret(40);
+    assertGenericHit("api_token", value, "const api_token: []const u8 = \"" + value + "\";");
+  }
+
+  @Test
+  void sliceAndArrayAnnotations() {
+    var value = fake.genericSecret(40);
+    for (var type :
+        List.of(
+            "[] const u8",
+            "[]u8",
+            "[32]u8",
+            "[_]u8",
+            "[:0]const u8",
+            "*const [40:0]u8",
+            "?[]const u8",
+            "const [32]u8")) {
+      assertGenericHit("apiToken", value, "pub const apiToken: " + type + " = \"" + value + "\";");
+    }
+  }
+
+  @Test
+  void sliceAnnotationsOfAnUnquotedValueAreNotReported() {
+    assertTrue(scan("const api_token: []const u8 = std.os.getenv(\"API_TOKEN\").?;").isEmpty());
+    assertTrue(scan("const api_token: []const u8 = config.api_token;").isEmpty());
+    // Two qualifiers in a row and an unclosed bracket are outside the prefix.
+    var value = fake.genericSecret(40);
+    assertTrue(scan("const api_token: const const u8 = \"" + value + "\";").isEmpty());
+    assertTrue(scan("const api_token: [32 u8 = \"" + value + "\";").isEmpty());
+  }
+
+  @Test
   void javaAndCSharpTypeBeforeTheName() {
     var value = fake.genericSecret(32);
     assertGenericHit(
@@ -319,6 +353,8 @@ class SecretScannerTest {
             ("token[" + "a".repeat(45)).repeat(length / 51),
             ("token " + "a".repeat(45) + " ").repeat(length / 52),
             ("token: &'" + "a".repeat(25) + "    mut    ").repeat(length / 45),
+            ("token: *    const    [" + "a".repeat(25) + "]    const    ").repeat(length / 60),
+            ("token: [" + "a:".repeat(30)).repeat(length / 68),
             "a".repeat(40) + "token" + "a".repeat(length - 45));
     assertTimeoutPreemptively(
         Duration.ofSeconds(5),
@@ -349,6 +385,10 @@ class SecretScannerTest {
         "static API_TOKEN: &'static str = \"" + redacted + "\";",
         SecretScanner.redactAssignedLiterals(
             "static API_TOKEN: &'static str = \"" + value + "\";", THRESHOLD));
+    assertEquals(
+        "const api_token: []const u8 = \"" + redacted + "\";",
+        SecretScanner.redactAssignedLiterals(
+            "const api_token: []const u8 = \"" + value + "\";", THRESHOLD));
     assertEquals(
         "Remove `api_key := `" + redacted + "`` and\nrotate it.",
         SecretScanner.redactAssignedLiterals(

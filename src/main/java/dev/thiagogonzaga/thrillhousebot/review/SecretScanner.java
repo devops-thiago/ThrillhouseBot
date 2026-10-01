@@ -106,13 +106,27 @@ final class SecretScanner {
           + "|access[_-]?key|private[_-]?key|client[_-]?secret)";
 
   /**
+   * What a type annotation may put before its type name (#962): a pointer or optional mark ({@code
+   * *}, {@code ?}), a {@code const} qualifier, then a slice or array bracket ({@code []}, {@code
+   * [32]}, {@code [_]}, Zig's sentinel {@code [:0]} or {@code [40:0]}) with at most one more {@code
+   * const} after it. Each part appears at most once, and the second {@code const} can only follow a
+   * bracket, so no two parts compete for the same text.
+   */
+  private static final String TYPE_PREFIX =
+      "(?:[*?]\\s{0,4})?(?:const\\s{1,4})?"
+          + "(?:\\[[A-Za-z0-9_:]{0,20}+\\]\\s{0,4}(?:const\\s{1,4})?)?";
+
+  /**
    * A type name after a {@code :} annotation: TypeScript {@code string}, Kotlin and Swift {@code
    * String} or {@code String?}, Python {@code str} or {@code Final[str]}, Rust {@code &str}, {@code
-   * &'static str} or {@code &mut str}. One word at most 40 characters long, taken possessively like
+   * &'static str} or {@code &mut str}, and Zig {@code []const u8} or {@code *const [40:0]u8}
+   * through {@link #TYPE_PREFIX}. One word at most 40 characters long, taken possessively like
    * every run in the rule, so a failed match gives nothing back and the rule stays linear.
    */
   private static final String ANNOTATED_TYPE =
-      "&?(?:'[A-Za-z_]{1,20}\\s{1,4})?(?:mut\\s{1,4})?[A-Za-z_][A-Za-z0-9_.\\[\\]]{0,40}+\\??";
+      "&?(?:'[A-Za-z_]{1,20}\\s{1,4})?(?:mut\\s{1,4})?"
+          + TYPE_PREFIX
+          + "[A-Za-z_][A-Za-z0-9_.\\[\\]]{0,40}+\\??";
 
   /**
    * What a declaration may put between the key and the operator (#916): a C array suffix ({@code
