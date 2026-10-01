@@ -331,6 +331,32 @@ class PromptLabelScrubberTest {
     assertEquals(result.reviewState(), scrubbed.reviewState());
     assertEquals(result.mediumCount(), scrubbed.mediumCount());
 
+    // The earlier rounds' findings still open (#917) survive the rebuild, scrubbed too.
+    var carried =
+        new Finding(RiskLevel.HIGH, "go/store.go", 9, "Open race", "(dimension 10) Race.", "", "");
+    var withOpen =
+        new ReviewResult(
+            List.of(leaked),
+            0,
+            0,
+            1,
+            0,
+            RiskLevel.MEDIUM,
+            ReviewState.COMMENT,
+            false,
+            "## Summary",
+            List.of(),
+            List.of(),
+            0,
+            false,
+            true,
+            null,
+            0,
+            List.of(carried));
+    var scrubbedOpen = PromptLabelScrubber.scrub(withOpen).openPreviousFindings();
+    assertEquals(1, scrubbedOpen.size());
+    assertEquals("Race.", scrubbedOpen.getFirst().description());
+
     var clean =
         new ReviewResult(
             List.of(),

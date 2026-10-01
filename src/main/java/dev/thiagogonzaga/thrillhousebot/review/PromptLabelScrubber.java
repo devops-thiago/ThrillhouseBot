@@ -358,9 +358,10 @@ public final class PromptLabelScrubber {
   }
 
   /**
-   * A review result with its findings, its previous-finding notes and its rendered summary scrubbed
-   * — the publisher's guard for whatever reached it without passing the pipeline's (a round carried
-   * over from storage written before #918). The same instance when nothing changed.
+   * A review result with its findings, the earlier rounds' findings still open, its
+   * previous-finding notes and its rendered summary scrubbed — the publisher's guard for whatever
+   * reached it without passing the pipeline's (a round carried over from storage written before
+   * #918). The same instance when nothing changed.
    */
   public static ReviewResult scrub(ReviewResult result) {
     var findings = scrubFindings(result.findings());
@@ -370,9 +371,11 @@ public final class PromptLabelScrubber {
         result.previousStatuses().stream()
             .map(s -> new ReviewResult.PreviousFindingStatus(s.id(), s.status(), scrub(s.note())))
             .toList();
+    var openPrevious = scrubFindings(result.openPreviousFindings());
     if (findings.equals(result.findings())
         && Objects.equals(summary, result.summaryMarkdown())
-        && statuses.equals(result.previousStatuses())) {
+        && statuses.equals(result.previousStatuses())
+        && openPrevious.equals(result.openPreviousFindings())) {
       return result;
     }
     return new ReviewResult(
@@ -391,7 +394,8 @@ public final class PromptLabelScrubber {
         result.ciUnreadable(),
         result.requiredContextsKnown(),
         result.truncation(),
-        result.blockingWithheldByConfidence());
+        result.blockingWithheldByConfidence(),
+        openPrevious);
   }
 
   /** Rendered markdown scrubbed against the files {@code findings} are filed on. */
