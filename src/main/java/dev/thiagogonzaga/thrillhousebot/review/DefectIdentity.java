@@ -134,7 +134,32 @@ final class DefectIdentity {
     var text =
         (Objects.toString(finding.title(), "") + " " + Objects.toString(finding.description(), ""))
             .toLowerCase(Locale.ROOT);
-    return identifiers(title).stream().anyMatch(text::contains);
+    return identifiers(title).stream().anyMatch(name -> namesWhole(text, name));
+  }
+
+  /**
+   * Whether {@code text} names {@code name} as a whole word: no letter, digit or underscore runs on
+   * from it at a word-character edge, so {@code events} is not found inside "prevents". An edge
+   * that is itself punctuation ({@code user.name()}) needs no boundary.
+   */
+  static boolean namesWhole(String text, String name) {
+    for (var at = text.indexOf(name); at >= 0; at = text.indexOf(name, at + 1)) {
+      var end = at + name.length();
+      if ((at == 0 || !continuesWord(name.charAt(0), text.charAt(at - 1)))
+          && (end == text.length()
+              || !continuesWord(name.charAt(name.length() - 1), text.charAt(end)))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean continuesWord(char edge, char neighbour) {
+    return isWordChar(edge) && isWordChar(neighbour);
+  }
+
+  private static boolean isWordChar(char c) {
+    return Character.isLetterOrDigit(c) || c == '_';
   }
 
   private static int sharedTitleWords(String title, String otherTitle) {

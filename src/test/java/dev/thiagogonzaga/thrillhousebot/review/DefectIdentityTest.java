@@ -240,6 +240,23 @@ class DefectIdentityTest {
   }
 
   @Test
+  void anIdentifierInsideALongerWordIsNotNamed() {
+    assertFalse(
+        DefectIdentity.sameDefect(
+            at("high", "high", MAIN, 46, "New retry loop added", "It prevents a crash."),
+            at("low", "low", MAIN, 46, "Is the `events` table created?", "d")),
+        "\"prevents\" does not name `events`");
+    assertTrue(DefectIdentity.namesWhole("the events table", "events"));
+    assertTrue(DefectIdentity.namesWhole("events", "events"));
+    assertTrue(DefectIdentity.namesWhole("prevents (events)", "events"), "a later whole match");
+    assertFalse(DefectIdentity.namesWhole("eventsource", "events"));
+    assertFalse(DefectIdentity.namesWhole("port_events", "events"), "underscore continues a word");
+    assertTrue(DefectIdentity.namesWhole("call x.user.name()s", "user.name()"));
+    assertTrue(DefectIdentity.namesWhole("(a)", "(a)"));
+    assertFalse(DefectIdentity.namesWhole("no match", "events"));
+  }
+
+  @Test
   void identifiersAreBacktickedSnakeOrCamelNames() {
     assertEquals(
         Set.of("tracked_ports", "port_events", "findbycontainer", "x y"),
