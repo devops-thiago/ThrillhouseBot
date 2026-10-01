@@ -298,17 +298,18 @@ class WebhookDeliveryTest {
         new WebhookDelivery.Request(
             "review.completed", "d-1", "{\"a\":1}".getBytes(StandardCharsets.UTF_8), "agent/1");
 
-    assertThat(request).isEqualTo(same).hasSameHashCodeAs(same);
+    Object notARequest = "not a request";
     assertThat(request)
+        .isEqualTo(same)
+        .hasSameHashCodeAs(same)
+        .isNotEqualTo(notARequest)
         .isNotEqualTo(
             new WebhookDelivery.Request("review.completed", "d-1", new byte[] {1}, "agent/1"))
-        .isNotEqualTo("not a request")
         .isNotEqualTo(new WebhookDelivery.Request("review.failed", "d-1", body.clone(), "agent/1"))
         .isNotEqualTo(
             new WebhookDelivery.Request("review.completed", "d-2", body.clone(), "agent/1"))
         .isNotEqualTo(
-            new WebhookDelivery.Request("review.completed", "d-1", body.clone(), "agent/2"));
-    assertThat(request)
+            new WebhookDelivery.Request("review.completed", "d-1", body.clone(), "agent/2"))
         .hasToString(
             "Request[event=review.completed, deliveryId=d-1, body=7 bytes, userAgent=agent/1]");
 

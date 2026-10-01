@@ -104,11 +104,11 @@ final class WebhookDelivery {
 
     @Override
     public boolean equals(Object other) {
-      return other instanceof Request that
-          && Objects.equals(event, that.event)
-          && Objects.equals(deliveryId, that.deliveryId)
-          && Arrays.equals(body, that.body)
-          && Objects.equals(userAgent, that.userAgent);
+      return other instanceof Request(var otherEvent, var otherId, var otherBody, var otherAgent)
+          && Objects.equals(event, otherEvent)
+          && Objects.equals(deliveryId, otherId)
+          && Arrays.equals(body, otherBody)
+          && Objects.equals(userAgent, otherAgent);
     }
 
     @Override
