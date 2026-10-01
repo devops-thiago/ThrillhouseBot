@@ -52,6 +52,12 @@ import java.util.regex.Pattern;
  * (#950): a learning id ("[L51]") becomes "a maintainer's earlier decision", the config-key block's
  * name ("the config-key definitions section") becomes "the configuration code", and "the provided
  * material" — the prompts' name for everything they hand the model — becomes "the reviewed code".
+ *
+ * <p>Notes on how the model's input reached it are dropped or reworded too (#975): a withheld
+ * file's "(excluded from review scope by the ignore list)", {@code (supplied from <path>)} (which
+ * reads {@code (in <path>)}), "as provided with this review", "config key definition for" (which
+ * reads "definition of"), and a clause narrating the confidence rule the model applied ("I am
+ * rating this claim at the required … confidence").
  */
 public final class PromptLabelScrubber {
 
@@ -224,6 +230,70 @@ public final class PromptLabelScrubber {
   /** The prompts' name for everything they hand the model (#950). */
   private static final Pattern PROVIDED_MATERIAL =
       Pattern.compile("(?<![\\w-])(the )?provided materials?\\b", Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The model narrating the confidence rule it applied (#975): "I am rating this claim at the
+   * required arithmetic-claim confidence until that log names the test." Only a rating "at the
+   * required" (or prescribed, capped …) level — the prompt's rule, not a reason — so a reply that
+   * answers "why medium?" with "I rated it at medium confidence because …" stays.
+   */
+  private static final Pattern SELF_RATED_CONFIDENCE =
+      Pattern.compile(
+          "\\bI(?: am|'m|’m| have|'ve|’ve)? (\\p{L}{3,8}) (?:this|the|it)(?: claim| finding| issue)?"
+              + " (?:at|to) the (\\p{L}{6,10}) ");
+
+  /**
+   * The verbs and qualifiers a rating clause uses ("I am <verb> this claim at the <qualifier>").
+   */
+  private static final Set<String> RATING_VERBS =
+      Set.of(
+          "rate", "rated", "rating", "keep", "keeping", "kept", "hold", "holding", "held", "cap",
+          "capped", "capping");
+
+  private static final Set<String> RATING_QUALIFIERS =
+      Set.of("required", "prescribed", "mandated", "permitted", "allowed", "maximum", "capped");
+
+  /**
+   * The note the review call's withheld-file list puts after an ignored path (#975), quoted as if
+   * the pull request said it: "rust/Cargo.lock (excluded from review scope by the ignore list)".
+   */
+  private static final Pattern WITHHELD_NOTE =
+      Pattern.compile(
+          "[ \\t]*\\((?:excluded|omitted|withheld)(?: from (?:AI )?review(?: scope)?)? by the"
+              + " ignore list\\)",
+          Pattern.CASE_INSENSITIVE);
+
+  /** "(supplied from kotlin/.../Config.kt)": how a context block reached the model (#975). */
+  private static final Pattern SUPPLIED_FROM =
+      Pattern.compile("\\(supplied from (?=[\\w.-]*[/.]\\w|\\z)", Pattern.CASE_INSENSITIVE);
+
+  /** "config key definition for POLL_INTERVAL": the block's name as a noun phrase (#975). */
+  private static final Pattern CONFIG_KEY_DEFINITION_FOR =
+      Pattern.compile(
+          "(?<![\\w-])config(?:uration)?[- ]keys? (definitions?) (?:for|of)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /** "(as provided with this review)": the same note as a parenthetical, which goes whole. */
+  private static final Pattern PROVIDED_WITH_REVIEW_PARENTHETICAL =
+      Pattern.compile(
+          "[ \\t]*\\((?:as )?(?:provided|supplied|given) (?:with|to|for) this review\\)",
+          Pattern.CASE_INSENSITIVE);
+
+  /** "from issue #117 as provided with this review": a note on the model's input (#975). */
+  private static final Pattern PROVIDED_WITH_REVIEW =
+      Pattern.compile(
+          "(,)?(?:[ \\t]+|[ \\t]*\n[ \\t]*)(?:as )?(?:provided|supplied|given) (?:with|to|for)"
+              + " this review\\b(,)?",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The same note opening a line or the text: it goes with its comma, and the rest is capitalized.
+   */
+  private static final Pattern PROVIDED_WITH_REVIEW_OPENING =
+      Pattern.compile(
+          "(?<![^.!?\\n])([ \\t]*)As (?:provided|supplied|given) (?:with|to|for) this"
+              + " review\\b,?[ \\t]*"
+              + "(\\p{Ll})?");
 
   private PromptLabelScrubber() {}
 
@@ -441,12 +511,133 @@ public final class PromptLabelScrubber {
                     opensSentence(headed, m.start(), 0)
                         ? "Configuration code"
                         : "configuration code");
-    return PROVIDED_MATERIAL
-        .matcher(s)
-        .replaceAll(
-            m ->
-                capitalizeLike(
-                    m.group(), m.group(1) == null ? "reviewed code" : "the reviewed code"));
+    s =
+        PROVIDED_MATERIAL
+            .matcher(s)
+            .replaceAll(
+                m ->
+                    capitalizeLike(
+                        m.group(), m.group(1) == null ? "reviewed code" : "the reviewed code"));
+    s = WITHHELD_NOTE.matcher(s).replaceAll("");
+    s = SUPPLIED_FROM.matcher(s).replaceAll("(in ");
+    // "the criterion, as supplied to this review, says" loses both commas; one comma alone stays
+    // only when it closes the clause the note ended.
+    s = PROVIDED_WITH_REVIEW_PARENTHETICAL.matcher(s).replaceAll("");
+    s =
+        PROVIDED_WITH_REVIEW_OPENING
+            .matcher(s)
+            .replaceAll(
+                m ->
+                    Matcher.quoteReplacement(
+                        m.group(1)
+                            + (m.group(2) == null ? "" : m.group(2).toUpperCase(Locale.ROOT))));
+    s =
+        PROVIDED_WITH_REVIEW
+            .matcher(s)
+            .replaceAll(m -> m.group(1) == null && m.group(2) != null ? "," : "");
+    var defined = s;
+    s =
+        CONFIG_KEY_DEFINITION_FOR
+            .matcher(defined)
+            .replaceAll(
+                m -> {
+                  var phrase = m.group(1).toLowerCase(Locale.ROOT) + " of";
+                  return opensSentence(defined, m.start(), 0) ? capitalize(phrase) : phrase;
+                });
+    return removeSelfRatedConfidence(s);
+  }
+
+  /**
+   * Whether the clause starting at {@code clause} hangs from a separator ending at {@code blank}: a
+   * semicolon, comma, em or en dash, or a plain hyphen that stands alone between spaces after other
+   * text on the same line — a hyphen joined to a word ("well-") is part of that word, and one that
+   * opens the text or a line is a list marker, not a separator.
+   */
+  private static boolean hangsFromSeparator(String text, int blank, int clause, int floor) {
+    char separator = text.charAt(blank - 1);
+    if (";,—–".indexOf(separator) >= 0) {
+      return true;
+    }
+    return separator == '-'
+        && blank < clause
+        && blank - 1 > floor
+        && (text.charAt(blank - 2) == ' ' || text.charAt(blank - 2) == '\t');
+  }
+
+  /**
+   * Where the rating clause {@code m} found ends, or -1 when it is not one: the verb and qualifier
+   * must be a rating's, and "confidence" must follow within 80 characters of the same clause. The
+   * clause ends at the sentence's end, a comma, semicolon, colon or em/en dash within 200
+   * characters, or it is not one.
+   */
+  private static int ratingClauseEnd(String text, Matcher m) {
+    if (!RATING_VERBS.contains(m.group(1).toLowerCase(Locale.ROOT))
+        || !RATING_QUALIFIERS.contains(m.group(2).toLowerCase(Locale.ROOT))) {
+      return -1;
+    }
+    int word = text.indexOf("confidence", m.end());
+    if (word < 0 || word - m.end() > 80 || hasStop(text, m.end(), word, ".!?\n,;")) {
+      return -1;
+    }
+    int end = word + "confidence".length();
+    if (end < text.length() && Character.isLetterOrDigit(text.charAt(end))) {
+      return -1;
+    }
+    int limit = Math.min(text.length(), end + 200);
+    while (end < limit && ".!?\n,;:—–".indexOf(text.charAt(end)) < 0) {
+      end++;
+    }
+    // A clause that runs on past the window without ending is not the short narration: leave it.
+    return end == limit && end < text.length() ? -1 : end;
+  }
+
+  /** Whether {@code text} holds one of {@code stops} between {@code from} and {@code to}. */
+  private static boolean hasStop(String text, int from, int to, String stops) {
+    for (int i = from; i < to; i++) {
+      if (stops.indexOf(text.charAt(i)) >= 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Drops the model's account of the confidence rule it applied (#975). After a semicolon, comma or
+   * dash (an em or en dash, or a hyphen standing alone between blanks) the clause goes with that
+   * separator and the sentence keeps its end ("…, so the suite will confirm; I am rating this claim
+   * at the required … confidence." reads "…, so the suite will confirm."); a sentence that is only
+   * the rating goes whole with the blanks after it, while one that goes on past a comma or
+   * semicolon carries more than the narration and stays. Anywhere else the sentence leans on it,
+   * and it stays.
+   */
+  private static String removeSelfRatedConfidence(String text) {
+    var m = SELF_RATED_CONFIDENCE.matcher(text);
+    var out = new StringBuilder(text.length());
+    int at = 0;
+    while (m.find()) {
+      int clauseEnd = ratingClauseEnd(text, m);
+      if (clauseEnd < 0) {
+        continue;
+      }
+      int blank = skipBlanksBack(text, m.start(), at);
+      if (blank > at && hangsFromSeparator(text, blank, m.start(), at)) {
+        out.append(text, at, skipBlanksBack(text, blank - 1, at));
+        at = clauseEnd;
+      } else if (opensSentence(text, m.start(), at)
+          && (clauseEnd == text.length() || ",;".indexOf(text.charAt(clauseEnd)) < 0)) {
+        // A rating sentence that goes on past a comma carries more than the narration: it stays.
+        int end = clauseEnd;
+        if (end < text.length() && ".!?".indexOf(text.charAt(end)) >= 0) {
+          end++;
+        }
+        end = skipBlanks(text, end);
+        // The last sentence of a line takes the blanks before it, so the line does not end in one.
+        int start = end == text.length() || text.charAt(end) == '\n' ? blank : m.start();
+        out.append(text, at, start);
+        at = end;
+      }
+    }
+    return out.append(text, at, text.length()).toString();
   }
 
   /**
