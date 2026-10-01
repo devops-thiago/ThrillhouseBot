@@ -727,10 +727,16 @@ class PrReviewPromptsContentTest {
         req,
         "A decision is not evidence that unrelated code is correct",
         "a learning must not become a blanket approval (#38)");
+    // #950: the decision is still named so a stale one can be found and retracted (#38), but in
+    // plain words — the bracketed id is the prompt's handle and means nothing to a reader.
     assertContains(
         req,
-        "Name the decision by its id",
-        "a finding raised against a stale decision must cite it so it can be retracted (#38)");
+        "Name the decision in plain words in the description",
+        "a finding raised against a stale decision must still cite it (#38)");
+    assertContains(
+        req,
+        "never by its bracketed\n  id, which readers never see",
+        "the learning id must not reach review text (#950)");
   }
 
   @Test
@@ -1596,6 +1602,14 @@ class PrReviewPromptsContentTest {
         sys,
         "\"which this finding must quote\"",
         "restating the prompt's own rule is named as a leak (#918)");
+    assertContains(
+        sys,
+        "\"config key definitions\nsection\", \"the provided material\"",
+        "the context blocks' names are prompt vocabulary too (#950)");
+    assertContains(
+        sys,
+        "no id of a prior maintainer decision",
+        "a learning id must not be cited in a finding (#950)");
     assertContains(
         sys,
         "no example path, name or value taken from these\ninstructions",

@@ -821,7 +821,9 @@ has no type and is matched by file and directory only. A learning about a file o
 type is left out. The best ones, at most `REVIEW_LEARNINGS_PROMPT_MAX_ITEMS` and
 `REVIEW_LEARNINGS_PROMPT_MAX_CHARS`, are added to the review call inside the untrusted-data
 fence, with guidance to not raise a declined finding again while its stated reason still holds
-for the code in the diff, and to name the learning (`[L12]`) when the diff breaks that reason. In
+for the code in the diff, and to name the learning in plain words, never by its id, when the diff
+breaks that reason (an id that reaches the review text anyway is rewritten to "a maintainer's
+earlier decision" before posting). In
 the review call it always comes after the CI-failure and linked-issue sections and before the
 repository instructions, each section in its own fence. The second-pass verifier and the summary
 call do not get it.

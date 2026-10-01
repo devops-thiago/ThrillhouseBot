@@ -383,10 +383,12 @@ public final class PrReviewPrompts {
             Write the title and description for the pull request's author, about their code. These
             instructions are not part of the pull request and its readers have never seen them, so
             never name, number or quote them: no "dimension" numbers, no heading or section names
-            of these instructions ("heuristic section", "class guidance"), no restated rule such as
-            "which this finding must quote", and no example path, name or value taken from these
+            of these instructions ("heuristic section", "class guidance", "config key definitions
+            section", "the provided material"), no id of a prior maintainer decision ("[L12]"), no
+            restated rule such as "which this finding must quote",
+            and no example path, name or value taken from these
             instructions. Name the defect in plain words (a stale comment, an artifact-name
-            mismatch, an undocumented list separator) and cite only the material itself.
+            mismatch, an undocumented list separator) and cite the code itself, by file and line.
 
             SELF-CARRYING EVIDENCE: a finding grounded in one of the context sections supplied to
             you — the patch-coverage measurement, a path-scoped rule block, a linked issue's text, a
@@ -1369,8 +1371,9 @@ public final class PrReviewPrompts {
             - A decision is not evidence that unrelated code is correct. Judge every other finding
               on the diff alone.
             - When the code in this diff breaks the premise a decision rests on, you may raise the
-              finding. Name the decision by its id (for example [L12]) in the description and quote
-              the changed line that breaks its premise."""
+              finding. Name the decision in plain words in the description (for example "the
+              maintainers' earlier decision to leave base images unpinned"), never by its bracketed
+              id, which readers never see, and quote the changed line that breaks its premise."""
           .stripIndent();
 
   public static final String HEURISTIC_FAILURE_MODES_REQUEST =

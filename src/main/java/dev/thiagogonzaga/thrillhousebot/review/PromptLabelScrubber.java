@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -46,6 +47,11 @@ import java.util.regex.Pattern;
  * placeholder wherever it appears unless it is one of the real paths the caller passes — the files
  * the findings are filed on and the summary describes, which are the paths of this pull request the
  * text can be about.
+ *
+ * <p>Some prompt vocabulary is rewritten rather than removed, because a sentence leans on it
+ * (#950): a learning id ("[L51]") becomes "a maintainer's earlier decision", the config-key block's
+ * name ("the config-key definitions section") becomes "the configuration code", and "the provided
+ * material" — the prompts' name for everything they hand the model — becomes "the reviewed code".
  */
 public final class PromptLabelScrubber {
 
@@ -158,6 +164,66 @@ public final class PromptLabelScrubber {
       Pattern.compile(
           ",? which (?:this|the) (?:PR|pull request|finding) must quote(?![^:.;,])",
           Pattern.CASE_INSENSITIVE);
+
+  /**
+   * One or more learning ids as the prompt prints them ({@code [L12]}), joined as "[L51]/[L52]" or
+   * "[L51], [L52] and [L53]" (#950). Not an index ({@code arr[L1]}) and not a markdown link's text
+   * ({@code [L10](...)}).
+   */
+  private static final String LEARNING_ID_GROUP =
+      "(?<![\\w\\[\\]])\\[L\\d{1,18}](?:[ /,&]{1,3}(?:(?:and|or) )?\\[L\\d{1,18}])*(?![(\\[])";
+
+  private static final Pattern LEARNING_IDS = Pattern.compile(LEARNING_ID_GROUP);
+
+  /**
+   * "([L51]/[L52]/[L53])" or "(see [L12])", with the blanks before it; whether the words before the
+   * ids are only a citing lead is decided by {@link #CITING_LEADS}.
+   */
+  private static final Pattern LEARNING_ID_PARENTHETICAL =
+      Pattern.compile("[ \\t]*\\(([^()\\n]{0,6}?)" + LEARNING_ID_GROUP + "\\)");
+
+  /** What may stand before the ids of a parenthetical that goes whole: "(see [L12])". */
+  private static final Set<String> CITING_LEADS =
+      Set.of("", "see", "per", "cf", "cf.", "e.g.", "e.g.,");
+
+  /** "the decision [L12]": the noun already says what the id stood for. */
+  private static final Pattern NAMED_LEARNING_IDS =
+      Pattern.compile("\\b((?i:decision|learning)s?) " + LEARNING_ID_GROUP);
+
+  /**
+   * The blanks between a word and what follows it at the end of a text: spaces and tabs, a
+   * non-breaking space, or one hard line wrap — not a paragraph break.
+   */
+  private static final String WRAP_BLANKS = "(?:[ \\t\\u00A0]+|[ \\t\\u00A0]*\\n[ \\t\\u00A0]*)\\z";
+
+  /** An article ending the text before a learning id: "the [L12]". */
+  private static final Pattern ARTICLE_BEFORE =
+      Pattern.compile("(?<![\\w-])(a|an|the)" + WRAP_BLANKS, Pattern.CASE_INSENSITIVE);
+
+  /** The config-key context block's heading, cited by name (#950). */
+  private static final Pattern CONFIG_KEY_HEADING =
+      Pattern.compile(
+          "(?<![\\w-])(the )?\"?config(?:uration)?[- ]keys? definitions from the repository\"?"
+              + "(?: (?:sections?|blocks?))?",
+          Pattern.CASE_INSENSITIVE);
+
+  private static final String CONFIG_KEY_CODE = "the repository's configuration code";
+
+  /** A determiner ending the text before the heading's name: "the repository's", "its", "this". */
+  private static final Pattern DETERMINER_BEFORE =
+      Pattern.compile(
+          "(?:'s|(?<![\\w-])(?:its|this|that|a|an|their|our|your))" + WRAP_BLANKS,
+          Pattern.CASE_INSENSITIVE);
+
+  /** "config-key definitions section", "config key definition block" and the like (#950). */
+  private static final Pattern CONFIG_KEY_SECTION =
+      Pattern.compile(
+          "(?<![\\w-])config(?:uration)?[- ]keys? definitions? (?:sections?|blocks?)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /** The prompts' name for everything they hand the model (#950). */
+  private static final Pattern PROVIDED_MATERIAL =
+      Pattern.compile("(?<![\\w-])(the )?provided materials?\\b", Pattern.CASE_INSENSITIVE);
 
   private PromptLabelScrubber() {}
 
@@ -363,7 +429,118 @@ public final class PromptLabelScrubber {
     var s = removeLabelParentheticals(prose);
     s = removeNumberedLabels(s);
     s = GUIDANCE_ASIDE.matcher(s).replaceAll(" ");
-    return RESTATED_RULE.matcher(s).replaceAll("");
+    s = RESTATED_RULE.matcher(s).replaceAll("");
+    s = rewriteLearningIds(s);
+    s = rewriteConfigKeyHeading(s);
+    var headed = s;
+    s =
+        CONFIG_KEY_SECTION
+            .matcher(headed)
+            .replaceAll(
+                m ->
+                    opensSentence(headed, m.start(), 0)
+                        ? "Configuration code"
+                        : "configuration code");
+    return PROVIDED_MATERIAL
+        .matcher(s)
+        .replaceAll(
+            m ->
+                capitalizeLike(
+                    m.group(), m.group(1) == null ? "reviewed code" : "the reviewed code"));
+  }
+
+  /**
+   * The config-key block's heading, cited by name, as "the repository's configuration code" — or as
+   * "configuration code" alone when a determiner already stands before it ("the repository's
+   * \"Config key definitions from the repository\" block"), so the determiner is not doubled.
+   */
+  private static String rewriteConfigKeyHeading(String text) {
+    return CONFIG_KEY_HEADING
+        .matcher(text)
+        .replaceAll(
+            m -> {
+              if (m.group(1) != null) {
+                return capitalizeLike(m.group(1), CONFIG_KEY_CODE);
+              }
+              if (DETERMINER_BEFORE.matcher(text.substring(0, m.start())).find()) {
+                return "configuration code";
+              }
+              // The heading prints "Config" in capitals, so its case says nothing about the
+              // sentence: a quoted or bare heading is capitalized only where a sentence opens.
+              return opensSentence(text, m.start(), 0)
+                  ? capitalize(CONFIG_KEY_CODE)
+                  : CONFIG_KEY_CODE;
+            });
+  }
+
+  /** {@code phrase}, capitalized when {@code original} starts with a capital. */
+  private static String capitalizeLike(String original, String phrase) {
+    return Character.isUpperCase(original.charAt(0)) ? capitalize(phrase) : phrase;
+  }
+
+  private static String capitalize(String phrase) {
+    return Character.toUpperCase(phrase.charAt(0)) + phrase.substring(1);
+  }
+
+  /**
+   * Rewrites learning ids — {@code [L51]}, or {@code [L51]/[L52]/[L53]} together — to plain words
+   * (#950): the id is the prompt's handle for a stored decision and means nothing to a reader. A
+   * parenthetical holding nothing but ids, or ids after a citing lead ("see", "e.g."), goes with
+   * the blanks before it; ids right after "decision" or "learning" go alone ("the decision [L12]"
+   * reads "the decision"); any other becomes "a maintainer's earlier decision", or "maintainers'
+   * earlier decisions" for several, taking the place of an article before it, or "earlier
+   * maintainer decision(s)" after another determiner ("its", "this"), which stays. It is
+   * capitalized when it opens a sentence or its article was capitalized; a clause after a colon,
+   * semicolon or dash stays lower-case.
+   */
+  private static String rewriteLearningIds(String text) {
+    if (!text.contains("[L")) {
+      return text;
+    }
+    var s =
+        LEARNING_ID_PARENTHETICAL
+            .matcher(text)
+            .replaceAll(
+                m ->
+                    CITING_LEADS.contains(m.group(1).strip().toLowerCase(Locale.ROOT))
+                        ? ""
+                        : Matcher.quoteReplacement(m.group()));
+    s = NAMED_LEARNING_IDS.matcher(s).replaceAll("$1");
+    var m = LEARNING_IDS.matcher(s);
+    var out = new StringBuilder(s.length());
+    int at = 0;
+    while (m.find()) {
+      int start = m.start();
+      boolean plural = m.group().indexOf("[L", 1) > 0;
+      var article = ARTICLE_BEFORE.matcher(s.substring(at, start));
+      String phrase;
+      if (article.find()) {
+        start = at + article.start();
+        phrase = afterArticle(article.group(1), plural);
+      } else if (DETERMINER_BEFORE.matcher(s.substring(at, start)).find()) {
+        // "its [L12]", "this [L12]", "the decision's [L12]": the determiner stays, so no article.
+        phrase = plural ? "earlier maintainer decisions" : "earlier maintainer decision";
+      } else {
+        phrase = plural ? "maintainers' earlier decisions" : "a maintainer's earlier decision";
+        phrase = opensSentence(s, start, at) ? capitalize(phrase) : phrase;
+      }
+      out.append(s, at, start).append(phrase);
+      at = m.end();
+    }
+    return out.append(s, at, s.length()).toString();
+  }
+
+  /** A learning id's phrase in place of the article before it, in that article's case. */
+  private static String afterArticle(String article, boolean plural) {
+    String phrase;
+    if (plural) {
+      phrase = "maintainers' earlier decisions";
+    } else if ("the".equalsIgnoreCase(article)) {
+      phrase = "the maintainer's earlier decision";
+    } else {
+      phrase = "a maintainer's earlier decision";
+    }
+    return capitalizeLike(article, phrase);
   }
 
   /**
@@ -500,6 +677,22 @@ public final class PromptLabelScrubber {
       end++;
     }
     return s.substring(i, end).toLowerCase(Locale.ROOT);
+  }
+
+  /**
+   * Whether {@code start} opens a line or a sentence: after ".", "!" or "?", but not after "e.g.",
+   * "i.e." or "cf.". A clause after a colon, semicolon or dash stays lower-case.
+   */
+  private static boolean opensSentence(String s, int start, int floor) {
+    int blank = skipBlanksBack(s, start, floor);
+    if (opensLine(s, blank)) {
+      return true;
+    }
+    if (blank == start || ".!?".indexOf(s.charAt(blank - 1)) < 0) {
+      return false;
+    }
+    var before = s.substring(floor, blank).toLowerCase(Locale.ROOT);
+    return !before.endsWith("e.g.") && !before.endsWith("i.e.") && !before.endsWith("cf.");
   }
 
   /** Whether {@code start} opens a line, or a clause after a sentence end, colon, dash or pipe. */
