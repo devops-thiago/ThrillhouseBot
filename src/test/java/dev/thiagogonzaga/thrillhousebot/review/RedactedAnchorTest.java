@@ -76,6 +76,17 @@ class RedactedAnchorTest {
   }
 
   @Test
+  void aMarkerForAValueLongerThanFourDigitsOfCharactersIsRecognized() {
+    // A JWT has no length cap; a redaction of 12,000 characters must still read as a marker.
+    var value = "eyJh" + "a".repeat(11_996);
+    var line = "TOKEN=" + value;
+    var anchor = "TOKEN=[redacted: eyJh…, 12000 chars]";
+
+    assertTrue(RedactedAnchor.lineMatcher(anchor).test(line));
+    assertFalse(RedactedAnchor.lineMatcher(anchor).test("TOKEN=other"));
+  }
+
+  @Test
   void everyRulesRedactedFormIsRecognized() {
     // The marker's prefix cap is SecretScanner's own, so no rule can show a prefix it misses.
     var value = fake.alnum(60);

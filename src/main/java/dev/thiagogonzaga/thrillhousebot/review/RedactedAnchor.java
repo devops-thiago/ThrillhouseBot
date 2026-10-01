@@ -50,7 +50,7 @@ final class RedactedAnchor {
       Pattern.compile(
           "\\[redacted: (.{0,"
               + SecretScanner.REDACTED_PREFIX
-              + "}?)…, (\\d{1,4}) chars]|"
+              + "}?)…, (\\d{1,9}) chars]|"
               + Pattern.quote(SecurityScan.PEM_MATERIAL_REDACTION));
 
   /** What {@link SecurityScan} scrubs as private key material. */
