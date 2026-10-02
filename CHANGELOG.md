@@ -4,6 +4,14 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Security
+
+- Bumped Jackson (`jackson-bom`) from 2.22.2 to 2.22.3 (#914) for four advisories in the JSON parser the bot uses on webhook payloads and model responses: GHSA-7hhh-6rmp-j9qf (`jackson-core` error-token length not capped), GHSA-p6pp-m3f8-5c89 (`jackson-core` quadratic backtracking in float parsing), GHSA-cxp5-3px4-pw24 (`jackson-databind` quadratic forward-reference completion) and GHSA-wv8q-qhhj-9h54 (`jackson-databind` retaining every unknown raw type id)
+
+### Dependencies
+
+- Bumped `spotless-maven-plugin` from 3.10.2 to 3.10.3 (#914)
+
 ## [0.7.0] — 2026-10-01
 
 Six opt-in review features drove this release: a deterministic scan of the added lines for leaked secrets and risky IaC settings, the issues a pull request links and their acceptance criteria, the CI checks that had already failed on the head commit, the maintainer decisions earlier reviews were taught (review learnings), a per-call choice of the review dimensions a call's files can use, and an outgoing notification when a review completes or fails. The summary changed shape alongside them: every review now ends with the dedicated summary call, and the summary comment is edited in place on every round instead of being posted once. Most of the Fixed list is older follow-up-round behaviour that work brought to light: findings re-posted beside their own open threads, a follow-up that called the pull request clean or did not block on an open critical finding, and the prompt's own vocabulary (dimension numbers, context-block names, notes about how the input reached the model) showing up in posted text.
