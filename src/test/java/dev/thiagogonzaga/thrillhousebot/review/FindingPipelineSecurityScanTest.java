@@ -101,11 +101,15 @@ class FindingPipelineSecurityScanTest {
     pipeline =
         new FindingPipeline(
             aiReviewService,
-            quoteValidator,
-            frameworkFilter,
+            new FindingScreen(
+                quoteValidator,
+                frameworkFilter,
+                new FindingDeduplicator(),
+                verification,
+                new VerifierRejectionMemory(),
+                budgetPlanner,
+                new TokenCounter()),
             new FindingDeduplicator(),
-            verification,
-            new VerifierRejectionMemory(),
             followUpAnalyzer,
             new ObjectMapper(),
             BotIdentity.from(List.of("thrillhousebot[bot]")),

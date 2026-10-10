@@ -163,19 +163,25 @@ class ReviewOrchestratorTest {
             BOT_ID);
     verdictBuilder =
         new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID, BlockingStrictness.BALANCED);
+    var budgetPlanner =
+        new DiffBudgetPlanner(
+            diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m"));
     findingPipeline =
         new FindingPipeline(
             aiReviewService,
-            quoteValidator,
-            frameworkFilter,
+            new FindingScreen(
+                quoteValidator,
+                frameworkFilter,
+                deduplicator,
+                findingVerificationService,
+                new VerifierRejectionMemory(),
+                budgetPlanner,
+                new TokenCounter()),
             deduplicator,
-            findingVerificationService,
-            new VerifierRejectionMemory(),
             followUpAnalyzer,
             mapper,
             BOT_ID,
-            new DiffBudgetPlanner(
-                diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
+            budgetPlanner,
             new TokenCounter(),
             mock(ReviewTokenLedger.class),
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper),
@@ -5998,19 +6004,25 @@ class ReviewOrchestratorTest {
       ObjectMapper badMapper = mock(ObjectMapper.class);
       when(badMapper.writeValueAsString(any()))
           .thenThrow(new com.fasterxml.jackson.core.JsonProcessingException("fail") {});
+      var budgetPlanner =
+          new DiffBudgetPlanner(
+              diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m"));
       var failingPipeline =
           new FindingPipeline(
               aiReviewService,
-              quoteValidator,
-              frameworkFilter,
+              new FindingScreen(
+                  quoteValidator,
+                  frameworkFilter,
+                  deduplicator,
+                  findingVerificationService,
+                  new VerifierRejectionMemory(),
+                  budgetPlanner,
+                  new TokenCounter()),
               deduplicator,
-              findingVerificationService,
-              new VerifierRejectionMemory(),
               followUpAnalyzer,
               badMapper,
               BOT_ID,
-              new DiffBudgetPlanner(
-                  diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
+              budgetPlanner,
               new TokenCounter(),
               mock(ReviewTokenLedger.class),
               new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper),

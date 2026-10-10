@@ -86,11 +86,15 @@ class FindingPipelineTest {
     pipeline =
         new FindingPipeline(
             aiReviewService,
-            quoteValidator,
-            frameworkFilter,
+            new FindingScreen(
+                quoteValidator,
+                frameworkFilter,
+                deduplicator,
+                findingVerificationService,
+                new VerifierRejectionMemory(),
+                budgetPlanner,
+                new TokenCounter()),
             deduplicator,
-            findingVerificationService,
-            new VerifierRejectionMemory(),
             followUpAnalyzer,
             new ObjectMapper(),
             BotIdentity.from(List.of("thrillhousebot[bot]")),
@@ -2611,11 +2615,15 @@ class FindingPipelineTest {
     var p =
         new FindingPipeline(
             aiReviewService,
-            quoteValidator,
-            frameworkFilter,
+            new FindingScreen(
+                quoteValidator,
+                frameworkFilter,
+                deduplicator,
+                realVerificationService,
+                new VerifierRejectionMemory(),
+                budgetPlanner,
+                new TokenCounter()),
             deduplicator,
-            realVerificationService,
-            new VerifierRejectionMemory(),
             followUpAnalyzer,
             new ObjectMapper(),
             BotIdentity.from(List.of("thrillhousebot[bot]")),
@@ -2670,11 +2678,15 @@ class FindingPipelineTest {
     var p =
         new FindingPipeline(
             aiReviewService,
-            quoteValidator,
-            frameworkFilter,
+            new FindingScreen(
+                quoteValidator,
+                frameworkFilter,
+                deduplicator,
+                findingVerificationService,
+                new VerifierRejectionMemory(),
+                budgetPlanner,
+                new TokenCounter()),
             deduplicator,
-            findingVerificationService,
-            new VerifierRejectionMemory(),
             followUpAnalyzer,
             new ObjectMapper(),
             BotIdentity.from(List.of("thrillhousebot[bot]")),
@@ -2815,11 +2827,15 @@ class FindingPipelineTest {
     var p =
         new FindingPipeline(
             aiReviewService,
-            quoteValidator,
-            frameworkFilter,
+            new FindingScreen(
+                quoteValidator,
+                frameworkFilter,
+                deduplicator,
+                findingVerificationService,
+                new VerifierRejectionMemory(),
+                budgetPlanner,
+                new TokenCounter()),
             deduplicator,
-            findingVerificationService,
-            new VerifierRejectionMemory(),
             followUpAnalyzer,
             throwingMapper,
             BotIdentity.from(List.of("thrillhousebot[bot]")),
@@ -2905,11 +2921,15 @@ class FindingPipelineTest {
   private FindingPipeline routedPipeline() {
     return new FindingPipeline(
         aiReviewService,
-        quoteValidator,
-        frameworkFilter,
+        new FindingScreen(
+            quoteValidator,
+            frameworkFilter,
+            deduplicator,
+            findingVerificationService,
+            new VerifierRejectionMemory(),
+            budgetPlanner,
+            new TokenCounter()),
         deduplicator,
-        findingVerificationService,
-        new VerifierRejectionMemory(),
         followUpAnalyzer,
         new ObjectMapper(),
         BotIdentity.from(List.of("thrillhousebot[bot]")),
