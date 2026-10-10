@@ -799,8 +799,12 @@ lines for the IaC rules, and placeholder values: anything containing `example`,
 six identical characters, and for assignments any value starting with `$`, a
 regular expression (a value holding `(?`, a character-class range such as
 `[A-Z0-9]` or an escape such as `\d`, with at least a quarter of its characters
-regex syntax), and sample text quoted inside another string
-(`"client_secret: 'abc…'"` in a test's list of inputs). To
+regex syntax), and sample text quoted inside another string that sits first on
+its line or after `(`, `[`, `{` or `,` (`"client_secret: 'abc…'",` in a test's
+list of inputs). An assignment in a command string (`sh -c 'API_KEY="…"'`) is
+still reported; one in a command string written as a list element
+(`["sh", "-c", "API_KEY='…'"]`) is not, since it reads exactly like sample
+text. To
 accept a line, put `thrillhousebot:allow-secret` (or `thrillhousebot:allow-iac`)
 in a comment on that line or the line above; above is the only place a
 Dockerfile instruction can take one. JSON cannot hold a comment, so put such a

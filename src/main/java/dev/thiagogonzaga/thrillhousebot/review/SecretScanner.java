@@ -285,6 +285,12 @@ final class SecretScanner {
    * {"token": '…'}}) closes its quote before the operator, so it is still read as an assignment.
    * The rule reads only quoted values, so an unquoted value inside a string ({@code "password=…"})
    * is not an assignment to it either way.
+   *
+   * <p>The enclosing string must also sit where a list element or a call argument does: first on
+   * its line, or right after {@code (}, {@code [}, {@code {} or {@code ,}. A string a command runs
+   * ({@code sh -c 'DB_PASSWORD="…"'}, {@code ExecStart=… 'API_KEY="…"'}) follows a word or an
+   * operator, so a real credential there is still reported. A command string passed as a list
+   * element ({@code ["sh", "-c", "PASSWORD='…'"]}) is the case this cannot tell from sample text.
    */
   private static boolean insideStringLiteral(String line, Matcher generic) {
     int keyStart = generic.start(1);
@@ -296,7 +302,20 @@ final class SecretScanner {
       return false;
     }
     return line.charAt(generic.start(2)) != before
-        && line.substring(generic.end(1), generic.start(2)).indexOf(before) < 0;
+        && line.substring(generic.end(1), generic.start(2)).indexOf(before) < 0
+        && inElementPosition(line, keyStart - 1);
+  }
+
+  /**
+   * Whether the string opening at {@code quote} is first on its line or follows {@code (}, {@code
+   * [}, {@code {} or {@code ,}, ignoring whitespace.
+   */
+  private static boolean inElementPosition(String line, int quote) {
+    int i = quote - 1;
+    while (i >= 0 && Character.isWhitespace(line.charAt(i))) {
+      i--;
+    }
+    return i < 0 || "([{,".indexOf(line.charAt(i)) >= 0;
   }
 
   /** Whether a private-key header is followed by a key body; see {@link #PEM_BODY}. */

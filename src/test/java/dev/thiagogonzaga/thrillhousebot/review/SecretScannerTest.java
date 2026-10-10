@@ -466,6 +466,15 @@ class SecretScannerTest {
     assertTrue(scan("        \"client_secret: 'abcdefgh12345'\",").isEmpty());
     assertTrue(scan("    'password = \"q8#Lm2!vRt9Z\"',").isEmpty());
     assertTrue(scan("  `api_key: \"q8#Lm2!vRt9Z\"`,").isEmpty());
+    assertTrue(scan("List.of(\"token: 'q8#Lm2!vRt9Z'\", \"secret: 'q8#Lm2!vRt9Z'\")").isEmpty());
+  }
+
+  @Test
+  void anAssignmentInACommandStringIsStillACredential() {
+    assertGenericHit(
+        "DB_PASSWORD", "q8#Lm2!vRt9Z", "ExecStart=/bin/sh -c 'DB_PASSWORD=\"q8#Lm2!vRt9Z\" run'");
+    assertGenericHit(
+        "API_KEY", "q8#Lm2!vRt9Z", "  command: sh -c 'export API_KEY=\"q8#Lm2!vRt9Z\"'");
   }
 
   @Test
