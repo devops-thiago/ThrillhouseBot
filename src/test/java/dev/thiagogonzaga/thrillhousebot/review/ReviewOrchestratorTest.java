@@ -35,12 +35,14 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TicketContextPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
+import dev.thiagogonzaga.thrillhousebot.webhook.ReviewTriggerFilter;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.junit.jupiter.api.BeforeEach;
@@ -137,6 +139,12 @@ class ReviewOrchestratorTest {
 
   private final CiHoldRegistry ciHoldRegistry = new CiHoldRegistry();
 
+  /**
+   * The label gates (#1021): the real stand-down over the GitHub mocks, with the gate's reads
+   * stubbed per test; it reports no gate configured unless a test sets one.
+   */
+  private PullRequestLabelGate labelGate;
+
   private final ExecutorService reviewExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
   @Mock private ReviewNotifier notifier;
@@ -146,6 +154,14 @@ class ReviewOrchestratorTest {
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
+    labelGate =
+        spy(
+            new PullRequestLabelGate(
+                mock(ReviewTriggerFilter.class),
+                authClient,
+                mock(GitHubLabelClient.class),
+                new CheckRunManager(checkRunClient),
+                skipEmitter));
     ThrillhouseConfig.GitHubConfig githubConfig = mock(ThrillhouseConfig.GitHubConfig.class);
     when(config.github()).thenReturn(githubConfig);
     when(githubConfig.botLogins()).thenReturn(List.of(BOT_LOGIN));
@@ -160,7 +176,8 @@ class ReviewOrchestratorTest {
             followUpAnalyzer,
             labeler,
             config,
-            BOT_ID);
+            BOT_ID,
+            labelGate);
     verdictBuilder =
         new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID, BlockingStrictness.BALANCED);
     findingPipeline =
@@ -329,7 +346,8 @@ class ReviewOrchestratorTest {
         verdictBuilder,
         new CheckRunManager(checkRunClient),
         reviewPublisher,
-        ciHoldRegistry);
+        ciHoldRegistry,
+        labelGate);
   }
 
   /**
@@ -3660,6 +3678,17 @@ class ReviewOrchestratorTest {
 
       assertEquals(2L, skipEmitter.countsByReason().get("HEAD_MOVED"));
       verify(broadcaster, times(2)).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
+    }
+
+    @Test
+    void closeLabelGatedSessionSurvivesAPersistenceFailure() {
+      var session = ReviewSession.create("owner/repo", 42, "T", "abcdefgh");
+      session.id = 7L;
+      doThrow(new RuntimeException("db down")).when(sessionPersistence).update(anyLong(), any());
+
+      assertDoesNotThrow(() -> orchestrator.closeLabelGatedSession(session));
+
+      verify(broadcaster).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
     }
 
     @Test
@@ -7527,6 +7556,139 @@ class ReviewOrchestratorTest {
                 argThat(req -> "APPROVE".equals(req.event())));
         verify(aiReviewService, times(1)).review(any(ReviewSession.class), any());
         assertTrue(ciHoldRegistry.heldAt("owner", "repo", 42, "abcdefgh").isPresent());
+      }
+    }
+
+    private void excludeOnLabels(List<String> labels) {
+      when(labelGate.configured()).thenReturn(true);
+      when(labelGate.currentLabels("Bearer test", "owner", "repo", 42))
+          .thenReturn(Optional.of(labels));
+      when(labelGate.skipFor(labels))
+          .thenReturn(
+              Optional.of(
+                  new ReviewTriggerFilter.Skip(
+                      ReviewSkipReason.EXCLUDED_LABEL, "PR carries an excluded label")));
+    }
+
+    @Test
+    void aLabelAddedDuringTheReviewStopsItsPost() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubCommonReviewMocks(buildCheck("completed", "success"));
+        excludeOnLabels(List.of("dependencies"));
+
+        assertFalse(orchestrator.review(request()));
+
+        verify(reviewClient, never())
+            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(commentClient, never())
+            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        assertEquals(1L, skipEmitter.countsByReason().get("EXCLUDED_LABEL"));
+        var update = ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
+        verify(checkRunClient)
+            .updateCheckRun(
+                anyString(), anyString(), anyString(), anyString(), eq(1L), update.capture());
+        assertEquals("skipped", update.getValue().conclusion());
+        assertEquals(PullRequestLabelGate.CHECK_TITLE, update.getValue().output().title());
+        verify(session).setStatus(ReviewSession.STATUS_FAILED);
+        assertTrue(ciHoldRegistry.pullRequestsAt("owner", "repo", "abcdefgh").isEmpty());
+        verifyNoInteractions(notifier);
+      }
+    }
+
+    @Test
+    void aManualReviewIsNotLabelGatedBeforeItsPost() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubCommonReviewMocks(buildCheck("completed", "success"));
+        excludeOnLabels(List.of("dependencies"));
+
+        assertTrue(
+            orchestrator.review(
+                new ReviewOrchestrator.ReviewRequest(
+                    "owner",
+                    "repo",
+                    42,
+                    "abcdefgh",
+                    "Test PR",
+                    "",
+                    "base1234567",
+                    "main",
+                    123L,
+                    true,
+                    "main")));
+
+        verify(labelGate, never()).currentLabels(anyString(), anyString(), anyString(), anyInt());
+        verify(reviewClient)
+            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      }
+    }
+
+    @Test
+    void unreadableLabelsDoNotStopThePost() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubCommonReviewMocks(buildCheck("completed", "success"));
+        when(labelGate.configured()).thenReturn(true);
+        when(labelGate.currentLabels("Bearer test", "owner", "repo", 42))
+            .thenReturn(Optional.empty());
+
+        assertTrue(orchestrator.review(request()));
+
+        verify(reviewClient)
+            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(labelGate, never()).skipFor(any());
+      }
+    }
+
+    @Test
+    void anExcludedLabelAddedWhileTheApprovalIsHeldDropsItWhenCiTurnsGreen() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        stubCommonReviewMocks(buildCheck("in_progress", null));
+        when(labelGate.configured()).thenReturn(true);
+        when(labelGate.currentLabels("Bearer test", "owner", "repo", 42))
+            .thenReturn(Optional.of(List.of()));
+        orchestrator.review(request());
+        assertTrue(ciHoldRegistry.heldAt("owner", "repo", 42, "abcdefgh").isPresent());
+
+        // Dependabot's label lands after the review held its approval on CI.
+        excludeOnLabels(List.of("dependencies"));
+        when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+            .thenReturn(buildCheck("completed", "success").checkRuns());
+        newCiHoldRevisit()
+            .revisit(new CiHoldRevisit.Recheck("owner", "repo", 42, "abcdefgh", 123L));
+
+        verify(reviewClient, never())
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> "APPROVE".equals(req.event())));
+        verify(checkRunClient)
+            .updateCheckRun(
+                anyString(),
+                anyString(),
+                eq("owner"),
+                eq("repo"),
+                eq(1L),
+                argThat(update -> "skipped".equals(update.conclusion())));
+        assertEquals(1L, skipEmitter.countsByReason().get("EXCLUDED_LABEL"));
+        assertTrue(ciHoldRegistry.pullRequestsAt("owner", "repo", "abcdefgh").isEmpty());
       }
     }
 

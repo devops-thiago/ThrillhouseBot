@@ -55,9 +55,11 @@ public class CiHoldRegistry {
   /**
    * What a re-evaluation needs to post the verdict a review held on CI: the head it reviewed, the
    * base branch its required contexts are resolved against, the check run to conclude, and the
-   * dashboard link that check run carries.
+   * dashboard link that check run carries, and whether a manual {@code /review} earned it, which
+   * the label gates do not apply to (#1021).
    */
-  public record HeldVerdict(String headSha, String baseRef, long checkRunId, String detailsUrl) {}
+  public record HeldVerdict(
+      String headSha, String baseRef, long checkRunId, String detailsUrl, boolean manualTrigger) {}
 
   private record PrKey(String owner, String repo, int prNumber) {}
 

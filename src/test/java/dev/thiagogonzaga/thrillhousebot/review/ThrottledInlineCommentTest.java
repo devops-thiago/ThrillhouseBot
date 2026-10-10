@@ -110,7 +110,8 @@ class ThrottledInlineCommentTest {
             mock(FollowUpAnalyzer.class),
             mock(PrLabeler.class),
             config,
-            BotIdentity.of("thrillhousebot[bot]"));
+            BotIdentity.of("thrillhousebot[bot]"),
+            mock(PullRequestLabelGate.class));
   }
 
   /** GitHub throttles the first attempt only: the repeat is the same comment, on the same line. */
