@@ -355,7 +355,7 @@ class ModelSuppliedTextInLogLinesTest {
     var pipeline =
         new FindingPipeline(
             mock(AiReviewService.class),
-            new FindingScreen(
+            FindingScreens.of(
                 mock(FindingQuoteValidator.class),
                 mock(FrameworkFalsePositiveFilter.class),
                 mock(FindingDeduplicator.class),

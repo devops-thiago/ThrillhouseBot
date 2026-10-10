@@ -86,7 +86,7 @@ class FindingPipelineTest {
     pipeline =
         new FindingPipeline(
             aiReviewService,
-            new FindingScreen(
+            FindingScreens.of(
                 quoteValidator,
                 frameworkFilter,
                 deduplicator,
@@ -2615,7 +2615,7 @@ class FindingPipelineTest {
     var p =
         new FindingPipeline(
             aiReviewService,
-            new FindingScreen(
+            FindingScreens.of(
                 quoteValidator,
                 frameworkFilter,
                 deduplicator,
@@ -2678,7 +2678,7 @@ class FindingPipelineTest {
     var p =
         new FindingPipeline(
             aiReviewService,
-            new FindingScreen(
+            FindingScreens.of(
                 quoteValidator,
                 frameworkFilter,
                 deduplicator,
@@ -2827,7 +2827,7 @@ class FindingPipelineTest {
     var p =
         new FindingPipeline(
             aiReviewService,
-            new FindingScreen(
+            FindingScreens.of(
                 quoteValidator,
                 frameworkFilter,
                 deduplicator,
@@ -2921,7 +2921,7 @@ class FindingPipelineTest {
   private FindingPipeline routedPipeline() {
     return new FindingPipeline(
         aiReviewService,
-        new FindingScreen(
+        FindingScreens.of(
             quoteValidator,
             frameworkFilter,
             deduplicator,

@@ -80,6 +80,34 @@ class FindingScreenTest {
   }
 
   @Test
+  void eachLaneRunsItsStagesInThisOrder() {
+    assertEquals(
+        List.of(
+            EvidenceStage.class,
+            QuoteValidationStage.class,
+            FrameworkFilterStage.class,
+            DedupeStage.class,
+            RejectionScreenStage.class,
+            VerificationStage.class,
+            RememberVerdictsStage.class),
+        stageTypes(screen.singleCallStages()));
+    // The batch lane is the single-call lane without dedupe, which runs once over every batch.
+    assertEquals(
+        List.of(
+            EvidenceStage.class,
+            QuoteValidationStage.class,
+            FrameworkFilterStage.class,
+            RejectionScreenStage.class,
+            VerificationStage.class,
+            RememberVerdictsStage.class),
+        stageTypes(screen.batchStages()));
+    assertEquals(
+        screen.singleCallStages().stream().filter(s -> !(s instanceof DedupeStage)).toList(),
+        screen.batchStages(),
+        "both lanes share the same stage instances");
+  }
+
+  @Test
   void singleCallRunsEveryCheckInOrderAndDedupesBeforeTheRejectionScreen() {
     var result = screen.screenSingleCall(session, raw, QUOTE_SOURCE, INPUTS, plan(), evidence);
 
@@ -178,8 +206,12 @@ class FindingScreenTest {
     assertEquals(List.of(), sent.getAllValues().get(1).findings());
   }
 
+  private static List<Class<?>> stageTypes(List<FindingStage> stages) {
+    return stages.stream().<Class<?>>map(FindingStage::getClass).toList();
+  }
+
   private FindingScreen screenWith(VerifierRejectionMemory memory) {
-    return new FindingScreen(
+    return FindingScreens.of(
         quoteValidator,
         frameworkFilter,
         deduplicator,

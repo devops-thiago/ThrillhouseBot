@@ -101,7 +101,7 @@ class FindingPipelineSecurityScanTest {
     pipeline =
         new FindingPipeline(
             aiReviewService,
-            new FindingScreen(
+            FindingScreens.of(
                 quoteValidator,
                 frameworkFilter,
                 new FindingDeduplicator(),

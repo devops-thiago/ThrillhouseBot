@@ -224,7 +224,7 @@ which both lanes share):
 3. Drop known framework false positives (`FrameworkFalsePositiveFilter`).
 4. Merge duplicates (`FindingDeduplicator`).
 5. Drop what the verifier already rejected on this head (`VerifierRejectionMemory`).
-6. Verify (`FindingVerificationService`).
+6. Verify (`FindingVerificationService`), then remember its verdicts against the findings sent.
 7. Calibrate severity (`SeverityCalibrator`).
 8. Drop restatements of findings a maintainer already answered, and of findings argued out on
    earlier rounds.
@@ -233,6 +233,14 @@ which both lanes share):
 On the multi-call lane each batch runs steps 1, 2, 3, 5 and 6 in its own thread. Once every batch
 has finished, the pipeline merges the statuses the batches reported and runs steps 4, 8 and 9 over
 the combined findings. Severity calibration does not run on this lane.
+
+`FindingScreen` is a small pipes-and-filters chain. Each of steps 1 to 6 is a `FindingStage`
+(`EvidenceStage`, `QuoteValidationStage`, `FrameworkFilterStage`, `DedupeStage`,
+`RejectionScreenStage`, `VerificationStage`, `RememberVerdictsStage`) that owns only its own
+collaborator and maps one immutable `ScreeningContext` (the call's response, its quote source and
+prompt inputs, the plan, the evidence resolver, and the evidence and verifier candidates the
+stages produce) to the next. The constructor builds one explicit ordered list per lane; the batch
+list is the single-call list without `DedupeStage`. `FindingScreenTest` pins both orders.
 
 Every lane then ends with the same two steps (`FindingPipeline.finish`): the deterministic security
 scan merge, then the guard that drops a new finding restating one still open on its own thread

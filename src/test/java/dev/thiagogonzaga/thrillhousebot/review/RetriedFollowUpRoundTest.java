@@ -170,7 +170,7 @@ class RetriedFollowUpRoundTest {
     pipeline =
         new FindingPipeline(
             aiService,
-            new FindingScreen(
+            FindingScreens.of(
                 quoteValidator,
                 frameworkFilter,
                 new FindingDeduplicator(),

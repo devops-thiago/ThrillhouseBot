@@ -169,7 +169,7 @@ class ReviewOrchestratorTest {
     findingPipeline =
         new FindingPipeline(
             aiReviewService,
-            new FindingScreen(
+            FindingScreens.of(
                 quoteValidator,
                 frameworkFilter,
                 deduplicator,
@@ -6010,7 +6010,7 @@ class ReviewOrchestratorTest {
       var failingPipeline =
           new FindingPipeline(
               aiReviewService,
-              new FindingScreen(
+              FindingScreens.of(
                   quoteValidator,
                   frameworkFilter,
                   deduplicator,
