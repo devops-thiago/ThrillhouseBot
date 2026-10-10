@@ -36,7 +36,9 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  *
  * <p>A read either returns every label or nothing: unlike {@link PrLabeler}'s capping read, a
  * partial set is never used, because a page lost to a failure could be the one that carries the
- * excluded label. Each caller decides what an unreadable set means for it.
+ * excluded label. A failed or empty-bodied page makes the whole set unreadable, and each caller
+ * decides what that means for it. The only bound is {@link PrLabeler#MAX_LABEL_PAGES} pages of 100,
+ * far past the labels GitHub lets one issue carry.
  *
  * <p>A run or held approval the gates reject stands down the same way from either caller ({@link
  * #standDown}): the skip is counted under the gate's reason and the check run concluded as skipped,
@@ -179,7 +181,7 @@ public class PullRequestLabelGate {
    * The names of every label on the pull request, walking pages up to {@link
    * PrLabeler#MAX_LABEL_PAGES}.
    *
-   * @return empty when any page could not be read
+   * @return empty when any page could not be read or came back without a body
    */
   public Optional<List<String>> currentLabels(
       String auth, String owner, String repo, int prNumber) {
@@ -191,7 +193,7 @@ public class PullRequestLabelGate {
           p++) {
         page = labelClient.listIssueLabels(auth, ACCEPT, owner, repo, prNumber, LABELS_PER_PAGE, p);
         if (page == null) {
-          break;
+          return Optional.empty();
         }
         page.forEach(label -> names.add(label.name()));
       }

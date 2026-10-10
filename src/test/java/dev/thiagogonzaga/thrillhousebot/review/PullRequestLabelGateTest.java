@@ -161,10 +161,11 @@ class PullRequestLabelGateTest {
   }
 
   @Test
-  void aNullPageEndsTheRead() {
-    page(1, null);
+  void aPageWithoutABodyMakesTheWholeSetUnreadable() {
+    page(1, IntStream.range(0, 100).mapToObj(i -> label("l" + i)).toList());
+    page(2, null);
 
-    assertEquals(Optional.of(List.of()), gate.currentLabels(AUTH, "owner", "repo", 42));
+    assertTrue(gate.currentLabels(AUTH, "owner", "repo", 42).isEmpty());
   }
 
   @Test
