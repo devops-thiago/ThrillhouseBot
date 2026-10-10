@@ -282,11 +282,11 @@ public final class PromptLabelScrubber {
 
   /**
    * "(as provided with this review, the parser must reject it)": the note leading a parenthetical
-   * that goes on (#986). The note and its comma go; the parenthetical keeps the rest.
+   * that goes on (#986). The note and its comma, if any, go; the parenthetical keeps the rest.
    */
   private static final Pattern PROVIDED_WITH_REVIEW_PARENTHETICAL_LEAD =
       Pattern.compile(
-          "\\([ \\t]*(?:as )?(?:provided|supplied|given) (?:with|to|for) this review,[ \\t]*",
+          "\\([ \\t]*(?:as )?(?:provided|supplied|given) (?:with|to|for) this review\\b,?[ \\t]*",
           Pattern.CASE_INSENSITIVE);
 
   /**

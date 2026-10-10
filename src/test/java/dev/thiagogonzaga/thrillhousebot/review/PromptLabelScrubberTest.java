@@ -723,6 +723,8 @@ class PromptLabelScrubberTest {
           """
           the quote above (as provided with this review, the parser must reject it) says so | the quote above (the parser must reject it) says so
           the quote above (provided with this review, the parser must reject it) says so | the quote above (the parser must reject it) says so
+          the quote above (as provided with this review the parser must reject it) says so | the quote above (the parser must reject it) says so
+          the quote above (as provided with this reviewer in mind) says so | the quote above (as provided with this reviewer in mind) says so
           Note: as provided with this review, the parser must reject it. | Note: the parser must reject it.
           Note: As provided with this review, the parser must reject it. | Note: The parser must reject it.
           X — as provided with this review, Y | X — Y
