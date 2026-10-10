@@ -153,6 +153,35 @@ class OpenThreadDuplicateGuardTest {
     assertEquals(response.previousFindingsStatus(), guarded.previousFindingsStatus());
   }
 
+  /**
+   * #972: a new double-check item that is the same defect as an open threaded finding, raised on
+   * another file, is the pair the summary would mark "Same issue as", so it is not listed and
+   * counted beside it. Posted inline it would be kept: a re-raise is held to the thread's own test.
+   */
+  @Test
+  void aListedRestatementOfAnOpenThreadOnAnotherFileIsDropped() {
+    var listed =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            "rust/src/main.rs",
+            3,
+            "sync_sensors fetches only the first page of the registry",
+            "d",
+            null,
+            null);
+    var inline =
+        new ReviewResponse.Finding(
+            "medium", "high", listed.file(), 3, listed.title(), "d", null, null);
+
+    assertEquals(
+        List.of(nan),
+        guard(new ReviewResponse(List.of(listed, nan), List.of(), null), threads).findings());
+    assertEquals(
+        List.of(inline, nan),
+        guard(new ReviewResponse(List.of(inline, nan), List.of(), null), threads).findings());
+  }
+
   @Test
   void aReRaiseOfTheEffectivePreviousRoundsOpenFindingIsDroppedToo() {
     var guarded = guard(new ReviewResponse(List.of(quadraticAgain, nan), List.of(), null), threads);

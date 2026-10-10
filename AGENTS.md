@@ -172,10 +172,18 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
 - **A "Things to double-check" item is counted once and replaced only by the same defect** (#951,
   #961). A listed-only repeat at no higher severity is dropped by the open-thread guard
   (`restatesListed`); a finding at the same or higher severity replaces the item
-  (`replacedPriors`, `withoutReplaced`). Both go through `DefectIdentity.sameDefect`: same file,
-  then the same title, a similar title within three lines, or the same line with two shared title
-  words or a common identifier, and never two titles naming different identifiers
-  (`namesDifferentIdentifiers`). Content overlap alone is not identity (`DefectIdentityTest`).
+  (`replacedPriors`, `withoutReplaced`). A new listed item restating an open threaded finding is
+  dropped the same way. The summary's "Same issue as" note (`SummarySurfaceDeduplicator.restatedBy`)
+  uses the same predicate, so the note and the counts never disagree (#972). All of them go through
+  `DefectIdentity.sameDefect`, which is symmetric: in one file, the same title, a similar title or
+  a title-vs-description phrase within three lines, the same line with two shared title words or a
+  common identifier, or titles that restate each other (shared phrase and 0.6 overlap); in any
+  file, a subject (key, symbol, or the class a file is named after) named by both titles plus
+  another shared title word or defect class (#956), or a description citing the other's
+  `file:line` and naming a symbol of its title. Two vetoes come first: titles naming different
+  identifiers (`namesDifferentIdentifiers`), and titles naming disjoint defect classes
+  (`classesConflict`: a race is not an off-by-one, #964). A key named only in a description, or
+  common title words, are not identity (`DefectIdentityTest`).
 - **A declined scan finding stays settled while its content is unchanged** (#982). The scan reads
   no learning and is not model output, so it needs its own memory:
   `FollowUpAnalyzer.justifiedPriorFindings` hands every persisted `justified` scan finding to

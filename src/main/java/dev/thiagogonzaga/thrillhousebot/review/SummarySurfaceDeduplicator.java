@@ -153,12 +153,15 @@ final class SummarySurfaceDeduplicator {
    * false collapse deletes a claim outright where a surviving duplicate only repeats one.
    */
   private static List<Claim> claimsOf(Finding finding) {
+    return claimsOf(finding.title(), finding.description());
+  }
+
+  private static List<Claim> claimsOf(String title, String findingDescription) {
     // #885: the unverified note is shared verbatim by every finding a fail-open round kept, so it
     // is a phrase-arm match between any two of them; it says nothing about either defect.
-    var description =
-        claim(FindingVerificationService.withoutUnverifiedNote(finding.description()));
+    var description = claim(FindingVerificationService.withoutUnverifiedNote(findingDescription));
     return List.of(
-        claim(finding.title()),
+        claim(title),
         new Claim(
             description.words(),
             description.negated(),
@@ -178,43 +181,43 @@ final class SummarySurfaceDeduplicator {
    * mistaken match would take the claim away entirely.
    */
   static Optional<Finding> restatedBy(Finding candidate, List<Finding> published) {
-    // Both sides come from ReviewResult.findings(), whose List.copyOf rejects null elements, so no
-    // null guard earns its keep here. A titleless finding is the real degenerate case, and claim()
-    // reduces it to a claim with no words, which matches nothing.
-    var candidateClaim = claim(candidate.title());
-    for (Finding finding : published) {
-      // #961: a bullet about one config key is never "the same issue as" a finding about another.
-      if (DefectIdentity.namesDifferentIdentifiers(candidate.title(), finding.title())) {
-        continue;
-      }
-      var claims =
-          sameLocation(candidate, finding) ? claimsOf(finding) : List.of(claim(finding.title()));
-      if (restates(candidateClaim, claims)) {
-        return Optional.of(finding);
-      }
-    }
-    return Optional.empty();
+    // The pairing is DefectIdentity's, the one replacement and the open-thread guard use (#972),
+    // so the summary never calls two findings one issue while the counts hold both. A title-only
+    // overlap of common words is not enough there (#964), and a bullet about one config key is
+    // never "the same issue as" a finding about another (#961).
+    return published.stream()
+        .filter(finding -> DefectIdentity.sameDefect(finding, candidate))
+        .findFirst();
   }
 
   /**
-   * Whether two findings flag the same place: the same file and a line within {@value
-   * #SAME_LOCATION_LINES} of each other.
-   *
-   * <p>A bullet's title is weighed against an inline finding's description only there (#951). A
-   * description names far more than its own defect — the config keys a Dockerfile finding lists
-   * while explaining a token, the table a scheduler finding mentions on its way to the poll loop —
-   * so matching a title against it anywhere linked bullets to unrelated findings: a
-   * configuration-doc item "Same issue as" {@code java/Dockerfile:10}, an events-table item "Same
-   * issue as" the poll finding twelve lines away. Away from the bullet's location only a title that
-   * restates the finding's own title links.
+   * Whether {@code title} shares a contiguous run of {@value #PHRASE_TOKENS} content words with
+   * {@code description}, the arm {@link #claimsOf} weighs a finding's description on. {@link
+   * DefectIdentity} applies it only to findings a few lines apart (#951): a description names far
+   * more than its own defect — the config keys a Dockerfile finding lists while explaining a token,
+   * the table a scheduler finding mentions on its way to the poll loop — so matching a title
+   * against it anywhere linked bullets to unrelated findings.
    */
-  private static boolean sameLocation(Finding candidate, Finding published) {
-    return FilePaths.same(candidate.file(), published.file())
-        && Math.abs(candidate.line() - published.line()) <= SAME_LOCATION_LINES;
+  static boolean titleSharesPhraseWith(String title, String description) {
+    return restates(claim(title), List.of(claimsOf(title, description).get(1)));
   }
 
-  /** How far apart two findings' lines may sit and still flag the same place. */
-  private static final int SAME_LOCATION_LINES = 3;
+  /**
+   * Whether two titles restate one claim: a shared run of {@value #PHRASE_TOKENS} content words and
+   * at least {@value #RESTATEMENT_OVERLAP} of the shorter title's content words. Stricter than the
+   * overlap arm alone, whose 0.5 three common words reach on a six-word title ("job", "list",
+   * "every") without the two naming one defect (#964).
+   */
+  static boolean titlesRestate(String title, String otherTitle) {
+    var claim = claim(title);
+    var other = claim(otherTitle);
+    return !contradicts(claim, other)
+        && sharesPhrase(claim.phrases(), other.phrases())
+        && overlap(claim.wordSet(), other.wordSet()) >= RESTATEMENT_OVERLAP;
+  }
+
+  /** Fraction of the shorter title's content words two restating titles share. */
+  static final double RESTATEMENT_OVERLAP = 0.6;
 
   /**
    * Collapses {@code descriptionGaps} and {@code fileSummaries} against the findings already
@@ -332,12 +335,18 @@ final class SummarySurfaceDeduplicator {
 
   /** Overlap coefficient — shared content words over the shorter side — against the threshold. */
   private static boolean overlaps(Set<String> candidateWords, Set<String> claimWords) {
-    int shorter = Math.min(candidateWords.size(), claimWords.size());
-    if (shorter < MIN_OVERLAP_TOKENS) {
-      return false;
+    return Math.min(candidateWords.size(), claimWords.size()) >= MIN_OVERLAP_TOKENS
+        && overlap(candidateWords, claimWords) >= OVERLAP_THRESHOLD;
+  }
+
+  /** Shared content words over the shorter side's count; 0 when either side has none. */
+  private static double overlap(Set<String> words, Set<String> otherWords) {
+    int shorter = Math.min(words.size(), otherWords.size());
+    if (shorter == 0) {
+      return 0;
     }
-    long shared = claimWords.stream().filter(candidateWords::contains).count();
-    return (double) shared / shorter >= OVERLAP_THRESHOLD;
+    long shared = otherWords.stream().filter(words::contains).count();
+    return (double) shared / shorter;
   }
 
   /**

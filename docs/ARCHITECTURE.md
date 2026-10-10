@@ -326,9 +326,13 @@ again.
 3. An `unresolved` id that is repeated or names no finding is dropped, so nothing is counted twice.
 4. A "Things to double-check" item (a low-confidence medium or low finding, listed in the summary
    without a thread) is replaced when this round or a later one raises the same defect at the same
-   or higher severity. Same defect means the same file and either the same title, a similar title
-   within three lines, or the same line with shared title words or a common identifier. Two titles
-   that name different identifiers are never the same defect.
+   or higher severity. Same defect means, in the same file, the same title, a similar title within
+   three lines, the same line with shared title words or a common identifier, or titles that restate
+   each other; in any file, both titles naming the same key or symbol plus another shared word or
+   defect class (a restatement on the paired doc or code file), or one finding citing the other's
+   `file:line` and code. Two titles that name different identifiers, or different defect classes
+   (a race and an off-by-one), are never the same defect. The summary's "Same issue as" note on a
+   double-check item uses the same test.
 5. The approval backstop replays every earlier round, oldest first. It keeps open each finding that
    no round closed and the model did not report on, as long as its code is still in the diff. A
    decline on a finding from an older round is weighed as in step 2: the finding stays open when
