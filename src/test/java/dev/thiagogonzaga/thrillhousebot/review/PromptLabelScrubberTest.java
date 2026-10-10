@@ -716,6 +716,61 @@ class PromptLabelScrubberTest {
         PromptLabelScrubber.scrub("As provided with this review, README.md is renamed."));
   }
 
+  // #986: the placements that left "(as," or "Note:," behind.
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          the quote above (as provided with this review, the parser must reject it) says so | the quote above (the parser must reject it) says so
+          the quote above (provided with this review, the parser must reject it) says so | the quote above (the parser must reject it) says so
+          the quote above (as provided with this review the parser must reject it) says so | the quote above (the parser must reject it) says so
+          the quote above (as provided with this reviewer in mind) says so | the quote above (as provided with this reviewer in mind) says so
+          Note: as provided with this review, the parser must reject it. | Note: the parser must reject it.
+          Note: As provided with this review, the parser must reject it. | Note: The parser must reject it.
+          X — as provided with this review, Y | X — Y
+          X – as provided with this review, Y | X – Y
+          X - as provided with this review, Y | X - Y
+          X — provided with this review, Y | X — Y
+          as provided with this review, the parser must reject it. | the parser must reject it.
+          as provided with this review the parser must reject it. | the parser must reject it.
+          """)
+  void providedWithThisReviewAfterAColonDashParenthesisOrAtTheStartGoesCleanly(
+      String leaked, String clean) {
+    var scrubbed = PromptLabelScrubber.scrub(leaked);
+    assertEquals(clean, scrubbed);
+    // No fragment of the note survives: neither its "as" nor a comma left where it stood.
+    assertFalse(scrubbed.matches("(?s).*(?:\\bas,|[:—–(-],|^,).*"), scrubbed);
+    assertEquals(clean, PromptLabelScrubber.scrub(clean));
+  }
+
+  @Test
+  void providedWithThisReviewAfterAnOpenerKeepsTheTextBeforeTheNote() {
+    // A note leading a parenthetical goes with the blanks around it; a mid-line note at the text
+    // start has nothing a comma could close, so no comma is left in its place.
+    assertEquals("(the rest)", PromptLabelScrubber.scrub("( provided to this review, the rest)"));
+    assertEquals(" the rest", PromptLabelScrubber.scrub(" \tprovided with this review, the rest"));
+  }
+
+  // #987, PR #977 review thread r4152742157.
+  @Test
+  void anIndentedBulletKeepsItsMarkerWhenTheRatingSentenceGoes() {
+    assertEquals(
+        "Off-by-one:\n  -",
+        PromptLabelScrubber.scrub(
+            "Off-by-one:\n  - I am rating this claim at the required arithmetic-claim confidence."));
+    assertEquals(
+        "Off-by-one:\n\t-",
+        PromptLabelScrubber.scrub(
+            "Off-by-one:\n\t- I am rating this claim at the required arithmetic-claim confidence."));
+    // After text on the same line, an indented line's standalone hyphen still separates.
+    assertEquals(
+        "Off-by-one:\n  It fails.",
+        PromptLabelScrubber.scrub(
+            "Off-by-one:\n  It fails - I am rating this claim at the required arithmetic-claim"
+                + " confidence."));
+  }
+
   @Test
   void confidenceRuleClauseKeepsWhatFollowsItsComma() {
     assertEquals(

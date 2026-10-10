@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.MatchResult;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -284,19 +285,35 @@ public final class PromptLabelScrubber {
           "[ \\t]*\\((?:as )?(?:provided|supplied|given) (?:with|to|for) this review\\)",
           Pattern.CASE_INSENSITIVE);
 
-  /** "from issue #117 as provided with this review": a note on the model's input (#975). */
-  private static final Pattern PROVIDED_WITH_REVIEW =
+  /**
+   * "(as provided with this review, the parser must reject it)": the note leading a parenthetical
+   * that goes on (#986). The note and its comma, if any, go; the parenthetical keeps the rest.
+   */
+  private static final Pattern PROVIDED_WITH_REVIEW_PARENTHETICAL_LEAD =
       Pattern.compile(
-          "(,)?(?:[ \\t]+|[ \\t]*\n[ \\t]*)(?:as )?(?:provided|supplied|given) (?:with|to|for)"
-              + " this review\\b(,)?",
+          "\\([ \\t]*(?:as )?(?:provided|supplied|given) (?:with|to|for) this review\\b,?[ \\t]*",
           Pattern.CASE_INSENSITIVE);
 
   /**
-   * The same note opening a line or the text: it goes with its comma, and the rest is capitalized.
+   * "from issue #117 as provided with this review": a note on the model's input (#975). Never right
+   * after "as", which belongs to the note (#986).
+   */
+  private static final Pattern PROVIDED_WITH_REVIEW =
+      Pattern.compile(
+          "(,)?(?<!\\bas)(?:[ \\t]+|[ \\t]*\n[ \\t]*)(?:as )?(?:provided|supplied|given)"
+              + " (?:with|to|for) this review\\b(,)?",
+          Pattern.CASE_INSENSITIVE);
+
+  /** What may stand right before the mid-line note for its trailing comma to go with it (#986). */
+  private static final String NOTE_OPENERS = ":—–-(";
+
+  /**
+   * The same note opening a line, the text, a sentence, or a clause after a colon or dash (#986):
+   * it goes with its comma, and the rest is capitalized when the note was.
    */
   private static final Pattern PROVIDED_WITH_REVIEW_OPENING =
       Pattern.compile(
-          "(?<![^.!?\\n])([ \\t]*)As (?:provided|supplied|given) (?:with|to|for) this"
+          "(?<![^.!?\\n:—–-])([ \\t]*)([Aa])s (?:provided|supplied|given) (?:with|to|for) this"
               + " review\\b,?[ \\t]*"
               + "(\\p{Ll})?");
 
@@ -579,18 +596,26 @@ public final class PromptLabelScrubber {
     // "the criterion, as supplied to this review, says" loses both commas; one comma alone stays
     // only when it closes the clause the note ended.
     s = PROVIDED_WITH_REVIEW_PARENTHETICAL.matcher(s).replaceAll("");
+    s = PROVIDED_WITH_REVIEW_PARENTHETICAL_LEAD.matcher(s).replaceAll("(");
+    var opened = s;
     s =
         PROVIDED_WITH_REVIEW_OPENING
-            .matcher(s)
+            .matcher(opened)
             .replaceAll(
                 m ->
                     Matcher.quoteReplacement(
-                        m.group(1)
-                            + (m.group(2) == null ? "" : m.group(2).toUpperCase(Locale.ROOT))));
+                        opensNote(opened, m)
+                            ? m.group(1) + noteFollower(m.group(2), m.group(3))
+                            : m.group()));
+    var noted = s;
     s =
         PROVIDED_WITH_REVIEW
-            .matcher(s)
-            .replaceAll(m -> m.group(1) == null && m.group(2) != null ? "," : "");
+            .matcher(noted)
+            .replaceAll(
+                m ->
+                    m.group(1) == null && m.group(2) != null && !followsNoteOpener(noted, m.start())
+                        ? ","
+                        : "");
     var defined = s;
     s =
         CONFIG_KEY_DEFINITION_FOR
@@ -641,7 +666,7 @@ public final class PromptLabelScrubber {
    * Whether the clause starting at {@code clause} hangs from a separator ending at {@code blank}: a
    * semicolon, comma, em or en dash, or a plain hyphen that stands alone between spaces after other
    * text on the same line — a hyphen joined to a word ("well-") is part of that word, and one that
-   * opens the text or a line is a list marker, not a separator.
+   * opens the text or a line, after any indentation, is a list marker, not a separator (#987).
    */
   private static boolean hangsFromSeparator(String text, int blank, int clause, int floor) {
     char separator = text.charAt(blank - 1);
@@ -651,7 +676,39 @@ public final class PromptLabelScrubber {
     return separator == '-'
         && blank < clause
         && blank - 1 > floor
-        && (text.charAt(blank - 2) == ' ' || text.charAt(blank - 2) == '\t');
+        && (text.charAt(blank - 2) == ' ' || text.charAt(blank - 2) == '\t')
+        && !opensLine(text, blank - 1);
+  }
+
+  /**
+   * Whether the opening note {@code m} found is one: a capitalized "As" anywhere the pattern
+   * allows, a lower-case "as" only at the start of the text or after a colon or dash (#986). After
+   * a sentence end or a line break a lower-case "as" continues the sentence before it, so the
+   * mid-line rule takes it with the blanks before it.
+   */
+  private static boolean opensNote(String text, MatchResult m) {
+    return "A".equals(m.group(2))
+        || m.start() == 0
+        || ".!?\n".indexOf(text.charAt(m.start() - 1)) < 0;
+  }
+
+  /**
+   * The letter after an opening note, capitalized when the note's "As" was: a lower-case "as" opens
+   * a clause after a colon or dash, or a text that already started in lower case (#986).
+   */
+  private static String noteFollower(String noteInitial, String follower) {
+    if (follower == null) {
+      return "";
+    }
+    return "A".equals(noteInitial) ? follower.toUpperCase(Locale.ROOT) : follower;
+  }
+
+  /**
+   * Whether the mid-line note matched at {@code start} opens the text or follows a colon, dash or
+   * open parenthesis, where a comma in its place would dangle ("Note:, the parser") (#986).
+   */
+  private static boolean followsNoteOpener(String text, int start) {
+    return start == 0 || NOTE_OPENERS.indexOf(text.charAt(start - 1)) >= 0;
   }
 
   /**
