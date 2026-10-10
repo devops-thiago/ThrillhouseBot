@@ -779,7 +779,7 @@ IaC rules (high confidence unless noted):
 |---|---|---|---|
 | Admin port open to the internet | `.tf`, `.yaml`/`.yml`, `.json` | an ingress rule admitting `0.0.0.0/0` or `::/0` to port 22, 23, 3389, 5985 or 5986, to a range containing one, or to every protocol | high |
 | S3 bucket made public | `.tf`, `.yaml`/`.yml`, `.json` | a `public-read`/`public-read-write` ACL (`AccessControl: PublicRead…`), or a Block Public Access setting set to `false` | high |
-| IAM wildcard | `.tf`, `.yaml`/`.yml`, `.json` | `Action: "*"` with `Resource: "*"` in the same statement and no `Effect: Deny`; a `"*"` anywhere in a one-line list counts | high |
+| IAM wildcard | `.tf`, `.yaml`/`.yml`, `.json` | `Action: "*"` with `Resource: "*"` in the same statement and no `Effect: Deny`; a `"*"` anywhere in a one-line list counts (up to 64 quoted elements before it, each at most 256 characters; a longer or wider list is not reported) | high |
 | Privileged container | `.yaml`/`.yml`, `.json` | `privileged: true` (in YAML also `yes`, `on`, `y`, any case) | high |
 | Host namespace | `.yaml`/`.yml`, `.json` | `hostNetwork`, `hostPID` or `hostIPC` set to `true` (in YAML also `yes`, `on`, `y`) | high |
 | Final stage runs as root | Dockerfiles | `USER root` (or `0`) with no later `FROM` or `USER`, in a new file or in a last hunk that reaches the end of the file | medium, medium confidence |
