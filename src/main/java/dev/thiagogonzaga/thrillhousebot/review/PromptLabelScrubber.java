@@ -322,11 +322,11 @@ public final class PromptLabelScrubber {
    * (#964). What it doubted goes with the marker; the correction after it stays.
    */
   private static final Pattern PARENTHETICAL_SELF_CORRECTION =
-      Pattern.compile("\\([^()\\n]{1,40}?[ \\t]+[—–-][ \\t]+(?i:wait),[ \\t]+");
+      Pattern.compile("\\([^()\\n]{1,40}?[ \\t]+[—–-][ \\t]+[Ww]ait,[ \\t]+");
 
   /** "X — wait, Y" outside a parenthetical: the marker goes, the dash and both sides stay. */
   private static final Pattern DASH_SELF_CORRECTION =
-      Pattern.compile("[ \\t]+([—–-])[ \\t]+(?i:wait),[ \\t]+");
+      Pattern.compile("[ \\t]+([—–-])[ \\t]+[Ww]ait,[ \\t]+");
 
   /**
    * "BedReporter... rather, grep across the added files confirms …": a sentence the model broke off
@@ -347,14 +347,12 @@ public final class PromptLabelScrubber {
   /**
    * "no findings in this batch" as an aside — a parenthetical, a clause after a separator or a
    * sentence of its own (#964). A batch is how the review split the diff, which no reader sees, and
-   * "no findings" in a batch says nothing about the file's findings from other rounds.
+   * "no findings" in a batch says nothing about the file's findings from other rounds. Whether its
+   * context makes it an aside is decided by {@link #removeNoFindingsAsides}.
    */
   private static final Pattern NO_FINDINGS_IN_BATCH =
       Pattern.compile(
-          "[ \\t]*\\(no (?:new )?(?:findings?|issues?) (?:in|for|from) this batch\\)"
-              + "|[ \\t]*[;,—–][ \\t]*no (?:new )?(?:findings?|issues?) (?:in|for|from) this batch\\b"
-              + "|(?<![^.!?\\n])[ \\t]*No (?:new )?(?:findings?|issues?) (?:in|for|from) this"
-              + " batch(?:\\.|(?=\\n)|\\z)",
+          "\\bno (?:new )?(?:finding|issue)s? (?:in|for|from) this batch\\b",
           Pattern.CASE_INSENSITIVE);
 
   /** "the findings in this batch": the batch goes, the findings stay (#964). */
@@ -654,10 +652,38 @@ public final class PromptLabelScrubber {
     var m = NO_FINDINGS_IN_BATCH.matcher(text);
     var out = new StringBuilder(text.length());
     int at = 0;
-    while (at < text.length() && m.find(at)) {
-      out.append(text, at, m.start());
-      boolean lineStart = m.start() == 0 || text.charAt(m.start() - 1) == '\n';
-      at = lineStart ? skipBlanks(text, m.end()) : m.end();
+    while (m.find()) {
+      int blank = skipBlanksBack(text, m.start(), at);
+      // Only what is still unwritten can be the aside's context; the start of the text opens a
+      // line.
+      char before;
+      if (blank > at) {
+        before = text.charAt(blank - 1);
+      } else {
+        before = at == 0 ? '\n' : ' ';
+      }
+      int start;
+      int end = m.end();
+      if (before == '(' && end < text.length() && text.charAt(end) == ')') {
+        start = skipBlanksBack(text, blank - 1, at);
+        end++;
+      } else if (";,—–".indexOf(before) >= 0) {
+        start = skipBlanksBack(text, blank - 1, at);
+      } else if (".!?\n".indexOf(before) >= 0) {
+        start = blank;
+        if (end < text.length() && text.charAt(end) == '.') {
+          end++;
+        } else if (end < text.length() && text.charAt(end) != '\n') {
+          continue; // the sentence goes on past the aside: leave it to FINDINGS_IN_BATCH
+        }
+      } else {
+        continue;
+      }
+      out.append(text, at, start);
+      // An aside that started a line takes the blanks after it, so the line does not start with
+      // one.
+      boolean lineStart = start == 0 || text.charAt(start - 1) == '\n';
+      at = lineStart ? skipBlanks(text, end) : end;
     }
     return out.append(text, at, text.length()).toString();
   }

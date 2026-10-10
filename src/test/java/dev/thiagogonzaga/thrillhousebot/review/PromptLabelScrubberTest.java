@@ -1022,6 +1022,9 @@ class PromptLabelScrubberTest {
           Line one.\\nNo findings in this batch\\nLine three. | Line one.\\n\\nLine three.
           Two findings were raised in this batch on the scheduler. | Two findings were raised on the scheduler.
           the findings from this batch | the findings
+          There are no findings in this batch yet. | There are no findings yet.
+          No findings in this batch were raised on the scheduler. | No findings were raised on the scheduler.
+          (no findings in this batch) no findings in this batch here | no findings here
           """)
   void scratchTextAndOtherStagesVocabularyAreRemoved(String leaked, String clean) {
     var out = clean.replace("\\n", "\n");
