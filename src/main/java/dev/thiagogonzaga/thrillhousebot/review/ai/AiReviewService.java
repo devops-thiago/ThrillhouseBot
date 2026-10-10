@@ -28,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses.ModelLane;
 import io.quarkiverse.langchain4j.runtime.aiservice.QuarkusAiServiceTokenStream;
 import io.quarkus.logging.Log;
+import io.quarkus.qute.TemplateData;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.time.Duration;
@@ -158,15 +159,7 @@ public class AiReviewService {
   }
 
   private TokenStream reviewStream(PromptInputs inputs) {
-    return prReviewer.reviewStream(
-        inputs.diff(),
-        inputs.prContext(),
-        inputs.baseComparison(),
-        inputs.projectStack(),
-        inputs.relatedTests(),
-        inputs.previousFindings(),
-        inputs.repoInstructions(),
-        inputs.reviewSystemPrompt());
+    return prReviewer.reviewStream(inputs);
   }
 
   /**
@@ -450,7 +443,14 @@ public class AiReviewService {
    * <p>{@code linkedIssues} is the unfenced linked-issue section (#58) both calls already carry
    * inside their guidance, kept apart as well so the summary's {@code Linked issue #N} entries can
    * be checked against the issues actually linked (#923). {@code null} reads as {@code ""}.
+   *
+   * <p>The record itself is the review call's one template variable (#993): {@link
+   * PrReviewer#reviewStream} binds it as {@code inputs}, and {@link PrReviewPrompts#USER} and the
+   * system message read its components as {@code {{inputs.diff}}} and so on. {@code @TemplateData}
+   * has the template engine generate those accessors at build time, so the native image reads them
+   * without reflection.
    */
+  @TemplateData
   public record PromptInputs(
       String diff,
       String prContext,
