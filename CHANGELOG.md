@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Excluded labels added right after a pull request opens are honoured** (#1021): with `WEBHOOK_EXCLUDED_LABELS=dependencies`, Dependabot pull requests were still reviewed and later approved, because Dependabot adds its labels a second or two after opening the pull request and the trigger filter read the labels only from the `opened` payload, a snapshot taken before them. On `opened`, `reopened` and `ready_for_review` the labels are now read from the API before the label gates when `WEBHOOK_REQUIRED_LABELS` or `WEBHOOK_EXCLUDED_LABELS` is set (falling back to the payload's labels, logged, when the read fails); an automatic review re-reads them before its first write and stands down, with its check run concluded as skipped, when a gate now rejects the pull request; and the approval a review held back on CI is no longer posted when CI turns green on a pull request that has since gained an excluded label or lost its required one: the held verdict is dropped and the check run concluded as skipped. No label is read when no label gate is configured, and a manual `/review` still bypasses the gates
+
 ### Security
 
 - Bumped Jackson (`jackson-bom`) from 2.22.2 to 2.22.3 (#914) for four advisories in the JSON parser the bot uses on webhook payloads and model responses: GHSA-7hhh-6rmp-j9qf (`jackson-core` error-token length not capped), GHSA-p6pp-m3f8-5c89 (`jackson-core` quadratic backtracking in float parsing), GHSA-cxp5-3px4-pw24 (`jackson-databind` quadratic forward-reference completion) and GHSA-wv8q-qhhj-9h54 (`jackson-databind` retaining every unknown raw type id)

@@ -32,6 +32,7 @@ import static org.mockito.Mockito.when;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.webhook.ReviewTriggerFilter;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,6 +57,9 @@ class CiHoldRevisitTest {
   private final CheckRunManager checkRunManager = mock(CheckRunManager.class);
   private final ReviewPublisher reviewPublisher = mock(ReviewPublisher.class);
   private final CiHoldRegistry registry = new CiHoldRegistry();
+  private final PullRequestLabelGate labelGate = mock(PullRequestLabelGate.class);
+  private final ReviewSkipEmitter skipEmitter =
+      new ReviewSkipEmitter(io.opentelemetry.api.OpenTelemetry.noop());
 
   private CiHoldRevisit revisit;
 
@@ -75,14 +79,106 @@ class CiHoldRevisitTest {
             verdictBuilder,
             checkRunManager,
             reviewPublisher,
-            registry);
+            registry,
+            labelGate,
+            skipEmitter);
     when(authClient.getAuthHeader(123L)).thenReturn(AUTH);
     when(contextLoader.currentHeadSha(eq(AUTH), any())).thenReturn(Optional.of(HEAD));
   }
 
   private void hold() {
+    hold(false);
+  }
+
+  private void hold(boolean manualTrigger) {
     registry.hold(
-        "owner", "repo", 42, new CiHoldRegistry.HeldVerdict(HEAD, "main", 7L, DETAILS_URL));
+        "owner",
+        "repo",
+        42,
+        new CiHoldRegistry.HeldVerdict(HEAD, "main", 7L, DETAILS_URL, manualTrigger));
+  }
+
+  private void labelsOnThePullRequest(List<String> labels, ReviewSkipReason gateSays) {
+    when(labelGate.configured()).thenReturn(true);
+    when(labelGate.currentLabels(AUTH, "owner", "repo", 42)).thenReturn(Optional.of(labels));
+    when(labelGate.skipFor(labels))
+        .thenReturn(
+            gateSays == null
+                ? Optional.empty()
+                : Optional.of(new ReviewTriggerFilter.Skip(gateSays, "PR carries a gated label")));
+  }
+
+  @Test
+  void anExcludedLabelDropsTheHeldApprovalAndConcludesTheCheckRunSkipped() {
+    hold();
+    labelsOnThePullRequest(List.of("dependencies"), ReviewSkipReason.EXCLUDED_LABEL);
+    when(ciStatusEvaluator.evaluate(AUTH, "owner", "repo", HEAD, "main")).thenReturn(green());
+
+    revisit.revisit(RECHECK);
+
+    verifyNoInteractions(reviewPublisher);
+    verifyNoInteractions(ciStatusEvaluator);
+    var update = ArgumentCaptor.forClass(CheckRunManager.CheckRunUpdate.class);
+    verify(checkRunManager).updateCheckRun(update.capture());
+    assertEquals(7L, update.getValue().checkRunId());
+    assertEquals("completed", update.getValue().status());
+    assertEquals("skipped", update.getValue().conclusion());
+    assertEquals(ReviewOrchestrator.LABEL_GATED_CHECK_TITLE, update.getValue().title());
+    assertTrue(update.getValue().summary().startsWith("PR carries a gated label"));
+    assertEquals(DETAILS_URL, update.getValue().detailsUrl());
+    assertEquals(1L, skipEmitter.countsByReason().get("EXCLUDED_LABEL"));
+    assertTrue(registry.pullRequestsAt("owner", "repo", HEAD).isEmpty());
+  }
+
+  @Test
+  void aMissingRequiredLabelDropsTheHoldEvenWhenTheCheckRunCannotBeConcluded() {
+    hold();
+    labelsOnThePullRequest(List.of(), ReviewSkipReason.MISSING_REQUIRED_LABEL);
+    doThrow(new RuntimeException("check runs down")).when(checkRunManager).updateCheckRun(any());
+
+    revisit.revisit(RECHECK);
+
+    verifyNoInteractions(reviewPublisher);
+    assertEquals(1L, skipEmitter.countsByReason().get("MISSING_REQUIRED_LABEL"));
+    assertTrue(registry.pullRequestsAt("owner", "repo", HEAD).isEmpty());
+  }
+
+  @Test
+  void labelsTheGatesAllowStillPostTheHeldApproval() {
+    hold();
+    labelsOnThePullRequest(List.of("java"), null);
+    when(ciStatusEvaluator.evaluate(AUTH, "owner", "repo", HEAD, "main")).thenReturn(green());
+
+    revisit.revisit(RECHECK);
+
+    verify(reviewPublisher)
+        .createReviewWithFallback(eq(AUTH), eq("owner"), eq("repo"), eq(42), any());
+  }
+
+  @Test
+  void unreadableLabelsKeepTheHoldForTheNextCiEvent() {
+    hold();
+    when(labelGate.configured()).thenReturn(true);
+    when(labelGate.currentLabels(AUTH, "owner", "repo", 42)).thenReturn(Optional.empty());
+
+    revisit.revisit(RECHECK);
+
+    verifyNoInteractions(reviewPublisher);
+    verifyNoInteractions(checkRunManager);
+    assertTrue(registry.heldAt("owner", "repo", 42, HEAD).isPresent());
+  }
+
+  @Test
+  void aVerdictAManualReviewEarnedIsNotLabelGated() {
+    hold(true);
+    labelsOnThePullRequest(List.of("dependencies"), ReviewSkipReason.EXCLUDED_LABEL);
+    when(ciStatusEvaluator.evaluate(AUTH, "owner", "repo", HEAD, "main")).thenReturn(green());
+
+    revisit.revisit(RECHECK);
+
+    verify(labelGate, never()).currentLabels(anyString(), anyString(), anyString(), anyInt());
+    verify(reviewPublisher)
+        .createReviewWithFallback(eq(AUTH), eq("owner"), eq("repo"), eq(42), any());
   }
 
   private static CiStatusEvaluator.CiEvaluation green() {

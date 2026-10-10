@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.webhook.ReviewTriggerFilter;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
@@ -37,6 +38,12 @@ import java.util.List;
  * fails open because a finished review must not be lost to its own check, this one fails closed: a
  * head that cannot be read keeps the hold, because an approval posted on a head that was never
  * verified is the worse outcome and the next CI event retries for free.
+ *
+ * <p>The label gates are applied again before anything is posted (#1021), to the labels the pull
+ * request carries now: a label added after the review — Dependabot labels a pull request a second
+ * or two after opening it — drops the held verdict and concludes the check run as skipped instead
+ * of approving. A verdict a manual {@code /review} earned is exempt, as the review itself was. The
+ * read fails closed for the same reason the head read does: unreadable labels keep the hold.
  */
 @ApplicationScoped
 public class CiHoldRevisit {
@@ -58,6 +65,8 @@ public class CiHoldRevisit {
   private final CheckRunManager checkRunManager;
   private final ReviewPublisher reviewPublisher;
   private final CiHoldRegistry registry;
+  private final PullRequestLabelGate labelGate;
+  private final ReviewSkipEmitter skipEmitter;
 
   @Inject
   public CiHoldRevisit(
@@ -67,7 +76,9 @@ public class CiHoldRevisit {
       VerdictBuilder verdictBuilder,
       CheckRunManager checkRunManager,
       ReviewPublisher reviewPublisher,
-      CiHoldRegistry registry) {
+      CiHoldRegistry registry,
+      PullRequestLabelGate labelGate,
+      ReviewSkipEmitter skipEmitter) {
     this.authClient = authClient;
     this.contextLoader = contextLoader;
     this.ciStatusEvaluator = ciStatusEvaluator;
@@ -75,6 +86,8 @@ public class CiHoldRevisit {
     this.checkRunManager = checkRunManager;
     this.reviewPublisher = reviewPublisher;
     this.registry = registry;
+    this.labelGate = labelGate;
+    this.skipEmitter = skipEmitter;
   }
 
   /**
@@ -133,6 +146,20 @@ public class CiHoldRevisit {
           task.headSha(), task.owner(), task.repo(), task.prNumber(), currentHead.get());
       return;
     }
+    if (!verdict.manualTrigger() && labelGate.configured()) {
+      var labels = labelGate.currentLabels(auth, task.owner(), task.repo(), task.prNumber());
+      if (labels.isEmpty()) {
+        Log.warnf(
+            "Could not read the labels on %s/%s #%d — keeping the hold for the next CI event",
+            task.owner(), task.repo(), task.prNumber());
+        return;
+      }
+      var skip = labelGate.skipFor(labels.get());
+      if (skip.isPresent()) {
+        dropOnLabelGate(auth, task, verdict, skip.get());
+        return;
+      }
+    }
 
     var evaluation =
         ciStatusEvaluator.evaluate(
@@ -179,6 +206,46 @@ public class CiHoldRevisit {
       Log.warnf(
           e,
           "Posted the held approval for %s/%s #%d, but concluding check run %d failed",
+          task.owner(),
+          task.repo(),
+          task.prNumber(),
+          verdict.checkRunId());
+    }
+  }
+
+  /**
+   * Drops a held verdict the label gates no longer allow: the hold is released, the skip counted
+   * under the gate's reason, and the check run concluded as skipped. Nothing is posted to the pull
+   * request. Concluding the check run is best-effort, as it is after a posted approval.
+   */
+  private void dropOnLabelGate(
+      String auth,
+      Recheck task,
+      CiHoldRegistry.HeldVerdict verdict,
+      ReviewTriggerFilter.Skip skip) {
+    registry.release(task.owner(), task.repo(), task.prNumber());
+    skipEmitter.recordSkip(
+        skip.reason(),
+        task.owner(),
+        task.repo(),
+        task.prNumber(),
+        skip.detail() + " — dropping the approval held on CI for " + task.headSha());
+    try {
+      checkRunManager.updateCheckRun(
+          new CheckRunManager.CheckRunUpdate(
+              auth,
+              task.owner(),
+              task.repo(),
+              verdict.checkRunId(),
+              "completed",
+              "skipped",
+              ReviewOrchestrator.LABEL_GATED_CHECK_TITLE,
+              ReviewOrchestrator.labelGatedCheckSummary(skip),
+              verdict.detailsUrl()));
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Dropped the held approval for %s/%s #%d, but concluding check run %d failed",
           task.owner(),
           task.repo(),
           task.prNumber(),

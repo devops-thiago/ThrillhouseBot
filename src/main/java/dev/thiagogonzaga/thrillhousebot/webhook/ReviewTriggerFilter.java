@@ -25,11 +25,12 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
+import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Supplier;
 import java.util.regex.PatternSyntaxException;
 import java.util.stream.Collectors;
 
@@ -38,6 +39,11 @@ import java.util.stream.Collectors;
  * this to cut noise/cost: skip drafts, gate on labels, or restrict base branches. The defaults
  * (skip nothing, require nothing, allow every branch) review every PR, preserving the original
  * behavior. Manual {@code /review} comments bypass these filters entirely.
+ *
+ * <p>The label gates are also applied to labels read from the API, not only to the webhook payload
+ * (#1021): a pull request can be labelled a second or two after it is opened, as Dependabot does,
+ * so the {@code opened} payload is a snapshot without them. See {@link #labelSkipReason} and its
+ * callers.
  */
 @ApplicationScoped
 public class ReviewTriggerFilter {
@@ -80,6 +86,17 @@ public class ReviewTriggerFilter {
    *     Optional#empty()} when it should proceed to dispatch.
    */
   public Optional<Skip> skipReason(WebhookPayload.PullRequest pr) {
+    return skipReason(pr, () -> labelNames(pr));
+  }
+
+  /**
+   * Like {@link #skipReason(WebhookPayload.PullRequest)}, with the labels the gates read supplied
+   * by the caller. The supplier is called only when the draft and branch checks pass and a label
+   * gate is configured, so a caller that reads the labels from the API spends that call only when
+   * it decides something.
+   */
+  public Optional<Skip> skipReason(
+      WebhookPayload.PullRequest pr, Supplier<? extends Collection<String>> labels) {
     if (pr == null) {
       return Optional.empty();
     }
@@ -103,19 +120,35 @@ public class ReviewTriggerFilter {
               "base branch '" + base + "' is not in the base-branches allowlist"));
     }
 
-    var labels = labelNames(pr);
-    if (!excludedLabels.isEmpty() && labels.stream().anyMatch(excludedLabels::contains)) {
+    if (!hasLabelGates()) {
+      return Optional.empty();
+    }
+    return labelSkipReason(labels.get());
+  }
+
+  /** Whether {@code required-labels} or {@code excluded-labels} is configured. */
+  public boolean hasLabelGates() {
+    return !excludedLabels.isEmpty() || !requiredLabels.isEmpty();
+  }
+
+  /**
+   * Applies the label gates alone to {@code labels}, matched case-insensitively.
+   *
+   * @return the skip when a label is excluded or no required label is present; empty otherwise
+   */
+  public Optional<Skip> labelSkipReason(Collection<String> labels) {
+    var names = normalizeLabels(labels);
+    if (!excludedLabels.isEmpty() && names.stream().anyMatch(excludedLabels::contains)) {
       return Optional.of(new Skip(ReviewSkipReason.EXCLUDED_LABEL, "PR carries an excluded label"));
     }
-    if (!requiredLabels.isEmpty() && labels.stream().noneMatch(requiredLabels::contains)) {
+    if (!requiredLabels.isEmpty() && names.stream().noneMatch(requiredLabels::contains)) {
       return Optional.of(
           new Skip(ReviewSkipReason.MISSING_REQUIRED_LABEL, "PR is missing a required label"));
     }
-
     return Optional.empty();
   }
 
-  private static Set<String> normalizeLabels(List<String> labels) {
+  private static Set<String> normalizeLabels(Collection<String> labels) {
     if (labels == null || labels.isEmpty()) {
       return Set.of();
     }
@@ -125,16 +158,9 @@ public class ReviewTriggerFilter {
         .collect(Collectors.toUnmodifiableSet());
   }
 
-  /** Lower-cased names of the labels currently on the PR; empty when the payload omits them. */
-  private static Set<String> labelNames(WebhookPayload.PullRequest pr) {
-    if (pr.labels().isEmpty()) {
-      return Set.of();
-    }
-    return pr.labels().stream()
-        .map(WebhookPayload.Label::name)
-        .filter(name -> name != null && !name.isBlank())
-        .map(name -> name.trim().toLowerCase(Locale.ROOT))
-        .collect(Collectors.toCollection(LinkedHashSet::new));
+  /** Names of the labels in the payload; empty when the payload omits them. */
+  private static List<String> labelNames(WebhookPayload.PullRequest pr) {
+    return pr.labels().stream().map(WebhookPayload.Label::name).toList();
   }
 
   /**

@@ -28,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.review.CiHoldRevisit;
 import dev.thiagogonzaga.thrillhousebot.review.FindingFeedbackCaptureService;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
+import dev.thiagogonzaga.thrillhousebot.review.PullRequestLabelGate;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewSkipEmitter;
@@ -60,6 +61,8 @@ class WebhookControllerTest {
   @Mock private TriggerDetector triggerDetector;
 
   @Mock private ReviewTriggerFilter triggerFilter;
+
+  @Mock private PullRequestLabelGate labelGate;
 
   @Mock private AutoReviewRateLimiter autoReviewRateLimiter;
 
@@ -97,24 +100,28 @@ class WebhookControllerTest {
     when(githubConfig.webhookSecret()).thenReturn("test-secret");
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.conversationalRepliesEnabled()).thenReturn(true);
-    controller =
-        new WebhookController(
-            config,
-            verifier,
-            triggerDetector,
-            triggerFilter,
-            autoReviewRateLimiter,
-            reviewDispatcher,
-            replyDispatcher,
-            deduplicator,
-            manualReviewAuthorizer,
-            commentCommandService,
-            prPauseService,
-            ackReactionService,
-            skipEmitter,
-            findingFeedbackCapture,
-            ciHoldRegistry,
-            mapper);
+    controller = newController(triggerFilter);
+  }
+
+  private WebhookController newController(ReviewTriggerFilter filter) {
+    return new WebhookController(
+        config,
+        verifier,
+        triggerDetector,
+        filter,
+        labelGate,
+        autoReviewRateLimiter,
+        reviewDispatcher,
+        replyDispatcher,
+        deduplicator,
+        manualReviewAuthorizer,
+        commentCommandService,
+        prPauseService,
+        ackReactionService,
+        skipEmitter,
+        findingFeedbackCapture,
+        ciHoldRegistry,
+        mapper);
   }
 
   @Test
@@ -455,7 +462,7 @@ class WebhookControllerTest {
   @Test
   void shouldSkipReviewWhenTriggerFilterRejects() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerFilter.skipReason(any()))
+    when(triggerFilter.skipReason(any(), any()))
         .thenReturn(
             Optional.of(new ReviewTriggerFilter.Skip(ReviewSkipReason.DRAFT, "PR is a draft")));
 
@@ -497,7 +504,7 @@ class WebhookControllerTest {
   @Test
   void shouldEmitStructuredSkipEventWhenDraftFilterRejects() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(triggerFilter.skipReason(any()))
+    when(triggerFilter.skipReason(any(), any()))
         .thenReturn(
             Optional.of(new ReviewTriggerFilter.Skip(ReviewSkipReason.DRAFT, "PR is a draft")));
 
@@ -708,6 +715,106 @@ class WebhookControllerTest {
     verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
+  /** A controller gating on the real filter with {@code dependencies} excluded (#1021). */
+  private WebhookController excludingDependencies() {
+    return newController(
+        new ReviewTriggerFilter(false, List.of(), List.of("dependencies"), List.of(), List.of()));
+  }
+
+  @Test
+  void dependabotOpenedPayloadWithoutLabelsIsSkippedOnTheLabelsReadFromTheApi() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    // Dependabot opens the pull request, then labels it: the opened payload has no labels.
+    when(labelGate.currentLabels(12345L, "owner", "repo", 1012))
+        .thenReturn(Optional.of(List.of("dependencies", "java")));
+    var body =
+        buildPullRequestPayload("opened", 1012, "owner/repo", "sha1012", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    excludingDependencies().handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+
+    verify(skipEmitter)
+        .recordSkip(
+            eq(ReviewSkipReason.EXCLUDED_LABEL), eq("owner"), eq("repo"), eq(1012), anyString());
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @ParameterizedTest
+  @MethodSource("labelReadingActions")
+  void reopenedAndReadyForReviewAlsoReadTheLabelsFromTheApi(String action) {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(labelGate.currentLabels(12345L, "owner", "repo", 7))
+        .thenReturn(Optional.of(List.of("Dependencies")));
+    var body =
+        buildPullRequestPayload(action, 7, "owner/repo", "sha7", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    excludingDependencies().handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  static Stream<String> labelReadingActions() {
+    return Stream.of("reopened", "ready_for_review");
+  }
+
+  @Test
+  void anUnreadableLabelSetFallsBackToThePayloadLabels() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(labelGate.currentLabels(anyLong(), anyString(), anyString(), anyInt()))
+        .thenReturn(Optional.empty());
+    var labelled = labelledOpenedPayload(8, "dependencies");
+    var unlabelled =
+        buildPullRequestPayload("opened", 9, "owner/repo", "sha9", "main")
+            .getBytes(StandardCharsets.UTF_8);
+    var gated = excludingDependencies();
+
+    gated.handleWebhook("sha256=valid", "pull_request", null, "d-8", labelled);
+    gated.handleWebhook("sha256=valid", "pull_request", null, "d-9", unlabelled);
+
+    verify(skipEmitter)
+        .recordSkip(
+            eq(ReviewSkipReason.EXCLUDED_LABEL), eq("owner"), eq("repo"), eq(8), anyString());
+    var dispatched = ArgumentCaptor.forClass(ReviewOrchestrator.ReviewRequest.class);
+    verify(reviewDispatcher).dispatch(dispatched.capture());
+    assertEquals(9, dispatched.getValue().prNumber());
+  }
+
+  @Test
+  void synchronizeGatesOnThePayloadLabelsWithoutAnApiRead() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    var body =
+        buildPullRequestPayload("synchronize", 10, "owner/repo", "sha10", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    excludingDependencies().handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+
+    verifyNoInteractions(labelGate);
+    verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void noLabelGateMeansNoApiRead() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    var body =
+        buildPullRequestPayload("opened", 11, "owner/repo", "sha11", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    newController(new ReviewTriggerFilter(false, List.of(), List.of(), List.of(), List.of()))
+        .handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+
+    verifyNoInteractions(labelGate);
+    verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  private byte[] labelledOpenedPayload(int prNumber, String label) {
+    return buildPullRequestPayload("opened", prNumber, "owner/repo", "sha" + prNumber, "main")
+        .replace(
+            "\"user\":{\"login\":\"octocat\",\"id\":1}",
+            "\"user\":{\"login\":\"octocat\",\"id\":1},\"labels\":[{\"name\":\"" + label + "\"}]")
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
   @Test
   void shouldPassParsedDraftAndLabelsToTriggerFilter() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
@@ -728,7 +835,7 @@ class WebhookControllerTest {
     controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
 
     var captor = ArgumentCaptor.forClass(WebhookPayload.PullRequest.class);
-    verify(triggerFilter).skipReason(captor.capture());
+    verify(triggerFilter).skipReason(captor.capture(), any());
     var pr = captor.getValue();
     assertTrue(pr.draft());
     assertEquals(2, pr.labels().size());

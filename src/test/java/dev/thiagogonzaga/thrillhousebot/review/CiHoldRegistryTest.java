@@ -26,7 +26,7 @@ import org.junit.jupiter.api.Test;
 class CiHoldRegistryTest {
 
   private static final CiHoldRegistry.HeldVerdict VERDICT =
-      new CiHoldRegistry.HeldVerdict("abc123", "main", 7L, "https://bot.example/session/x");
+      new CiHoldRegistry.HeldVerdict("abc123", "main", 7L, "https://bot.example/session/x", false);
 
   private final CiHoldRegistry registry = new CiHoldRegistry();
 
