@@ -773,7 +773,7 @@ Secret rules (high confidence):
 | JSON Web Token | three base64url segments whose first two start `eyJ` | high |
 | Credential assignment | a quoted literal assigned to a key named like `password`, `secret`, `token`, `api_key`, `access_key`, `private_key` or `client_secret`, with `=`, `:`, `:=` or `=>`, including typed and array declarations (C `char API_TOKEN[] =`, Rust `const API_TOKEN: &str =`, Zig `const api_token: []const u8 =`, TypeScript, Kotlin, Scala, Swift and Python `apiToken: String =`, Go `var apiToken string =`). The literal must have at least 8 characters, a non-letter, two character classes and entropy at or above `REVIEW_SECRET_SCAN_ENTROPY_THRESHOLD`, and must not be a URL, a path or an identifier such as `DB_PASSWORD` | high |
 
-IaC rules (high confidence unless noted):
+IaC rules (high confidence):
 
 | Rule | Files | Matches | Risk |
 |---|---|---|---|
@@ -782,7 +782,7 @@ IaC rules (high confidence unless noted):
 | IAM wildcard | `.tf`, `.yaml`/`.yml`, `.json` | `Action: "*"` with `Resource: "*"` in the same statement and no `Effect: Deny` | high |
 | Privileged container | `.yaml`/`.yml`, `.json` | `privileged: true` (in YAML also `yes`, `on`, `y`, any case) | high |
 | Host namespace | `.yaml`/`.yml`, `.json` | `hostNetwork`, `hostPID` or `hostIPC` set to `true` (in YAML also `yes`, `on`, `y`) | high |
-| Final stage runs as root | Dockerfiles | `USER root` (or `0`) with no later `FROM` or `USER`, in a new file or in a last hunk that reaches the end of the file | medium, medium confidence |
+| Final stage runs as root | Dockerfiles | `USER root` (or `0`) with no later `FROM` or `USER`, in a new file or in a last hunk that reaches the end of the file | medium |
 | Storage encryption off | `.tf` | `encrypted = false` or `storage_encrypted = false` | medium |
 
 A rule that needs context (a firewall rule's direction and port, an IAM
@@ -796,7 +796,8 @@ repository's `review.ignored-files`), files matching
 lines for the IaC rules, and placeholder values: anything containing `example`,
 `sample`, `dummy`, `placeholder`, `changeme`, `redacted`, `your_`/`your-`,
 `fake`, `xxxx`, `****`, `<`/`>`, `${`, `{{`, `$(`, `%s` or an ellipsis, a run of
-six identical characters, and for assignments any value starting with `$`. To
+six identical characters, and for assignments any value starting with `$` or
+written as a Windows `%VAR%` reference. To
 accept a line, put `thrillhousebot:allow-secret` (or `thrillhousebot:allow-iac`)
 in a comment on that line or the line above; above is the only place a
 Dockerfile instruction can take one. JSON cannot hold a comment, so put such a
@@ -824,8 +825,27 @@ unverified. A model finding in the same file is dropped as a duplicate when it
 is within three lines and reports the same defect (same title by the
 deduplicator's measure, or a title using two of the rule's words), or, for a
 secret, when it sits on the matched line and its title uses one of the rule's
-words. A title that only names a key (`PAYMENT_API_KEY is never read`) is a
-different defect and is kept. Under `balanced` strictness a critical or high
+words, or, for an IaC rule, when it is within three lines and its title uses a
+word that names that rule's defect (`root`, `privileged`,
+`hostNetwork`/`hostPID`/`hostIPC`, `SSH`/`RDP`/`WinRM`/`Telnet`, `public`,
+`wildcard`/`administrator`, `encryption`/`encrypted`/`unencrypted`). A title
+that only names a key (`PAYMENT_API_KEY is never read`) is a different defect
+and is kept.
+
+**Grades.** Every scan finding is high confidence, so none carries the "verify
+before acting" note: a match settles whether the pattern is on the line. The
+risk is the rule's, from the tables above. A final stage running as root is
+medium, the grade the review gives the same defect when the model raises it: a
+container that starts as root breaks nothing by itself, but a compromise of it
+starts with root. Medium never requests changes under any strictness, so it
+informs the verdict without deciding it.
+
+**Model secret findings on a stand-in.** Whether or not the scan is on, a model
+finding whose title reports a secret is dropped when its own line assigns every
+credential-named key an interpolation (`${VAR}`, `$VAR`, `%VAR%`, `$(…)`,
+`{{ … }}`) or a placeholder (the list under "What is skipped"), and no scan rule
+matches the line: `ENV API_TOKEN=${API_TOKEN}` names where a credential comes
+from, and `API_TOKEN=changeme` in a sample stands in for one. Under `balanced` strictness a critical or high
 scan finding requests changes on its own.
 
 **Later rounds.** A scan finding an earlier round raised is not posted again. It

@@ -439,6 +439,54 @@ class SecretScannerTest {
     assertTrue(SecretScanner.looksLikeSecret("Zx9!-q8#Lm2-vRt", 3.5));
   }
 
+  // --- #926: interpolations and placeholders ---
+
+  @Test
+  void anInterpolationIsAWholeReferenceToTheEnvironmentOrATemplate() {
+    for (var value :
+        List.of(
+            "${API_TOKEN}",
+            "${API_TOKEN:-}",
+            "$API_TOKEN",
+            "%DB_PASSWORD%",
+            "$(cat /run/secrets/token)",
+            "{{ .Values.token }}")) {
+      assertTrue(SecretScanner.isInterpolation(value), value);
+    }
+    for (var value : List.of("q8#Lm2!vRt9Z", "${API_TOKEN}x", "%DB%PASS", "pre$VAR")) {
+      assertFalse(SecretScanner.isInterpolation(value), value);
+    }
+  }
+
+  @Test
+  void aWindowsEnvironmentReferenceIsNotACredential() {
+    assertTrue(scan("password = \"%DATABASE_PASSWORD_VALUE%\"").isEmpty());
+    assertFalse(SecretScanner.looksLikeSecret("%DATABASE_PASSWORD_VALUE%", 1.0));
+  }
+
+  @Test
+  void aLineAssigningOnlyStandInsIsRecognized() {
+    for (var line :
+        List.of(
+            "ENV FUELRECON_API_TOKEN=${FUELRECON_API_TOKEN}",
+            "FLEET_API_TOKEN=changeme",
+            "export API_TOKEN=$API_TOKEN DB_PASSWORD=%DB_PASSWORD%",
+            "  client_secret: '<your-client-secret>'")) {
+      assertTrue(SecretScanner.assignsOnlyStandIns(line, THRESHOLD), line);
+    }
+    var literal = fake.genericSecret(32);
+    for (var line :
+        List.of(
+            "API_TOKEN=${API_TOKEN} DB_PASSWORD=\"" + literal + "\"",
+            "API_TOKEN=" + literal,
+            "ARG API_TOKEN",
+            "Rotate the API token every quarter.",
+            "API_TOKEN=${API_TOKEN} # " + fake.githubToken(),
+            "API_TOKEN=${API_TOKEN}" + " ".repeat(SecretScanner.MAX_GENERIC_LINE_LENGTH))) {
+      assertFalse(SecretScanner.assignsOnlyStandIns(line, THRESHOLD), line);
+    }
+  }
+
   @Test
   void aKnownFormatAssignedToACredentialNameIsReportedOnceByTheSpecificRule() {
     var token = fake.githubToken();

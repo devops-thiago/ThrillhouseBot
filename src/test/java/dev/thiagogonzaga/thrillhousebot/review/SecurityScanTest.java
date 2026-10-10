@@ -32,6 +32,8 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -392,7 +394,7 @@ class SecurityScanTest {
             scan(false, true),
             response(modelFinding("pod.yaml", 2, "Pod network is flat", "d")),
             List.of(added("pod.yaml", "spec:", "  hostNetwork: true")));
-    assertEquals(2, merged.findings().size(), "the same-line rule is for secrets only");
+    assertEquals(2, merged.findings().size(), "network is not a host-namespace defect word");
     var twoWords =
         merge(
             scan(false, true),
@@ -411,6 +413,240 @@ class SecurityScanTest {
             List.of(added("pod.yaml", "spec:", "  hostPID: true")));
     assertEquals(2, merged.findings().size());
     assertSame(nearby, merged.findings().get(0));
+  }
+
+  // --- #921 / #952: deterministic IaC grade and its model duplicate ---
+
+  @Test
+  void aFinalStageRootUserPostsAtHighConfidenceWithNoHedge() throws Exception {
+    var merged =
+        merge(
+            scan(false, true),
+            response(),
+            List.of(added("node/Dockerfile", "FROM node:20", "USER root")));
+    assertEquals(1, merged.findings().size());
+    var finding = merged.findings().get(0);
+    assertEquals("medium", finding.risk(), "the README rule table's grade");
+    assertEquals("high", finding.confidence());
+    assertFalse(everySurface(merged).contains("verify before acting"));
+  }
+
+  @Test
+  void theModelsRootFindingOnTheLineBelowCollapsesIntoTheScans() {
+    // Round 12, ThrillhouseBot-test#158: the scan on USER root (line 16), the model on the
+    // ENTRYPOINT line below it, titled with one rule word.
+    var lines = new ArrayList<String>();
+    for (int i = 1; i <= 15; i++) {
+      lines.add("RUN step" + i);
+    }
+    lines.add("USER root");
+    lines.add("ENTRYPOINT [\"node\", \"dist/bundle.js\"]");
+    var model =
+        modelFinding(
+            "node/Dockerfile",
+            17,
+            "Container reverts to root just before the entrypoint",
+            "The process starts as root.");
+    var merged =
+        merge(
+            scan(false, true),
+            response(model),
+            List.of(added("node/Dockerfile", lines.toArray(String[]::new))));
+    assertEquals(1, merged.findings().size());
+    assertEquals(SecurityRule.ROOT_USER.iacTitle(), merged.findings().get(0).title());
+    assertEquals(16, merged.findings().get(0).line());
+  }
+
+  @Test
+  void eachIacRuleCollapsesAModelFindingNamingItsDefectNearby() {
+    var cases =
+        Map.of(
+            "Container is privileged",
+            added("pod.yaml", "spec:", "  privileged: true"),
+            "Pod joins the hostPID namespace",
+            added("pod.yaml", "spec:", "  hostPID: true"),
+            "SSH reachable from anywhere",
+            added(
+                "sg.tf",
+                "  ingress {",
+                "    from_port = 22",
+                "    to_port = 22",
+                "    cidr_blocks = [\"0.0.0.0/0\"]",
+                "  }"),
+            "Bucket is public",
+            added("s3.tf", "  acl = \"public-read\""),
+            "Wildcard grants",
+            added("p.json", "{", "  \"Action\": \"*\",", "  \"Resource\": \"*\"", "}"),
+            "Volume left unencrypted",
+            added("ebs.tf", "  encrypted = false"));
+    for (var entry : cases.entrySet()) {
+      var file = entry.getValue();
+      var detections = scan(false, true).scan(List.of(file)).detections();
+      assertEquals(1, detections.size(), entry.getKey());
+      var at = detections.get(0).finding();
+      var model = modelFinding(at.file(), at.line() + 1, entry.getKey(), "d");
+      var merged = merge(scan(false, true), response(model), List.of(file));
+      assertEquals(1, merged.findings().size(), entry.getKey());
+      assertTrue(merged.findings().get(0).title().startsWith(SecurityRule.TITLE_PREFIX));
+    }
+  }
+
+  @Test
+  void aDefectWordBeyondTheLineToleranceIsADifferentFinding() {
+    var lines = new ArrayList<>(List.of("FROM node:20", "USER root"));
+    for (int i = 0; i < FindingDeduplicator.LINE_TOLERANCE + 1; i++) {
+      lines.add("RUN step" + i);
+    }
+    var far =
+        modelFinding(
+            "Dockerfile",
+            2 + FindingDeduplicator.LINE_TOLERANCE + 1,
+            "Script writes to a root path",
+            "d");
+    var merged =
+        merge(
+            scan(false, true),
+            response(far),
+            List.of(
+                new FileDiff(
+                    "Dockerfile",
+                    "added",
+                    lines.size(),
+                    0,
+                    lines.size(),
+                    "@@ -0,0 +1," + lines.size() + " @@\n+" + String.join("\n+", lines) + "\n")));
+    assertEquals(2, merged.findings().size());
+  }
+
+  @Test
+  void theCalendarTokenFindingFromRoundNineCollapsesIntoTheScans() throws Exception {
+    // #927 item 4, ThrillhouseBot-test#109: a model CRITICAL and the scan HIGH on config.js:5.
+    var value = fake.genericSecret(40);
+    var line = "export const CALENDAR_API_TOKEN = \"" + value + "\";";
+    var model =
+        new ReviewResponse.Finding(
+            "critical",
+            "high",
+            "node/src/config.js",
+            5,
+            "Committed calendar gateway API token in source",
+            "It reads `" + line + "`.",
+            line,
+            null);
+    var merged =
+        merge(
+            scan(true, false),
+            response(model),
+            List.of(
+                added(
+                    "node/src/config.js",
+                    "// config",
+                    "import x from 'y';",
+                    "",
+                    "// Shared secret used to auth",
+                    line)));
+    assertEquals(1, merged.findings().size());
+    assertTrue(merged.findings().get(0).title().startsWith(SecurityRule.TITLE_PREFIX));
+    assertFalse(everySurface(merged).contains(value));
+  }
+
+  // --- #926: a model secret finding on an interpolation or a placeholder ---
+
+  private static DiffLineResolver resolver(FileDiff... files) {
+    var patches = new HashMap<String, String>();
+    for (var file : files) {
+      patches.put(file.filename(), file.patch());
+    }
+    return new DiffLineResolver(patches);
+  }
+
+  @Test
+  void aModelSecretFindingOnAnInterpolatedValueIsDropped() {
+    // Round 12: the ARG/ENV decoy on the go and csharp pull requests.
+    var go =
+        added(
+            "go/Dockerfile",
+            "FROM alpine:3.20",
+            "ARG FUELRECON_API_TOKEN",
+            "ENV FUELRECON_API_TOKEN=${FUELRECON_API_TOKEN}");
+    var csharp =
+        added(
+            "csharp/Dockerfile",
+            "WORKDIR /app",
+            "ARG PERMIT_API_TOKEN",
+            "ENV PERMIT_API_TOKEN=${PERMIT_API_TOKEN}");
+    var response =
+        response(
+            modelFinding(
+                "go/Dockerfile",
+                3,
+                "API token passed as build arg is persisted in the image config via ENV",
+                "d"),
+            modelFinding(
+                "csharp/Dockerfile",
+                3,
+                "Registry token supplied as a build argument is persisted into the image ENV",
+                "d"));
+    for (var scan : List.of(SecurityScan.disabled(), scan(true, true))) {
+      assertTrue(scan.withoutStandInSecrets(response, resolver(go, csharp)).findings().isEmpty());
+    }
+  }
+
+  @Test
+  void everyInterpolationAndPlaceholderSpellingIsAStandIn() {
+    for (var line :
+        List.of(
+            "ENV API_TOKEN=${API_TOKEN}",
+            "ENV API_TOKEN=${API_TOKEN:-}",
+            "export API_TOKEN=$API_TOKEN",
+            "set DB_PASSWORD=%DB_PASSWORD%",
+            "  password: \"{{ .Values.dbPassword }}\"",
+            "API_TOKEN=$(cat /run/secrets/token)",
+            "FLEET_API_TOKEN=changeme",
+            "client_secret: \"<your-client-secret>\"")) {
+      var file = added("conf/app.env", line);
+      var finding = modelFinding("conf/app.env", 1, "Hardcoded secret in config", "d");
+      assertTrue(
+          scan(true, false)
+              .withoutStandInSecrets(response(finding), resolver(file))
+              .findings()
+              .isEmpty(),
+          line);
+    }
+  }
+
+  @Test
+  void aStandInLineKeepsWhatIsNotASecretClaimOrNotAStandIn() {
+    var docs =
+        added(
+            "docs/CONFIG-C.md",
+            "ELEVATOR_LOG_PATH=/data/maintenance.csv",
+            "FLEET_API_TOKEN=changeme");
+    // Round 12's c finding: an unread config key, not a secret claim.
+    var unread =
+        modelFinding(
+            "docs/CONFIG-C.md",
+            2,
+            "Example environment file documents FLEET_API_TOKEN, which no code reads",
+            "d");
+    var offDiff = modelFinding("docs/CONFIG-C.md", 40, "Hardcoded API token", "d");
+    var noFile = modelFinding(null, 0, "Hardcoded API token", "d");
+    var literal = fake.genericSecret(32);
+    var real = added("app.env", "API_TOKEN=${API_TOKEN}", "DB_PASSWORD=\"" + literal + "\"");
+    var mixed = added("mixed.env", "API_TOKEN=${API_TOKEN} DB_PASSWORD=\"" + literal + "\"");
+    var noAssignment = added("notes.md", "Rotate the API token every quarter.");
+    var response =
+        response(
+            unread,
+            offDiff,
+            noFile,
+            modelFinding("app.env", 2, "Hardcoded database password", "d"),
+            modelFinding("mixed.env", 1, "Hardcoded database password", "d"),
+            modelFinding("notes.md", 1, "Token rotation policy is undocumented", "d"));
+    var kept =
+        scan(true, false)
+            .withoutStandInSecrets(response, resolver(docs, real, mixed, noAssignment));
+    assertSame(response, kept);
   }
 
   @Test
@@ -610,7 +846,7 @@ class SecurityScanTest {
       List<FileDiff> files,
       List<ReviewResponse> rounds,
       List<GitHubReviewClient.PullRequestComment> threads) {
-    var patches = new java.util.HashMap<String, String>();
+    var patches = new HashMap<String, String>();
     files.forEach(file -> patches.put(file.filename(), file.patch()));
     return new ReviewContextLoader.ReviewContext(
         files,

@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -53,11 +54,15 @@ class SecurityRuleTest {
     assertEquals("high", SecurityRule.GITHUB_TOKEN.confidence());
     assertEquals("high", SecurityRule.JWT.risk());
     assertEquals("high", SecurityRule.GENERIC_SECRET.risk());
-    // #773: the same grade SeverityCalibrator gives the model's missing-privilege-drop class.
+    // #773: the risk SeverityCalibrator gives the model's missing-privilege-drop class.
     assertEquals("medium", SecurityRule.ROOT_USER.risk());
-    assertEquals("medium", SecurityRule.ROOT_USER.confidence());
     for (var rule : SecurityRule.values()) {
+      // #921: a match settles whether the pattern is on the line, so no rule posts hedged.
+      assertEquals("high", rule.confidence(), rule.name());
       assertFalse(rule.topic().isEmpty(), rule.name());
+      assertEquals(
+          rule.category() == SecurityRule.Category.IAC, !rule.defectWords().isEmpty(), rule.name());
+      assertTrue(rule.topic().containsAll(rule.defectWords()), rule.name());
       assertEquals(
           rule.category() == SecurityRule.Category.IAC, !rule.explanation().isEmpty(), rule.name());
       assertEquals(rule.label(), rule.label().strip());

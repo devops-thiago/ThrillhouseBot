@@ -176,6 +176,29 @@ final class SecretScanner {
               + ",256})\\1");
 
   /**
+   * Every value a line assigns to a credential-named key, quoted or not (#926): the generic rule
+   * reads only quoted literals, because an unquoted right-hand side is where the credential is
+   * supposed to come from, but a model finding about {@code ENV API_TOKEN=${API_TOKEN}} is about
+   * exactly that unquoted value. A {@code {{ template }}} value is read whole, spaces included.
+   */
+  private static final Pattern ASSIGNED_VALUE =
+      Pattern.compile(
+          "(?i)[A-Za-z0-9_.-]{0,40}"
+              + CREDENTIAL_WORD
+              + "[A-Za-z0-9_.-]{0,40}+[\"']?\\s{0,4}+(?::=|=>|=|:)\\s{0,4}+([\"'`]?)"
+              + "(\\{\\{[^}\\n]{1,200}+}}|[^\\s\"'`,;]{1,256}+)\\1");
+
+  /**
+   * A value read from the environment or a template rather than written out (#926): {@code ${VAR}},
+   * {@code ${VAR:-default}}, {@code $VAR}, Windows {@code %VAR%}, {@code $(command)} and {@code {{
+   * template }}}. The whole value must be one such reference.
+   */
+  private static final Pattern INTERPOLATION =
+      Pattern.compile(
+          "\\$\\{[^}]{1,200}+}|\\$[A-Za-z_][A-Za-z0-9_]{0,100}+|%[A-Za-z_][A-Za-z0-9_]{0,100}+%"
+              + "|\\$\\([^)]{1,200}+\\)|\\{\\{[^}]{1,200}+}}");
+
+  /**
    * Case-insensitive fragments that mark a value as a placeholder rather than a credential. Each is
    * a word no provider's random alphabet produces by chance at a rate that matters.
    */
@@ -291,6 +314,7 @@ final class SecretScanner {
    */
   static boolean looksLikeSecret(String value, double entropyThreshold) {
     if (isPlaceholder(value)
+        || isInterpolation(value)
         || value.startsWith("$")
         || value.startsWith("/")
         || value.startsWith("./")
@@ -312,6 +336,34 @@ final class SecretScanner {
     var words = IDENTIFIER_SEPARATOR.split(value, -1);
     return words.length >= 2
         && Arrays.stream(words).allMatch(word -> IDENTIFIER_WORD.matcher(word).matches());
+  }
+
+  /** Whether the whole value is a reference to the environment or a template; see INTERPOLATION. */
+  static boolean isInterpolation(String value) {
+    return INTERPOLATION.matcher(value).matches();
+  }
+
+  /**
+   * Whether every credential-named key the line assigns gets an {@link #isInterpolation
+   * interpolation} or a {@link #isPlaceholder placeholder}, at least one key is assigned, and no
+   * rule of {@link #scan} matches the line (#926). Such a line names where a credential comes from,
+   * or stands in for one in documentation: {@code ENV API_TOKEN=${API_TOKEN}}, {@code
+   * FLEET_API_TOKEN=changeme}.
+   */
+  static boolean assignsOnlyStandIns(String line, double entropyThreshold) {
+    if (line.length() > MAX_GENERIC_LINE_LENGTH) {
+      return false;
+    }
+    Matcher assigned = ASSIGNED_VALUE.matcher(line);
+    boolean any = false;
+    while (assigned.find()) {
+      var value = assigned.group(2);
+      if (!isInterpolation(value) && !isPlaceholder(value)) {
+        return false;
+      }
+      any = true;
+    }
+    return any && scan(line, null, entropyThreshold).isEmpty();
   }
 
   /** Whether a matched value is a documentation or template stand-in. */
