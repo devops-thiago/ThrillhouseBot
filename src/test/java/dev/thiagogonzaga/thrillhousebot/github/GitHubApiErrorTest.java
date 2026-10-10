@@ -1188,6 +1188,17 @@ class GitHubApiErrorTest {
     }
 
     @Test
+    void anEscapedQuoteInsideAMessageDoesNotCutItShort() {
+      var body =
+          "{\"message\":\"Validation Failed\",\"errors\":[{\"field\":\"thread.path\",\"message\":"
+              + "\"\\\"lib/x\\\" could not be resolved\"}]}";
+
+      assertEquals(
+          "path \"lib/x\" could not be resolved",
+          GitHubApiError.from(outbound(422, body)).refusal());
+    }
+
+    @Test
     void fallsBackToTheTopLevelMessageWhenTheBodyListsNoErrors() {
       assertEquals(
           "Resource not accessible by integration",

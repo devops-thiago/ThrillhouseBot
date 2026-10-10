@@ -294,10 +294,12 @@ public final class GitHubApiError {
    */
   private static final Pattern JSON_OBJECT = Pattern.compile("\\{[^{}]*+}");
 
+  /** A string member's value, escapes included, so an escaped {@code \"} does not end it. */
   private static final Pattern MESSAGE_MEMBER =
-      Pattern.compile("\"message\"\\s*+:\\s*+\"([^\"]*+)\"");
+      Pattern.compile("\"message\"\\s*+:\\s*+\"((?:[^\"\\\\]|\\\\.)*+)\"");
 
-  private static final Pattern FIELD_MEMBER = Pattern.compile("\"field\"\\s*+:\\s*+\"([^\"]*+)\"");
+  private static final Pattern FIELD_MEMBER =
+      Pattern.compile("\"field\"\\s*+:\\s*+\"((?:[^\"\\\\]|\\\\.)*+)\"");
 
   private final int status;
   private final String retryAfter;
@@ -569,7 +571,7 @@ public final class GitHubApiError {
 
   private static String stringMember(String object, Pattern member) {
     var matcher = member.matcher(object);
-    return matcher.find() ? matcher.group(1).strip() : "";
+    return matcher.find() ? matcher.group(1).replace("\\\"", "\"").strip() : "";
   }
 
   private static void append(StringBuilder text, String name, String value) {
