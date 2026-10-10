@@ -56,8 +56,7 @@ class ReviewPublisherPromptLabelTest {
           mock(FollowUpAnalyzer.class),
           mock(PrLabeler.class),
           config,
-          BotIdentity.of("thrillhousebot"),
-          mock(PullRequestLabelGate.class));
+          BotIdentity.of("thrillhousebot"));
 
   private static final Finding LEAKED =
       new Finding(

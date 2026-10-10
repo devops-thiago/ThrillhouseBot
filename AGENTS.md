@@ -54,7 +54,8 @@ same diff.
 | Stage | Where |
 |---|---|
 | Dispatch, per-PR serialization, coalescing | `review/ReviewDispatcher` |
-| Top-level run: check run, context, plan, pipeline, verdict, publish, head-moved abort | `review/ReviewOrchestrator` |
+| Top-level run: check run, context, plan, pipeline, verdict, publish | `review/ReviewOrchestrator` |
+| Stand down before the first write: a chain of `review/PrePublishGuard`s run in order, first stand-down wins, shared consequences (skip counted, check run skipped) applied once. Order: head moved (#704, with the #806 carry-over), then a rejecting label gate (#1021). A new guard is added to the coordinator's list, not to the orchestrator | `review/ReviewStandDown.beforeFirstWrite` over `HeadMovedGuard` (with `SupersededFindingsCarryover`), `LabelGateGuard` (with `PullRequestLabelGate`) |
 | Load diff, every earlier round (from the stored `ReviewSession.aiResponseJson`), threads and conversation, instructions, labels, project stack, config-key and patch-coverage context | `review/ReviewContextLoader` (with `PatchCoverageResolver`, `ConfigKeyContextResolver`, `BugFixContextResolver`, `SupersededFindingsCarryover`) |
 | Previous-findings prompt section: the numbered effective round, then the unnumbered "still open from earlier rounds" and "answered in earlier rounds" sections | `review/FollowUpAnalyzer.buildPreviousFindingsContext` (with `effectivePreviousRoundIndex`, `openEarlierRoundFindings`) |
 | Early CI reading and the opt-in CI-failure section | `review/CiStatusEvaluator`, `review/CiFailureContextResolver` |
@@ -186,14 +187,15 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
   loses nothing. An unchanged body is not rewritten; a failed edit posts a new comment.
 - **A run whose head moved stands down before its first write** (#704, #806) and hands its
   verified findings to the next run through `SupersededFindingsCarryover`, so two runs never edit
-  the summary at once and nothing is posted against a diff that changed.
+  the summary at once and nothing is posted against a diff that changed. This is `HeadMovedGuard`,
+  run by `ReviewStandDown` before `LabelGateGuard`; the orchestrator only closes out the session.
 - **The label gates read the labels the pull request carries now, not only the payload's** (#1021).
   Dependabot labels a pull request a second or two after opening it, so `WebhookController` reads
   them from the API on `opened`, `reopened` and `ready_for_review` (payload fallback on a failed
-  read), the orchestrator re-reads them before an automatic run's first write (fail open, like the
-  head guard), and `CiHoldRevisit` before posting a held approval (fail closed: the hold stays).
-  All three go through `PullRequestLabelGate`, which reads nothing when no label gate is
-  configured, and skip a manual `/review` (`HeldVerdict.manualTrigger`).
+  read), `LabelGateGuard` re-reads them before an automatic run's first write, after the head
+  guard (fail open, like the head guard), and `CiHoldRevisit` before posting a held approval (fail
+  closed: the hold stays). All three go through `PullRequestLabelGate`, which reads nothing when
+  no label gate is configured, and skip a manual `/review` (`HeldVerdict.manualTrigger`).
 
 ## Prompts
 

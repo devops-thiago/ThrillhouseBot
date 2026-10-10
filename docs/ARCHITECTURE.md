@@ -114,8 +114,13 @@ newest head is reviewed next. A CI-hold recheck runs once no review of that PR i
 5. Run the model calls and the finding chain (`FindingPipeline.run`).
 6. Read CI again if the first reading would hold approval, then build the verdict
    (`VerdictBuilder.build`).
-7. Read the PR head again. If it moved during the round, mark the check run `skipped`, hand the
-   verified findings to the run queued for the new head (`SupersededFindingsCarryover`) and stop.
+7. Check that the round may still post (`ReviewStandDown.beforeFirstWrite`, which runs the
+   `PrePublishGuard`s in order and stops at the first that stands the round down). Read the PR
+   head again (`HeadMovedGuard`): if it moved during the round, mark the check run `skipped`, hand
+   the verified findings to the run queued for the new head (`SupersededFindingsCarryover`) and
+   stop. Then, for an automatic run with a label gate configured, read the PR's labels again
+   (`LabelGateGuard`): if a gate now rejects the PR, mark the check run `skipped` and stop. A
+   failed read of either lets the round post.
 8. Publish the summary comment, the optional delta comment and the PR review, then conclude the
    check run.
 9. Run the post-result steps. Each may fail without undoing the review: resolve the threads of

@@ -203,8 +203,7 @@ class RetriedFollowUpRoundTest {
             analyzer,
             mock(PrLabeler.class),
             config,
-            BOT,
-            mock(PullRequestLabelGate.class));
+            BOT);
   }
 
   @Test

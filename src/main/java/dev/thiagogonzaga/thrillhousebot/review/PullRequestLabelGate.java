@@ -42,7 +42,8 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  *
  * <p>A run or held approval the gates reject stands down the same way from either caller ({@link
  * #standDown}): the skip is counted under the gate's reason and the check run concluded as skipped,
- * with nothing posted to the pull request.
+ * with nothing posted to the pull request. A finished run asks through {@link LabelGateGuard}, a
+ * held approval through {@link CiHoldRevisit}.
  */
 @ApplicationScoped
 public class PullRequestLabelGate {
@@ -94,36 +95,6 @@ public class PullRequestLabelGate {
   /** The label gates applied to {@code labels}; see {@link ReviewTriggerFilter#labelSkipReason}. */
   public Optional<ReviewTriggerFilter.Skip> skipFor(Collection<String> labels) {
     return triggerFilter.labelSkipReason(labels);
-  }
-
-  /**
-   * The label gate that stops an automatic review before its first write, applied to the labels the
-   * pull request carries now; stands the run down ({@link #standDown}) when it rejects. Never for a
-   * manual {@code /review}, which the gates do not apply to, and no read is made when no label gate
-   * is configured. Fails open on unreadable labels, like the orchestrator's head guard: a finished
-   * review is never lost to its own guard, and the webhook already gated the dispatch.
-   *
-   * @return whether the run was stood down
-   */
-  public boolean standsDownBeforePublish(
-      String auth, ReviewOrchestrator.ReviewRequest req, long checkRunId, String detailsUrl) {
-    if (req.isManualTrigger() || !configured()) {
-      return false;
-    }
-    var where =
-        new StandDown(
-            auth,
-            req.owner(),
-            req.repo(),
-            req.prNumber(),
-            checkRunId,
-            detailsUrl,
-            "the review of " + req.commitSha());
-    var skip =
-        currentLabels(where.auth(), where.owner(), where.repo(), where.prNumber())
-            .flatMap(this::skipFor);
-    skip.ifPresent(s -> standDown(s, where));
-    return skip.isPresent();
   }
 
   /**

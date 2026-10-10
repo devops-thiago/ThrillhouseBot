@@ -32,7 +32,7 @@ import java.util.List;
  *
  * <p>Runs on the dispatcher's per-pull-request worker, serialized after any review in flight for
  * the pull request, so it can never post against a head a newer review is about to replace; the
- * head is re-read before posting all the same, the way {@link ReviewOrchestrator} guards its own
+ * head is re-read before posting all the same, the way {@link HeadMovedGuard} guards a review's
  * post, in case the push landed between the review's release and this run. Unlike that guard, which
  * fails open because a finished review must not be lost to its own check, this one fails closed: a
  * head that cannot be read keeps the hold, because an approval posted on a head that was never
@@ -135,7 +135,7 @@ public class CiHoldRevisit {
           task.owner(), task.repo(), task.prNumber());
       return;
     }
-    if (ReviewOrchestrator.headMoved(req, currentHead.get())) {
+    if (HeadMovedGuard.headMoved(req, currentHead.get())) {
       registry.release(task.owner(), task.repo(), task.prNumber());
       Log.infof(
           "Dropping the verdict held on %s for %s/%s #%d — the head moved to %s",

@@ -108,8 +108,7 @@ class RescuedFindingLostWriteTest {
             mock(FollowUpAnalyzer.class),
             mock(PrLabeler.class),
             config,
-            BotIdentity.of("thrillhousebot[bot]"),
-            mock(PullRequestLabelGate.class));
+            BotIdentity.of("thrillhousebot[bot]"));
   }
 
   /**
