@@ -27,14 +27,12 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededExcepti
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TruncationReport;
-import dev.thiagogonzaga.thrillhousebot.webhook.ReviewTriggerFilter;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
@@ -398,9 +396,17 @@ public class ReviewOrchestrator {
       }
       // #1021: a label added while the run waited or ran — Dependabot labels a pull request a
       // second or two after opening it — is honoured before the first write, as a moved head is.
-      var labelSkip = labelGateSkip(auth, req);
-      if (labelSkip.isPresent()) {
-        abandonLabelGatedRun(auth, req, session, checkRunId, labelSkip.get());
+      if (labelGate.standsDownBeforePublish(
+          req,
+          new PullRequestLabelGate.StandDown(
+              auth,
+              req.owner(),
+              req.repo(),
+              req.prNumber(),
+              checkRunId,
+              sessionUrl(session),
+              "the review of " + req.commitSha()))) {
+        closeLabelGatedSession(session);
         return false;
       }
 
@@ -549,69 +555,14 @@ public class ReviewOrchestrator {
   /** SKIPPED check-run title when the finished run's post was abandoned (#704). */
   static final String SUPERSEDED_CHECK_TITLE = "Review superseded by a newer commit";
 
-  /** SKIPPED check-run title when a label gate stopped the post or a held approval (#1021). */
-  static final String LABEL_GATED_CHECK_TITLE = "Review skipped by a label gate";
-
-  /** The SKIPPED check-run summary for {@link #LABEL_GATED_CHECK_TITLE}. */
-  static String labelGatedCheckSummary(ReviewTriggerFilter.Skip skip) {
-    return skip.detail()
-        + " (webhook.triggers label gates), so this result was not posted. A manual /review"
-        + " still reviews the pull request.";
-  }
-
   /**
-   * The label gate that stops an automatic run before its first write (#1021), applied to the
-   * labels the pull request carries now. Empty for a manual {@code /review}, which the gates never
-   * apply to, when no label gate is configured (no read is made), and when the labels cannot be
-   * read: like the head guard, this one fails open, because a finished review is never lost to its
-   * own guard and the webhook already gated the dispatch.
+   * Closes out the session of a run a label gate stood down before its first write (#1021). Unlike
+   * a superseded run nothing replaces it, so its findings are not carried anywhere. Visible for
+   * tests.
    */
-  private Optional<ReviewTriggerFilter.Skip> labelGateSkip(String auth, ReviewRequest req) {
-    if (req.isManualTrigger() || !labelGate.configured()) {
-      return Optional.empty();
-    }
-    return labelGate
-        .currentLabels(auth, req.owner(), req.repo(), req.prNumber())
-        .flatMap(labelGate::skipFor);
-  }
-
-  /**
-   * Retires a run a label gate stopped before its first write: counted as a structured skip under
-   * the gate's reason, the check run concluded as skipped and the session closed out, with nothing
-   * posted to the pull request (#1021). Unlike a superseded run nothing replaces it, so its
-   * findings are not carried anywhere. Visible for tests.
-   */
-  void abandonLabelGatedRun(
-      String auth,
-      ReviewRequest req,
-      ReviewSession session,
-      long checkRunId,
-      ReviewTriggerFilter.Skip skip) {
-    skipEmitter.recordSkip(
-        skip.reason(),
-        req.owner(),
-        req.repo(),
-        req.prNumber(),
-        skip.detail() + " now — abandoning the post of the review of " + req.commitSha());
-    if (checkRunId > 0) {
-      try {
-        checkRunManager.updateCheckRun(
-            new CheckRunManager.CheckRunUpdate(
-                auth,
-                req.owner(),
-                req.repo(),
-                checkRunId,
-                CHECK_STATUS_COMPLETED,
-                "skipped",
-                LABEL_GATED_CHECK_TITLE,
-                labelGatedCheckSummary(skip),
-                sessionUrl(session)));
-      } catch (RuntimeException checkRunError) {
-        Log.warnf(checkRunError, "Failed to mark label-gated check run %d as skipped", checkRunId);
-      }
-    }
+  void closeLabelGatedSession(ReviewSession session) {
     try {
-      applyReviewFailure(session, "Skipped: " + skip.detail());
+      applyReviewFailure(session, "Skipped: a label gate rejects the pull request");
     } catch (RuntimeException persistenceError) {
       Log.warnf(persistenceError, "Failed to persist label-gated review session %d", session.id);
     }

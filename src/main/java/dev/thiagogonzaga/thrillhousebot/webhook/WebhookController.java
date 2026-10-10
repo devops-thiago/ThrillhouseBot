@@ -46,10 +46,11 @@ public class WebhookController {
   private static final Logger log = LoggerFactory.getLogger(WebhookController.class);
 
   private static final String ACTION_READY_FOR_REVIEW = "ready_for_review";
+  private static final String ACTION_SYNCHRONIZE = "synchronize";
 
   /** pull_request actions that trigger an automatic review. */
   private static final Set<String> AUTO_REVIEW_ACTIONS =
-      Set.of("opened", "reopened", "synchronize", ACTION_READY_FOR_REVIEW);
+      Set.of("opened", "reopened", ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW);
 
   private final ThrillhouseConfig config;
   private final WebhookVerifier verifier;
@@ -215,7 +216,7 @@ public class WebhookController {
 
     return switch (action) {
       // ready_for_review fires when a draft is marked ready and is not followed by a synchronize.
-      case "opened", "reopened", "synchronize", ACTION_READY_FOR_REVIEW -> {
+      case "opened", "reopened", ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW -> {
         var pr = payload.pullRequest();
         var repo = payload.repository();
         if (pr == null || repo == null || payload.installation() == null) {
@@ -306,7 +307,7 @@ public class WebhookController {
   private List<String> gatedLabels(WebhookPayload payload) {
     var pr = payload.pullRequest();
     var payloadLabels = pr.labels().stream().map(WebhookPayload.Label::name).toList();
-    if ("synchronize".equals(payload.action())) {
+    if (ACTION_SYNCHRONIZE.equals(payload.action())) {
       return payloadLabels;
     }
     var repo = payload.repository();

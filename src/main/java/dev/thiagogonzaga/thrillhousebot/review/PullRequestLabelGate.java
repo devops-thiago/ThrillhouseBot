@@ -37,6 +37,10 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * <p>A read either returns every label or nothing: unlike {@link PrLabeler}'s capping read, a
  * partial set is never used, because a page lost to a failure could be the one that carries the
  * excluded label. Each caller decides what an unreadable set means for it.
+ *
+ * <p>A run or held approval the gates reject stands down the same way from either caller ({@link
+ * #standDown}): the skip is counted under the gate's reason and the check run concluded as skipped,
+ * with nothing posted to the pull request.
  */
 @ApplicationScoped
 public class PullRequestLabelGate {
@@ -44,18 +48,40 @@ public class PullRequestLabelGate {
   private static final String ACCEPT = "application/vnd.github+json";
   private static final int LABELS_PER_PAGE = 100;
 
+  /** SKIPPED check-run title when a label gate stopped a post or a held approval. */
+  static final String CHECK_TITLE = "Review skipped by a label gate";
+
+  /**
+   * Where a stand-down happens, so the check run can be concluded: the pull request, the check run
+   * (none when not positive), the dashboard link it carries, and what was not posted, for the log.
+   */
+  public record StandDown(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      long checkRunId,
+      String detailsUrl,
+      String notPosted) {}
+
   private final ReviewTriggerFilter triggerFilter;
   private final GitHubAuthClient authClient;
   private final GitHubLabelClient labelClient;
+  private final CheckRunManager checkRunManager;
+  private final ReviewSkipEmitter skipEmitter;
 
   @Inject
   public PullRequestLabelGate(
       ReviewTriggerFilter triggerFilter,
       GitHubAuthClient authClient,
-      @RestClient GitHubLabelClient labelClient) {
+      @RestClient GitHubLabelClient labelClient,
+      CheckRunManager checkRunManager,
+      ReviewSkipEmitter skipEmitter) {
     this.triggerFilter = triggerFilter;
     this.authClient = authClient;
     this.labelClient = labelClient;
+    this.checkRunManager = checkRunManager;
+    this.skipEmitter = skipEmitter;
   }
 
   /** Whether a required or excluded label is configured; nothing is read when not. */
@@ -66,6 +92,70 @@ public class PullRequestLabelGate {
   /** The label gates applied to {@code labels}; see {@link ReviewTriggerFilter#labelSkipReason}. */
   public Optional<ReviewTriggerFilter.Skip> skipFor(Collection<String> labels) {
     return triggerFilter.labelSkipReason(labels);
+  }
+
+  /**
+   * The label gate that stops an automatic review before its first write, applied to the labels the
+   * pull request carries now; stands the run down ({@link #standDown}) when it rejects. Never for a
+   * manual {@code /review}, which the gates do not apply to, and no read is made when no label gate
+   * is configured. Fails open on unreadable labels, like the orchestrator's head guard: a finished
+   * review is never lost to its own guard, and the webhook already gated the dispatch.
+   *
+   * @return whether the run was stood down
+   */
+  public boolean standsDownBeforePublish(ReviewOrchestrator.ReviewRequest req, StandDown where) {
+    if (req.isManualTrigger() || !configured()) {
+      return false;
+    }
+    var skip =
+        currentLabels(where.auth(), where.owner(), where.repo(), where.prNumber())
+            .flatMap(this::skipFor);
+    skip.ifPresent(s -> standDown(s, where));
+    return skip.isPresent();
+  }
+
+  /**
+   * Counts the skip under the gate's reason and concludes the check run as skipped. Concluding the
+   * check run is best-effort: the skip is already decided and nothing was posted.
+   */
+  public void standDown(ReviewTriggerFilter.Skip skip, StandDown where) {
+    skipEmitter.recordSkip(
+        skip.reason(),
+        where.owner(),
+        where.repo(),
+        where.prNumber(),
+        skip.detail() + " — not posting " + where.notPosted());
+    if (where.checkRunId() <= 0) {
+      return;
+    }
+    try {
+      checkRunManager.updateCheckRun(
+          new CheckRunManager.CheckRunUpdate(
+              where.auth(),
+              where.owner(),
+              where.repo(),
+              where.checkRunId(),
+              "completed",
+              "skipped",
+              CHECK_TITLE,
+              checkSummary(skip),
+              where.detailsUrl()));
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Failed to mark check run %d of %s/%s #%d as skipped by a label gate",
+          where.checkRunId(),
+          where.owner(),
+          where.repo(),
+          where.prNumber());
+    }
+  }
+
+  /** The SKIPPED check-run summary for {@link #CHECK_TITLE}. */
+  static String checkSummary(ReviewTriggerFilter.Skip skip) {
+    return skip.detail()
+        + " (webhook.triggers label gates), so this result was not posted. A manual /review"
+        + " still reviews the pull request.";
   }
 
   /**

@@ -17,7 +17,6 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
-import dev.thiagogonzaga.thrillhousebot.webhook.ReviewTriggerFilter;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
@@ -66,7 +65,6 @@ public class CiHoldRevisit {
   private final ReviewPublisher reviewPublisher;
   private final CiHoldRegistry registry;
   private final PullRequestLabelGate labelGate;
-  private final ReviewSkipEmitter skipEmitter;
 
   @Inject
   public CiHoldRevisit(
@@ -77,8 +75,7 @@ public class CiHoldRevisit {
       CheckRunManager checkRunManager,
       ReviewPublisher reviewPublisher,
       CiHoldRegistry registry,
-      PullRequestLabelGate labelGate,
-      ReviewSkipEmitter skipEmitter) {
+      PullRequestLabelGate labelGate) {
     this.authClient = authClient;
     this.contextLoader = contextLoader;
     this.ciStatusEvaluator = ciStatusEvaluator;
@@ -87,7 +84,6 @@ public class CiHoldRevisit {
     this.reviewPublisher = reviewPublisher;
     this.registry = registry;
     this.labelGate = labelGate;
-    this.skipEmitter = skipEmitter;
   }
 
   /**
@@ -156,7 +152,17 @@ public class CiHoldRevisit {
       }
       var skip = labelGate.skipFor(labels.get());
       if (skip.isPresent()) {
-        dropOnLabelGate(auth, task, verdict, skip.get());
+        registry.release(task.owner(), task.repo(), task.prNumber());
+        labelGate.standDown(
+            skip.get(),
+            new PullRequestLabelGate.StandDown(
+                auth,
+                task.owner(),
+                task.repo(),
+                task.prNumber(),
+                verdict.checkRunId(),
+                verdict.detailsUrl(),
+                "the approval held on CI for " + task.headSha()));
         return;
       }
     }
@@ -206,46 +212,6 @@ public class CiHoldRevisit {
       Log.warnf(
           e,
           "Posted the held approval for %s/%s #%d, but concluding check run %d failed",
-          task.owner(),
-          task.repo(),
-          task.prNumber(),
-          verdict.checkRunId());
-    }
-  }
-
-  /**
-   * Drops a held verdict the label gates no longer allow: the hold is released, the skip counted
-   * under the gate's reason, and the check run concluded as skipped. Nothing is posted to the pull
-   * request. Concluding the check run is best-effort, as it is after a posted approval.
-   */
-  private void dropOnLabelGate(
-      String auth,
-      Recheck task,
-      CiHoldRegistry.HeldVerdict verdict,
-      ReviewTriggerFilter.Skip skip) {
-    registry.release(task.owner(), task.repo(), task.prNumber());
-    skipEmitter.recordSkip(
-        skip.reason(),
-        task.owner(),
-        task.repo(),
-        task.prNumber(),
-        skip.detail() + " — dropping the approval held on CI for " + task.headSha());
-    try {
-      checkRunManager.updateCheckRun(
-          new CheckRunManager.CheckRunUpdate(
-              auth,
-              task.owner(),
-              task.repo(),
-              verdict.checkRunId(),
-              "completed",
-              "skipped",
-              ReviewOrchestrator.LABEL_GATED_CHECK_TITLE,
-              ReviewOrchestrator.labelGatedCheckSummary(skip),
-              verdict.detailsUrl()));
-    } catch (RuntimeException e) {
-      Log.warnf(
-          e,
-          "Dropped the held approval for %s/%s #%d, but concluding check run %d failed",
           task.owner(),
           task.repo(),
           task.prNumber(),

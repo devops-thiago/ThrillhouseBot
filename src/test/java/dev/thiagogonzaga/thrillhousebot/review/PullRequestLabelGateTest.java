@@ -15,13 +15,16 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -35,8 +38,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
-/** Unit tests for {@link PullRequestLabelGate}, the API read behind the label gates (#1021). */
+/** Unit tests for {@link PullRequestLabelGate}: the label read and the stand-down (#1021). */
 class PullRequestLabelGateTest {
 
   private static final String AUTH = "Bearer test";
@@ -44,8 +48,81 @@ class PullRequestLabelGateTest {
   private final ReviewTriggerFilter triggerFilter = mock(ReviewTriggerFilter.class);
   private final GitHubAuthClient authClient = mock(GitHubAuthClient.class);
   private final GitHubLabelClient labelClient = mock(GitHubLabelClient.class);
+  private final CheckRunManager checkRunManager = mock(CheckRunManager.class);
+  private final ReviewSkipEmitter skipEmitter =
+      new ReviewSkipEmitter(io.opentelemetry.api.OpenTelemetry.noop());
   private final PullRequestLabelGate gate =
-      new PullRequestLabelGate(triggerFilter, authClient, labelClient);
+      new PullRequestLabelGate(
+          triggerFilter, authClient, labelClient, checkRunManager, skipEmitter);
+
+  private static final ReviewTriggerFilter.Skip EXCLUDED =
+      new ReviewTriggerFilter.Skip(ReviewSkipReason.EXCLUDED_LABEL, "PR carries an excluded label");
+
+  private static PullRequestLabelGate.StandDown where(long checkRunId) {
+    return new PullRequestLabelGate.StandDown(
+        AUTH, "owner", "repo", 42, checkRunId, "https://bot.example/s", "the review of abc");
+  }
+
+  private static ReviewOrchestrator.ReviewRequest request(boolean manual) {
+    return new ReviewOrchestrator.ReviewRequest(
+        "owner", "repo", 42, "abc", "T", "", "base", "main", 1L, manual);
+  }
+
+  @Test
+  void anAutomaticRunARejectingGateStandsDown() {
+    when(triggerFilter.hasLabelGates()).thenReturn(true);
+    page(1, List.of(label("dependencies")));
+    when(triggerFilter.labelSkipReason(List.of("dependencies"))).thenReturn(Optional.of(EXCLUDED));
+
+    assertTrue(gate.standsDownBeforePublish(request(false), where(9L)));
+
+    assertEquals(1L, skipEmitter.countsByReason().get("EXCLUDED_LABEL"));
+    var update = ArgumentCaptor.forClass(CheckRunManager.CheckRunUpdate.class);
+    verify(checkRunManager).updateCheckRun(update.capture());
+    assertEquals(9L, update.getValue().checkRunId());
+    assertEquals("skipped", update.getValue().conclusion());
+    assertEquals(PullRequestLabelGate.CHECK_TITLE, update.getValue().title());
+    assertEquals(
+        "PR carries an excluded label (webhook.triggers label gates), so this result was not"
+            + " posted. A manual /review still reviews the pull request.",
+        update.getValue().summary());
+    assertEquals("https://bot.example/s", update.getValue().detailsUrl());
+  }
+
+  @Test
+  void aRunTheGatesAllowOrCannotJudgeIsNotStoodDown() {
+    when(triggerFilter.hasLabelGates()).thenReturn(true);
+    page(1, List.of(label("java")));
+
+    assertFalse(gate.standsDownBeforePublish(request(false), where(9L)));
+
+    when(labelClient.listIssueLabels(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+        .thenThrow(new RuntimeException("labels down"));
+    assertFalse(gate.standsDownBeforePublish(request(false), where(9L)));
+    verifyNoInteractions(checkRunManager);
+    assertTrue(skipEmitter.countsByReason().isEmpty());
+  }
+
+  @Test
+  void aManualRunOrAnUnconfiguredGateReadsNothing() {
+    assertFalse(gate.standsDownBeforePublish(request(false), where(9L)));
+    when(triggerFilter.hasLabelGates()).thenReturn(true);
+    assertFalse(gate.standsDownBeforePublish(request(true), where(9L)));
+
+    verifyNoInteractions(labelClient);
+  }
+
+  @Test
+  void standDownWithoutACheckRunOrWithAFailingOneStillCountsTheSkip() {
+    gate.standDown(EXCLUDED, where(-1L));
+    verifyNoInteractions(checkRunManager);
+
+    doThrow(new RuntimeException("check runs down")).when(checkRunManager).updateCheckRun(any());
+    assertDoesNotThrow(() -> gate.standDown(EXCLUDED, where(9L)));
+
+    assertEquals(2L, skipEmitter.countsByReason().get("EXCLUDED_LABEL"));
+  }
 
   private static GitHubLabelClient.Label label(String name) {
     return new GitHubLabelClient.Label(name, null, null);

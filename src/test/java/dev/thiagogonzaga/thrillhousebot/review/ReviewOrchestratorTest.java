@@ -139,8 +139,11 @@ class ReviewOrchestratorTest {
 
   private final CiHoldRegistry ciHoldRegistry = new CiHoldRegistry();
 
-  /** The label gates (#1021); a mock that reports no gate configured unless a test sets one. */
-  private final PullRequestLabelGate labelGate = mock(PullRequestLabelGate.class);
+  /**
+   * The label gates (#1021): the real stand-down over the GitHub mocks, with the gate's reads
+   * stubbed per test; it reports no gate configured unless a test sets one.
+   */
+  private PullRequestLabelGate labelGate;
 
   private final ExecutorService reviewExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -151,6 +154,14 @@ class ReviewOrchestratorTest {
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
+    labelGate =
+        spy(
+            new PullRequestLabelGate(
+                mock(ReviewTriggerFilter.class),
+                authClient,
+                mock(GitHubLabelClient.class),
+                new CheckRunManager(checkRunClient),
+                skipEmitter));
     ThrillhouseConfig.GitHubConfig githubConfig = mock(ThrillhouseConfig.GitHubConfig.class);
     when(config.github()).thenReturn(githubConfig);
     when(githubConfig.botLogins()).thenReturn(List.of(BOT_LOGIN));
@@ -336,8 +347,7 @@ class ReviewOrchestratorTest {
         new CheckRunManager(checkRunClient),
         reviewPublisher,
         ciHoldRegistry,
-        labelGate,
-        skipEmitter);
+        labelGate);
   }
 
   /**
@@ -3671,29 +3681,14 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void abandonLabelGatedRunSurvivesCheckRunAndPersistenceFailures() {
+    void closeLabelGatedSessionSurvivesAPersistenceFailure() {
       var session = ReviewSession.create("owner/repo", 42, "T", "abcdefgh");
       session.id = 7L;
-      session.setPublicId("test-public-id");
-      var req =
-          new ReviewOrchestrator.ReviewRequest(
-              "owner", "repo", 42, "abcdefgh", "T", "", "base", "main", 1L, false);
-      var skip =
-          new ReviewTriggerFilter.Skip(
-              ReviewSkipReason.EXCLUDED_LABEL, "PR carries an excluded label");
-      doThrow(new RuntimeException("check run API down"))
-          .when(checkRunClient)
-          .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
       doThrow(new RuntimeException("db down")).when(sessionPersistence).update(anyLong(), any());
 
-      assertDoesNotThrow(
-          () -> orchestrator.abandonLabelGatedRun("Bearer tok", req, session, 1L, skip));
-      // And with no check run to conclude, the abandon still counts and broadcasts.
-      assertDoesNotThrow(
-          () -> orchestrator.abandonLabelGatedRun("Bearer tok", req, session, -1L, skip));
+      assertDoesNotThrow(() -> orchestrator.closeLabelGatedSession(session));
 
-      assertEquals(2L, skipEmitter.countsByReason().get("EXCLUDED_LABEL"));
-      verify(broadcaster, times(2)).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
+      verify(broadcaster).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
     }
 
     @Test
@@ -7597,8 +7592,7 @@ class ReviewOrchestratorTest {
             .updateCheckRun(
                 anyString(), anyString(), anyString(), anyString(), eq(1L), update.capture());
         assertEquals("skipped", update.getValue().conclusion());
-        assertEquals(
-            ReviewOrchestrator.LABEL_GATED_CHECK_TITLE, update.getValue().output().title());
+        assertEquals(PullRequestLabelGate.CHECK_TITLE, update.getValue().output().title());
         verify(session).setStatus(ReviewSession.STATUS_FAILED);
         assertTrue(ciHoldRegistry.pullRequestsAt("owner", "repo", "abcdefgh").isEmpty());
         verifyNoInteractions(notifier);

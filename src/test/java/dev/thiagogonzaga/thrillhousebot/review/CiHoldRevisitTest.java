@@ -25,12 +25,14 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubLabelClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.webhook.ReviewTriggerFilter;
 import java.util.List;
@@ -57,9 +59,18 @@ class CiHoldRevisitTest {
   private final CheckRunManager checkRunManager = mock(CheckRunManager.class);
   private final ReviewPublisher reviewPublisher = mock(ReviewPublisher.class);
   private final CiHoldRegistry registry = new CiHoldRegistry();
-  private final PullRequestLabelGate labelGate = mock(PullRequestLabelGate.class);
   private final ReviewSkipEmitter skipEmitter =
       new ReviewSkipEmitter(io.opentelemetry.api.OpenTelemetry.noop());
+
+  /** The real stand-down over the check-run mock, with the gate's reads stubbed per test. */
+  private final PullRequestLabelGate labelGate =
+      spy(
+          new PullRequestLabelGate(
+              mock(ReviewTriggerFilter.class),
+              authClient,
+              mock(GitHubLabelClient.class),
+              checkRunManager,
+              skipEmitter));
 
   private CiHoldRevisit revisit;
 
@@ -80,8 +91,7 @@ class CiHoldRevisitTest {
             checkRunManager,
             reviewPublisher,
             registry,
-            labelGate,
-            skipEmitter);
+            labelGate);
     when(authClient.getAuthHeader(123L)).thenReturn(AUTH);
     when(contextLoader.currentHeadSha(eq(AUTH), any())).thenReturn(Optional.of(HEAD));
   }
@@ -123,7 +133,7 @@ class CiHoldRevisitTest {
     assertEquals(7L, update.getValue().checkRunId());
     assertEquals("completed", update.getValue().status());
     assertEquals("skipped", update.getValue().conclusion());
-    assertEquals(ReviewOrchestrator.LABEL_GATED_CHECK_TITLE, update.getValue().title());
+    assertEquals(PullRequestLabelGate.CHECK_TITLE, update.getValue().title());
     assertTrue(update.getValue().summary().startsWith("PR carries a gated label"));
     assertEquals(DETAILS_URL, update.getValue().detailsUrl());
     assertEquals(1L, skipEmitter.countsByReason().get("EXCLUDED_LABEL"));
