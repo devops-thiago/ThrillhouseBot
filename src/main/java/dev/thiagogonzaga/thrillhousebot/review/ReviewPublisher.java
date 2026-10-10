@@ -857,14 +857,17 @@ public class ReviewPublisher {
         capSkipped.add(finding);
       } else {
         var delivery = postFindingComment(target, finding, i + 1, lineResolver);
-        switch (delivery.outcome()) {
-          case THREADED -> posted++;
-          case THROTTLED -> throttled++;
-          case BUDGET_SPENT -> budgetSpent++;
-          case REFUSED -> refusals.merge(delivery.refusal(), 1, Integer::sum);
+        if (delivery.outcome() == Outcome.THREADED) {
+          posted++;
+          continue;
         }
-        if (delivery.outcome() != Outcome.THREADED) {
-          unanchored.add(finding);
+        unanchored.add(finding);
+        if (delivery.outcome() == Outcome.REFUSED) {
+          refusals.merge(delivery.refusal(), 1, Integer::sum);
+        } else if (delivery.outcome() == Outcome.THROTTLED) {
+          throttled++;
+        } else {
+          budgetSpent++;
         }
       }
     }
