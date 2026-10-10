@@ -910,4 +910,130 @@ class PromptLabelScrubberTest {
           s);
     }
   }
+
+  // #964 item 5, angular #179 inline 4151111263.
+  static final String WAIT_LEAK =
+      "the sink is `return this.sanitizer.bypassSecurityTrustHtml(renderShiftNotes(shift.signups));`"
+          + " feeding `[innerHTML]=\"notesFor(shift)\"` (line 24 — wait, the binding is"
+          + " `<div class=\"notes\" [innerHTML]=\"notesFor(shift)\"></div>`). Upstream, the note is"
+          + " not escaped.";
+
+  static final String WAIT_CLEAN =
+      "the sink is `return this.sanitizer.bypassSecurityTrustHtml(renderShiftNotes(shift.signups));`"
+          + " feeding `[innerHTML]=\"notesFor(shift)\"` (the binding is"
+          + " `<div class=\"notes\" [innerHTML]=\"notesFor(shift)\"></div>`). Upstream, the note is"
+          + " not escaped.";
+
+  // #964 round 15 (b), java #197 review 5375359719.
+  static final String RESTART_LEAK =
+      "line 28 `.header(\"Authorization\", \"Bearer \" + apiToken)`. BedReporter... rather, grep"
+          + " across the added files confirms BED_API_TOKEN appears only in the Dockerfile and the"
+          + " docs example; no `System.getenv(\"BED_API_TOKEN\")` call exists anywhere.";
+
+  static final String RESTART_CLEAN =
+      "line 28 `.header(\"Authorization\", \"Bearer \" + apiToken)`. Grep"
+          + " across the added files confirms BED_API_TOKEN appears only in the Dockerfile and the"
+          + " docs example; no `System.getenv(\"BED_API_TOKEN\")` call exists anywhere.";
+
+  @Test
+  void selfCorrectionsKeepTheCorrectionAndLoseWhatItCorrected() {
+    assertEquals(WAIT_CLEAN, PromptLabelScrubber.scrub(WAIT_LEAK));
+    assertEquals(RESTART_CLEAN, PromptLabelScrubber.scrub(RESTART_LEAK));
+    assertEquals(WAIT_CLEAN, PromptLabelScrubber.scrub(WAIT_CLEAN));
+    assertEquals(RESTART_CLEAN, PromptLabelScrubber.scrub(RESTART_CLEAN));
+  }
+
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          The binding is on line 24 — wait, it is on line 25. | The binding is on line 24 — it is on line 25.
+          The binding is on line 24 - Wait, it is on line 25. | The binding is on line 24 - it is on line 25.
+          (line 24 – wait, line 25) holds the binding. | (line 25) holds the binding.
+          BedReporter… rather, grep confirms it. | Grep confirms it.
+          It fails. The reader in Main... actually, the handler reads it. | It fails. The handler reads it.
+          Done.\\nBedReporter... wait, grep confirms it. | Done.\\nGrep confirms it.
+          main.tsx mounts the app and hosts the two confirmed findings | main.tsx mounts the app and hosts the two findings
+          Confirmed findings: two. | Findings: two.
+          a confirmed finding on line 4 | a finding on line 4
+          Scheduled executor that uploads due episodes; no findings in this batch | Scheduled executor that uploads due episodes
+          Scheduled executor that uploads due episodes (no findings in this batch) | Scheduled executor that uploads due episodes
+          Scheduled executor that uploads due episodes — no new findings for this batch. | Scheduled executor that uploads due episodes.
+          Uploads due episodes. No findings in this batch. | Uploads due episodes.
+          No findings in this batch. Uploads due episodes. | Uploads due episodes.
+          (no findings in this batch) Uploads due episodes. | Uploads due episodes.
+          Line one.\\nNo findings in this batch\\nLine three. | Line one.\\n\\nLine three.
+          Two findings were raised in this batch on the scheduler. | Two findings were raised on the scheduler.
+          the findings from this batch | the findings
+          """)
+  void scratchTextAndOtherStagesVocabularyAreRemoved(String leaked, String clean) {
+    var in = leaked.replace("\\n", "\n");
+    var out = clean.replace("\\n", "\n");
+    assertEquals(out, PromptLabelScrubber.scrub(in));
+    assertEquals(out, PromptLabelScrubber.scrub(out));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The job processes every record in this batch before committing.",
+        "BatchImporter validates imported batches and rejects this batch of imports.",
+        "The confirmed bug is on line 4, and the unconfirmed findings are listed below.",
+        "Wait for the latch before reading the queue.",
+        "The loop must wait, then retry once.",
+        "The worker blocks — waiting, not spinning — until notified.",
+        "The values run 1...10, rather than 0...9.",
+        "It reads the header... and then the body.",
+        "(line 24 — waits for the lock)"
+      })
+  void scratchTextNearMissesAreLeftAlone(String text) {
+    assertEquals(text, PromptLabelScrubber.scrub(text));
+  }
+
+  @Test
+  void scratchTextIsScrubbedOnEveryPostedSurface() {
+    var response =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "critical",
+                    "low",
+                    "angular/src/app/shifts.component.ts",
+                    24,
+                    "XSS",
+                    WAIT_LEAK,
+                    null,
+                    null)),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", RESTART_LEAK)),
+            new ReviewResponse.Summary(
+                1,
+                1,
+                0,
+                0,
+                0,
+                RESTART_LEAK,
+                "",
+                List.of(),
+                List.of(),
+                List.of(
+                    new ReviewResponse.FileSummary(
+                        "react/src/main.tsx",
+                        "Mounts the app and hosts the two confirmed findings"),
+                    new ReviewResponse.FileSummary(
+                        "kotlin/src/main/kotlin/pod/Scheduler.kt",
+                        "Uploads due episodes; no findings in this batch")),
+                ""));
+
+    var scrubbed = PromptLabelScrubber.scrub(response);
+
+    assertEquals(WAIT_CLEAN, scrubbed.findings().getFirst().description());
+    assertEquals(RESTART_CLEAN, scrubbed.previousFindingsStatus().getFirst().note());
+    assertEquals(RESTART_CLEAN, scrubbed.summary().overallAssessment());
+    assertEquals(
+        List.of("Mounts the app and hosts the two findings", "Uploads due episodes"),
+        scrubbed.summary().fileSummaries().stream()
+            .map(ReviewResponse.FileSummary::summary)
+            .toList());
+  }
 }

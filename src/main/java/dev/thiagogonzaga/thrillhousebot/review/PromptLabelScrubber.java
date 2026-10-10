@@ -58,6 +58,11 @@ import java.util.regex.Pattern;
  * reads {@code (in <path>)}), "as provided with this review", "config key definition for" (which
  * reads "definition of"), and a clause narrating the confidence rule the model applied ("I am
  * rating this claim at the required … confidence").
+ *
+ * <p>The model's working notes go as well (#964): a self-correction ("(line 24 — wait, the binding
+ * is …)", "BedReporter... rather, grep confirms …") keeps the correction and loses what it
+ * corrected, and the names other stages use — the verifier's "confirmed findings", the batch
+ * planner's "no findings in this batch" — are dropped, because a reader sees neither stage.
  */
 public final class PromptLabelScrubber {
 
@@ -294,6 +299,53 @@ public final class PromptLabelScrubber {
           "(?<![^.!?\\n])([ \\t]*)As (?:provided|supplied|given) (?:with|to|for) this"
               + " review\\b,?[ \\t]*"
               + "(\\p{Ll})?");
+
+  /**
+   * "(line 24 — wait, the binding is …)": the model correcting itself inside a parenthetical
+   * (#964). What it doubted goes with the marker; the correction after it stays.
+   */
+  private static final Pattern PARENTHETICAL_SELF_CORRECTION =
+      Pattern.compile("\\([^()\\n]{1,40}?[ \\t]+[—–-][ \\t]+(?i:wait),[ \\t]+");
+
+  /** "X — wait, Y" outside a parenthetical: the marker goes, the dash and both sides stay. */
+  private static final Pattern DASH_SELF_CORRECTION =
+      Pattern.compile("[ \\t]+([—–-])[ \\t]+(?i:wait),[ \\t]+");
+
+  /**
+   * "BedReporter... rather, grep across the added files confirms …": a sentence the model broke off
+   * at an ellipsis and restarted (#964). The broken-off start goes with the marker, and the restart
+   * opens the sentence.
+   */
+  private static final Pattern RESTARTED_SENTENCE =
+      Pattern.compile(
+          "(?<![^.!?\\n])([ \\t]*)[^.!?\\n… \\t][^.!?\\n…]{0,59}(?:\\.\\.\\.|…)[ \\t]+"
+              + "(?i:rather|wait|actually),[ \\t]+(\\p{L})");
+
+  /**
+   * "hosts the two confirmed findings": the verifier's verdict name for a posted finding (#964).
+   */
+  private static final Pattern CONFIRMED_FINDINGS =
+      Pattern.compile("(?<![\\w-])(confirmed) (findings?)\\b", Pattern.CASE_INSENSITIVE);
+
+  /**
+   * "no findings in this batch" as an aside — a parenthetical, a clause after a separator or a
+   * sentence of its own (#964). A batch is how the review split the diff, which no reader sees, and
+   * "no findings" in a batch says nothing about the file's findings from other rounds.
+   */
+  private static final Pattern NO_FINDINGS_IN_BATCH =
+      Pattern.compile(
+          "[ \\t]*\\(no (?:new )?(?:findings?|issues?) (?:in|for|from) this batch\\)"
+              + "|[ \\t]*[;,—–][ \\t]*no (?:new )?(?:findings?|issues?) (?:in|for|from) this batch\\b"
+              + "|(?<![^.!?\\n])[ \\t]*No (?:new )?(?:findings?|issues?) (?:in|for|from) this"
+              + " batch(?:\\.|(?=\\n)|\\z)",
+          Pattern.CASE_INSENSITIVE);
+
+  /** "the findings in this batch": the batch goes, the findings stay (#964). */
+  private static final Pattern FINDINGS_IN_BATCH =
+      Pattern.compile(
+          "\\b(findings?(?: (?:were |was )?(?:raised|reported|found|flagged))?) (?:in|for|from)"
+              + " this batch\\b",
+          Pattern.CASE_INSENSITIVE);
 
   private PromptLabelScrubber() {}
 
@@ -548,7 +600,41 @@ public final class PromptLabelScrubber {
                   var phrase = m.group(1).toLowerCase(Locale.ROOT) + " of";
                   return opensSentence(defined, m.start(), 0) ? capitalize(phrase) : phrase;
                 });
-    return removeSelfRatedConfidence(s);
+    return removeScratchText(removeSelfRatedConfidence(s));
+  }
+
+  /**
+   * Drops the model's working notes (#964): a self-correction ("— wait,", "… rather,") keeps the
+   * correction and loses what it corrected, and the verifier's and the batch planner's vocabulary
+   * ("confirmed findings", "no findings in this batch") goes, since neither stage is visible to a
+   * reader.
+   */
+  private static String removeScratchText(String text) {
+    var s = PARENTHETICAL_SELF_CORRECTION.matcher(text).replaceAll("(");
+    s = DASH_SELF_CORRECTION.matcher(s).replaceAll(" $1 ");
+    s =
+        RESTARTED_SENTENCE
+            .matcher(s)
+            .replaceAll(m -> Matcher.quoteReplacement(m.group(1) + capitalize(m.group(2))));
+    s = CONFIRMED_FINDINGS.matcher(s).replaceAll(m -> capitalizeLike(m.group(1), m.group(2)));
+    s = removeNoFindingsAsides(s);
+    return FINDINGS_IN_BATCH.matcher(s).replaceAll("$1");
+  }
+
+  /**
+   * Drops each "no findings in this batch" aside; one that started a line takes the blanks after
+   * it, so the line does not start with one.
+   */
+  private static String removeNoFindingsAsides(String text) {
+    var m = NO_FINDINGS_IN_BATCH.matcher(text);
+    var out = new StringBuilder(text.length());
+    int at = 0;
+    while (at < text.length() && m.find(at)) {
+      out.append(text, at, m.start());
+      boolean lineStart = m.start() == 0 || text.charAt(m.start() - 1) == '\n';
+      at = lineStart ? skipBlanks(text, m.end()) : m.end();
+    }
+    return out.append(text, at, text.length()).toString();
   }
 
   /**
