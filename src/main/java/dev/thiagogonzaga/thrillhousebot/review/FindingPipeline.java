@@ -1546,8 +1546,9 @@ public class FindingPipeline {
         findingScreen.screenSingleCall(session, aiResponse, diff, promptInputs, plan, evidence);
     // #773: the last word on the two graded fields, so the anchored infrastructure classes cannot
     // be re-spread by the verifier's own lowering, and the grade the publisher routes on is the
-    // one persisted below for the next round to compare against.
-    aiResponse = SeverityCalibrator.calibrate(aiResponse);
+    // one persisted below for the next round to compare against. The diff's lines let it recognize
+    // an unpinned-reference finding anchored on a versioned COPY --from source (#926).
+    aiResponse = SeverityCalibrator.calibrate(aiResponse, lineResolver::getLineText);
     aiResponse =
         followUpAnalyzer.dropRepliedDuplicates(
             aiResponse, ctx.priorAiResponseJsons(), ctx.inlineComments(), botIdentity);

@@ -1625,9 +1625,8 @@ class FindingPipelineTest {
             "medium",
             "Dockerfile",
             1,
-            "unpinned base image",
-            "FROM node:20-alpine is an unpinned base image, so two builds of this commit can"
-                + " resolve to different images.",
+            "container runs as root",
+            "The Dockerfile never adds a USER directive, so the published service runs as root.",
             null,
             null);
     when(aiReviewService.review(eq(session), any()))

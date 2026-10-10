@@ -1,0 +1,141 @@
+/*
+ * Copyright 2026 Thiago Gonzaga
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package dev.thiagogonzaga.thrillhousebot.review;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import org.junit.jupiter.api.Test;
+
+/** {@link CiFailureCitations}: which findings cite a check the CI-failure section records. */
+class CiFailureCitationsTest {
+
+  /** The section round 12 carried on ThrillhouseBot-test#155, as the resolver renders it. */
+  private static final String ROUND_12_SECTION =
+      """
+      Checks on this commit that had completed without passing when this review started: 1
+
+      ### test (conclusion: failure)
+      Title: test
+      Annotations (1 of 1):
+      - .github:41 [failure] Process completed with exit code 1.
+      """;
+
+  /** The round-12 angular finding (4149712189), posted at low confidence. */
+  private static final ReviewResponse.Finding ANGULAR_OFF_BY_ONE =
+      new ReviewResponse.Finding(
+          "high",
+          "low",
+          "angular/src/app/shift-board.ts",
+          45,
+          "Capacity check off by one: full shift still accepts an extra sign-up",
+          "The guard is `if (shift.signups.length > shift.capacity) {`. The in-diff test \"a full"
+              + " shift rejects further sign-ups\" exercises exactly this path and the assertion"
+              + " fails. This matches the CI check on this commit: \"test (conclusion: failure)\""
+              + " with annotation \".github:41 [failure] Process completed with exit code 1.\"",
+          null,
+          null);
+
+  private static ReviewResponse.Finding described(String description) {
+    return new ReviewResponse.Finding(
+        "high", "low", "src/queue.zig", 27, "Copy limit off by one", description, null, null);
+  }
+
+  @Test
+  void aFindingThatCitesTheFailingCheckIsRecognizedAndNamed() {
+    var citations = CiFailureCitations.parse(ROUND_12_SECTION);
+
+    assertTrue(citations.cites(ANGULAR_OFF_BY_ONE));
+    var note = citations.noteFor(ANGULAR_OFF_BY_ONE);
+    assertTrue(note.contains("records \"test\" as completed without passing"), note);
+    assertTrue(note.contains("judged on the code"), note);
+  }
+
+  /** The zig finding (4149695274) names the check its own way: the "test" check failed. */
+  @Test
+  void theCheckCanBeNamedInTheFindingsOwnWords() {
+    var zig =
+        described(
+            "The added test \"submit accepts copies equal to the configured maximum\" fails, and"
+                + " the CI for this commit already shows it: the \"test\" check (conclusion:"
+                + " failure).");
+
+    assertTrue(CiFailureCitations.parse(ROUND_12_SECTION).cites(zig));
+  }
+
+  /** A failing check the section does not record cites nothing: "CI fails" buys no floor. */
+  @Test
+  void aCheckTheSectionDoesNotRecordIsNotCited() {
+    var lint = described("The lint check fails in CI on this line.");
+
+    var citations = CiFailureCitations.parse(ROUND_12_SECTION);
+    assertFalse(citations.cites(lint));
+    assertNull(citations.noteFor(lint));
+  }
+
+  /** Naming the check without a failure, or without the CI that ran it, is not a citation. */
+  @Test
+  void aNameAloneIsNotACitation() {
+    var citations = CiFailureCitations.parse(ROUND_12_SECTION);
+
+    assertFalse(citations.cites(described("The new test asserts the wrong capacity.")));
+    assertFalse(citations.cites(described("The test fails when copies equals the maximum.")));
+  }
+
+  @Test
+  void checksTheSectionDidNotDetailAreRecordedToo() {
+    var section =
+        ROUND_12_SECTION + "\nAlso failing, not detailed: lint / eslint, build (windows-latest)\n";
+
+    var citations = CiFailureCitations.parse(section);
+
+    assertTrue(citations.cites(described("The eslint step of the lint / eslint check failed.")));
+    assertTrue(citations.cites(described("CI shows build (windows-latest) failing on it.")));
+  }
+
+  @Test
+  void aBlankOrNamelessSectionRecordsNothing() {
+    assertSame(CiFailureCitations.NONE, CiFailureCitations.parse(null));
+    assertSame(CiFailureCitations.NONE, CiFailureCitations.parse("  "));
+    assertSame(CiFailureCitations.NONE, CiFailureCitations.parse("### ··· (conclusion: failure)"));
+    assertFalse(CiFailureCitations.NONE.cites(ANGULAR_OFF_BY_ONE));
+    assertNull(CiFailureCitations.NONE.noteFor(ANGULAR_OFF_BY_ONE));
+  }
+
+  @Test
+  void aFindingWithNoTextCitesNothing() {
+    var bare = new ReviewResponse.Finding("high", "low", "a.ts", 1, null, null, null, null);
+
+    assertFalse(CiFailureCitations.parse(ROUND_12_SECTION).cites(bare));
+  }
+
+  /** Check names are output the pull request controls, so a note repeats a bounded one. */
+  @Test
+  void aLongCheckNameIsClippedInTheNote() {
+    String name = "x".repeat(400);
+    var citations = CiFailureCitations.parse("### " + name + " (conclusion: failure)\n");
+
+    var note = citations.noteFor(described("The CI check " + name + " fails."));
+
+    assertEquals(
+        CiFailureCitations.MAX_NAME_CHARS,
+        note.substring(note.indexOf('"') + 1, note.indexOf('"', note.indexOf('"') + 1)).length());
+  }
+}
