@@ -19,9 +19,11 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.review.ReviewSkipReason;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 
 class ReviewTriggerFilterTest {
@@ -41,6 +43,54 @@ class ReviewTriggerFilterTest {
     var pr = new WebhookPayload.PullRequest(1, "t", null, base("main"), null, "", false, null);
 
     assertTrue(filter.skipReason(pr).isEmpty());
+  }
+
+  @Test
+  void suppliedLabelsReplaceThePayloadsForTheLabelGates() {
+    var filter = filter(false, List.of(), List.of("dependencies"), List.of(), List.of());
+
+    var skip = filter.skipReason(pr("main", false), () -> List.of("Dependencies"));
+
+    assertEquals(ReviewSkipReason.EXCLUDED_LABEL, skip.orElseThrow().reason());
+  }
+
+  @Test
+  void suppliedLabelsAreNotAskedForWithoutALabelGateOrOnAnEarlierSkip() {
+    Supplier<List<String>> unread =
+        () -> {
+          throw new AssertionError("labels read without a label gate deciding");
+        };
+
+    assertTrue(
+        filter(false, List.of(), List.of(), List.of(), List.of())
+            .skipReason(pr("main", false), unread)
+            .isEmpty());
+    assertEquals(
+        ReviewSkipReason.DRAFT,
+        filter(true, List.of(), List.of("dependencies"), List.of(), List.of())
+            .skipReason(pr("main", true), unread)
+            .orElseThrow()
+            .reason());
+  }
+
+  @Test
+  void labelGatesAloneApplyToAnyLabelSet() {
+    var excluding = filter(false, List.of(), List.of("dependencies"), List.of(), List.of());
+    var requiring = filter(false, List.of("ai-review"), List.of(), List.of(), List.of());
+    var none = filter(false, List.of(), List.of(), List.of("main"), List.of());
+
+    assertTrue(excluding.hasLabelGates());
+    assertTrue(requiring.hasLabelGates());
+    assertFalse(none.hasLabelGates());
+    assertEquals(
+        ReviewSkipReason.EXCLUDED_LABEL,
+        excluding.labelSkipReason(Arrays.asList(null, " dependencies ")).orElseThrow().reason());
+    assertTrue(excluding.labelSkipReason(null).isEmpty());
+    assertEquals(
+        ReviewSkipReason.MISSING_REQUIRED_LABEL,
+        requiring.labelSkipReason(List.of("java")).orElseThrow().reason());
+    assertTrue(requiring.labelSkipReason(List.of("AI-Review")).isEmpty());
+    assertTrue(none.labelSkipReason(List.of("anything")).isEmpty());
   }
 
   @Test

@@ -391,6 +391,12 @@ public class ReviewOrchestrator {
             findingsToCarry(ctx, aiResponse, result));
         return false;
       }
+      // #1021: a label added while the run waited or ran — Dependabot labels a pull request a
+      // second or two after opening it — is honoured before the first write, as a moved head is.
+      if (reviewPublisher.standsDownOnLabelGate(auth, req, checkRunId, sessionUrl(session))) {
+        closeLabelGatedSession(session);
+        return false;
+      }
 
       boolean summaryPosted = publishSummaryBestEffort(auth, req, result);
       // Opt-in follow-up delta comment. Runs only when no summary was posted this round, and its
@@ -523,7 +529,11 @@ public class ReviewOrchestrator {
         req.repo(),
         req.prNumber(),
         new CiHoldRegistry.HeldVerdict(
-            req.commitSha(), req.baseRef(), checkRunId, sessionUrl(session)));
+            req.commitSha(),
+            req.baseRef(),
+            checkRunId,
+            sessionUrl(session),
+            req.isManualTrigger()));
     Log.infof(
         "Holding the approval of %s/%s #%d on CI for %s — re-evaluated when its checks complete",
         req.owner(), req.repo(), req.prNumber(), req.commitSha());
@@ -532,6 +542,20 @@ public class ReviewOrchestrator {
 
   /** SKIPPED check-run title when the finished run's post was abandoned (#704). */
   static final String SUPERSEDED_CHECK_TITLE = "Review superseded by a newer commit";
+
+  /**
+   * Closes out the session of a run a label gate stood down before its first write (#1021). Unlike
+   * a superseded run nothing replaces it, so its findings are not carried anywhere. Visible for
+   * tests.
+   */
+  void closeLabelGatedSession(ReviewSession session) {
+    try {
+      applyReviewFailure(session, "Skipped: a label gate rejects the pull request");
+    } catch (RuntimeException persistenceError) {
+      Log.warnf(persistenceError, "Failed to persist label-gated review session %d", session.id);
+    }
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.failed(session));
+  }
 
   /**
    * Whether the freshly read head names a different commit than the one this run reviewed. False

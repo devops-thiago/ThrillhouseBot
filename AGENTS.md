@@ -188,6 +188,13 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
 - **A run whose head moved stands down before its first write** (#704, #806) and hands its
   verified findings to the next run through `SupersededFindingsCarryover`, so two runs never edit
   the summary at once and nothing is posted against a diff that changed.
+- **The label gates read the labels the pull request carries now, not only the payload's** (#1021).
+  Dependabot labels a pull request a second or two after opening it, so `WebhookController` reads
+  them from the API on `opened`, `reopened` and `ready_for_review` (payload fallback on a failed
+  read), the orchestrator re-reads them before an automatic run's first write (fail open, like the
+  head guard), and `CiHoldRevisit` before posting a held approval (fail closed: the hold stays).
+  All three go through `PullRequestLabelGate`, which reads nothing when no label gate is
+  configured, and skip a manual `/review` (`HeldVerdict.manualTrigger`).
 
 ## Prompts
 
