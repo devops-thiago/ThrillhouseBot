@@ -216,14 +216,15 @@ counts.
 
 `FindingPipeline` runs the model's findings through a fixed chain before anything is published.
 
-On the single-call lane (`FindingPipeline.refine`), in order:
+On the single-call lane (`FindingPipeline.refine`), in order (steps 1 to 6 are `FindingScreen`,
+which both lanes share):
 
 1. Attach evidence for findings that cite code outside the diff (`ReviewEvidence`).
 2. Check that quoted code exists (`FindingQuoteValidator`).
 3. Drop known framework false positives (`FrameworkFalsePositiveFilter`).
 4. Merge duplicates (`FindingDeduplicator`).
 5. Drop what the verifier already rejected on this head (`VerifierRejectionMemory`).
-6. Verify (`FindingVerificationService`).
+6. Verify (`FindingVerificationService`), then remember its verdicts against the findings sent.
 7. Calibrate severity (`SeverityCalibrator`).
 8. Drop restatements of findings a maintainer already answered, and of findings argued out on
    earlier rounds.
@@ -232,6 +233,14 @@ On the single-call lane (`FindingPipeline.refine`), in order:
 On the multi-call lane each batch runs steps 1, 2, 3, 5 and 6 in its own thread. Once every batch
 has finished, the pipeline merges the statuses the batches reported and runs steps 4, 8 and 9 over
 the combined findings. Severity calibration does not run on this lane.
+
+`FindingScreen` is a small pipes-and-filters chain. Each of steps 1 to 6 is a `FindingStage`
+(`EvidenceStage`, `QuoteValidationStage`, `FrameworkFilterStage`, `DedupeStage`,
+`RejectionScreenStage`, `VerificationStage`, `RememberVerdictsStage`) that owns only its own
+collaborator and maps one immutable `ScreeningContext` (the call's response, its quote source and
+prompt inputs, the plan, the evidence resolver, and the evidence and verifier candidates the
+stages produce) to the next. The constructor builds one explicit ordered list per lane; the batch
+list is the single-call list without `DedupeStage`. `FindingScreenTest` pins both orders.
 
 Every lane then ends with the same two steps (`FindingPipeline.finish`): the deterministic security
 scan merge, then the guard that drops a new finding restating one still open on its own thread
@@ -525,7 +534,7 @@ diff, filtered by the ignore globs.
 | Package | Responsibility | Notable classes |
 |---|---|---|
 | `webhook/` | Receives events, verifies the signature, drops redeliveries, applies trigger filters, pause state and the auto-review window, acks commands with 👀, routes commands and replies, starts CI-hold rechecks | `WebhookController`, `WebhookVerifier`, `WebhookDeduplicator`, `TriggerDetector`, `ReviewTriggerFilter`, `ManualReviewAuthorizer`, `AckReactionService`, `CommentCommandService`, `LearningCommands`, `PrPauseService` |
-| `review/` | Everything from "a review was requested" to "the result is on GitHub": dispatch, context, prompt assembly, budgeting, the finding chain, the security scan, follow-up reconciliation, verdict, publishing, CI gating, learnings, replies and the on-request commands | `ReviewDispatcher`, `ReviewOrchestrator`, `ReviewContextLoader`, `ReviewPromptAssembler`, `DiffBudgetPlanner`, `FindingPipeline`, `SecurityScan`, `FollowUpAnalyzer`, `VerdictBuilder`, `ReviewPublisher`, `PrSummaryGenerator`, `CiStatusEvaluator`, `CiHoldRevisit`, `TicketContextResolver`, `ReviewLearnings`, `MaintainerReplyService` |
+| `review/` | Everything from "a review was requested" to "the result is on GitHub": dispatch, context, prompt assembly, budgeting, the finding chain, the security scan, follow-up reconciliation, verdict, publishing, CI gating, learnings, replies and the on-request commands | `ReviewDispatcher`, `ReviewOrchestrator`, `ReviewContextLoader`, `ReviewPromptAssembler`, `DiffBudgetPlanner`, `FindingPipeline`, `FindingScreen`, `SecurityScan`, `FollowUpAnalyzer`, `VerdictBuilder`, `ReviewPublisher`, `PrSummaryGenerator`, `CiStatusEvaluator`, `CiHoldRevisit`, `TicketContextResolver`, `ReviewLearnings`, `MaintainerReplyService` |
 | `review/ai/` | The LangChain4j layer: AI service interfaces and prompts, streaming and retries, response parsing and salvage, the verifier, the token ledger and the call gate | `AiReviewService`, `PrReviewer`, `PrSummarizer`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant`, `ModelCallGate`, `ReviewTokenLedger` |
 | `github/` | GitHub REST and GraphQL clients, app auth, write pacing and retry, the instructions file and repository settings | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubWritePacer`, `GitHubWriteRetry`, `InstructionsResolver`, `RepoSettingsResolver`, `ReviewThreadService` |
 | `dashboard/` | OAuth sessions, the WebSocket broadcaster, review session persistence, dashboard REST | `AuthResource`, `DashboardResource`, `SessionEventBroadcaster`, `ReviewSession`, `ReviewSessionPersistence`, `InterruptedSessionReconciler` |
