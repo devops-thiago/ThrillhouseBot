@@ -170,17 +170,21 @@ class RetriedFollowUpRoundTest {
     pipeline =
         new FindingPipeline(
             aiService,
-            quoteValidator,
-            frameworkFilter,
+            FindingScreens.of(
+                quoteValidator,
+                frameworkFilter,
+                new FindingDeduplicator(),
+                new FindingVerificationService(
+                    mock(FindingVerifier.class),
+                    config,
+                    mapper,
+                    pipelineLedger,
+                    new TruncatedResponseSalvager(mapper),
+                    TestResponseCaps.defaults()),
+                new VerifierRejectionMemory(),
+                mock(DiffBudgetPlanner.class),
+                new TokenCounter()),
             new FindingDeduplicator(),
-            new FindingVerificationService(
-                mock(FindingVerifier.class),
-                config,
-                mapper,
-                pipelineLedger,
-                new TruncatedResponseSalvager(mapper),
-                TestResponseCaps.defaults()),
-            new VerifierRejectionMemory(),
             analyzer,
             mapper,
             BOT,

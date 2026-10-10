@@ -179,19 +179,25 @@ class ReviewOrchestratorTest {
             BOT_ID);
     verdictBuilder =
         new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID, BlockingStrictness.BALANCED);
+    var budgetPlanner =
+        new DiffBudgetPlanner(
+            diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m"));
     findingPipeline =
         new FindingPipeline(
             aiReviewService,
-            quoteValidator,
-            frameworkFilter,
+            FindingScreens.of(
+                quoteValidator,
+                frameworkFilter,
+                deduplicator,
+                findingVerificationService,
+                new VerifierRejectionMemory(),
+                budgetPlanner,
+                new TokenCounter()),
             deduplicator,
-            findingVerificationService,
-            new VerifierRejectionMemory(),
             followUpAnalyzer,
             mapper,
             BOT_ID,
-            new DiffBudgetPlanner(
-                diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
+            budgetPlanner,
             new TokenCounter(),
             mock(ReviewTokenLedger.class),
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper),
@@ -5995,19 +6001,25 @@ class ReviewOrchestratorTest {
       ObjectMapper badMapper = mock(ObjectMapper.class);
       when(badMapper.writeValueAsString(any()))
           .thenThrow(new com.fasterxml.jackson.core.JsonProcessingException("fail") {});
+      var budgetPlanner =
+          new DiffBudgetPlanner(
+              diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m"));
       var failingPipeline =
           new FindingPipeline(
               aiReviewService,
-              quoteValidator,
-              frameworkFilter,
+              FindingScreens.of(
+                  quoteValidator,
+                  frameworkFilter,
+                  deduplicator,
+                  findingVerificationService,
+                  new VerifierRejectionMemory(),
+                  budgetPlanner,
+                  new TokenCounter()),
               deduplicator,
-              findingVerificationService,
-              new VerifierRejectionMemory(),
               followUpAnalyzer,
               badMapper,
               BOT_ID,
-              new DiffBudgetPlanner(
-                  diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
+              budgetPlanner,
               new TokenCounter(),
               mock(ReviewTokenLedger.class),
               new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper),
@@ -6114,6 +6126,48 @@ class ReviewOrchestratorTest {
       var response = new ReviewResponse(List.of(finding), List.of(), null);
       var updated = findingPipeline.populateMissingAnchors(response, lineResolver);
       assertSame(response, updated);
+    }
+
+    /**
+     * #1022: SiliconShip #430 cited {@code external/container} on a diff that changes {@code
+     * External/container}. The finding leaves this step, which is what is persisted and posted, on
+     * the diff's spelling, and its missing anchor is read from that file.
+     */
+    @Test
+    void movesAFindingOntoTheDiffSpellingOfItsPathAndAnchorsItThere() {
+      var lineResolver =
+          new DiffLineResolver(
+              Map.of(
+                  "External/container",
+                  "@@ -1 +1 @@\n-Subproject commit 5f8c7cb\n+Subproject commit 498e11b"));
+      var exact =
+          new ReviewResponse.Finding(
+              "high", "high", "External/container", 1, "Exact", "Desc", "kept", null);
+      var miscased =
+          new ReviewResponse.Finding(
+              "high", "high", "external/container", 1, "Bump", "Desc", null, null);
+      var response = new ReviewResponse(List.of(exact, miscased), List.of(), null);
+
+      var updated = findingPipeline.populateMissingAnchors(response, lineResolver);
+
+      assertSame(exact, updated.findings().get(0));
+      assertEquals("External/container", updated.findings().get(1).file());
+      assertEquals("Subproject commit 498e11b", updated.findings().get(1).suggestionOld());
+    }
+
+    @Test
+    void movesAFindingOntoTheDiffSpellingEvenWhenItAlreadyHasAnAnchor() {
+      var lineResolver =
+          new DiffLineResolver(Map.of("Src/Main.java", "@@ -1 +1 @@\n-old()\n+new()"));
+      var finding =
+          new ReviewResponse.Finding(
+              "high", "high", "src/main.java", 1, "Title", "Desc", "new()", null);
+      var response = new ReviewResponse(List.of(finding), List.of(), null);
+
+      var updated = findingPipeline.populateMissingAnchors(response, lineResolver);
+
+      assertEquals("Src/Main.java", updated.findings().getFirst().file());
+      assertEquals("new()", updated.findings().getFirst().suggestionOld());
     }
   }
 

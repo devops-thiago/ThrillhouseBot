@@ -25,7 +25,6 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededExcepti
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
-import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
@@ -57,7 +56,8 @@ import org.jboss.logging.Logger;
  * fields, drop already-replied duplicates, backfill missing content anchors, and persist the
  * response. Extracted from {@code ReviewOrchestrator}; the ordering is preserved verbatim — quote
  * validation runs before dedupe so a merged finding cannot inherit a phantom quote while a verbatim
- * sibling is discarded.
+ * sibling is discarded. The checks against the call's own material, up to and including the
+ * verifier, are {@link FindingScreen}'s; this class runs the calls and everything after them.
  */
 @ApplicationScoped
 public class FindingPipeline {
@@ -200,11 +200,8 @@ public class FindingPipeline {
   }
 
   private final AiReviewService aiReviewService;
-  private final FindingQuoteValidator quoteValidator;
-  private final FrameworkFalsePositiveFilter frameworkFilter;
+  private final FindingScreen findingScreen;
   private final FindingDeduplicator deduplicator;
-  private final FindingVerificationService findingVerificationService;
-  private final VerifierRejectionMemory rejectionMemory;
   private final FollowUpAnalyzer followUpAnalyzer;
   private final ObjectMapper mapper;
   private final BotIdentity botIdentity;
@@ -218,11 +215,8 @@ public class FindingPipeline {
   @Inject
   public FindingPipeline(
       AiReviewService aiReviewService,
-      FindingQuoteValidator quoteValidator,
-      FrameworkFalsePositiveFilter frameworkFilter,
+      FindingScreen findingScreen,
       FindingDeduplicator deduplicator,
-      FindingVerificationService findingVerificationService,
-      VerifierRejectionMemory rejectionMemory,
       FollowUpAnalyzer followUpAnalyzer,
       ObjectMapper mapper,
       BotIdentity botIdentity,
@@ -233,11 +227,8 @@ public class FindingPipeline {
       ReviewDimensionRouter dimensionRouter,
       SecurityScan securityScan) {
     this.aiReviewService = aiReviewService;
-    this.quoteValidator = quoteValidator;
-    this.frameworkFilter = frameworkFilter;
+    this.findingScreen = findingScreen;
     this.deduplicator = deduplicator;
-    this.findingVerificationService = findingVerificationService;
-    this.rejectionMemory = rejectionMemory;
     this.followUpAnalyzer = followUpAnalyzer;
     this.mapper = mapper;
     this.botIdentity = botIdentity;
@@ -906,11 +897,10 @@ public class FindingPipeline {
   }
 
   /**
-   * Runs one batch's raw response through the per-batch chain — quote validation and framework
-   * filtering against the batch's own in-budget text, verification, and status scoping. Shared by
-   * the parsed path and the salvage path, so salvaged findings face exactly the checks a normally
-   * parsed batch's findings do. The session keys the spend ledger for the verification call, which
-   * is metered and ceiling-gated inside {@link FindingVerificationService}.
+   * Runs one batch's raw response through the per-batch chain — the {@linkplain
+   * FindingScreen#screenBatch screen} against the batch's own in-budget text, then status scoping.
+   * Shared by the parsed path and the salvage path, so salvaged findings face exactly the checks a
+   * normally parsed batch's findings do.
    */
   private BatchOutcome refineBatchOutcome(
       int index,
@@ -918,29 +908,9 @@ public class FindingPipeline {
       AiReviewService.PromptInputs batchInputs,
       ReviewResponse batchResponse,
       BatchRun run) {
-    // #650/#475: resolved against the findings as the model raised them, before the quote
-    // validator below nulls suggestion_old on exactly the finding whose quote is outside the
-    // batch's hunks.
-    var attached = run.evidence().forFindings(batchResponse.findings());
-    var validated = quoteValidator.validate(batchResponse, batch.text());
-    validated = frameworkFilter.filter(validated, batch.text());
-    // #711: as in the single-call lane — a claim the audit already rejected on this head is not
-    // put to the verifier a second time, and stays dropped on a round that never gets a verdict.
-    var candidates = rejectionMemory.withoutRejectionsOnThisHead(run.session(), validated);
-    // #736: the verification call is the one review-path call that does no budget arithmetic of
-    // its own, so the section the author alone sizes is bounded here before it is sent.
     var verified =
-        findingVerificationService.verify(
-            ledgerSessionId(run.session()),
-            candidates,
-            PrContextBudget.bound(
-                batchInputs.prContext(), budgetPlanner.perCallInputBudget(), tokenCounter),
-            batchInputs.diff(),
-            batchInputs.projectStack(),
-            batchInputs.previousFindings(),
-            attached,
-            run.plan()::recordVerificationCoverage);
-    rejectionMemory.remember(run.session(), candidates.findings(), verified.findings());
+        findingScreen.screenBatch(
+            run.session(), batchResponse, batch.text(), batchInputs, run.plan(), run.evidence());
     return new BatchOutcome(
         index,
         verified.findings(),
@@ -1571,31 +1541,9 @@ public class FindingPipeline {
       DiffLineResolver lineResolver,
       DiffBudgetPlanner.BudgetPlan plan,
       ReviewEvidence evidence) {
-    // #650/#475: resolved against the findings as the model raised them, before the quote
-    // validator below nulls suggestion_old on exactly the finding whose quote is outside the
-    // window.
-    var attached = evidence.forFindings(aiResponse.findings());
-    aiResponse = quoteValidator.validate(aiResponse, diff);
-    aiResponse = frameworkFilter.filter(aiResponse, diff);
-    aiResponse = deduplicator.dedupe(aiResponse);
-    // #711: a claim the audit already rejected on this head is dropped before the call rather
-    // than put to it again. A second verdict on unchanged code is a re-roll of the same question,
-    // and on the fail-open paths there is no second verdict at all.
-    var candidates = rejectionMemory.withoutRejectionsOnThisHead(session, aiResponse);
-    // #736: the verification call is the one review-path call that does no budget arithmetic of
-    // its own, so the section the author alone sizes is bounded here before it is sent.
+    // Evidence, quote validation, framework filter, dedupe, rejection memory, then the verifier.
     aiResponse =
-        findingVerificationService.verify(
-            ledgerSessionId(session),
-            candidates,
-            PrContextBudget.bound(
-                promptInputs.prContext(), budgetPlanner.perCallInputBudget(), tokenCounter),
-            promptInputs.diff(),
-            promptInputs.projectStack(),
-            promptInputs.previousFindings(),
-            attached,
-            plan::recordVerificationCoverage);
-    rejectionMemory.remember(session, candidates.findings(), aiResponse.findings());
+        findingScreen.screenSingleCall(session, aiResponse, diff, promptInputs, plan, evidence);
     // #773: the last word on the two graded fields, so the anchored infrastructure classes cannot
     // be re-spread by the verifier's own lowering, and the grade the publisher routes on is the
     // one persisted below for the next round to compare against.
@@ -1629,7 +1577,11 @@ public class FindingPipeline {
     }
     var adjusted = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     var changed = false;
-    for (ReviewResponse.Finding finding : response.findings()) {
+    for (ReviewResponse.Finding cited : response.findings()) {
+      // #1022: the diff's spelling of the path, persisted with the finding, so the thread GitHub
+      // resolves case-sensitively opens and later rounds compare against the same path.
+      var finding = lineResolver.withDiffPath(cited);
+      changed |= finding != cited;
       if (finding.suggestionOld() == null || finding.suggestionOld().isBlank()) {
         String fallback = lineResolver.getLineText(finding.file(), finding.line());
         if (fallback != null && !fallback.isBlank()) {

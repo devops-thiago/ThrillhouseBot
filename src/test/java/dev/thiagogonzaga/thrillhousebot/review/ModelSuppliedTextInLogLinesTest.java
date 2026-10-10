@@ -355,11 +355,15 @@ class ModelSuppliedTextInLogLinesTest {
     var pipeline =
         new FindingPipeline(
             mock(AiReviewService.class),
-            mock(FindingQuoteValidator.class),
-            mock(FrameworkFalsePositiveFilter.class),
+            FindingScreens.of(
+                mock(FindingQuoteValidator.class),
+                mock(FrameworkFalsePositiveFilter.class),
+                mock(FindingDeduplicator.class),
+                mock(FindingVerificationService.class),
+                new VerifierRejectionMemory(),
+                mock(DiffBudgetPlanner.class),
+                new TokenCounter()),
             mock(FindingDeduplicator.class),
-            mock(FindingVerificationService.class),
-            new VerifierRejectionMemory(),
             mock(FollowUpAnalyzer.class),
             new ObjectMapper(),
             BotIdentity.of("thrillhousebot"),

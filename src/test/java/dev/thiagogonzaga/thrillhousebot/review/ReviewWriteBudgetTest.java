@@ -52,6 +52,11 @@ class ReviewWriteBudgetTest {
   private static final String THROTTLE_BODY =
       "{\"message\":\"You have exceeded a secondary rate limit.\"}";
 
+  private static final String PATH_REFUSED_BODY =
+      "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":\"PullRequestReviewComment\","
+          + "\"code\":\"custom\",\"field\":\"pull_request_review_thread.path\","
+          + "\"message\":\"could not be resolved\"}]}";
+
   /** The registry the client writes to is process-wide, so each test takes its own PR. */
   private static final AtomicInteger PR_NUMBERS = new AtomicInteger(800);
 
@@ -140,6 +145,35 @@ class ReviewWriteBudgetTest {
     assertTrue(body.contains("Only bug"), body);
   }
 
+  /**
+   * #1022 — the budget is spent on a finding that then lands, and the only finding left without a
+   * thread is one GitHub refused for its path. The body names that refusal and says nothing about
+   * the budget, which had nothing to do with it.
+   */
+  @Test
+  void aSpentBudgetIsNotBlamedForAFindingGitHubRefusedOutright() {
+    reviewClient.retryAfterSeconds = 1;
+    reviewClient.landsOnAttempt = 2;
+    reviewClient.refusesPathFromAttempt = 3;
+    var landed = finding("Landed bug", 10);
+    var refused = finding("Refused bug", 11);
+
+    publisher(Duration.ofSeconds(1))
+        .postReview(
+            "Bearer tok", "owner", "repo", prNumber, "sha", result(landed, refused), resolver());
+
+    // The first finding: one throttle, the wait that spends the budget, then its thread. The
+    // second: its line route and its file route, each refused for the path.
+    assertEquals(4, reviewClient.attempts.get());
+    var body = reviewClient.reviewBodies.getLast();
+    assertTrue(body.contains("1 issue(s) GitHub accepted no review thread for:"), body);
+    assertTrue(body.contains("Refused bug"), body);
+    assertTrue(
+        body.contains("All of these were refused by GitHub: `path could not be resolved`."), body);
+    assertFalse(body.contains("budget"), body);
+    assertFalse(body.contains("rate limit"), body);
+  }
+
   // -------------------------------------------------------------------------------- the fixture
 
   private static Finding finding(String title, int line) {
@@ -174,6 +208,12 @@ class ReviewWriteBudgetTest {
     private final List<String> reviewBodies = new ArrayList<>();
     private int retryAfterSeconds;
 
+    /** The attempt (1-based) that lands; every other one is refused. */
+    private int landsOnAttempt = -1;
+
+    /** From this attempt on, GitHub refuses the path instead of throttling. */
+    private int refusesPathFromAttempt = Integer.MAX_VALUE;
+
     @Override
     public PullRequestCommentResponse createPullRequestCommentOnce(
         String auth,
@@ -182,7 +222,13 @@ class ReviewWriteBudgetTest {
         String repo,
         int pullNumber,
         CreatePullRequestCommentRequest request) {
-      attempts.incrementAndGet();
+      var attempt = attempts.incrementAndGet();
+      if (attempt == landsOnAttempt) {
+        return new PullRequestCommentResponse(1L, request.body(), request.path(), request.line());
+      }
+      if (attempt >= refusesPathFromAttempt) {
+        throw new WebApplicationException(Response.status(422).entity(PATH_REFUSED_BODY).build());
+      }
       throw new WebApplicationException(
           Response.status(403)
               .header("Retry-After", String.valueOf(retryAfterSeconds))

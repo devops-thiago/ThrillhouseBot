@@ -15,12 +15,16 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import io.quarkus.logging.Log;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.TreeSet;
@@ -137,6 +141,58 @@ public final class DiffLineResolver {
       }
     }
     return resolved != null ? resolved.get(line) : null;
+  }
+
+  /**
+   * The diff's own spelling of {@code file} when the two differ only in letter case, otherwise
+   * {@code file} unchanged (#1022).
+   *
+   * <p>GitHub resolves a review thread's path case-sensitively, so a finding citing {@code
+   * external/container} on a diff that changes {@code External/container} is refused on its line
+   * and on its file alike. A path the diff holds exactly is returned as is, and so is one that
+   * matches no diff file or more than one (two files differing only in case): picking one of those
+   * would put the finding on a file it may not mean.
+   */
+  public String diffPathFor(String file) {
+    if (file == null || rightSideLinesByFile.containsKey(file)) {
+      return file;
+    }
+    String match = null;
+    for (String candidate : rightSideLinesByFile.keySet()) {
+      if (candidate.equalsIgnoreCase(file)) {
+        if (match != null) {
+          return file;
+        }
+        match = candidate;
+      }
+    }
+    return match != null ? match : file;
+  }
+
+  /**
+   * {@code finding} moved onto {@link #diffPathFor its file's diff spelling}, or the same instance
+   * when the path needs no change. The change is logged at INFO, so a posted path that differs from
+   * the model's can be traced to it.
+   */
+  public ReviewResponse.Finding withDiffPath(ReviewResponse.Finding finding) {
+    String diffPath = diffPathFor(finding.file());
+    if (Objects.equals(diffPath, finding.file())) {
+      return finding;
+    }
+    Log.infof(
+        "Finding '%s' cites %s; the diff spells it %s, so the finding is posted there",
+        LogSafe.oneLine(finding.title()),
+        LogSafe.oneLine(finding.file()),
+        LogSafe.oneLine(diffPath));
+    return new ReviewResponse.Finding(
+        finding.risk(),
+        finding.confidence(),
+        diffPath,
+        finding.line(),
+        finding.title(),
+        finding.description(),
+        finding.suggestionOld(),
+        finding.suggestionNew());
   }
 
   /** Whether {@code needle} appears as a contiguous, in-order run within {@code haystack}. */
