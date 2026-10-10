@@ -301,6 +301,9 @@ public class FindingVerificationService {
   private static final Pattern NEGATING_SUBJECT_BEFORE_VERB =
       Pattern.compile("\\b(nothing|nobody)\\s+(\\w+[\\s-]+){0,3}\\z", Pattern.CASE_INSENSITIVE);
 
+  /** The pronouns of {@link #NEGATING_SUBJECT_BEFORE_VERB}, for its backward reading (#1030). */
+  private static final List<String> NEGATING_PRONOUNS = List.of("nothing", "nobody");
+
   /**
    * A defense-stemmed word within two words AFTER the verb — the verbatim body of the one-pattern
    * form's trailing negative lookahead, applied by {@link #claimsAbsenceAsSubject} at the match end
@@ -1358,26 +1361,96 @@ public class FindingVerificationService {
    * and its trailing lookahead — including the parse where a defense noun flips an earlier verb's
    * reading while a later verb in the same subject gap stays clean — so the split changes what the
    * analyzer counts, not what the recognizer accepts.
+   *
+   * <p>The subject prefix is read backwards from each token ({@link #negatingSubjectEndsAt}), so a
+   * token costs its own three-word window rather than a search of everything before it, and a
+   * description of many verb tokens is read in linear time (#1030).
    */
-  private static boolean claimsAbsenceAsSubject(String text) {
+  static boolean claimsAbsenceAsSubject(CharSequence text) {
     return claimsAbsenceOnVerbToken(ABSENCE_SUBJECT_VERB, text)
         || claimsAbsenceOnVerbToken(ABSENCE_MODAL_VERB, text);
   }
 
-  private static boolean claimsAbsenceOnVerbToken(Pattern verbToken, String text) {
+  private static boolean claimsAbsenceOnVerbToken(Pattern verbToken, CharSequence text) {
     Matcher verb = verbToken.matcher(text);
-    // Regions instead of substrings, so stepping through the verb tokens never copies the text;
-    // with the matchers' default opaque and anchoring bounds a region IS the whole input to the
-    // pattern, so {@code \z} stops at the region end and the semantics stay those of a substring.
-    Matcher subject = NEGATING_SUBJECT_BEFORE_VERB.matcher(text);
+    // A region rather than a substring, so stepping through the verb tokens never copies the text;
+    // with the matcher's default opaque and anchoring bounds a region IS the whole input to the
+    // pattern, so the semantics stay those of a substring.
     Matcher object = DEFENSE_OBJECT_AFTER_VERB.matcher(text);
     while (verb.find()) {
-      if (subject.region(0, verb.start()).find()
+      if (negatingSubjectEndsAt(text, verb.start())
           && !object.region(verb.end(), text.length()).lookingAt()) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Whether {@code text} up to {@code end} ends on a negating pronoun subject and at most three gap
+   * words — exactly what {@link #NEGATING_SUBJECT_BEFORE_VERB} finds in that prefix, read backwards
+   * from {@code end} instead of searched for from the start, so the work is bounded by the window
+   * rather than the prefix (#1030). Backwards the parse is unique: each gap word is a maximal run
+   * of word characters and its separator the maximal run of whitespace and hyphens after it, and
+   * the separator after the pronoun must be whitespace alone.
+   */
+  static boolean negatingSubjectEndsAt(CharSequence text, int end) {
+    int at = end;
+    for (int gapWords = 0; ; gapWords++) {
+      int separator = at;
+      boolean whitespaceOnly = true;
+      while (separator > 0 && isGapSeparator(text.charAt(separator - 1))) {
+        whitespaceOnly &= text.charAt(separator - 1) != '-';
+        separator--;
+      }
+      int word = separator;
+      while (word > 0 && isRegexWordChar(text.charAt(word - 1))) {
+        word--;
+      }
+      if (separator == at || word == separator) {
+        return false;
+      }
+      if (whitespaceOnly && isNegatingPronoun(text, word, separator)) {
+        return true;
+      }
+      if (gapWords == 3) {
+        return false;
+      }
+      at = word;
+    }
+  }
+
+  /**
+   * {@code \s} or a hyphen: the separator {@link #NEGATING_SUBJECT_BEFORE_VERB} puts after a word.
+   */
+  private static boolean isGapSeparator(char c) {
+    return c == '-' || c == ' ' || (c >= '\t' && c <= '\r');
+  }
+
+  /** {@code \w} as the patterns read it: an ASCII letter, digit or underscore. */
+  private static boolean isRegexWordChar(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+  }
+
+  /** Whether {@code text} from {@code start} to {@code end} is "nothing" or "nobody", any case. */
+  private static boolean isNegatingPronoun(CharSequence text, int start, int end) {
+    for (var pronoun : NEGATING_PRONOUNS) {
+      if (end - start == pronoun.length() && equalsIgnoringAsciiCase(text, start, pronoun)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean equalsIgnoringAsciiCase(CharSequence text, int start, String lower) {
+    for (int i = 0; i < lower.length(); i++) {
+      char c = text.charAt(start + i);
+      char folded = c >= 'A' && c <= 'Z' ? (char) (c + ('a' - 'A')) : c;
+      if (folded != lower.charAt(i)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**
