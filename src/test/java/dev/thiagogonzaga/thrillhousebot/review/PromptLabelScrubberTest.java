@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
@@ -736,7 +737,10 @@ class PromptLabelScrubberTest {
           """)
   void providedWithThisReviewAfterAColonDashParenthesisOrAtTheStartGoesCleanly(
       String leaked, String clean) {
-    assertEquals(clean, PromptLabelScrubber.scrub(leaked));
+    var scrubbed = PromptLabelScrubber.scrub(leaked);
+    assertEquals(clean, scrubbed);
+    // No fragment of the note survives: neither its "as" nor a comma left where it stood.
+    assertFalse(scrubbed.matches("(?s).*(?:\\bas,|[:—–(-],|^,).*"), scrubbed);
     assertEquals(clean, PromptLabelScrubber.scrub(clean));
   }
 
