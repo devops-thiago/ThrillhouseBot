@@ -1469,7 +1469,12 @@ public class ReviewPublisher {
           reviewThreadService.threadsByRootComment(auth, req.owner(), req.repo(), req.prNumber());
       var resolved = 0;
       for (var status : addressed) {
-        var rootCommentId = rootByFinding.get(status.id());
+        // An earlier round's status names no finding by id: it resolves only the thread the
+        // backstop located by the finding's marker and own content, when it carries one (#958).
+        var rootCommentId =
+            status.fromEarlierRound()
+                ? status.earlierRound().threadRootId()
+                : rootByFinding.get(status.id());
         ReviewThreadService.ThreadRef thread =
             rootCommentId != null ? threads.get(rootCommentId) : null;
         if (thread == null || thread.resolved()) {

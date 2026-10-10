@@ -4712,11 +4712,18 @@ class FollowUpAnalyzerTest {
         .orElseThrow();
   }
 
+  /**
+   * A standing decline names no finding by id, and carries the finding and its own thread (root
+   * 100, found by marker and title) instead (#958).
+   */
   private static void assertStands(FollowUpAnalyzer.HeldPrevious entry) {
     assertFalse(entry.holdsOpen());
     assertEquals(
         new ReviewResult.PreviousFindingStatus(
-            FollowUpAnalyzer.EARLIER_ROUND_ID, "justified", FollowUpAnalyzer.STANDING_DECLINE_NOTE),
+            FollowUpAnalyzer.EARLIER_ROUND_ID,
+            "justified",
+            FollowUpAnalyzer.STANDING_DECLINE_NOTE,
+            new ReviewResult.EarlierRound(entry.finding(), 100L)),
         entry.status());
   }
 
@@ -4887,6 +4894,238 @@ class FollowUpAnalyzerTest {
                 List.of(FollowUpAnalyzer.EARLIER_ROUND_ID),
                 threads,
                 List.of(),
+                BOT_ID,
+                () -> "+counter.bump();")
+            .isEmpty());
+  }
+
+  // #957: an earlier round's finding the backstop no longer holds still gets a status.
+
+  /** The backstop over PREVIOUS_JSON whose diff carries only the files in {@code patches}. */
+  private List<FollowUpAnalyzer.HeldPrevious> entriesOver(
+      Map<String, String> patches, List<GitHubCommentClient.IssueComment> conversation) {
+    return analyzer.heldPreviousFindings(
+        analyzer.parsePreviousResponses(List.of(PREVIOUS_JSON)),
+        List.of(),
+        List.of(),
+        conversation,
+        new DiffLineResolver(patches),
+        BOT_ID,
+        Map.of(),
+        () -> "+unrelated();");
+  }
+
+  private static FollowUpAnalyzer.HeldPrevious entryFor(
+      List<FollowUpAnalyzer.HeldPrevious> entries, String title) {
+    return entries.stream()
+        .filter(e -> title.equals(e.finding().title()))
+        .findFirst()
+        .orElseThrow();
+  }
+
+  @Test
+  void anEarlierRoundFindingWhoseCodeLeftTheDiffIsSuperseded() {
+    var entries = entriesOver(Map.of("src/B.java", patch(5)), List.of());
+
+    assertEquals(2, entries.size(), "every finding carried in has an entry");
+    var gone = entryFor(entries, "SQL injection");
+    assertFalse(gone.holdsOpen());
+    assertEquals("superseded", gone.status().status());
+    assertEquals(FollowUpAnalyzer.EARLIER_ROUND_ID, gone.status().id());
+    assertEquals(new ReviewResult.EarlierRound(gone.finding(), null), gone.status().earlierRound());
+    assertTrue(entryFor(entries, "Missing null check").holdsOpen());
+  }
+
+  @Test
+  void anEarlierRoundFindingClearedFromTheConversationIsResolved() {
+    var entries =
+        entriesOver(
+            Map.of("src/A.java", patch(10), "src/B.java", patch(5)),
+            List.of(maintainerSays(CLEARS_FINDING_ONE)));
+
+    var cleared = entryFor(entries, "SQL injection");
+    assertEquals(
+        new ReviewResult.PreviousFindingStatus(
+            FollowUpAnalyzer.EARLIER_ROUND_ID,
+            "resolved",
+            FollowUpAnalyzer.conversationClearedNote(BOT_ID),
+            new ReviewResult.EarlierRound(cleared.finding(), null)),
+        cleared.status());
+  }
+
+  @Test
+  void anEarlierRoundFindingWhoseCodeLeftTheDiffIsNotAlsoCountedCleared() {
+    var entries =
+        entriesOver(Map.of("src/B.java", patch(5)), List.of(maintainerSays(CLEARS_FINDING_ONE)));
+
+    assertEquals("superseded", entryFor(entries, "SQL injection").status().status());
+  }
+
+  @Test
+  void anEarlierRoundFindingDeclinedFromTheConversationIsJustified() {
+    var entries =
+        entriesOver(
+            Map.of("src/A.java", patch(10), "src/B.java", patch(5)),
+            List.of(
+                maintainerSays(
+                    """
+                    @thrillhousebot declined `src/A.java:10` — SQL injection
+
+                    The column name comes from an allow-list, never from the request.
+                    """)));
+
+    var declined = entryFor(entries, "SQL injection");
+    assertFalse(declined.holdsOpen());
+    assertEquals(
+        new ReviewResult.PreviousFindingStatus(
+            FollowUpAnalyzer.EARLIER_ROUND_ID,
+            "justified",
+            FollowUpAnalyzer.conversationDeclinedNote(BOT_ID),
+            new ReviewResult.EarlierRound(declined.finding(), null)),
+        declined.status());
+  }
+
+  /**
+   * The backstop path re-checks a conversation decline as the effective round's path does: a lone
+   * decline whose premise the reviewed code contradicts keeps the finding held, with the note
+   * telling the maintainer how to keep the decline.
+   */
+  @Test
+  void anEarlierRoundConversationDeclineTheCodeContradictsIsHeld() {
+    var held =
+        analyzer.heldPreviousFindings(
+            List.of(new ReviewResponse(RACE_PREVIOUS, List.of(), null)),
+            List.of(),
+            List.of(),
+            declinesRace(ASYNC_AFTER_ACK),
+            new DiffLineResolver(Map.of(PAUSE_FILE, patch(60))),
+            BOT_ID,
+            Map.of(),
+            () -> DISPATCHING_DIFF);
+
+    assertEquals(1, held.size());
+    assertTrue(held.get(0).holdsOpen());
+    assertEquals(1, held.get(0).status().id(), "a hold keeps the id its own round gave it");
+    var note = held.get(0).status().note();
+    assertTrue(note.startsWith(RebuttalContradiction.NOTE_LEAD_IN), note);
+    assertTrue(note.contains("A second @thrillhousebot declined comment"), note);
+  }
+
+  /** One directive naming the same defect raised in two rounds is one decline, not two. */
+  @Test
+  void oneConversationDeclineNamingTheSameDefectInTwoRoundsIsReCheckedOnce() {
+    var held =
+        analyzer.heldPreviousFindings(
+            List.of(
+                new ReviewResponse(RACE_PREVIOUS, List.of(), null),
+                new ReviewResponse(RACE_PREVIOUS, List.of(), null)),
+            List.of(),
+            List.of(),
+            declinesRace(ASYNC_AFTER_ACK),
+            new DiffLineResolver(Map.of(PAUSE_FILE, patch(60))),
+            BOT_ID,
+            Map.of(),
+            () -> DISPATCHING_DIFF);
+
+    assertEquals(1, held.size());
+    assertTrue(held.get(0).holdsOpen(), "a doubled count would read as the second reply");
+  }
+
+  // #958: a standing decline on an earlier round's thread resolves it and may become a learning.
+
+  /** A thread found only by its title (no marker) is not the finding's own thread by marker. */
+  @Test
+  void aStandingDeclineFoundOnlyByTitleCarriesNoThreadToResolve() {
+    var held =
+        analyzer.heldPreviousFindings(
+            List.of(new ReviewResponse(RACE_PREVIOUS, List.of(), null)),
+            List.of(),
+            raceThread("Accepted risk: GitHub retries the webhook and the insert fails loudly."),
+            List.of(),
+            new DiffLineResolver(Map.of(PAUSE_FILE, patch(60))),
+            BOT_ID,
+            Map.of(),
+            () -> DISPATCHING_DIFF);
+
+    assertEquals(1, held.size());
+    assertEquals("justified", held.get(0).status().status());
+    assertEquals(null, held.get(0).status().earlierRound().threadRootId());
+  }
+
+  private static final String RACE_STANDING_DECLINE =
+      "Accepted risk: the counter is advisory and a lost increment is harmless.";
+
+  private List<ReviewResult.PreviousFindingStatus> raceStatuses(String... replies) {
+    return raceBackstop(analyzer, earlierRaceThread(replies), () -> "+counter.bump();").stream()
+        .map(FollowUpAnalyzer.HeldPrevious::status)
+        .toList();
+  }
+
+  @Test
+  void aStandingEarlierRoundDeclineIsOfferedToTheLearningsFromItsOwnThread() {
+    var statuses = raceStatuses(RACE_STANDING_DECLINE);
+
+    var surviving =
+        analyzer.survivingEarlierRoundDeclines(
+            statuses, earlierRaceThread(RACE_STANDING_DECLINE), BOT_ID, () -> "+counter.bump();");
+
+    assertEquals(1, surviving.size());
+    var decline = surviving.get(0);
+    assertEquals("Race on shared counter", decline.finding().title());
+    assertEquals(RACE_STANDING_DECLINE, decline.reason());
+    assertEquals(101L, decline.sourceCommentId());
+    assertTrue(decline.onThread());
+    assertEquals(List.of("maintainer"), decline.contributors());
+  }
+
+  @Test
+  void anEarlierRoundDeclineIsLearnedOnlyUnderTheNewestRoundsRules() {
+    var threads = earlierRaceThread(RACE_STANDING_DECLINE);
+    var statuses = raceStatuses(RACE_STANDING_DECLINE);
+
+    assertTrue(
+        new FollowUpAnalyzer(new ObjectMapper(), false)
+            .survivingEarlierRoundDeclines(statuses, threads, BOT_ID, () -> "+counter.bump();")
+            .isEmpty(),
+        "with the re-check off nothing was re-checked, so nothing is remembered");
+    assertTrue(analyzer.survivingEarlierRoundDeclines(statuses, threads, BOT_ID, null).isEmpty());
+    assertTrue(
+        analyzer.survivingEarlierRoundDeclines(statuses, threads, BOT_ID, () -> " ").isEmpty());
+    var secondReply = earlierRaceThread(RACE_WRONG_DECLINE, "Still declining: it is serialized.");
+    assertTrue(
+        analyzer
+            .survivingEarlierRoundDeclines(
+                raceStatuses(RACE_WRONG_DECLINE, "Still declining: it is serialized."),
+                secondReply,
+                BOT_ID,
+                () -> "+counter.bump();")
+            .isEmpty(),
+        "a decline that stood only on the second reply rests on a refutable premise");
+  }
+
+  /** Id 0 alone never names a thread or a learning: only the thread the status carries does. */
+  @Test
+  void anIdZeroStatusWithoutItsOwnThreadNeverLearnsFromAnUnrelatedThread() {
+    var threads = earlierRaceThread(RACE_STANDING_DECLINE);
+    var finding = new ReviewResponse.Finding("high", "src/A.java", 10, "Race", "d", null, null);
+
+    assertTrue(
+        analyzer
+            .survivingEarlierRoundDeclines(
+                List.of(
+                    new ReviewResult.PreviousFindingStatus(
+                        FollowUpAnalyzer.EARLIER_ROUND_ID, "justified", "n"),
+                    new ReviewResult.PreviousFindingStatus(
+                        FollowUpAnalyzer.EARLIER_ROUND_ID,
+                        "justified",
+                        "n",
+                        new ReviewResult.EarlierRound(finding, null)),
+                    new ReviewResult.PreviousFindingStatus(
+                        FollowUpAnalyzer.EARLIER_ROUND_ID,
+                        "unresolved",
+                        "n",
+                        new ReviewResult.EarlierRound(finding, 100L))),
+                threads,
                 BOT_ID,
                 () -> "+counter.bump();")
             .isEmpty());

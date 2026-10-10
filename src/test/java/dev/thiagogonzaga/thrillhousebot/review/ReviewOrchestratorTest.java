@@ -6994,6 +6994,38 @@ class ReviewOrchestratorTest {
       verify(reviewThreadService, never()).resolve(AUTH, "T3");
     }
 
+    /**
+     * #958: an earlier round's standing decline names no finding by id, so its thread is the one it
+     * carries, never the effective round's finding 1 that id 0 or its round-relative id would name.
+     */
+    @Test
+    void shouldResolveAnEarlierRoundDeclineOnlyThroughItsOwnThread() {
+      var finding = new ReviewResponse.Finding("high", "f", 1, "t", "d", null, null);
+      var statuses =
+          List.of(
+              new ReviewResult.PreviousFindingStatus(
+                  FollowUpAnalyzer.EARLIER_ROUND_ID,
+                  "justified",
+                  "settled",
+                  new ReviewResult.EarlierRound(finding, 500L)),
+              new ReviewResult.PreviousFindingStatus(
+                  1, "justified", "settled", new ReviewResult.EarlierRound(finding, null)));
+      when(followUpAnalyzer.matchFindingThreads(
+              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
+          .thenReturn(Map.of(1, 100L));
+      when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5))
+          .thenReturn(
+              Map.of(
+                  100L, new ReviewThreadService.ThreadRef("T1", false),
+                  500L, new ReviewThreadService.ThreadRef("T5", false)));
+
+      reviewPublisher.resolveAddressedThreads(
+          AUTH, request(), List.of(), List.of(rootComment()), statuses);
+
+      verify(reviewThreadService).resolve(AUTH, "T5");
+      verify(reviewThreadService, never()).resolve(AUTH, "T1");
+    }
+
     @Test
     void shouldSkipFindingsWithoutAMatchedThread() {
       var statuses = List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed"));
