@@ -241,8 +241,7 @@ class SummaryAcrossRoundsTest {
           mock(FollowUpAnalyzer.class),
           mock(PrLabeler.class),
           configWithWriteBudget(),
-          BOT,
-          mock(PullRequestLabelGate.class));
+          BOT);
 
   /** A test PR (one file, +4) is over these thresholds, so only the #933 guard can silence it. */
   private final VerdictBuilder nudgingBuilder =

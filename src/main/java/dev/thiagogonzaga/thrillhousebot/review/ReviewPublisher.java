@@ -59,7 +59,6 @@ public class ReviewPublisher {
   private final PrLabeler labeler;
   private final ThrillhouseConfig config;
   private final BotIdentity botIdentity;
-  private final PullRequestLabelGate labelGate;
 
   @Inject
   public ReviewPublisher(
@@ -70,8 +69,7 @@ public class ReviewPublisher {
       FollowUpAnalyzer followUpAnalyzer,
       PrLabeler labeler,
       ThrillhouseConfig config,
-      BotIdentity botIdentity,
-      PullRequestLabelGate labelGate) {
+      BotIdentity botIdentity) {
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
     this.reviewThreadService = reviewThreadService;
@@ -80,20 +78,6 @@ public class ReviewPublisher {
     this.labeler = labeler;
     this.config = config;
     this.botIdentity = botIdentity;
-    this.labelGate = labelGate;
-  }
-
-  /**
-   * Asks the label gates, right before the first write, whether an automatic review may still post
-   * (#1021): a label added while it waited or ran stands it down, its check run concluded as
-   * skipped. The publisher makes that first write, so it is where the gate is asked; see {@link
-   * PullRequestLabelGate#standsDownBeforePublish}.
-   *
-   * @return whether the run was stood down and must not post
-   */
-  public boolean standsDownOnLabelGate(
-      String auth, ReviewOrchestrator.ReviewRequest req, long checkRunId, String detailsUrl) {
-    return labelGate.standsDownBeforePublish(auth, req, checkRunId, detailsUrl);
   }
 
   /**

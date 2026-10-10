@@ -31,12 +31,10 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
-import java.util.stream.Collectors;
 
 @ApplicationScoped
 public class ReviewOrchestrator {
@@ -112,9 +110,7 @@ public class ReviewOrchestrator {
 
   private final FindingFeedbackCaptureService findingFeedbackCapture;
 
-  private final ReviewSkipEmitter skipEmitter;
-
-  private final SupersededFindingsCarryover carryover;
+  private final ReviewStandDown standDown;
 
   private final CiHoldRegistry ciHoldRegistry;
 
@@ -236,8 +232,7 @@ public class ReviewOrchestrator {
       FindingPipeline findingPipeline,
       CitedLocationResolver citedLocationResolver,
       FindingFeedbackCaptureService findingFeedbackCapture,
-      ReviewSkipEmitter skipEmitter,
-      SupersededFindingsCarryover carryover,
+      ReviewStandDown standDown,
       CiHoldRegistry ciHoldRegistry,
       @ReviewExecutor ExecutorService reviewExecutor,
       ReviewNotifier notifier,
@@ -261,8 +256,7 @@ public class ReviewOrchestrator {
     this.findingPipeline = findingPipeline;
     this.citedLocationResolver = citedLocationResolver;
     this.findingFeedbackCapture = findingFeedbackCapture;
-    this.skipEmitter = skipEmitter;
-    this.carryover = carryover;
+    this.standDown = standDown;
     this.ciHoldRegistry = ciHoldRegistry;
     this.reviewExecutor = reviewExecutor;
     this.notifier = notifier;
@@ -374,27 +368,17 @@ public class ReviewOrchestrator {
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);
       String checkSummary = VerdictBuilder.checkSummaryForResult(result);
-      // #704: the model call can run for minutes; a push landing in that window supersedes this
-      // run (the dispatcher already queued a coalesced run for the new head). Re-read the head
-      // just before the first write and abandon the post when it moved, instead of posting a
-      // review — and resolving inline comments — against a diff that changed underneath it.
-      final var headReq = req;
-      var movedHead =
-          contextLoader.currentHeadSha(auth, req).filter(fresh -> headMoved(headReq, fresh));
-      if (movedHead.isPresent()) {
-        abandonSupersededRun(
-            auth,
-            req,
-            session,
-            checkRunId,
-            movedHead.get(),
-            findingsToCarry(ctx, aiResponse, result));
-        return false;
-      }
-      // #1021: a label added while the run waited or ran — Dependabot labels a pull request a
-      // second or two after opening it — is honoured before the first write, as a moved head is.
-      if (reviewPublisher.standsDownOnLabelGate(auth, req, checkRunId, sessionUrl(session))) {
-        closeLabelGatedSession(session);
+      // #704/#1021: the model call can run for minutes. A push landing in that window supersedes
+      // this run (the dispatcher already queued a coalesced run for the new head), and a label
+      // added meanwhile — Dependabot labels a pull request a second or two after opening it — can
+      // make a label gate reject it. Both are honoured just before the first write, instead of
+      // posting a review — and resolving inline comments — that no longer applies.
+      var stoodDown =
+          standDown.beforeFirstWrite(
+              new PrePublishGuard.Review(
+                  auth, req, checkRunId, sessionUrl(session), ctx, aiResponse, result));
+      if (stoodDown.isPresent()) {
+        closeStoodDownSession(session, stoodDown.get());
         return false;
       }
 
@@ -540,114 +524,17 @@ public class ReviewOrchestrator {
     return true;
   }
 
-  /** SKIPPED check-run title when the finished run's post was abandoned (#704). */
-  static final String SUPERSEDED_CHECK_TITLE = "Review superseded by a newer commit";
-
   /**
-   * Closes out the session of a run a label gate stood down before its first write (#1021). Unlike
-   * a superseded run nothing replaces it, so its findings are not carried anywhere. Visible for
-   * tests.
+   * Closes out the session of a run that stood down before its first write ({@link
+   * ReviewStandDown}). Nothing is posted for it, and the stand-down already handed a superseded
+   * run's findings to its replacement. Visible for tests.
    */
-  void closeLabelGatedSession(ReviewSession session) {
+  void closeStoodDownSession(ReviewSession session, PrePublishGuard.StandDown stoodDown) {
     try {
-      applyReviewFailure(session, "Skipped: a label gate rejects the pull request");
+      applyReviewFailure(session, stoodDown.sessionError());
     } catch (RuntimeException persistenceError) {
-      Log.warnf(persistenceError, "Failed to persist label-gated review session %d", session.id);
-    }
-    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.failed(session));
-  }
-
-  /**
-   * Whether the freshly read head names a different commit than the one this run reviewed. False
-   * when the run has no reviewed sha to compare against; a fresh read that failed never reaches
-   * here (fail-open — a finished review is never lost to its own guard). Visible for tests.
-   */
-  static boolean headMoved(ReviewRequest req, String freshHead) {
-    return req.commitSha() != null
-        && !req.commitSha().isBlank()
-        && !freshHead.equalsIgnoreCase(req.commitSha());
-  }
-
-  /**
-   * What a run that stands down hands to its replacement (#806): the findings it verified this
-   * round, plus any it was itself carrying that are still open on its verdict — a run superseded
-   * while replacing another must not lose the first run's findings a second time. A carried finding
-   * the run resolved, justified or superseded is settled and stays behind. The carried ones occupy
-   * the ids after the persisted round's own in {@link
-   * ReviewContextLoader.ReviewContext#previousFindingsList}, which is how they are told apart from
-   * findings a posted round already tracks.
-   */
-  static List<ReviewResponse.Finding> findingsToCarry(
-      ReviewContextLoader.ReviewContext ctx, ReviewResponse aiResponse, ReviewResult result) {
-    var previous = ctx.previousFindingsList();
-    var firstCarriedId = previous.size() - ctx.carried().findings().size() + 1;
-    var carry =
-        result.previousStatuses().stream()
-            .filter(
-                status ->
-                    status.id() >= firstCarriedId
-                        && status.id() <= previous.size()
-                        && "unresolved".equalsIgnoreCase(status.status()))
-            .map(ReviewResult.PreviousFindingStatus::id)
-            .distinct()
-            .map(id -> previous.get(id - 1))
-            .collect(Collectors.toCollection(ArrayList::new));
-    carry.addAll(aiResponse.findings());
-    return carry;
-  }
-
-  /**
-   * Retires a run whose head moved while it reviewed: counted as a structured skip, the check run
-   * on the reviewed (old) sha concluded as skipped, and the session closed out — nothing is posted
-   * to the PR and no user-facing error is raised, because the dispatcher's coalesced run for the
-   * new head re-reviews and posts in this run's place (#704). The run's verified findings are
-   * handed to that replacement rather than dropped with the post (#806). Visible for tests.
-   */
-  void abandonSupersededRun(
-      String auth,
-      ReviewRequest req,
-      ReviewSession session,
-      long checkRunId,
-      String freshHead,
-      List<ReviewResponse.Finding> verifiedFindings) {
-    carryover.stash(
-        req.owner(), req.repo(), req.prNumber(), req.commitSha(), freshHead, verifiedFindings);
-    skipEmitter.recordSkip(
-        ReviewSkipReason.HEAD_MOVED,
-        req.owner(),
-        req.repo(),
-        req.prNumber(),
-        "head moved from "
-            + req.commitSha()
-            + " to "
-            + freshHead
-            + " while the review ran — abandoning the post; the queued run for the new head"
-            + " replaces it");
-    if (checkRunId > 0) {
-      try {
-        checkRunManager.updateCheckRun(
-            new CheckRunManager.CheckRunUpdate(
-                auth,
-                req.owner(),
-                req.repo(),
-                checkRunId,
-                CHECK_STATUS_COMPLETED,
-                "skipped",
-                SUPERSEDED_CHECK_TITLE,
-                "The pull request head moved to "
-                    + freshHead
-                    + " while this review ran, so its"
-                    + " result was not posted. The review of the new head replaces it.",
-                sessionUrl(session)));
-      } catch (RuntimeException checkRunError) {
-        Log.warnf(checkRunError, "Failed to mark superseded check run %d as skipped", checkRunId);
-      }
-    }
-    try {
-      applyReviewFailure(
-          session, "Superseded: the PR head moved to " + freshHead + " during the review");
-    } catch (RuntimeException persistenceError) {
-      Log.warnf(persistenceError, "Failed to persist superseded review session %d", session.id);
+      Log.warnf(
+          persistenceError, "Failed to persist %s review session %d", stoodDown.kind(), session.id);
     }
     broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.failed(session));
   }

@@ -38,7 +38,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
 /** Unit tests for {@link PullRequestLabelGate}: the label read and the stand-down (#1021). */
 class PullRequestLabelGateTest {
@@ -61,56 +60,6 @@ class PullRequestLabelGateTest {
   private static PullRequestLabelGate.StandDown where(long checkRunId) {
     return new PullRequestLabelGate.StandDown(
         AUTH, "owner", "repo", 42, checkRunId, "https://bot.example/s", "the review of abc");
-  }
-
-  private static ReviewOrchestrator.ReviewRequest request(boolean manual) {
-    return new ReviewOrchestrator.ReviewRequest(
-        "owner", "repo", 42, "abc", "T", "", "base", "main", 1L, manual);
-  }
-
-  @Test
-  void anAutomaticRunARejectingGateStandsDown() {
-    when(triggerFilter.hasLabelGates()).thenReturn(true);
-    page(1, List.of(label("dependencies")));
-    when(triggerFilter.labelSkipReason(List.of("dependencies"))).thenReturn(Optional.of(EXCLUDED));
-
-    assertTrue(gate.standsDownBeforePublish(AUTH, request(false), 9L, "https://bot.example/s"));
-
-    assertEquals(1L, skipEmitter.countsByReason().get("EXCLUDED_LABEL"));
-    var update = ArgumentCaptor.forClass(CheckRunManager.CheckRunUpdate.class);
-    verify(checkRunManager).updateCheckRun(update.capture());
-    assertEquals(9L, update.getValue().checkRunId());
-    assertEquals("skipped", update.getValue().conclusion());
-    assertEquals(PullRequestLabelGate.CHECK_TITLE, update.getValue().title());
-    assertEquals(
-        "PR carries an excluded label (webhook.triggers label gates), so this result was not"
-            + " posted. A manual /review still reviews the pull request.",
-        update.getValue().summary());
-    assertEquals("https://bot.example/s", update.getValue().detailsUrl());
-  }
-
-  @Test
-  void aRunTheGatesAllowOrCannotJudgeIsNotStoodDown() {
-    when(triggerFilter.hasLabelGates()).thenReturn(true);
-    page(1, List.of(label("java")));
-
-    assertFalse(gate.standsDownBeforePublish(AUTH, request(false), 9L, "https://bot.example/s"));
-
-    when(labelClient.listIssueLabels(
-            anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
-        .thenThrow(new RuntimeException("labels down"));
-    assertFalse(gate.standsDownBeforePublish(AUTH, request(false), 9L, "https://bot.example/s"));
-    verifyNoInteractions(checkRunManager);
-    assertTrue(skipEmitter.countsByReason().isEmpty());
-  }
-
-  @Test
-  void aManualRunOrAnUnconfiguredGateReadsNothing() {
-    assertFalse(gate.standsDownBeforePublish(AUTH, request(false), 9L, "https://bot.example/s"));
-    when(triggerFilter.hasLabelGates()).thenReturn(true);
-    assertFalse(gate.standsDownBeforePublish(AUTH, request(true), 9L, "https://bot.example/s"));
-
-    verifyNoInteractions(labelClient);
   }
 
   @Test

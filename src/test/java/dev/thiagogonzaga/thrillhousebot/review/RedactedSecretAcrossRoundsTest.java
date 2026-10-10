@@ -251,8 +251,7 @@ class RedactedSecretAcrossRoundsTest {
             mock(FollowUpAnalyzer.class),
             mock(PrLabeler.class),
             mock(ThrillhouseConfig.class),
-            BOT,
-            mock(PullRequestLabelGate.class));
+            BOT);
     assertTrue(publisher.publishSummary("auth", "o", "r", 1, result, true));
     var captor = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
     verify(commentClient)

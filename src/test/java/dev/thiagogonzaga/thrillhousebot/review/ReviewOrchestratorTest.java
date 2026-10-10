@@ -176,8 +176,7 @@ class ReviewOrchestratorTest {
             followUpAnalyzer,
             labeler,
             config,
-            BOT_ID,
-            labelGate);
+            BOT_ID);
     verdictBuilder =
         new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID, BlockingStrictness.BALANCED);
     var budgetPlanner =
@@ -302,8 +301,11 @@ class ReviewOrchestratorTest {
         findingPipeline,
         new CitedLocationResolver(prClient),
         mock(FindingFeedbackCaptureService.class),
-        skipEmitter,
-        carryover,
+        new ReviewStandDown(
+            new HeadMovedGuard(newContextLoader(), carryover),
+            new LabelGateGuard(labelGate),
+            skipEmitter,
+            new CheckRunManager(checkRunClient)),
         ciHoldRegistry,
         reviewExecutor,
         notifier,
@@ -3642,59 +3644,25 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void headMovedComparesTheReviewedShaAgainstTheFreshHead() {
-      var req =
-          new ReviewOrchestrator.ReviewRequest(
-              "owner", "repo", 42, "abcdefgh", "T", "", "base", "main", 1L, false);
-      assertTrue(ReviewOrchestrator.headMoved(req, "other-sha"));
-      assertFalse(ReviewOrchestrator.headMoved(req, "ABCDEFGH"));
-      // No reviewed sha to compare against: never treated as moved.
-      var noSha =
-          new ReviewOrchestrator.ReviewRequest(
-              "owner", "repo", 42, "", "T", "", "base", "main", 1L, false);
-      assertFalse(ReviewOrchestrator.headMoved(noSha, "other-sha"));
-      var nullSha =
-          new ReviewOrchestrator.ReviewRequest(
-              "owner", "repo", 42, null, "T", "", "base", "main", 1L, false);
-      assertFalse(ReviewOrchestrator.headMoved(nullSha, "other-sha"));
-    }
-
-    @Test
-    void abandonSupersededRunSurvivesCheckRunAndPersistenceFailures() {
+    void closeStoodDownSessionSurvivesAPersistenceFailure() {
       var session = ReviewSession.create("owner/repo", 42, "T", "abcdefgh");
       session.id = 7L;
-      session.setPublicId("test-public-id");
-      var req =
-          new ReviewOrchestrator.ReviewRequest(
-              "owner", "repo", 42, "abcdefgh", "T", "", "base", "main", 1L, false);
-      doThrow(new RuntimeException("check run API down"))
-          .when(checkRunClient)
-          .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
       doThrow(new RuntimeException("db down")).when(sessionPersistence).update(anyLong(), any());
 
       assertDoesNotThrow(
           () ->
-              orchestrator.abandonSupersededRun(
-                  "Bearer tok", req, session, 1L, "movedsha", List.of()));
-      // And with no check run to conclude, the abandon still counts and broadcasts.
+              orchestrator.closeStoodDownSession(
+                  session,
+                  new PrePublishGuard.StandDown(
+                      ReviewSkipReason.HEAD_MOVED, "", "", "", "Superseded", "superseded")));
       assertDoesNotThrow(
           () ->
-              orchestrator.abandonSupersededRun(
-                  "Bearer tok", req, session, -1L, "movedsha", List.of()));
+              orchestrator.closeStoodDownSession(
+                  session,
+                  new PrePublishGuard.StandDown(
+                      ReviewSkipReason.EXCLUDED_LABEL, "", "", "", "Skipped", "label-gated")));
 
-      assertEquals(2L, skipEmitter.countsByReason().get("HEAD_MOVED"));
       verify(broadcaster, times(2)).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
-    }
-
-    @Test
-    void closeLabelGatedSessionSurvivesAPersistenceFailure() {
-      var session = ReviewSession.create("owner/repo", 42, "T", "abcdefgh");
-      session.id = 7L;
-      doThrow(new RuntimeException("db down")).when(sessionPersistence).update(anyLong(), any());
-
-      assertDoesNotThrow(() -> orchestrator.closeLabelGatedSession(session));
-
-      verify(broadcaster).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
     }
 
     @Test
@@ -8505,91 +8473,6 @@ class ReviewOrchestratorTest {
         assertEquals("APPROVE", posted.event());
         assertFalse(posted.body().contains("remain unresolved"), posted.body());
       }
-    }
-
-    @Test
-    void abandonSupersededRunHandsItsVerifiedFindingsToTheReplacement() {
-      var session = ReviewSession.create("owner/repo", 42, "T", "abcdefgh");
-      session.id = 7L;
-      session.setPublicId("test-public-id");
-      var req = requestFor("abcdefgh");
-
-      orchestrator.abandonSupersededRun(
-          "Bearer tok", req, session, 1L, "movedsha", List.of(VERIFIED_BY_SUPERSEDED_RUN));
-
-      var carried = carryover.take("owner", "repo", 42, "movedsha");
-      assertEquals("abcdefgh", carried.supersededSha());
-      assertEquals(List.of(VERIFIED_BY_SUPERSEDED_RUN), carried.findings());
-    }
-
-    /**
-     * A replacement that is itself superseded hands on its own findings plus the carried ones its
-     * verdict still holds open — and only those: a carried finding it resolved is settled, a
-     * persisted round's finding is tracked by that round, a duplicate id (model plus backstop) is
-     * carried once, and an id outside the round is ignored.
-     */
-    @Test
-    void findingsToCarryKeepsOwnFindingsAndTheCarriedOnesStillOpen() {
-      var posted = new ReviewResponse.Finding("low", "low", "a.java", 1, "Posted", "d", "x", "y");
-      var carriedA =
-          new ReviewResponse.Finding("high", "high", "b.java", 2, "Carried A", "d", "x", "y");
-      var carriedB =
-          new ReviewResponse.Finding("high", "high", "c.java", 3, "Carried B", "d", "x", "y");
-      var own = new ReviewResponse.Finding("medium", "high", "d.java", 4, "Own", "d", "x", "y");
-      var merged = new ReviewResponse(List.of(posted, carriedA, carriedB), List.of(), null);
-      var ctx =
-          new ReviewContextLoader.ReviewContext(
-              List.of(),
-              "diff",
-              "",
-              0,
-              List.of(),
-              List.of("{}"),
-              List.of(merged),
-              false,
-              true,
-              "{}",
-              List.of(),
-              "",
-              new InstructionsResolver.ResolvedInstructions("", ""),
-              PathScopedInstructions.NONE,
-              List.of(),
-              "",
-              "",
-              "",
-              "",
-              List.of(),
-              () -> new DiffLineResolver(Map.of()),
-              null,
-              List.of(),
-              List.of(),
-              new SupersededFindingsCarryover.Carried(
-                  "abcdefgh", "d4389d2aa", List.of(carriedA, carriedB)));
-      var result =
-          new ReviewResult(
-              List.of(),
-              0,
-              0,
-              0,
-              0,
-              null,
-              ReviewState.COMMENT,
-              false,
-              "",
-              List.of(
-                  new ReviewResult.PreviousFindingStatus(1, "unresolved", "posted round's own"),
-                  new ReviewResult.PreviousFindingStatus(2, "unresolved", "still open"),
-                  new ReviewResult.PreviousFindingStatus(2, "unresolved", "backstop duplicate"),
-                  new ReviewResult.PreviousFindingStatus(3, "resolved", "fixed on this head"),
-                  new ReviewResult.PreviousFindingStatus(99, "unresolved", "no such id")),
-              List.of(),
-              0);
-
-      var carry =
-          ReviewOrchestrator.findingsToCarry(
-              ctx, new ReviewResponse(List.of(own), List.of(), null), result);
-
-      assertEquals(List.of(carriedA, own), carry);
     }
   }
 
