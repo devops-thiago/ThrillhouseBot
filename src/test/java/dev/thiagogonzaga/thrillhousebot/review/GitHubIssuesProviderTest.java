@@ -22,6 +22,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -213,6 +214,67 @@ class GitHubIssuesProviderTest {
     }
 
     @Test
+    void aMidLineMarkerRunWithoutACloserIsText() {
+      // #1032: a run of three or more in the middle of a line is no fence.
+      for (var marker : List.of("```", "~~~", "````", "~~~~")) {
+        var body = "Prose mentioning " + marker + " mid-line.\n\nCloses #17";
+        assertEquals(List.of(17), GitHubIssuesProvider.bodyReferences(body, "owner", "repo"));
+      }
+      assertEquals(List.of(3), GitHubIssuesProvider.bodyReferences("a ``` b Closes #3", "o", "r"));
+    }
+
+    @Test
+    void aMidLineBacktickRunWithAMatchingCloserIsACodeSpan() {
+      assertEquals(
+          List.of(2),
+          GitHubIssuesProvider.bodyReferences("Prose ```Closes #1``` here. Fixes #2", "o", "r"));
+      // A closer of another width does not close it, so the run stays literal.
+      assertEquals(
+          List.of(1, 2),
+          GitHubIssuesProvider.bodyReferences("Prose ```Closes #1`` here. Fixes #2", "o", "r"));
+      // At a line start, a backtick in the would-be info string makes it a span, not a fence.
+      assertEquals(
+          List.of(2), GitHubIssuesProvider.bodyReferences("```Closes #1``` Fixes #2", "o", "r"));
+    }
+
+    @Test
+    void aFenceAtAValidLineStartStillHidesItsContents() {
+      for (var opener :
+          List.of(
+              "```", "   ```", "\t```", "> ```", ">```", "- ```", "* ~~~", "+ ```", "12. ```",
+              "3) ```", "> - ```")) {
+        var close = opener.contains("~") ? "~~~" : "```";
+        var body = "Intro.\n" + opener + "\nCloses #1\n" + close + "\nFixes #2";
+        assertEquals(List.of(2), GitHubIssuesProvider.bodyReferences(body, "o", "r"), opener);
+      }
+      // A tilde fence's info string may hold backticks.
+      assertEquals(
+          List.of(2),
+          GitHubIssuesProvider.bodyReferences("~~~ `x`\nCloses #1\n~~~\nFixes #2", "o", "r"));
+    }
+
+    @Test
+    void notEveryLineStartRunOpensOrClosesAFence() {
+      // Text before the marker, or a marker glued to it, opens no fence.
+      for (var opener : List.of("x ```", "-```", "a. ```", "1234567890. ```", "x - ```")) {
+        var body = opener + " Closes #1\n\nFixes #2";
+        assertEquals(List.of(1, 2), GitHubIssuesProvider.bodyReferences(body, "o", "r"), opener);
+      }
+      // Only a line holding a run at least as long as the opener, and nothing else, closes it.
+      var body = "````\nFixes #1\n```\n```` trailing text\nFixes #2\n`````  \nCloses #3";
+      assertEquals(List.of(3), GitHubIssuesProvider.bodyReferences(body, "o", "r"));
+      assertEquals(
+          List.of(4),
+          GitHubIssuesProvider.bodyReferences("~~~\nFixes #1\n```\n~~~\nCloses #4", "o", "r"));
+    }
+
+    @Test
+    void stripsLongRunsOfMidLineMarkersInOnePass() {
+      var body = "x ``` y ~~~ ".repeat(20_000) + "\n```x`\n".repeat(20_000) + "Closes #7";
+      assertEquals(List.of(7), GitHubIssuesProvider.bodyReferences(body, "o", "r"));
+    }
+
+    @Test
     void deduplicatesAndHandlesAnEmptyBody() {
       assertEquals(
           List.of(5), GitHubIssuesProvider.bodyReferences("Fixes #5. Closes #5", "o", "r"));
@@ -278,6 +340,22 @@ class GitHubIssuesProviderTest {
 
       assertEquals(List.of("#9"), keys(tickets));
       assertEquals(GitHubIssuesProvider.VIA_BRANCH, tickets.get(0).via());
+    }
+
+    @Test
+    void aReferenceAfterAMidLineMarkerLinksWhenTheFallbackHasNothing() throws Exception {
+      // #1032: the body is the only source when GitHub records no closing reference.
+      graphQl(links("main"));
+      for (var marker : List.of("```", "~~~")) {
+        var body = "Prose mentioning " + marker + " mid-line.\n\nCloses #17";
+        assertEquals(List.of("#17"), keys(provider.linkedTickets(lookup(body, false), 3)));
+      }
+      doThrow(new IllegalStateException("down")).when(graphQLClient).execute(anyString(), any());
+      assertEquals(
+          List.of("#17"),
+          keys(
+              provider.linkedTickets(
+                  lookup("Prose mentioning ``` mid-line.\n\nCloses #17", false), 3)));
     }
 
     @Test
