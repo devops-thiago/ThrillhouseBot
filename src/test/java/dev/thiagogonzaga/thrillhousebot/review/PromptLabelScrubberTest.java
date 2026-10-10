@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
@@ -968,9 +969,13 @@ class PromptLabelScrubberTest {
           the findings from this batch | the findings
           """)
   void scratchTextAndOtherStagesVocabularyAreRemoved(String leaked, String clean) {
-    var in = leaked.replace("\\n", "\n");
     var out = clean.replace("\\n", "\n");
-    assertEquals(out, PromptLabelScrubber.scrub(in));
+    var scrubbed = PromptLabelScrubber.scrub(leaked.replace("\\n", "\n"));
+    assertEquals(out, scrubbed);
+    // None of the working-note markers survives in the scrubbed text.
+    assertFalse(
+        scrubbed.matches("(?is).*(?:\\bwait,|\\brather,|\\bactually,|confirmed finding|batch).*"),
+        scrubbed);
     assertEquals(out, PromptLabelScrubber.scrub(out));
   }
 
