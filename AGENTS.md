@@ -180,8 +180,10 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
   no learning and is not model output, so it needs its own memory:
   `FollowUpAnalyzer.justifiedPriorFindings` hands every persisted `justified` scan finding to
   `SecurityScan.merge`, which does not raise a detection with the same file, title, anchor and, for
-  a secret, the same `<!-- thrillhousebot:scan-content=… -->` fingerprint (8 hex digits of a
-  SHA-256 over the rule and the stripped line). Each decline covers one detection
+  a secret, the same `<!-- thrillhousebot:scan-content=… -->` fingerprint (8 hex digits of an
+  HMAC-SHA-256 over the rule and the stripped line, keyed from the webhook secret by
+  `SecurityScan.fingerprintKey`, #985; a decline under the unkeyed 0.7.0 marker still matches
+  through `Detection.legacyFingerprint`). Each decline covers one detection
   (`DeclinedScanFindingAcrossRoundsTest`).
 - **The summary comment is found by its marker every round** (`<!-- thrillhousebot:summary -->`,
   or the heading for summaries from before #868), never by an id held in memory, so a restart
@@ -340,7 +342,8 @@ live `fence(...)` (#604).
   `SecurityScan.Scrubber` replaces every verbatim occurrence of a matched value in the same
   response's model findings, status notes and summary before it is persisted, posted or handed to
   the summary call. `SecurityScan` logs counts only. The cross-round `scan-content` marker (#982)
-  holds 8 hex digits of a SHA-256 over the rule and the line, never the line itself. Never log,
+  holds 8 hex digits of an HMAC-SHA-256 over the rule and the line, keyed so a reader cannot
+  test a guess against it (#985), never the line itself. Never log,
   persist or post `SecretScanner.Hit.literal()`, and keep test credentials generated at run time
   (`FakeCredentials`), never as literals.
 

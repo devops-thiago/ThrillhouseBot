@@ -835,9 +835,14 @@ finding stays declined: once a round has recorded the decline `justified`, the
 finding is not raised again while the rule matches the same content (same file,
 title and anchor, and for a secret the same line). A secret finding ends with a
 hidden `thrillhousebot:scan-content` marker holding the first eight hex digits
-of a SHA-256 of the flagged line (for a private key, its block), which is how a
-later round tells a new value with the same prefix and length from the declined
-one. A new value, or any other change to the line apart from leading and
+of an HMAC-SHA-256 of the flagged line (for a private key, its block), keyed
+from `GITHUB_WEBHOOK_SECRET`, which is how a later round tells a new value with
+the same prefix and length from the declined one. The key means a reader of the
+pull request cannot test a guessed value against the marker. The same secret
+gives the same marker across rounds and restarts; changing the webhook secret
+makes each declined secret finding come back once, and the next decline stores
+the new marker. A decline recorded under the unkeyed marker of 0.7.0 keeps
+matching its line. A new value, or any other change to the line apart from leading and
 trailing whitespace, is raised again. A secret finding declined before 0.7.0 has
 no fingerprint, so its decline holds only until the head moves; it is then
 raised once more, with the marker.

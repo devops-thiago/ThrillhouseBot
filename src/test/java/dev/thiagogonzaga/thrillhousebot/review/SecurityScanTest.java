@@ -905,10 +905,17 @@ class SecurityScanTest {
     when(security.iacEnabled()).thenReturn(false);
     when(security.entropyThreshold()).thenReturn(3.5);
     when(security.skippedFiles()).thenReturn(SKIPPED);
+    var github = mock(ThrillhouseConfig.GitHubConfig.class);
+    when(config.github()).thenReturn(github);
+    when(github.webhookSecret()).thenReturn("configured-webhook-secret");
     var configured = new SecurityScan(config);
     assertTrue(configured.enabled());
     assertTrue(
         configured.scan(List.of(added("pod.yaml", "  privileged: true"))).detections().isEmpty());
+    // #985: the fingerprint is keyed from the webhook secret.
+    assertEquals(
+        keyed("configured-webhook-secret").contentFingerprint(SecurityRule.JWT, "x"),
+        configured.contentFingerprint(SecurityRule.JWT, "x"));
   }
 
   @Test
@@ -1347,18 +1354,109 @@ class SecurityScanTest {
 
   @Test
   void theContentFingerprintNamesAMissingAlgorithm() {
+    var key = SecurityScan.fingerprintKey("s");
     var thrown =
         org.junit.jupiter.api.Assertions.assertThrows(
             IllegalStateException.class,
-            () -> SecurityScan.contentFingerprint("NO-SUCH-DIGEST", SecurityRule.JWT, "x"));
-    assertTrue(thrown.getMessage().contains("NO-SUCH-DIGEST"));
+            () -> SecurityScan.contentFingerprint("NO-SUCH-MAC", key, SecurityRule.JWT, "x"));
+    assertTrue(thrown.getMessage().contains("NO-SUCH-MAC"));
+    var legacy =
+        org.junit.jupiter.api.Assertions.assertThrows(
+            IllegalStateException.class,
+            () -> SecurityScan.legacyContentFingerprint("NO-SUCH-DIGEST", SecurityRule.JWT, "x"));
+    assertTrue(legacy.getMessage().contains("NO-SUCH-DIGEST"));
     assertEquals(
-        SecurityScan.contentFingerprint(SecurityRule.JWT, "x"),
-        SecurityScan.contentFingerprint("SHA-256", SecurityRule.JWT, "x"));
+        SecurityScan.legacyContentFingerprint(SecurityRule.JWT, "x"),
+        SecurityScan.legacyContentFingerprint("SHA-256", SecurityRule.JWT, "x"));
+    var s = keyed("s");
     assertNotEquals(
-        SecurityScan.contentFingerprint(SecurityRule.JWT, "x"),
-        SecurityScan.contentFingerprint(SecurityRule.GITHUB_TOKEN, "x"),
+        s.contentFingerprint(SecurityRule.JWT, "x"),
+        s.contentFingerprint(SecurityRule.GITHUB_TOKEN, "x"),
         "the rule is part of the fingerprint");
+  }
+
+  // --- #985: the fingerprint is keyed with the server's secret ---
+
+  private static SecurityScan keyed(String serverSecret) {
+    return new SecurityScan(true, false, 3.5, SKIPPED, serverSecret);
+  }
+
+  @Test
+  void theFingerprintIsStableForOneKeyAndChangesWithTheKey() {
+    var line = "T=" + fake.githubToken();
+    var first = keyed("webhook-secret-one").contentFingerprint(SecurityRule.GITHUB_TOKEN, line);
+    // A restart builds a new scan from the same secret.
+    assertEquals(
+        first, keyed("webhook-secret-one").contentFingerprint(SecurityRule.GITHUB_TOKEN, line));
+    assertNotEquals(
+        first, keyed("webhook-secret-two").contentFingerprint(SecurityRule.GITHUB_TOKEN, line));
+    // Without the key a reader cannot recompute it: the plain hash a guess would be tested with
+    // is not what is posted.
+    assertNotEquals(first, SecurityScan.legacyContentFingerprint(SecurityRule.GITHUB_TOKEN, line));
+    assertEquals(8, first.length());
+    assertEquals(
+        keyed(null).contentFingerprint(SecurityRule.JWT, "x"),
+        keyed("").contentFingerprint(SecurityRule.JWT, "x"),
+        "a missing secret still gives a key");
+  }
+
+  @Test
+  void thePostedMarkerIsTheKeyedFingerprint() {
+    var token = fake.githubToken();
+    var s = keyed("webhook-secret-one");
+    var raised =
+        s.merge(response(), s.scan(List.of(added("app.env", "T=" + token))), List.of(), Set.of())
+            .findings()
+            .get(0);
+    assertEquals(
+        s.contentFingerprint(SecurityRule.GITHUB_TOKEN, "T=" + token),
+        SecurityScan.fingerprintOf(raised.description()));
+  }
+
+  @Test
+  void aDeclineUnderTheUnkeyedMarkerKeepsMatchingAfterTheUpgrade() {
+    var token = fake.githubToken();
+    var line = "T=" + token;
+    var s = keyed("webhook-secret-one");
+    var keyedFinding =
+        s.merge(response(), s.scan(List.of(added("app.env", line))), List.of(), Set.of())
+            .findings()
+            .get(0);
+    var legacyMarker = SecurityScan.legacyContentFingerprint(SecurityRule.GITHUB_TOKEN, line);
+    var declinedBeforeUpgrade =
+        new ReviewResponse.Finding(
+            keyedFinding.risk(),
+            keyedFinding.confidence(),
+            keyedFinding.file(),
+            keyedFinding.line(),
+            keyedFinding.title(),
+            keyedFinding
+                .description()
+                .replace(SecurityScan.fingerprintOf(keyedFinding.description()), legacyMarker),
+            null,
+            null);
+    assertEquals(legacyMarker, SecurityScan.fingerprintOf(declinedBeforeUpgrade.description()));
+
+    // After a push, on the same content: still covered, so it is not raised again.
+    var files = List.of(added("app.env", "X=1", line));
+    assertTrue(
+        mergeAfterDecline(s, response(), files, List.of(), List.of(declinedBeforeUpgrade))
+            .findings()
+            .isEmpty());
+    // A rotated value is not.
+    var rotated = List.of(added("app.env", "X=1", "T=" + fake.githubToken()));
+    assertEquals(
+        1,
+        mergeAfterDecline(s, response(), rotated, List.of(), List.of(declinedBeforeUpgrade))
+            .findings()
+            .size());
+    // A decline recorded under another server's key does not match this one's content.
+    assertEquals(
+        1,
+        mergeAfterDecline(
+                keyed("webhook-secret-two"), response(), files, List.of(), List.of(keyedFinding))
+            .findings()
+            .size());
   }
 
   private static String stillDetectedNote() {
