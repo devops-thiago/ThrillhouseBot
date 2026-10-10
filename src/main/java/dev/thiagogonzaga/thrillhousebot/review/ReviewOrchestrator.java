@@ -579,9 +579,9 @@ public class ReviewOrchestrator {
    * Retires a run a label gate stopped before its first write: counted as a structured skip under
    * the gate's reason, the check run concluded as skipped and the session closed out, with nothing
    * posted to the pull request (#1021). Unlike a superseded run nothing replaces it, so its
-   * findings are not carried anywhere.
+   * findings are not carried anywhere. Visible for tests.
    */
-  private void abandonLabelGatedRun(
+  void abandonLabelGatedRun(
       String auth,
       ReviewRequest req,
       ReviewSession session,

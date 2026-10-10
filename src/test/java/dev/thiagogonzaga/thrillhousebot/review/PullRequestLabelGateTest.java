@@ -23,6 +23,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -66,6 +67,20 @@ class PullRequestLabelGateTest {
 
     assertEquals(101, labels.size());
     assertEquals("dependencies", labels.get(100));
+  }
+
+  @Test
+  void theReadStopsAtThePageCap() {
+    when(labelClient.listIssueLabels(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
+        .thenReturn(IntStream.range(0, 100).mapToObj(i -> label("l" + i)).toList());
+
+    var labels = gate.currentLabels(AUTH, "owner", "repo", 42).orElseThrow();
+
+    assertEquals(100 * PrLabeler.MAX_LABEL_PAGES, labels.size());
+    verify(labelClient, times(PrLabeler.MAX_LABEL_PAGES))
+        .listIssueLabels(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt());
   }
 
   @Test

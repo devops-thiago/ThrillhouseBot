@@ -3671,6 +3671,32 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void abandonLabelGatedRunSurvivesCheckRunAndPersistenceFailures() {
+      var session = ReviewSession.create("owner/repo", 42, "T", "abcdefgh");
+      session.id = 7L;
+      session.setPublicId("test-public-id");
+      var req =
+          new ReviewOrchestrator.ReviewRequest(
+              "owner", "repo", 42, "abcdefgh", "T", "", "base", "main", 1L, false);
+      var skip =
+          new ReviewTriggerFilter.Skip(
+              ReviewSkipReason.EXCLUDED_LABEL, "PR carries an excluded label");
+      doThrow(new RuntimeException("check run API down"))
+          .when(checkRunClient)
+          .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+      doThrow(new RuntimeException("db down")).when(sessionPersistence).update(anyLong(), any());
+
+      assertDoesNotThrow(
+          () -> orchestrator.abandonLabelGatedRun("Bearer tok", req, session, 1L, skip));
+      // And with no check run to conclude, the abandon still counts and broadcasts.
+      assertDoesNotThrow(
+          () -> orchestrator.abandonLabelGatedRun("Bearer tok", req, session, -1L, skip));
+
+      assertEquals(2L, skipEmitter.countsByReason().get("EXCLUDED_LABEL"));
+      verify(broadcaster, times(2)).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
+    }
+
+    @Test
     void shouldAbandonPostWhenHeadMovedDuringReview() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
