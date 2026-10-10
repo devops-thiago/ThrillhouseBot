@@ -1629,7 +1629,11 @@ public class FindingPipeline {
     }
     var adjusted = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     var changed = false;
-    for (ReviewResponse.Finding finding : response.findings()) {
+    for (ReviewResponse.Finding cited : response.findings()) {
+      // #1022: the diff's spelling of the path, persisted with the finding, so the thread GitHub
+      // resolves case-sensitively opens and later rounds compare against the same path.
+      var finding = lineResolver.withDiffPath(cited);
+      changed |= finding != cited;
       if (finding.suggestionOld() == null || finding.suggestionOld().isBlank()) {
         String fallback = lineResolver.getLineText(finding.file(), finding.line());
         if (fallback != null && !fallback.isBlank()) {

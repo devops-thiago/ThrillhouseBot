@@ -22,6 +22,7 @@ import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -287,6 +288,17 @@ public final class GitHubApiError {
    */
   static final Duration CONTENT_CREATION_BLOCK_MIN_DELAY = Duration.ofSeconds(30);
 
+  /**
+   * A JSON object with no object nested in it: each entry of an {@code errors} array, or the whole
+   * body when it has none. Flat, so it scans in linear time over the bounded logged body.
+   */
+  private static final Pattern JSON_OBJECT = Pattern.compile("\\{[^{}]*+}");
+
+  private static final Pattern MESSAGE_MEMBER =
+      Pattern.compile("\"message\"\\s*+:\\s*+\"([^\"]*+)\"");
+
+  private static final Pattern FIELD_MEMBER = Pattern.compile("\"field\"\\s*+:\\s*+\"([^\"]*+)\"");
+
   private final int status;
   private final String retryAfter;
   private final String rateLimitRemaining;
@@ -531,6 +543,33 @@ public final class GitHubApiError {
     append(text, "x-ratelimit-resource", rateLimitResource);
     var logged = body.logged();
     return text.append(" body=").append(logged.isEmpty() ? "<unavailable>" : logged).toString();
+  }
+
+  /**
+   * GitHub's own words for why it refused the call, short enough to name in a sentence: each {@code
+   * errors} entry's field (its last segment) and message — {@code path could not be resolved} — or,
+   * when the body lists none, its top-level {@code message}, or the status when nothing can be read
+   * (#1022). Read off the logged, already redacted body, so nothing here is text {@link
+   * #diagnostics()} would not show.
+   */
+  public String refusal() {
+    var parts = new LinkedHashSet<String>();
+    var objects = JSON_OBJECT.matcher(body.logged());
+    while (objects.find()) {
+      var message = stringMember(objects.group(), MESSAGE_MEMBER);
+      if (message.isEmpty()) {
+        continue;
+      }
+      var field = stringMember(objects.group(), FIELD_MEMBER);
+      var lastSegment = field.substring(field.lastIndexOf('.') + 1);
+      parts.add(lastSegment.isEmpty() ? message : lastSegment + " " + message);
+    }
+    return parts.isEmpty() ? "status=" + status : String.join("; ", parts);
+  }
+
+  private static String stringMember(String object, Pattern member) {
+    var matcher = member.matcher(object);
+    return matcher.find() ? matcher.group(1).strip() : "";
   }
 
   private static void append(StringBuilder text, String name, String value) {

@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A finding whose path differs from the diff's only in letter case is posted on the diff's path, and a finding left without a review thread is reported by its real cause** (#1022): on a submodule bump of `External/container` a finding cited `external/container`, and GitHub, which resolves review-thread paths case-sensitively, refused both its line thread and its file thread with "path could not be resolved". The closing warning then read "0 refused by GitHub's rate limit, after their retries ran out or unretried once the write-retry budget was spent", which looked like the review had run out of budget on a one-line pull request. A finding's path is now mapped onto the diff's spelling before it is persisted and posted, when exactly one changed file matches it ignoring case and none matches exactly, so later rounds compare against the same path. The warning names each cause that occurred: refused by GitHub with GitHub's own reason, rate-limited after the retries ran out, or rate-limited once the write-retry budget was spent. The review body names GitHub's reason for a refused finding and mentions the budget only when one of its findings was rate-limited. A file thread GitHub refuses with the right path, as it may for a submodule entry, still falls back to the review body.
+
 ### Security
 
 - Bumped Jackson (`jackson-bom`) from 2.22.2 to 2.22.3 (#914) for four advisories in the JSON parser the bot uses on webhook payloads and model responses: GHSA-7hhh-6rmp-j9qf (`jackson-core` error-token length not capped), GHSA-p6pp-m3f8-5c89 (`jackson-core` quadratic backtracking in float parsing), GHSA-cxp5-3px4-pw24 (`jackson-databind` quadratic forward-reference completion) and GHSA-wv8q-qhhj-9h54 (`jackson-databind` retaining every unknown raw type id)

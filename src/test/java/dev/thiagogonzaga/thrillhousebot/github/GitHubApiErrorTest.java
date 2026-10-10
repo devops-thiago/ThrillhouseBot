@@ -1159,4 +1159,46 @@ class GitHubApiErrorTest {
       assertTrue(GitHubApiError.of(noResponse).isEmpty());
     }
   }
+
+  /** #1022 — GitHub's own words for a refusal, short enough for a sentence. */
+  @Nested
+  class Refusal {
+
+    @Test
+    void namesEachErrorByTheLastSegmentOfItsFieldAndItsMessage() {
+      var pathRefused =
+          "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":"
+              + "\"PullRequestReviewComment\",\"code\":\"custom\",\"field\":"
+              + "\"pull_request_review_thread.path\",\"message\":\"could not be resolved\"}]}";
+
+      assertEquals(
+          "path could not be resolved", GitHubApiError.from(outbound(422, pathRefused)).refusal());
+    }
+
+    @Test
+    void joinsDistinctErrorsAndSkipsOnesWithNoMessage() {
+      var body =
+          "{\"message\":\"Validation Failed\",\"errors\":[{\"field\":\"a.line\",\"message\":"
+              + "\"could not be resolved\"},{\"field\":\"a.line\",\"message\":\"could not be"
+              + " resolved\"},{\"code\":\"missing\"},{\"message\":\"is invalid\"}]}";
+
+      assertEquals(
+          "line could not be resolved; is invalid",
+          GitHubApiError.from(inbound(422, body)).refusal());
+    }
+
+    @Test
+    void fallsBackToTheTopLevelMessageWhenTheBodyListsNoErrors() {
+      assertEquals(
+          "Resource not accessible by integration",
+          GitHubApiError.from(outbound(403, PERMISSION_BODY)).refusal());
+    }
+
+    @Test
+    void fallsBackToTheStatusWhenNothingCanBeRead() {
+      assertEquals(
+          "status=502", GitHubApiError.from(outbound(502, "<html>Bad gateway</html>")).refusal());
+      assertEquals("status=500", GitHubApiError.from(outbound(500, null)).refusal());
+    }
+  }
 }

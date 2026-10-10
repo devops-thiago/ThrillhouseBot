@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.Map;
 import java.util.OptionalInt;
 import java.util.stream.Stream;
@@ -919,5 +920,57 @@ class DiffLineResolverTest {
     assertTrue(range.isPresent());
     assertEquals(10, range.get().startLine());
     assertEquals(11, range.get().endLine());
+  }
+
+  // #1022: GitHub resolves a thread's path case-sensitively, so a cited path is posted at the
+  // diff's own spelling when the two differ only in case.
+
+  private static final String SUBMODULE_PATCH =
+      "@@ -1 +1 @@\n-Subproject commit 5f8c7cb\n+Subproject commit 498e11b";
+
+  @Test
+  void aPathDifferingOnlyInCaseTakesTheDiffSpelling() {
+    var resolver = new DiffLineResolver(Map.of("External/container", SUBMODULE_PATCH));
+
+    assertEquals("External/container", resolver.diffPathFor("external/container"));
+  }
+
+  @Test
+  void aPathTheDiffHoldsExactlyIsKeptEvenWhenAnotherFileDiffersOnlyInCase() {
+    var resolver = new DiffLineResolver(Map.of("docs/README.md", PATCH, "docs/readme.md", PATCH));
+
+    assertEquals("docs/readme.md", resolver.diffPathFor("docs/readme.md"));
+  }
+
+  @Test
+  void anAmbiguousOrUnknownPathIsLeftAsCited() {
+    var resolver = new DiffLineResolver(Map.of("docs/README.md", PATCH, "docs/readme.md", PATCH));
+
+    assertEquals("Docs/Readme.md", resolver.diffPathFor("Docs/Readme.md"));
+    assertEquals("other/file.md", resolver.diffPathFor("other/file.md"));
+    assertNull(resolver.diffPathFor(null));
+  }
+
+  @Test
+  void aFindingIsMovedOntoTheDiffSpellingAndKeepsEverythingElse() {
+    var resolver = new DiffLineResolver(Map.of("External/container", SUBMODULE_PATCH));
+    var cited =
+        new ReviewResponse.Finding(
+            "high", "high", "external/container", 1, "Title", "Desc", "old", "new");
+
+    assertEquals(
+        new ReviewResponse.Finding(
+            "high", "high", "External/container", 1, "Title", "Desc", "old", "new"),
+        resolver.withDiffPath(cited));
+  }
+
+  @Test
+  void aFindingAlreadyOnTheDiffSpellingIsReturnedAsIs() {
+    var resolver = new DiffLineResolver(Map.of("External/container", SUBMODULE_PATCH));
+    var cited =
+        new ReviewResponse.Finding(
+            "high", "high", "External/container", 1, "Title", "Desc", "old", "new");
+
+    assertSame(cited, resolver.withDiffPath(cited));
   }
 }
