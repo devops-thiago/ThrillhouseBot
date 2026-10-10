@@ -519,7 +519,7 @@ public class ReviewPublisher {
   private static List<String> skippedFindingsBodyParts(InlineCommentResult inline) {
     var parts = new ArrayList<String>();
     if (!inline.unanchored().isEmpty()) {
-      parts.add(unanchoredFindingsBody(inline.unanchored(), inline.throttled(), inline.refusals()));
+      parts.add(unanchoredFindingsBody(inline));
     }
     if (!inline.capSkipped().isEmpty()) {
       parts.add(capSkippedFindingsBody(inline.capSkipped()));
@@ -552,9 +552,13 @@ public class ReviewPublisher {
    * left out when none of the findings was throttled (#1022): a 422 that could not resolve the path
    * is not something a re-run or the budget changes, and a body that blamed the budget for it sent
    * the reader the wrong way.
+   *
+   * <p>A finding that names a file the pull request does not change, with no changed file its path
+   * could be mapped to, was never offered to GitHub, and the section says so (#925).
    */
-  private static String unanchoredFindingsBody(
-      List<Finding> findings, int throttled, Map<String, Integer> refusals) {
+  private static String unanchoredFindingsBody(InlineCommentResult inline) {
+    var findings = inline.unanchored();
+    var throttled = inline.throttled();
     var sb = new StringBuilder();
     sb.append("ThrillhouseBot found ")
         .append(findings.size())
@@ -587,13 +591,25 @@ public class ReviewPublisher {
                   + ". Without a thread they cannot be replied to, declined or resolved;"
                   + " re-running `/review` once GitHub stops throttling may post them._\n");
     }
-    refusals.forEach(
-        (refusal, count) ->
-            sb.append("\n_")
-                .append(count == findings.size() ? "All of these were" : count + " of these were")
-                .append(" refused by GitHub: `")
-                .append(MarkdownSafe.inlineCode(refusal))
-                .append("`._\n"));
+    var outside = inline.outsidePullRequest();
+    if (outside > 0) {
+      sb.append("\n_")
+          .append(outside == findings.size() ? "All of these name" : outside + " of these name")
+          .append(
+              " a file this pull request does not change, and no changed file matches that path,"
+                  + " so no thread was opened for them; the path is shown as the review gave"
+                  + " it._\n");
+    }
+    inline
+        .refusals()
+        .forEach(
+            (refusal, count) ->
+                sb.append("\n_")
+                    .append(
+                        count == findings.size() ? "All of these were" : count + " of these were")
+                    .append(" refused by GitHub: `")
+                    .append(MarkdownSafe.inlineCode(refusal))
+                    .append("`._\n"));
     return sb.toString();
   }
 
@@ -813,6 +829,9 @@ public class ReviewPublisher {
    * <p>{@code refusals} is the rest of {@code unanchored} by what GitHub said when it refused the
    * finding's last route — {@code path could not be resolved} — with how many findings it refused
    * that way, in the order they were met (#1022).
+   *
+   * <p>{@code outsidePullRequest} is how many of the {@code unanchored} findings name a file the
+   * pull request does not change, so no route was tried for them (#925).
    */
   record InlineCommentResult(
       int posted,
@@ -820,7 +839,8 @@ public class ReviewPublisher {
       List<Finding> capSkipped,
       List<Finding> confidenceSkipped,
       int throttled,
-      Map<String, Integer> refusals) {}
+      Map<String, Integer> refusals,
+      int outsidePullRequest) {}
 
   /**
    * Posts each finding as its own pull request review comment on the diff. Individual comments
@@ -843,6 +863,7 @@ public class ReviewPublisher {
     var unanchored = new ArrayList<Finding>();
     var capSkipped = new ArrayList<Finding>();
     var confidenceSkipped = new ArrayList<Finding>();
+    var outside = 0;
     var throttled = 0;
     var budgetSpent = 0;
     var refusals = new LinkedHashMap<String, Integer>();
@@ -862,24 +883,30 @@ public class ReviewPublisher {
           continue;
         }
         unanchored.add(finding);
-        if (delivery.outcome() == Outcome.REFUSED) {
-          refusals.merge(delivery.refusal(), 1, Integer::sum);
-        } else if (delivery.outcome() == Outcome.THROTTLED) {
-          throttled++;
-        } else {
-          budgetSpent++;
+        switch (delivery.outcome()) {
+          case REFUSED -> refusals.merge(delivery.refusal(), 1, Integer::sum);
+          case OUTSIDE_PULL_REQUEST -> outside++;
+          case THROTTLED -> throttled++;
+          default -> budgetSpent++;
         }
       }
     }
     logFindingsWithoutThread(
-        target, posted + unanchored.size(), unanchored.size(), throttled, budgetSpent, refusals);
+        target,
+        posted + unanchored.size(),
+        unanchored.size(),
+        outside,
+        throttled,
+        budgetSpent,
+        refusals);
     return new InlineCommentResult(
         posted,
         List.copyOf(unanchored),
         List.copyOf(capSkipped),
         List.copyOf(confidenceSkipped),
         throttled + budgetSpent,
-        Collections.unmodifiableMap(refusals));
+        Collections.unmodifiableMap(refusals),
+        outside);
   }
 
   /**
@@ -898,6 +925,7 @@ public class ReviewPublisher {
       CommentTarget target,
       int attempted,
       int withoutThread,
+      int outside,
       int throttled,
       int budgetSpent,
       Map<String, Integer> refusals) {
@@ -905,6 +933,9 @@ public class ReviewPublisher {
       return;
     }
     var causes = new ArrayList<String>();
+    if (outside > 0) {
+      causes.add(outside + " name a file this pull request does not change");
+    }
     refusals.forEach(
         (refusal, count) -> causes.add(count + " refused by GitHub: " + LogSafe.oneLine(refusal)));
     if (throttled > 0) {
@@ -933,6 +964,11 @@ public class ReviewPublisher {
     THREADED,
     /** GitHub refused the line and the file for the payload or the anchor. */
     REFUSED,
+    /**
+     * The finding names a path the pull request does not change and no changed file matched, so no
+     * route was tried (#925).
+     */
+    OUTSIDE_PULL_REQUEST,
     /** GitHub's rate limit refused it after its retries ran out; a re-run can post it (#919). */
     THROTTLED,
     /**
@@ -950,6 +986,8 @@ public class ReviewPublisher {
   private record Delivery(Outcome outcome, String refusal) {
 
     static final Delivery THREADED = new Delivery(Outcome.THREADED, null);
+
+    static final Delivery OUTSIDE_PULL_REQUEST = new Delivery(Outcome.OUTSIDE_PULL_REQUEST, null);
 
     static Delivery refused(Rejection rejection) {
       return new Delivery(Outcome.REFUSED, rejection.refusal());
@@ -1020,6 +1058,16 @@ public class ReviewPublisher {
   /** The routes themselves, in preference order. See {@link #postFindingComment}. */
   private Delivery postFindingCommentRoutes(
       CommentTarget target, Finding finding, int findingId, DiffLineResolver lineResolver) {
+    if (!lineResolver.isChangedFile(finding.file())) {
+      // #925: no changed file matched the path (FindingPipeline already mapped every one that
+      // did), and GitHub opens no thread, on a line or on the file, outside the pull request's own
+      // files; two requests it would refuse are not sent, and the review body says why instead.
+      Log.infof(
+          "Finding at %s:%d names no file this pull request changes — listing it in the review"
+              + " body without a thread",
+          LogSafe.oneLine(finding.file()), finding.line());
+      return Delivery.OUTSIDE_PULL_REQUEST;
+    }
     var line = lineResolver.resolveRightSideLine(finding.file(), finding.line());
     if (line.isEmpty()) {
       Log.debugf(
