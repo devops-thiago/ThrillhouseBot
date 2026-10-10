@@ -30,7 +30,10 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.WebApplicationException;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
@@ -532,7 +535,7 @@ public class ReviewPublisher {
   private static List<String> skippedFindingsBodyParts(InlineCommentResult inline) {
     var parts = new ArrayList<String>();
     if (!inline.unanchored().isEmpty()) {
-      parts.add(unanchoredFindingsBody(inline.unanchored(), inline.throttled()));
+      parts.add(unanchoredFindingsBody(inline.unanchored(), inline.throttled(), inline.refusals()));
     }
     if (!inline.capSkipped().isEmpty()) {
       parts.add(capSkippedFindingsBody(inline.capSkipped()));
@@ -560,13 +563,20 @@ public class ReviewPublisher {
    * the reason (#734). And a finding GitHub's rate limit refused is not a finding whose line or
    * file GitHub refused: it is the kind a re-run can post, so the section ends by saying how many
    * of its findings that was (#919).
+   *
+   * <p>A finding GitHub refused outright is named by what GitHub said, and the budget sentence is
+   * left out when none of the findings was throttled (#1022): a 422 that could not resolve the path
+   * is not something a re-run or the budget changes, and a body that blamed the budget for it sent
+   * the reader the wrong way.
    */
-  private static String unanchoredFindingsBody(List<Finding> findings, int throttled) {
+  private static String unanchoredFindingsBody(
+      List<Finding> findings, int throttled, Map<String, Integer> refusals) {
     var sb = new StringBuilder();
     sb.append("ThrillhouseBot found ")
         .append(findings.size())
         .append(" issue(s) GitHub accepted no review thread for");
     GitHubWriteBudget.exhausted()
+        .filter(_ -> throttled > 0)
         .ifPresent(
             budget ->
                 // The list mixes causes: a finding can be here because GitHub refused its line and
@@ -593,6 +603,13 @@ public class ReviewPublisher {
                   + ". Without a thread they cannot be replied to, declined or resolved;"
                   + " re-running `/review` once GitHub stops throttling may post them._\n");
     }
+    refusals.forEach(
+        (refusal, count) ->
+            sb.append("\n_")
+                .append(count == findings.size() ? "All of these were" : count + " of these were")
+                .append(" refused by GitHub: `")
+                .append(MarkdownSafe.inlineCode(refusal))
+                .append("`._\n"));
     return sb.toString();
   }
 
@@ -808,13 +825,18 @@ public class ReviewPublisher {
    * — until the retries ran out, or on the only attempt once the review's write-retry budget was
    * spent — as opposed to refusing their line and their file (#919). Those are the ones a re-run
    * can post, so the review body says so.
+   *
+   * <p>{@code refusals} is the rest of {@code unanchored} by what GitHub said when it refused the
+   * finding's last route — {@code path could not be resolved} — with how many findings it refused
+   * that way, in the order they were met (#1022).
    */
   record InlineCommentResult(
       int posted,
       List<Finding> unanchored,
       List<Finding> capSkipped,
       List<Finding> confidenceSkipped,
-      int throttled) {}
+      int throttled,
+      Map<String, Integer> refusals) {}
 
   /**
    * Posts each finding as its own pull request review comment on the diff. Individual comments
@@ -838,6 +860,8 @@ public class ReviewPublisher {
     var capSkipped = new ArrayList<Finding>();
     var confidenceSkipped = new ArrayList<Finding>();
     var throttled = 0;
+    var budgetSpent = 0;
+    var refusals = new LinkedHashMap<String, Integer>();
     var maxComments = config.review().maxReviewComments();
     for (var i = 0; i < result.findings().size(); i++) {
       // The 1-based index doubles as the finding's id in the persisted response and the hidden
@@ -849,21 +873,29 @@ public class ReviewPublisher {
         capSkipped.add(finding);
       } else {
         var delivery = postFindingComment(target, finding, i + 1, lineResolver);
-        if (delivery == Delivery.THREADED) {
+        if (delivery.outcome() == Outcome.THREADED) {
           posted++;
+          continue;
+        }
+        unanchored.add(finding);
+        if (delivery.outcome() == Outcome.REFUSED) {
+          refusals.merge(delivery.refusal(), 1, Integer::sum);
+        } else if (delivery.outcome() == Outcome.THROTTLED) {
+          throttled++;
         } else {
-          unanchored.add(finding);
-          throttled += delivery == Delivery.THROTTLED ? 1 : 0;
+          budgetSpent++;
         }
       }
     }
-    logFindingsWithoutThread(target, posted + unanchored.size(), unanchored.size(), throttled);
+    logFindingsWithoutThread(
+        target, posted + unanchored.size(), unanchored.size(), throttled, budgetSpent, refusals);
     return new InlineCommentResult(
         posted,
         List.copyOf(unanchored),
         List.copyOf(capSkipped),
         List.copyOf(confidenceSkipped),
-        throttled);
+        throttled + budgetSpent,
+        Collections.unmodifiableMap(refusals));
   }
 
   /**
@@ -871,30 +903,80 @@ public class ReviewPublisher {
    * per-route warnings name each refusal as it happens, but twelve reviews interleave them in the
    * log, and the round-9 count — 42 findings with no thread across twelve pull requests — had to be
    * reassembled from them by hand.
+   *
+   * <p>The line names each cause that occurred and only those (#1022). It used to append the
+   * rate-limit clause, retry budget and all, to every count, so a single 422 path refusal on a
+   * one-line pull request read "0 refused by GitHub's rate limit, after their retries ran out or
+   * unretried once the write-retry budget was spent" — a budget that was never touched, standing in
+   * for a refusal stated only on the line before.
    */
   private static void logFindingsWithoutThread(
-      CommentTarget target, int attempted, int withoutThread, int throttled) {
+      CommentTarget target,
+      int attempted,
+      int withoutThread,
+      int throttled,
+      int budgetSpent,
+      Map<String, Integer> refusals) {
     if (withoutThread == 0) {
       return;
     }
+    var causes = new ArrayList<String>();
+    refusals.forEach(
+        (refusal, count) -> causes.add(count + " refused by GitHub: " + LogSafe.oneLine(refusal)));
+    if (throttled > 0) {
+      causes.add(throttled + " rate-limited by GitHub after their retries ran out");
+    }
+    if (budgetSpent > 0) {
+      causes.add(
+          budgetSpent
+              + " rate-limited by GitHub once the review's write-retry budget was spent, so not"
+              + " retried further");
+    }
     Log.warnf(
-        "%d of %d finding(s) on %s/%s #%d ended without a review thread (%d refused by GitHub's"
-            + " rate limit, after their retries ran out or unretried once the write-retry budget"
-            + " was spent) — the review body lists them",
-        withoutThread, attempted, target.owner(), target.repo(), target.prNumber(), throttled);
+        "%d of %d finding(s) on %s/%s #%d ended without a review thread (%s) — the review body"
+            + " lists them",
+        withoutThread,
+        attempted,
+        target.owner(),
+        target.repo(),
+        target.prNumber(),
+        String.join("; ", causes));
   }
 
   /** How one finding's routes ended. */
-  private enum Delivery {
+  private enum Outcome {
     /** A thread opened, on the finding's line or on its file. */
     THREADED,
     /** GitHub refused the line and the file for the payload or the anchor. */
     REFUSED,
+    /** GitHub's rate limit refused it after its retries ran out; a re-run can post it (#919). */
+    THROTTLED,
     /**
-     * GitHub's rate limit refused it, after its retries or unretried once the review's write-retry
-     * budget was spent; a re-run can post it (#919).
+     * GitHub's rate limit refused it once the review's write-retry budget was spent, so it was not
+     * retried further (#734); a re-run can post it.
      */
-    THROTTLED
+    BUDGET_SPENT
+  }
+
+  /**
+   * One finding's delivery: how its routes ended and, for a refusal, what GitHub said about the
+   * last one ({@link GitHubApiError#refusal()}), which the review's closing warning and its body
+   * name (#1022).
+   */
+  private record Delivery(Outcome outcome, String refusal) {
+
+    static final Delivery THREADED = new Delivery(Outcome.THREADED, null);
+
+    static Delivery refused(Rejection rejection) {
+      return new Delivery(Outcome.REFUSED, rejection.refusal());
+    }
+
+    /** A throttle, told apart by whether the review's write-retry budget was spent by then. */
+    static Delivery throttled() {
+      return new Delivery(
+          GitHubWriteBudget.exhausted().isPresent() ? Outcome.BUDGET_SPENT : Outcome.THROTTLED,
+          null);
+    }
   }
 
   /** PR coordinates shared by every inline comment of one review. */
@@ -1032,7 +1114,7 @@ public class ReviewPublisher {
             + " retries ran out or the review's write-retry budget was spent; not falling back to"
             + " another route, which the same limit would refuse, so the finding keeps no thread",
         LogSafe.oneLine(finding.file()), finding.line(), reason);
-    return Delivery.THROTTLED;
+    return Delivery.throttled();
   }
 
   /**
@@ -1040,11 +1122,16 @@ public class ReviewPublisher {
    * than a refusal of the payload or the anchor — the one thing that decides whether the next route
    * is worth trying (#919).
    */
-  private record Rejection(String diagnostics, boolean throttled) {
+  private record Rejection(String diagnostics, boolean throttled, String refusal) {
 
     static Rejection of(RuntimeException e) {
+      var apiError = apiError(e);
       return new Rejection(
-          rejectionReason(e), apiError(e).filter(GitHubApiError::isThrottled).isPresent());
+          rejectionReason(e),
+          apiError.filter(GitHubApiError::isThrottled).isPresent(),
+          apiError
+              .map(GitHubApiError::refusal)
+              .orElseGet(() -> "no response (" + e.getClass().getSimpleName() + ")"));
     }
 
     /**
@@ -1112,7 +1199,7 @@ public class ReviewPublisher {
       Log.warnf(
           "GitHub rejected the file-level thread for %s (%s) — the finding keeps no thread at all",
           LogSafe.oneLine(finding.file()), rejection.diagnostics());
-      return rejection.throttled() ? Delivery.THROTTLED : Delivery.REFUSED;
+      return rejection.throttled() ? Delivery.throttled() : Delivery.refused(rejection);
     }
   }
 
