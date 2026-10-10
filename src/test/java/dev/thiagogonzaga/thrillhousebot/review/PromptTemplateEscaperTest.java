@@ -45,8 +45,9 @@ class PromptTemplateEscaperTest {
     assertEquals(opening, PromptTemplateEscaper.unfence(opening));
     var mismatched = opening + "\nx\n" + otherClosing;
     assertEquals(mismatched, PromptTemplateEscaper.unfence(mismatched));
-    var unclosedToken = "[[THRILLHOUSEBOT-UNTRUSTED-DATA-ab\nx\n[[THRILLHOUSEBOT-UNTRUSTED-DATA-ab";
-    assertEquals(unclosedToken, PromptTemplateEscaper.unfence(unclosedToken));
+    var unclosedFenceLine = PromptTemplateEscaper.fencePrefix() + "ab";
+    var unclosed = unclosedFenceLine + "\nx\n" + unclosedFenceLine;
+    assertEquals(unclosed, PromptTemplateEscaper.unfence(unclosed));
   }
 
   @Test

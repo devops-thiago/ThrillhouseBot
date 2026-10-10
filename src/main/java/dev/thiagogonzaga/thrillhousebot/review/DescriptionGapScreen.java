@@ -81,6 +81,13 @@ final class DescriptionGapScreen {
               + "|acceptance criteri\\w*|claim\\w*|promis\\w*|stated|mention\\w*|narrower)\\b"
               + "|^\\s*+(?:states|says)\\b");
 
+  /**
+   * What ends a clause before a quote: punctuation that separates clauses, a sentence end, or a
+   * contrasting conjunction. A colon does not: "the description states: '…'" attributes the quote.
+   */
+  private static final Pattern CLAUSE_BREAK =
+      Pattern.compile("(?i)[,;!?\u2014\u2013]|\\.\\s|\\b(?:but|while|whereas|however)\\b");
+
   /** An editorial bracket holding one or two letters, as in "[t]he". */
   private static final Pattern EDITORIAL_LETTERS = Pattern.compile("\\[(\\p{L}{1,2})]");
 
@@ -126,7 +133,8 @@ final class DescriptionGapScreen {
     var quotes = QUOTED.matcher(text);
     var since = 0;
     while (quotes.find()) {
-      var lead = text.substring(Math.max(since, quotes.start() - CUE_WINDOW), quotes.start());
+      var lead =
+          clauseOf(text.substring(Math.max(since, quotes.start() - CUE_WINDOW), quotes.start()));
       since = quotes.end();
       var quote = quotes.group(1) != null ? quotes.group(1) : quotes.group(2);
       if (CLAIM_CUE.matcher(lead).find() && judged(quote) && !appearsIn(quote, normalizedSource)) {
@@ -136,10 +144,23 @@ final class DescriptionGapScreen {
     return false;
   }
 
+  /**
+   * The part of {@code lead} after its last clause break, so a cue in an earlier clause ("the
+   * description says X, while the code reads '…'") does not attribute the quote to the description.
+   */
+  private static String clauseOf(String lead) {
+    var breaks = CLAUSE_BREAK.matcher(lead);
+    var start = 0;
+    while (breaks.find()) {
+      start = breaks.end();
+    }
+    return lead.substring(start);
+  }
+
   /** Whether a quote has enough words to be judged. */
   private static boolean judged(String quote) {
     var words = normalize(joinEditorialLetters(quote));
-    return !words.isEmpty() && words.split(" ").length >= MIN_QUOTE_WORDS;
+    return words.split(" ").length >= MIN_QUOTE_WORDS;
   }
 
   /**

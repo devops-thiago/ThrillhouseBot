@@ -70,6 +70,22 @@ class DescriptionGapScreenTest {
   }
 
   @Test
+  void aCueInAnEarlierClauseDoesNotAttributeTheQuote() {
+    var gap =
+        "The description says the README moves unchanged, while the change's rename reads"
+            + " 'docs/RUST-V15.md is the new home'.";
+
+    assertEquals(List.of(gap), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
+  }
+
+  @Test
+  void aColonKeepsTheCueWithItsQuote() {
+    var gap = "The description states: 'the README moves to docs/RUST-V8.md'.";
+
+    assertEquals(List.of(), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
+  }
+
+  @Test
   void curlyQuotesAndCaseAreFoldedBeforeTheQuoteIsLookedUp() {
     var kept = "The PR description states “THE README MOVES TO docs/RUST-V10.md”.";
     var dropped = "The PR description states ‘the README moves to docs/RUST-V8.md’.";

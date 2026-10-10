@@ -140,12 +140,7 @@ final class SummarySurfaceDeduplicator {
    * the Description vs. Implementation section can name them instead of saying they exist.
    */
   record Surfaces(
-      List<String> descriptionGaps, Map<String, String> fileSummaries, List<Finding> gapFindings) {
-
-    Surfaces(List<String> descriptionGaps, Map<String, String> fileSummaries) {
-      this(descriptionGaps, fileSummaries, List.of());
-    }
-  }
+      List<String> descriptionGaps, Map<String, String> fileSummaries, List<Finding> gapFindings) {}
 
   /**
    * What one finding publishes, as claims to match other surfaces against: its title on both arms,

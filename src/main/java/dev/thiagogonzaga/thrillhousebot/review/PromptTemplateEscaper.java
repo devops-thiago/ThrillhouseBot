@@ -91,7 +91,7 @@ public final class PromptTemplateEscaper {
     }
     var firstBreak = fenced.indexOf('\n');
     var lastBreak = fenced.lastIndexOf('\n');
-    if (firstBreak < 0 || firstBreak == lastBreak || !fenced.startsWith(FENCE_PREFIX)) {
+    if (firstBreak == lastBreak || !fenced.startsWith(FENCE_PREFIX)) {
       return fenced;
     }
     var opening = fenced.substring(0, firstBreak);
