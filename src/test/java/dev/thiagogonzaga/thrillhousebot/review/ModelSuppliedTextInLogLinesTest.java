@@ -211,7 +211,8 @@ class ModelSuppliedTextInLogLinesTest {
             mock(FollowUpAnalyzer.class),
             mock(PrLabeler.class),
             config,
-            BotIdentity.of("thrillhousebot"));
+            BotIdentity.of("thrillhousebot"),
+            mock(PullRequestLabelGate.class));
     var result =
         new ReviewResult(
             List.of(

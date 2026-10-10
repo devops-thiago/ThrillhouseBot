@@ -176,7 +176,8 @@ class ReviewOrchestratorTest {
             followUpAnalyzer,
             labeler,
             config,
-            BOT_ID);
+            BOT_ID,
+            labelGate);
     verdictBuilder =
         new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID, BlockingStrictness.BALANCED);
     findingPipeline =
@@ -296,7 +297,6 @@ class ReviewOrchestratorTest {
         new CitedLocationResolver(prClient),
         mock(FindingFeedbackCaptureService.class),
         skipEmitter,
-        labelGate,
         carryover,
         ciHoldRegistry,
         reviewExecutor,

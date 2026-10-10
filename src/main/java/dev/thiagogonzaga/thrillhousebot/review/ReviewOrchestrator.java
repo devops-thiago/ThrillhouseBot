@@ -113,7 +113,6 @@ public class ReviewOrchestrator {
   private final FindingFeedbackCaptureService findingFeedbackCapture;
 
   private final ReviewSkipEmitter skipEmitter;
-  private final PullRequestLabelGate labelGate;
 
   private final SupersededFindingsCarryover carryover;
 
@@ -238,7 +237,6 @@ public class ReviewOrchestrator {
       CitedLocationResolver citedLocationResolver,
       FindingFeedbackCaptureService findingFeedbackCapture,
       ReviewSkipEmitter skipEmitter,
-      PullRequestLabelGate labelGate,
       SupersededFindingsCarryover carryover,
       CiHoldRegistry ciHoldRegistry,
       @ReviewExecutor ExecutorService reviewExecutor,
@@ -264,7 +262,6 @@ public class ReviewOrchestrator {
     this.citedLocationResolver = citedLocationResolver;
     this.findingFeedbackCapture = findingFeedbackCapture;
     this.skipEmitter = skipEmitter;
-    this.labelGate = labelGate;
     this.carryover = carryover;
     this.ciHoldRegistry = ciHoldRegistry;
     this.reviewExecutor = reviewExecutor;
@@ -396,7 +393,7 @@ public class ReviewOrchestrator {
       }
       // #1021: a label added while the run waited or ran — Dependabot labels a pull request a
       // second or two after opening it — is honoured before the first write, as a moved head is.
-      if (labelGate.standsDownBeforePublish(auth, req, checkRunId, sessionUrl(session))) {
+      if (reviewPublisher.standsDownOnLabelGate(auth, req, checkRunId, sessionUrl(session))) {
         closeLabelGatedSession(session);
         return false;
       }
