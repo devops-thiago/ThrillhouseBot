@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -70,6 +71,12 @@ class ThrottledInlineCommentTest {
   private static final String UNRESOLVABLE_LINE_BODY =
       "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":\"PullRequestReviewComment\","
           + "\"code\":\"custom\",\"field\":\"pull_request_review_thread.line\","
+          + "\"message\":\"could not be resolved\"}]}";
+
+  /** The refusal of the path itself, as SiliconShip #430 logged it for a submodule entry. */
+  private static final String UNRESOLVABLE_PATH_BODY =
+      "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":\"PullRequestReviewComment\","
+          + "\"code\":\"custom\",\"field\":\"pull_request_review_thread.path\","
           + "\"message\":\"could not be resolved\"}]}";
 
   private static final String WITH_SUGGESTION = "the finding, with its suggestion";
@@ -136,31 +143,11 @@ class ThrottledInlineCommentTest {
   @Test
   void aThrottleThatOutlastsEveryRetryTakesNoFallbackRouteAndIsReported() {
     reviewClient.refuse = attempt -> throttled();
-    var warnings = new CopyOnWriteArrayList<String>();
-    var logger = Logger.getLogger(ReviewPublisher.class.getName());
-    var capture =
-        new Handler() {
-          @Override
-          public void publish(LogRecord entry) {
-            warnings.add(entry.getMessage());
-          }
-
-          @Override
-          public void flush() {
-            // Nothing is buffered.
-          }
-
-          @Override
-          public void close() {
-            // Nothing to release.
-          }
-        };
-    logger.addHandler(capture);
-    try {
-      publisher.postReview("Bearer tok", "owner", "repo", prNumber, "sha", result(), resolver());
-    } finally {
-      logger.removeHandler(capture);
-    }
+    var warnings =
+        publisherLogs(
+            () ->
+                publisher.postReview(
+                    "Bearer tok", "owner", "repo", prNumber, "sha", result(), resolver()));
 
     // Four attempts, all at the line with the suggestion: GitHubWriteRetry.MAX_ATTEMPTS, and
     // nothing after them.
@@ -179,10 +166,77 @@ class ThrottledInlineCommentTest {
         List.of(
             "1 of 1 finding(s) on owner/repo #"
                 + prNumber
-                + " ended without a review thread (1 refused by GitHub's rate limit, after their"
-                + " retries ran out or unretried once the write-retry budget was spent) — the"
-                + " review body lists them"),
+                + " ended without a review thread (1 rate-limited by GitHub after their retries"
+                + " ran out) — the review body lists them"),
         summaries.toList());
+  }
+
+  /**
+   * #1022 — GitHub refuses the line and then the file because it cannot resolve the path, as it did
+   * for a submodule entry on SiliconShip #430. The finding still reaches the review body, and both
+   * the closing warning and the body name the refusal rather than the rate limit or a retry budget
+   * nothing touched.
+   */
+  @Test
+  void aPathRefusalOnEveryRouteIsNamedAsTheRefusalNotTheBudget() {
+    reviewClient.refuse = attempt -> unresolvablePath();
+
+    var warnings =
+        publisherLogs(
+            () ->
+                publisher.postReview(
+                    "Bearer tok", "owner", "repo", prNumber, "sha", result(), resolver()));
+
+    assertEquals(3, reviewClient.attempts.size(), () -> "attempts: " + reviewClient.attempts);
+    assertTrue(reviewClient.attempts.getLast().fileLevel(), "the file-level route was tried");
+    assertEquals(List.of(), reviewClient.landed);
+
+    var body = reviewClient.reviewBodies.getLast();
+    assertTrue(body.contains("1 issue(s) GitHub accepted no review thread for:"), body);
+    assertTrue(body.contains("Bug"), body);
+    assertTrue(
+        body.contains("All of these were refused by GitHub: `path could not be resolved`."), body);
+    assertFalse(body.contains("budget"), body);
+    assertFalse(body.contains("rate limit"), body);
+
+    var summaries =
+        warnings.stream().filter(m -> m.contains("ended without a review thread")).toList();
+    assertEquals(
+        List.of(
+            "1 of 1 finding(s) on owner/repo #"
+                + prNumber
+                + " ended without a review thread (1 refused by GitHub: path could not be"
+                + " resolved) — the review body lists them"),
+        summaries);
+  }
+
+  /** Each cause gets its own clause; a refusal and a throttle in one review are both named. */
+  @Test
+  void theClosingWarningNamesARefusalAndAThrottleSeparately() {
+    // The first finding's four attempts are throttled; every route of the second is refused.
+    reviewClient.refuse = attempt -> attempt <= 4 ? throttled() : unresolvablePath();
+    var second = new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Other bug", "desc", null, null);
+
+    var warnings =
+        publisherLogs(
+            () ->
+                publisher.postReview(
+                    "Bearer tok",
+                    "owner",
+                    "repo",
+                    prNumber,
+                    "sha",
+                    result(finding, second),
+                    resolver()));
+
+    assertTrue(
+        warnings.contains(
+            "2 of 2 finding(s) on owner/repo #"
+                + prNumber
+                + " ended without a review thread (1 refused by GitHub: path could not be"
+                + " resolved; 1 rate-limited by GitHub after their retries ran out) — the review"
+                + " body lists them"),
+        () -> "warnings: " + warnings);
   }
 
   /**
@@ -302,6 +356,40 @@ class ThrottledInlineCommentTest {
 
   private static WebApplicationException unresolvable() {
     return new WebApplicationException(Response.status(422).entity(UNRESOLVABLE_LINE_BODY).build());
+  }
+
+  private static WebApplicationException unresolvablePath() {
+    return new WebApplicationException(Response.status(422).entity(UNRESOLVABLE_PATH_BODY).build());
+  }
+
+  /** The messages {@link ReviewPublisher} logged while {@code work} ran. */
+  private static List<String> publisherLogs(Runnable work) {
+    var messages = new CopyOnWriteArrayList<String>();
+    var logger = Logger.getLogger(ReviewPublisher.class.getName());
+    var capture =
+        new Handler() {
+          @Override
+          public void publish(LogRecord entry) {
+            messages.add(entry.getMessage());
+          }
+
+          @Override
+          public void flush() {
+            // Nothing is buffered.
+          }
+
+          @Override
+          public void close() {
+            // Nothing to release.
+          }
+        };
+    logger.addHandler(capture);
+    try {
+      work.run();
+    } finally {
+      logger.removeHandler(capture);
+    }
+    return messages;
   }
 
   /** One HTTP attempt at a review comment: what it said, and where it was anchored. */
