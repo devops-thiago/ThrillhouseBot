@@ -33,6 +33,7 @@ import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.service.TokenStream;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import io.quarkiverse.langchain4j.ModelName;
+import io.quarkus.qute.Engine;
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -72,6 +73,7 @@ class AiServicePromptRenderingTest {
   @Inject ChangelogAssistant changelogAssistant;
   @Inject DocGenerator docGenerator;
   @Inject UnitTestAssistant unitTestAssistant;
+  @Inject Engine engine;
 
   @Test
   void describePromptIncludesEveryContextVariable() {
@@ -290,14 +292,16 @@ class AiServicePromptRenderingTest {
         captureStreaming(
             () ->
                 prReviewer.reviewStream(
-                    PromptTemplateEscaper.escape("DIFF_SENTINEL"),
-                    PromptTemplateEscaper.escape("PRCONTEXT_SENTINEL"),
-                    PromptTemplateEscaper.escape("BASECMP_SENTINEL"),
-                    PromptTemplateEscaper.escape("STACK_SENTINEL"),
-                    PromptTemplateEscaper.escape("TESTS_SENTINEL"),
-                    PromptTemplateEscaper.escape("PREVFINDINGS_SENTINEL"),
-                    PromptTemplateEscaper.escape("INSTRUCTIONS_SENTINEL"),
-                    PrReviewPrompts.SYSTEM));
+                    new AiReviewService.PromptInputs(
+                        PromptTemplateEscaper.escape("DIFF_SENTINEL"),
+                        PromptTemplateEscaper.escape("PRCONTEXT_SENTINEL"),
+                        PromptTemplateEscaper.escape("BASECMP_SENTINEL"),
+                        PromptTemplateEscaper.escape("STACK_SENTINEL"),
+                        PromptTemplateEscaper.escape("TESTS_SENTINEL"),
+                        PromptTemplateEscaper.escape("PREVFINDINGS_SENTINEL"),
+                        PromptTemplateEscaper.escape("INSTRUCTIONS_SENTINEL"),
+                        "",
+                        PrReviewPrompts.SYSTEM)));
 
     assertTrue(user.contains("DIFF_SENTINEL"), "diff missing");
     assertTrue(user.contains("PRCONTEXT_SENTINEL"), "prContext missing");
@@ -320,7 +324,9 @@ class AiServicePromptRenderingTest {
       var request =
           captureStreamingRequest(
               streamingChatModel,
-              () -> prReviewer.reviewStream("d", "", "", "", "", "", "", expected));
+              () ->
+                  prReviewer.reviewStream(
+                      new AiReviewService.PromptInputs("d", "", "", "", "", "", "", "", expected)));
       assertEquals(expected, systemText(request));
     }
   }
@@ -356,6 +362,56 @@ class AiServicePromptRenderingTest {
     assertTrue(user.contains("CHANGEDFILES_SENTINEL"), "changedFiles missing");
     assertTrue(user.contains("PREVFINDINGS_SENTINEL"), "previousFindings missing");
     assertTrue(user.contains("INSTRUCTIONS_SENTINEL"), "repoInstructions missing");
+  }
+
+  @Test
+  void reviewPromptsRenderByteForByteAsTheEightVariableSignatureDid() throws InterruptedException {
+    // #993: the review call takes one record where it took eight @V strings. The model must
+    // receive exactly what it received before: the system message is the record's system prompt
+    // verbatim, and the user message is the same template with each {{inputs.x}} spelled {{x}}
+    // (the eight-variable form) and the double braces turned into the engine's single ones, as the
+    // AI service does, rendered by the same engine over the same values. Covers every optional
+    // section present, every one blank, and null slots, which rendered like blank ones.
+    var eightVariableUser =
+        engine.parse(
+            PrReviewPrompts.USER
+                .replace("{{#if inputs.", "{{#if ")
+                .replace("{{inputs.", "{{")
+                .replace("{{", "{")
+                .replace("}}", "}"));
+    var cases =
+        java.util.List.of(
+            new AiReviewService.PromptInputs(
+                "DIFF\nline {{x}}",
+                "CTX",
+                "BASE",
+                "STACK",
+                "TESTS",
+                "PREV",
+                "INSTR",
+                "SUMMARY",
+                "SYS {{y}} {\"a\":1}",
+                "LINKED"),
+            new AiReviewService.PromptInputs(
+                "DIFF", "", "BASE", "", "", "", "", "", PrReviewPrompts.SYSTEM),
+            new AiReviewService.PromptInputs(
+                "DIFF", null, "BASE", null, null, null, null, null, null));
+    for (var inputs : cases) {
+      var request =
+          captureStreamingRequest(streamingChatModel, () -> prReviewer.reviewStream(inputs));
+      var expected =
+          eightVariableUser
+              .data("diff", inputs.diff())
+              .data("prContext", inputs.prContext())
+              .data("baseComparison", inputs.baseComparison())
+              .data("projectStack", inputs.projectStack())
+              .data("relatedTests", inputs.relatedTests())
+              .data("previousFindings", inputs.previousFindings())
+              .data("repoInstructions", inputs.repoInstructions())
+              .render();
+      assertEquals(expected, userText(request));
+      assertEquals(inputs.reviewSystemPrompt(), systemText(request));
+    }
   }
 
   private ChatRequest captureBlockingRequest(Runnable call) {

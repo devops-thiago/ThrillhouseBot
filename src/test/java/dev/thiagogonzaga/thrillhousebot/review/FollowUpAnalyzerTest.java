@@ -940,6 +940,43 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void aFindingOnAPathTheDiffNeverHadIsNotSupersededOnAnUnchangedHead() throws Exception {
+    // #925: ThrillhouseBot-test#107 round 2, head unchanged at 77b8cd8, retired a finding stored at
+    // src/main/... while the file is under src/test/... The path never existed in the diff, so on
+    // the same head it is a path defect, not code that left the diff, whether the model reports
+    // the finding or omits it.
+    var resolver =
+        new DiffLineResolver(
+            Map.of("kotlin/src/test/kotlin/dev/tbtest/rooms/RoomsTest.kt", patch(23)));
+    var misPathed =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "kotlin/src/main/kotlin/dev/tbtest/rooms/RoomsTest.kt",
+            23,
+            "Mock stub contradicts the dispatcher",
+            "Desc",
+            null,
+            null);
+    var previousJson =
+        new ObjectMapper()
+            .writeValueAsString(new ReviewResponse(List.of(misPathed), List.of(), null));
+    var reported = List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still"));
+
+    var reportedRound = analyzer.supersedeVanished(previousJson, reported, resolver);
+    var omittedRound =
+        analyzer.addUnreportedVanished(List.of(misPathed), List.of(), resolver, Map.of());
+    assertEquals("superseded", reportedRound.getFirst().status(), "a moved head supersedes it");
+    assertEquals("superseded", omittedRound.getFirst().status(), "a moved head supersedes it");
+
+    for (var round : List.of(reportedRound, omittedRound)) {
+      var held = FollowUpAnalyzer.holdSupersededOnUnchangedHead(round, true);
+      assertEquals("unresolved", held.getFirst().status());
+      assertEquals(FollowUpAnalyzer.HEAD_UNCHANGED_NOTE, held.getFirst().note());
+    }
+  }
+
+  @Test
   void supersedeVanishedShouldNotSupersedeASettledId() {
     // Finding #2's code vanished, but a newer round already closed it (settled). It must not be
     // rewritten to superseded, or hasSupersededPrevious would pin on and re-post the summary every

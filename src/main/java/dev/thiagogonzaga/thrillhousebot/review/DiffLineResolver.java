@@ -21,12 +21,14 @@ import io.quarkus.logging.Log;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
@@ -52,9 +54,22 @@ public final class DiffLineResolver {
   private final Map<String, List<Integer>> rightSideTextLineNumbersByFile;
   private final Map<String, Map<Integer, String>> rightSideLineTextByFile;
   private final Map<String, TreeSet<Integer>> rightSideHunkStartsByFile;
+  private final Set<String> changedFiles;
 
   public DiffLineResolver(Map<String, String> patchesByFile) {
+    this(patchesByFile, List.of());
+  }
+
+  /**
+   * A resolver over {@code patchesByFile} that also knows every file the pull request changes,
+   * including those with no patch to parse (binary, too large to diff), so {@link #diffPathFor} and
+   * {@link #isChangedFile} answer for the whole pull request rather than for the patched files
+   * only.
+   */
+  public DiffLineResolver(Map<String, String> patchesByFile, Collection<String> changedFiles) {
     CONSTRUCTION_COUNT.incrementAndGet();
+    this.changedFiles = new HashSet<>(changedFiles);
+    this.changedFiles.addAll(patchesByFile.keySet());
     this.rightSideLinesByFile = new HashMap<>();
     this.rightSideTextByFile = new HashMap<>();
     this.rightSideTextLineNumbersByFile = new HashMap<>();
@@ -144,35 +159,77 @@ public final class DiffLineResolver {
   }
 
   /**
-   * The diff's own spelling of {@code file} when the two differ only in letter case, otherwise
-   * {@code file} unchanged (#1022).
+   * Whether {@code file} is, exactly, a path this pull request changes: the only paths GitHub opens
+   * a review thread on, on a line or on the file.
+   */
+  public boolean isChangedFile(String file) {
+    return file != null && changedFiles.contains(file);
+  }
+
+  /**
+   * The changed file {@code file} names, or {@code file} unchanged when it is a changed file
+   * already or names none of them unambiguously (#1022, #945).
    *
-   * <p>GitHub resolves a review thread's path case-sensitively, so a finding citing {@code
-   * external/container} on a diff that changes {@code External/container} is refused on its line
-   * and on its file alike. A path the diff holds exactly is returned as is, and so is one that
-   * matches no diff file or more than one (two files differing only in case): picking one of those
-   * would put the finding on a file it may not mean.
+   * <p>GitHub resolves a review thread's path exactly, so a finding citing a path the pull request
+   * does not change is refused on its line and on its file alike, and keeps no thread. The model
+   * gets the path wrong in three shapes, tried in this order, each only when exactly one changed
+   * file fits:
+   *
+   * <ol>
+   *   <li>letter case: {@code external/container} for {@code External/container};
+   *   <li>a lost or invented leading directory, one path a suffix of the other: {@code
+   *       csharp/docs/CONFIG-CSHARP.md} for {@code docs/CONFIG-CSHARP.md};
+   *   <li>a wrong directory with the right file name: {@code
+   *       kotlin/src/main/kotlin/dev/tbtest/rooms/RoomsTest.kt} for {@code
+   *       kotlin/src/test/kotlin/dev/tbtest/rooms/RoomsTest.kt}.
+   * </ol>
+   *
+   * <p>A shape that fits two or more changed files falls through to the next, and the path is
+   * returned as is when none settles it: picking one of several candidates would put the finding on
+   * a file it may not mean.
    */
   public String diffPathFor(String file) {
-    if (file == null || rightSideLinesByFile.containsKey(file)) {
+    if (file == null || changedFiles.contains(file)) {
       return file;
     }
+    String fileName = fileName(file);
+    List<Predicate<String>> shapes =
+        List.of(
+            candidate -> candidate.equalsIgnoreCase(file),
+            candidate -> CitedLocationResolver.sharesPathSuffix(candidate, file),
+            candidate -> fileName(candidate).equals(fileName));
+    for (Predicate<String> shape : shapes) {
+      String match = uniqueChangedFile(shape);
+      if (match != null) {
+        return match;
+      }
+    }
+    return file;
+  }
+
+  /** The one changed file {@code shape} accepts, or {@code null} for none or several. */
+  private String uniqueChangedFile(Predicate<String> shape) {
     String match = null;
-    for (String candidate : rightSideLinesByFile.keySet()) {
-      if (candidate.equalsIgnoreCase(file)) {
+    for (String candidate : changedFiles) {
+      if (shape.test(candidate)) {
         if (match != null) {
-          return file;
+          return null;
         }
         match = candidate;
       }
     }
-    return match != null ? match : file;
+    return match;
+  }
+
+  /** The last segment of a slash-separated path. */
+  private static String fileName(String path) {
+    return path.substring(path.lastIndexOf('/') + 1);
   }
 
   /**
-   * {@code finding} moved onto {@link #diffPathFor its file's diff spelling}, or the same instance
-   * when the path needs no change. The change is logged at INFO, so a posted path that differs from
-   * the model's can be traced to it.
+   * {@code finding} moved onto {@link #diffPathFor the changed file its path names}, or the same
+   * instance when the path needs no change. The change is logged at INFO, so a posted path that
+   * differs from the model's can be traced to it.
    */
   public ReviewResponse.Finding withDiffPath(ReviewResponse.Finding finding) {
     String diffPath = diffPathFor(finding.file());
@@ -180,7 +237,8 @@ public final class DiffLineResolver {
       return finding;
     }
     Log.infof(
-        "Finding '%s' cites %s; the diff spells it %s, so the finding is posted there",
+        "Finding '%s' cites %s, which this pull request does not change; the one changed file that"
+            + " path names is %s, so the finding is posted there",
         LogSafe.oneLine(finding.title()),
         LogSafe.oneLine(finding.file()),
         LogSafe.oneLine(diffPath));
