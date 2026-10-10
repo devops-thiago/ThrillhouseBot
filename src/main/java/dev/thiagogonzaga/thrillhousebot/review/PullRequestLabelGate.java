@@ -105,10 +105,20 @@ public class PullRequestLabelGate {
    *
    * @return whether the run was stood down
    */
-  public boolean standsDownBeforePublish(ReviewOrchestrator.ReviewRequest req, StandDown where) {
+  public boolean standsDownBeforePublish(
+      String auth, ReviewOrchestrator.ReviewRequest req, long checkRunId, String detailsUrl) {
     if (req.isManualTrigger() || !configured()) {
       return false;
     }
+    var where =
+        new StandDown(
+            auth,
+            req.owner(),
+            req.repo(),
+            req.prNumber(),
+            checkRunId,
+            detailsUrl,
+            "the review of " + req.commitSha());
     var skip =
         currentLabels(where.auth(), where.owner(), where.repo(), where.prNumber())
             .flatMap(this::skipFor);

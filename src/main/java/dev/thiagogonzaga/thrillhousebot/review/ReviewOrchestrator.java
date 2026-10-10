@@ -396,16 +396,7 @@ public class ReviewOrchestrator {
       }
       // #1021: a label added while the run waited or ran — Dependabot labels a pull request a
       // second or two after opening it — is honoured before the first write, as a moved head is.
-      if (labelGate.standsDownBeforePublish(
-          req,
-          new PullRequestLabelGate.StandDown(
-              auth,
-              req.owner(),
-              req.repo(),
-              req.prNumber(),
-              checkRunId,
-              sessionUrl(session),
-              "the review of " + req.commitSha()))) {
+      if (labelGate.standsDownBeforePublish(auth, req, checkRunId, sessionUrl(session))) {
         closeLabelGatedSession(session);
         return false;
       }

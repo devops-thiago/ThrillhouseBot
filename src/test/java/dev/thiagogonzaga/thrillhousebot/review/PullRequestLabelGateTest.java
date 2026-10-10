@@ -74,7 +74,7 @@ class PullRequestLabelGateTest {
     page(1, List.of(label("dependencies")));
     when(triggerFilter.labelSkipReason(List.of("dependencies"))).thenReturn(Optional.of(EXCLUDED));
 
-    assertTrue(gate.standsDownBeforePublish(request(false), where(9L)));
+    assertTrue(gate.standsDownBeforePublish(AUTH, request(false), 9L, "https://bot.example/s"));
 
     assertEquals(1L, skipEmitter.countsByReason().get("EXCLUDED_LABEL"));
     var update = ArgumentCaptor.forClass(CheckRunManager.CheckRunUpdate.class);
@@ -94,21 +94,21 @@ class PullRequestLabelGateTest {
     when(triggerFilter.hasLabelGates()).thenReturn(true);
     page(1, List.of(label("java")));
 
-    assertFalse(gate.standsDownBeforePublish(request(false), where(9L)));
+    assertFalse(gate.standsDownBeforePublish(AUTH, request(false), 9L, "https://bot.example/s"));
 
     when(labelClient.listIssueLabels(
             anyString(), anyString(), anyString(), anyString(), anyInt(), anyInt(), anyInt()))
         .thenThrow(new RuntimeException("labels down"));
-    assertFalse(gate.standsDownBeforePublish(request(false), where(9L)));
+    assertFalse(gate.standsDownBeforePublish(AUTH, request(false), 9L, "https://bot.example/s"));
     verifyNoInteractions(checkRunManager);
     assertTrue(skipEmitter.countsByReason().isEmpty());
   }
 
   @Test
   void aManualRunOrAnUnconfiguredGateReadsNothing() {
-    assertFalse(gate.standsDownBeforePublish(request(false), where(9L)));
+    assertFalse(gate.standsDownBeforePublish(AUTH, request(false), 9L, "https://bot.example/s"));
     when(triggerFilter.hasLabelGates()).thenReturn(true);
-    assertFalse(gate.standsDownBeforePublish(request(true), where(9L)));
+    assertFalse(gate.standsDownBeforePublish(AUTH, request(true), 9L, "https://bot.example/s"));
 
     verifyNoInteractions(labelClient);
   }
