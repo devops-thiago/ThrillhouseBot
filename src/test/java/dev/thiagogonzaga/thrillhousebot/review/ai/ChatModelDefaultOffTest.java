@@ -29,10 +29,10 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Default profile: reasoning is off and no per-model settings entry exists, so no {@code
- * reasoning_effort} and no {@code max_tokens} reach either default model, and temperature/top-p
- * are omitted so the provider's own defaults apply (quarkus-langchain4j 1.14 stopped injecting
- * 1.0/1.0). The {@code concise} named model differs in exactly one way: it always
- * carries its response cap ({@code REVIEW_CONCISE_MAX_OUTPUT_TOKENS}, default 8192), because the
+ * reasoning_effort} and no {@code max_tokens} reach either default model, and temperature/top-p are
+ * omitted so the provider's own defaults apply (quarkus-langchain4j 1.14 stopped injecting
+ * 1.0/1.0). The {@code concise} named model differs in exactly one way: it always carries its
+ * response cap ({@code REVIEW_CONCISE_MAX_OUTPUT_TOKENS}, default 8192), because the
  * summary/verifier/reply responses are fixed-shape and must not run unbounded.
  */
 @QuarkusTest
