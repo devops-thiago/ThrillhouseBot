@@ -1048,16 +1048,6 @@ public class ReviewPublisher {
    */
   private Delivery postFindingComment(
       CommentTarget target, Finding finding, int findingId, DiffLineResolver lineResolver) {
-    return GitHubReviewClient.asOneComment(
-        target.owner(),
-        target.repo(),
-        target.prNumber(),
-        () -> postFindingCommentRoutes(target, finding, findingId, lineResolver));
-  }
-
-  /** The routes themselves, in preference order. See {@link #postFindingComment}. */
-  private Delivery postFindingCommentRoutes(
-      CommentTarget target, Finding finding, int findingId, DiffLineResolver lineResolver) {
     if (!lineResolver.isChangedFile(finding.file())) {
       // #925: no changed file matched the path (FindingPipeline already mapped every one that
       // did), and GitHub opens no thread, on a line or on the file, outside the pull request's own
@@ -1068,6 +1058,16 @@ public class ReviewPublisher {
           LogSafe.oneLine(finding.file()), finding.line());
       return Delivery.OUTSIDE_PULL_REQUEST;
     }
+    return GitHubReviewClient.asOneComment(
+        target.owner(),
+        target.repo(),
+        target.prNumber(),
+        () -> postFindingCommentRoutes(target, finding, findingId, lineResolver));
+  }
+
+  /** The routes themselves, in preference order. See {@link #postFindingComment}. */
+  private Delivery postFindingCommentRoutes(
+      CommentTarget target, Finding finding, int findingId, DiffLineResolver lineResolver) {
     var line = lineResolver.resolveRightSideLine(finding.file(), finding.line());
     if (line.isEmpty()) {
       Log.debugf(
