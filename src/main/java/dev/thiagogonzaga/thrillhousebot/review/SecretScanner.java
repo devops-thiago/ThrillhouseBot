@@ -280,9 +280,11 @@ final class SecretScanner {
   /**
    * Whether a generic match is sample text quoted inside another string literal (#981), such as
    * {@code "client_secret: 'abcdefgh12345'",} in a test's list of inputs: a quote opens right
-   * before the key and is not closed before the value's own quote. A quoted key in JSON, YAML or a
-   * dictionary ({@code "apiKey": "…"}, {@code {"token": '…'}}) closes its quote before the
-   * operator, so it is still read as an assignment.
+   * before the key, is not closed before the value's own quote, and is a different quote character
+   * from the value's. A quoted key in JSON, YAML or a dictionary ({@code "apiKey": "…"}, {@code
+   * {"token": '…'}}) closes its quote before the operator, so it is still read as an assignment.
+   * The rule reads only quoted values, so an unquoted value inside a string ({@code "password=…"})
+   * is not an assignment to it either way.
    */
   private static boolean insideStringLiteral(String line, Matcher generic) {
     int keyStart = generic.start(1);
@@ -293,7 +295,8 @@ final class SecretScanner {
     if (before != '"' && before != '\'' && before != '`') {
       return false;
     }
-    return line.substring(generic.end(1), generic.start(2)).indexOf(before) < 0;
+    return line.charAt(generic.start(2)) != before
+        && line.substring(generic.end(1), generic.start(2)).indexOf(before) < 0;
   }
 
   /** Whether a private-key header is followed by a key body; see {@link #PEM_BODY}. */

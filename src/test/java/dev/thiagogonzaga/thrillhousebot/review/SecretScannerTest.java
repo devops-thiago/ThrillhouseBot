@@ -473,6 +473,8 @@ class SecretScannerTest {
     assertGenericHit("client_secret", "q8#Lm2!vRt9Z", "  \"client_secret\": \"q8#Lm2!vRt9Z\",");
     assertGenericHit("token", "q8#Lm2!vRt9Z", "creds = {\"token\": 'q8#Lm2!vRt9Z'}");
     assertGenericHit("password", "q8#Lm2!vRt9Z", "  'password': \"q8#Lm2!vRt9Z\"");
+    // The value's quote is the opener's character, so it cannot be nested inside that string.
+    assertGenericHit("password", "q8#Lm2!vRt9Z", "\"password = \"q8#Lm2!vRt9Z\"");
   }
 
   @Test
