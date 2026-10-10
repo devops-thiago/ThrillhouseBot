@@ -23,6 +23,7 @@ import dev.thiagogonzaga.thrillhousebot.review.CiHoldRevisit;
 import dev.thiagogonzaga.thrillhousebot.review.FindingFeedbackCaptureService;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.MaintainerReplyService;
+import dev.thiagogonzaga.thrillhousebot.review.PullRequestLabelGate;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewSkipEmitter;
@@ -32,6 +33,7 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import java.io.IOException;
+import java.util.List;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,15 +46,17 @@ public class WebhookController {
   private static final Logger log = LoggerFactory.getLogger(WebhookController.class);
 
   private static final String ACTION_READY_FOR_REVIEW = "ready_for_review";
+  private static final String ACTION_SYNCHRONIZE = "synchronize";
 
   /** pull_request actions that trigger an automatic review. */
   private static final Set<String> AUTO_REVIEW_ACTIONS =
-      Set.of("opened", "reopened", "synchronize", ACTION_READY_FOR_REVIEW);
+      Set.of("opened", "reopened", ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW);
 
   private final ThrillhouseConfig config;
   private final WebhookVerifier verifier;
   private final TriggerDetector triggerDetector;
   private final ReviewTriggerFilter triggerFilter;
+  private final PullRequestLabelGate labelGate;
   private final AutoReviewRateLimiter autoReviewRateLimiter;
   private final ReviewDispatcher reviewDispatcher;
   private final MaintainerReplyDispatcher replyDispatcher;
@@ -72,6 +76,7 @@ public class WebhookController {
       WebhookVerifier verifier,
       TriggerDetector triggerDetector,
       ReviewTriggerFilter triggerFilter,
+      PullRequestLabelGate labelGate,
       AutoReviewRateLimiter autoReviewRateLimiter,
       ReviewDispatcher reviewDispatcher,
       MaintainerReplyDispatcher replyDispatcher,
@@ -88,6 +93,7 @@ public class WebhookController {
     this.verifier = verifier;
     this.triggerDetector = triggerDetector;
     this.triggerFilter = triggerFilter;
+    this.labelGate = labelGate;
     this.autoReviewRateLimiter = autoReviewRateLimiter;
     this.reviewDispatcher = reviewDispatcher;
     this.replyDispatcher = replyDispatcher;
@@ -210,7 +216,7 @@ public class WebhookController {
 
     return switch (action) {
       // ready_for_review fires when a draft is marked ready and is not followed by a synchronize.
-      case "opened", "reopened", "synchronize", ACTION_READY_FOR_REVIEW -> {
+      case "opened", "reopened", ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW -> {
         var pr = payload.pullRequest();
         var repo = payload.repository();
         if (pr == null || repo == null || payload.installation() == null) {
@@ -232,7 +238,7 @@ public class WebhookController {
           yield true;
         }
 
-        var skipReason = triggerFilter.skipReason(pr);
+        var skipReason = triggerFilter.skipReason(pr, () -> gatedLabels(payload));
         if (skipReason.isPresent()) {
           skipEmitter.recordSkip(
               skipReason.get().reason(),
@@ -288,6 +294,35 @@ public class WebhookController {
         yield true;
       }
     };
+  }
+
+  /**
+   * The labels the trigger filter's label gates read (#1021). A {@code synchronize} payload is
+   * current, but the {@code opened}, {@code reopened} and {@code ready_for_review} payloads can
+   * predate labels added right after them — Dependabot opens a pull request, then labels it — so
+   * for those the labels are read from the API. The filter asks only when a label gate is
+   * configured. A failed read falls back to the payload's labels: the review then runs as it did
+   * before the read existed, and the pre-publish gate in the orchestrator reads them again.
+   */
+  private List<String> gatedLabels(WebhookPayload payload) {
+    var pr = payload.pullRequest();
+    var payloadLabels = pr.labels().stream().map(WebhookPayload.Label::name).toList();
+    if (ACTION_SYNCHRONIZE.equals(payload.action())) {
+      return payloadLabels;
+    }
+    var repo = payload.repository();
+    var current =
+        labelGate.currentLabels(
+            payload.installation().id(), repo.owner().login(), repo.name(), pr.number());
+    if (current.isEmpty()) {
+      log.warn(
+          "Could not read the current labels on PR #{} in {} — gating on the {} payload's labels",
+          pr.number(),
+          repo.fullName(),
+          payload.action());
+      return payloadLabels;
+    }
+    return current.get();
   }
 
   /**
