@@ -633,9 +633,14 @@ unresolved".
 The **Description vs. Implementation** section appears only when the PR
 description and the change disagree. A summary with model prose ("What this PR
 does", per-file summaries) and no such section means the check ran and found
-nothing; a counts-only summary means it did not run, and says why. A gap stays
-listed on later rounds until the summary call says what resolved it, the same
-gap is reported again, or the PR stops linking the issue the gap names. A
+nothing; a counts-only summary means it did not run, and says why. Each gap
+names what the description or a linked issue says; a gap that quotes the
+description is dropped when the quoted words are not in it, and a finding that
+reports a mismatch with the description is named in the section by title and
+location. A gap stays listed on later rounds until the summary call says what
+resolved it (never on the head the previous round reviewed, where nothing the
+call reads has changed), the same gap is reported again, the quoted claim leaves
+the description, or the PR stops linking the issue the gap names. A
 follow-up on the head the previous round reviewed whose summary call returns no
 overview keeps that round's overview and file summaries.
 

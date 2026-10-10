@@ -20,6 +20,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DescriptionGapLabels;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import io.quarkus.logging.Log;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -47,7 +48,11 @@ import java.util.regex.Pattern;
  *   <li>the summary call names it in {@code addressed_gaps} with what now shows it resolved. The
  *       call re-evaluates the carried list, since only it reads the current description and file
  *       list, but silence keeps a gap: leaving a gap out of its answer is exactly the failure being
- *       fixed, so it is never read as a resolution;
+ *       fixed, so it is never read as a resolution. On the head the previous round reviewed that
+ *       answer is not taken at all (#964): nothing the call can read has changed there;
+ *   <li>it fails the {@link DescriptionGapScreen}: it quotes as the description's claim a passage
+ *       the description does not contain, or cites neither the description nor a linked issue
+ *       (#946, #964). The call's own gaps go through the same screen;
  *   <li>it is a {@code Linked issue #N} gap and the pull request's linked issues, read this round,
  *       no longer include {@code #N}. With no linked issues read at all (the feature off, or the
  *       read failed) nothing is dropped on that ground, since nothing can be judged;
@@ -118,14 +123,22 @@ final class DescriptionGapCarryover {
    *
    * @param gaps the previous round's listed gaps still linked, oldest listing order
    * @param linkedIssues the unfenced linked-issue section of this round, {@code ""} when none
+   * @param prText the PR title and description the summary call read, unfenced; {@code null} when
+   *     not known, which turns the {@link DescriptionGapScreen} off
+   * @param headUnchanged whether this round reviews the head the previous round reviewed
    */
-  record Carry(List<String> gaps, String linkedIssues) {
+  record Carry(List<String> gaps, String linkedIssues, String prText, boolean headUnchanged) {
 
     static final Carry NONE = new Carry(List.of(), "");
 
     Carry {
       gaps = List.copyOf(gaps);
       linkedIssues = linkedIssues == null ? "" : linkedIssues;
+    }
+
+    /** A carry with no PR text to screen against, on a head that moved. */
+    Carry(List<String> gaps, String linkedIssues) {
+      this(gaps, linkedIssues, null, false);
     }
 
     /**
@@ -160,20 +173,47 @@ final class DescriptionGapCarryover {
      */
     ReviewResponse.Summary apply(ReviewResponse.Summary summary) {
       if (summary == null) {
-        return gaps.isEmpty() ? null : new ReviewResponse.Summary(0, 0, 0, 0, 0, null, null, gaps);
+        var kept = screened(gaps);
+        return kept.isEmpty() ? null : new ReviewResponse.Summary(0, 0, 0, 0, 0, null, null, kept);
       }
       // The call saw the first carried gaps as G1…Gk, so in its own gaps a G<n> up to k is one of
       // them even when words follow it (#974), short of a name such as "G1 GC" or "G1-specific";
       // the summary's context-free strip cannot know which labels were issued.
       var issued = Math.min(gaps.size(), MAX_PROMPTED_GAPS);
       var current =
-          withLinkedIssueNumbers(
-              DescriptionGapLabels.stripIssued(summary.descriptionGaps(), issued), linkedIssues);
-      var merged = merge(current, gaps, summary.addressedGaps());
+          screened(
+              withLinkedIssueNumbers(
+                  DescriptionGapLabels.stripIssued(summary.descriptionGaps(), issued),
+                  linkedIssues));
+      var merged = screened(merge(current, gaps, resolutions(summary.addressedGaps())));
       // Nothing to change leaves the call's own summary as it came.
       return merged.equals(summary.descriptionGaps()) && summary.addressedGaps().isEmpty()
           ? summary
           : summary.withDescriptionGaps(merged);
+    }
+
+    /** {@code list} through the {@link DescriptionGapScreen}; as it is with no PR text known. */
+    private List<String> screened(List<String> list) {
+      return prText == null ? list : DescriptionGapScreen.screen(list, prText, linkedIssues);
+    }
+
+    /**
+     * The call's {@code addressed_gaps}, or none on the head the previous round reviewed (#964).
+     * The call does not see the diff, and on that head the code has not changed, so nothing it can
+     * read shows a carried gap resolved: on one such head a {@code /review} dropped a still-open
+     * acceptance criterion because a test file's name suggested it was covered. A gap whose quoted
+     * claim the author has since taken out of the description still leaves, through the screen, and
+     * one whose issue is no longer linked leaves through {@link #stillLinked}.
+     */
+    private List<String> resolutions(List<String> addressed) {
+      if (!headUnchanged || addressed.isEmpty()) {
+        return addressed;
+      }
+      Log.infof(
+          "Kept the carried description gaps on the head the previous round reviewed; ignored %d"
+              + " addressed-gap entry(ies) from the summary call",
+          addressed.size());
+      return List.of();
     }
   }
 
@@ -185,12 +225,29 @@ final class DescriptionGapCarryover {
       List<GitHubCommentClient.IssueComment> conversation,
       BotIdentity botIdentity,
       String linkedIssues) {
+    return of(conversation, botIdentity, linkedIssues, null, false);
+  }
+
+  /**
+   * The carry for a round, screened against {@code prText} (the PR title and description the
+   * summary call reads, unfenced; {@code null} for no screen) and holding its gaps when {@code
+   * headUnchanged}.
+   */
+  static Carry of(
+      List<GitHubCommentClient.IssueComment> conversation,
+      BotIdentity botIdentity,
+      String linkedIssues,
+      String prText,
+      boolean headUnchanged) {
     var previous = previousGaps(conversation, botIdentity);
     if (previous.isEmpty()) {
-      return new Carry(List.of(), linkedIssues);
+      return new Carry(List.of(), linkedIssues, prText, headUnchanged);
     }
     return new Carry(
-        stillLinked(previous, TicketContextResolver.linkedKeys(linkedIssues)), linkedIssues);
+        stillLinked(previous, TicketContextResolver.linkedKeys(linkedIssues)),
+        linkedIssues,
+        prText,
+        headUnchanged);
   }
 
   /** The gaps the newest bot-authored summary comment lists; empty when there is none. */
@@ -212,9 +269,11 @@ final class DescriptionGapCarryover {
    * The bullets of a rendered summary's Description vs. Implementation section, all of them: a gap
    * cut here would leave the section with no reason given, the failure this class exists for. The
    * section is bounded by the comment it sits in. The intro line and the all-reported-as-findings
-   * line are not bullets, so a section that listed nothing carries nothing. A line after a bullet
-   * that is neither a bullet, a blank nor a heading continues it (a gap rendered before bullets
-   * were flattened to one line).
+   * line of older summaries are not bullets, so a section that listed nothing carries nothing; a
+   * bullet naming a finding ({@link PrSummaryGenerator#GAP_FINDING_PREFIX}) is not a gap either,
+   * since the finding it names stays listed for as long as it is open. A line after a bullet that
+   * is neither a bullet, a blank nor a heading continues it (a gap rendered before bullets were
+   * flattened to one line).
    */
   static List<String> listedGaps(String body) {
     var gaps = new ArrayList<String>();
@@ -236,7 +295,12 @@ final class DescriptionGapCarryover {
       }
       if (line.startsWith("- ")) {
         addGap(gaps, open);
-        open = new StringBuilder(line.substring(2).strip());
+        var bullet = line.substring(2).strip();
+        // A bullet naming a finding is that finding's, carried by the finding itself (#964).
+        open =
+            bullet.startsWith(PrSummaryGenerator.GAP_FINDING_PREFIX)
+                ? null
+                : new StringBuilder(bullet);
       } else if (line.isEmpty()) {
         addGap(gaps, open);
         open = null;

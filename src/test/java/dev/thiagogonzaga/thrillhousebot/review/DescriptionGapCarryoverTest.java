@@ -128,14 +128,30 @@ class DescriptionGapCarryoverTest {
 
     @Test
     void aSectionThatCollapsedOntoFindingsCarriesNothing() {
+      // The line a summary posted before #964 rendered when every gap collapsed onto a finding.
       var body =
           PrSummaryGenerator.GAPS_HEADING
-              + "\n"
-              + PrSummaryGenerator.GAPS_ALL_REPORTED_AS_FINDINGS
+              + "\nEvery mismatch found between the description and the change is reported as a"
+              + " finding below, so it is not repeated here."
               + "\n\n### Changes Overview\n- **Files changed:** 3\n";
 
       assertEquals(List.of(), DescriptionGapCarryover.listedGaps(body));
       assertEquals(List.of(), DescriptionGapCarryover.listedGaps("## Summary\nno section\n"));
+    }
+
+    @Test
+    void aBulletNamingAFindingIsNotCarriedAsAGap() {
+      // #964: the finding is carried as a finding, and keeps its own bullet while it is open.
+      var body =
+          PrSummaryGenerator.GAPS_HEADING
+              + "\nThe PR description does not fully match the change:\n- "
+              + PrSummaryGenerator.GAP_FINDING_PREFIX
+              + "Description claims five-minute caching; no cache exists (`go/handler.go:35`)\n"
+              + "  continued text of that bullet\n- "
+              + CAP_GAP
+              + "\n\n### Changes Overview\n";
+
+      assertEquals(List.of(CAP_GAP), DescriptionGapCarryover.listedGaps(body));
     }
 
     @Test
@@ -484,6 +500,13 @@ class DescriptionGapCarryoverTest {
         "The description documents PAYMENT_API_KEY as configurable, but PAYMENT_API_KEY is"
             + " hardcoded instead of read from the environment.";
 
+    /** The bullet naming {@link #HARDCODED_KEY} in the section, once a gap collapsed onto it. */
+    private static final String FINDING_BULLET =
+        "- "
+            + PrSummaryGenerator.GAP_FINDING_PREFIX
+            + "PAYMENT_API_KEY is hardcoded instead of read from the environment"
+            + " (`python/marketplace/config.py:5`)\n";
+
     private String render(ReviewResponse.Summary aiSummary) {
       var result =
           new ReviewResult(
@@ -521,7 +544,7 @@ class DescriptionGapCarryoverTest {
 
       assertTrue(round2.contains("- " + CAP_GAP + "\n"), round2);
       assertFalse(round2.contains(RESTATING_GAP), round2);
-      assertFalse(round2.contains(PrSummaryGenerator.GAPS_ALL_REPORTED_AS_FINDINGS), round2);
+      assertTrue(round2.contains(FINDING_BULLET), round2);
       assertTrue(
           round2.contains("The PR description or its linked issue does not fully match"), round2);
 
@@ -546,14 +569,16 @@ class DescriptionGapCarryoverTest {
 
       var rendered = render(carry.apply(summary(List.of(RESTATING_GAP), List.of())));
 
-      assertFalse(rendered.contains(PrSummaryGenerator.GAPS_ALL_REPORTED_AS_FINDINGS), rendered);
+      assertFalse(rendered.contains("is reported as a finding below"), rendered);
       assertTrue(rendered.contains(CAP_GAP), rendered);
 
-      // With nothing carried and the round's gap restating the finding, the line is true and stays.
+      // With nothing carried and the round's gap restating the finding, the section names that
+      // finding rather than claiming, unnamed, that some finding below covers it (#964).
       var collapsed =
           render(
               DescriptionGapCarryover.Carry.NONE.apply(summary(List.of(RESTATING_GAP), List.of())));
-      assertTrue(collapsed.contains(PrSummaryGenerator.GAPS_ALL_REPORTED_AS_FINDINGS), collapsed);
+      assertTrue(collapsed.contains(FINDING_BULLET), collapsed);
+      assertFalse(collapsed.contains("is reported as a finding below"), collapsed);
     }
 
     @Test
@@ -733,6 +758,91 @@ class DescriptionGapCarryoverTest {
                 DescriptionGapCarryover.addressedPositions(
                     List.of(blanks + "x"), List.of("a gap")));
           });
+    }
+  }
+
+  /** The gap screen and the unchanged-head hold, through a round's carry (#946, #964). */
+  @Nested
+  class ScreeningAndHolding {
+
+    /** ThrillhouseBot-test#159's PR text. */
+    private static final String PR_TEXT =
+        "Title: feat(rust): bookings\nDescription:\nThe README moves to `docs/RUST-V10.md`"
+            + " unchanged.\nNotification emails are sent to subscribers as soon as an episode"
+            + " goes live.\n";
+
+    private static final String MISQUOTE =
+        "PR description claims '[t]he README moves to docs/RUST-VEV10.md unchanged' — the rename"
+            + " is to docs/RUST-V10.md";
+
+    private static final String EMAIL_GAP =
+        "The PR description states \"Notification emails are sent to subscribers as soon as an"
+            + " episode goes live\", but no changed file sends email.";
+
+    private static final String DOCS_GAP =
+        "The configuration doc's TRACKED_PORTS example uses a space separator.";
+
+    private List<IssueComment> listing(String... gaps) {
+      var body = new StringBuilder(PrSummaryGenerator.GAPS_HEADING).append("\nIntro:\n");
+      for (var gap : gaps) {
+        body.append("- ").append(gap).append('\n');
+      }
+      return List.of(summaryComment(body.append("\n### Changes Overview\n").toString()));
+    }
+
+    @Test
+    void aMisquotingGapTheCallReturnsIsDropped() {
+      var carry = DescriptionGapCarryover.of(List.of(), BOT, LINKED_113, PR_TEXT, false);
+
+      var applied = carry.apply(summary(List.of(MISQUOTE, EMAIL_GAP, DOCS_GAP), List.of()));
+
+      assertEquals(List.of(EMAIL_GAP), applied.descriptionGaps());
+    }
+
+    @Test
+    void aMisquoteCarriedFromTheRoundBeforeIsDroppedOnReRead() {
+      // #946: round 1 listed the misquote and round 2 carried it over unchanged.
+      var carry =
+          DescriptionGapCarryover.of(listing(MISQUOTE, CAP_GAP), BOT, LINKED_113, PR_TEXT, false);
+      assertEquals(List.of(MISQUOTE, CAP_GAP), carry.gaps());
+
+      assertEquals(List.of(CAP_GAP), carry.apply(summary(List.of(), List.of())).descriptionGaps());
+      // A round with no summary answer screens what it carries too.
+      assertEquals(List.of(CAP_GAP), carry.apply(null).descriptionGaps());
+      var onlyMisquote = DescriptionGapCarryover.of(listing(MISQUOTE), BOT, "", PR_TEXT, false);
+      assertNull(onlyMisquote.apply(null));
+    }
+
+    @Test
+    void onTheHeadThePreviousRoundReviewedTheCallCannotResolveACarriedGap() {
+      // ThrillhouseBot-test#216: three rounds on one head; round 2 dropped the open #117
+      // criterion and round 3 the email claim, each on the call's say-so.
+      var carry =
+          DescriptionGapCarryover.of(listing(CAP_GAP, EMAIL_GAP), BOT, LINKED_113, PR_TEXT, true);
+
+      var applied =
+          carry.apply(summary(List.of(), List.of("G1: SchedulerTest covers it", "G2: done")));
+
+      assertEquals(List.of(CAP_GAP, EMAIL_GAP), applied.descriptionGaps());
+    }
+
+    @Test
+    void onAMovedHeadTheCallStillResolvesOne() {
+      var carry =
+          DescriptionGapCarryover.of(listing(CAP_GAP, EMAIL_GAP), BOT, LINKED_113, PR_TEXT, false);
+
+      var applied = carry.apply(summary(List.of(), List.of("G1: store.py now caps listings")));
+
+      assertEquals(List.of(EMAIL_GAP), applied.descriptionGaps());
+    }
+
+    @Test
+    void aClaimTheAuthorTookOutOfTheDescriptionLeavesEvenOnTheSameHead() {
+      var carry =
+          DescriptionGapCarryover.of(
+              listing(EMAIL_GAP), BOT, "", PR_TEXT.replace("Notification", "No"), true);
+
+      assertNull(carry.apply(null));
     }
   }
 }

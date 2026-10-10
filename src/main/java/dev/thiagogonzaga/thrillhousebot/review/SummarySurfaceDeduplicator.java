@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -133,8 +134,18 @@ final class SummarySurfaceDeduplicator {
     }
   }
 
-  /** The description-gap bullets and per-path walkthrough notes left after collapsing. */
-  record Surfaces(List<String> descriptionGaps, Map<String, String> fileSummaries) {}
+  /**
+   * The description-gap bullets and per-path walkthrough notes left after collapsing, and the
+   * findings the collapsed gaps restated, once each in the order of the gaps they took (#964), so
+   * the Description vs. Implementation section can name them instead of saying they exist.
+   */
+  record Surfaces(
+      List<String> descriptionGaps, Map<String, String> fileSummaries, List<Finding> gapFindings) {
+
+    Surfaces(List<String> descriptionGaps, Map<String, String> fileSummaries) {
+      this(descriptionGaps, fileSummaries, List.of());
+    }
+  }
 
   /**
    * What one finding publishes, as claims to match other surfaces against: its title on both arms,
@@ -233,16 +244,29 @@ final class SummarySurfaceDeduplicator {
   static Surfaces collapse(
       List<String> descriptionGaps, Map<String, String> fileSummaries, List<Finding> findings) {
     var claims = new ArrayList<Claim>(2 * findings.size() + descriptionGaps.size());
+    // The finding each claim states, null for a kept gap's: what a collapsed gap is reported as.
+    var owners = new ArrayList<Finding>(2 * findings.size() + descriptionGaps.size());
     var demoted = new ArrayList<Claim>(2 * findings.size());
     for (Finding finding : findings) {
-      (finding.postsInline() ? claims : demoted).addAll(claimsOf(finding));
+      var own = claimsOf(finding);
+      if (finding.postsInline()) {
+        claims.addAll(own);
+        own.forEach(c -> owners.add(finding));
+      } else {
+        demoted.addAll(own);
+      }
     }
     var keptGaps = new ArrayList<String>(descriptionGaps.size());
+    var gapFindings = new LinkedHashSet<Finding>();
     for (String gap : descriptionGaps) {
       var candidate = claim(gap);
-      if (!restates(candidate, claims)) {
+      var at = restatedAt(candidate, claims);
+      if (at < 0) {
         keptGaps.add(gap);
         claims.add(candidate);
+        owners.add(null);
+      } else if (owners.get(at) != null) {
+        gapFindings.add(owners.get(at));
       }
     }
     claims.addAll(demoted);
@@ -250,7 +274,7 @@ final class SummarySurfaceDeduplicator {
     for (var entry : fileSummaries.entrySet()) {
       trimmed.put(entry.getKey(), trimRestatedClauses(entry.getValue(), claims));
     }
-    return new Surfaces(keptGaps, trimmed);
+    return new Surfaces(keptGaps, trimmed, List.copyOf(gapFindings));
   }
 
   /**
@@ -284,16 +308,22 @@ final class SummarySurfaceDeduplicator {
    * phrase and word sets were derived once at construction and are reused across every pair.
    */
   private static boolean restates(Claim candidate, List<Claim> claims) {
-    for (Claim claim : claims) {
+    return restatedAt(candidate, claims) >= 0;
+  }
+
+  /** The position of the first of {@code claims} that {@code candidate} restates, or -1. */
+  private static int restatedAt(Claim candidate, List<Claim> claims) {
+    for (var i = 0; i < claims.size(); i++) {
+      var claim = claims.get(i);
       if (contradicts(candidate, claim)) {
         continue;
       }
       if (sharesPhrase(candidate.phrases(), claim.phrases())
           || (!claim.phraseOnly() && overlaps(candidate.wordSet(), claim.wordSet()))) {
-        return true;
+        return i;
       }
     }
-    return false;
+    return -1;
   }
 
   /**
