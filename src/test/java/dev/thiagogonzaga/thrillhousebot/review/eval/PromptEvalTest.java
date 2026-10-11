@@ -20,9 +20,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.review.ChangeSymbols;
+import dev.thiagogonzaga.thrillhousebot.review.Confidence;
 import dev.thiagogonzaga.thrillhousebot.review.PromptSections;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
+import dev.thiagogonzaga.thrillhousebot.review.RiskLevel;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
@@ -271,7 +273,8 @@ class PromptEvalTest {
 
   /**
    * Feeds the labeled candidate through the production verification path and classifies what came
-   * back: dropped → rejected, risk or confidence lowered → downgraded, unchanged → confirmed.
+   * back: dropped → rejected, risk or confidence lowered → downgraded, unchanged or raised by a
+   * deterministic floor → confirmed.
    */
   private String verifierOutcome(EvalCase evalCase) {
     var f = evalCase.spec().finding();
@@ -295,9 +298,13 @@ class PromptEvalTest {
       return "rejected";
     }
     var kept = verified.findings().get(0);
+    // Both enums declare constants most- to least-severe, so a higher ordinal is a lower rating. A
+    // deterministic floor can RAISE a rating (#570, #926), which is not a downgrade.
     var lowered =
-        !kept.risk().equalsIgnoreCase(candidate.risk())
-            || !kept.confidence().equalsIgnoreCase(candidate.confidence());
+        RiskLevel.fromString(kept.risk()).ordinal()
+                > RiskLevel.fromString(candidate.risk()).ordinal()
+            || Confidence.fromString(kept.confidence()).ordinal()
+                > Confidence.fromString(candidate.confidence()).ordinal();
     return lowered ? "downgraded" : "confirmed";
   }
 

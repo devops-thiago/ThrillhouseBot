@@ -23,6 +23,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
+import java.util.function.BiFunction;
 import java.util.regex.Pattern;
 
 /**
@@ -39,13 +41,13 @@ import java.util.regex.Pattern;
  *
  * <p>The calibration rule is that severity follows the consequence and its reachability, and for
  * these three classes both are fixed by the class: an unpinned reference changes the build's inputs
- * without a commit and breaks nothing at run time; a path the running user cannot write fails the
- * first time it is written, on every deployment; a container that never drops privilege breaks
- * nothing by itself but starts a compromise as root. So the grade is a property of the class and is
- * written here rather than judged per review. {@link dev.thiagogonzaga.thrillhousebot.review.ai
- * .PrReviewPrompts} states the same three anchors to the model — this is what makes them hold when
- * it does not follow them, the way {@code FindingVerificationService.floorInjectionSinkRisk} holds
- * the injection-sink floor (#570).
+ * without a commit and breaks nothing at run time, so it is informational ("low", #926); a path the
+ * running user cannot write fails the first time it is written, on every deployment; a container
+ * that never drops privilege breaks nothing by itself but starts a compromise as root. So the grade
+ * is a property of the class and is written here rather than judged per review. {@link
+ * dev.thiagogonzaga.thrillhousebot.review.ai .PrReviewPrompts} states the same three anchors to the
+ * model — this is what makes them hold when it does not follow them, the way {@code
+ * FindingVerificationService.floorInjectionSinkRisk} holds the injection-sink floor (#570).
  *
  * <p>Confidence is anchored too, and at "medium" for all three, because the question confidence
  * answers has the same answer in every pull request: the shape is settled by the file in front of
@@ -59,8 +61,13 @@ import java.util.regex.Pattern;
  *
  * <p>The anchor pins rather than floors: a level above it is as much a miscalibration as one below,
  * and a floor would close only the half of the spread that happened to point down. Nothing is
- * dropped, added, re-anchored or reworded here, so the precision of the finding set is
- * arithmetically unchanged — only the two graded fields move.
+ * added, re-anchored or reworded here — only the two graded fields move — and one finding is
+ * dropped: an unpinned-reference finding anchored on a {@code COPY --from=} line whose source is an
+ * external image with an explicit version tag ({@code busybox:1.36}, {@code
+ * ghcr.io/acme/nginx-conf:1.2.0}) or a digest (#926). That image is a versioned producer outside
+ * the diff, not a reference that moves under the build; across one corpus round it was swept into
+ * the unpinned-tag finding on PR after PR, which the answer keys list as correct code. Every other
+ * finding keeps its place, so precision can only rise.
  *
  * <p>Recognition is deliberately narrow in the safe direction. It needs the finding to be anchored
  * in a declarative deployment artifact AND to assert the class in its own words, and any finding
@@ -78,7 +85,7 @@ public final class SeverityCalibrator {
    */
   private enum InfrastructureClass {
     /** A base image, action or chart referenced by a name that can move under the build. */
-    MUTABLE_EXTERNAL_REFERENCE(RiskLevel.MEDIUM),
+    MUTABLE_EXTERNAL_REFERENCE(RiskLevel.LOW),
 
     /** A path the image's non-root user cannot write, which fails the first write on every run. */
     UNWRITABLE_RUNTIME_PATH(RiskLevel.HIGH),
@@ -319,6 +326,15 @@ public final class SeverityCalibrator {
           "passwords",
           "private key");
 
+  /** The Dockerfile instruction whose {@code --from=} source can name an external image. */
+  private static final String COPY_INSTRUCTION = "copy";
+
+  /** The option that names a {@code COPY} source: a build stage, or an image by reference. */
+  private static final String FROM_OPTION = "--from=";
+
+  /** Whitespace runs, which separate a Dockerfile instruction's tokens. */
+  private static final Pattern WHITESPACE = Pattern.compile("\\s+");
+
   /** The separator between a file name's stem and its extensions. */
   private static final Pattern SEGMENT = Pattern.compile("\\.");
 
@@ -349,17 +365,43 @@ public final class SeverityCalibrator {
   private SeverityCalibrator() {}
 
   /**
-   * Rewrites the risk and confidence of every finding that states one of the three anchored classes
-   * and leaves every other finding, and the rest of the response, untouched. The same response
-   * instance comes back when nothing was regraded.
+   * {@link #calibrate(ReviewResponse, BiFunction)} with no diff to read anchored lines from: a
+   * {@code COPY --from=} line is then recognized only from the finding's own {@code
+   * suggestion_old}.
    */
   public static ReviewResponse calibrate(ReviewResponse response) {
+    return calibrate(response, (file, line) -> null);
+  }
+
+  /**
+   * Rewrites the risk and confidence of every finding that states one of the three anchored classes
+   * and leaves every other finding, and the rest of the response, untouched, except that an
+   * unpinned-reference finding anchored on a versioned external {@code COPY --from=} source is
+   * dropped (#926). The same response instance comes back when nothing was regraded or dropped.
+   *
+   * @param lineText the diff's text for a file and line, or {@code null} when the line is not in
+   *     the diff; it reads the line a finding is anchored on
+   */
+  public static ReviewResponse calibrate(
+      ReviewResponse response, BiFunction<String, Integer, String> lineText) {
     if (response.findings().isEmpty()) {
       return response;
     }
-    var adjusted = new ArrayList<ReviewResponse.Finding>(response.findings().size());
-    var changed = false;
+    var kept = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     for (ReviewResponse.Finding finding : response.findings()) {
+      if (classify(finding) == InfrastructureClass.MUTABLE_EXTERNAL_REFERENCE
+          && anchoredOnVersionedExternalSource(finding, lineText)) {
+        Log.infof(
+            "Dropping unpinned-reference finding '%s' (%s:%d): it is anchored on a COPY --from"
+                + " source that names an external image by an explicit version",
+            LogSafe.oneLine(finding.title()), LogSafe.oneLine(finding.file()), finding.line());
+      } else {
+        kept.add(finding);
+      }
+    }
+    var adjusted = new ArrayList<ReviewResponse.Finding>(kept.size());
+    var changed = kept.size() != response.findings().size();
+    for (ReviewResponse.Finding finding : kept) {
       InfrastructureClass anchored = classify(finding);
       if (anchored == null || alreadyAnchored(finding, anchored)) {
         adjusted.add(finding);
@@ -430,6 +472,80 @@ public final class SeverityCalibrator {
             || (states(text, UNPINNED_REFERENCE) && states(text, EXTERNAL_REFERENCE_SUBJECT))
         ? InfrastructureClass.MUTABLE_EXTERNAL_REFERENCE
         : null;
+  }
+
+  /**
+   * Whether the line the finding is anchored on — the diff's text at its file and line, else its
+   * own {@code suggestion_old} — is a {@code COPY --from=} instruction whose source is an external
+   * image named by an explicit version or a digest, and the finding's own words name that image.
+   * The second half keeps a finding about another reference whose anchor merely landed on the
+   * {@code COPY} line (an unpinned {@code FROM} one line up) from being dropped for an image it
+   * never mentions. Read token by token rather than by one expression, so the options a {@code
+   * COPY} can carry before {@code --from=} cost nothing to skip.
+   */
+  private static boolean anchoredOnVersionedExternalSource(
+      ReviewResponse.Finding finding, BiFunction<String, Integer, String> lineText) {
+    String anchoredLine = lineText.apply(finding.file(), finding.line());
+    if (anchoredLine == null || anchoredLine.isBlank()) {
+      anchoredLine = finding.suggestionOld() == null ? "" : finding.suggestionOld().strip();
+      int newline = anchoredLine.indexOf('\n');
+      anchoredLine = newline < 0 ? anchoredLine : anchoredLine.substring(0, newline);
+    }
+    String[] tokens = WHITESPACE.split(anchoredLine.strip());
+    if (tokens.length < 2 || !COPY_INSTRUCTION.equals(tokens[0].toLowerCase(Locale.ROOT))) {
+      return false;
+    }
+    String claim =
+        (Objects.toString(finding.title(), "") + "\n" + Objects.toString(finding.description(), ""))
+            .toLowerCase(Locale.ROOT);
+    return Arrays.stream(tokens)
+        .skip(1)
+        .filter(token -> token.toLowerCase(Locale.ROOT).startsWith(FROM_OPTION))
+        .findFirst()
+        .map(token -> token.substring(FROM_OPTION.length()))
+        .filter(SeverityCalibrator::isVersionedExternalImage)
+        .map(source -> claim.contains(imageName(source)))
+        .orElse(false);
+  }
+
+  /**
+   * The image's own name in a reference, lower-cased: the last path segment without its tag or
+   * digest ({@code ghcr.io/acme/nginx-conf:1.2.0} is {@code nginx-conf}).
+   */
+  private static String imageName(String source) {
+    String reference = source.replace("\"", "").replace("'", "").toLowerCase(Locale.ROOT);
+    String name = reference.substring(reference.lastIndexOf('/') + 1);
+    int end = name.length();
+    for (char mark : new char[] {':', '@'}) {
+      int at = name.indexOf(mark);
+      end = at >= 0 ? Math.min(end, at) : end;
+    }
+    return name.substring(0, end);
+  }
+
+  /**
+   * Whether a {@code COPY --from=} source names an external image by an explicit version or a
+   * digest. A build stage is a bare name ({@code build}, {@code 0}); an image reference carries a
+   * registry path, a tag or a digest. The tag is read after the last path separator, so a registry
+   * port ({@code registry:5000/tools}) is not taken for one. A tag is a version when it is not
+   * {@code latest} and carries a digit ({@code 1.36}, {@code v0.4.25}, {@code 3.9-alpine}); an
+   * untagged image is {@code latest}, and a tag built from a build argument ({@code ${TOOLS_2}}) is
+   * never a version, whatever characters the argument's name holds: its value is not in the file.
+   */
+  static boolean isVersionedExternalImage(String source) {
+    String reference = source.replace("\"", "").replace("'", "");
+    if (reference.indexOf('@') >= 0) {
+      return true;
+    }
+    String name = reference.substring(reference.lastIndexOf('/') + 1);
+    int colon = name.lastIndexOf(':');
+    if (colon < 0) {
+      return false;
+    }
+    String tag = name.substring(colon + 1);
+    return !"latest".equalsIgnoreCase(tag)
+        && tag.indexOf('$') < 0
+        && tag.chars().anyMatch(Character::isDigit);
   }
 
   /** Whether the finding is anchored in one of the declarative artifacts these classes live in. */

@@ -453,10 +453,13 @@ public final class PrReviewPrompts {
             in. Grade them exactly as follows, in every language and every repository, and let the
             description carry whatever is specific to this pull request:
             - A MUTABLE EXTERNAL REFERENCE — a base image, action, or chart named by a tag, or by
-              no tag at all, instead of a digest: risk "medium", confidence "medium". The
-              consequence is a build whose inputs change without a commit; nothing fails at run
-              time. A lockfile elsewhere in the repository pins the dependency set, not the image,
-              so it neither raises nor lowers this.
+              no tag at all, instead of a digest: risk "low", confidence "medium". It is
+              informational: the consequence is a build whose inputs change without a commit;
+              nothing fails at run time. A lockfile elsewhere in the repository pins the dependency
+              set, not the image, so it neither raises nor lowers this. An external image a COPY
+              --from names by an explicit version (busybox:1.36, grpc-health-probe:v0.4.25,
+              ghcr.io/acme/nginx-conf:1.2.0) is a versioned producer, not this defect: do not
+              report it, and do not sweep it into a finding about another reference.
             - A PATH THE RUNNING USER CANNOT WRITE — a VOLUME, WORKDIR or data directory that stays
               root-owned while the image drops to a non-root USER, with no mkdir/chown for it:
               risk "high", confidence "medium". Docker creates that path root:root, so the
@@ -954,7 +957,10 @@ public final class PrReviewPrompts {
             as disproof. The reverse claim — that one of these tests itself fails, an assertion
             expecting the wrong value or an off-by-one in an expected count — rests on arithmetic
             that no amount of re-reading can check: keep it at confidence "low", phrase it as
-            "CI will confirm", and never state the failure as settled fact.
+            "CI will confirm", and never state the failure as settled fact. That holds only while
+            nothing ran the test: when a CI-failure section in this prompt shows the check that
+            runs it already failed on this commit, the failure is measured, not counted — quote
+            that check and grade confidence on that evidence.
             {{inputs.relatedTests}}
             {{/if}}
 
@@ -1371,8 +1377,12 @@ public final class PrReviewPrompts {
               THAT line as the finding, at the confidence the code itself supports.
             - Carry the evidence: quote the check name and the exact annotation or log line the
               finding rests on in its description. The audit pass that rules on your findings is
-              not given this section, and a failure you do not quote reads there as a claim about
-              output nobody showed it. Never quote a failure line that is not in the list below.
+              not given this section; it is told only which failing checks a finding names, so a
+              failure you do not quote, check name included, reads there as a claim about output
+              nobody showed it. Never quote a failure line that is not in the list below.
+            - A failure the code explains is evidence, not arithmetic: a finding whose flagged line
+              makes a failing test in the list fail is graded at the confidence that failure
+              supports, never "low" for being a claim that a test fails.
             - A failure is not a finding by itself. Do not report that CI is failing, do not restate
               the list, and do not raise a finding for a failure the diff does not explain — a flaky
               test, an infrastructure error, or a file this pull request does not touch.

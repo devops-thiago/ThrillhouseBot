@@ -294,4 +294,110 @@ class DescriptionGapScreenTest {
 
     assertSame(gaps, DescriptionGapScreen.screen(gaps, RUST_159, ""));
   }
+
+  /** A description whose retry behaviour a run-together quote can misstate (#1064). */
+  private static final String RETRIES =
+      """
+      Title: feat: retry the registry call
+      Description:
+      Retries three times on failure. Set `retryBudget` to change it.
+      """;
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The description promises 'retriesforever', but the code stops after three.",
+        "The description states 'retryForever'; the loop is bounded.",
+        "The description says 'retryBudgetForever' is the setting."
+      })
+  void aRunTogetherOrCamelCasedMisquoteIsDropped(String gap) {
+    assertEquals(List.of(), DescriptionGapScreen.screen(List.of(gap), RETRIES, ""));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The description promises 'retriesthree', but the code retries twice.",
+        "The description says 'retryBudget' defaults to three; nothing reads it.",
+        "The description says 'retrybudget' is configurable; nothing reads it.",
+        // The quote spaces out the identifier the description runs together.
+        "The description says 'retry budget' defaults to three; nothing reads it."
+      })
+  void aRunTogetherQuoteThePrTextHoldsIsKept(String gap) {
+    assertEquals(List.of(gap), DescriptionGapScreen.screen(List.of(gap), RETRIES, ""));
+  }
+
+  @Test
+  void aPossessiveInThePrTextStillHoldsTheQuotedIdentifier() {
+    var source = DescriptionGapScreen.normalize("Raise `retryBudget`'s default to five.");
+
+    assertFalse(
+        DescriptionGapScreen.misquotes("The description says 'retryBudget' is raised.", source));
+  }
+
+  @Test
+  void anOrdinaryWordIsNotTakenForTwoRunTogether() {
+    var source = DescriptionGapScreen.normalize("the theory of retries");
+
+    assertFalse(DescriptionGapScreen.runTogether("theory", source));
+    assertFalse(DescriptionGapScreen.runTogether("retriesx", source));
+    assertTrue(DescriptionGapScreen.runTogether("retriesforever", source));
+    assertTrue(DescriptionGapScreen.runTogether("foreverretries", source));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "'retries forever' is what the description promises; the code retries three times.",
+        "The code retries three times; 'retries forever' is what the PR says.",
+        "'the README moves to docs/RUST-V8.md' was what the PR body claims.",
+        // Past-tense attributions, after the quote and before it.
+        "'retries forever' was what the description stated.",
+        "'retries forever' was what the PR promised.",
+        "The description claimed 'retries forever', but the loop is bounded."
+      })
+  void aMisquoteAttributedAfterTheQuoteIsDropped(String gap) {
+    assertEquals(List.of(), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "'retries forever' is what the code does, not what the description says.",
+        "'retries forever' is not what the description says; it is the code's own default.",
+        "'retries forever' is what the description never says.",
+        "'retries forever' is what the description says the code does not do.",
+        "'the README moves to docs/RUST-V10.md unchanged' is what the description says, and it"
+            + " does not."
+      })
+  void aQuoteTheTrailingClauseDoesNotAttributeOrThatHoldsIsKept(String gap) {
+    assertEquals(List.of(gap), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
+  }
+
+  @Test
+  void anOmissionIsCoveredOnlyWhenTheDescriptionNowHoldsTheQuotedPassage() {
+    var source = DescriptionGapScreen.normalize(RUST_159);
+
+    assertTrue(
+        DescriptionGapScreen.omissionCovered(
+            "The description never mentions 'the bookings service'.", source));
+    assertTrue(
+        DescriptionGapScreen.omissionCovered(
+            "The PR says nothing about 'the bookings service'.", source));
+    assertTrue(
+        DescriptionGapScreen.omissionCovered(
+            "The description never mentions \"the bookings service\".", source));
+    assertFalse(
+        DescriptionGapScreen.omissionCovered(
+            "The description never mentions 'the Redis cache layer'.", source));
+    // The code's side, and a claim rather than an omission, are not omissions of the description.
+    assertFalse(
+        DescriptionGapScreen.omissionCovered(
+            "The code never calls 'the bookings service'.", source));
+    assertFalse(
+        DescriptionGapScreen.omissionCovered(
+            "The description says 'the bookings service' is new.", source));
+    assertFalse(
+        DescriptionGapScreen.omissionCovered("The description never mentions 'bookings'.", source));
+  }
 }

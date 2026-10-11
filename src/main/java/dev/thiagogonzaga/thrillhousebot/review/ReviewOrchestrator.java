@@ -357,7 +357,13 @@ public class ReviewOrchestrator {
       // files this pull request changes are ever read.
       var evidence =
           ReviewEvidence.forReview(
-              citedLocationResolver, auth, req.owner(), req.repo(), req.commitSha(), ctx);
+              citedLocationResolver,
+              auth,
+              req.owner(),
+              req.repo(),
+              req.commitSha(),
+              ctx,
+              ciFailures);
       var aiResponse =
           findingPipeline.run(session, promptInputs, ctx, plan, lineResolver, evidence);
 
@@ -383,9 +389,14 @@ public class ReviewOrchestrator {
       }
 
       boolean summaryPosted = publishSummaryBestEffort(auth, req, result);
-      // Opt-in follow-up delta comment. Runs only when no summary was posted this round, and its
-      // outcome is intentionally discarded — it must not feed summaryPosted below.
-      publishFollowUpDeltaBestEffort(auth, req, result, summaryPosted, previousFindings);
+      // Opt-in follow-up delta comment. Skipped only on a /summary round that posted the summary:
+      // that command always posts a fresh summary comment, so the delta would land beside it. Any
+      // other round posts the delta, including one whose summary a superseded finding refreshed in
+      // place (an edit notifies nobody, #927) and one whose upsert posted a summary because none
+      // was
+      // left. The outcome is intentionally discarded — it must not feed summaryPosted below.
+      publishFollowUpDeltaBestEffort(
+          auth, req, result, summaryPosted && req.forceSummary(), previousFindings);
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       // summaryPosted gates the redundant-review skips: a failed summary post leaves review
@@ -560,7 +571,13 @@ public class ReviewOrchestrator {
   private boolean publishSummaryBestEffort(String auth, ReviewRequest req, ReviewResult result) {
     try {
       return reviewPublisher.publishSummary(
-          auth, req.owner(), req.repo(), req.prNumber(), result, req.forceSummary());
+          auth,
+          req.owner(),
+          req.repo(),
+          req.prNumber(),
+          result,
+          req.forceSummary(),
+          PromptSections.prContext(req.prTitle(), req.prDescription()));
     } catch (RuntimeException e) {
       Log.warnf(
           e,
@@ -582,11 +599,17 @@ public class ReviewOrchestrator {
       String auth,
       ReviewRequest req,
       ReviewResult result,
-      boolean summaryPosted,
+      boolean summaryCommandPosted,
       List<ReviewResponse.Finding> previousFindings) {
     try {
       reviewPublisher.publishFollowUpDelta(
-          auth, req.owner(), req.repo(), req.prNumber(), result, summaryPosted, previousFindings);
+          auth,
+          req.owner(),
+          req.repo(),
+          req.prNumber(),
+          result,
+          summaryCommandPosted,
+          previousFindings);
     } catch (RuntimeException e) {
       Log.warnf(
           e,
