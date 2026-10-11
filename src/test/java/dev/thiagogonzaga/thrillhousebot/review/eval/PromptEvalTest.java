@@ -189,14 +189,23 @@ class PromptEvalTest {
     // Same for a case that pins patch-coverage behavior (#115): the guidance and the
     // uncovered-line list travel together, exactly as ReviewPromptAssembler sends them.
     var coverage = orEmpty(evalCase.spec().patchCoverage());
+    // And for a case that pins how a stored maintainer decision is honoured (#971): the guidance
+    // and the fenced list, as ReviewPromptAssembler.learningsSection sends them.
+    var learnings = orEmpty(evalCase.spec().learnings());
     var repoInstructions =
         joinSections(
-            relatedTests.isBlank() ? "" : PrReviewPrompts.MOCK_FIDELITY_REQUEST,
-            coverage.isBlank()
+            joinSections(
+                relatedTests.isBlank() ? "" : PrReviewPrompts.MOCK_FIDELITY_REQUEST,
+                coverage.isBlank()
+                    ? ""
+                    : PrReviewPrompts.PATCH_COVERAGE_REQUEST
+                        + "\n\n"
+                        + PromptTemplateEscaper.escape(coverage)),
+            learnings.isBlank()
                 ? ""
-                : PrReviewPrompts.PATCH_COVERAGE_REQUEST
+                : PrReviewPrompts.LEARNINGS_REQUEST
                     + "\n\n"
-                    + PromptTemplateEscaper.escape(coverage));
+                    + PromptTemplateEscaper.fence(learnings));
     prReviewer
         .reviewStream(
             new AiReviewService.PromptInputs(

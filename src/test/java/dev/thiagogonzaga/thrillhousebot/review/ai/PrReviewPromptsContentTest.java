@@ -737,6 +737,22 @@ class PrReviewPromptsContentTest {
         req,
         "never by its bracketed\n  id, which readers never see",
         "the learning id must not reach review text (#950)");
+    assertContains(
+        req,
+        "A decision covers the same kind of finding in the same kind of file",
+        "a decline covers its defect class, not only the line it was made on (#971)");
+    assertContains(
+        req,
+        "differs in a way the diff itself shows and that changes the consequence",
+        "only a difference the code shows lifts a decision (#971)");
+    assertContains(
+        req,
+        "Do not invent a distinction to escape a decision",
+        "the model must not reason around a stored decline with a false distinction (#971)");
+    assertContains(
+        req,
+        "a COPY --from image instead of a\n  FROM base image",
+        "the round-14 COPY --from case is pinned against the base-image learning (#971)");
   }
 
   @Test
