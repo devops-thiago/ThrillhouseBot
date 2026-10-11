@@ -250,17 +250,17 @@ final class OverviewScreen {
 
   /**
    * Whether {@code clause} is about the review's findings: "finding(s)" with a count or a review
-   * word one or two words before it ("the two confirmed findings", "no findings"), or "this batch".
-   * "Refines findings before they are posted" describes a file and is not.
+   * word one or two words before it ("the two confirmed findings", "no findings"), or "finding(s)"
+   * anywhere in a clause that names "this batch" ("no findings in this batch", the batch planner's
+   * split). "Refines findings before they are posted" and "Processes this batch of rows" describe a
+   * file and are not.
    */
   static boolean talksAboutFindings(String clause) {
     var lower = clause.toLowerCase(Locale.ROOT);
-    if (lower.contains("this batch")) {
-      return true;
-    }
     var words = NON_WORD.split(lower);
+    var aboutTheBatch = lower.contains("this batch");
     for (var i = 0; i < words.length; i++) {
-      if (words[i].startsWith("finding") && qualified(words, i)) {
+      if (words[i].startsWith("finding") && (aboutTheBatch || qualified(words, i))) {
         return true;
       }
     }

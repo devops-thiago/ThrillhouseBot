@@ -114,6 +114,12 @@ class OverviewScreenTest {
         OverviewScreen.screenedText(
             "Entry point that renders the dashboard; hosts the two confirmed findings", "+x", ""));
     assertEquals("", OverviewScreen.screenedText("No findings in this batch", "+x", ""));
+    assertTrue(OverviewScreen.talksAboutFindings("Findings for this batch are posted inline"));
+    // A batch-processing file's role names "this batch" without the review's findings.
+    assertEquals(
+        "Processes this batch of rows before the next one is read",
+        OverviewScreen.screenedText(
+            "Processes this batch of rows before the next one is read", "+x", ""));
     // A leading separator leaves an empty token before "findings": it is not a count.
     assertEquals(
         "(findings) parser for the dashboard",
