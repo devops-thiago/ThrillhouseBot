@@ -187,7 +187,11 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
 - **A "Things to double-check" item is counted once and replaced only by the same defect** (#951,
   #961). A listed-only repeat at no higher severity is dropped by the open-thread guard
   (`restatesListed`); a finding at the same or higher severity replaces the item
-  (`replacedPriors`, `withoutReplaced`). Both go through `DefectIdentity.sameDefect`: same file,
+  (`replacedPriors`, `withoutReplaced`). An item this round's own finding replaces
+  (`replacedThisRound`) keeps an `unresolved` status under `REPLACED_NOTE` and is listed as its
+  replacement in the still-open set, so "Still present" adds up to the findings carried in and the
+  summary folds it into the round's entry as open since an earlier review; the delta comment does
+  not count it as new (`FollowUpDeltaSummary.newFindingCount`, #969). Both go through `DefectIdentity.sameDefect`: same file,
   then the same title, a similar title within three lines, or the same line with two shared title
   words or a common identifier, and never two titles naming different identifiers
   (`namesDifferentIdentifiers`). Content overlap alone is not identity (`DefectIdentityTest`).
