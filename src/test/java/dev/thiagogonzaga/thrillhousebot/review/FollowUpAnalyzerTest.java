@@ -4959,11 +4959,28 @@ class FollowUpAnalyzerTest {
   }
 
   /**
-   * A negator two long words before the statement denies it, however many characters those words
-   * take; a guard word in an earlier clause does not.
+   * A negator in the statement's clause denies it, however many characters its words take and up to
+   * six words back; a negator or guard word in an earlier clause does not, nor does "not only".
    */
   @Test
-  void aDenialReachesExactlyTwoWordsBackWhateverTheirLength() {
+  void aDenialReachesBackThroughItsClauseWhateverTheWordLength() {
+    for (var denied :
+        List.of(
+            "+// The counter is not ever really shared by every request goroutine.",
+            "+// Never is the pool really shared by every request goroutine.")) {
+      var note = heldNote(denied);
+      assertTrue(note.contains("no review has weighed"), denied + " -> " + note);
+    }
+    for (var affirmed :
+        List.of(
+            "+// It is not, in practice, a thing called from multiple threads.",
+            "+// It is not a cache and it is shared by every request goroutine.",
+            "+// There is no cache because the pool is shared by every request goroutine.",
+            "+// The pool is not only shared by every request goroutine but by the workers too.")) {
+      var note = heldNote(affirmed);
+      assertTrue(note.contains("says this path runs concurrently"), affirmed + " -> " + note);
+    }
+
     var longWords =
         heldNote(
             "+// The counter is not aVeryLongCamelCaseIdentifierOfFortyChar thereby shared by every"
@@ -5029,6 +5046,29 @@ class FollowUpAnalyzerTest {
             +tracker.bump();
             +// request goroutine in the server.""");
     assertTrue(codeBetween.contains("no review has weighed"), codeBetween);
+
+    // A code line that only starts like a comment marker splits the run as any code line does.
+    for (var code : List.of("*p = q;", "#include <stdio.h>", "---", "**bold**")) {
+      var note =
+          heldNote(
+              "+// The tracker is shared by every\n+"
+                  + code
+                  + "\n+// request goroutine in the server.");
+      assertTrue(note.contains("no review has weighed"), code + " -> " + note);
+    }
+    // Only // and /* open a comment with no space after them; #, * and -- need one.
+    for (var marker : List.of("//", "#", "*", "--", "/*")) {
+      var note =
+          heldNote(
+              "+// The tracker is shared by every\n+"
+                  + marker
+                  + "request goroutine in the server.");
+      var expected =
+          marker.equals("//") || marker.equals("/*")
+              ? "says this path runs concurrently"
+              : "no review has weighed";
+      assertTrue(note.contains(expected), marker + " -> " + note);
+    }
   }
 
   // #963: a decline the model did not accept on the effective previous round is explained too.

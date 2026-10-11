@@ -293,10 +293,10 @@ final class RebuttalContradiction {
 
   /**
    * Where {@code text} states concurrency, or {@code -1}: a {@link #STATED_CONCURRENCY} match that
-   * a denial word does not govern ({@link #DENIES}: one at most two words before it, in the same
-   * clause). Everything before the match is read, so the two-word rule alone decides how far back a
-   * denial reaches. A guard word earlier in the sentence ("the lock guards every field, which is
-   * shared by every request goroutine") governs something else.
+   * a denial word does not govern ({@link #DENIES}: one in the same clause, at most {@value
+   * #DENIAL_WORDS} words before it). Everything before the match is read, so the clause alone
+   * decides how far back a denial reaches. A guard word earlier in the sentence ("the lock guards
+   * every field, which is shared by every request goroutine") governs something else.
    */
   private static int concurrencyStatedAt(String text) {
     for (var pattern : STATED_CONCURRENCY) {
@@ -339,25 +339,39 @@ final class RebuttalContradiction {
     return statements;
   }
 
-  /** The marker that opens a whole-line comment: {@code //}, {@code #}, {@code *}, {@code --}. */
+  /**
+   * The marker that opens a whole-line comment: {@code //}, a block comment's opening, {@code ;},
+   * and {@code #}, {@code *}, a block comment's close or {@code --} followed by a space or the end
+   * of the line, so a code line such as {@code *p = q;}, {@code #include} or a {@code ---} rule is
+   * not read as a comment.
+   */
   private static final Pattern COMMENT_LINE =
-      Pattern.compile("\\h{0,40}+(?://+|#+|/?\\*+/?|--|;+)");
+      Pattern.compile("\\h{0,40}+(?://+|/\\*+|;+|(?:#+|\\*+/?|--)(?=\\h|$))");
+
+  /** How many words a negator may sit before the statement it denies, within one clause. */
+  private static final int DENIAL_WORDS = 6;
 
   /**
-   * What turns the {@link #STATED_CONCURRENCY} statement right after it into a denial: a negator at
-   * most two words and no clause punctuation away ("not shared by every goroutine", "is never
-   * called from multiple threads", any n't contraction: "doesn't support concurrent use"), or a
-   * verb that refuses the statement's own subject directly before it ("rejects concurrent
-   * requests", "prevents concurrent access", "prohibits concurrent access"). A verb that only
-   * protects shared state ("the lock guards every field shared by every request goroutine",
-   * "serializes concurrent requests") still says the path is reached concurrently, so it denies
-   * nothing. A gap is any horizontal space, a non-breaking one included, and a word counts as one
-   * whatever its length (a long identifier); the possessive quantifiers keep the scan linear.
+   * What turns the {@link #STATED_CONCURRENCY} statement after it into a denial: a negator in the
+   * same clause, at most {@value #DENIAL_WORDS} words before it with no clause punctuation or
+   * clause conjunction ("and", "but", "which", "because" …) between ("not shared by every
+   * goroutine", "is not ever really called from multiple threads", any n't contraction: "doesn't
+   * support concurrent use"), but not "not only" or "not just", which affirm; or a verb that
+   * refuses the statement's own subject directly before it ("rejects concurrent requests",
+   * "prevents concurrent access", "prohibits concurrent access"). A verb that only protects shared
+   * state ("the lock guards every field shared by every request goroutine", "serializes concurrent
+   * requests") still says the path is reached concurrently, so it denies nothing. A gap is any
+   * horizontal space, a non-breaking one included, and a word counts as one whatever its length (a
+   * long identifier); the possessive quantifiers keep the scan linear.
    */
   private static final Pattern DENIES =
       ci(
           "(?:\\b(?:not|never|no|nor|without|cannot|cant|wont|isnt|\\w{1,8}n['’]t)\\b"
-              + "(?:[\\h-]{1,16}+[\\w'’]++(?:-[\\w'’]++)*+){0,2}"
+              + "(?![\\h-]{1,16}+(?:only|just|merely)\\b)"
+              + "(?:[\\h-]{1,16}+(?!(?:and|but|or|nor|which|that|while|whereas|because|since|so"
+              + "|though|although|yet|unless|except)\\b)[\\w'’]++(?:-[\\w'’]++)*+){0,"
+              + DENIAL_WORDS
+              + "}"
               + "|\\b(?:rejects?|prevents?|avoids?|forbids?|disallows?|blocks?|prohibits?"
               + "|excludes?|precludes?|refuses?|disables?)\\b)"
               + "[\\h-]{0,16}+$");
