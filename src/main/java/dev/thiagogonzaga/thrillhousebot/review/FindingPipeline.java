@@ -619,9 +619,22 @@ public class FindingPipeline {
             ctx.files(),
             Objects.requireNonNullElse(inputs.prContext(), "")
                 + "\n"
-                + Objects.requireNonNullElse(inputs.linkedIssues(), ""));
+                + Objects.requireNonNullElse(inputs.linkedIssues(), "")
+                + "\n"
+                + findingsText(refined));
     // #944: an answer with no overview on the head the previous round reviewed keeps that round's.
     return persistWithSummary(session, refined, PriorOverviewCarryover.fill(screened, ctx), carry);
+  }
+
+  /** The titles and descriptions of {@code response}'s findings, one per line. */
+  private static String findingsText(ReviewResponse response) {
+    return response.findings().stream()
+        .map(
+            f ->
+                Objects.requireNonNullElse(f.title(), "")
+                    + " "
+                    + Objects.requireNonNullElse(f.description(), ""))
+        .collect(Collectors.joining("\n"));
   }
 
   /** The inputs with the carried gaps' request appended to the summary call's guidance. */

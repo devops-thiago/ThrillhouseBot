@@ -95,7 +95,7 @@ class OverviewScreenTest {
   @ParameterizedTest
   @ValueSource(strings = {"placeholder", "TODO", "n/a", "…", "-", "  ", "Summary.", "TBD"})
   void placeholderTextIsNotASummary(String text) {
-    assertEquals("", OverviewScreen.screenedText(text, "+x"));
+    assertEquals("", OverviewScreen.screenedText(text, "+x", ""));
   }
 
   @Test
@@ -105,12 +105,12 @@ class OverviewScreenTest {
     assertEquals(
         "Entry point that renders the dashboard",
         OverviewScreen.screenedText(
-            "Entry point that renders the dashboard; hosts the two confirmed findings", "+x"));
-    assertEquals("", OverviewScreen.screenedText("No findings in this batch", "+x"));
+            "Entry point that renders the dashboard; hosts the two confirmed findings", "+x", ""));
+    assertEquals("", OverviewScreen.screenedText("No findings in this batch", "+x", ""));
     // A file about findings is still described.
     assertEquals(
         "Refines findings before they are posted",
-        OverviewScreen.screenedText("Refines findings before they are posted", "+x"));
+        OverviewScreen.screenedText("Refines findings before they are posted", "+x", ""));
   }
 
   @Test
@@ -119,12 +119,49 @@ class OverviewScreenTest {
 
     assertEquals(
         "Documents VITE_API_URL",
-        OverviewScreen.screenedText("Documents VITE_API_URL; adds MAX_PER_ZONE", patch));
-    assertEquals("", OverviewScreen.screenedText("Documents MAX_PER_ZONE and currency", patch));
+        OverviewScreen.screenedText("Documents VITE_API_URL; adds MAX_PER_ZONE", patch, ""));
+    assertEquals("", OverviewScreen.screenedText("Documents MAX_PER_ZONE and currency", patch, ""));
     // No patch to read: nothing is judged.
-    assertEquals("Logo for MAX_PER_ZONE", OverviewScreen.screenedText("Logo for MAX_PER_ZONE", ""));
     assertEquals(
-        "Logo for MAX_PER_ZONE", OverviewScreen.screenedText("Logo for MAX_PER_ZONE", null));
+        "Logo for MAX_PER_ZONE", OverviewScreen.screenedText("Logo for MAX_PER_ZONE", "", ""));
+    assertEquals(
+        "Logo for MAX_PER_ZONE", OverviewScreen.screenedText("Logo for MAX_PER_ZONE", null, ""));
+  }
+
+  @Test
+  void aSettingAFindingOrThePrTextNamesIsNotInvented() {
+    // A finding can quote a constant on a line the patch does not show.
+    var patch = "+| VITE_API_URL | url |";
+
+    assertEquals(
+        "Documents MAX_PER_ZONE",
+        OverviewScreen.screenedText(
+            "Documents MAX_PER_ZONE", patch, "Finding: MAX_PER_ZONE is never enforced"));
+  }
+
+  @Test
+  void emptyClausesAreDroppedAndAnExactPathKeepsItsScreenedText() {
+    assertEquals("one; two", OverviewScreen.screenedText("one;; two;", "+x", ""));
+    var screened =
+        OverviewScreen.screen(
+            summary(
+                "p",
+                List.of(row("react/src/main.tsx", "Renders it; hosts the two confirmed findings"))),
+            FILES,
+            null);
+
+    assertEquals(List.of(row("react/src/main.tsx", "Renders it")), screened.fileSummaries());
+  }
+
+  @Test
+  void onlyThePurposeChangingStillYieldsANewSummary() {
+    var clean =
+        summary("Adds it (THRILLHOUSEBOT-9). Done.", List.of(row("react/src/main.tsx", "renders")));
+
+    var screened = OverviewScreen.screen(clean, FILES, "");
+
+    assertEquals("Done.", screened.prPurpose());
+    assertEquals(clean.fileSummaries(), screened.fileSummaries());
   }
 
   @Test
@@ -139,6 +176,10 @@ class OverviewScreenTest {
         OverviewScreen.withoutInventedTickets(purpose, "Title: rotator\nCloses jira-7"));
     assertEquals("No key here.", OverviewScreen.withoutInventedTickets("No key here.", ""));
     assertNull(OverviewScreen.withoutInventedTickets(null, ""));
+    // Every key of a sentence must be known; the first unknown one takes it out.
+    assertEquals(
+        "Known.",
+        OverviewScreen.withoutInventedTickets("Known. Fixes JIRA-7 and ABCD-9.", "JIRA-7"));
   }
 
   @Test
