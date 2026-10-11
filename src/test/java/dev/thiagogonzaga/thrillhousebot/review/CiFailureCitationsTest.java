@@ -140,6 +140,31 @@ class CiFailureCitationsTest {
     assertFalse(citations.cites(described("Lint and eslint both fail on this line.")));
   }
 
+  /**
+   * The section is read back by the strings {@link CiFailureContextResolver} renders it with: a
+   * section that resolver actually built records every check, detailed or only named.
+   */
+  @Test
+  void aSectionTheResolverRendersIsReadBack() {
+    var failed = new java.util.ArrayList<CiStatusEvaluator.FailedCheck>();
+    for (var name : java.util.List.of("unit", "lint", "e2e", "docs", "build", "native image")) {
+      failed.add(new CiStatusEvaluator.FailedCheck(name, "failure", 0L, null, null, null, 0));
+    }
+    var section =
+        new CiFailureContextResolver(null, null, null, true, false, 20_000)
+            .resolve(
+                "a",
+                "o",
+                "r",
+                new CiStatusEvaluator.CiEvaluation(
+                    java.util.List.of(), false, true, new CiStatusEvaluator.CiFailures(failed, 0)));
+
+    var citations = CiFailureCitations.parse(section);
+
+    assertTrue(citations.cites(described("The e2e check fails in CI.")), section);
+    assertTrue(citations.cites(described("The native image job fails in CI.")), section);
+  }
+
   @Test
   void aBlankOrNamelessSectionRecordsNothing() {
     assertSame(CiFailureCitations.NONE, CiFailureCitations.parse(null));

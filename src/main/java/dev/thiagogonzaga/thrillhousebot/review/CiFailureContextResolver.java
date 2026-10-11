@@ -88,6 +88,17 @@ public class CiFailureContextResolver {
   /** Characters of any single line — a title, an annotation, a log line. */
   static final int MAX_LINE_CHARS = 300;
 
+  /**
+   * The heading a detailed check opens with, its conclusion marker, and the line naming the checks
+   * not detailed. {@link CiFailureCitations} reads the rendered section back by these same three
+   * strings, so the two cannot drift apart.
+   */
+  static final String CHECK_HEADING = "### ";
+
+  static final String CONCLUSION = " (conclusion: ";
+
+  static final String NOT_DETAILED = "Also failing, not detailed: ";
+
   /** Appended when the whole section had to be cut to {@code max-chars}. */
   static final String TRUNCATION_NOTE = "[CI context truncated to its character budget]";
 
@@ -186,17 +197,15 @@ public class CiFailureContextResolver {
     }
     if (failed.size() > detailed) {
       var rest = failed.subList(detailed, failed.size()).stream().map(c -> oneLine(c.name()));
-      sb.append("\nAlso failing, not detailed: ")
-          .append(String.join(", ", rest.toList()))
-          .append('\n');
+      sb.append('\n').append(NOT_DETAILED).append(String.join(", ", rest.toList())).append('\n');
     }
     return sb.toString();
   }
 
   private static void appendCheck(StringBuilder sb, CiStatusEvaluator.FailedCheck check) {
-    sb.append("### ")
+    sb.append(CHECK_HEADING)
         .append(oneLine(check.name()))
-        .append(" (conclusion: ")
+        .append(CONCLUSION)
         .append(oneLine(check.conclusion() == null ? "unknown" : check.conclusion()))
         .append(")\n");
     var title = oneLine(check.title());

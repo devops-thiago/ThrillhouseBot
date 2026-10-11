@@ -1554,8 +1554,12 @@ public class FindingPipeline {
     // #773: the last word on the two graded fields, so the anchored infrastructure classes cannot
     // be re-spread by the verifier's own lowering, and the grade the publisher routes on is the
     // one persisted below for the next round to compare against. The diff's lines let it recognize
-    // an unpinned-reference finding anchored on a versioned COPY --from source (#926).
-    aiResponse = SeverityCalibrator.calibrate(aiResponse, lineResolver::getLineText);
+    // an unpinned-reference finding anchored on a versioned COPY --from source (#926); the line is
+    // read at the diff's spelling of the path, since that mapping (#1022) is only applied below.
+    aiResponse =
+        SeverityCalibrator.calibrate(
+            aiResponse,
+            (file, line) -> lineResolver.getLineText(lineResolver.diffPathFor(file), line));
     aiResponse =
         followUpAnalyzer.dropRepliedDuplicates(
             aiResponse, ctx.priorAiResponseJsons(), ctx.inlineComments(), botIdentity);

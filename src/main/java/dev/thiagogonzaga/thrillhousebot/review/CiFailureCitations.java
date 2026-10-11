@@ -48,13 +48,13 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   static final CiFailureCitations NONE = new CiFailureCitations(List.of());
 
   /** The heading each detailed check opens with, as {@code CiFailureContextResolver} renders it. */
-  private static final String CHECK_HEADING = "### ";
+  private static final String CHECK_HEADING = CiFailureContextResolver.CHECK_HEADING;
 
   /** What follows a detailed check's name on its heading line. */
-  private static final String CONCLUSION = " (conclusion: ";
+  private static final String CONCLUSION = CiFailureContextResolver.CONCLUSION;
 
   /** The line naming the failing checks the section did not detail. */
-  private static final String NOT_DETAILED = "Also failing, not detailed: ";
+  private static final String NOT_DETAILED = CiFailureContextResolver.NOT_DETAILED;
 
   /** Characters of a check name repeated in a note; names are output the pull request controls. */
   static final int MAX_NAME_CHARS = 120;
