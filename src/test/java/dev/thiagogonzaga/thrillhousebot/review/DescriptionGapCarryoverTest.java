@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -30,6 +31,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.time.Duration;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -837,6 +839,130 @@ class DescriptionGapCarryoverTest {
       var applied = carry.apply(summary(List.of(), List.of("G1: store.py now caps listings")));
 
       assertEquals(List.of(EMAIL_GAP), applied.descriptionGaps());
+    }
+
+    private static final String OMISSION_GAP =
+        "The description never mentions 'the Redis cache layer', which the change adds.";
+
+    private static final String UNQUOTED_OMISSION_GAP =
+        "The description does not cover the new retry budget setting.";
+
+    /** {@link #listing} as a round that judged its gaps against {@code prText} posts it. */
+    private List<IssueComment> listingJudgedAgainst(String prText, String... gaps) {
+      var body = listing(gaps).getFirst().body();
+      return List.of(
+          comment(
+              "thrillhousebot[bot]",
+              body.replaceFirst(
+                  "\n",
+                  Matcher.quoteReplacement(
+                      "\n" + DescriptionGapCarryover.prTextMarker(prText) + "\n"))));
+    }
+
+    @Test
+    void aCarriedOmissionLeavesOnTheSameHeadOnceTheEditedDescriptionHoldsIt() {
+      // #1064: the author answered "the description omits X" by editing only the description.
+      var edited = PR_TEXT + "It adds the Redis cache layer in front of the store.\n";
+      var carry =
+          DescriptionGapCarryover.of(
+              listingJudgedAgainst(PR_TEXT, OMISSION_GAP, CAP_GAP), BOT, LINKED_113, edited, true);
+
+      assertTrue(carry.prTextChanged());
+      assertEquals(List.of(CAP_GAP), carry.apply(summary(List.of(), List.of())).descriptionGaps());
+      assertEquals(List.of(CAP_GAP), carry.apply(null).descriptionGaps());
+    }
+
+    @Test
+    void anUnchangedDescriptionKeepsTheHold() {
+      var carry =
+          DescriptionGapCarryover.of(
+              listingJudgedAgainst(PR_TEXT, OMISSION_GAP, UNQUOTED_OMISSION_GAP),
+              BOT,
+              LINKED_113,
+              PR_TEXT.replace("  ", " ").replace(".", ". "),
+              true);
+
+      var applied = carry.apply(summary(List.of(), List.of("G1", "G2: the PR covers it")));
+
+      assertFalse(carry.prTextChanged());
+      assertEquals(List.of(OMISSION_GAP, UNQUOTED_OMISSION_GAP), applied.descriptionGaps());
+    }
+
+    @Test
+    void anEditedDescriptionLetsTheCallReleaseADescriptionGapButNotALinkedIssueOne() {
+      var edited = PR_TEXT + "A retry budget setting caps the attempts.\n";
+      var carry =
+          DescriptionGapCarryover.of(
+              listingJudgedAgainst(PR_TEXT, UNQUOTED_OMISSION_GAP, CAP_GAP),
+              BOT,
+              LINKED_113,
+              edited,
+              true);
+
+      var applied =
+          carry.apply(summary(List.of(), List.of("G1: the description now names it", "G2")));
+
+      assertEquals(List.of(CAP_GAP), applied.descriptionGaps());
+      assertEquals(
+          List.of(CAP_GAP), carry.apply(summary(List.of(), List.of("G1"))).descriptionGaps());
+      // An entry naming nothing carried resolves nothing either.
+      assertEquals(
+          List.of(UNQUOTED_OMISSION_GAP, CAP_GAP),
+          carry.apply(summary(List.of(), List.of("G9"))).descriptionGaps());
+    }
+
+    @Test
+    void aSummaryPostedBeforeTheFingerprintReadsAsUnchanged() {
+      var carry =
+          DescriptionGapCarryover.of(
+              listing(OMISSION_GAP),
+              BOT,
+              LINKED_113,
+              PR_TEXT + "Adds the Redis cache layer.",
+              true);
+
+      assertNull(carry.previousPrText());
+      assertFalse(carry.prTextChanged());
+      // Nor is a change read without this round's PR text.
+      assertFalse(
+          new DescriptionGapCarryover.Carry(List.of(OMISSION_GAP), "", null, true, "0123")
+              .prTextChanged());
+      assertEquals(
+          List.of(OMISSION_GAP), carry.apply(summary(List.of(), List.of("G1"))).descriptionGaps());
+    }
+
+    @Test
+    void theFingerprintIsTakenOverTheSameTextOnBothSides() {
+      // The publisher fingerprints PromptSections.prContext(title, description); the carry reads
+      // the summary call's prContext, the same text fenced by ReviewPromptAssembler and unfenced.
+      var prContext = PromptSections.prContext("feat: bookings", "Adds the bookings service.");
+
+      assertEquals(
+          DescriptionGapCarryover.fingerprint(prContext),
+          DescriptionGapCarryover.fingerprint(
+              PromptTemplateEscaper.unfence(PromptTemplateEscaper.fence(prContext))));
+    }
+
+    @Test
+    void theFingerprintIsReadFromTheMarkerLineOnly() {
+      var marker = DescriptionGapCarryover.prTextMarker(PR_TEXT);
+
+      assertEquals(
+          DescriptionGapCarryover.fingerprint(PR_TEXT),
+          DescriptionGapCarryover.markedFingerprint("x\n  " + marker + "  \ny"));
+      assertNull(DescriptionGapCarryover.markedFingerprint("no marker here"));
+      assertThrows(
+          IllegalStateException.class,
+          () -> DescriptionGapCarryover.fingerprint("NO-SUCH-DIGEST", PR_TEXT));
+      assertNull(
+          DescriptionGapCarryover.markedFingerprint(DescriptionGapCarryover.PR_TEXT_MARKER_PREFIX));
+      assertNotEquals(
+          DescriptionGapCarryover.fingerprint(PR_TEXT),
+          DescriptionGapCarryover.fingerprint(PR_TEXT + "More."));
+      // The marker line is not read back as a gap.
+      assertEquals(
+          List.of(OMISSION_GAP),
+          DescriptionGapCarryover.previousGaps(listingJudgedAgainst(PR_TEXT, OMISSION_GAP), BOT));
     }
 
     @Test
