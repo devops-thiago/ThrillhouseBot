@@ -58,7 +58,10 @@ class AbsenceSubjectScanTest {
       ",",
       ";",
       "é",
-      "\u000B"
+      "\u000B",
+      "\u0001",
+      "n0thing",
+      "nobod_"
     };
     var random = new Random(1030);
     for (var n = 0; n < 50_000; n++) {

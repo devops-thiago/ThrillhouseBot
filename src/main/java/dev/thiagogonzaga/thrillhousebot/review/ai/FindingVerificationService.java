@@ -1396,7 +1396,7 @@ public class FindingVerificationService {
    */
   static boolean negatingSubjectEndsAt(CharSequence text, int end) {
     int at = end;
-    for (int gapWords = 0; ; gapWords++) {
+    for (int gapWords = 0; gapWords <= 3; gapWords++) {
       int separator = at;
       boolean whitespaceOnly = true;
       while (separator > 0 && isGapSeparator(text.charAt(separator - 1))) {
@@ -1413,11 +1413,9 @@ public class FindingVerificationService {
       if (whitespaceOnly && isNegatingPronoun(text, word, separator)) {
         return true;
       }
-      if (gapWords == 3) {
-        return false;
-      }
       at = word;
     }
+    return false;
   }
 
   /**
