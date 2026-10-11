@@ -1402,6 +1402,13 @@ public final class PrReviewPrompts {
    * silence a real defect. And a finding raised against a decision names it, so the maintainer sees
    * which learning the bot believes has gone stale and can retract it.
    *
+   * <p>"Same kind of finding" is spelled out (#971): the model re-raised a declined digest-pinning
+   * finding on a {@code COPY --from} image by arguing the decline covered base images "consumed at
+   * deploy time" while a {@code COPY --from} source "is fetched during image build" — a base image
+   * is pulled at build time too, and the built image's digest pins both. A decision covers its
+   * defect class in that kind of file unless the diff shows a difference that changes the
+   * consequence, and the prompt names inventing a distinction as the failure it is.
+   *
    * <p>Terminated with {@link String#stripIndent()} so the value is not a compile-time constant;
    * see {@link #PATCH_COVERAGE_REQUEST}.
    */
@@ -1416,6 +1423,14 @@ public final class PrReviewPrompts {
             - Do not raise a finding a decision already declined — the same defect claim about the
               same kind of code — while the decision's stated reason still holds for the code in
               this diff. Apply a stated convention the way you apply the repository instructions.
+            - A decision covers the same kind of finding in the same kind of file, not only the
+              exact line it was made on. It stops covering a new case only when the code in this
+              diff differs in a way the diff itself shows and that changes the consequence the
+              decision weighed. Do not invent a distinction to escape a decision: a different
+              instruction, stage or wording for the same defect (a COPY --from image instead of a
+              FROM base image, both pulled when the image is built and both pinned by the built
+              image's digest) is the same finding, and a reason you have to supply yourself is not
+              a difference the code shows.
             - A decision is not evidence that unrelated code is correct. Judge every other finding
               on the diff alone.
             - When the code in this diff breaks the premise a decision rests on, you may raise the

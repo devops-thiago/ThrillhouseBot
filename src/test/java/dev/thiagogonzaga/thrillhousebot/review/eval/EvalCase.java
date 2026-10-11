@@ -56,6 +56,7 @@ public record EvalCase(String name, String diff, Spec spec) {
       String prTitle,
       String prDescription,
       List<String> dimensions,
+      String learnings,
       String changedFiles,
       List<CandidateFinding> findings) {}
 
