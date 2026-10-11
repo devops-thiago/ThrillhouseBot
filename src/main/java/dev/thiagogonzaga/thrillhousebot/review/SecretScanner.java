@@ -102,7 +102,7 @@ final class SecretScanner {
 
   /** The words that mark a key as naming a credential. */
   private static final String CREDENTIAL_WORD =
-      "(?:password|passwd|secret|token|api[_-]?key|apikey"
+      "(?:password|passwd|secret|token|api[_-]?key"
           + "|access[_-]?key|private[_-]?key|client[_-]?secret)";
 
   /**
@@ -176,6 +176,40 @@ final class SecretScanner {
               + ",256})\\1");
 
   /**
+   * Every value a line assigns to a credential-named key, quoted or not (#926): the generic rule
+   * reads only quoted literals, because an unquoted right-hand side is where the credential is
+   * supposed to come from, but a model finding about {@code ENV API_TOKEN=${API_TOKEN}} is about
+   * exactly that unquoted value. A {@code {{ template }}} value is read whole, spaces included. The
+   * key (group 1) is any identifier; {@link #CREDENTIAL_KEY} decides whether it names a credential.
+   */
+  private static final Pattern ASSIGNED_VALUE =
+      Pattern.compile(
+          "([\\w.-]{1,80}+)[\"']?\\s{0,4}+(?::=|=>|=|:)\\s{0,4}+([\"'`]?)"
+              + "(\\{\\{[^}\\n]{1,200}+}}|[^\\s\"'`,;]{1,256}+)\\2");
+
+  /** A key that names a credential. */
+  private static final Pattern CREDENTIAL_KEY = Pattern.compile("(?i)" + CREDENTIAL_WORD);
+
+  /**
+   * A value read from the environment or a template rather than written out (#926): {@code ${VAR}},
+   * {@code ${VAR:-default}}, {@code $(command)} and {@code {{ template }}} here, and {@code $VAR}
+   * and Windows {@code %VAR%} in {@link #VARIABLE_REFERENCE}. The whole value must be one such
+   * reference.
+   */
+  private static final Pattern INTERPOLATION =
+      Pattern.compile("\\$\\{[^}]{1,200}+}|\\$\\([^)]{1,200}+\\)|\\{\\{[^}]{1,200}+}}");
+
+  private static final Pattern VARIABLE_REFERENCE =
+      Pattern.compile("\\$[A-Za-z_]\\w{0,100}+|%[A-Za-z_]\\w{0,100}+%");
+
+  /**
+   * A shell reference with a default ({@code ${VAR:-default}}, {@code ${VAR-default}}, {@code
+   * ${VAR:=default}}, {@code ${VAR=default}}); group 1 is the default, which is written out.
+   */
+  private static final Pattern SHELL_DEFAULT =
+      Pattern.compile("\\$\\{[A-Za-z_]\\w{0,100}+:?[-=]([^}]{0,200}+)}");
+
+  /**
    * Case-insensitive fragments that mark a value as a placeholder rather than a credential. Each is
    * a word no provider's random alphabet produces by chance at a rate that matters.
    */
@@ -217,6 +251,17 @@ final class SecretScanner {
   private static final Pattern IDENTIFIER_SEPARATOR = Pattern.compile("[._/-]");
 
   /**
+   * A construct only a regular expression writes (#981): a group or lookaround opener {@code (?}, a
+   * character class holding a range ({@code [A-Za-z0-9_-]}), or a class escape ({@code \d}, {@code
+   * \w}, {@code \s}, {@code \b}). Bounded, so a long value costs one linear pass.
+   */
+  private static final Pattern REGEX_CONSTRUCT =
+      Pattern.compile("\\(\\?|\\[[^\\]]{0,64}?[A-Za-z0-9]-[A-Za-z0-9]|\\\\[dDwWsSbB]");
+
+  /** The characters that carry a regular expression's structure. */
+  private static final String REGEX_STRUCTURE = "()[]{}\\|?*+^$";
+
+  /**
    * The start of a PEM body: base64 of at least a line's worth, either on the line after the header
    * or after a literal {@code \n} on the header's own line (a key pasted into a JSON or YAML
    * string), or the {@code Proc-Type} header of a legacy encrypted key. A header with no body
@@ -256,12 +301,55 @@ final class SecretScanner {
     Matcher generic = GENERIC_ASSIGNMENT.matcher(line);
     while (generic.find()) {
       var value = generic.group(3);
-      if (claimed(hits, value) || !looksLikeSecret(value, entropyThreshold)) {
+      if (claimed(hits, value)
+          || insideStringLiteral(line, generic)
+          || !looksLikeSecret(value, entropyThreshold)) {
         continue;
       }
       hits.add(new Hit(SecurityRule.GENERIC_SECRET, value, generic.group(1)));
     }
     return hits;
+  }
+
+  /**
+   * Whether a generic match is sample text quoted inside another string literal (#981), such as
+   * {@code "client_secret: 'abcdefgh12345'",} in a test's list of inputs: a quote opens right
+   * before the key, is not closed before the value's own quote, and is a different quote character
+   * from the value's. A quoted key in JSON, YAML or a dictionary ({@code "apiKey": "…"}, {@code
+   * {"token": '…'}}) closes its quote before the operator, so it is still read as an assignment.
+   * The rule reads only quoted values, so an unquoted value inside a string ({@code "password=…"})
+   * is not an assignment to it either way.
+   *
+   * <p>The enclosing string must also sit where a list element or a call argument does: first on
+   * its line, or right after {@code (}, {@code [}, {@code {} or {@code ,}. A string a command runs
+   * ({@code sh -c 'DB_PASSWORD="…"'}, {@code ExecStart=… 'API_KEY="…"'}) follows a word or an
+   * operator, so a real credential there is still reported. A command string passed as a list
+   * element ({@code ["sh", "-c", "PASSWORD='…'"]}) is the case this cannot tell from sample text.
+   */
+  private static boolean insideStringLiteral(String line, Matcher generic) {
+    int keyStart = generic.start(1);
+    if (keyStart == 0) {
+      return false;
+    }
+    char before = line.charAt(keyStart - 1);
+    if (before != '"' && before != '\'' && before != '`') {
+      return false;
+    }
+    return line.charAt(generic.start(2)) != before
+        && line.substring(generic.end(1), generic.start(2)).indexOf(before) < 0
+        && inElementPosition(line, keyStart - 1);
+  }
+
+  /**
+   * Whether the string opening at {@code quote} is first on its line or follows {@code (}, {@code
+   * [}, {@code {} or {@code ,}, ignoring whitespace.
+   */
+  private static boolean inElementPosition(String line, int quote) {
+    int i = quote - 1;
+    while (i >= 0 && Character.isWhitespace(line.charAt(i))) {
+      i--;
+    }
+    return i < 0 || "([{,".indexOf(line.charAt(i)) >= 0;
   }
 
   /** Whether a private-key header is followed by a key body; see {@link #PEM_BODY}. */
@@ -291,12 +379,14 @@ final class SecretScanner {
    */
   static boolean looksLikeSecret(String value, double entropyThreshold) {
     if (isPlaceholder(value)
+        || isInterpolation(value)
         || value.startsWith("$")
         || value.startsWith("/")
         || value.startsWith("./")
         || value.startsWith("~/")
         || value.contains("://")
-        || isIdentifier(value)) {
+        || isIdentifier(value)
+        || isRegex(value)) {
       return false;
     }
     return characterClasses(value) >= 2
@@ -312,6 +402,67 @@ final class SecretScanner {
     var words = IDENTIFIER_SEPARATOR.split(value, -1);
     return words.length >= 2
         && Arrays.stream(words).allMatch(word -> IDENTIFIER_WORD.matcher(word).matches());
+  }
+
+  /** Whether the whole value is a reference to the environment or a template; see INTERPOLATION. */
+  static boolean isInterpolation(String value) {
+    return INTERPOLATION.matcher(value).matches() || VARIABLE_REFERENCE.matcher(value).matches();
+  }
+
+  /**
+   * Whether a value stands in for a credential rather than writing one out: an {@link
+   * #isInterpolation interpolation} or a {@link #isPlaceholder placeholder}. A shell default
+   * ({@code ${API_TOKEN:-…}}) is written out, so it counts only when the default is empty or itself
+   * a stand-in: {@code ${API_TOKEN:-changeme}} is one, {@code ${API_TOKEN:-q8#Lm2…}} is a committed
+   * credential.
+   */
+  private static boolean isStandIn(String value) {
+    Matcher shellDefault = SHELL_DEFAULT.matcher(value);
+    if (shellDefault.matches()) {
+      var fallback = shellDefault.group(1);
+      return fallback.isEmpty() || isStandIn(fallback);
+    }
+    return isInterpolation(value) || isPlaceholder(value);
+  }
+
+  /**
+   * Whether every credential-named key the line assigns gets a {@link #isStandIn stand-in}, with a
+   * shell default only when the default is one too, at least one key is assigned, and no rule of
+   * {@link #scan} matches the line (#926). Such a line names where a credential comes from, or
+   * stands in for one in documentation: {@code ENV API_TOKEN=${API_TOKEN}}, {@code
+   * FLEET_API_TOKEN=changeme}.
+   */
+  static boolean assignsOnlyStandIns(String line, double entropyThreshold) {
+    if (line.length() > MAX_GENERIC_LINE_LENGTH) {
+      return false;
+    }
+    Matcher assigned = ASSIGNED_VALUE.matcher(line);
+    boolean any = false;
+    while (assigned.find()) {
+      if (!CREDENTIAL_KEY.matcher(assigned.group(1)).find()) {
+        continue;
+      }
+      var value = assigned.group(3);
+      if (!isStandIn(value)) {
+        return false;
+      }
+      any = true;
+    }
+    return any && scan(line, null, entropyThreshold).isEmpty();
+  }
+
+  /**
+   * Whether the value is a regular expression rather than a credential (#981), such as {@code
+   * TOKEN_END = "(?![A-Za-z0-9_-])"}: it holds a {@link #REGEX_CONSTRUCT} and at least a quarter of
+   * its characters are {@link #REGEX_STRUCTURE}. A password with the odd bracket or question mark
+   * has neither a construct nor that density.
+   */
+  private static boolean isRegex(String value) {
+    if (!REGEX_CONSTRUCT.matcher(value).find()) {
+      return false;
+    }
+    long structure = value.chars().filter(c -> REGEX_STRUCTURE.indexOf(c) >= 0).count();
+    return structure * 4 >= value.length();
   }
 
   /** Whether a matched value is a documentation or template stand-in. */

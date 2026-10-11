@@ -19,7 +19,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -964,6 +966,90 @@ class DiffLineResolverTest {
         resolver.withDiffPath(cited));
   }
 
+  // #945, #925: a path the pull request does not change maps to the one changed file it names by a
+  // lost or invented leading directory, or by its file name.
+
+  @Test
+  void aPathWithAnInventedLeadingDirectoryMapsToTheChangedFile() {
+    // ThrillhouseBot-test#150 round 12.
+    var resolver =
+        new DiffLineResolver(
+            Map.of("docs/CONFIG-CSHARP.md", PATCH, "csharp/src/Program.cs", PATCH));
+
+    assertEquals("docs/CONFIG-CSHARP.md", resolver.diffPathFor("csharp/docs/CONFIG-CSHARP.md"));
+  }
+
+  @Test
+  void aPathThatLostItsLeadingDirectoryMapsToTheChangedFile() {
+    var resolver = new DiffLineResolver(Map.of("csharp/docs/CONFIG-CSHARP.md", PATCH));
+
+    assertEquals("csharp/docs/CONFIG-CSHARP.md", resolver.diffPathFor("docs/CONFIG-CSHARP.md"));
+  }
+
+  @Test
+  void aPathInTheWrongDirectoryMapsToTheOneChangedFileOfThatName() {
+    // ThrillhouseBot-test#150 round 12 and ThrillhouseBot-test#107 round 9.
+    var resolver =
+        new DiffLineResolver(
+            Map.of(
+                "csharp/tests/ParkingPermits.Tests/IssuanceServiceTests.cs", PATCH,
+                "csharp/src/ParkingPermits/IssuanceService.cs", PATCH,
+                "kotlin/src/test/kotlin/dev/tbtest/rooms/RoomsTest.kt", PATCH,
+                "kotlin/Dockerfile", PATCH));
+
+    assertEquals(
+        "csharp/tests/ParkingPermits.Tests/IssuanceServiceTests.cs",
+        resolver.diffPathFor(
+            "csharp/src/ParkingPermits/Tests/ParkingPermits.Tests/IssuanceServiceTests.cs"));
+    assertEquals(
+        "kotlin/src/test/kotlin/dev/tbtest/rooms/RoomsTest.kt",
+        resolver.diffPathFor("kotlin/src/main/kotlin/dev/tbtest/rooms/RoomsTest.kt"));
+    assertEquals(
+        "kotlin/Dockerfile",
+        resolver.diffPathFor("kotlin/src/main/kotlin/dev/tbtest/rooms/Dockerfile"));
+  }
+
+  @Test
+  void aFileNameTwoChangedFilesShareIsLeftAsCited() {
+    var resolver =
+        new DiffLineResolver(Map.of("kotlin/Dockerfile", PATCH, "node/Dockerfile", PATCH));
+
+    assertEquals(
+        "kotlin/src/main/kotlin/dev/tbtest/rooms/Dockerfile",
+        resolver.diffPathFor("kotlin/src/main/kotlin/dev/tbtest/rooms/Dockerfile"));
+  }
+
+  @Test
+  void aUniquePathSuffixSettlesAFileNameTwoChangedFilesShare() {
+    var resolver =
+        new DiffLineResolver(Map.of("go/docs/CONFIG.md", PATCH, "java/docs/CONFIG.md", PATCH));
+
+    assertEquals("go/docs/CONFIG.md", resolver.diffPathFor("repo/go/docs/CONFIG.md"));
+    assertEquals("docs/CONFIG.md", resolver.diffPathFor("docs/CONFIG.md"));
+  }
+
+  @Test
+  void aChangedFileWithNoPatchIsMatchedAndKnownAsChanged() {
+    var resolver = new DiffLineResolver(Map.of("src/Main.java", PATCH), List.of("assets/logo.png"));
+
+    assertEquals("assets/logo.png", resolver.diffPathFor("web/assets/logo.png"));
+    assertTrue(resolver.isChangedFile("assets/logo.png"));
+    assertTrue(resolver.isChangedFile("src/Main.java"));
+    assertFalse(resolver.isChangedFile("web/assets/logo.png"));
+    assertFalse(resolver.isChangedFile(null));
+  }
+
+  @Test
+  void aFindingOnAMistypedPathIsMovedOntoTheChangedFile() {
+    var resolver = new DiffLineResolver(Map.of("docs/CONFIG-CSHARP.md", PATCH));
+    var cited =
+        new ReviewResponse.Finding(
+            "medium", "high", "csharp/docs/CONFIG-CSHARP.md", 7, "Title", "Desc", "old", null);
+
+    assertEquals("docs/CONFIG-CSHARP.md", resolver.withDiffPath(cited).file());
+    assertEquals(7, resolver.withDiffPath(cited).line());
+  }
+
   @Test
   void aFindingAlreadyOnTheDiffSpellingIsReturnedAsIs() {
     var resolver = new DiffLineResolver(Map.of("External/container", SUBMODULE_PATCH));
@@ -972,5 +1058,29 @@ class DiffLineResolverTest {
             "high", "high", "External/container", 1, "Title", "Desc", "old", "new");
 
     assertSame(cited, resolver.withDiffPath(cited));
+  }
+
+  // #924: where a finding's suggestion_old sits, for the line the finding cites.
+
+  @Test
+  void aQuoteIsLocatedOnTheRightSideOnly() {
+    var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
+
+    assertEquals(
+        Optional.of(new DiffLineResolver.LineRange(11, 12)),
+        resolver.locateQuote("main.py", "new_line()\n  added_line()", 40));
+    assertEquals(Optional.empty(), resolver.locateQuote("main.py", "old_line()", 11));
+    assertEquals(Optional.empty(), resolver.locateQuote("main.py", "  ", 11));
+    assertEquals(Optional.empty(), resolver.locateQuote(null, "new_line()", 11));
+    assertEquals(Optional.empty(), resolver.locateQuote("other.py", "new_line()", 11));
+  }
+
+  @Test
+  void overlappingRunsHoldingTheCitedLineLeaveTheLocationOpen() {
+    var resolver = new DiffLineResolver(Map.of("a.txt", "@@ -0,0 +1,3 @@\n+a\n+a\n+a"));
+
+    assertEquals(Optional.empty(), resolver.locateQuote("a.txt", "a\na", 2));
+    assertEquals(
+        Optional.of(new DiffLineResolver.LineRange(1, 1)), resolver.locateQuote("a.txt", "a", 1));
   }
 }

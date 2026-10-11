@@ -4588,7 +4588,11 @@ class ReviewOrchestratorTest {
     void shouldFileFindingOnTheFileWhenItsLineIsOutsideDiff() {
       var finding = new Finding(RiskLevel.MEDIUM, "missing.java", 10, "Bug", "desc", null, null);
       var result = resultWithFinding(finding, ReviewState.COMMENT);
-      var resolver = new DiffLineResolver(Map.of("src/Main.java", "@@ +1,1 @@\n+line"));
+      // missing.java is changed but has no patch to parse (binary, or too large to diff).
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", "@@ +1,1 @@\n+line"),
+              List.of("src/Main.java", "missing.java"));
       when(suggestionFormatter.formatReviewComment(eq(finding), eq(false), anyInt()))
           .thenReturn("body");
 
@@ -4758,8 +4762,7 @@ class ReviewOrchestratorTest {
      */
     @Test
     void shouldLogBothReasonsWhenTheSuggestionRetryFailsDifferently() {
-      var finding =
-          new Finding(RiskLevel.HIGH, "src/Main.java", 10, "t", "d", "old code", "new code");
+      var finding = new Finding(RiskLevel.HIGH, "src/Main.java", 10, "t", "d", "new", "new code");
       var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
       var resolver =
           new DiffLineResolver(
@@ -4892,7 +4895,7 @@ class ReviewOrchestratorTest {
     @Test
     void shouldSkipFindingWhenInlineCommentRejectedTwice() {
       var finding =
-          new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Bug", "desc", "old code", "new code");
+          new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Bug", "desc", "new", "new code");
       var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
       var resolver =
           new DiffLineResolver(
@@ -4914,6 +4917,61 @@ class ReviewOrchestratorTest {
       verify(reviewClient, times(3))
           .createPullRequestComment(
               anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    }
+
+    /**
+     * #924: a single-line suggestion whose suggestion_old is not the line it would be posted on
+     * (here the deleted {@code old}, not the {@code new} line 10 now holds) is posted without its
+     * suggestion block, so applying the comment cannot replace a line it does not quote.
+     */
+    @Test
+    void shouldPostWithoutSuggestionWhenASingleLineSuggestionQuotesAnotherLine() {
+      var finding = new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Bug", "desc", "old", "fixed");
+      var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", fileDiffWithLine("src/Main.java", 10).patch()));
+      when(suggestionFormatter.formatReviewComment(eq(finding), anyBoolean(), anyInt()))
+          .thenReturn("body");
+
+      var posted =
+          reviewPublisher
+              .postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver)
+              .posted();
+
+      assertEquals(1, posted);
+      verify(suggestionFormatter).formatReviewComment(eq(finding), eq(false), anyInt());
+      verify(suggestionFormatter, never()).formatReviewComment(eq(finding), eq(true), anyInt());
+    }
+
+    /**
+     * #924, c/Dockerfile:15 on ThrillhouseBot-test#157: the suggestion quotes the COPY on line 14
+     * but reaches the publisher on {@code USER app} at 15, so it is posted there without its block.
+     */
+    @Test
+    void shouldPostWithoutSuggestionWhenItsQuoteIsTheLineAbove() {
+      var copy = "COPY --from=build /src/build/elevator-analyzer /usr/local/bin/elevator-analyser";
+      var finding =
+          new Finding(
+              RiskLevel.HIGH,
+              "c/Dockerfile",
+              15,
+              "COPY names an artifact the build never produces",
+              "desc",
+              copy,
+              "COPY --from=build /src/build/elevator-analyser /usr/local/bin/elevator-analyser");
+      var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("c/Dockerfile", "@@ -13,0 +14,2 @@\n+" + copy + "\n+USER app"));
+      when(suggestionFormatter.formatReviewComment(eq(finding), anyBoolean(), anyInt()))
+          .thenReturn("body");
+
+      reviewPublisher.postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      verify(suggestionFormatter).formatReviewComment(eq(finding), eq(false), anyInt());
+      verify(suggestionFormatter, never()).formatReviewComment(eq(finding), eq(true), anyInt());
+      assertEquals(15, capturedComment().line());
     }
 
     @Test
@@ -6104,7 +6162,7 @@ class ReviewOrchestratorTest {
       var lineResolver = new DiffLineResolver(Map.of("main.py", patch));
       var finding =
           new ReviewResponse.Finding(
-              "high", "high", "main.py", 11, "Title", "Desc", "  anchor  ", "new_line()");
+              "high", "high", "main.py", 11, "Title", "Desc", "  new_line()  ", "fixed_line()");
       var response = new ReviewResponse(List.of(finding), List.of(), null);
       var updated = findingPipeline.populateMissingAnchors(response, lineResolver);
       assertSame(response, updated);
@@ -6153,6 +6211,55 @@ class ReviewOrchestratorTest {
       assertSame(exact, updated.findings().get(0));
       assertEquals("External/container", updated.findings().get(1).file());
       assertEquals("Subproject commit 498e11b", updated.findings().get(1).suggestionOld());
+    }
+
+    /**
+     * #945: ThrillhouseBot-test#150 cited {@code csharp/docs/CONFIG-CSHARP.md} for the changed
+     * {@code docs/CONFIG-CSHARP.md}. The finding leaves this step, which is what is persisted,
+     * posted and listed in the review body, on the changed file, anchored from it.
+     */
+    @Test
+    void movesAFindingOnAMistypedPathOntoTheChangedFileAndAnchorsItThere() {
+      var lineResolver =
+          new DiffLineResolver(
+              Map.of("docs/CONFIG-CSHARP.md", "@@ -6,0 +7,1 @@\n+| `PERMIT_TTL` | 30 |"),
+              List.of("docs/CONFIG-CSHARP.md", "csharp/src/Program.cs"));
+      var finding =
+          new ReviewResponse.Finding(
+              "medium", "high", "csharp/docs/CONFIG-CSHARP.md", 7, "Doc", "Desc", null, null);
+
+      var updated =
+          findingPipeline.populateMissingAnchors(
+              new ReviewResponse(List.of(finding), List.of(), null), lineResolver);
+
+      assertEquals("docs/CONFIG-CSHARP.md", updated.findings().getFirst().file());
+      assertEquals("| `PERMIT_TTL` | 30 |", updated.findings().getFirst().suggestionOld());
+    }
+
+    /**
+     * #924: the finding this step persists and posts sits on the table row its suggestion_old
+     * quotes, not on the row two lines up that the model cited.
+     */
+    @Test
+    void movesAFindingOntoTheRowItsSuggestionQuotes() {
+      var row = "| `VITE_REFRESH_INTERVAL` | How often the desk reloads the loan list. |";
+      var lineResolver =
+          new DiffLineResolver(
+              Map.of(
+                  "docs/CONFIG-REACT.md",
+                  "@@ -0,0 +1,3 @@\n+| `VITE_LOAN_API_URL` | Base URL. |\n+| `VITE_BRANCH_ID` |"
+                      + " Branch. |\n+"
+                      + row));
+      var finding =
+          new ReviewResponse.Finding(
+              "low", "high", "docs/CONFIG-REACT.md", 1, "Unit", "Desc", row, "| a | b |");
+
+      var updated =
+          findingPipeline.populateMissingAnchors(
+              new ReviewResponse(List.of(finding), List.of(), null), lineResolver);
+
+      assertEquals(3, updated.findings().getFirst().line());
+      assertEquals("| a | b |", updated.findings().getFirst().suggestionNew());
     }
 
     @Test
@@ -6992,6 +7099,38 @@ class ReviewOrchestratorTest {
       verify(reviewThreadService).resolve(AUTH, "T4");
       verify(reviewThreadService, never()).resolve(AUTH, "T2");
       verify(reviewThreadService, never()).resolve(AUTH, "T3");
+    }
+
+    /**
+     * #958: an earlier round's standing decline names no finding by id, so its thread is the one it
+     * carries, never the effective round's finding 1 that id 0 or its round-relative id would name.
+     */
+    @Test
+    void shouldResolveAnEarlierRoundDeclineOnlyThroughItsOwnThread() {
+      var finding = new ReviewResponse.Finding("high", "f", 1, "t", "d", null, null);
+      var statuses =
+          List.of(
+              new ReviewResult.PreviousFindingStatus(
+                  FollowUpAnalyzer.EARLIER_ROUND_ID,
+                  "justified",
+                  "settled",
+                  new ReviewResult.EarlierRound(finding, 500L)),
+              new ReviewResult.PreviousFindingStatus(
+                  1, "justified", "settled", new ReviewResult.EarlierRound(finding, null)));
+      when(followUpAnalyzer.matchFindingThreads(
+              ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any(), any()))
+          .thenReturn(Map.of(1, 100L));
+      when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 5))
+          .thenReturn(
+              Map.of(
+                  100L, new ReviewThreadService.ThreadRef("T1", false),
+                  500L, new ReviewThreadService.ThreadRef("T5", false)));
+
+      reviewPublisher.resolveAddressedThreads(
+          AUTH, request(), List.of(), List.of(rootComment()), statuses);
+
+      verify(reviewThreadService).resolve(AUTH, "T5");
+      verify(reviewThreadService, never()).resolve(AUTH, "T1");
     }
 
     @Test

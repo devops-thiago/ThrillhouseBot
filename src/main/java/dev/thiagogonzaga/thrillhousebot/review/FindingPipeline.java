@@ -534,19 +534,21 @@ public class FindingPipeline {
   }
 
   /**
-   * The last two steps before a review's findings are summarized, persisted and published, on every
-   * lane (the model-less one too): the deterministic scan's merge (#60), then the guard that drops
-   * a finding restating one still open on its own thread from any earlier round (#939). The guard
-   * runs here, on the one response every path converges on — a retried call, a salvaged cut, the
-   * batches, the scan — so no way of producing the findings can post a second thread for an open
-   * one, and the summary counts and the persisted round agree with what is posted.
+   * The last steps before a review's findings are summarized, persisted and published, on every
+   * lane (the model-less one too): the drop of model secret findings on a line that assigns only an
+   * interpolation or a placeholder (#926), the deterministic scan's merge (#60), then the guard
+   * that drops a finding restating one still open on its own thread from any earlier round (#939).
+   * The guard runs here, on the one response every path converges on — a retried call, a salvaged
+   * cut, the batches, the scan — so no way of producing the findings can post a second thread for
+   * an open one, and the summary counts and the persisted round agree with what is posted.
    */
   private ReviewResponse finish(
       ReviewResponse refined,
       ReviewContextLoader.ReviewContext ctx,
       DiffLineResolver lineResolver) {
     return FollowUpAnalyzer.withoutOpenThreadDuplicates(
-        securityScan.merge(refined, ctx, botIdentity),
+        securityScan.merge(
+            securityScan.withoutStandInSecrets(refined, lineResolver), ctx, botIdentity),
         ctx.priorAiResponses(),
         ctx.inlineComments(),
         lineResolver,
@@ -1580,7 +1582,9 @@ public class FindingPipeline {
     for (ReviewResponse.Finding cited : response.findings()) {
       // #1022: the diff's spelling of the path, persisted with the finding, so the thread GitHub
       // resolves case-sensitively opens and later rounds compare against the same path.
-      var finding = lineResolver.withDiffPath(cited);
+      // #924: then onto the lines its suggestion_old quotes, or without a suggestion block that
+      // cannot be placed there.
+      var finding = SuggestionAnchor.place(lineResolver.withDiffPath(cited), lineResolver);
       changed |= finding != cited;
       if (finding.suggestionOld() == null || finding.suggestionOld().isBlank()) {
         String fallback = lineResolver.getLineText(finding.file(), finding.line());
