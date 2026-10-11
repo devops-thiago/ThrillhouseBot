@@ -59,6 +59,11 @@ import java.util.regex.Pattern;
  * reads {@code (in <path>)}), "as provided with this review", "config key definition for" (which
  * reads "definition of"), and a clause narrating the confidence rule the model applied ("I am
  * rating this claim at the required … confidence").
+ *
+ * <p>The model's working notes go as well (#964): a self-correction ("(line 24 — wait, the binding
+ * is …)", "BedReporter... rather, grep confirms …") keeps the correction and loses what it
+ * corrected, and the names other stages use — the verifier's "confirmed findings", the batch
+ * planner's "no findings in this batch" — are dropped, because a reader sees neither stage.
  */
 public final class PromptLabelScrubber {
 
@@ -312,6 +317,70 @@ public final class PromptLabelScrubber {
               + " review\\b,?[ \\t]*"
               + "(\\p{Ll})?");
 
+  /**
+   * "(line 24 — wait, the binding is …)": the model correcting itself inside a parenthetical
+   * (#964). What it doubted goes with the marker; the correction after it stays.
+   */
+  private static final Pattern PARENTHETICAL_SELF_CORRECTION =
+      Pattern.compile("\\([^()\\n]{1,40}?[ \\t]+[—–-][ \\t]+[Ww]ait,[ \\t]++(?!then\\b)");
+
+  /**
+   * "X — wait, Y" outside a parenthetical: the marker goes, the dash and both sides stay. Neither
+   * rule reads "wait, then …", an instruction to wait, as a correction.
+   */
+  private static final Pattern DASH_SELF_CORRECTION =
+      Pattern.compile("[ \\t]+([—–-])[ \\t]+[Ww]ait,[ \\t]++(?!then\\b)");
+
+  /**
+   * "BedReporter... rather, grep across the added files confirms …": a sentence the model broke off
+   * at an ellipsis and restarted (#964). The broken-off start goes with the marker, and the restart
+   * opens the sentence; a list or quote marker before it stays. Only a start of one token — a name
+   * the model began to cite, possibly dotted — reads as broken off: "It fails fast... rather, it
+   * surfaces the error" is a whole clause, and "rather," there is the connective, so it stays.
+   */
+  private static final Pattern RESTARTED_SENTENCE =
+      Pattern.compile(
+          "([ \\t]*)[^\\s.!?…](?:[^\\s.!?…]|\\.(?=\\w)){0,59}"
+              + "(?:\\.\\.\\.|…)[ \\t]+(\\p{L}{4,8}),[ \\t]+(\\p{L})");
+
+  /**
+   * The same restart when the broken-off start is one code span: "`foo.bar()`... rather, grep
+   * confirms it." The span is the name the model began to cite, so it goes with the marker. Read on
+   * the whole text, since prose is otherwise scrubbed between code spans, and never inside a fenced
+   * block.
+   */
+  private static final Pattern RESTARTED_AFTER_CODE_SPAN =
+      Pattern.compile(
+          "(?<![^.!?\\n])([ \\t]*(?:[-*+>][ \\t]+)?)`[^`\\n]{1,80}`"
+              + "(?:\\.\\.\\.|…)[ \\t]+(\\p{L}{4,8}),[ \\t]+(\\p{L})");
+
+  /** The words that restart a broken-off sentence, in any case: "rather,", "Wait,", "actually,". */
+  private static final Set<String> RESTART_CONNECTORS = Set.of("rather", "wait", "actually");
+
+  /**
+   * "hosts the two confirmed findings": the verifier's verdict name for a posted finding (#964).
+   */
+  private static final Pattern CONFIRMED_FINDINGS =
+      Pattern.compile("(?<![\\w-])(confirmed) (findings?)\\b", Pattern.CASE_INSENSITIVE);
+
+  /**
+   * "no findings in this batch" as an aside — a parenthetical, a clause after a separator or a
+   * sentence of its own (#964). A batch is how the review split the diff, which no reader sees, and
+   * "no findings" in a batch says nothing about the file's findings from other rounds. Whether its
+   * context makes it an aside is decided by {@link #removeNoFindingsAsides}.
+   */
+  private static final Pattern NO_FINDINGS_IN_BATCH =
+      Pattern.compile(
+          "\\bno (?:new )?(?:finding|issue)s? (?:in|for|from) this batch\\b(?! of\\b)",
+          Pattern.CASE_INSENSITIVE);
+
+  /** "the findings in this batch": the batch goes, the findings stay (#964). */
+  private static final Pattern FINDINGS_IN_BATCH =
+      Pattern.compile(
+          "\\b((?:finding|issue)s?(?: (?:were |was )?(?:raised|reported|found|flagged))?) (?:in|for|from)"
+              + " this batch\\b(?! of\\b)",
+          Pattern.CASE_INSENSITIVE);
+
   private PromptLabelScrubber() {}
 
   /** {@link #scrub(String, Collection)} for text that names no file of the pull request. */
@@ -331,6 +400,13 @@ public final class PromptLabelScrubber {
     if (text == null || text.isEmpty()) {
       return text;
     }
+    return scrubAroundCode(removeRestartsAfterCodeSpans(text), realPaths);
+  }
+
+  /**
+   * {@code text} scrubbed between its code spans, fenced blocks and markers, which stay as written.
+   */
+  private static String scrubAroundCode(String text, Collection<String> realPaths) {
     var out = new StringBuilder(text.length());
     int prose = 0;
     int i = 0;
@@ -571,7 +647,164 @@ public final class PromptLabelScrubber {
                   var phrase = m.group(1).toLowerCase(Locale.ROOT) + " of";
                   return opensSentence(defined, m.start(), 0) ? capitalize(phrase) : phrase;
                 });
-    return removeSelfRatedConfidence(s);
+    return removeScratchText(removeSelfRatedConfidence(s));
+  }
+
+  /**
+   * Drops the model's working notes (#964): a self-correction ("— wait,", "… rather,") keeps the
+   * correction and loses what it corrected, and the verifier's and the batch planner's vocabulary
+   * ("confirmed findings", "no findings in this batch") goes, since neither stage is visible to a
+   * reader.
+   */
+  private static String removeScratchText(String text) {
+    var s = PARENTHETICAL_SELF_CORRECTION.matcher(text).replaceAll("(");
+    s = DASH_SELF_CORRECTION.matcher(s).replaceAll(" $1 ");
+    var corrected = s;
+    s =
+        RESTARTED_SENTENCE
+            .matcher(corrected)
+            .replaceAll(m -> Matcher.quoteReplacement(restartedSentence(corrected, m)));
+    s = CONFIRMED_FINDINGS.matcher(s).replaceAll(m -> capitalizeLike(m.group(1), m.group(2)));
+    s = removeNoFindingsAsides(s);
+    return FINDINGS_IN_BATCH.matcher(s).replaceAll("$1");
+  }
+
+  /**
+   * A restart {@code m} found by {@link #RESTARTED_SENTENCE} or {@link #RESTARTED_AFTER_CODE_SPAN}
+   * without its broken-off start: the marker before it and the capitalized restart, or the match
+   * unchanged when its connector is not a restart word.
+   */
+  private static String restarted(MatchResult m) {
+    if (!RESTART_CONNECTORS.contains(m.group(2).toLowerCase(Locale.ROOT))) {
+      return m.group();
+    }
+    return m.group(1) + capitalize(m.group(3));
+  }
+
+  /**
+   * {@link #restarted} for a {@link #RESTARTED_SENTENCE} match in {@code text} when its broken-off
+   * start opens the text, a line or a sentence, after blanks and at most one list or quote marker
+   * ({@code -}, {@code *}, {@code +}, {@code >}) followed by a blank, which stays; anywhere else
+   * the start is part of a clause and the match stays. Decided here rather than by a lookbehind,
+   * which kept the pattern over the regex complexity budget.
+   */
+  private static String restartedSentence(String text, MatchResult m) {
+    return opensRestart(text, m.end(1)) ? restarted(m) : m.group();
+  }
+
+  /**
+   * Whether only blanks and at most one marker followed by a blank stand between {@code token} and
+   * the start of the text or a {@code .}, {@code !}, {@code ?} or line break before it.
+   */
+  private static boolean opensRestart(String text, int token) {
+    int at = skipBlanksBack(text, token, 0);
+    if (at > 0 && at < token && "-*+>".indexOf(text.charAt(at - 1)) >= 0) {
+      at = skipBlanksBack(text, at - 1, 0);
+    }
+    return at == 0 || ".!?\n".indexOf(text.charAt(at - 1)) >= 0;
+  }
+
+  /** Drops each {@link #RESTARTED_AFTER_CODE_SPAN} outside a fenced block. */
+  private static String removeRestartsAfterCodeSpans(String text) {
+    if (!text.contains("`")) {
+      return text;
+    }
+    return RESTARTED_AFTER_CODE_SPAN
+        .matcher(text)
+        .replaceAll(
+            m -> Matcher.quoteReplacement(insideFence(text, m.start()) ? m.group() : restarted(m)));
+  }
+
+  /** Whether {@code at} lies inside a fenced block: an odd number of fence markers precede it. */
+  private static boolean insideFence(String text, int at) {
+    boolean inside = false;
+    for (int i = text.indexOf("```"); i >= 0 && i < at; i = text.indexOf("```", i + 3)) {
+      inside = !inside;
+    }
+    return inside;
+  }
+
+  /**
+   * Drops each "no findings in this batch" aside; one that started a line takes the blanks after
+   * it, so the line does not start with one.
+   */
+  private static String removeNoFindingsAsides(String text) {
+    var m = NO_FINDINGS_IN_BATCH.matcher(text);
+    var out = new StringBuilder(text.length());
+    int at = 0;
+    while (m.find()) {
+      int[] aside = asideBounds(text, m.start(), m.end(), at);
+      if (aside.length == 0) {
+        continue;
+      }
+      out.append(text, at, aside[0]);
+      at = aside[1];
+    }
+    return out.append(text, at, text.length()).toString();
+  }
+
+  /**
+   * Where the aside around "no findings in this batch" at {@code start}..{@code end} begins and
+   * where the text after it resumes, or an empty array when its context makes it part of a sentence
+   * (left to {@link #FINDINGS_IN_BATCH}): inside a parenthetical, after a semicolon, comma or dash
+   * (with the separator), or as a sentence or line of its own (with its full stop). Nothing before
+   * {@code floor}, which is already written, is taken.
+   */
+  private static int[] asideBounds(String text, int start, int end, int floor) {
+    int blank = skipBlanksBack(text, start, floor);
+    boolean opensText = blank == 0;
+    char before = blank > floor ? text.charAt(blank - 1) : ' ';
+    int from;
+    int to = end;
+    if (before == '(' && to < text.length() && text.charAt(to) == ')') {
+      from = skipBlanksBack(text, blank - 1, floor);
+      to++;
+    } else if (followsClauseSeparator(text, blank, floor)) {
+      from = skipBlanksBack(text, blank - 1, floor);
+    } else if (opensText || ".!?\n".indexOf(before) >= 0) {
+      from = blank;
+      if (to < text.length() && ".!?:".indexOf(text.charAt(to)) >= 0) {
+        to++;
+      } else if (to < text.length() && text.charAt(to) != '\n') {
+        return new int[0];
+      }
+    } else {
+      return new int[0];
+    }
+    return new int[] {from, lineStartTailEnd(text, from, to)};
+  }
+
+  /**
+   * Whether a semicolon, comma or dash ends at {@code blank}: an em or en dash, or a hyphen
+   * standing alone after other text on its line — one that opens a line is a list marker, not a
+   * separator.
+   */
+  private static boolean followsClauseSeparator(String text, int blank, int floor) {
+    if (blank <= floor) {
+      return false;
+    }
+    char separator = text.charAt(blank - 1);
+    if (";,—–".indexOf(separator) >= 0) {
+      return true;
+    }
+    return separator == '-'
+        && blank - 1 > floor
+        && isBlank(text.charAt(blank - 2))
+        && !opensLine(text, blank - 1);
+  }
+
+  /**
+   * Where the text after an aside spanning {@code from}..{@code to} resumes: an aside that starts a
+   * line takes the punctuation and blanks after it, so the line does not start with either.
+   */
+  private static int lineStartTailEnd(String text, int from, int to) {
+    if (from > 0 && text.charAt(from - 1) != '\n') {
+      // After a sentence end the aside was a sentence of its own, so its full stop goes too.
+      boolean ownSentence = ".!?".indexOf(text.charAt(from - 1)) >= 0;
+      return ownSentence && to < text.length() && text.charAt(to) == '.' ? to + 1 : to;
+    }
+    int end = to < text.length() && ".,;".indexOf(text.charAt(to)) >= 0 ? to + 1 : to;
+    return skipBlanks(text, end);
   }
 
   /**

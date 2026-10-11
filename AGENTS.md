@@ -69,11 +69,11 @@ same diff.
 | Per-call screen stages: one `FindingStage` per step over an immutable `ScreeningContext`; each lane is an explicit ordered stage list built in the `FindingScreen` constructor (the batch list omits dedupe), pinned by `FindingScreenTest` | `review/FindingScreen` over `EvidenceStage`, `QuoteValidationStage`, `FrameworkFilterStage`, `DedupeStage`, `RejectionScreenStage`, `VerificationStage`, `RememberVerdictsStage` |
 | Verifier | `review/ai/FindingVerificationService`, evidence from `review/ContextEvidenceResolver` and `review/CitedLocationResolver` |
 | Last steps on every lane, including the one with no review call: the always-on drop of model secret findings on a line that assigns only an interpolation or a placeholder (#926), the opt-in deterministic security scan (secrets, risky IaC), then the open-thread duplicate guard (#939) | `review/FindingPipeline.finish` → `review/SecurityScan.withoutStandInSecrets` (`SecretScanner.assignsOnlyStandIns`) → `review/SecurityScan.merge` (rules in `SecurityRule`, detection in `SecretScanner` and `IacScanner` over `PatchLines`) → `FollowUpAnalyzer.withoutOpenThreadDuplicates` |
-| Summary call, carried description gaps, reused overview, prompt-label scrub, persistence | `review/FindingPipeline.withSummary` (with `DescriptionGapCarryover`, `PriorOverviewCarryover`, `PromptLabelScrubber`), `persistWithSummary` |
+| Summary call, carried description gaps, reused overview, prompt-label scrub, persistence | `review/FindingPipeline.withSummary` (with `DescriptionGapCarryover`, `PriorOverviewCarryover`, `PromptLabelScrubber`), `persistWithSummary`. Every gap, fresh or carried, passes `DescriptionGapScreen` (a quoted claim must be in the PR text, a gap must cite the description or a linked issue, #946); on an unchanged head the call's `addressed_gaps` is ignored (#964). On an unchanged head every degraded path keeps the previous overview and `VerdictBuilder` swaps in the carried-overview banner; an answer keeps earlier file summaries and the diagram it lacks (#965) |
 | Follow-up status reconciliation, in order: supersede, decline re-check, conversation clears, phantom ids, double-check replacement, approval backstop, still-open set | `review/VerdictBuilder.build` over `FollowUpAnalyzer` (`supersedeVanished`, `recheckDeclines`, `clearNamedInConversation`, `withoutPhantomUnresolved`, `replacedPriors`, `heldPreviousFindings`, `stillOpenFindings`) |
 | Verdict and check-run text | `review/VerdictBuilder.buildResult` |
 | Post review, inline comments, thread resolution. A finding on a path the pull request does not change (`DiffLineResolver.isChangedFile`, over every changed file, patch or not) is listed in the review body without trying a route (#925) | `review/ReviewPublisher`, `review/CheckRunManager` |
-| Summary comment: render over the round plus the still-open set, edit in place by marker | `review/PrSummaryGenerator` (`currentState`), `review/ReviewPublisher.publishSummary` / `upsertSummaryComment` |
+| Summary comment: render over the round plus the still-open set, edit in place by marker. The Description vs. Implementation section names each description finding (`descriptionFindings`) instead of a boilerplate line (#964) | `review/PrSummaryGenerator` (`currentState`), `review/ReviewPublisher.publishSummary` / `upsertSummaryComment` |
 | CI hold and revisit | `review/CiHoldRegistry`, `review/CiHoldRevisit` |
 | Opt-in review learnings: capture after the post, from the round's final statuses | `review/ReviewLearnings.captureSurvivingDeclines` → `review/FollowUpAnalyzer.survivingDeclines` → `review/ReviewLearningService.save` |
 | `/learnings`, `/remember`, `/forget` | `webhook/LearningCommands` (routed by `CommentCommandService`) |
@@ -187,7 +187,11 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
 - **A "Things to double-check" item is counted once and replaced only by the same defect** (#951,
   #961). A listed-only repeat at no higher severity is dropped by the open-thread guard
   (`restatesListed`); a finding at the same or higher severity replaces the item
-  (`replacedPriors`, `withoutReplaced`). Both go through `DefectIdentity.sameDefect`: same file,
+  (`replacedPriors`, `withoutReplaced`). An item this round's own finding replaces
+  (`replacedThisRound`) keeps an `unresolved` status under `REPLACED_NOTE` and is listed as its
+  replacement in the still-open set, so "Still present" adds up to the findings carried in and the
+  summary folds it into the round's entry as open since an earlier review; the delta comment does
+  not count it as new (`FollowUpDeltaSummary.newFindingCount`, #969). Both go through `DefectIdentity.sameDefect`: same file,
   then the same title, a similar title within three lines, or the same line with two shared title
   words or a common identifier, and never two titles naming different identifiers
   (`namesDifferentIdentifiers`). Content overlap alone is not identity (`DefectIdentityTest`).

@@ -308,12 +308,14 @@ final class RebuttalContradiction {
    * since it would cut a C {@code #include} and a CSS colour. Either needs a per-language comment
    * model, which is more than the per-file profile of delimiter facts the scanner does keep ({@link
    * LiveCodeScanner#fileNamed}): whether a backslash escapes inside a backtick or a triple quote,
-   * and whether a terminator after a triple quote marks a closer (#791, #814). That profile is read
-   * off the file the diff names — the {@code diff --git} header of a bare patch, or the {@code ###
-   * path (…)} heading {@code ReviewDiffFormatter} puts over each file section, which is the text
-   * the bot actually re-checks against: a GitHub patch starts at its first {@code @@} and carries
-   * no {@code diff --git} line, so without the heading the profile never applied outside a bare
-   * fragment. A fragment that names no file keeps the reading the table always had.
+   * whether a terminator after a triple quote marks a closer (#791, #814), and whether an
+   * apostrophe always opens a string, so quoted dispatch text holding a semicolon in a Python or
+   * TypeScript file is blanked rather than read as a Rust lifetime pair (#762). That profile is
+   * read off the file the diff names — the {@code diff --git} header of a bare patch, or the {@code
+   * ### path (…)} heading {@code ReviewDiffFormatter} puts over each file section, which is the
+   * text the bot actually re-checks against: a GitHub patch starts at its first {@code @@} and
+   * carries no {@code diff --git} line, so without the heading the profile never applied outside a
+   * bare fragment. A fragment that names no file keeps the reading the table always had.
    */
   private static String rightSideCode(String reviewedCode) {
     var scanner = new LiveCodeScanner();

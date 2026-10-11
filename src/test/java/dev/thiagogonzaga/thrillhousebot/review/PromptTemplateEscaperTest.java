@@ -26,6 +26,32 @@ import org.junit.jupiter.api.Test;
 class PromptTemplateEscaperTest {
 
   @Test
+  void unfenceReturnsTheContentFenceWrapped() {
+    var content = "Title: t\nDescription:\nline one\nline two";
+
+    assertEquals(content, PromptTemplateEscaper.unfence(PromptTemplateEscaper.fence(content)));
+  }
+
+  @Test
+  void unfenceLeavesTextThatIsNotOneFencedBlockAsItIs() {
+    var fenced = PromptTemplateEscaper.fence("x");
+    var opening = fenced.substring(0, fenced.indexOf('\n'));
+    var other = PromptTemplateEscaper.fence("y");
+    var otherClosing = other.substring(other.lastIndexOf('\n') + 1);
+
+    assertEquals("", PromptTemplateEscaper.unfence(null));
+    assertEquals("plain text", PromptTemplateEscaper.unfence("plain text"));
+    assertEquals("one\nline", PromptTemplateEscaper.unfence("one\nline"));
+    assertEquals("three\nplain\nlines", PromptTemplateEscaper.unfence("three\nplain\nlines"));
+    assertEquals(opening, PromptTemplateEscaper.unfence(opening));
+    var mismatched = opening + "\nx\n" + otherClosing;
+    assertEquals(mismatched, PromptTemplateEscaper.unfence(mismatched));
+    var unclosedFenceLine = PromptTemplateEscaper.fencePrefix() + "ab";
+    var unclosed = unclosedFenceLine + "\nx\n" + unclosedFenceLine;
+    assertEquals(unclosed, PromptTemplateEscaper.unfence(unclosed));
+  }
+
+  @Test
   void shouldReturnNullForNullInput() {
     assertNull(PromptTemplateEscaper.escape(null));
   }

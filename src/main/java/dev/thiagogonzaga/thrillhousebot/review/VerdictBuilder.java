@@ -27,6 +27,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -243,11 +244,18 @@ public class VerdictBuilder {
     effectiveStatuses =
         FollowUpAnalyzer.withoutPhantomUnresolved(ctx.previousFindingsList(), effectiveStatuses);
     // A double-check item that a later round, or this one, raised again at no lower severity is
-    // one defect with its later copy, which is the one counted (#951): the earlier copy leaves
-    // the statuses here and the backstop's holds below.
+    // one defect with its later copy, which is the one counted (#951). An earlier round's
+    // replacement already carries it, so its status and hold leave; this round's own replacement
+    // carries it below.
+    // An item this round's own finding replaced was still open coming in, so it keeps a "still
+    // present" status, carried by that finding, and the finding is listed as open since an
+    // earlier review rather than as new (#969).
     var replaced = FollowUpAnalyzer.replacedPriors(ctx.priorAiResponses(), aiResponse.findings());
+    var replacedNow =
+        FollowUpAnalyzer.replacedThisRound(ctx.priorAiResponses(), aiResponse.findings());
     effectiveStatuses =
-        FollowUpAnalyzer.withoutReplaced(ctx.previousFindingsList(), effectiveStatuses, replaced);
+        FollowUpAnalyzer.withoutReplaced(
+            ctx.previousFindingsList(), effectiveStatuses, replaced, replacedNow);
     var effectiveResponse =
         new ReviewResponse(aiResponse.findings(), effectiveStatuses, aiResponse.summary());
     // Lazily resolve the shared DiffLineResolver only when the backstop runs — first reviews and
@@ -266,7 +274,8 @@ public class VerdictBuilder {
                     currentRenameTargets,
                     reviewedCode)
                 .stream()
-                .filter(hold -> !replaced.contains(hold.finding()))
+                .map(hold -> FollowUpAnalyzer.carriedByReplacement(hold, replaced, replacedNow))
+                .filter(Objects::nonNull)
                 .toList()
             : List.<FollowUpAnalyzer.HeldPrevious>of();
     var backstopStatuses = held.stream().map(FollowUpAnalyzer.HeldPrevious::status).toList();
@@ -278,7 +287,8 @@ public class VerdictBuilder {
     // missed every finding only the backstop holds — all of an older round's, once a later round
     // raised anything — so a round could list an open CRITICAL and still end as COMMENT.
     var openPrevious =
-        FollowUpAnalyzer.stillOpenFindings(ctx.previousFindingsList(), effectiveStatuses, held);
+        FollowUpAnalyzer.stillOpenFindings(
+            ctx.previousFindingsList(), effectiveStatuses, held, replacedNow);
     return buildResult(
         effectiveResponse,
         ctx.isFirstVisibleReview(),
@@ -287,11 +297,13 @@ public class VerdictBuilder {
             changedFiles,
             ReviewDiffFormatter.formatPureRenameRollup(
                 ReviewDiffFormatter.pureRenameFiles(ctx.files())),
+            ReviewDiffFormatter.formatIgnoredFiles(ctx.files(), ctx.reviewableFiles()),
             ReviewDiffFormatter.formatUnmatchedIgnoreGlobs(ctx.unmatchedIgnoreGlobs()),
             PatchCoverageResolver.formatScopeNote(ctx.coverageArtifactRefusal()),
             SupersededFindingsCarryover.formatScopeNote(ctx.carried()),
             reasoningStepDownNote(plan.reasoningStepDown()),
-            openPrevious),
+            openPrevious,
+            PriorOverviewCarryover.carried(effectiveResponse.summary(), ctx)),
         ciEvaluation,
         backstopStatuses);
   }
@@ -449,6 +461,59 @@ public class VerdictBuilder {
       suffix += " " + ReviewResult.verificationBrief(result.truncation().verification());
     }
     return suffix;
+  }
+
+  /**
+   * {@code body} under the coverage banners: the partial-review banner when files were not covered
+   * (with the carried-overview line when the degraded summary shows the previous review's overview,
+   * #965), else the summary-only banner and the verification notice.
+   */
+  private static String withCoverageBanners(
+      String body, DiffStats diffStats, boolean overviewCarried) {
+    var summaryMarkdown = body;
+    // #965: a degraded summary on the head the previous round reviewed shows that round's overview,
+    // so its banner says the overview is carried rather than that only the counts are shown.
+    var degradation = diffStats.truncation().summaryDegradation();
+    var carriedOverview = overviewCarried && degradation != SummaryDegradation.NONE;
+    if (diffStats.truncated()) {
+      summaryMarkdown =
+          ReviewResult.truncationNotice(diffStats.omittedFiles(), diffStats.truncation())
+              + (carriedOverview ? ReviewResult.OVERVIEW_CARRIED_LINE : "")
+              + summaryMarkdown;
+    } else {
+      // Summary-only degradation (no file gap): the findings are complete, so the partial-review
+      // banner (and the approval hold that goes with file gaps) would overstate it — a dedicated
+      // banner names the cut, the token spend ceiling (#518) or the failed summary call (#851),
+      // without holding the verdict.
+      summaryMarkdown = summaryOnlyBanner(degradation, carriedOverview) + summaryMarkdown;
+      // Verification-only degradation (#623): the findings post either way — the verifier fails
+      // open by design — but a finding set no second stage screened must say so. When a
+      // file-coverage gap exists the truncation banner above already folds this clause in.
+      if (diffStats.truncation().verification().disclosed()) {
+        summaryMarkdown =
+            ReviewResult.verificationNotice(diffStats.truncation().verification())
+                + summaryMarkdown;
+      }
+    }
+    return summaryMarkdown;
+  }
+
+  /**
+   * The banner of a summary-only degradation: the carried-overview banner when the overview shown
+   * is the previous review's (#965), else the one naming the cut, the ceiling, the call cap or the
+   * failure; {@code ""} with no degradation.
+   */
+  private static String summaryOnlyBanner(SummaryDegradation degradation, boolean carried) {
+    if (carried) {
+      return ReviewResult.overviewCarriedNotice(degradation);
+    }
+    return switch (degradation) {
+      case RESPONSE_CUT -> ReviewResult.SUMMARY_CUT_NOTICE;
+      case SKIPPED_AT_CEILING -> ReviewResult.SUMMARY_SKIPPED_NOTICE;
+      case SKIPPED_AT_CALL_CAP -> ReviewResult.SUMMARY_CALL_CAP_NOTICE;
+      case SUMMARY_FAILED -> ReviewResult.SUMMARY_FAILED_NOTICE;
+      case NONE -> "";
+    };
   }
 
   record DiffStats(
@@ -636,11 +701,13 @@ public class VerdictBuilder {
   private record SummaryInputs(
       List<PrSummaryGenerator.ChangedFile> changedFiles,
       String pureRenameRollup,
+      String ignoredFiles,
       String unmatchedIgnoreGlobs,
       String coverageArtifactNotRead,
       String carriedFromSupersededRun,
       String reasoningStepDown,
-      List<Finding> openPrevious) {}
+      List<Finding> openPrevious,
+      boolean overviewCarried) {}
 
   ReviewResult buildResult(
       ReviewResponse aiResponse,
@@ -654,7 +721,7 @@ public class VerdictBuilder {
         aiResponse,
         isFirstReview,
         diffStats,
-        new SummaryInputs(changedFiles, "", "", "", "", "", unresolvedPrevious),
+        new SummaryInputs(changedFiles, "", "", "", "", "", "", unresolvedPrevious, false),
         ciEvaluation,
         backstopStatuses);
   }
@@ -673,8 +740,12 @@ public class VerdictBuilder {
     var tally = tallyFindings(aiResponse);
 
     // This round's findings and every earlier one still open — the set the summary lists (#948).
+    // An open entry equal to one of the round's findings is that finding (a replaced item listed as
+    // its replacement, #969), so it is weighed once.
     var outstanding = new ArrayList<Finding>(tally.findings());
-    outstanding.addAll(summaryInputs.openPrevious());
+    summaryInputs.openPrevious().stream()
+        .filter(open -> !tally.findings().contains(open))
+        .forEach(outstanding::add);
     ReviewState state = ReviewState.fromFindings(outstanding, blockingStrictness);
     // #645: count the outstanding findings whose severity cleared the mode's bar but whose
     // confidence did not, and only when the review is not requesting changes anyway — that is
@@ -746,32 +817,8 @@ public class VerdictBuilder {
     if (withheldByConfidence > 0) {
       summaryMarkdown = ReviewResult.confidenceHoldNotice(withheldByConfidence) + summaryMarkdown;
     }
-    if (diffStats.truncated()) {
-      summaryMarkdown =
-          ReviewResult.truncationNotice(diffStats.omittedFiles(), diffStats.truncation())
-              + summaryMarkdown;
-    } else {
-      // Summary-only degradation (no file gap): the findings are complete, so the partial-review
-      // banner (and the approval hold that goes with file gaps) would overstate it — a dedicated
-      // banner names the cut, the token spend ceiling (#518) or the failed summary call (#851),
-      // without holding the verdict.
-      summaryMarkdown =
-          switch (diffStats.truncation().summaryDegradation()) {
-            case RESPONSE_CUT -> ReviewResult.SUMMARY_CUT_NOTICE + summaryMarkdown;
-            case SKIPPED_AT_CEILING -> ReviewResult.SUMMARY_SKIPPED_NOTICE + summaryMarkdown;
-            case SKIPPED_AT_CALL_CAP -> ReviewResult.SUMMARY_CALL_CAP_NOTICE + summaryMarkdown;
-            case SUMMARY_FAILED -> ReviewResult.SUMMARY_FAILED_NOTICE + summaryMarkdown;
-            case NONE -> summaryMarkdown;
-          };
-      // Verification-only degradation (#623): the findings post either way — the verifier fails
-      // open by design — but a finding set no second stage screened must say so. When a
-      // file-coverage gap exists the truncation banner above already folds this clause in.
-      if (diffStats.truncation().verification().disclosed()) {
-        summaryMarkdown =
-            ReviewResult.verificationNotice(diffStats.truncation().verification())
-                + summaryMarkdown;
-      }
-    }
+    summaryMarkdown =
+        withCoverageBanners(summaryMarkdown, diffStats, summaryInputs.overviewCarried());
 
     return new ReviewResult(
         tally.findings(),
@@ -803,6 +850,7 @@ public class VerdictBuilder {
   private static String reviewScopeNote(SummaryInputs summaryInputs) {
     var notes = new ArrayList<String>(4);
     addScopeNote(notes, summaryInputs.pureRenameRollup());
+    addScopeNote(notes, summaryInputs.ignoredFiles());
     addScopeNote(notes, summaryInputs.unmatchedIgnoreGlobs());
     addScopeNote(notes, summaryInputs.coverageArtifactNotRead());
     addScopeNote(notes, summaryInputs.carriedFromSupersededRun());
