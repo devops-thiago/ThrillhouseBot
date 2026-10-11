@@ -4977,6 +4977,67 @@ class FollowUpAnalyzerTest {
         "the comment says Race in its header, but its key names the finding on line 30");
   }
 
+  /**
+   * The key is computed from the persisted finding on both sides: the round that raised it posted
+   * the marker from those fields, and every later lookup reads the same persisted finding. When a
+   * later round raises the defect again moved and reworded, its thread is still found from the
+   * earlier persisted copy, so the re-raise is dropped beside it and a maintainer's reply on it
+   * still settles it.
+   */
+  @Test
+  void aPersistedFindingKeepsItsThreadWhenALaterRoundMovesAndRewordsTheDefect() {
+    var raised =
+        new ReviewResponse.Finding(
+            "high", "high", "src/A.java", 10, "Race on shared counter", "d", null, null);
+    var movedAndReworded =
+        new ReviewResponse.Finding(
+            "high", "high", "src/A.java", 11, "Race on the shared counter", "d", null, null);
+    var other =
+        new ReviewResponse.Finding(
+            "medium", "high", "src/B.java", 5, "Missing null check", "d", null, null);
+    var roundOne = new ReviewResponse(List.of(raised), List.of(), null);
+    var roundTwo = new ReviewResponse(List.of(other), List.of(), null);
+    var threads = new ArrayList<GitHubReviewClient.PullRequestComment>();
+    threads.add(keyedRoot(100L, raised, raised, 1));
+    threads.add(keyedRoot(200L, other, other, 1));
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    var guarded =
+        FollowUpAnalyzer.withoutOpenThreadDuplicates(
+            new ReviewResponse(List.of(movedAndReworded), List.of(), null),
+            List.of(roundTwo, roundOne),
+            threads,
+            resolver,
+            Map.of(),
+            BOT_ID);
+    assertTrue(guarded.findings().isEmpty(), "the open thread of the persisted copy was found");
+
+    threads.add(
+        comment(
+            101L,
+            100L,
+            "src/A.java",
+            "Accepted risk: the counter is advisory and a lost increment is harmless.",
+            "maintainer"));
+    var settled =
+        analyzer
+            .heldPreviousFindings(
+                List.of(roundTwo, roundOne),
+                List.of(),
+                threads,
+                List.of(),
+                resolver,
+                BOT_ID,
+                Map.of(),
+                () -> "+counter.bump();")
+            .stream()
+            .filter(entry -> raised.title().equals(entry.finding().title()))
+            .findFirst()
+            .orElseThrow();
+    assertEquals("justified", settled.status().status());
+    assertEquals(100L, settled.status().earlierRound().threadRootId());
+  }
+
   @Test
   void aMarkerPostedBeforeTheKeyStillBindsByItsContent() {
     var finding = new ReviewResponse.Finding("high", "src/A.java", 10, "Race", "d", null, null);
