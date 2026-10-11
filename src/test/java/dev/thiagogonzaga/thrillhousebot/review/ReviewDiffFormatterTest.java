@@ -884,19 +884,26 @@ class ReviewDiffFormatterTest {
 
     /**
      * #481 pin. The gitignore-style normalization changes what a pattern compiles to, so the
-     * shipped default list has to keep excluding exactly what it excluded before — starting with
-     * its first entry, {@code **}{@code /pom.xml}, whose reach (every pom at every depth, and no
-     * neighbouring file that merely contains the name) was never asserted anywhere.
+     * shipped default list has to keep excluding exactly what it excluded before. Since #935 it no
+     * longer excludes a build manifest: the pom a Dockerfile's jar name depends on is reviewed.
      */
     @Test
     void shouldExcludeTheSameFilesTheShippedDefaultsAlwaysDid() throws Exception {
       var formatter = defaultFormatter();
 
-      assertTrue(formatter.isIgnored("pom.xml"), "the root pom is a default exclusion");
-      assertTrue(formatter.isIgnored("module/pom.xml"));
-      assertTrue(formatter.isIgnored("a/b/c/pom.xml"));
-      assertFalse(formatter.isIgnored("docs/pom.xml.md"));
-      assertFalse(formatter.isIgnored("src/main/java/PomXml.java"));
+      for (var manifest :
+          List.of(
+              "pom.xml",
+              "module/pom.xml",
+              "build.gradle",
+              "rust/Cargo.toml",
+              "react/package.json",
+              "zig/build.zig")) {
+        assertFalse(formatter.isIgnored(manifest), manifest + " is reviewed (#935)");
+      }
+      assertTrue(formatter.isIgnored("go.sum"), "a lockfile stays out");
+      assertTrue(formatter.isIgnored("react/package-lock.json"));
+      assertTrue(formatter.isIgnored("rust/Cargo.lock"));
 
       // The rest of the list, sampled across every class of default entry.
       assertTrue(formatter.isIgnored("yarn.lock"));
@@ -907,6 +914,61 @@ class ReviewDiffFormatterTest {
       assertFalse(formatter.isIgnored("src/main/resources/build.properties"));
       assertFalse(formatter.isIgnored("src/bindings/Codec.java"));
       assertFalse(formatter.isIgnored("README.md"));
+    }
+  }
+
+  /** #935: the scope note names every file the ignore list kept out, and manifests are known. */
+  @Nested
+  class IgnoredFilesAndManifests {
+
+    @Test
+    void theScopeNoteNamesEveryIgnoredFileButNotAPureRename() {
+      var renamed =
+          new GitHubPullRequestClient.FileDiff("new.md", "renamed", 0, 0, 0, null, "old.md");
+      var lock = file("go.sum", "modified", 40, 2, "@@ x");
+      var source = file("main.go", "modified", 4, 1, "@@ y");
+      var files = List.of(renamed, lock, source);
+
+      assertEquals(
+          "1 file excluded from AI review by the ignore list (go.sum)\n",
+          ReviewDiffFormatter.formatIgnoredFiles(files, List.of(source)));
+      assertEquals("", ReviewDiffFormatter.formatIgnoredFiles(files, List.of(lock, source)));
+      assertEquals("", ReviewDiffFormatter.formatIgnoredFiles(List.of(), List.of()));
+      assertEquals("", ReviewDiffFormatter.formatIgnoredFiles(null, List.of()));
+    }
+
+    @Test
+    void aLongIgnoredListIsNamedUpToItsCap() {
+      var files = new java.util.ArrayList<GitHubPullRequestClient.FileDiff>();
+      for (var i = 0; i < ReviewDiffFormatter.IGNORED_NAMES_CAP + 2; i++) {
+        files.add(file("vendor/f" + i + ".go", "added", 1, 0, "@@ z"));
+      }
+
+      var note = ReviewDiffFormatter.formatIgnoredFiles(files, List.of());
+
+      assertTrue(
+          note.startsWith((ReviewDiffFormatter.IGNORED_NAMES_CAP + 2) + " files excluded"), note);
+      assertTrue(note.endsWith(", and 2 more)\n"), note);
+    }
+
+    @Test
+    void buildManifestsAreRecognizedByFileName() {
+      for (var manifest :
+          List.of(
+              "pom.xml",
+              "java/pom.xml",
+              "build.gradle.kts",
+              "Cargo.toml",
+              "react/package.json",
+              "build.zig",
+              "go.mod",
+              "src/App.csproj",
+              "CMakeLists.txt")) {
+        assertTrue(ReviewDiffFormatter.isBuildManifest(manifest), manifest);
+      }
+      assertFalse(ReviewDiffFormatter.isBuildManifest("go.sum"));
+      assertFalse(ReviewDiffFormatter.isBuildManifest("docs/pom.xml.md"));
+      assertFalse(ReviewDiffFormatter.isBuildManifest(null));
     }
   }
 

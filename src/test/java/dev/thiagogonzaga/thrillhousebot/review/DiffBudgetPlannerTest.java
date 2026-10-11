@@ -171,6 +171,22 @@ class DiffBudgetPlannerTest {
   }
 
   @Test
+  void aBuildManifestIsPackedBeforeLargerFilesSoTheCapNeverOmitsIt() {
+    // #935: the pom proving a Dockerfile's jar is never built was the smallest file, so it sorted
+    // last and was the first the call cap left out.
+    var files =
+        List.of(
+            file("java/src/Big.java", 40, patch(6)),
+            file("java/src/Mid.java", 30, patch(6)),
+            file("java/pom.xml", 2, patch(6)));
+    var budget = files.stream().mapToInt(this::sectionTokens).max().orElseThrow(); // one file/bin
+    var plan = planner.plan(files, budget, 2);
+
+    assertEquals(List.of("java/pom.xml", "java/src/Big.java"), coveredFilenames(plan));
+    assertEquals(List.of("java/src/Mid.java"), plan.omittedFiles());
+  }
+
+  @Test
   void oversizedSingleFileIsClippedToFitOneBatch() {
     var big = file("dir/huge.java", 400, patch(400));
     var budget = 80;
