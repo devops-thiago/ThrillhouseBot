@@ -191,6 +191,21 @@ class EstablishedConfidenceFloorTest {
         "low", floored(finding("high", "low", "SQL injection: organizer", twoQuotes), oneLine));
   }
 
+  /** Two apostrophes inside words are not a quotation: they cannot make a second path line. */
+  @Test
+  void apostrophesInsideWordsDoNotQuoteALine() {
+    String diff = GO_DIFF + "+\t// can't resolve user's intent here\n";
+    String sinkAndProse =
+        "TransactionsForVehicle builds the query by string concatenation: `q := \"SELECT id,"
+            + " card_number, vehicle_id FROM transactions WHERE vehicle_id = '\" + vehicleID +"
+            + " \"'\"`. The handler can't resolve user's intent here; nothing escapes or"
+            + " parameterizes the vehicle ID, an SQL injection.";
+
+    assertEquals(
+        "low",
+        floored(finding("critical", "low", "SQL injection: vehicle ID", sinkAndProse), diff));
+  }
+
   /** File names match the diff's headings, which are not code: naming two files quotes none. */
   @Test
   void quotingTheFilesAPathRunsThroughIsNotQuotingItsCode() {

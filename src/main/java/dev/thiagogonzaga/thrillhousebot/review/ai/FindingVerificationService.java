@@ -603,11 +603,13 @@ public class FindingVerificationService {
 
   /**
    * Code a finding quotes: a span between backticks, straight or curly double quotes, or single
-   * quotes, on one line. The group of the alternative that matched is the quoted text.
+   * quotes, on one line. A single quote counts only outside a word, so the apostrophes of "can't"
+   * and "user's" never pair up into a span. The group of the alternative that matched is the quoted
+   * text.
    */
   private static final Pattern QUOTED_SPAN =
       Pattern.compile(
-          "`([^`\\n]{1,300})`|[\"\u201C]([^\"\u201C\u201D\\n]{1,300})[\"\u201D]|'([^'\\n]{1,300})'");
+          "`([^`\\n]{1,300})`|[\"\u201C]([^\"\u201C\u201D\\n]{1,300})[\"\u201D]|(?<!\\w)'([^'\\n]{1,300})'(?!\\w)");
 
   /**
    * A call expression a finding names without quoting it ({@code r.PathValue("id")}, {@code
