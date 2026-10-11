@@ -302,7 +302,8 @@ public class VerdictBuilder {
             PatchCoverageResolver.formatScopeNote(ctx.coverageArtifactRefusal()),
             SupersededFindingsCarryover.formatScopeNote(ctx.carried()),
             reasoningStepDownNote(plan.reasoningStepDown()),
-            openPrevious),
+            openPrevious,
+            PriorOverviewCarryover.carried(effectiveResponse.summary(), ctx)),
         ciEvaluation,
         backstopStatuses);
   }
@@ -460,6 +461,59 @@ public class VerdictBuilder {
       suffix += " " + ReviewResult.verificationBrief(result.truncation().verification());
     }
     return suffix;
+  }
+
+  /**
+   * {@code body} under the coverage banners: the partial-review banner when files were not covered
+   * (with the carried-overview line when the degraded summary shows the previous review's overview,
+   * #965), else the summary-only banner and the verification notice.
+   */
+  private static String withCoverageBanners(
+      String body, DiffStats diffStats, boolean overviewCarried) {
+    var summaryMarkdown = body;
+    // #965: a degraded summary on the head the previous round reviewed shows that round's overview,
+    // so its banner says the overview is carried rather than that only the counts are shown.
+    var degradation = diffStats.truncation().summaryDegradation();
+    var carriedOverview = overviewCarried && degradation != SummaryDegradation.NONE;
+    if (diffStats.truncated()) {
+      summaryMarkdown =
+          ReviewResult.truncationNotice(diffStats.omittedFiles(), diffStats.truncation())
+              + (carriedOverview ? ReviewResult.OVERVIEW_CARRIED_LINE : "")
+              + summaryMarkdown;
+    } else {
+      // Summary-only degradation (no file gap): the findings are complete, so the partial-review
+      // banner (and the approval hold that goes with file gaps) would overstate it — a dedicated
+      // banner names the cut, the token spend ceiling (#518) or the failed summary call (#851),
+      // without holding the verdict.
+      summaryMarkdown = summaryOnlyBanner(degradation, carriedOverview) + summaryMarkdown;
+      // Verification-only degradation (#623): the findings post either way — the verifier fails
+      // open by design — but a finding set no second stage screened must say so. When a
+      // file-coverage gap exists the truncation banner above already folds this clause in.
+      if (diffStats.truncation().verification().disclosed()) {
+        summaryMarkdown =
+            ReviewResult.verificationNotice(diffStats.truncation().verification())
+                + summaryMarkdown;
+      }
+    }
+    return summaryMarkdown;
+  }
+
+  /**
+   * The banner of a summary-only degradation: the carried-overview banner when the overview shown
+   * is the previous review's (#965), else the one naming the cut, the ceiling, the call cap or the
+   * failure; {@code ""} with no degradation.
+   */
+  private static String summaryOnlyBanner(SummaryDegradation degradation, boolean carried) {
+    if (carried) {
+      return ReviewResult.overviewCarriedNotice(degradation);
+    }
+    return switch (degradation) {
+      case RESPONSE_CUT -> ReviewResult.SUMMARY_CUT_NOTICE;
+      case SKIPPED_AT_CEILING -> ReviewResult.SUMMARY_SKIPPED_NOTICE;
+      case SKIPPED_AT_CALL_CAP -> ReviewResult.SUMMARY_CALL_CAP_NOTICE;
+      case SUMMARY_FAILED -> ReviewResult.SUMMARY_FAILED_NOTICE;
+      case NONE -> "";
+    };
   }
 
   record DiffStats(
@@ -652,7 +706,8 @@ public class VerdictBuilder {
       String coverageArtifactNotRead,
       String carriedFromSupersededRun,
       String reasoningStepDown,
-      List<Finding> openPrevious) {}
+      List<Finding> openPrevious,
+      boolean overviewCarried) {}
 
   ReviewResult buildResult(
       ReviewResponse aiResponse,
@@ -666,7 +721,7 @@ public class VerdictBuilder {
         aiResponse,
         isFirstReview,
         diffStats,
-        new SummaryInputs(changedFiles, "", "", "", "", "", "", unresolvedPrevious),
+        new SummaryInputs(changedFiles, "", "", "", "", "", "", unresolvedPrevious, false),
         ciEvaluation,
         backstopStatuses);
   }
@@ -762,32 +817,8 @@ public class VerdictBuilder {
     if (withheldByConfidence > 0) {
       summaryMarkdown = ReviewResult.confidenceHoldNotice(withheldByConfidence) + summaryMarkdown;
     }
-    if (diffStats.truncated()) {
-      summaryMarkdown =
-          ReviewResult.truncationNotice(diffStats.omittedFiles(), diffStats.truncation())
-              + summaryMarkdown;
-    } else {
-      // Summary-only degradation (no file gap): the findings are complete, so the partial-review
-      // banner (and the approval hold that goes with file gaps) would overstate it — a dedicated
-      // banner names the cut, the token spend ceiling (#518) or the failed summary call (#851),
-      // without holding the verdict.
-      summaryMarkdown =
-          switch (diffStats.truncation().summaryDegradation()) {
-            case RESPONSE_CUT -> ReviewResult.SUMMARY_CUT_NOTICE + summaryMarkdown;
-            case SKIPPED_AT_CEILING -> ReviewResult.SUMMARY_SKIPPED_NOTICE + summaryMarkdown;
-            case SKIPPED_AT_CALL_CAP -> ReviewResult.SUMMARY_CALL_CAP_NOTICE + summaryMarkdown;
-            case SUMMARY_FAILED -> ReviewResult.SUMMARY_FAILED_NOTICE + summaryMarkdown;
-            case NONE -> summaryMarkdown;
-          };
-      // Verification-only degradation (#623): the findings post either way — the verifier fails
-      // open by design — but a finding set no second stage screened must say so. When a
-      // file-coverage gap exists the truncation banner above already folds this clause in.
-      if (diffStats.truncation().verification().disclosed()) {
-        summaryMarkdown =
-            ReviewResult.verificationNotice(diffStats.truncation().verification())
-                + summaryMarkdown;
-      }
-    }
+    summaryMarkdown =
+        withCoverageBanners(summaryMarkdown, diffStats, summaryInputs.overviewCarried());
 
     return new ReviewResult(
         tally.findings(),
