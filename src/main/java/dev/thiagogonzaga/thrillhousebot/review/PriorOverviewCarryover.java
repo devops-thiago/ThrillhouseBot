@@ -18,8 +18,9 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -109,7 +110,7 @@ final class PriorOverviewCarryover {
     var files =
         new ArrayList<>(
             current.fileSummaries().stream().filter(f -> !isBlank(f.summary())).toList());
-    var covered = new HashSet<String>();
+    var covered = new CoveredPaths();
     files.forEach(f -> covered.add(f.path()));
     var earlier =
         prior.fileSummaries().stream().filter(f -> isUsable(f) && covered.add(f.path())).toList();
@@ -128,6 +129,51 @@ final class PriorOverviewCarryover {
         current.prPurpose(),
         files,
         keepDiagram ? prior.walkthroughDiagram() : current.walkthroughDiagram());
+  }
+
+  /**
+   * The paths a file list already summarizes, matched as {@link FilePaths#same} matches them (one
+   * path a suffix of the other at a directory boundary), indexed by file name so a lookup weighs
+   * only the paths that could match rather than the whole list.
+   */
+  private static final class CoveredPaths {
+
+    private final Map<String, List<String>> byFileName = new HashMap<>();
+
+    /** Records {@code path}; {@code false} when a path it is the same as is already recorded. */
+    boolean add(String path) {
+      var name = path.substring(path.lastIndexOf('/') + 1);
+      var same = byFileName.computeIfAbsent(name, k -> new ArrayList<>());
+      if (same.stream().anyMatch(p -> FilePaths.same(p, path))) {
+        return false;
+      }
+      same.add(path);
+      return true;
+    }
+  }
+
+  /**
+   * The summary a degraded round persists (#965): the previous round's overview on the head that
+   * round reviewed, under counts taken from the findings this round keeps, so the stored summary
+   * does not say zero findings over a round that has them; {@code null}, the counts-only shape,
+   * when there is no overview to carry.
+   */
+  static ReviewResponse.Summary fillDegraded(
+      ReviewContextLoader.ReviewContext ctx, List<ReviewResponse.Finding> findings) {
+    var counts = new int[RiskLevel.values().length];
+    findings.forEach(f -> counts[RiskLevel.fromString(f.risk()).ordinal()]++);
+    var countsOnly =
+        new ReviewResponse.Summary(
+            findings.size(),
+            counts[RiskLevel.CRITICAL.ordinal()],
+            counts[RiskLevel.HIGH.ordinal()],
+            counts[RiskLevel.MEDIUM.ordinal()],
+            counts[RiskLevel.LOW.ordinal()],
+            null,
+            null,
+            List.of());
+    var filled = fill(countsOnly, ctx);
+    return filled == countsOnly ? null : filled;
   }
 
   /** Whether an earlier file summary names a path and says something. */

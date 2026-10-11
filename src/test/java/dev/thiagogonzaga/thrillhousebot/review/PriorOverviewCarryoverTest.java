@@ -275,6 +275,60 @@ class PriorOverviewCarryoverTest {
   }
 
   @Test
+  void anEarlierSummaryForTheSameFileUnderAnotherSpellingIsNotTakenTwice() {
+    // The answer and the earlier round can spell one file with and without a leading directory;
+    // FilePaths.same holds them for one file, as the rest of the pipeline does.
+    var earlier =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            null,
+            "Adds a cache layer.",
+            List.of(),
+            List.of(),
+            List.of(
+                new ReviewResponse.FileSummary("repo/src/lib.rs", "the earlier line"),
+                new ReviewResponse.FileSummary("other/lib.rs", "a different lib.rs")),
+            null,
+            List.of());
+    var current =
+        new ReviewResponse.Summary(
+            0, 0, 0, 0, 0, null, "Its own purpose.", List.of(), List.of(), FILES, null, List.of());
+
+    var kept = PriorOverviewCarryover.fill(current, context(List.of(round(earlier)), true));
+
+    assertEquals(
+        List.of(
+            FILES.getFirst(), new ReviewResponse.FileSummary("other/lib.rs", "a different lib.rs")),
+        kept.fileSummaries());
+  }
+
+  @Test
+  void aDegradedRoundCarriesTheOverviewUnderItsOwnFindingCounts() {
+    var findings =
+        List.of(
+            finding(),
+            new ReviewResponse.Finding("critical", "high", "src/lib.rs", 9, "t", "d", null, null),
+            new ReviewResponse.Finding("low", "high", "src/lib.rs", 12, "t2", "d", null, null));
+
+    var kept = PriorOverviewCarryover.fillDegraded(context(List.of(round(PRIOR)), true), findings);
+
+    assertEquals(PRIOR.prPurpose(), kept.prPurpose());
+    assertEquals(FILES, kept.fileSummaries());
+    assertEquals(3, kept.totalFindings());
+    assertEquals(1, kept.critical());
+    assertEquals(1, kept.high());
+    assertEquals(0, kept.medium());
+    assertEquals(1, kept.low());
+    // No overview to carry: the counts-only shape, a null summary, as before.
+    assertNull(
+        PriorOverviewCarryover.fillDegraded(context(List.of(round(PRIOR)), false), findings));
+  }
+
+  @Test
   void aCarriedOverviewIsToldApartFromTheRoundsOwn() {
     var ctx = context(List.of(round(PRIOR)), true);
     var carried = PriorOverviewCarryover.fill(null, ctx);
