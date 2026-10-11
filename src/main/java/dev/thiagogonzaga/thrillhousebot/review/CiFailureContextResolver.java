@@ -140,7 +140,7 @@ public class CiFailureContextResolver {
           // error in the test's setup): a Python file, not a logger's "ERROR app::db: refused".
           // unittest "FAIL: test_y (module.Case)".
           Pattern.compile("^(?:FAILED|ERROR) [^\\s:]++(?<=\\.py)::").asPredicate(),
-          Pattern.compile("^(?:FAIL|ERROR): \\w++ \\(").asPredicate(),
+          Pattern.compile("^(?:FAIL|ERROR): \\w++ \\((?:\\w++\\.)++\\w++\\)").asPredicate(),
           // go test "--- FAIL: TestY", cargo test "test y ... FAILED" and its doctest
           // "test src/lib.rs - add (line 5) - compile fail ... FAILED".
           line -> line.startsWith("--- FAIL: "),
@@ -159,6 +159,43 @@ public class CiFailureContextResolver {
 
   /** A dotnet test duration as the console logger prints it: {@code [12 ms]}, {@code [< 1 ms]}. */
   private static final Pattern DOTNET_DURATION = Pattern.compile("\\[(?:< )?+\\d[^\\]]*+]");
+
+  /**
+   * File extensions a tool's {@code name.ext:line} row ends its token with, where Surefire's row
+   * has a test method.
+   */
+  private static final Set<String> FILE_EXTENSIONS =
+      Set.of(
+          "java",
+          "kt",
+          "kts",
+          "groovy",
+          "scala",
+          "gradle",
+          "xml",
+          "properties",
+          "yml",
+          "yaml",
+          "json",
+          "js",
+          "jsx",
+          "mjs",
+          "cjs",
+          "ts",
+          "tsx",
+          "vue",
+          "css",
+          "scss",
+          "html",
+          "md",
+          "py",
+          "rb",
+          "go",
+          "rs",
+          "cs",
+          "sql",
+          "sh",
+          "txt");
 
   /** The browser names Karma prints before a browser's version on a test's result line. */
   private static final Set<String> KARMA_BROWSERS =
@@ -389,14 +426,26 @@ public class CiFailureContextResolver {
     var duration = line.lastIndexOf(" [");
     return line.startsWith("Failed ")
         && duration > "Failed".length()
-        && DOTNET_DURATION.matcher(line.substring(duration + 1)).matches();
+        && DOTNET_DURATION.matcher(line.substring(duration + 1)).matches()
+        && isQualifiedTestName(line.substring("Failed ".length(), duration));
+  }
+
+  /**
+   * Whether {@code name} opens with a namespace-qualified method, as every dotnet test name does
+   * ({@code Ns.Class.Method}, then a theory's arguments): a step's "Failed 3 checks" or "Failed
+   * deploy" is not one.
+   */
+  private static boolean isQualifiedTestName(String name) {
+    var arguments = name.indexOf('(');
+    var method = arguments < 0 ? name : name.substring(0, arguments);
+    return method.indexOf(' ') < 0 && method.contains(".");
   }
 
   /**
    * Surefire's summary row {@code [ERROR] BedTest.wardIsEscaped:42 expected …}: an indented {@code
    * Class.method} token and the test's line number. A tool's output that Maven re-emits indented is
-   * not a test: a path ({@code src/app.ts:12}), a {@code file:line:column} position, or a bare
-   * {@code 12:5} position.
+   * not a test: a path ({@code src/app.ts:12}), a file name ({@code App.java:12}), a {@code
+   * file:line:column} position, or a bare {@code 12:5} position.
    */
   private static boolean isSurefireRow(String line) {
     var row = SUREFIRE_ROW.matcher(line);
@@ -404,7 +453,11 @@ public class CiFailureContextResolver {
       return false;
     }
     var test = row.group(1);
-    return test.contains(".") && test.indexOf('/') < 0 && test.indexOf('\\') < 0;
+    var method = test.substring(test.lastIndexOf('.') + 1);
+    return test.contains(".")
+        && test.indexOf('/') < 0
+        && test.indexOf('\\') < 0
+        && !FILE_EXTENSIONS.contains(method.toLowerCase(Locale.ROOT));
   }
 
   private static int levelRank(GitHubCheckRunClient.Annotation annotation) {
