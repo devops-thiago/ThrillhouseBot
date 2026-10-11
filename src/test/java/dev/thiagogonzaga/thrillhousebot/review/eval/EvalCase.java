@@ -51,7 +51,8 @@ public record EvalCase(String name, String diff, Spec spec) {
       String patchCoverage,
       String prTitle,
       String prDescription,
-      List<String> dimensions) {}
+      List<String> dimensions,
+      String learnings) {}
 
   /** The candidate finding a verifier case feeds to the second-pass audit. */
   public record CandidateFinding(
