@@ -74,8 +74,8 @@ final class OverviewScreen {
       Pattern.compile("(?<![\\w$])[A-Z][A-Z0-9]*+(?:_[A-Z0-9]++)++(?![\\w$])");
 
   /**
-   * A tracker key such as {@code PROJ-123}. Four or more letters, so "SHA-256", "UTF-8" and
-   * "CVE-…" are not taken for one.
+   * A tracker key such as {@code PROJ-123}. Four or more letters, so "SHA-256", "UTF-8" and "CVE-…"
+   * are not taken for one.
    */
   private static final Pattern TICKET_KEY =
       Pattern.compile("(?<![\\w-])[A-Z]{4,15}-\\d{1,7}(?![\\w-])");
@@ -92,9 +92,7 @@ final class OverviewScreen {
    * @param prText the PR title, description and linked-issue text the call read
    */
   static ReviewResponse.Summary screen(
-      ReviewResponse.Summary summary,
-      List<GitHubPullRequestClient.FileDiff> files,
-      String prText) {
+      ReviewResponse.Summary summary, List<GitHubPullRequestClient.FileDiff> files, String prText) {
     if (summary == null) {
       return null;
     }
@@ -162,8 +160,8 @@ final class OverviewScreen {
   }
 
   /**
-   * A file summary's text with its findings talk and invented setting names cut, or {@code ""}
-   * when nothing true is left. The first clause is the file's role: when it fails, the summary goes.
+   * A file summary's text with its findings talk and invented setting names cut, or {@code ""} when
+   * nothing true is left. The first clause is the file's role: when it fails, the summary goes.
    */
   static String screenedText(String summary, String patch) {
     var text = summary.strip();

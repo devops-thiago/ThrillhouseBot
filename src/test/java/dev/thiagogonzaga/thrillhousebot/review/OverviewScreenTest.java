@@ -31,7 +31,8 @@ class OverviewScreenTest {
 
   private static final List<FileDiff> FILES =
       List.of(
-          new FileDiff("src/main/java/dev/acme/SecretScanner.java", "added", 9, 0, 9, "+class S {}"),
+          new FileDiff(
+              "src/main/java/dev/acme/SecretScanner.java", "added", 9, 0, 9, "+class S {}"),
           new FileDiff("react/src/Dashboard.tsx", "added", 5, 0, 5, "+export function D() {}"),
           new FileDiff(
               "docs/CONFIG-REACT.md",
@@ -87,7 +88,8 @@ class OverviewScreenTest {
             FILES,
             "");
 
-    assertEquals(List.of(row("react/src/Dashboard.tsx", "the exact one")), screened.fileSummaries());
+    assertEquals(
+        List.of(row("react/src/Dashboard.tsx", "the exact one")), screened.fileSummaries());
   }
 
   @ParameterizedTest
@@ -161,8 +163,7 @@ class OverviewScreenTest {
     var screened =
         OverviewScreen.screen(
             summary(
-                "p (THRILLHOUSEBOT-1).",
-                List.of(row(null, "x"), row("react/src/main.tsx", null))),
+                "p (THRILLHOUSEBOT-1).", List.of(row(null, "x"), row("react/src/main.tsx", null))),
             FILES,
             "");
 
