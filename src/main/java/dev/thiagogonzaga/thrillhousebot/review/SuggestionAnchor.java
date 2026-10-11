@@ -100,7 +100,7 @@ final class SuggestionAnchor {
   /**
    * Cells of a markdown table row: the separator pipes after its leading pipe, plus one unless the
    * row ends on one, so a row written without a trailing pipe counts the same. As in GFM, a
-   * backslash escapes the character after it, so {@code \\|} is cell text and {@code \\\\|} is an
+   * backslash escapes the character after it, so {@code \|} is cell text and {@code \\|} is an
    * escaped backslash followed by a separator.
    */
   static int cellCount(String row) {
