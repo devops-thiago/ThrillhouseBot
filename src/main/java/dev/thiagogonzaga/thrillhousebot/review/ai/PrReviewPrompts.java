@@ -1434,6 +1434,12 @@ public final class PrReviewPrompts {
               line outside it; a "starts with" check meets the token inside a fenced code block or
               a blockquote; a presence check meets a value that is present but the wrong shape
               (non-numeric where a number is required).
+            - When the rule reads a standard format, list that format's own special lines and run
+              each through the rule: a unified diff's "\\ No newline at end of file" marker and its
+              "---" / "+++" file headers, a CSV field holding a quoted separator, a Markdown fence
+              inside a list item, a YAML document separator. A special line the rule does not name
+              is classified by whichever branch it happens to reach — say which one, and what that
+              does to the rule's output.
             - Report BOTH directions, and weight the one the code cannot tell you about: a false
               positive (it matches what it should not) is visible when you read the rule; a false
               NEGATIVE (it silently misses, mis-segments, or accepts) is the defect class this

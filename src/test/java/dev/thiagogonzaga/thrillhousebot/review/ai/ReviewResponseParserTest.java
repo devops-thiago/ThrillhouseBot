@@ -40,6 +40,17 @@ class ReviewResponseParserTest {
     assertThrows(IllegalArgumentException.class, () -> parser.parse(null));
   }
 
+  /**
+   * A prose answer with no JSON fails unchecked, so the live eval's retry ({@code
+   * PromptEvalTest.review}) asks again instead of losing the run.
+   */
+  @Test
+  void shouldRejectAProseAnswerWithAnUncheckedException() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> parser.parse("I reviewed the change and it looks correct; nothing to report."));
+  }
+
   @Test
   void shouldHandleUnterminatedOrInlineFences() {
     // Opening fence without a closing one: fence stripping is skipped, noise stripping applies
