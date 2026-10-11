@@ -189,7 +189,8 @@ class RescuedFindingLostWriteTest {
   }
 
   private static Finding findingWithSuggestion() {
-    return new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Bug", "desc", "old", "new");
+    // suggestion_old quotes line 10 as the diff has it, so the suggestion is posted there (#924).
+    return new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Bug", "desc", "new", "newer");
   }
 
   private ReviewPublisher.InlineCommentResult postFinding(Finding finding) {
