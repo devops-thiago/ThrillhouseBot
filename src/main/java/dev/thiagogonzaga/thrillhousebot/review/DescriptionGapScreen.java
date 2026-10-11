@@ -61,17 +61,24 @@ final class DescriptionGapScreen {
   private static final Pattern QUOTED =
       Pattern.compile("\"([^\"\n]++)\"|(?<![\\p{L}\\p{N}])'([^\n]+?)'(?![\\p{L}\\p{N}])");
 
-  /** The pull request's own text named as such: its description, or its author. */
-  private static final Pattern PR_TEXT = Pattern.compile("(?i)\\b(?:description|author)\\b");
+  /** The description named as such. */
+  private static final Pattern DESCRIPTION = Pattern.compile("(?i)\\bdescription\\b");
+
+  /**
+   * The author named: a citation of the pull request's own text, though not by itself what
+   * attributes a quote to it, since "the author's code caps caching at '…'" quotes the change.
+   */
+  private static final Pattern AUTHOR = Pattern.compile("(?i)\\bauthor\\b");
 
   /** The pull request's title or body, named as the PR's: a bare "title" may be a page's. */
   private static final Pattern PR_TITLE_OR_BODY =
       Pattern.compile("(?i)\\b(?:pr|pull request)(?:['’]s)?\\s++(?:title|body)\\b");
 
-  /** The pull request stating or claiming something: "the PR states", "the pull request says". */
+  /** The PR or its author stating or claiming something: "the PR states", "the author says". */
   private static final Pattern PR_SAYS =
       Pattern.compile(
-          "(?i)\\b(?:pr|pull request)(?:['’]s)?\\s++(?:(?:state|claim|promise|mention|read)s?|says)\\b");
+          "(?i)\\b(?:pr|pull request|author)(?:['’]s)?\\s++"
+              + "(?:(?:state|claim|promise|mention|read)s?|says)\\b");
 
   /** A claim verb opening the text, its subject elided under the section's intro line. */
   private static final Pattern LEADING_CLAIM_VERB =
@@ -79,10 +86,10 @@ final class DescriptionGapScreen {
 
   /**
    * What attributes the quote that follows it to the pull request's own text: the description, its
-   * title or body, the author, or the PR stating or claiming something.
+   * title or body, or the PR or its author stating or claiming something.
    */
   private static final List<Pattern> CLAIM_CUES =
-      List.of(PR_TEXT, PR_TITLE_OR_BODY, PR_SAYS, LEADING_CLAIM_VERB);
+      List.of(DESCRIPTION, PR_TITLE_OR_BODY, PR_SAYS, LEADING_CLAIM_VERB);
 
   /**
    * A clause saying the description does not hold something: the quote after it is what the change
@@ -115,7 +122,8 @@ final class DescriptionGapScreen {
    */
   private static final List<Pattern> CITATIONS =
       List.of(
-          PR_TEXT,
+          DESCRIPTION,
+          AUTHOR,
           PR_TITLE_OR_BODY,
           PR_SAYS,
           LINKED_ISSUE,

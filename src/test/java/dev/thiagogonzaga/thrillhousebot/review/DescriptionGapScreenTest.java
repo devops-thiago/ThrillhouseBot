@@ -132,9 +132,11 @@ class DescriptionGapScreenTest {
   @ValueSource(
       strings = {
         "The page's <title> element reads 'Bookings dashboard home' on every route.",
-        "The response body reads 'retry after thirty seconds' on a conflict."
+        "The response body reads 'retry after thirty seconds' on a conflict.",
+        "The author's code caps caching at 'CACHE_TTL_SECONDS', but the description promises"
+            + " unbounded caching."
       })
-  void aBareTitleOrBodyIsNotThePullRequests(String gap) {
+  void aBareTitleBodyOrAuthorDoesNotAttributeAQuote(String gap) {
     assertFalse(DescriptionGapScreen.misquotes(gap, DescriptionGapScreen.normalize(RUST_159)));
   }
 
@@ -233,7 +235,8 @@ class DescriptionGapScreenTest {
         "Acceptance criteria require rejecting past dates; nothing does.",
         "The Dockerfile the change adds is never mentioned.",
         "Unmentioned: the change also adds a CI workflow.",
-        "Says the cache is bounded; it is not."
+        "Says the cache is bounded; it is not.",
+        "The author caps the retry budget at three attempts; the change has no cap."
       })
   void aGapCitingTheDescriptionOrALinkedIssueIsKept(String gap) {
     assertTrue(DescriptionGapScreen.cites(gap), gap);
