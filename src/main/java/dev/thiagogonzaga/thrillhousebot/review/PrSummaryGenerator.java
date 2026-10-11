@@ -960,14 +960,14 @@ public class PrSummaryGenerator {
   }
 
   /**
-   * A double-quoted label or an edge label between pipes, removed before the syntax checks. An edge
-   * label holds no arrowhead of a link ({@code -->}, {@code ==>}, {@code -.->}), so two labels left
-   * open on one line ({@code A -->|x B -->|y C}) do not pair into one label that spans the arrow
-   * between them: their pipes stay and fail the check. Label text may still hold {@code --}, {@code
-   * ==} or a lone {@code ->} ({@code |retry--fallback|}, {@code |yes -> go|}).
+   * A double-quoted label or an edge label between pipes, removed before the syntax checks. A link
+   * that ends right at a pipe ({@code -->|}, {@code ==>|}, {@code -.->|}) opens the next label
+   * rather than closing this one, so two labels left open on one line ({@code A -->|x B -->|y C})
+   * do not pair into one label that spans the arrow between them: their pipes stay and fail the
+   * check. Label text may still hold a link ({@code |calls a --> b|}), {@code --} or {@code ->}.
    */
   private static final Pattern MERMAID_LABEL =
-      Pattern.compile("\"[^\"\\n]*+\"|\\|(?:[^|\\n>]|(?<!--|==|\\.-)>)*+\\|");
+      Pattern.compile("\"[^\"\\n]*+\"|\\|(?:[^|\\n>]|>(?!\\s*+\\|)|(?<!--|==|\\.-)>)*+\\|");
 
   /**
    * A one-dash arrow: {@code ->} not preceded by another dash or a dot, which covers the sequence

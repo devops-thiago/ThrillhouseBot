@@ -2045,6 +2045,7 @@ class PrSummaryGeneratorTest {
         "flowchart TD\n  A -->|x B",
         // Two edge labels left open on one line do not pair across the arrow between them.
         "flowchart TD\n  A -->|x B -->|y C",
+        "flowchart TD\n  A -->|x B ==> |y C",
         // A doubled arrowhead, a sequence diagram's arrow under a flowchart header.
         "flowchart TD\n  A-->>B",
         "flowchart TD\n  A -->> B",
@@ -2103,6 +2104,7 @@ class PrSummaryGeneratorTest {
         "flowchart LR\n  A -->|x-y| B -->|re-try| C ==>|go| D",
         // Interior link characters in a label, and comma statements after a semicolon.
         "flowchart LR\n  A -->|retry--fallback| B ==>|a==b| C",
+        "flowchart LR\n  A -->|calls a --> b| B -->|then c ==> d| C",
         "flowchart TD; A --> B; class A,B hot",
         "flowchart TD\n  A --> B; style A fill:#f9f,stroke:#333",
         "graph TD\n  subgraph S [\"Store\"]\n    A([\"Fetch, merge\"]) --> B[(\"db\")]\n  end",
