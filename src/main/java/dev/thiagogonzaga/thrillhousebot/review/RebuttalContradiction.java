@@ -337,9 +337,9 @@ final class RebuttalContradiction {
     var inFile = true;
     for (var line : reviewedCode.split("\n", -1)) {
       if (line.startsWith("diff --git ")) {
-        inFile = file != null && line.endsWith("/" + file);
+        inFile = line.endsWith("/" + file);
       } else if (line.startsWith("### ")) {
-        inFile = file != null && FilePaths.same(sectionPath(line), file);
+        inFile = FilePaths.same(sectionPath(line), file);
       } else if (inFile && (line.startsWith("+") || line.startsWith(" "))) {
         kept.add(line.substring(1));
       }
