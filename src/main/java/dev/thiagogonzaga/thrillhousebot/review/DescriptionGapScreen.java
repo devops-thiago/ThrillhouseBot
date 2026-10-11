@@ -83,8 +83,12 @@ final class DescriptionGapScreen {
    */
   private static final Pattern AUTHOR = Pattern.compile("(?i)\\bauthor\\b");
 
-  /** The verbs that attribute what follows them to their subject: states, claims, says, said… */
-  private static final String SAYING_VERBS = "(?:(?:state|claim|promise|mention|read)s?|says|said)";
+  /**
+   * The verbs that attribute what follows them to their subject, present or past: states, stated,
+   * claims, claimed, says, said…
+   */
+  private static final String SAYING_VERBS =
+      "(?:(?:state|promise)[sd]?|(?:claim|mention)(?:s|ed)?|reads?|says|said)";
 
   /**
    * The description stating or claiming something: "the description states", "description says".
@@ -361,10 +365,13 @@ final class DescriptionGapScreen {
    */
   private static boolean present(String quote, String normalizedSource) {
     var words = normalize(joinEditorialLetters(quote));
+    var runTogetherSource = normalizedSource.replace(" ", "");
     if (words.indexOf(' ') < 0) {
-      return normalizedSource.replace(" ", "").contains(words);
+      return runTogetherSource.contains(words);
     }
-    return appearsIn(quote, normalizedSource);
+    // A quote that spaces out what the PR text runs together ('retry forever' for retryForever)
+    // is the same words, so it is kept.
+    return appearsIn(quote, normalizedSource) || runTogetherSource.contains(words.replace(" ", ""));
   }
 
   /**

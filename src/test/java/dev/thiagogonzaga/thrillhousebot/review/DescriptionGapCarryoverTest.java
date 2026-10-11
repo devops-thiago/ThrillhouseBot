@@ -932,6 +932,18 @@ class DescriptionGapCarryoverTest {
     }
 
     @Test
+    void theFingerprintIsTakenOverTheSameTextOnBothSides() {
+      // The publisher fingerprints PromptSections.prContext(title, description); the carry reads
+      // the summary call's prContext, the same text fenced by ReviewPromptAssembler and unfenced.
+      var prContext = PromptSections.prContext("feat: bookings", "Adds the bookings service.");
+
+      assertEquals(
+          DescriptionGapCarryover.fingerprint(prContext),
+          DescriptionGapCarryover.fingerprint(
+              PromptTemplateEscaper.unfence(PromptTemplateEscaper.fence(prContext))));
+    }
+
+    @Test
     void theFingerprintIsReadFromTheMarkerLineOnly() {
       var marker = DescriptionGapCarryover.prTextMarker(PR_TEXT);
 
