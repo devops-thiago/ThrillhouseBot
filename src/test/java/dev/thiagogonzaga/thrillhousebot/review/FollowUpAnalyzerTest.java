@@ -4889,6 +4889,29 @@ class FollowUpAnalyzerTest {
       var note = heldNote(otherObject);
       assertTrue(note.contains("says this path runs concurrently"), otherObject + " -> " + note);
     }
+    // A refusing verb is read back through the whole clause, however far from the statement.
+    var farRefusal =
+        heldNote(
+            "+// The limiter rejects by returning 429 on each attempt for every one of the"
+                + " concurrent requests.");
+    assertTrue(farRefusal.contains("no review has weighed"), farRefusal);
+  }
+
+  /**
+   * A diff can state concurrency in words {@code STATED_CONCURRENCY} does not match, so the note
+   * held without a quote never claims the reviewed code cannot confirm it.
+   */
+  @Test
+  void aHeldNoteWithoutAQuoteNeverSaysTheCodeCannotConfirmConcurrency() {
+    for (var unmatched :
+        List.of(
+            "+// Multiple threads call tracker.bump() on every request.",
+            "+// Requests arrive at this handler in parallel.")) {
+      var note = heldNote(unmatched);
+      assertTrue(note.contains("no review has weighed"), unmatched + " -> " + note);
+      assertTrue(note.contains("not taken on faith"), note);
+      assertFalse(note.contains("cannot confirm"), note);
+    }
   }
 
   /** A diff section is the declined file's only when its a/ or b/ path is that file exactly. */
@@ -4994,7 +5017,8 @@ class FollowUpAnalyzerTest {
             "+// It is not a cache and it is shared by every request goroutine.",
             "+// There is no cache because the pool is shared by every request goroutine.",
             "+// The pool is not only shared by every request goroutine but by the workers too.",
-            // Seven words without a negator end the scan, and so does a gap over sixteen spaces.
+            // A negator reaches seven words back at most, and a gap over sixteen spaces ends the
+            // clause.
             "+// The pool held by the small old worker type here is shared by every request"
                 + " goroutine.",
             "+// The pool is not" + " ".repeat(17) + "shared by every request goroutine.")) {

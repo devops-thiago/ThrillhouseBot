@@ -482,7 +482,7 @@ final class RebuttalContradiction {
     var subordinate = false;
     for (var i = 0; i < words.size(); i++) {
       var word = words.get(i);
-      if (isNegator(word)) {
+      if (i <= DENIAL_WORDS && isNegator(word)) {
         return i == 0 || !AFFIRMING.contains(words.get(i - 1));
       }
       if (CLAUSE_OPENERS.contains(word)) {
@@ -497,14 +497,15 @@ final class RebuttalContradiction {
   }
 
   /**
-   * The words before a statement, lowercased, nearest first: at most {@value #DENIAL_WORDS} beyond
-   * the nearest, read back until a gap wider than {@value #MAX_GAP} characters or anything that is
-   * neither a gap nor a word character (clause punctuation) ends the clause.
+   * The words of the statement's clause before it, lowercased, nearest first: read back until a gap
+   * wider than {@value #MAX_GAP} characters, or anything that is neither a gap nor a word character
+   * (clause punctuation, the start of the text), ends the clause. The whole clause is read, so a
+   * refusing verb anywhere in it is seen; {@link #denies} bounds the negator's reach itself.
    */
   private static List<String> wordsBefore(String before) {
     var words = new ArrayList<String>();
     var end = before.length();
-    while (words.size() <= DENIAL_WORDS) {
+    while (true) {
       var wordEnd = end;
       while (wordEnd > 0 && isGap(before.charAt(wordEnd - 1))) {
         wordEnd--;
@@ -514,12 +515,11 @@ final class RebuttalContradiction {
         start--;
       }
       if (end - wordEnd > MAX_GAP || start == wordEnd) {
-        break;
+        return words;
       }
       words.add(before.substring(start, wordEnd).toLowerCase(Locale.ROOT));
       end = start;
     }
-    return words;
   }
 
   private static boolean isNegator(String word) {
@@ -604,17 +604,20 @@ final class RebuttalContradiction {
 
   /**
    * The status note of a decline held by {@link #unconfirmedPremise}: the claim, why it is not
-   * taken on faith, and how to keep the decline. Opens with {@link #NOTE_LEAD_IN}, so the review
-   * body carries it as it carries a contradiction's note.
+   * taken on faith, and how to keep the decline. It says nothing about what the reviewed code
+   * states: {@link #STATED_CONCURRENCY} recognizes common phrasings only, so a diff may state the
+   * concurrency in words it does not match, and the note must not then claim the code cannot
+   * confirm it. Opens with {@link #NOTE_LEAD_IN}, so the review body carries it as it carries a
+   * contradiction's note.
    */
   static String unconfirmedPremiseNote(String claim) {
     return NOTE_LEAD_IN
         + REPLY_ARGUES
         + claim
         + "\", but no review has weighed that against this finding, which an earlier review"
-        + " raised, and the reviewed code cannot confirm it: what runs a path concurrently (a server"
-        + " that handles each request on its own thread or goroutine, an executor in a file outside"
-        + " the diff) is often not in the diff. Reply again to keep the decline.";
+        + " raised, so it is not taken on faith: what runs a path concurrently (a server that"
+        + " handles each request on its own thread or goroutine, an executor in a file outside the"
+        + " diff) is often not in the diff. Reply again to keep the decline.";
   }
 
   /**
