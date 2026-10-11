@@ -71,7 +71,7 @@ final class FollowUpDeltaSummary {
    */
   static Optional<String> render(
       ReviewResult result, List<ReviewResponse.Finding> previousFindings) {
-    var newFindings = result.totalFindings();
+    var newFindings = newFindingCount(result);
     var resolved = result.resolvedPreviousCount();
     if (newFindings == 0 && resolved == 0) {
       return Optional.empty();
@@ -104,5 +104,20 @@ final class FollowUpDeltaSummary {
       body += "\n\n> ⚠️ " + ReviewResult.verificationBrief(result.truncation().verification());
     }
     return Optional.of(body);
+  }
+
+  /**
+   * The round's findings that are new: those that are not an earlier finding still open, raised
+   * again. A double-check item replaced by this round's finding is listed among the still-open
+   * findings as that finding (#969), and an exact re-raise is the earlier finding by identity
+   * ({@link PrSummaryGenerator#reRaises}), so neither is reported as new; both are counted under
+   * "still open".
+   */
+  static int newFindingCount(ReviewResult result) {
+    var open = result.openPreviousFindings();
+    return (int)
+        result.findings().stream()
+            .filter(f -> open.stream().noneMatch(o -> PrSummaryGenerator.reRaises(f, o)))
+            .count();
   }
 }
