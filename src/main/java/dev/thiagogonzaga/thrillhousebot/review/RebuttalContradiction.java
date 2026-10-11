@@ -69,6 +69,9 @@ final class RebuttalContradiction {
   /** Max characters of the reply sentence / code line quoted back in the status note. */
   private static final int QUOTE_LIMIT = 120;
 
+  /** The header line that opens a file's section of a unified diff. */
+  private static final String DIFF_GIT = "diff --git ";
+
   /** The prior finding must itself be about concurrency for this family to apply. */
   private static final Pattern CONCURRENCY_FINDING =
       Pattern.compile(
@@ -336,7 +339,7 @@ final class RebuttalContradiction {
     var kept = new ArrayList<String>();
     var inFile = true;
     for (var line : reviewedCode.split("\n", -1)) {
-      if (line.startsWith("diff --git ")) {
+      if (line.startsWith(DIFF_GIT)) {
         inFile = namesFile(line, file);
       } else if (line.startsWith("### ")) {
         inFile = sectionPath(line).equals(file);
@@ -354,7 +357,7 @@ final class RebuttalContradiction {
    * file's section.
    */
   private static boolean namesFile(String diffLine, String file) {
-    var paths = diffLine.substring("diff --git ".length());
+    var paths = diffLine.substring(DIFF_GIT.length());
     var split = paths.indexOf(" b/");
     if (!paths.startsWith("a/") || split < 0) {
       return false;
@@ -454,7 +457,7 @@ final class RebuttalContradiction {
       if (!body) {
         scanner.reset();
       }
-      if (line.startsWith("diff --git ")) {
+      if (line.startsWith(DIFF_GIT)) {
         scanner.fileNamed(line);
       } else if (line.startsWith("### ")) {
         scanner.fileNamed(sectionPath(line));
