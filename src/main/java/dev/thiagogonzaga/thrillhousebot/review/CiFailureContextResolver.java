@@ -144,9 +144,8 @@ public class CiFailureContextResolver {
           // go test "--- FAIL: TestY", cargo test "test y ... FAILED" and its doctest
           // "test src/lib.rs - add (line 5) - compile fail ... FAILED".
           line -> line.startsWith("--- FAIL: "),
-          Pattern.compile(
-                  "^test (?:\\S++|\\S++ - [^()\\s]++ \\(line \\d++\\)(?: - \\w++(?: \\w++)*+)?+)"
-                      + " \\.\\.\\. FAILED")
+          Pattern.compile("^test \\S++ \\.\\.\\. FAILED").asPredicate(),
+          Pattern.compile("^test \\S++ - [^()\\s]++ \\(line \\d++\\)[^.]*+\\.\\.\\. FAILED")
               .asPredicate(),
           // dotnet test "Failed Ns.Class.Method [12 ms]" (a theory's arguments inlined in the
           // name), ScalaTest "*** FAILED ***", munit "==> X".
