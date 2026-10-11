@@ -2046,7 +2046,8 @@ class PrSummaryGeneratorTest {
         "flowchart TD\n  A[x & y] --> B",
         // An edge label left open.
         "flowchart TD\n  A -->|x B",
-        "flowchart TD\n  A] --> B"
+        "flowchart TD\n  A] --> B",
+        "flowchart TD\n  A --> B,"
       })
   void aFlowchartThatWouldNotParseIsOmitted(String diagram) {
     assertFalse(PrSummaryGenerator.flowchartParses(diagram), diagram);
