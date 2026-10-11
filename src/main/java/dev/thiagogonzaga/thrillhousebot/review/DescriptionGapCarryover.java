@@ -359,17 +359,18 @@ final class DescriptionGapCarryover {
    * is not a change. The text is public on the pull request; the hash only keeps the marker short.
    */
   static String fingerprint(String prText) {
-    var digest =
-        sha256().digest(DescriptionGapScreen.normalize(prText).getBytes(StandardCharsets.UTF_8));
-    return HexFormat.of().formatHex(digest).substring(0, FINGERPRINT_HEX_DIGITS);
+    return fingerprint("SHA-256", prText);
   }
 
-  private static MessageDigest sha256() {
+  /** As {@link #fingerprint(String)}; the algorithm is a parameter for tests. */
+  static String fingerprint(String algorithm, String prText) {
     try {
-      return MessageDigest.getInstance("SHA-256");
+      var digest =
+          MessageDigest.getInstance(algorithm)
+              .digest(DescriptionGapScreen.normalize(prText).getBytes(StandardCharsets.UTF_8));
+      return HexFormat.of().formatHex(digest).substring(0, FINGERPRINT_HEX_DIGITS);
     } catch (NoSuchAlgorithmException e) {
-      // Every Java platform is required to provide SHA-256.
-      throw new IllegalStateException(e);
+      throw new IllegalStateException(algorithm + " is not available", e);
     }
   }
 

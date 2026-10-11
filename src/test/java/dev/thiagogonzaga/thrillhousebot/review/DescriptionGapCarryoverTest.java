@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -938,6 +939,9 @@ class DescriptionGapCarryoverTest {
           DescriptionGapCarryover.fingerprint(PR_TEXT),
           DescriptionGapCarryover.markedFingerprint("x\n  " + marker + "  \ny"));
       assertNull(DescriptionGapCarryover.markedFingerprint("no marker here"));
+      assertThrows(
+          IllegalStateException.class,
+          () -> DescriptionGapCarryover.fingerprint("NO-SUCH-DIGEST", PR_TEXT));
       assertNull(
           DescriptionGapCarryover.markedFingerprint(DescriptionGapCarryover.PR_TEXT_MARKER_PREFIX));
       assertNotEquals(

@@ -351,6 +351,7 @@ class DescriptionGapScreenTest {
       strings = {
         "'retries forever' is what the code does, not what the description says.",
         "'retries forever' is not what the description says; it is the code's own default.",
+        "'retries forever' is what the description never says.",
         "'the README moves to docs/RUST-V10.md unchanged' is what the description says, and it"
             + " does not."
       })
@@ -368,6 +369,9 @@ class DescriptionGapScreenTest {
     assertTrue(
         DescriptionGapScreen.omissionCovered(
             "The PR says nothing about 'the bookings service'.", source));
+    assertTrue(
+        DescriptionGapScreen.omissionCovered(
+            "The description never mentions \"the bookings service\".", source));
     assertFalse(
         DescriptionGapScreen.omissionCovered(
             "The description never mentions 'the Redis cache layer'.", source));
