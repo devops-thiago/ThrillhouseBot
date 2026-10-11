@@ -3114,6 +3114,8 @@ class ReviewOrchestratorTest {
     @Test
     void shouldPostTheDeltaCommentWhenASupersededFindingRefreshedTheSummary() {
       when(followUpSummaryConfig.enabled()).thenReturn(true);
+      when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+          .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -3183,7 +3185,17 @@ class ReviewOrchestratorTest {
                 false));
 
         // #927: the superseded status makes the summary edit stand in for the round, which used to
-        // skip the delta as well; an edit notifies nobody, so the delta still lands.
+        // skip the delta as well; an edit notifies nobody, so the delta still lands. The summary
+        // was published this round (no summary comment existed, so the upsert posted one), so
+        // publishSummary returned hasSupersededPrevious() — true here — and the delta still landed.
+        verify(commentClient)
+            .createComment(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().startsWith(PrSummaryGenerator.SUMMARY_MARKER)));
         verify(commentClient)
             .createComment(
                 anyString(),
