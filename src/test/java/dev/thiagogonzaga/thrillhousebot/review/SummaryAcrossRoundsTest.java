@@ -904,10 +904,20 @@ class SummaryAcrossRoundsTest {
     var result = builder.build(followUp(priors, List.of()), roundThree, CI_CLEAR, plan);
     var edited = publishFollowUp(result, first);
 
-    assertEquals(3, result.unresolvedPreviousCount());
+    // #969: carried in 4 (round one's three, round two's one), all still present; the replaced
+    // item is carried by PROMOTED, listed once and marked open since an earlier review.
+    assertEquals(4, result.unresolvedPreviousCount());
     assertFalse(lists(result, DOUBLE_CHECK));
-    assertOpenCount(edited, 3);
+    assertTrue(lists(result, PROMOTED));
+    assertOpenCount(edited, 4);
     assertRisk(edited, 1, 2, 1, 0);
+    assertTrue(
+        section(edited, "### Key Findings")
+            .lines()
+            .anyMatch(
+                l -> l.contains(PROMOTED.title()) && l.contains(PrSummaryGenerator.CARRIED_NOTE)),
+        edited);
+    assertEquals(0, FollowUpDeltaSummary.newFindingCount(result));
     assertFalse(edited.contains(DOUBLE_CHECK.title()), edited);
     assertFalse(edited.contains("### Things to double-check"), edited);
 
@@ -926,6 +936,72 @@ class SummaryAcrossRoundsTest {
     assertFalse(lists(roundFour, DOUBLE_CHECK));
   }
 
+  /**
+   * #969, ThrillhouseBot-test#192's shape: an open double-check item from round one raised inline
+   * by round three. The status table counts it still present (carried by the inline finding), so
+   * its buckets add up to the findings carried in; the inline finding is listed once, marked open
+   * since an earlier review, and the delta does not report it as new.
+   */
+  @Test
+  void aReplacedItemIsStillPresentAndItsReplacementIsNotNew() {
+    var item =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            FILE,
+            30,
+            "dedupeById is O(n^2) over a feed of 200,000 episodes",
+            "Each episode is compared with every earlier one.",
+            "log(user.name());",
+            null);
+    var inline =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            FILE,
+            28,
+            "dedupeById is O(n^2) over a feed of up to 200,000 episodes",
+            "Each episode is compared with every earlier one, so a full feed takes minutes.",
+            "log(user.name());",
+            null);
+    var roundOne = new ReviewResponse(List.of(CRITICAL, HIGH, item), List.of(), null);
+    var priors = List.of(allUnresolved(List.of(NEW_IN_ROUND_TWO), 3), roundOne);
+    var first = publishFirstRound(roundOne);
+
+    var result =
+        builder.build(
+            followUp(priors, List.of()),
+            new ReviewResponse(
+                List.of(inline, LOW_NOTE),
+                List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+                null),
+            CI_CLEAR,
+            plan);
+    var edited = publishFollowUp(result, first);
+
+    // Carried in 4: round one's three and round two's one, all still present.
+    assertEquals(4, result.unresolvedPreviousCount());
+    assertTrue(edited.contains("| ⚠️ Still present | 4 |"), edited);
+    assertTrue(
+        result.previousStatuses().stream()
+            .anyMatch(s -> FollowUpAnalyzer.REPLACED_NOTE.equals(s.note())),
+        result.previousStatuses().toString());
+    assertTrue(lists(result, inline));
+    assertFalse(lists(result, item));
+    // Listed once: risk counts are the round's two plus the three other carried findings.
+    assertRisk(edited, 1, 1, 2, 1);
+    assertTrue(
+        section(edited, "### Key Findings")
+            .lines()
+            .anyMatch(
+                l -> l.contains(inline.title()) && l.contains(PrSummaryGenerator.CARRIED_NOTE)),
+        edited);
+    assertEquals(1, FollowUpDeltaSummary.newFindingCount(result));
+    var delta = FollowUpDeltaSummary.render(result, List.of(NEW_IN_ROUND_TWO)).orElseThrow();
+    assertTrue(delta.contains("- **New findings this round:** 1"), delta);
+    assertTrue(delta.contains("- **Previous findings still open:** 4"), delta);
+  }
+
   /** The same promotion of an item the model still reports on by id: its status is not counted. */
   @Test
   void aDoubleCheckItemPromotedFromThePreviousRoundIsNotAlsoCountedStillPresent() {
@@ -936,9 +1012,10 @@ class SummaryAcrossRoundsTest {
             CI_CLEAR,
             plan);
 
-    assertEquals(2, result.unresolvedPreviousCount());
-    assertEquals(2, result.openPreviousFindings().size());
+    assertEquals(3, result.unresolvedPreviousCount());
+    assertEquals(3, result.openPreviousFindings().size());
     assertFalse(lists(result, DOUBLE_CHECK));
+    assertTrue(lists(result, PROMOTED));
     assertEquals(1, result.totalFindings());
   }
 
@@ -999,7 +1076,7 @@ class SummaryAcrossRoundsTest {
 
     var result = builder.build(followUp(priors, List.of()), roundThree, CI_CLEAR, plan);
 
-    assertEquals(3, result.unresolvedPreviousCount());
+    assertEquals(4, result.unresolvedPreviousCount());
     assertFalse(result.openPreviousFindings().stream().anyMatch(f -> f.risk() == RiskLevel.LOW));
     assertEquals(1, result.doubleCheckFindings().size());
   }
@@ -1045,9 +1122,9 @@ class SummaryAcrossRoundsTest {
     assertTrue(lists(result, DefectIdentityTest.POLL_INTERVAL));
     assertTrue(lists(result, FREE_DAYS));
     assertFalse(lists(result, DefectIdentityTest.SCHEMA));
-    // Carried in 3 = Still present 2 + replaced 1; nothing resolved or justified.
-    assertEquals(2, result.unresolvedPreviousCount());
-    assertEquals(2, result.openPreviousFindings().size());
+    // Carried in 3, all still present: the schema item as the events-table finding (#969).
+    assertEquals(3, result.unresolvedPreviousCount());
+    assertEquals(3, result.openPreviousFindings().size());
     assertEquals(2, result.totalFindings());
   }
 
