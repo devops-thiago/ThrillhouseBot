@@ -322,11 +322,14 @@ public final class PromptLabelScrubber {
    * (#964). What it doubted goes with the marker; the correction after it stays.
    */
   private static final Pattern PARENTHETICAL_SELF_CORRECTION =
-      Pattern.compile("\\([^()\\n]{1,40}?[ \\t]+[—–-][ \\t]+[Ww]ait,[ \\t]+");
+      Pattern.compile("\\([^()\\n]{1,40}?[ \\t]+[—–-][ \\t]+[Ww]ait,[ \\t]++(?!then\\b)");
 
-  /** "X — wait, Y" outside a parenthetical: the marker goes, the dash and both sides stay. */
+  /**
+   * "X — wait, Y" outside a parenthetical: the marker goes, the dash and both sides stay. Neither
+   * rule reads "wait, then …", an instruction to wait, as a correction.
+   */
   private static final Pattern DASH_SELF_CORRECTION =
-      Pattern.compile("[ \\t]+([—–-])[ \\t]+[Ww]ait,[ \\t]+");
+      Pattern.compile("[ \\t]+([—–-])[ \\t]+[Ww]ait,[ \\t]++(?!then\\b)");
 
   /**
    * "BedReporter... rather, grep across the added files confirms …": a sentence the model broke off

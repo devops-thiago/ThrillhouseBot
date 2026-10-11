@@ -1066,6 +1066,8 @@ class PromptLabelScrubberTest {
         "The confirmed bug is on line 4, and the unconfirmed findings are listed below.",
         "Wait for the latch before reading the queue.",
         "The loop must wait, then retry once.",
+        "The loop retries — wait, then retry once.",
+        "Sends with backoff (5s — wait, then retry once more)",
         "The worker blocks — waiting, not spinning — until notified.",
         "The values run 1...10, rather than 0...9.",
         "It reads the header... and then the body.",
