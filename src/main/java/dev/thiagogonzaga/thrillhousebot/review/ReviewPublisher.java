@@ -116,13 +116,32 @@ public class ReviewPublisher {
       int prNumber,
       ReviewResult result,
       boolean forceSummary) {
+    return publishSummary(auth, owner, repo, prNumber, result, forceSummary, null);
+  }
+
+  /**
+   * {@link #publishSummary(String, String, String, int, ReviewResult, boolean)}, with the PR text
+   * the round judged its description gaps against fingerprinted in a hidden line under the marker
+   * ({@link DescriptionGapCarryover#prTextMarker}), so the next round on the same head can tell an
+   * edited description from a re-read (#1064). A {@code null} {@code prText} adds no line.
+   */
+  boolean publishSummary(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      ReviewResult result,
+      boolean forceSummary,
+      String prText) {
     if (result.summaryMarkdown().isBlank()) {
       return false;
     }
+    var prTextLine = prText == null ? "" : DescriptionGapCarryover.prTextMarker(prText) + "\n";
     var request =
         new GitHubCommentClient.CreateCommentRequest(
             PrSummaryGenerator.SUMMARY_MARKER
                 + "\n"
+                + prTextLine
                 + PromptLabelScrubber.scrubMarkdown(result.summaryMarkdown(), result.findings()));
     if (result.isFirstReview() || forceSummary) {
       commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
