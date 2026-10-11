@@ -1514,6 +1514,9 @@ public class ReviewPublisher {
    * <p>A finding a maintainer cleared with an {@code @thrillhousebot resolved} directive also gets
    * a reply on its thread before the thread closes (#714), so the record of the close sits at the
    * point of the discussion rather than only in a count on a separate comment.
+   *
+   * <p>An earlier round's finding whose code left the diff ({@code superseded} with the root of its
+   * own thread) is resolved too (#1066). Resolving is idempotent: a resolved thread is skipped.
    */
   void resolveAddressedThreads(
       String auth,
@@ -1522,12 +1525,14 @@ public class ReviewPublisher {
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       List<ReviewResult.PreviousFindingStatus> statuses) {
     try {
+      logEarlierRoundStatuses(req, statuses);
       List<ReviewResult.PreviousFindingStatus> addressed =
           statuses.stream()
               .filter(
                   s ->
                       "resolved".equalsIgnoreCase(s.status())
-                          || "justified".equalsIgnoreCase(s.status()))
+                          || "justified".equalsIgnoreCase(s.status())
+                          || s.closesEarlierRound())
               .toList();
       if (addressed.isEmpty() || inlineComments.isEmpty()) {
         return;
@@ -1558,6 +1563,30 @@ public class ReviewPublisher {
       }
     } catch (RuntimeException e) {
       Log.warn("Failed to resolve addressed review threads (continuing)", e);
+    }
+  }
+
+  /**
+   * Logs, at debug, each status the backstop gave an earlier round's finding and the thread root it
+   * carries, ahead of every early return, so a thread left open can be traced to its status or to a
+   * missing root (#1066).
+   */
+  private static void logEarlierRoundStatuses(
+      ReviewOrchestrator.ReviewRequest req, List<ReviewResult.PreviousFindingStatus> statuses) {
+    for (var status : statuses) {
+      if (status.fromEarlierRound()) {
+        var finding = status.earlierRound().finding();
+        Log.debugf(
+            "Earlier-round finding '%s' (%s:%d) on %s/%s #%d: status %s, thread root %s",
+            LogSafe.oneLine(finding.title()),
+            LogSafe.oneLine(finding.file()),
+            finding.line(),
+            req.owner(),
+            req.repo(),
+            req.prNumber(),
+            LogSafe.oneLine(status.status()),
+            status.earlierRound().threadRootId());
+      }
     }
   }
 

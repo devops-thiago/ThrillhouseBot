@@ -406,6 +406,11 @@ public interface GitHubReviewClient {
    * the repository ({@code OWNER}/{@code MEMBER}/{@code COLLABORATOR}/{@code CONTRIBUTOR}/{@code
    * NONE}/…). The follow-up analyzer uses it to tell a write-capable maintainer's reply — which may
    * clear an approve hold or overrule a finding — from a fork-PR author's, which may not.
+   *
+   * <p>{@code line} and {@code originalLine} are the comment's line on the current and on the
+   * original diff ({@code null} when GitHub gives none, as for a file-level comment or an outdated
+   * line). The in-thread clear directive compares a {@code path:line} it names against them
+   * (#1066).
    */
   record PullRequestComment(
       long id,
@@ -413,7 +418,20 @@ public interface GitHubReviewClient {
       String path,
       String body,
       ReviewResponse.User user,
-      @JsonProperty("author_association") String authorAssociation) {
+      @JsonProperty("author_association") String authorAssociation,
+      Integer line,
+      @JsonProperty("original_line") Integer originalLine) {
+
+    /** A comment with no line information, as most callers and tests build one. */
+    public PullRequestComment(
+        long id,
+        Long inReplyToId,
+        String path,
+        String body,
+        ReviewResponse.User user,
+        String authorAssociation) {
+      this(id, inReplyToId, path, body, user, authorAssociation, null, null);
+    }
 
     /**
      * Back-compat convenience for callers/tests that carry no author association. Defaults it to
