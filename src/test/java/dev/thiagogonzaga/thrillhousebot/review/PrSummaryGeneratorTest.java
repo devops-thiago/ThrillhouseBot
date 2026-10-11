@@ -2074,7 +2074,8 @@ class PrSummaryGeneratorTest {
         "flowchart TD\n\n  A --> B",
         // The asymmetric (flag) shape, quoted and bare, beside arrows whose '>' follows a dash.
         "flowchart TD\n  Deploy>\"release\"] --> Prod",
-        "flowchart TD\n  Deploy>release] -->Prod\n  Prod ==>Done"
+        "flowchart TD\n  Deploy>release] -->Prod\n  Prod ==>Done",
+        "flowchart TD\n  deploy_>release] --> B[a>b]"
       })
   void aFlowchartThatParsesIsKept(String diagram) {
     assertTrue(PrSummaryGenerator.flowchartParses(diagram), diagram);
