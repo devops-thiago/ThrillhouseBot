@@ -88,6 +88,20 @@ public class CiFailureContextResolver {
   /** Characters of any single line — a title, an annotation, a log line. */
   static final int MAX_LINE_CHARS = 300;
 
+  /**
+   * The heading a detailed check opens with, its conclusion marker, and the line naming the checks
+   * not detailed. {@link CiFailureCitations} reads the rendered section back by these same three
+   * strings, so the two cannot drift apart.
+   */
+  static final String CHECK_HEADING = "### ";
+
+  static final String CONCLUSION = " (conclusion: ";
+
+  static final String NOT_DETAILED = "Also failing, not detailed:";
+
+  /** The prefix each check named under {@link #NOT_DETAILED} is listed with, one per line. */
+  static final String NAMED_ONLY = "- ";
+
   /** Appended when the whole section had to be cut to {@code max-chars}. */
   static final String TRUNCATION_NOTE = "[CI context truncated to its character budget]";
 
@@ -185,18 +199,20 @@ public class CiFailureContextResolver {
       }
     }
     if (failed.size() > detailed) {
-      var rest = failed.subList(detailed, failed.size()).stream().map(c -> oneLine(c.name()));
-      sb.append("\nAlso failing, not detailed: ")
-          .append(String.join(", ", rest.toList()))
-          .append('\n');
+      // One name per line: a check name can itself hold a comma, so a joined list could not be
+      // read back into the names it was built from.
+      sb.append('\n').append(NOT_DETAILED).append('\n');
+      failed
+          .subList(detailed, failed.size())
+          .forEach(c -> sb.append(NAMED_ONLY).append(oneLine(c.name())).append('\n'));
     }
     return sb.toString();
   }
 
   private static void appendCheck(StringBuilder sb, CiStatusEvaluator.FailedCheck check) {
-    sb.append("### ")
+    sb.append(CHECK_HEADING)
         .append(oneLine(check.name()))
-        .append(" (conclusion: ")
+        .append(CONCLUSION)
         .append(oneLine(check.conclusion() == null ? "unknown" : check.conclusion()))
         .append(")\n");
     var title = oneLine(check.title());

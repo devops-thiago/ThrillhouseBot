@@ -1625,9 +1625,8 @@ class FindingPipelineTest {
             "medium",
             "Dockerfile",
             1,
-            "unpinned base image",
-            "FROM node:20-alpine is an unpinned base image, so two builds of this commit can"
-                + " resolve to different images.",
+            "container runs as root",
+            "The Dockerfile never adds a USER directive, so the published service runs as root.",
             null,
             null);
     when(aiReviewService.review(eq(session), any()))
@@ -1656,6 +1655,50 @@ class FindingPipelineTest {
 
     assertEquals("medium", refined.findings().get(0).risk());
     assertEquals("medium", refined.findings().get(0).confidence());
+  }
+
+  /**
+   * #926: the drop reads the anchored line from the real diff, at the diff's spelling of the path
+   * (the finding cites "dockerfile", the diff changes "Dockerfile"), before the path itself is
+   * mapped further down the chain.
+   */
+  @Test
+  void anUnpinnedFindingOnAVersionedCopyFromLineIsDroppedAtTheDiffsPathSpelling() {
+    var session = ReviewSession.create("owner/repo", 1, "Add the container image", "sha");
+    var ctx = reviewContext();
+    var template =
+        new AiReviewService.PromptInputs("raw legacy diff", "ctx", "base", "s", "t", "", "");
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(batch("Dockerfile")), List.of(), List.of(), true, null, null, null, null);
+    var raised =
+        new ReviewResponse.Finding(
+            "medium",
+            "medium",
+            "dockerfile",
+            2,
+            "busybox image is unpinned",
+            "COPY --from=busybox:1.36 names an image with no digest, a mutable tag.",
+            null,
+            null);
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(raised), List.of(), null));
+    when(findingVerificationService.verify(
+            anyLong(), any(), any(), any(), any(), any(), any(), any()))
+        .thenAnswer(inv -> inv.getArgument(1));
+    var resolver =
+        new DiffLineResolver(
+            Map.of(
+                "Dockerfile",
+                """
+                @@ -0,0 +1,2 @@
+                +FROM node:20-alpine
+                +COPY --from=busybox:1.36 /bin/busybox /bin/busybox"""),
+            List.of("Dockerfile"));
+
+    var refined = pipeline.run(session, template, ctx, plan, resolver, ReviewEvidence.NONE);
+
+    assertEquals(List.of(), refined.findings());
   }
 
   @Test

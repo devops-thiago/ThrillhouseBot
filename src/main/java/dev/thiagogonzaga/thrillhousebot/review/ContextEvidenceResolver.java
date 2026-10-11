@@ -31,10 +31,10 @@ import java.util.Map;
  * verifier judges the material instead of guessing at it (#475).
  *
  * <p>The reviewer is handed context sections the verifier is not: the patch-coverage measurement
- * for this commit (#115) and the maintainers' path-scoped rules (#33). A finding raised from one of
- * them therefore reaches the verifier as a claim about an artifact nobody showed it, which is
- * precisely the ground the verifier's own prompt tells it to reject on. Every context dimension
- * added to the review pass widens that gap.
+ * for this commit (#115), the maintainers' path-scoped rules (#33) and the checks CI had already
+ * failed on it (#59, #952). A finding raised from one of them therefore reaches the verifier as a
+ * claim about an artifact nobody showed it, which is precisely the ground the verifier's own prompt
+ * tells it to reject on. Every context dimension added to the review pass widens that gap.
  *
  * <p>The finding's grounding is built into the finding instead. The generator prompt asks for the
  * measurement or the rule to be quoted in the description; this class then matches the finding
@@ -124,7 +124,23 @@ public final class ContextEvidenceResolver {
    */
   public static Round forReview(
       String patchCoverage, PathScopedInstructions pathInstructions, EvidenceBudget budget) {
-    return new Round(patchCoverage, pathInstructions, budget, false);
+    return forReview(patchCoverage, pathInstructions, "", budget);
+  }
+
+  /**
+   * {@link #forReview(String, PathScopedInstructions, EvidenceBudget)} over a review that was also
+   * given a CI-failure section: a finding citing one of its failing checks carries a note naming
+   * it.
+   *
+   * @param ciFailures the rendered CI-failure section, or blank when the review had none
+   */
+  public static Round forReview(
+      String patchCoverage,
+      PathScopedInstructions pathInstructions,
+      String ciFailures,
+      EvidenceBudget budget) {
+    return new Round(
+        patchCoverage, pathInstructions, CiFailureCitations.parse(ciFailures), budget, false);
   }
 
   /**
@@ -134,7 +150,7 @@ public final class ContextEvidenceResolver {
    * caller rather than about the review (#475 review).
    */
   public static Round disabled() {
-    return new Round(null, null, null, true);
+    return new Round(null, null, CiFailureCitations.NONE, null, true);
   }
 
   /** One review's parsed context sections and the budget their notes are charged to. */
@@ -157,6 +173,9 @@ public final class ContextEvidenceResolver {
      */
     private final Map<String, List<String>> governedByName;
 
+    /** The failing checks of the review's CI-failure section, and which findings cite them. */
+    private final CiFailureCitations ciFailures;
+
     private final EvidenceBudget budget;
 
     /** Whether this round speaks at all; see {@link ContextEvidenceResolver#disabled()}. */
@@ -165,8 +184,10 @@ public final class ContextEvidenceResolver {
     private Round(
         String patchCoverage,
         PathScopedInstructions pathInstructions,
+        CiFailureCitations ciFailures,
         EvidenceBudget budget,
         boolean silent) {
+      this.ciFailures = ciFailures;
       this.coverageSupplied = patchCoverage != null && !patchCoverage.isBlank();
       this.coverage = coverageSupplied ? parseSection(patchCoverage) : Coverage.NONE;
       this.scopesByFile = new LinkedHashMap<>();
@@ -218,9 +239,18 @@ public final class ContextEvidenceResolver {
       };
     }
 
+    /**
+     * Which findings cite a check the review's CI-failure section records as failed, for the
+     * verifier's confidence floor.
+     */
+    public FindingVerificationService.FailingChecks failingChecks() {
+      return ciFailures;
+    }
+
     /** The sentences attached to one finding, or {@code null} when nothing could be said. */
     private String noteFor(ReviewResponse.Finding finding) {
-      var note = join(coverageNote(finding), pathRuleNote(finding));
+      var note =
+          join(join(coverageNote(finding), pathRuleNote(finding)), ciFailures.noteFor(finding));
       if (note == null) {
         return null;
       }
@@ -419,12 +449,12 @@ public final class ContextEvidenceResolver {
         : ConfigKeyContextResolver.truncate(rules, MAX_QUOTED_RULE_CHARS) + RULES_TRUNCATED;
   }
 
-  /** The two notes as one, dropping either when it has nothing to say. */
-  static String join(String coverage, String pathRules) {
-    if (coverage == null) {
-      return pathRules;
+  /** Two notes as one, dropping either when it has nothing to say. */
+  static String join(String first, String second) {
+    if (first == null) {
+      return second;
     }
-    return pathRules == null ? coverage : coverage + "\n" + pathRules;
+    return second == null ? first : first + "\n" + second;
   }
 
   /**

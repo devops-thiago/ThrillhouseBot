@@ -344,6 +344,33 @@ class ContextEvidenceResolverTest {
         "naming one of two matching files' measurements as this finding's would be a guess");
   }
 
+  /**
+   * #952: a finding tied to a check CI already failed reaches the verifier with that check, and the
+   * round reports the citation for the confidence floor; a finding that cites nothing gets neither.
+   */
+  @Test
+  void carriesTheFailingCheckAFindingCites() {
+    var round =
+        ContextEvidenceResolver.forReview(
+            null,
+            PathScopedInstructions.NONE,
+            "### unit-tests (conclusion: failure)\nTitle: 1 failed\n",
+            new EvidenceBudget());
+    var cites =
+        finding(PATH, 42, "The off-by-one makes the unit-tests check fail in CI on this commit.");
+    var silent = finding(PATH, 43, "The new fallback branch decides what the caller renders.");
+
+    var note = evidence(round, cites);
+
+    assertTrue(note.contains("records \"unit-tests\" as completed without passing"), note);
+    assertTrue(round.failingChecks().cites(cites));
+    assertNull(evidence(round, silent));
+    assertFalse(round.failingChecks().cites(silent));
+    assertFalse(
+        ContextEvidenceResolver.disabled().failingChecks().cites(cites),
+        "a caller that loaded no context records no failing check");
+  }
+
   @Test
   void attachesNothingWhenTheReviewLoadedNoSectionAndNoScopes() {
     var round = ContextEvidenceResolver.forReview(null, null, new EvidenceBudget());
