@@ -410,7 +410,7 @@ calls do not get them unless stated. All are off by default.
 | Section | Setting | Source |
 |---|---|---|
 | Patch coverage | `REVIEW_PATCH_COVERAGE_ENABLED` | `PatchCoverageResolver` reads the CI coverage report and lists the changed lines no test covers. |
-| CI failures | `REVIEW_CI_CONTEXT_ENABLED` | `CiStatusEvaluator`'s early reading of the head. `CiFailureContextResolver` renders the failing checks, one annotations page each, plus a job-log tail with `REVIEW_CI_CONTEXT_INCLUDE_LOGS`. Pending checks contribute a count only. |
+| CI failures | `REVIEW_CI_CONTEXT_ENABLED` | `CiStatusEvaluator`'s early reading of the head. `CiFailureContextResolver` renders the failing checks, one annotations page each (runner notices dropped), and the failing tests named in up to two failing Actions job logs, plus a job-log tail with `REVIEW_CI_CONTEXT_INCLUDE_LOGS`. The review call and the summary call both get it, each with its own request. Pending checks contribute a count only. |
 | Linked issues | `REVIEW_TICKET_CONTEXT_ENABLED` | `TicketContextResolver` over `GitHubIssuesProvider`: PR-body closing keywords, then GitHub's closing references, then optionally the branch name. Same-repository issues only, read and never written. The summary call gets it too and lists unaddressed acceptance criteria as description gaps, never as findings. |
 | Review learnings | `REVIEW_LEARNINGS_ENABLED` | `ReviewLearnings` ranks the repository's active learnings by how close their file is to the changed files, and caps them in count and characters. |
 
