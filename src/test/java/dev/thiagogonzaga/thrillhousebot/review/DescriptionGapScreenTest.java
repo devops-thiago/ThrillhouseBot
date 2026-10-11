@@ -352,6 +352,7 @@ class DescriptionGapScreenTest {
         "'retries forever' is what the code does, not what the description says.",
         "'retries forever' is not what the description says; it is the code's own default.",
         "'retries forever' is what the description never says.",
+        "'retries forever' is what the description says the code does not do.",
         "'the README moves to docs/RUST-V10.md unchanged' is what the description says, and it"
             + " does not."
       })
