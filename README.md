@@ -623,7 +623,10 @@ new findings and every earlier finding still open, each listed once and marked
 finding leaves the summary once it is resolved, declined, cleared with
 `@thrillhousebot resolved`, or its code leaves the diff. A later finding replaces
 an open double-check item only when it is the same defect, so a finding about one
-config key does not replace an item about the key on the next row. The verdict
+config key does not replace an item about the key on the next row, while the same
+key restated on its paired doc or code file does. A double-check item is marked
+"Same issue as" an inline finding by the same test, never by location or common
+words alone. The verdict
 is computed over the same open set, so an earlier CRITICAL still open keeps a
 follow-up round at `REQUEST_CHANGES` under the configured strictness. When a
 follow-up opens nothing new while earlier findings are open, its review body
