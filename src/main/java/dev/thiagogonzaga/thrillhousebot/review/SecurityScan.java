@@ -45,6 +45,8 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 /**
  * The deterministic security scan (#60): reads the lines a pull request adds for leaked credentials
@@ -157,6 +159,11 @@ public class SecurityScan {
 
   private static final String FINGERPRINT_ALGORITHM = "SHA-256";
 
+  private static final String MAC_ALGORITHM = "HmacSHA256";
+
+  /** Domain label the fingerprint key is derived under, so it is no other use's key (#985). */
+  private static final String FINGERPRINT_KEY_LABEL = "thrillhousebot:scan-content-key";
+
   private static final String STATUS_UNRESOLVED = "unresolved";
   private static final String STATUS_RESOLVED = "resolved";
   private static final String STATUS_JUSTIFIED = "justified";
@@ -172,24 +179,43 @@ public class SecurityScan {
   private final double entropyThreshold;
   private final ReviewDiffFormatter.IgnoreGlobs skippedFiles;
 
+  /** The secret the content fingerprint is keyed from ({@link #fingerprintKey}). */
+  private final String serverSecret;
+
   @Inject
   public SecurityScan(ThrillhouseConfig config) {
     this(
         config.review().securityScan().secretsEnabled(),
         config.review().securityScan().iacEnabled(),
         config.review().securityScan().entropyThreshold(),
-        config.review().securityScan().skippedFiles());
+        config.review().securityScan().skippedFiles(),
+        config.github().webhookSecret());
   }
 
+  /** A scan keyed with a blank server secret, for tests that do not care about the key. */
   SecurityScan(
       boolean secretsEnabled,
       boolean iacEnabled,
       double entropyThreshold,
       List<String> skippedFiles) {
+    this(secretsEnabled, iacEnabled, entropyThreshold, skippedFiles, "");
+  }
+
+  /**
+   * As the injected constructor, with {@code serverSecret} the per-installation secret the content
+   * fingerprint is keyed from (the webhook secret in production, #985).
+   */
+  SecurityScan(
+      boolean secretsEnabled,
+      boolean iacEnabled,
+      double entropyThreshold,
+      List<String> skippedFiles,
+      String serverSecret) {
     this.secretsEnabled = secretsEnabled;
     this.iacEnabled = iacEnabled;
     this.entropyThreshold = entropyThreshold;
     this.skippedFiles = ReviewDiffFormatter.IgnoreGlobs.compile(skippedFiles);
+    this.serverSecret = serverSecret;
   }
 
   /** A scan with both halves off, for callers that construct the pipeline without configuration. */
@@ -201,8 +227,18 @@ public class SecurityScan {
     return secretsEnabled || iacEnabled;
   }
 
-  /** One scan finding and the rule that raised it. */
-  record Detection(SecurityRule rule, ReviewResponse.Finding finding) {}
+  /**
+   * One scan finding and the rule that raised it.
+   *
+   * @param legacyFingerprint for a secret finding, the unkeyed fingerprint a marker posted before
+   *     #985 would carry for the same content ({@link #legacyContentFingerprint}), kept in memory
+   *     only to match a decline recorded under it; {@code null} for an IaC finding
+   */
+  record Detection(SecurityRule rule, ReviewResponse.Finding finding, String legacyFingerprint) {
+    Detection(SecurityRule rule, ReviewResponse.Finding finding) {
+      this(rule, finding, null);
+    }
+  }
 
   /** A matched value and the only form of it any surface may show. */
   record Redaction(String literal, String replacement) {}
@@ -428,9 +464,13 @@ public class SecurityScan {
               : null;
       for (var hit : SecretScanner.scan(line.text(), next, entropyThreshold)) {
         var redacted = SecretScanner.redact(hit);
-        var fingerprint = contentFingerprint(hit.rule(), flaggedContent(lines, i, hit.rule()));
+        var flagged = flaggedContent(lines, i, hit.rule());
         detections.add(
-            new Detection(hit.rule(), secretFinding(filename, line.number(), hit, fingerprint)));
+            new Detection(
+                hit.rule(),
+                secretFinding(
+                    filename, line.number(), hit, contentFingerprint(hit.rule(), flagged)),
+                legacyContentFingerprint(hit.rule(), flagged)));
         if (hit.rule() == SecurityRule.PRIVATE_KEY) {
           addPemMaterial(lines, i, redactions);
         } else {
@@ -692,11 +732,12 @@ public class SecurityScan {
             k -> identityKey(declines.get(k)));
     var pairs = new ArrayList<Pair>();
     for (int d = 0; d < detections.size(); d++) {
-      var detection = detections.get(d).finding();
-      for (int k : declinesByIdentity.candidates(detection.file(), identityKey(detection))) {
+      var detection = detections.get(d);
+      var scanned = detection.finding();
+      for (int k : declinesByIdentity.candidates(scanned.file(), identityKey(scanned))) {
         var declined = declines.get(k);
         if (sameContent(declined, detection)) {
-          pairs.add(new Pair(d, k, Math.abs(declined.line() - detection.line())));
+          pairs.add(new Pair(d, k, Math.abs(declined.line() - scanned.line())));
         }
       }
     }
@@ -713,15 +754,18 @@ public class SecurityScan {
   }
 
   /**
-   * Whether a declined finding the identity index paired with a detection covers its content: no
-   * fingerprint on the decline, or the same one.
+   * Whether a declined finding the identity index paired with a detection (same file, title and
+   * anchor) covers its content. A fingerprint on the declined finding must equal the detection's
+   * keyed fingerprint, or, for a marker posted before the fingerprint was keyed (#985), the
+   * detection's {@link Detection#legacyFingerprint}, so a decline recorded before an upgrade keeps
+   * matching rather than lapsing.
    */
-  private static boolean sameContent(
-      ReviewResponse.Finding prior, ReviewResponse.Finding detection) {
+  private static boolean sameContent(ReviewResponse.Finding prior, Detection detection) {
     IDENTITY_COMPARISONS.incrementAndGet();
     var priorFingerprint = fingerprintOf(prior.description());
     return priorFingerprint == null
-        || priorFingerprint.equals(fingerprintOf(detection.description()));
+        || priorFingerprint.equals(fingerprintOf(detection.finding().description()))
+        || priorFingerprint.equals(detection.legacyFingerprint());
   }
 
   /** The content fingerprint a scan finding's description carries, or {@code null}. */
@@ -735,23 +779,71 @@ public class SecurityScan {
 
   /**
    * A short fingerprint of the content a secret finding flagged, the rule's name included: the
-   * first {@value #FINGERPRINT_HEX} hex digits of its SHA-256. It tells one value from another
-   * without holding either; the value itself is on the pull request's own diff.
+   * first {@value #FINGERPRINT_HEX} hex digits of its HMAC-SHA-256 under this server's {@linkplain
+   * #fingerprintKey key} (#985). It tells one value from another without holding either, and
+   * because the marker is posted on the pull request, the key is what stops a reader from testing a
+   * guessed value against it offline: the redacted title already gives the value's first characters
+   * and length, which leave a short password few candidates.
    */
-  static String contentFingerprint(SecurityRule rule, String content) {
-    return contentFingerprint(FINGERPRINT_ALGORITHM, rule, content);
+  String contentFingerprint(SecurityRule rule, String content) {
+    return contentFingerprint(MAC_ALGORITHM, fingerprintKey(serverSecret), rule, content);
   }
 
   /**
-   * As {@link #contentFingerprint(SecurityRule, String)}; the algorithm is a parameter for tests.
+   * As {@link #contentFingerprint(SecurityRule, String)} with the key and the MAC algorithm given;
+   * the algorithm is a parameter for tests.
    */
-  static String contentFingerprint(String algorithm, SecurityRule rule, String content) {
+  static String contentFingerprint(
+      String algorithm, byte[] key, SecurityRule rule, String content) {
+    try {
+      var mac = Mac.getInstance(algorithm);
+      mac.init(new SecretKeySpec(key, algorithm));
+      mac.update(rule.name().getBytes(StandardCharsets.UTF_8));
+      mac.update((byte) 0);
+      var hash = mac.doFinal(content.getBytes(StandardCharsets.UTF_8));
+      return HexFormat.of().formatHex(hash).substring(0, FINGERPRINT_HEX);
+    } catch (GeneralSecurityException e) {
+      throw new IllegalStateException(algorithm + " is not available", e);
+    }
+  }
+
+  /**
+   * The fingerprint key for a server secret: a SHA-256 of a fixed label and the secret, so the
+   * webhook secret is never used as a key for a second purpose as is, and a blank secret (a scan
+   * built without configuration) still gives a valid key. The same secret gives the same key on
+   * every start, which keeps markers stable across rounds and restarts.
+   */
+  static byte[] fingerprintKey(String serverSecret) {
+    return digest(
+        FINGERPRINT_ALGORITHM, FINGERPRINT_KEY_LABEL, serverSecret == null ? "" : serverSecret);
+  }
+
+  /**
+   * The unkeyed fingerprint markers carried before #985: the first {@value #FINGERPRINT_HEX} hex
+   * digits of a plain SHA-256 over the same input. Computed only to compare with a decline recorded
+   * under one, so that decline keeps covering its line after the upgrade; it is never posted.
+   */
+  static String legacyContentFingerprint(SecurityRule rule, String content) {
+    return legacyContentFingerprint(FINGERPRINT_ALGORITHM, rule, content);
+  }
+
+  /**
+   * As {@link #legacyContentFingerprint(SecurityRule, String)}; the algorithm is a parameter for
+   * tests.
+   */
+  static String legacyContentFingerprint(String algorithm, SecurityRule rule, String content) {
+    return HexFormat.of()
+        .formatHex(digest(algorithm, rule.name(), content))
+        .substring(0, FINGERPRINT_HEX);
+  }
+
+  /** The digest of {@code head}, a zero byte, then {@code content}. */
+  private static byte[] digest(String algorithm, String head, String content) {
     try {
       var digest = MessageDigest.getInstance(algorithm);
-      digest.update(rule.name().getBytes(StandardCharsets.UTF_8));
+      digest.update(head.getBytes(StandardCharsets.UTF_8));
       digest.update((byte) 0);
-      var hash = digest.digest(content.getBytes(StandardCharsets.UTF_8));
-      return HexFormat.of().formatHex(hash).substring(0, FINGERPRINT_HEX);
+      return digest.digest(content.getBytes(StandardCharsets.UTF_8));
     } catch (GeneralSecurityException e) {
       throw new IllegalStateException(algorithm + " is not available", e);
     }
