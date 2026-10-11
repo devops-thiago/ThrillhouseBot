@@ -28,11 +28,13 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReplyAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TestResponseCaps;
 import dev.thiagogonzaga.thrillhousebot.webhook.ManualReviewAuthorizer;
 import dev.thiagogonzaga.thrillhousebot.webhook.TriggerDetector;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -52,6 +54,7 @@ class MaintainerReplyServiceTest {
   @Mock private ReviewDiffFormatter diffFormatter;
   @Mock private ReplyAssistant replyAssistant;
   @Mock private RepoSettingsResolver repoSettingsResolver;
+  @Mock private ReviewThreadService reviewThreadService;
 
   // A real TriggerDetector — its bot-login check is the actual logic we want exercised.
   private final TriggerDetector triggerDetector = new TriggerDetector();
@@ -88,7 +91,8 @@ class MaintainerReplyServiceTest {
         replyAssistant,
         repoSettingsResolver,
         identity,
-        TestResponseCaps.defaults());
+        TestResponseCaps.defaults(),
+        reviewThreadService);
   }
 
   private static GitHubPullRequestClient.FileDiff fileDiff(
@@ -125,6 +129,160 @@ class MaintainerReplyServiceTest {
         1000L,
         mentioned,
         "@@ -1 +1 @@ context");
+  }
+
+  /** A reply on thread 99 that carries {@code question}, by an author of {@code association}. */
+  private static MaintainerReplyService.ReplyTask threadReply(String question, String association) {
+    return new MaintainerReplyService.ReplyTask(
+        "owner",
+        "repo",
+        42,
+        12345L,
+        "octocat",
+        association,
+        question,
+        "PR Title",
+        "PR body",
+        true,
+        99L,
+        1000L,
+        true,
+        "@@ -1 +1 @@ context");
+  }
+
+  /** Thread 99 is the bot's finding on {@code src/Foo.java}. */
+  private void botFindingThread() {
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(
+            List.of(
+                comment(99L, null, BOT, "**HIGH — possible NPE** on user lookup"),
+                comment(1000L, 99L, "octocat", "@thrillhousebot resolved")));
+  }
+
+  /** The body of the one reply posted on thread 99. */
+  private String threadAck() {
+    var reply = ArgumentCaptor.forClass(GitHubReviewClient.ReplyToReviewCommentRequest.class);
+    verify(reviewClient)
+        .replyToReviewComment(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), reply.capture());
+    return reply.getValue().body();
+  }
+
+  // #1066: an in-thread clear directive is applied, never answered with model prose.
+  @Test
+  void aClearDirectiveRepliedOnAFindingThreadResolvesItAndAcknowledgesDeterministically() {
+    authorize();
+    botFindingThread();
+    when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 42))
+        .thenReturn(Map.of(99L, new ReviewThreadService.ThreadRef("T99", false)));
+    when(reviewThreadService.resolve(AUTH, "T99")).thenReturn(true);
+
+    service.handle(
+        threadReply("@thrillhousebot resolved src/Foo.java:10 — possible NPE", "MEMBER"));
+
+    verify(reviewThreadService).resolve(AUTH, "T99");
+    assertEquals(MaintainerReplyService.threadClearedAck(BotIdentity.from(null)), threadAck());
+    verifyNoInteractions(replyAssistant, commentClient);
+  }
+
+  @Test
+  void aBareClearDirectiveOnAnAlreadyResolvedThreadIsAcknowledgedWithoutResolvingAgain() {
+    authorize();
+    botFindingThread();
+    when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 42))
+        .thenReturn(Map.of(99L, new ReviewThreadService.ThreadRef("T99", true)));
+
+    service.handle(threadReply("@thrillhousebot resolved", "OWNER"));
+
+    verify(reviewThreadService, never()).resolve(any(), any());
+    assertEquals(MaintainerReplyService.threadClearedAck(BotIdentity.from(null)), threadAck());
+    verifyNoInteractions(replyAssistant);
+  }
+
+  /** The acknowledgement never claims a close GitHub did not confirm. */
+  @Test
+  void aThreadThatCouldNotBeResolvedGetsTheAckThatClaimsNoClose() {
+    authorize();
+    botFindingThread();
+    when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 42))
+        .thenReturn(Map.of(99L, new ReviewThreadService.ThreadRef("T99", false)));
+    when(reviewThreadService.resolve(AUTH, "T99")).thenReturn(false);
+
+    service.handle(threadReply("@thrillhousebot resolved", "OWNER"));
+
+    assertEquals(MaintainerReplyService.THREAD_CLEAR_PENDING_ACK, threadAck());
+    verifyNoInteractions(replyAssistant);
+  }
+
+  @Test
+  void aThreadMissingFromTheListingGetsTheAckThatClaimsNoClose() {
+    authorize();
+    botFindingThread();
+    when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 42)).thenReturn(Map.of());
+
+    service.handle(threadReply("@thrillhousebot resolved", "OWNER"));
+
+    assertEquals(MaintainerReplyService.THREAD_CLEAR_PENDING_ACK, threadAck());
+  }
+
+  @Test
+  void aFailedThreadLookupGetsTheAckThatClaimsNoClose() {
+    authorize();
+    botFindingThread();
+    when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 42))
+        .thenThrow(new IllegalStateException("graphql down"));
+
+    service.handle(threadReply("@thrillhousebot resolved", "OWNER"));
+
+    assertEquals(MaintainerReplyService.THREAD_CLEAR_PENDING_ACK, threadAck());
+    verifyNoInteractions(replyAssistant);
+  }
+
+  @Test
+  void aClearDirectiveFromAnAuthorWithoutWriteAccessResolvesNothing() {
+    authorize();
+    botFindingThread();
+
+    service.handle(threadReply("@thrillhousebot resolved", "CONTRIBUTOR"));
+
+    verifyNoInteractions(reviewThreadService, replyAssistant);
+    assertEquals(
+        MaintainerReplyService.clearDirectiveUnauthorizedAck(BotIdentity.from(null)), threadAck());
+  }
+
+  /** A directive naming another file is about another finding: lean to hold. */
+  @Test
+  void aClearDirectiveNamingAnotherFileResolvesNothingHere() {
+    authorize();
+    botFindingThread();
+
+    service.handle(threadReply("@thrillhousebot resolved src/Bar.java:3 — other", "OWNER"));
+
+    verifyNoInteractions(reviewThreadService, replyAssistant);
+    assertEquals(MaintainerReplyService.THREAD_CLEAR_OTHER_FILE_ACK, threadAck());
+  }
+
+  @Test
+  void aClearDirectiveOnAThreadThatIsNotTheBotsClosesNothing() {
+    authorize();
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(List.of(comment(99L, null, "someone", "a human's review comment")));
+
+    service.handle(threadReply("@thrillhousebot resolved", "OWNER"));
+
+    verifyNoInteractions(reviewThreadService, replyAssistant);
+    assertEquals(MaintainerReplyService.THREAD_CLEAR_NOT_A_FINDING_ACK, threadAck());
+  }
+
+  /** The bot's acknowledgement shows the directive as documentation, never as a new directive. */
+  @Test
+  void theThreadClearedAckIsNotItselfADirective() {
+    var identity = BotIdentity.from(null);
+    assertFalse(
+        FollowUpAnalyzer.isClearDirective(
+            MaintainerReplyService.threadClearedAck(identity), identity));
   }
 
   private MaintainerReplyService.ReplyTask mentionTask() {

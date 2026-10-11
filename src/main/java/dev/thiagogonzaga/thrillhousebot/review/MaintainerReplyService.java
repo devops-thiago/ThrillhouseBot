@@ -21,6 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReplyAssistant;
@@ -63,6 +64,7 @@ public class MaintainerReplyService {
   private final RepoSettingsResolver repoSettingsResolver;
   private final BotIdentity botIdentity;
   private final ResponseCaps responseCaps;
+  private final ReviewThreadService reviewThreadService;
 
   @Inject
   public MaintainerReplyService(
@@ -76,7 +78,8 @@ public class MaintainerReplyService {
       ReplyAssistant replyAssistant,
       RepoSettingsResolver repoSettingsResolver,
       BotIdentity botIdentity,
-      ResponseCaps responseCaps) {
+      ResponseCaps responseCaps,
+      ReviewThreadService reviewThreadService) {
     this.authClient = authClient;
     this.authorizer = authorizer;
     this.triggerDetector = triggerDetector;
@@ -88,6 +91,7 @@ public class MaintainerReplyService {
     this.repoSettingsResolver = repoSettingsResolver;
     this.botIdentity = botIdentity;
     this.responseCaps = responseCaps;
+    this.reviewThreadService = reviewThreadService;
   }
 
   /**
@@ -175,6 +179,11 @@ public class MaintainerReplyService {
       return;
     }
 
+    if (FollowUpAnalyzer.isClearDirective(task.question(), botIdentity)) {
+      clearFromThread(auth, task, rootIsBot ? root : null);
+      return;
+    }
+
     String finding = rootIsBot ? root.body() : "";
     String thread = renderThread(comments, task.rootCommentId(), task.triggeringCommentId());
 
@@ -201,6 +210,98 @@ public class MaintainerReplyService {
         "Posted conversational reply in review thread %d on %s/%s #%d",
         task.rootCommentId(), task.owner(), task.repo(), task.prNumber());
   }
+
+  /**
+   * Applies an {@code @thrillhousebot resolved} directive a maintainer replied on a review thread
+   * (#1066): it closes the finding that thread belongs to, so the thread is resolved here and the
+   * reply is a deterministic acknowledgement, never a generated answer that could claim a
+   * resolution that did not happen. The review applies the same directive to the finding's status
+   * ({@code FollowUpAnalyzer.clearNamedInConversation}), by the same two rules: a write-capable
+   * author, and a naming that carries no other file ({@link
+   * FollowUpAnalyzer#threadDirectiveNamesItsFile}).
+   *
+   * @param botRoot the thread's root comment when it is the bot's, else {@code null}
+   */
+  private void clearFromThread(
+      String auth, ReplyTask task, GitHubReviewClient.PullRequestComment botRoot) {
+    String ack;
+    if (!FollowUpAnalyzer.mayHoldWriteAccess(task.authorAssociation())) {
+      ack = clearDirectiveUnauthorizedAck(botIdentity);
+    } else if (botRoot == null) {
+      ack = THREAD_CLEAR_NOT_A_FINDING_ACK;
+    } else if (!FollowUpAnalyzer.threadDirectiveNamesItsFile(task.question(), botRoot.path())) {
+      ack = THREAD_CLEAR_OTHER_FILE_ACK;
+    } else {
+      ack = resolveThread(auth, task) ? threadClearedAck(botIdentity) : THREAD_CLEAR_PENDING_ACK;
+    }
+    reviewClient.replyToReviewComment(
+        auth,
+        ACCEPT,
+        task.owner(),
+        task.repo(),
+        task.prNumber(),
+        task.rootCommentId(),
+        new GitHubReviewClient.ReplyToReviewCommentRequest(ack));
+    Log.infof(
+        "Acknowledged a maintainer clear directive in review thread %d on %s/%s #%d",
+        task.rootCommentId(), task.owner(), task.repo(), task.prNumber());
+  }
+
+  /**
+   * Resolves the task's review thread, reporting whether it is resolved afterwards (already
+   * resolved counts). Any failure reads as not resolved, so the acknowledgement never claims a
+   * close GitHub did not confirm.
+   */
+  private boolean resolveThread(String auth, ReplyTask task) {
+    try {
+      var thread =
+          reviewThreadService
+              .threadsByRootComment(auth, task.owner(), task.repo(), task.prNumber())
+              .get(task.rootCommentId());
+      return thread != null
+          && (thread.resolved() || reviewThreadService.resolve(auth, thread.id()));
+    } catch (RuntimeException e) {
+      Log.warnf(
+          e,
+          "Failed to resolve review thread %d on %s/%s #%d for a clear directive",
+          task.rootCommentId(),
+          task.owner(),
+          task.repo(),
+          task.prNumber());
+      return false;
+    }
+  }
+
+  /**
+   * Acknowledgement for a clear directive replied on a finding's thread that this reply resolved.
+   * The directive is rendered inside a code span, the form {@link
+   * FollowUpAnalyzer#isClearDirective} treats as documentation, so the bot's own reply never reads
+   * as a fresh directive.
+   */
+  static String threadClearedAck(BotIdentity botIdentity) {
+    return "✅ Closed by a maintainer's `@"
+        + botIdentity.primaryMention()
+        + " resolved` reply on this thread — this finding is no longer tracked as open, and the"
+        + " thread is resolved. Re-open it if that was not intended.";
+  }
+
+  /** Acknowledgement when the directive's naming carries a file other than the thread's own. */
+  static final String THREAD_CLEAR_OTHER_FILE_ACK =
+      "That reply names a `path:line` in a different file from this thread's finding, so nothing"
+          + " was closed here. Reply on that finding's own thread, or post the directive on the PR"
+          + " conversation.";
+
+  /** Acknowledgement when the directive is replied on a thread that is not one of the bot's. */
+  static final String THREAD_CLEAR_NOT_A_FINDING_ACK =
+      "This thread is not one of the review's findings, so there is nothing here to close.";
+
+  /**
+   * Acknowledgement when the thread could not be resolved now. It claims no close: the next review
+   * reads the directive on the finding's own thread and closes the finding then.
+   */
+  static final String THREAD_CLEAR_PENDING_ACK =
+      "This thread could not be resolved just now. The next review reads this reply and closes the"
+          + " finding the thread belongs to.";
 
   /**
    * Acknowledgement posted for an {@code @thrillhousebot resolved} comment that names at least one
