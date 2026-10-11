@@ -4842,6 +4842,18 @@ class FollowUpAnalyzerTest {
 
     var near = heldNote("+// Not shared by every request goroutine.");
     assertTrue(near.contains("no review has weighed"), near);
+
+    // A guard word governing another clause does not deny the statement.
+    for (var line :
+        List.of(
+            "+// The lock guards every field, which is shared by every request goroutine.",
+            "+// The lock guards every field. The counter itself is shared by every request"
+                + " goroutine.")) {
+      var note = heldNote(line);
+      assertTrue(note.contains("says this path runs concurrently"), note);
+    }
+    var governed = heldNote("+// Counter is never called from multiple threads.");
+    assertTrue(governed.contains("no review has weighed"), governed);
   }
 
   /** A diff section is the declined file's only when its a/ or b/ path is that file exactly. */

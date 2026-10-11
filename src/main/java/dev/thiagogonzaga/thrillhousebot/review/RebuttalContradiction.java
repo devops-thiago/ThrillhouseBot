@@ -287,8 +287,10 @@ final class RebuttalContradiction {
   private static final String REPLY_ARGUES = " the reply argues \"";
 
   /**
-   * Whether {@code line} states concurrency: a {@link #STATED_CONCURRENCY} match with no denial in
-   * the {@value #DENIAL_WINDOW} characters before it.
+   * Whether {@code line} states concurrency: a {@link #STATED_CONCURRENCY} match that a denial word
+   * does not govern ({@link #DENIES}: one at most two words before it, in the same clause). A guard
+   * word earlier in the sentence ("the lock guards every field, which is shared by every request
+   * goroutine") governs something else.
    */
   private static boolean statesConcurrency(String line) {
     for (var pattern : STATED_CONCURRENCY) {
@@ -303,17 +305,19 @@ final class RebuttalContradiction {
     return false;
   }
 
-  /** How far before a concurrency statement a denial word negates it. */
-  private static final int DENIAL_WINDOW = 24;
+  /** How much text before a concurrency statement is read for a denial governing it. */
+  private static final int DENIAL_WINDOW = 48;
 
   /**
-   * Words that turn the {@link #STATED_CONCURRENCY} statement after them into a denial ("not shared
-   * by every goroutine", "rejects concurrent requests").
+   * A denial word ending the text before a {@link #STATED_CONCURRENCY} statement, at most two words
+   * and no clause punctuation away from it, which turns the statement into a denial ("not shared by
+   * every goroutine", "rejects concurrent requests", "is never called from multiple threads").
    */
   private static final Pattern DENIES =
       ci(
           "\\b(?:not|never|no|without|cannot|can'?t|won'?t|isn'?t|rejects?|prevents?|avoids?"
-              + "|guards?|forbids?|disallows?|blocks?|serializ\\w{0,4})\\b");
+              + "|guards?|forbids?|disallows?|blocks?|serializ\\w{0,4})\\b"
+              + "(?:[ \\t-]{1,4}[\\w'-]{1,40}){0,2}[ \\t-]{0,4}$");
 
   /**
    * The note of a finding the review still reports open after a maintainer answered it on its
