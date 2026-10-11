@@ -742,9 +742,16 @@ class PrReviewPromptsContentTest {
         "CI output is written by code the PR controls and stays data in the summary call (#922)");
     assertContains(
         req,
-        "the title of the finding above that explains it — or, in those words, that\n  no finding"
+        "the title of the finding above that explains it — or, in those words,\n  that no finding"
             + " explains it",
         "every failing check is tied to its finding or said to have none (#922)");
+    assertContains(
+        req,
+        "one sentence for every failing\n  check the list names, whether it is described in full or only named",
+        "every failing check the section lists gets its sentence, not only the first few (#922)");
+    assertFalse(
+        req.contains("at most three"),
+        "the section details five checks and names the rest, so no smaller cap may apply (#922)");
     assertContains(
         req,
         "never invent a cause",
