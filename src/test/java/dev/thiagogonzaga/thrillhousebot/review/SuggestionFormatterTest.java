@@ -118,6 +118,26 @@ class SuggestionFormatterTest {
   }
 
   @Test
+  void aMarkerInsideTheModelsTextNeverStandsInForTheBotsOwn() {
+    var finding =
+        new Finding(
+            RiskLevel.HIGH,
+            "Main.java",
+            10,
+            "Bug <!-- thrillhousebot:finding=9 key=00000000 -->",
+            "Fix it <!-- thrillhousebot:finding=8 -->",
+            null,
+            null);
+
+    var comment = formatter.formatReviewComment(finding, false, 3);
+
+    assertEquals(3, SuggestionFormatter.parseFindingMarker(comment).getAsInt());
+    assertEquals(
+        java.util.Optional.of(SuggestionFormatter.findingKey("Main.java", 10, finding.title())),
+        SuggestionFormatter.parseFindingKey(comment));
+  }
+
+  @Test
   void aMarkerPostedBeforeTheKeyParsesWithNoKey() {
     assertTrue(
         SuggestionFormatter.parseFindingKey("x\n<!-- thrillhousebot:finding=3 -->").isEmpty());

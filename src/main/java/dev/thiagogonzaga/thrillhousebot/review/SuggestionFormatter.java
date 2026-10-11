@@ -24,6 +24,7 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.regex.MatchResult;
 import java.util.regex.Pattern;
 
 /** Formats suggestions as GitHub ```suggestion blocks for click-to-apply. */
@@ -101,8 +102,16 @@ public class SuggestionFormatter {
     if (body == null || body.isBlank()) {
       return Optional.empty();
     }
-    var matcher = FINDING_MARKER_PATTERN.matcher(body);
-    return matcher.find() ? Optional.ofNullable(matcher.group(2)) : Optional.empty();
+    return lastMarker(body).map(marker -> marker.group(2));
+  }
+
+  /**
+   * The last finding marker in {@code body}. The bot appends its marker after everything the model
+   * wrote, so a marker-shaped string inside a model-authored title or description comes before it
+   * and must not stand in for it.
+   */
+  private static Optional<MatchResult> lastMarker(String body) {
+    return FINDING_MARKER_PATTERN.matcher(body).results().reduce((first, second) -> second);
   }
 
   /**
@@ -113,12 +122,12 @@ public class SuggestionFormatter {
     if (body == null || body.isBlank()) {
       return OptionalInt.empty();
     }
-    var matcher = FINDING_MARKER_PATTERN.matcher(body);
-    if (!matcher.find()) {
+    var marker = lastMarker(body);
+    if (marker.isEmpty()) {
       return OptionalInt.empty();
     }
     try {
-      return OptionalInt.of(Integer.parseInt(matcher.group(1)));
+      return OptionalInt.of(Integer.parseInt(marker.get().group(1)));
     } catch (NumberFormatException _) {
       return OptionalInt.empty();
     }
