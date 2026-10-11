@@ -34,6 +34,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -1292,20 +1293,28 @@ public class FindingVerificationService {
       return false;
     }
     String text = findingText(finding);
-    var quotedLines = new HashSet<Integer>();
+    // Each distinct fragment once (a call expression can also be a quoted span), and the diff is
+    // scanned only until the second line is found.
+    var fragments = new LinkedHashSet<String>();
     for (Pattern span : List.of(QUOTED_SPAN, CALL_EXPRESSION)) {
       Matcher m = span.matcher(text);
       while (m.find()) {
-        String fragment = collapsedWhitespace(quotedText(m)).strip();
-        if (fragment.length() >= MIN_FRAGMENT_CHARS) {
-          IntStream.range(0, diffLines.size())
-              .filter(i -> diffLines.get(i).contains(fragment))
-              .findFirst()
-              .ifPresent(quotedLines::add);
+        fragments.add(collapsedWhitespace(quotedText(m)).strip());
+      }
+    }
+    var quotedLines = new HashSet<Integer>();
+    for (String fragment : fragments) {
+      if (fragment.length() >= MIN_FRAGMENT_CHARS) {
+        IntStream.range(0, diffLines.size())
+            .filter(i -> diffLines.get(i).contains(fragment))
+            .findFirst()
+            .ifPresent(quotedLines::add);
+        if (quotedLines.size() >= TAINT_PATH_FRAGMENTS) {
+          return true;
         }
       }
     }
-    return quotedLines.size() >= TAINT_PATH_FRAGMENTS;
+    return false;
   }
 
   /**
