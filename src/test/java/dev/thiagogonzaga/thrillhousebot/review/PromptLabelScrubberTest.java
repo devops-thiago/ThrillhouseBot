@@ -1024,6 +1024,9 @@ class PromptLabelScrubberTest {
           the findings from this batch | the findings
           There are no findings in this batch yet. | There are no findings yet.
           There are no issues in this batch yet. | There are no issues yet.
+          Uploads due episodes. No findings in this batch! Next. | Uploads due episodes. Next.
+          Uploads due episodes. No findings in this batch? Next. | Uploads due episodes. Next.
+          Uploads due episodes. No findings in this batch: none. | Uploads due episodes. none.
           X (no findings in this batch), then uploads. | X, then uploads.
           X. (no findings in this batch). Uploads due episodes. | X. Uploads due episodes.
           X. (no findings in this batch) Uploads due episodes. | X. Uploads due episodes.

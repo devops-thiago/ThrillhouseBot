@@ -692,7 +692,7 @@ public final class PromptLabelScrubber {
       from = skipBlanksBack(text, blank - 1, floor);
     } else if (opensText || ".!?\n".indexOf(before) >= 0) {
       from = blank;
-      if (to < text.length() && text.charAt(to) == '.') {
+      if (to < text.length() && ".!?:".indexOf(text.charAt(to)) >= 0) {
         to++;
       } else if (to < text.length() && text.charAt(to) != '\n') {
         return new int[0];
