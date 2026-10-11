@@ -68,7 +68,7 @@ same diff.
 | Post-model chain, multi call: per batch evidence, quote validation, framework filter, rejection memory, verifier, remember verdicts (`refineBatchOutcome` → `FindingScreen.screenBatch`); after all batches status merge, dedupe, replied-duplicate and litigated drops, anchors, the mapped path and the suggestion placement. No severity calibration on this lane | `review/FindingPipeline.runMultiCall` |
 | Per-call screen stages: one `FindingStage` per step over an immutable `ScreeningContext`; each lane is an explicit ordered stage list built in the `FindingScreen` constructor (the batch list omits dedupe), pinned by `FindingScreenTest` | `review/FindingScreen` over `EvidenceStage`, `QuoteValidationStage`, `FrameworkFilterStage`, `DedupeStage`, `RejectionScreenStage`, `VerificationStage`, `RememberVerdictsStage` |
 | Verifier | `review/ai/FindingVerificationService`, evidence from `review/ContextEvidenceResolver` and `review/CitedLocationResolver` |
-| Last steps on every lane, including the one with no review call: the opt-in deterministic security scan (secrets, risky IaC), then the open-thread duplicate guard (#939) | `review/FindingPipeline.finish` → `review/SecurityScan.merge` (rules in `SecurityRule`, detection in `SecretScanner` and `IacScanner` over `PatchLines`) → `FollowUpAnalyzer.withoutOpenThreadDuplicates` |
+| Last steps on every lane, including the one with no review call: the always-on drop of model secret findings on a line that assigns only an interpolation or a placeholder (#926), the opt-in deterministic security scan (secrets, risky IaC), then the open-thread duplicate guard (#939) | `review/FindingPipeline.finish` → `review/SecurityScan.withoutStandInSecrets` (`SecretScanner.assignsOnlyStandIns`) → `review/SecurityScan.merge` (rules in `SecurityRule`, detection in `SecretScanner` and `IacScanner` over `PatchLines`) → `FollowUpAnalyzer.withoutOpenThreadDuplicates` |
 | Summary call, carried description gaps, reused overview, prompt-label scrub, persistence | `review/FindingPipeline.withSummary` (with `DescriptionGapCarryover`, `PriorOverviewCarryover`, `PromptLabelScrubber`), `persistWithSummary` |
 | Follow-up status reconciliation, in order: supersede, decline re-check, conversation clears, phantom ids, double-check replacement, approval backstop, still-open set | `review/VerdictBuilder.build` over `FollowUpAnalyzer` (`supersedeVanished`, `recheckDeclines`, `clearNamedInConversation`, `withoutPhantomUnresolved`, `replacedPriors`, `heldPreviousFindings`, `stillOpenFindings`) |
 | Verdict and check-run text | `review/VerdictBuilder.buildResult` |
@@ -127,8 +127,11 @@ same diff.
 - **Deterministic scan findings skip the verifier and calibrator.** `SecurityScan.merge` runs in
   `FindingPipeline.finish`, after every verifier call and (on the single-call lane) after
   `SeverityCalibrator.calibrate`, so no model grades a pattern match, and `markUnscreened` and
-  `VerificationCoverage` never see one. The grade comes from `SecurityRule`. Keep new
-  deterministic findings on that side of the verifier.
+  `VerificationCoverage` never see one. The grade comes from `SecurityRule`: every rule is high
+  confidence (a match settles whether the pattern is on the line, so no scan finding carries the
+  hedge, #921), at the risk the README's rule tables state. A model finding near a detection that
+  names the same defect collapses into the scan's (`SecurityScan.duplicatesDetection`; for IaC,
+  `SecurityRule.defectWords`). Keep new deterministic findings on that side of the verifier.
 - **`finish` is the one place every lane converges.** The single call, a salvaged cut, the
   batches and the summary-only lane all pass through `FindingPipeline.finish` before the summary
   call and persistence. A filter that must hold for every published finding (the scan merge, the
