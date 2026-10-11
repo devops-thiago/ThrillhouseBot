@@ -61,14 +61,25 @@ final class DescriptionGapScreen {
   private static final Pattern QUOTED =
       Pattern.compile("\"([^\"\n]++)\"|(?<![\\p{L}\\p{N}])'([^\n]+?)'(?![\\p{L}\\p{N}])");
 
-  /** The description named as such. */
+  /**
+   * The description named as such: a citation of the pull request's own text, though not by itself
+   * what attributes a quote to it, since "the description column renders ('…')" quotes the change.
+   */
   private static final Pattern DESCRIPTION = Pattern.compile("(?i)\\bdescription\\b");
 
   /**
-   * The author named: a citation of the pull request's own text, though not by itself what
-   * attributes a quote to it, since "the author's code caps caching at '…'" quotes the change.
+   * The author named: a citation like {@link #DESCRIPTION}, and no attribution by itself either.
    */
   private static final Pattern AUTHOR = Pattern.compile("(?i)\\bauthor\\b");
+
+  /** The verbs that attribute what follows them to their subject: states, claims, says, said… */
+  private static final String SAYING_VERBS = "(?:(?:state|claim|promise|mention|read)s?|says|said)";
+
+  /**
+   * The description stating or claiming something: "the description states", "description says".
+   */
+  private static final Pattern DESCRIPTION_SAYS =
+      Pattern.compile("(?i)\\bdescription\\s++" + SAYING_VERBS + "\\b");
 
   /** The pull request's title or body, named as the PR's: a bare "title" may be a page's. */
   private static final Pattern PR_TITLE_OR_BODY =
@@ -76,20 +87,20 @@ final class DescriptionGapScreen {
 
   /** The PR or its author stating or claiming something: "the PR states", "the author says". */
   private static final Pattern PR_SAYS =
-      Pattern.compile(
-          "(?i)\\b(?:pr|pull request|author)(?:['’]s)?\\s++"
-              + "(?:(?:state|claim|promise|mention|read)s?|says)\\b");
+      Pattern.compile("(?i)\\b(?:pr|pull request|author)(?:['’]s)?\\s++" + SAYING_VERBS + "\\b");
 
   /** A claim verb opening the text, its subject elided under the section's intro line. */
   private static final Pattern LEADING_CLAIM_VERB =
       Pattern.compile("(?i)^\\s*+(?:(?:claim|state|promise)s?|says)\\b");
 
   /**
-   * What attributes the quote that follows it to the pull request's own text: the description, its
-   * title or body, or the PR or its author stating or claiming something.
+   * What attributes the quote that follows it to the pull request's own text: the description, the
+   * PR or its author stating or claiming something, or the PR's title or body named. A bare
+   * "description" or "author" does not, so "the description never mentions '…'" and "the author's
+   * code caps caching at '…'" are not read as the description's claims.
    */
   private static final List<Pattern> CLAIM_CUES =
-      List.of(DESCRIPTION, PR_TITLE_OR_BODY, PR_SAYS, LEADING_CLAIM_VERB);
+      List.of(DESCRIPTION_SAYS, PR_TITLE_OR_BODY, PR_SAYS, LEADING_CLAIM_VERB);
 
   /**
    * A clause saying the description does not hold something: the quote after it is what the change

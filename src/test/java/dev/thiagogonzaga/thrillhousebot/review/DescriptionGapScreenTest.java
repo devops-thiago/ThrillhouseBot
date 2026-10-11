@@ -95,7 +95,9 @@ class DescriptionGapScreenTest {
         "The description leaves out 'the Redis cache layer' entirely.",
         "The description omits 'the Redis cache layer'.",
         "Not mentioned in the description: 'the Redis cache layer'.",
-        "Nothing in the description covers 'the Redis cache layer'."
+        "Nothing in the description covers 'the Redis cache layer'.",
+        "The PR body does not say 'the Redis cache layer' anywhere.",
+        "The PR says nothing about 'the Redis cache layer'."
       })
   void aQuoteTheDescriptionIsSaidToLackIsNotTakenForItsClaim(String gap) {
     assertEquals(List.of(gap), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
@@ -141,9 +143,10 @@ class DescriptionGapScreenTest {
         "The page's <title> element reads 'Bookings dashboard home' on every route.",
         "The response body reads 'retry after thirty seconds' on a conflict.",
         "The author's code caps caching at 'CACHE_TTL_SECONDS', but the description promises"
-            + " unbounded caching."
+            + " unbounded caching.",
+        "The description column renders raw markup ('<b>bold</b>') on every card."
       })
-  void aBareTitleBodyOrAuthorDoesNotAttributeAQuote(String gap) {
+  void aBareTitleBodyAuthorOrDescriptionDoesNotAttributeAQuote(String gap) {
     assertFalse(DescriptionGapScreen.misquotes(gap, DescriptionGapScreen.normalize(RUST_159)));
   }
 
@@ -205,7 +208,7 @@ class DescriptionGapScreenTest {
 
   @Test
   void aSingleQuotedWordIsNotJudged() {
-    var gap = "The description calls the store 'persistent', but it is an in-memory map.";
+    var gap = "The description says the store is 'persistent', but it is an in-memory map.";
 
     assertEquals(List.of(gap), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
   }
