@@ -358,8 +358,10 @@ class CiFailureContextResolverTest {
 
       assertTrue(
           section.contains(
-              "Failing tests named in the job log:\n"
-                  + "- \u2716 back-to-back bookings do not conflict (0.9ms)\n"),
+              """
+              Failing tests named in the job log:
+              - \u2716 back-to-back bookings do not conflict (0.9ms)
+              """),
           section);
       assertFalse(section.contains("Job log tail"), section);
       assertFalse(section.contains("Post job cleanup"), section);
