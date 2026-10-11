@@ -284,6 +284,10 @@ class SuggestionAnchorTest {
     assertEquals(3, SuggestionAnchor.cellCount("| a | b | c |"));
     assertEquals(3, SuggestionAnchor.cellCount("| a | b | |"));
     assertEquals(2, SuggestionAnchor.cellCount("| a | b \\|"));
+    // An escaped backslash does not escape the pipe after it: that pipe separates cells.
+    assertEquals(2, SuggestionAnchor.cellCount("| a \\\\| b |"));
+    assertEquals(1, SuggestionAnchor.cellCount("| a \\| b |"));
+    assertEquals(1, SuggestionAnchor.cellCount("|"));
   }
 
   private static DiffLineResolver goConfigDoc(String lastRow) {
