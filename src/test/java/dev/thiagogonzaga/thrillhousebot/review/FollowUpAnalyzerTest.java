@@ -2622,10 +2622,14 @@ class FollowUpAnalyzerTest {
             "Not changed — pause() is only ever called from the /pause command path, which runs"
                 + " asynchronously on the review executor after the webhook has returned 200.");
 
-    assertEquals(
-        unresolved,
+    // The re-check leaves the model's unresolved verdict as it is; only its note is put under the
+    // lead-in, so the review body explains the decline it did not accept (#963).
+    var kept =
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, unresolved, comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF));
+            RACE_PREVIOUS, unresolved, comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
+    assertEquals(1, kept.size());
+    assertEquals("unresolved", kept.get(0).status());
+    assertEquals(RebuttalContradiction.unsettledReplyNote("still there", true), kept.get(0).note());
     // No thread to read the rebuttal from.
     assertEquals(
         "justified",
@@ -4768,6 +4772,88 @@ class FollowUpAnalyzerTest {
     assertEquals(1, entry.status().id());
     assertTrue(entry.status().note().startsWith(RebuttalContradiction.NOTE_LEAD_IN));
     assertTrue(entry.status().note().contains("no review has weighed"), entry.status().note());
+  }
+
+  /**
+   * #963 (round 14, go #187): the diff's own comment says the instance is shared by every request
+   * goroutine, so the held decline's note quotes it instead of claiming the diff cannot confirm it.
+   */
+  @Test
+  void earlierRoundDeclineHeldOnAStatedConcurrencyQuotesWhatTheCodeSays() {
+    var entry =
+        race(
+            raceBackstop(
+                analyzer,
+                earlierRaceThread(RACE_WRONG_DECLINE),
+                () ->
+                    "+// Counter is shared by every net/http goroutine serving /reconcile.\n"
+                        + "+counter.bump();\n"
+                        + "-// removed: called from multiple threads"));
+
+    assertTrue(entry.holdsOpen());
+    var note = entry.status().note();
+    assertTrue(note.startsWith(RebuttalContradiction.NOTE_LEAD_IN), note);
+    assertTrue(note.contains("the reviewed code says this path runs concurrently"), note);
+    assertTrue(note.contains("shared by every net/http goroutine"), note);
+    assertFalse(note.contains("cannot confirm"), note);
+    assertTrue(note.endsWith("Reply again to keep the decline."), note);
+  }
+
+  // #963: a decline the model did not accept on the effective previous round is explained too.
+
+  private static final String MODEL_REASON =
+      "Decline reply says requests are handled one at a time, but Main.scala sets"
+          + " server.setExecutor(Executors.newFixedThreadPool(8)).";
+
+  private List<ReviewResponse.PreviousFindingStatus> modelUnresolved(
+      FollowUpAnalyzer backstop, String note, String... replies) {
+    var previous = analyzer.parsePreviousResponses(List.of(RACE_ROUND_JSON)).get(0).findings();
+    return backstop.recheckDeclines(
+        previous,
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "unresolved", note),
+            new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there")),
+        earlierRaceThread(replies),
+        List.of(),
+        BOT_ID,
+        () -> "+counter.bump();");
+  }
+
+  @Test
+  void aDeclineTheModelDidNotAcceptCarriesTheModelsReasonUnderTheLeadIn() {
+    var statuses = modelUnresolved(analyzer, MODEL_REASON, RACE_WRONG_DECLINE);
+
+    var note = statuses.get(0).note();
+    assertEquals("unresolved", statuses.get(0).status());
+    assertTrue(note.startsWith(RebuttalContradiction.NOTE_LEAD_IN), note);
+    assertTrue(note.contains(MODEL_REASON), note);
+    assertTrue(note.endsWith("Reply again to keep the decline."), note);
+    assertEquals("still there", statuses.get(1).note(), "a finding nobody answered is untouched");
+  }
+
+  @Test
+  void aDeclineTheModelDidNotAcceptAfterTwoRepliesIsExplainedWithoutAskingAgain() {
+    var note =
+        modelUnresolved(analyzer, MODEL_REASON, RACE_WRONG_DECLINE, "Still declining.")
+            .get(0)
+            .note();
+
+    assertTrue(note.startsWith(RebuttalContradiction.NOTE_LEAD_IN), note);
+    assertFalse(note.contains("Reply again"), note);
+  }
+
+  @Test
+  void aModelNoteIsLeftAsItIsWhenThereIsNothingToExplain() {
+    assertEquals("still there", modelUnresolved(analyzer, "still there").get(0).note());
+    var already = RebuttalContradiction.NOTE_LEAD_IN + " already explained.";
+    assertEquals(already, modelUnresolved(analyzer, already, RACE_WRONG_DECLINE).get(0).note());
+    assertEquals(" ", modelUnresolved(analyzer, " ", RACE_WRONG_DECLINE).get(0).note());
+    assertEquals(
+        MODEL_REASON,
+        modelUnresolved(
+                new FollowUpAnalyzer(new ObjectMapper(), false), MODEL_REASON, RACE_WRONG_DECLINE)
+            .get(0)
+            .note());
   }
 
   @Test

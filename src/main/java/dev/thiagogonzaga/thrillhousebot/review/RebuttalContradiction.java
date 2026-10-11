@@ -241,6 +241,71 @@ final class RebuttalContradiction {
   }
 
   /**
+   * Text in the reviewed code that states the code runs concurrently, comments included: the
+   * instance "shared by every net/http goroutine", a handler "called from multiple threads",
+   * "concurrent requests". Not proof the way a dispatch construct is, so it never overrules a
+   * decline on its own; it is what the note of a held decline cites instead of claiming the diff
+   * shows nothing (#963). Every quantifier is bounded.
+   */
+  private static final List<Pattern> STATED_CONCURRENCY =
+      List.of(
+          ci(
+              "shared (?:by|across|between) (?:every|all|each|multiple|many|concurrent)\\b.{0,40}?"
+                  + "\\b(?:goroutines?|threads?|requests?|handlers?|workers?|callers?)\\b"),
+          ci(
+              "\\b(?:called|invoked|accessed|used|runs?) (?:concurrently|in parallel|from"
+                  + " (?:multiple|many|several|every|each|all|concurrent)"
+                  + " (?:goroutines?|threads?|requests?|handlers?|workers?))"),
+          ci("\\bconcurrent (?:requests?|goroutines?|threads?|handlers?|callers?|access)\\b"));
+
+  /**
+   * The note of a decline held by {@link #unconfirmedPremise} (#963): when the reviewed code states
+   * that the path runs concurrently ({@link #STATED_CONCURRENCY}), the note quotes that line, since
+   * claiming the diff cannot confirm it would be wrong; otherwise {@link #unconfirmedPremiseNote}.
+   */
+  static String heldPremiseNote(String claim, String reviewedCode) {
+    var rightSide = rightSideText(reviewedCode);
+    var stated = earliestMatch(STATED_CONCURRENCY, rightSide);
+    if (stated == null) {
+      return unconfirmedPremiseNote(claim);
+    }
+    return NOTE_LEAD_IN
+        + " the reply argues \""
+        + claim
+        + "\", but the reviewed code says this path runs concurrently — \""
+        + lineAround(rightSide, stated.start())
+        + "\". Reply again to keep the decline.";
+  }
+
+  /**
+   * The note of a finding the review still reports open after a maintainer answered it on its
+   * thread (#963), the model's own reason under {@link #NOTE_LEAD_IN}, so the review body explains
+   * the decline it did not accept as the deterministic re-check's notes do.
+   *
+   * @param lone whether the thread carries a single maintainer reply, which the second one ends
+   */
+  static String unsettledReplyNote(String reason, boolean lone) {
+    return NOTE_LEAD_IN
+        + " the reply on this finding's thread did not settle it — "
+        + reason.strip()
+        + (lone ? " Reply again to keep the decline." : "");
+  }
+
+  /**
+   * The reviewed diff's added and context lines, removed lines left out, comments kept: the text a
+   * note may quote as what the code says.
+   */
+  private static String rightSideText(String reviewedCode) {
+    var kept = new ArrayList<String>();
+    for (var line : reviewedCode.split("\n", -1)) {
+      if (line.startsWith("+") || line.startsWith(" ")) {
+        kept.add(line.substring(1));
+      }
+    }
+    return String.join("\n", kept);
+  }
+
+  /**
    * The status note of a decline held by {@link #unconfirmedPremise}: the claim, why it is not
    * taken on faith, and how to keep the decline. Opens with {@link #NOTE_LEAD_IN}, so the review
    * body carries it as it carries a contradiction's note.

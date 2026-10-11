@@ -2063,10 +2063,63 @@ public class FollowUpAnalyzer {
     if (statuses == null || statuses.isEmpty()) {
       return statuses == null ? List.of() : statuses;
     }
+    var explained = explainUnsettledReplies(previous, statuses, inlineComments, botIdentity);
     var rechecked =
-        recheckThreadDeclines(previous, statuses, inlineComments, botIdentity, reviewedCode);
+        recheckThreadDeclines(previous, explained, inlineComments, botIdentity, reviewedCode);
     return declineNamedInConversation(
         previous, rechecked, conversationComments, botIdentity, reviewedCode);
+  }
+
+  /**
+   * The model's {@code unresolved} statuses on findings a maintainer answered on their own thread,
+   * with the model's reason put under {@link RebuttalContradiction#NOTE_LEAD_IN} (#963). The model
+   * weighs the reply against the finding on this path and gives its reason in the status note, but
+   * the review body shows only notes that open with the lead-in, which only the deterministic
+   * re-checks wrote: a maintainer who declined got no answer on why the finding still blocks. Now
+   * the body carries the same "Decline re-checked … not accepted" note on both paths. A lone reply
+   * is told how to keep the decline; after a second one the model's verdict stands as it is.
+   *
+   * <p>Only while the re-check is enabled, as every decline note is, and only for a status with a
+   * reason to show that does not already carry the lead-in.
+   */
+  private List<ReviewResponse.PreviousFindingStatus> explainUnsettledReplies(
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity) {
+    if (!declineRecheckEnabled || previous == null || inlineComments == null) {
+      return statuses;
+    }
+    var explained = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
+    for (var status : statuses) {
+      explained.add(explainedStatus(status, previous, inlineComments, botIdentity));
+    }
+    return explained;
+  }
+
+  private static ReviewResponse.PreviousFindingStatus explainedStatus(
+      ReviewResponse.PreviousFindingStatus status,
+      List<ReviewResponse.Finding> previous,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity) {
+    var id = status.id();
+    var note = status.note();
+    if (!STATUS_UNRESOLVED.equalsIgnoreCase(status.status())
+        || id < 1
+        || id > previous.size()
+        || note == null
+        || note.isBlank()
+        || note.startsWith(RebuttalContradiction.NOTE_LEAD_IN)) {
+      return status;
+    }
+    Long rootId = rootCommentId(previous.get(id - 1), id, inlineComments, botIdentity);
+    var replies =
+        rootId == null ? List.<String>of() : humanReplies(rootId, inlineComments, botIdentity);
+    if (replies.isEmpty()) {
+      return status;
+    }
+    return new ReviewResponse.PreviousFindingStatus(
+        id, status.status(), RebuttalContradiction.unsettledReplyNote(note, replies.size() == 1));
   }
 
   /**
@@ -3281,7 +3334,7 @@ public class FollowUpAnalyzer {
             .or(
                 () ->
                     RebuttalContradiction.unconfirmedPremise(finding, replies.get(0))
-                        .map(RebuttalContradiction::unconfirmedPremiseNote))
+                        .map(claim -> RebuttalContradiction.heldPremiseNote(claim, reviewed)))
             .orElse(null);
     if (note != null) {
       Log.infof(

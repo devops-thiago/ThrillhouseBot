@@ -659,6 +659,10 @@ the claim and the contradicting line. The check is conservative:
   maintainer reply; a second reply always ends it.
 - A re-opened finding is not posted again. It stays in **Previous Findings
   Status** and counts toward the verdict at its own severity.
+- A decline is always answered. When the review keeps a finding open after a
+  maintainer replied on its thread, the review body says why ("Decline
+  re-checked against the code and not accepted: …"), with the model's reason
+  or the line of code that refutes the reply.
 
 A follow-up round's model reports on the findings of the newest round that
 raised any. A decline on a finding from an older round is weighed by the
