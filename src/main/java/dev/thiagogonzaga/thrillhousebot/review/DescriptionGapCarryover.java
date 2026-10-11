@@ -21,9 +21,13 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.DescriptionGapLabels;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -50,7 +54,13 @@ import java.util.stream.IntStream;
  *       call re-evaluates the carried list, since only it reads the current description and file
  *       list, but silence keeps a gap: leaving a gap out of its answer is exactly the failure being
  *       fixed, so it is never read as a resolution. On the head the previous round reviewed that
- *       answer is not taken at all (#964): nothing the call can read has changed there;
+ *       answer is not taken (#964): nothing the call can read has changed there. The exception is a
+ *       PR text edited since that round (#1064, told by the fingerprint the summary comment
+ *       carries, {@link #prTextMarker}): the call then reads a new description, and its answer
+ *       releases a description gap, never a linked-issue one, which only the code can settle;
+ *   <li>the PR text changed since the round that listed it and now holds the passage the gap quoted
+ *       as missing ("the description never mentions '…'", {@link
+ *       DescriptionGapScreen#omissionCovered});
  *   <li>it fails the {@link DescriptionGapScreen}: it quotes as the description's claim a passage
  *       the description does not contain, or cites neither the description nor a linked issue
  *       (#946, #964). The call's own gaps go through the same screen;
@@ -119,6 +129,14 @@ final class DescriptionGapCarryover {
 
   private static final Pattern NON_ALPHANUMERIC = Pattern.compile("[^a-z0-9]+");
 
+  /** Opens the hidden line of the summary comment that fingerprints the PR text it judged. */
+  static final String PR_TEXT_MARKER_PREFIX = "<!-- thrillhousebot:pr-text=";
+
+  private static final String MARKER_SUFFIX = " -->";
+
+  /** Hex digits of the PR text's SHA-256 the marker keeps: enough to tell an edit apart. */
+  private static final int FINGERPRINT_HEX_DIGITS = 16;
+
   /**
    * The gaps carried into one round and the linked-issue section they are checked against.
    *
@@ -127,8 +145,16 @@ final class DescriptionGapCarryover {
    * @param prText the PR title and description the summary call read, unfenced; {@code null} when
    *     not known, which turns the {@link DescriptionGapScreen} off
    * @param headUnchanged whether this round reviews the head the previous round reviewed
+   * @param previousPrText the {@linkplain #fingerprint fingerprint} of the PR text the round that
+   *     listed {@code gaps} judged, {@code null} when its summary comment carries none (posted
+   *     before #1064), which reads as unchanged
    */
-  record Carry(List<String> gaps, String linkedIssues, String prText, boolean headUnchanged) {
+  record Carry(
+      List<String> gaps,
+      String linkedIssues,
+      String prText,
+      boolean headUnchanged,
+      String previousPrText) {
 
     static final Carry NONE = new Carry(List.of(), "");
 
@@ -140,6 +166,21 @@ final class DescriptionGapCarryover {
     /** A carry with no PR text to screen against, on a head that moved. */
     Carry(List<String> gaps, String linkedIssues) {
       this(gaps, linkedIssues, null, false);
+    }
+
+    /** A carry whose listing round's PR text is not known. */
+    Carry(List<String> gaps, String linkedIssues, String prText, boolean headUnchanged) {
+      this(gaps, linkedIssues, prText, headUnchanged, null);
+    }
+
+    /**
+     * Whether the PR text is known on both rounds and differs: the author edited the title or
+     * description since the round that listed the carried gaps.
+     */
+    boolean prTextChanged() {
+      return prText != null
+          && previousPrText != null
+          && !previousPrText.equals(fingerprint(prText));
     }
 
     /**
@@ -193,9 +234,22 @@ final class DescriptionGapCarryover {
           : summary.withDescriptionGaps(merged);
     }
 
-    /** {@code list} through the {@link DescriptionGapScreen}; as it is with no PR text known. */
+    /**
+     * {@code list} through the {@link DescriptionGapScreen}, less the omission gaps an edited PR
+     * text now covers; as it is with no PR text known.
+     */
     private List<String> screened(List<String> list) {
-      return prText == null ? list : DescriptionGapScreen.screen(list, prText, linkedIssues);
+      if (prText == null) {
+        return list;
+      }
+      var kept = DescriptionGapScreen.screen(list, prText, linkedIssues);
+      if (!prTextChanged()) {
+        return kept;
+      }
+      var source = DescriptionGapScreen.normalize(prText);
+      var open =
+          kept.stream().filter(gap -> !DescriptionGapScreen.omissionCovered(gap, source)).toList();
+      return open.size() == kept.size() ? kept : open;
     }
 
     /**
@@ -210,11 +264,27 @@ final class DescriptionGapCarryover {
       if (!headUnchanged || addressed.isEmpty()) {
         return addressed;
       }
-      Log.infof(
-          "Kept the carried description gaps on the head the previous round reviewed; ignored %d"
-              + " addressed-gap entry(ies) from the summary call",
-          addressed.size());
-      return List.of();
+      var taken =
+          prTextChanged()
+              ? addressed.stream().filter(this::resolvesOnlyDescriptionGaps).toList()
+              : List.<String>of();
+      if (taken.size() < addressed.size()) {
+        Log.infof(
+            "Kept the carried description gaps on the head the previous round reviewed; ignored %d"
+                + " addressed-gap entry(ies) from the summary call",
+            addressed.size() - taken.size());
+      }
+      return taken;
+    }
+
+    /**
+     * Whether an addressed-gap entry resolves carried gaps and none of them is a linked-issue gap:
+     * an edited description can settle what the description says, not what the code does.
+     */
+    private boolean resolvesOnlyDescriptionGaps(String entry) {
+      var positions = addressedPositions(List.of(entry), gaps);
+      return !positions.isEmpty()
+          && positions.stream().allMatch(i -> linkedIssueGap(gaps.get(i)) == null);
     }
   }
 
@@ -240,7 +310,8 @@ final class DescriptionGapCarryover {
       String linkedIssues,
       String prText,
       boolean headUnchanged) {
-    var previous = previousGaps(conversation, botIdentity);
+    var summaryComment = previousSummary(conversation, botIdentity);
+    var previous = summaryComment == null ? List.<String>of() : listedGaps(summaryComment);
     if (previous.isEmpty()) {
       return new Carry(List.of(), linkedIssues, prText, headUnchanged);
     }
@@ -248,11 +319,19 @@ final class DescriptionGapCarryover {
         stillLinked(previous, TicketContextResolver.linkedKeys(linkedIssues)),
         linkedIssues,
         prText,
-        headUnchanged);
+        headUnchanged,
+        markedFingerprint(summaryComment));
   }
 
   /** The gaps the newest bot-authored summary comment lists; empty when there is none. */
   static List<String> previousGaps(
+      List<GitHubCommentClient.IssueComment> conversation, BotIdentity botIdentity) {
+    var body = previousSummary(conversation, botIdentity);
+    return body == null ? List.of() : listedGaps(body);
+  }
+
+  /** The body of the newest bot-authored summary comment; {@code null} when there is none. */
+  private static String previousSummary(
       List<GitHubCommentClient.IssueComment> conversation, BotIdentity botIdentity) {
     for (var i = conversation.size() - 1; i >= 0; i--) {
       var comment = conversation.get(i);
@@ -260,10 +339,51 @@ final class DescriptionGapCarryover {
       if (user != null
           && botIdentity.matches(user.login())
           && ReviewContextLoader.isBotSummaryComment(comment.body())) {
-        return listedGaps(comment.body());
+        return comment.body();
       }
     }
-    return List.of();
+    return null;
+  }
+
+  /**
+   * The hidden line the summary comment carries to record the PR text its gaps were judged against
+   * (#1064), so the next round on the same head can tell a description edit from a re-read.
+   */
+  static String prTextMarker(String prText) {
+    return PR_TEXT_MARKER_PREFIX + fingerprint(prText) + MARKER_SUFFIX;
+  }
+
+  /**
+   * The PR text's fingerprint: hex digits of a SHA-256 over its {@linkplain
+   * DescriptionGapScreen#normalize normalised} words, so an edit to whitespace or punctuation alone
+   * is not a change. The text is public on the pull request; the hash only keeps the marker short.
+   */
+  static String fingerprint(String prText) {
+    var digest =
+        sha256().digest(DescriptionGapScreen.normalize(prText).getBytes(StandardCharsets.UTF_8));
+    return HexFormat.of().formatHex(digest).substring(0, FINGERPRINT_HEX_DIGITS);
+  }
+
+  private static MessageDigest sha256() {
+    try {
+      return MessageDigest.getInstance("SHA-256");
+    } catch (NoSuchAlgorithmException e) {
+      // Every Java platform is required to provide SHA-256.
+      throw new IllegalStateException(e);
+    }
+  }
+
+  /** The fingerprint a summary comment's marker line holds; {@code null} without one. */
+  static String markedFingerprint(String body) {
+    return body.lines()
+        .map(String::strip)
+        .filter(line -> line.startsWith(PR_TEXT_MARKER_PREFIX) && line.endsWith(MARKER_SUFFIX))
+        .map(
+            line ->
+                line.substring(
+                    PR_TEXT_MARKER_PREFIX.length(), line.length() - MARKER_SUFFIX.length()))
+        .findFirst()
+        .orElse(null);
   }
 
   /**

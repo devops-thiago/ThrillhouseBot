@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
@@ -31,9 +32,12 @@ import java.util.regex.Pattern;
  *       sides are compared case-, whitespace- and punctuation-blind, an editorial bracket such as
  *       "[t]he" reads as the letters it holds, and a bracketed or "…" omission splits the quote
  *       into parts that must appear in order. Only a quote of at least {@value #MIN_QUOTE_WORDS}
- *       words that follows a claim cue is judged: a quoted path or value the bullet gives as what
- *       the change does is not the description's claim, and a single quoted word is usually an
- *       identifier the model inflected.
+ *       words that a claim cue attributes is judged, the cue before the quote or, as in "'…' is
+ *       what the description promises", right after it (#1064): a quoted path or value the bullet
+ *       gives as what the change does is not the description's claim, and a single quoted word is
+ *       usually an identifier the model inflected. A single token that runs words together, camel
+ *       case such as "retryForever" or a run such as "retriesforever" that starts or ends with a
+ *       word of the PR text, is judged too, against the PR text with its separators removed.
  *   <li><b>A bullet must cite the description or a linked issue.</b> A gap is a mismatch between
  *       what the author or the linked issue says and what the change does; one that names neither —
  *       a configuration document's example disagreeing with the code, say — is a finding about the
@@ -52,6 +56,13 @@ final class DescriptionGapScreen {
 
   /** Words a quoted passage needs, after normalising, before it is judged. */
   static final int MIN_QUOTE_WORDS = 2;
+
+  /**
+   * Letters, at least, of both the PR-text word a run-together token starts or ends with and the
+   * rest of it, so a suffix ("bookings" from "booking") or a short word ("the" in "theory") does
+   * not make an ordinary word read as two run together.
+   */
+  static final int MIN_RUN_PART = 4;
 
   /**
    * A quoted passage: in double quotes, or in single quotes whose opening one does not follow a
@@ -103,6 +114,13 @@ final class DescriptionGapScreen {
       List.of(DESCRIPTION_SAYS, PR_TITLE_OR_BODY, PR_SAYS, LEADING_CLAIM_VERB);
 
   /**
+   * The pull request's own text named in a clause, with or without a verb: what an omission gap
+   * says lacks a passage ("the description never mentions '…'", "the PR says nothing about '…'").
+   */
+  private static final List<Pattern> PR_TEXT_NAMED =
+      List.of(DESCRIPTION, PR_TITLE_OR_BODY, PR_SAYS);
+
+  /**
    * A clause saying the description does not hold something: the quote after it is what the change
    * has and the description lacks, so it is not the description's claim. Negation words, then the
    * verbs and the two-word verbs that say something is left out.
@@ -120,6 +138,16 @@ final class DescriptionGapScreen {
   private static final Pattern VERB_BEFORE_QUOTE =
       Pattern.compile(
           "(?i)\\b(?:state|claim|say|promise|mention|read)s?(?:\\s++that)?\\s*+[:,]?\\s*+$");
+
+  /**
+   * An attribution after a quote, opening its clause: "'…' is what the description promises". The
+   * claim cue itself is read from the rest of the clause ({@link #CLAIM_CUES}).
+   */
+  private static final Pattern WHAT_FOLLOWS_QUOTE =
+      Pattern.compile("(?i)^\\s*+(?:is|are|was|were)\\s++what\\b");
+
+  /** A lower-case letter followed by an upper-case one: a camel-case word boundary. */
+  private static final Pattern CAMEL_HUMP = Pattern.compile("\\p{Ll}\\p{Lu}");
 
   /** A linked issue, or what it asks for. */
   private static final Pattern LINKED_ISSUE =
@@ -200,14 +228,55 @@ final class DescriptionGapScreen {
       var lead = clauseOf(text.substring(since, quotes.start()));
       since = quotes.end();
       var quote = quotes.group(quotes.group(1) != null ? 1 : 2);
-      if (anyFinds(CLAIM_CUES, lead)
-          && !negated(lead)
-          && judged(quote)
-          && !appearsIn(quote, normalizedSource)) {
+      if ((attributedBefore(lead) || attributedAfter(text.substring(quotes.end())))
+          && judged(quote, normalizedSource)
+          && !present(quote, normalizedSource)) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Whether {@code gap} says the description lacks a quoted passage that {@code normalizedSource}
+   * now holds: "the description never mentions '…'" over a description that does mention it. On a
+   * head the previous round reviewed this releases a carried omission gap once the author has
+   * edited the description to cover it (#1064).
+   */
+  static boolean omissionCovered(String gap, String normalizedSource) {
+    var text = foldQuotes(gap);
+    var quotes = QUOTED.matcher(text);
+    var since = 0;
+    while (quotes.find()) {
+      var lead = clauseOf(text.substring(since, quotes.start()));
+      since = quotes.end();
+      var quote = quotes.group(quotes.group(1) != null ? 1 : 2);
+      if (anyFinds(PR_TEXT_NAMED, lead)
+          && negated(lead)
+          && judged(quote, normalizedSource)
+          && present(quote, normalizedSource)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether the clause before a quote attributes it to the pull request's text. */
+  private static boolean attributedBefore(String lead) {
+    return anyFinds(CLAIM_CUES, lead) && !negated(lead);
+  }
+
+  /**
+   * Whether the clause after a quote attributes it to the pull request's text: "'…' is what the
+   * description promises". A negation there keeps the quote on the code's side ("'…' is what the
+   * code does, not what the description says" ends its clause at the comma anyway).
+   */
+  private static boolean attributedAfter(String rest) {
+    var end = CLAUSE_BREAK.matcher(rest);
+    var tail = end.find() ? rest.substring(0, end.start()) : rest;
+    return WHAT_FOLLOWS_QUOTE.matcher(tail).find()
+        && anyFinds(CLAIM_CUES, tail)
+        && !anyFinds(NEGATED_CUES, tail);
   }
 
   /**
@@ -258,10 +327,44 @@ final class DescriptionGapScreen {
     return patterns.stream().anyMatch(pattern -> pattern.matcher(text).find());
   }
 
-  /** Whether a quote has enough words to be judged. */
-  private static boolean judged(String quote) {
+  /**
+   * Whether a quote can be judged: it has enough words, or it is one token that runs words together
+   * ({@link #runTogether}).
+   */
+  private static boolean judged(String quote, String normalizedSource) {
+    var joined = joinEditorialLetters(quote);
+    var words = normalize(joined);
+    return words.split(" ").length >= MIN_QUOTE_WORDS
+        || CAMEL_HUMP.matcher(joined).find()
+        || runTogether(words, normalizedSource);
+  }
+
+  /**
+   * Whether the single token {@code word} starts or ends with a word of {@code normalizedSource},
+   * both that word and what is left at least {@value #MIN_RUN_PART} letters: "retriesforever"
+   * against a description reading "retries".
+   */
+  static boolean runTogether(String word, String normalizedSource) {
+    if (word.length() < 2 * MIN_RUN_PART) {
+      return false;
+    }
+    return Arrays.stream(normalizedSource.split(" "))
+        .filter(part -> part.length() >= MIN_RUN_PART)
+        .filter(part -> word.length() - part.length() >= MIN_RUN_PART)
+        .anyMatch(part -> word.startsWith(part) || word.endsWith(part));
+  }
+
+  /**
+   * Whether a judged quote is in {@code normalizedSource}: on word boundaries ({@link #appearsIn}),
+   * or, for a quote of one token, with the separators removed from both sides, so "retryForever"
+   * matches a description reading "retry forever" or {@code retry_forever}.
+   */
+  private static boolean present(String quote, String normalizedSource) {
     var words = normalize(joinEditorialLetters(quote));
-    return words.split(" ").length >= MIN_QUOTE_WORDS;
+    if (words.indexOf(' ') < 0) {
+      return normalizedSource.replace(" ", "").contains(words);
+    }
+    return appearsIn(quote, normalizedSource);
   }
 
   /**
