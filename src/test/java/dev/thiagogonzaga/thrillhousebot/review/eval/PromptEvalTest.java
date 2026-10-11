@@ -23,6 +23,7 @@ import dev.thiagogonzaga.thrillhousebot.review.PromptSections;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
 import dev.thiagogonzaga.thrillhousebot.review.RiskLevel;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewer;
@@ -205,16 +206,19 @@ class PromptEvalTest {
                     + PromptTemplateEscaper.escape(coverage));
     prReviewer
         .reviewStream(
-            PromptTemplateEscaper.fence(evalCase.diff()),
-            PromptTemplateEscaper.escape(
-                PromptSections.prContext(
-                    orEmpty(evalCase.spec().prTitle()), orEmpty(evalCase.spec().prDescription()))),
-            "",
-            "",
-            PromptTemplateEscaper.escape(relatedTests),
-            "",
-            repoInstructions,
-            dimensionRouter.systemPromptFor(evalCase.files()))
+            new AiReviewService.PromptInputs(
+                PromptTemplateEscaper.fence(evalCase.diff()),
+                PromptTemplateEscaper.escape(
+                    PromptSections.prContext(
+                        orEmpty(evalCase.spec().prTitle()),
+                        orEmpty(evalCase.spec().prDescription()))),
+                "",
+                "",
+                PromptTemplateEscaper.escape(relatedTests),
+                "",
+                repoInstructions,
+                "",
+                dimensionRouter.systemPromptFor(evalCase.files())))
         .onPartialResponse(token -> {})
         .onCompleteResponse(response -> raw.complete(response.aiMessage().text()))
         .onError(raw::completeExceptionally)

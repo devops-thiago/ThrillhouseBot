@@ -226,14 +226,16 @@ class ChatModelWiringTest {
     try {
       prReviewer
           .reviewStream(
-              diff,
-              "prContext",
-              "baseComparison",
-              "stack",
-              "tests",
-              "previous",
-              "instr",
-              PrReviewPrompts.SYSTEM)
+              new AiReviewService.PromptInputs(
+                  diff,
+                  "prContext",
+                  "baseComparison",
+                  "stack",
+                  "tests",
+                  "previous",
+                  "instr",
+                  "",
+                  PrReviewPrompts.SYSTEM))
           .onPartialResponse(token -> {})
           .onCompleteResponse(response -> done.complete(null))
           .onError(done::completeExceptionally)
