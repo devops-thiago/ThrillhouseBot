@@ -393,6 +393,78 @@ public class ReviewDiffFormatter {
     return files.stream().filter(ReviewDiffFormatter::isPureRename).toList();
   }
 
+  /** File names that declare how a project builds: never ignored by default, packed first. */
+  private static final Set<String> BUILD_MANIFESTS =
+      Set.of(
+          "pom.xml",
+          "build.gradle",
+          "build.gradle.kts",
+          "settings.gradle",
+          "settings.gradle.kts",
+          "build.sbt",
+          "cargo.toml",
+          "package.json",
+          "build.zig",
+          "build.zig.zon",
+          "go.mod",
+          "pyproject.toml",
+          "setup.py",
+          "gemfile",
+          "composer.json",
+          "package.swift",
+          "cmakelists.txt",
+          "makefile");
+
+  /** Project-file extensions that are build manifests whatever their base name. */
+  private static final List<String> BUILD_MANIFEST_EXTENSIONS =
+      List.of(".csproj", ".fsproj", ".vbproj", ".gemspec");
+
+  /** Whether {@code path} is a build manifest ({@code pom.xml}, {@code Cargo.toml}, …) (#935). */
+  static boolean isBuildManifest(String path) {
+    if (path == null) {
+      return false;
+    }
+    var name = path.substring(path.lastIndexOf('/') + 1).toLowerCase(Locale.ROOT);
+    return BUILD_MANIFESTS.contains(name) || BUILD_MANIFEST_EXTENSIONS.stream().anyMatch(name::endsWith);
+  }
+
+  /** Ignored paths the scope note names before rolling the rest up as a count. */
+  static final int IGNORED_NAMES_CAP = 30;
+
+  /**
+   * The scope note naming the changed files the ignore list kept out of the review (#935): a
+   * withheld file used to show only as "…and 1 more file(s)" under the walkthrough, so a reader
+   * could not tell that the review never saw, say, the {@code pom.xml} its finding depended on.
+   * Pure renames are disclosed by {@link #formatPureRenameRollup} and are not repeated here.
+   */
+  static String formatIgnoredFiles(
+      List<GitHubPullRequestClient.FileDiff> files,
+      List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
+    if (files == null || files.isEmpty()) {
+      return "";
+    }
+    var reviewable =
+        reviewableFiles.stream()
+            .map(GitHubPullRequestClient.FileDiff::filename)
+            .collect(Collectors.toSet());
+    var ignored =
+        files.stream()
+            .filter(f -> !isPureRename(f) && !reviewable.contains(f.filename()))
+            .map(GitHubPullRequestClient.FileDiff::filename)
+            .toList();
+    if (ignored.isEmpty()) {
+      return "";
+    }
+    var named = ignored.subList(0, Math.min(IGNORED_NAMES_CAP, ignored.size()));
+    var more = ignored.size() - named.size();
+    return ignored.size()
+        + (ignored.size() == 1 ? " file" : " files")
+        + " excluded from AI review by the ignore list ("
+        + String.join(", ", named.stream().map(MarkdownSafe::inline).toList())
+        + (more > 0 ? ", and " + more + " more" : "")
+        + ")\n";
+  }
+
   /**
    * One-line disclosure for the summary / diff overview. Caps the path sample so bulk package moves
    * do not dominate the prompt.
