@@ -227,8 +227,10 @@ class PromptEvalTest {
       List.of(
           Pattern.compile(
               "(?i)\\b(?:claims?|claimed|description|unconfirmed|unsupported|unverified)\\b"),
-          Pattern.compile("(?i)\\bnot (?:implemented|backed|shown|present|found|evident)\\b"),
-          Pattern.compile("(?i)\\bno (?:changed )?(?:file|code|evidence)\\b"),
+          Pattern.compile(
+              "(?i)(?:\\bnot|n't) (?:implemented|backed|shown|present|found|evident)\\b"),
+          Pattern.compile("(?i)\\b(?:missing|lacks?|absent)\\b"),
+          Pattern.compile("(?i)\\bno (?:changed )?(?:files?|code|evidence)\\b"),
           Pattern.compile("(?i)\\b(?:pr|pull request) (?:text|body|title)\\b"),
           Pattern.compile("(?i)\\b(?:stated|according to|only (?:from|in) the)\\b"));
 

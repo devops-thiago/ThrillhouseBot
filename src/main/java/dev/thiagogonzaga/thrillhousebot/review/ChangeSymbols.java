@@ -269,11 +269,18 @@ public final class ChangeSymbols {
   static final class LiteralTracker {
 
     /**
-     * A heredoc opener ({@code <<EOF}, {@code <<-'END'}): an upper-case word straight after the
-     * operator, or a quoted one, so a shift ({@code x << y}) opens nothing.
+     * A heredoc opener ({@code <<EOF}, {@code <<-'END'}, {@code <<'py'}): a quoted word of any case
+     * straight after the operator, a quoted upper-case word after a space, or an unquoted
+     * upper-case word straight after it. A shift ({@code x << y}) and a stream insertion of a
+     * string or character ({@code out << "x"}) open nothing.
      */
     private static final Pattern HEREDOC =
-        Pattern.compile("<<[-~]?(?:\\s*(['\"])([A-Z_][A-Z0-9_]*)\\1|([A-Z_][A-Z0-9_]*)(?!\\w))");
+        Pattern.compile(
+            "<<[-~]?(?:(['\"])([A-Za-z_]\\w*)\\1|\\s+(['\"])([A-Z_][A-Z0-9_]*)\\3"
+                + "|([A-Z_][A-Z0-9_]*)(?!\\w))");
+
+    /** The groups of {@link #HEREDOC} that hold the delimiter word, one per alternative. */
+    private static final int[] HEREDOC_WORD_GROUPS = {2, 4, 5};
 
     /** What closes the string or comment the text so far ends inside; {@code null} in code. */
     private String closer;
@@ -343,7 +350,11 @@ public final class ChangeSymbols {
       if (!heredoc.lookingAt()) {
         return i + 1;
       }
-      openedHeredoc = heredoc.group(heredoc.group(2) != null ? 2 : 3);
+      for (var group : HEREDOC_WORD_GROUPS) {
+        if (heredoc.group(group) != null) {
+          openedHeredoc = heredoc.group(group);
+        }
+      }
       return heredoc.end();
     }
 

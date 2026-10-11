@@ -59,6 +59,23 @@ class PromptEvalGradingTest {
   }
 
   @Test
+  void missingAbsentPluralAndContractedRefutationsAreNotStatements() {
+    for (var sentence :
+        List.of(
+            "Reminders are missing from this change.",
+            "Reminders are absent from the changed code.",
+            "The change lacks reminder e-mails.",
+            "No files declare anything that sends reminders.",
+            "Reminders aren't backed by any changed file.",
+            "A reminder isn't implemented anywhere.")) {
+      assertFalse(PromptEvalTest.statesAsImplemented(KEYWORDS, sentence), sentence);
+    }
+    assertTrue(
+        PromptEvalTest.statesAsImplemented(
+            KEYWORDS, "Reminder e-mails go out 15 minutes before each booking."));
+  }
+
+  @Test
   void aClaimTheEvidenceCanCarryPassesUnlessItIsGapped() {
     var notGapped = EvalCase.CLAIM_NOT_GAPPED;
     assertTrue(PromptEvalTest.summaryOutcomeMatches(notGapped, "claim-implemented"));

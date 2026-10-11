@@ -156,6 +156,32 @@ class ChangeSymbolsTest {
   }
 
   @Test
+  void everyHeredocDelimiterShapeOpensAHeredoc() {
+    // Quoted delimiters of any case, a quoted one after a space, and a dash before an unquoted one.
+    var patch =
+        """
+        @@ -0,0 +1,20 @@
+        +cat <<'py' > generated.py
+        +def build():
+        +py
+        +cat <<"end_marker"
+        +class InDoubleQuoted:
+        +end_marker
+        +cat <<- "END"
+        +def in_spaced_quoted():
+        +END
+        +cat <<-EOF
+        +def in_dashed():
+        +\tEOF
+        +out << "end";
+        +out << 'x';
+        +def after_stream_insertion():
+        """;
+
+    assertEquals(List.of("after_stream_insertion"), ChangeSymbols.declaredNames(patch));
+  }
+
+  @Test
   void eachHunkStartsInCode() {
     // The second hunk's opening line closes nothing: what lies between hunks is unknown.
     var patch = "@@ -1 +1 @@\n+s = \"\"\"open\n@@ -9 +9 @@\n+def after_hunk():";
