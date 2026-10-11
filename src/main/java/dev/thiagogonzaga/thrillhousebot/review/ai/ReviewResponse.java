@@ -27,9 +27,9 @@ public record ReviewResponse(
     Summary summary,
     // The findings of rounds older than the effective previous one that this round closed (their
     // code left the diff, or a maintainer cleared them), recorded so a later round does not close
-    // and name them again (#1066). Never written by the model: every lane rebuilds the response
-    // through the three-argument constructor before it is persisted, which leaves this empty, and
-    // the orchestrator sets it only after the verdict.
+    // and name them again (#1066). Never written by the model: ReviewResponseParser drops the field
+    // from every answer, every lane rebuilds the response through the three-argument constructor
+    // before it is persisted, and the orchestrator sets it only after the verdict.
     @JsonProperty("closed_earlier_round") List<Finding> closedEarlierRound) {
   public ReviewResponse {
     findings = List.copyOf(findings != null ? findings : List.of());

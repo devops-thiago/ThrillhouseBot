@@ -190,10 +190,12 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
   (`PreviousFindingStatus.closesEarlierRound`) also carries its own thread's root
   (`clusterThreadRoot`: marker and own content, no reply required), so `resolveAddressedThreads`
   resolves it; it counts in `ReviewResult.resolvedPreviousCount` and `ClosedFindingNames` names it
-  from the finding. The orchestrator then records those findings, every round's copy of the defect
+  from the finding, unless the round's own status already closes the effective round's copy of the
+  same defect (`EarlierRound.namedByTheRound`), so a defect is named once. The orchestrator then records those findings, every round's copy of the defect
   (`EarlierRound.members`, `ReviewResult.earlierRoundClosedMembers`), with the round's stored response
-  (`ReviewResponse.closedEarlierRound`, never written by the model: every lane rebuilds the
-  response with the three-argument constructor in `FindingPipeline.persistWithSummary`), and
+  (`ReviewResponse.closedEarlierRound`, never written by the model: `ReviewResponseParser` drops
+  it from every answer, and every lane rebuilds the response with the three-argument constructor
+  in `FindingPipeline.persistWithSummary`), and
   `replayRounds` drops them from every later replay, so no later round resolves, names or counts
   them again (#470). `hasSupersededPrevious` still leaves earlier rounds out, so an older close
   never re-posts the summary. Holds and standing declines are recomputed every round. The
