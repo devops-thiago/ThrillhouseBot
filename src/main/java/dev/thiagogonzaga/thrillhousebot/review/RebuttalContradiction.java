@@ -19,7 +19,9 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -270,7 +272,7 @@ final class RebuttalContradiction {
    * finding's own file states that the path runs concurrently ({@link #STATED_CONCURRENCY}), the
    * note quotes the sentence that says so, since claiming the diff cannot confirm it would be
    * wrong; otherwise {@link #unconfirmedPremiseNote}. A statement in another file says nothing
-   * about this path, and one the text denies ({@link #DENIES} before it) is not quoted as the
+   * about this path, and one the text denies ({@link #denies} before it) is not quoted as the
    * opposite of what it says. A comment wrapped across lines is read whole ({@link #statements}).
    */
   static String heldPremiseNote(String claim, String reviewedCode, String file) {
@@ -293,7 +295,7 @@ final class RebuttalContradiction {
 
   /**
    * Where {@code text} states concurrency, or {@code -1}: a {@link #STATED_CONCURRENCY} match that
-   * a denial word does not govern ({@link #DENIES}: one in the same clause, at most {@value
+   * a denial word does not govern ({@link #denies}: one in the same clause, at most {@value
    * #DENIAL_WORDS} words before it). Everything before the match is read, so the clause alone
    * decides how far back a denial reaches. A guard word earlier in the sentence ("the lock guards
    * every field, which is shared by every request goroutine") governs something else.
@@ -302,7 +304,7 @@ final class RebuttalContradiction {
     for (var pattern : STATED_CONCURRENCY) {
       var matcher = pattern.matcher(text);
       while (matcher.find()) {
-        if (!DENIES.matcher(text.substring(0, matcher.start())).find()) {
+        if (!denies(text.substring(0, matcher.start()))) {
           return matcher.start();
         }
       }
@@ -351,32 +353,120 @@ final class RebuttalContradiction {
   /** How many words a negator may sit before the statement it denies, within one clause. */
   private static final int DENIAL_WORDS = 6;
 
+  /** The widest gap, in characters, read between two words of one clause. */
+  private static final int MAX_GAP = 16;
+
+  /** Words that deny what follows them in their clause ({@link #denies}). */
+  private static final Set<String> NEGATORS =
+      Set.of(
+          "not", "never", "no", "nor", "none", "nothing", "nobody", "neither", "without", "cannot",
+          "cant", "wont", "isnt");
+
+  /** Verbs that refuse the statement's own subject when directly before it ({@link #denies}). */
+  private static final Set<String> REFUSALS =
+      Set.of(
+          "reject",
+          "rejects",
+          "prevent",
+          "prevents",
+          "avoid",
+          "avoids",
+          "forbid",
+          "forbids",
+          "disallow",
+          "disallows",
+          "block",
+          "blocks",
+          "prohibit",
+          "prohibits",
+          "exclude",
+          "excludes",
+          "preclude",
+          "precludes",
+          "refuse",
+          "refuses",
+          "disable",
+          "disables");
+
+  /** Words that open a new clause, so a negator before them governs another statement. */
+  private static final Set<String> CLAUSE_OPENERS =
+      Set.of(
+          "and",
+          "but",
+          "or",
+          "which",
+          "that",
+          "while",
+          "whereas",
+          "because",
+          "since",
+          "so",
+          "though",
+          "although",
+          "yet",
+          "unless",
+          "except");
+
+  /** Words that turn a negator right before them into an affirmation: "not only shared …". */
+  private static final Set<String> AFFIRMING = Set.of("only", "just", "merely");
+
   /**
-   * What turns the {@link #STATED_CONCURRENCY} statement after it into a denial: a negator in the
-   * same clause, at most {@value #DENIAL_WORDS} words before it with no clause punctuation or
-   * clause conjunction ("and", "but", "which", "because" …) between ("not shared by every
+   * Whether the text before a {@link #STATED_CONCURRENCY} statement turns it into a denial: a
+   * negator in the same clause, at most {@value #DENIAL_WORDS} words before it with no clause
+   * punctuation or clause opener ("and", "but", "which", "because" …) between ("not shared by every
    * goroutine", "is not ever really called from multiple threads", "nothing in it is shared across
    * goroutines", any n't contraction: "doesn't support concurrent use"), but not "not only" or "not
    * just", which affirm; or a verb that refuses the statement's own subject directly before it
    * ("rejects concurrent requests", "prevents concurrent access", "prohibits concurrent access"). A
    * verb that only protects shared state ("the lock guards every field shared by every request
    * goroutine", "serializes concurrent requests") still says the path is reached concurrently, so
-   * it denies nothing. A gap is any horizontal space, a non-breaking one included, and a word
-   * counts as one whatever its length (a long identifier); the possessive quantifiers keep the scan
-   * linear.
+   * it denies nothing. A gap is any horizontal space or hyphen, a non-breaking space included, and
+   * a word counts as one whatever its length (a long identifier). The words are read back from the
+   * statement, so the scan is linear in the clause.
    */
-  private static final Pattern DENIES =
-      ci(
-          "(?:\\b(?:not|never|no|nor|none|nothing|nobody|neither|without|cannot|cant|wont|isnt"
-              + "|\\w{1,8}n['’]t)\\b"
-              + "(?![\\h-]{1,16}+(?:only|just|merely)\\b)"
-              + "(?:[\\h-]{1,16}+(?!(?:and|but|or|nor|which|that|while|whereas|because|since|so"
-              + "|though|although|yet|unless|except)\\b)[\\w'’]++(?:-[\\w'’]++)*+){0,"
-              + DENIAL_WORDS
-              + "}"
-              + "|\\b(?:rejects?|prevents?|avoids?|forbids?|disallows?|blocks?|prohibits?"
-              + "|excludes?|precludes?|refuses?|disables?)\\b)"
-              + "[\\h-]{0,16}+$");
+  private static boolean denies(String before) {
+    var end = before.length();
+    String nearer = null;
+    for (var read = 0; read <= DENIAL_WORDS; read++) {
+      var wordEnd = end;
+      while (wordEnd > 0 && isGap(before.charAt(wordEnd - 1))) {
+        wordEnd--;
+      }
+      var start = wordEnd;
+      while (start > 0 && isWordChar(before.charAt(start - 1))) {
+        start--;
+      }
+      if (end - wordEnd > MAX_GAP || start == wordEnd) {
+        return false;
+      }
+      var word = before.substring(start, wordEnd).toLowerCase(Locale.ROOT);
+      if (isNegator(word)) {
+        return nearer == null || !AFFIRMING.contains(nearer);
+      }
+      if (CLAUSE_OPENERS.contains(word)) {
+        return false;
+      }
+      if (read == 0 && REFUSALS.contains(word)) {
+        return true;
+      }
+      nearer = word;
+      end = start;
+    }
+    return false;
+  }
+
+  private static boolean isNegator(String word) {
+    return NEGATORS.contains(word)
+        || (word.length() <= 11 && (word.endsWith("n't") || word.endsWith("n’t")));
+  }
+
+  private static boolean isGap(char c) {
+    return c == '-' || c == ' ' || c == '\t' || Character.isSpaceChar(c);
+  }
+
+  private static boolean isWordChar(char c) {
+    return Character.isLetterOrDigit(c) || c == '_' || c == '\'' || c == '’';
+  }
 
   /**
    * The note of a finding the review still reports open after a maintainer answered it on its

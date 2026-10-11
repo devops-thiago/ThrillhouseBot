@@ -4979,7 +4979,11 @@ class FollowUpAnalyzerTest {
             "+// It is not, in practice, a thing called from multiple threads.",
             "+// It is not a cache and it is shared by every request goroutine.",
             "+// There is no cache because the pool is shared by every request goroutine.",
-            "+// The pool is not only shared by every request goroutine but by the workers too.")) {
+            "+// The pool is not only shared by every request goroutine but by the workers too.",
+            // Seven words without a negator end the scan, and so does a gap over sixteen spaces.
+            "+// The pool held by the small old worker type here is shared by every request"
+                + " goroutine.",
+            "+// The pool is not" + " ".repeat(17) + "shared by every request goroutine.")) {
       var note = heldNote(affirmed);
       assertTrue(note.contains("says this path runs concurrently"), affirmed + " -> " + note);
     }
