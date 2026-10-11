@@ -406,33 +406,7 @@ public class PrSummaryGenerator {
   private static void appendFindingsOrCelebration(
       StringBuilder sb, ReviewResult result, Set<Finding> carried) {
     if (result.hasIssues()) {
-      var keyFindings = result.keyFindings(carried::contains);
-      if (!keyFindings.isEmpty()) {
-        sb.append("### Key Findings\n");
-        for (Finding f : keyFindings) {
-          // Model-supplied title/path: flatten and neutralize break-outs (a newline, a "```", or a
-          // "</details>" in the title must not escape the bullet or the summary's <details>
-          // blocks).
-          sb.append("- **")
-              .append(f.risk().name())
-              .append(":** ")
-              .append(MarkdownSafe.inline(f.title()))
-              .append(" (`")
-              .append(MarkdownSafe.inlineCode(f.file()))
-              .append(":")
-              .append(f.line())
-              .append("`)");
-          if (carried.contains(f)) {
-            sb.append(" ").append(CARRIED_NOTE);
-          }
-          sb.append("\n");
-        }
-        var leftOut = result.keyFindingsLeftOut();
-        if (leftOut > 0) {
-          sb.append(keyFindingsMoreLine(leftOut));
-        }
-        sb.append("\n");
-      }
+      appendKeyFindings(sb, result, carried);
     } else if (hasNoUnresolvedPrevious(result)) {
       if (result.ciHoldsApproval()) {
         appendCiHold(sb, result);
@@ -443,6 +417,41 @@ public class PrSummaryGenerator {
         sb.append(ZERO_ISSUES_MESSAGE).append("\n\n");
       }
     }
+  }
+
+  /**
+   * The Key Findings list: the highest-ranked findings that post inline, then a line counting what
+   * the cap left out (#964). Nothing when no finding posts inline.
+   */
+  private static void appendKeyFindings(
+      StringBuilder sb, ReviewResult result, Set<Finding> carried) {
+    var keyFindings = result.keyFindings(carried::contains);
+    if (keyFindings.isEmpty()) {
+      return;
+    }
+    sb.append("### Key Findings\n");
+    for (Finding f : keyFindings) {
+      // Model-supplied title/path: flatten and neutralize break-outs (a newline, a "```", or a
+      // "</details>" in the title must not escape the bullet or the summary's <details> blocks).
+      sb.append("- **")
+          .append(f.risk().name())
+          .append(":** ")
+          .append(MarkdownSafe.inline(f.title()))
+          .append(" (`")
+          .append(MarkdownSafe.inlineCode(f.file()))
+          .append(":")
+          .append(f.line())
+          .append("`)");
+      if (carried.contains(f)) {
+        sb.append(" ").append(CARRIED_NOTE);
+      }
+      sb.append("\n");
+    }
+    var leftOut = result.keyFindingsLeftOut();
+    if (leftOut > 0) {
+      sb.append(keyFindingsMoreLine(leftOut));
+    }
+    sb.append("\n");
   }
 
   /**
@@ -878,7 +887,7 @@ public class PrSummaryGenerator {
   private static final Pattern ONE_DASH_ARROW = Pattern.compile("(?<![-.])->");
 
   /** A comma straight after a node's closing bracket, or ending a line. */
-  private static final Pattern STRAY_COMMA = Pattern.compile("[\\])}]\\s*+,|,\\s*+$");
+  private static final Pattern STRAY_COMMA = Pattern.compile("(?:[\\])}]\\s*+,)|(?:,\\s*+$)");
 
   /** Flowchart statements whose syntax allows commas: class lists, styles, link styles, clicks. */
   private static final Pattern COMMA_STATEMENT =
@@ -914,28 +923,22 @@ public class PrSummaryGenerator {
   private static boolean balanced(String line) {
     var open = new ArrayDeque<Character>();
     for (var c : line.toCharArray()) {
-      switch (c) {
-        case '[', '(', '{' -> open.push(c);
-        case ']', ')', '}' -> {
-          if (open.isEmpty() || open.pop() != matching(c)) {
-            return false;
-          }
-        }
-        default -> {
-          // Not a bracket.
-        }
+      if (OPENING_BRACKETS.indexOf(c) >= 0) {
+        open.push(c);
+        continue;
+      }
+      var closing = CLOSING_BRACKETS.indexOf(c);
+      if (closing >= 0 && (open.isEmpty() || open.pop() != OPENING_BRACKETS.charAt(closing))) {
+        return false;
       }
     }
     return open.isEmpty();
   }
 
-  private static char matching(char closing) {
-    return switch (closing) {
-      case ']' -> '[';
-      case ')' -> '(';
-      default -> '{';
-    };
-  }
+  private static final String OPENING_BRACKETS = "([{";
+
+  /** The closing brackets, each at the position of its opening one in {@link #OPENING_BRACKETS}. */
+  private static final String CLOSING_BRACKETS = ")]}";
 
   /**
    * True when any {@code participant}/{@code actor} declaration in the source carries a flowchart
