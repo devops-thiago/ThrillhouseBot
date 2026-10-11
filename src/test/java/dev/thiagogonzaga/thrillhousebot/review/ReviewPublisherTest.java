@@ -404,9 +404,9 @@ class ReviewPublisherTest {
   }
 
   @Test
-  void followUpDeltaIsSkippedWhenThisRoundAlreadyPostedASummary() {
-    // /summary re-post, or a superseded finding refreshing the summary: the PR already carries a
-    // summary comment for this round, so the delta must not land beside it.
+  void followUpDeltaIsSkippedOnASummaryCommandRoundThatPostedTheSummary() {
+    // /summary posted the summary comment this round, so the delta must not land beside it. An
+    // in-place edit (a superseded finding refreshing the summary) is not this case (#927).
     followUpSummaryEnabled(true);
 
     assertFalse(
