@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.HashSet;
 import java.util.List;
@@ -213,8 +214,8 @@ final class DefectIdentity {
     var symbols = symbols(a.title());
     symbols.addAll(symbols(b.title()));
     return shared.stream().anyMatch(symbols::contains)
-        || namesSymbolOf(a.description(), b)
-        || namesSymbolOf(b.description(), a);
+        || namesSymbolOf(ownDescription(a), b)
+        || namesSymbolOf(ownDescription(b), a);
   }
 
   /** Whether {@code text} names a symbol of {@code other}'s title. */
@@ -230,7 +231,7 @@ final class DefectIdentity {
    * quoting the earlier finding's own code is restating it from the caller's side (#972).
    */
   private static boolean citesLocation(Finding citing, Finding cited) {
-    var description = citing.description();
+    var description = ownDescription(citing);
     if (description == null || cited.title() == null) {
       return false;
     }
@@ -426,9 +427,20 @@ final class DefectIdentity {
   /** Whether {@code finding}'s title or description names an identifier from {@code title}. */
   private static boolean namesIdentifierOf(String title, Finding finding) {
     var text =
-        (Objects.toString(finding.title(), "") + " " + Objects.toString(finding.description(), ""))
+        (Objects.toString(finding.title(), "")
+                + " "
+                + Objects.toString(ownDescription(finding), ""))
             .toLowerCase(Locale.ROOT);
     return identifiers(title).stream().anyMatch(name -> namesWhole(text, name));
+  }
+
+  /**
+   * A finding's description without the unverified note a fail-open round appends to every finding
+   * it kept (#885): the note is shared verbatim, so it would pair any two such findings and says
+   * nothing about either defect. The summary's claim matching strips it the same way.
+   */
+  private static String ownDescription(Finding finding) {
+    return FindingVerificationService.withoutUnverifiedNote(finding.description());
   }
 
   /**

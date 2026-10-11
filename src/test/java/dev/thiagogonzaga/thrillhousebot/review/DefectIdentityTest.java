@@ -745,6 +745,26 @@ class DefectIdentityTest {
     assertEquals(Set.of(), DefectIdentity.symbols("go() fails"), "two-character names say nothing");
   }
 
+  /**
+   * The unverified note a fail-open round appends to every finding it kept says nothing about
+   * either defect: an identifier it happens to contain ("audit") does not pair two findings.
+   */
+  @Test
+  void theUnverifiedNoteNeverPairsTwoFindings() {
+    var description =
+        "The handler rejects the request.\n\n"
+            + dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService.UNVERIFIED_NOTE;
+    var later = at("high", "medium", MAIN, 46, "Request rejected on retry", description);
+    var prior = at("low", "low", MAIN, 46, "Is the `audit` table created?", "d");
+
+    assertFalse(DefectIdentity.sameDefect(later, prior));
+    assertTrue(
+        DefectIdentity.sameDefect(
+            at("high", "medium", MAIN, 46, "Request rejected on retry", "writes the audit row"),
+            prior),
+        "the same identifier in the finding's own words still pairs");
+  }
+
   @Test
   void theEdgesOfEachArmStayApart() {
     var withFile = at("high", "high", "src/A.java", 1, "Race on the counter", "d");

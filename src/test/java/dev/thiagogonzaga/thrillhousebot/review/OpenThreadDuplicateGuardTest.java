@@ -170,9 +170,13 @@ class OpenThreadDuplicateGuardTest {
             "d",
             null,
             null);
+    // The same restatement, confident enough to post inline: the guard keeps it.
     var inline =
         new ReviewResponse.Finding(
             "medium", "high", listed.file(), 3, listed.title(), "d", null, null);
+    // The open thread it restates is round one's pagination finding, on another file.
+    assertEquals(CLIENT, pagination.file());
+    assertFalse(FilePaths.same(pagination.file(), listed.file()));
 
     assertEquals(
         List.of(nan),
