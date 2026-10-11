@@ -366,6 +366,16 @@ class OverviewScreenTest {
     assertEquals(
         "Renders it",
         OverviewScreen.screenedText("Renders it, and hosts the two findings", "+x", ""));
+    // Joined by "and" alone, the findings part is cut the same way, and kept parts keep their
+    // separators.
+    assertEquals(
+        "Renders the dashboard",
+        OverviewScreen.screenedText(
+            "Renders the dashboard and hosts the two confirmed findings", "+x", ""));
+    assertEquals(
+        "Parses rows, caches pages and renders the table",
+        OverviewScreen.screenedText(
+            "Parses rows, hosts two findings, caches pages and renders the table", "+x", ""));
     assertEquals(
         "Contains the findings table for the dashboard",
         OverviewScreen.screenedText("Contains the findings table for the dashboard", "+x", ""));

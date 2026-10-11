@@ -323,16 +323,40 @@ final class OverviewScreen {
   }
 
   /**
-   * {@code clause} less the comma-separated parts that talk about findings when some part does not
-   * ("renders the dashboard, hosts the two findings" keeps "renders the dashboard"); as it is when
-   * none or all of its parts do, so a clause that is only findings talk is still judged whole.
+   * {@code clause} less the parts, separated by a comma or an "and", that talk about findings when
+   * some part does not ("renders the dashboard, hosts the two findings" and "renders the dashboard
+   * and hosts the two findings" keep "renders the dashboard"); as it is when none or all of its
+   * parts do, so a clause that is only findings talk is still judged whole. Each kept part keeps
+   * the separator it had.
    */
   private static String withoutFindingsParts(String clause) {
-    // A comma inside a number ("1,000 findings") does not separate parts.
-    var parts = Arrays.stream(clause.split(",(?=\\s)")).map(String::strip).toList();
-    var kept = parts.stream().filter(part -> !talksAboutFindings(part)).toList();
-    return kept.isEmpty() || kept.size() == parts.size() ? clause : String.join(", ", kept);
+    var parts = new ArrayList<String>();
+    var separators = new ArrayList<String>();
+    var from = 0;
+    var cuts = PART_SEPARATOR.matcher(clause);
+    while (cuts.find()) {
+      parts.add(clause.substring(from, cuts.start()).strip());
+      separators.add(cuts.group());
+      from = cuts.end();
+    }
+    parts.add(clause.substring(from).strip());
+    var kept = new StringBuilder();
+    var dropped = 0;
+    for (var i = 0; i < parts.size(); i++) {
+      if (talksAboutFindings(parts.get(i))) {
+        dropped++;
+      } else {
+        kept.append(kept.isEmpty() ? "" : separators.get(i - 1)).append(parts.get(i));
+      }
+    }
+    return dropped == 0 || dropped == parts.size() ? clause : kept.toString();
   }
+
+  /**
+   * What separates the parts of a clause: a comma before a blank (not the one inside "1,000") or an
+   * "and" between blanks.
+   */
+  private static final Pattern PART_SEPARATOR = Pattern.compile(",(?=\\s)\\s*+|\\s++and\\s++");
 
   private static boolean isPlaceholder(String text) {
     return PLACEHOLDERS.contains(
