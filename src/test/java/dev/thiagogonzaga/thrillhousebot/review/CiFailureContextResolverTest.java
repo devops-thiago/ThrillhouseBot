@@ -665,6 +665,20 @@ class CiFailureContextResolverTest {
       assertEquals(List.of(), lines(line + "\n"));
     }
 
+    /** Jest heads a test outside any describe block with a bare bullet, no " \u203A ". */
+    @Test
+    void aTopLevelJestTestIsNamedUnderItsFailedFile() {
+      assertEquals(
+          List.of("FAIL src/app/shift-board.test.ts", "\u25CF rejects a full shift"),
+          lines(
+              "FAIL src/app/shift-board.test.ts\n\u25CF rejects a full shift\n\n  expect(x)\n"
+                  + "\u25CF Console\n\u25CF Test suite failed to run\n"));
+      assertEquals(
+          List.of("FAIL src/app/a.test.ts"),
+          lines("FAIL src/app/a.test.ts\nPASS src/app/b.test.ts\n\u25CF a passing note\n"));
+      assertEquals(List.of(), lines("\u25CF rejects a full shift\n"));
+    }
+
     @Test
     void theWholeWindowIsScannedEachLineOnceAndCapped() {
       var log = new StringBuilder("--- FAIL: TestFirst (0.00s)\n");

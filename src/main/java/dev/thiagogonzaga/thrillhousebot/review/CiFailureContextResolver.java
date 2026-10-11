@@ -124,6 +124,12 @@ public class CiFailureContextResolver {
   // ANSI CSI sequences (colour, cursor movement) that CI runners emit into logs and summaries.
   private static final Pattern ANSI_CSI = Pattern.compile("\u001B\\[[0-?]*[ -/]*[@-~]");
 
+  /** The status Jest and Vitest open a failed test file's line with. */
+  private static final String JEST_FAILED_FILE = "FAIL ";
+
+  /** The status Jest and Vitest open a passed test file's line with. */
+  private static final String JEST_PASSED_FILE = "PASS ";
+
   /**
    * The lines test runners write about one failed test, each tried against a cleaned log line with
    * its timestamp removed. Plain string tests where they suffice, and the few expressions anchored
@@ -145,11 +151,7 @@ public class CiFailureContextResolver {
                   || line.startsWith("\u00D7 "),
           line -> line.startsWith("\u25CF ") && line.contains(" \u203A "),
           // Jest and Vitest file lines: "FAIL src/app.test.ts", "FAIL src/__tests__/app.js".
-          line ->
-              line.startsWith("FAIL ")
-                  && (line.contains(".test.")
-                      || line.contains(".spec.")
-                      || line.contains("__tests__/")),
+          line -> isJestFile(line, JEST_FAILED_FILE),
           // pytest "FAILED tests/test_x.py::test_y" and "ERROR tests/test_x.py::test_y" (an
           // error in the test's setup): a Python file, not a logger's "ERROR app::db: refused".
           // unittest "FAIL: test_y (module.Case)".
@@ -210,6 +212,11 @@ public class CiFailureContextResolver {
           "sql",
           "sh",
           "txt");
+
+  private static final String JEST_BULLET = "\u25CF ";
+
+  /** The bullets Jest prints under a failed test file that head no test. */
+  private static final Set<String> JEST_NOTICES = Set.of("Console", "Test suite failed to run");
 
   /** The browser names Karma prints before a browser's version on a test's result line. */
   private static final Set<String> KARMA_BROWSERS =
@@ -550,14 +557,34 @@ public class CiFailureContextResolver {
     var lines = clean(new String(bytes, StandardCharsets.UTF_8)).split("\n", -1);
     var start = bytes.length >= LOG_TAIL_BYTES ? 1 : 0;
     var found = new LinkedHashSet<String>();
+    // Jest heads a test declared outside any describe block "● name", with no " › " to tell it
+    // from its other bullets, so it is read only under a failed test file's line.
+    var underFailedJestFile = false;
     for (var i = start; i < lines.length && found.size() < MAX_FAILING_TEST_LINES; i++) {
       // Matched before it is clipped: several shapes are read at the line's end ("... FAILED").
       var line = LOG_TIMESTAMP.matcher(lines[i]).replaceFirst("").strip();
-      if (namesAFailedTest(line)) {
+      if (isJestFile(line, JEST_FAILED_FILE)) {
+        underFailedJestFile = true;
+      } else if (isJestFile(line, JEST_PASSED_FILE)) {
+        underFailedJestFile = false;
+      }
+      if (namesAFailedTest(line) || (underFailedJestFile && isTopLevelJestTest(line))) {
         found.add(clip(line, MAX_LINE_CHARS));
       }
     }
     return List.copyOf(found);
+  }
+
+  /** Whether {@code line} is Jest's or Vitest's {@code status} line for a test file. */
+  private static boolean isJestFile(String line, String status) {
+    return line.startsWith(status)
+        && (line.contains(".test.") || line.contains(".spec.") || line.contains("__tests__/"));
+  }
+
+  /** Jest's "● name" for a test outside any describe block, not one of its other bullets. */
+  private static boolean isTopLevelJestTest(String line) {
+    return line.startsWith(JEST_BULLET)
+        && !JEST_NOTICES.contains(line.substring(JEST_BULLET.length()));
   }
 
   private static boolean namesAFailedTest(String line) {
