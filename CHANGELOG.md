@@ -21,6 +21,7 @@ All notable changes to ThrillhouseBot.
 
 ### Security
 
+- **The secret-scan content marker is keyed, so it cannot confirm a guessed value** (#985): the hidden `thrillhousebot:scan-content` marker on a secret finding held the first 8 hex digits of a plain SHA-256 over the rule and the flagged line. It is posted on the pull request, so with the redacted title's prefix and length anyone could test guesses for a short password offline. It is now an HMAC-SHA-256 under a key derived from `GITHUB_WEBHOOK_SECRET`, stable across rounds and restarts. A decline recorded under an unkeyed marker keeps matching its line, so upgrading raises nothing again; changing the webhook secret raises each declined secret finding once, and the next decline stores the new marker
 - Bumped Jackson (`jackson-bom`) from 2.22.2 to 2.22.3 (#914) for four advisories in the JSON parser the bot uses on webhook payloads and model responses: GHSA-7hhh-6rmp-j9qf (`jackson-core` error-token length not capped), GHSA-p6pp-m3f8-5c89 (`jackson-core` quadratic backtracking in float parsing), GHSA-cxp5-3px4-pw24 (`jackson-databind` quadratic forward-reference completion) and GHSA-wv8q-qhhj-9h54 (`jackson-databind` retaining every unknown raw type id)
 
 ### Documentation
