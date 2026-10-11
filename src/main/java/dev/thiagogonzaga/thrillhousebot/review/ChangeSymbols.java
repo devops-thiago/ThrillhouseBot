@@ -269,18 +269,19 @@ public final class ChangeSymbols {
   static final class LiteralTracker {
 
     /**
-     * A heredoc opener ({@code <<EOF}, {@code <<-'END'}, {@code <<'py'}): a quoted word of any case
-     * straight after the operator, a quoted upper-case word after a space, or an unquoted
-     * upper-case word straight after it. A shift ({@code x << y}) and a stream insertion of a
-     * string or character ({@code out << "x"}) open nothing.
+     * A quoted heredoc opener ({@code <<-'END'}, {@code <<'py'}): group 1 is the space before the
+     * quote, group 3 the word. A word of any case opens one straight after the operator; after a
+     * space only an upper-case one does, so a stream insertion of a string or character ({@code out
+     * << "x"}) opens nothing.
      */
-    private static final Pattern HEREDOC =
-        Pattern.compile(
-            "<<[-~]?(?:(['\"])([A-Za-z_]\\w*)\\1|\\s+(['\"])([A-Z_][A-Z0-9_]*)\\3"
-                + "|([A-Z_][A-Z0-9_]*)(?!\\w))");
+    private static final Pattern QUOTED_HEREDOC =
+        Pattern.compile("<<[-~]?(\\s*)(['\"])([A-Za-z_]\\w*)\\2");
 
-    /** The groups of {@link #HEREDOC} that hold the delimiter word, one per alternative. */
-    private static final int[] HEREDOC_WORD_GROUPS = {2, 4, 5};
+    /**
+     * An unquoted heredoc opener ({@code <<EOF}, {@code <<-EOF}): an upper-case word straight after
+     * the operator, so a shift ({@code x << y}) opens nothing.
+     */
+    private static final Pattern BARE_HEREDOC = Pattern.compile("<<[-~]?([A-Z_][A-Z0-9_]*)(?!\\w)");
 
     /** What closes the string or comment the text so far ends inside; {@code null} in code. */
     private String closer;
@@ -346,16 +347,24 @@ public final class ChangeSymbols {
       if (c == '"' || c == '\'') {
         return endOfQuoted(text, i);
       }
-      var heredoc = HEREDOC.matcher(text).region(i, text.length());
-      if (!heredoc.lookingAt()) {
+      if (!text.startsWith("<<", i)) {
         return i + 1;
       }
-      for (var group : HEREDOC_WORD_GROUPS) {
-        if (heredoc.group(group) != null) {
-          openedHeredoc = heredoc.group(group);
-        }
+      var quoted = QUOTED_HEREDOC.matcher(text).region(i, text.length());
+      if (quoted.lookingAt() && (quoted.group(1).isEmpty() || isUpperCase(quoted.group(3)))) {
+        openedHeredoc = quoted.group(3);
+        return quoted.end();
       }
-      return heredoc.end();
+      var bare = BARE_HEREDOC.matcher(text).region(i, text.length());
+      if (bare.lookingAt()) {
+        openedHeredoc = bare.group(1);
+        return bare.end();
+      }
+      return i + 2;
+    }
+
+    private static boolean isUpperCase(String word) {
+      return word.equals(word.toUpperCase(Locale.ROOT));
     }
 
     /** The index past the single-line string opening at {@code start}, or the line's end. */
