@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
@@ -522,19 +523,6 @@ class PromptLabelScrubberTest {
           but nothing in the provided material reads that variable. | but nothing in the reviewed code reads that variable.
           The provided material shows no producer. | The reviewed code shows no producer.
           nothing in provided materials builds it | nothing in reviewed code builds it
-          # #986: the placements that left "(as," or "Note:," behind.
-          the quote above (as provided with this review, the parser must reject it) says so | the quote above (the parser must reject it) says so
-          the quote above (provided with this review, the parser must reject it) says so | the quote above (the parser must reject it) says so
-          the quote above (as provided with this review the parser must reject it) says so | the quote above (the parser must reject it) says so
-          the quote above (as provided with this reviewer in mind) says so | the quote above (as provided with this reviewer in mind) says so
-          Note: as provided with this review, the parser must reject it. | Note: the parser must reject it.
-          Note: As provided with this review, the parser must reject it. | Note: The parser must reject it.
-          X — as provided with this review, Y | X — Y
-          X – as provided with this review, Y | X – Y
-          X - as provided with this review, Y | X - Y
-          X — provided with this review, Y | X — Y
-          as provided with this review, the parser must reject it. | the parser must reject it.
-          as provided with this review the parser must reject it. | the parser must reject it.
           """)
   void learningIdsAndContextBlockNamesAreRewritten(String leaked, String clean) {
     assertEquals(clean, PromptLabelScrubber.scrub(leaked));
@@ -726,6 +714,34 @@ class PromptLabelScrubberTest {
     assertEquals(
         "README.md is renamed.",
         PromptLabelScrubber.scrub("As provided with this review, README.md is renamed."));
+  }
+
+  // #986: the placements that left "(as," or "Note:," behind.
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          the quote above (as provided with this review, the parser must reject it) says so | the quote above (the parser must reject it) says so
+          the quote above (provided with this review, the parser must reject it) says so | the quote above (the parser must reject it) says so
+          the quote above (as provided with this review the parser must reject it) says so | the quote above (the parser must reject it) says so
+          the quote above (as provided with this reviewer in mind) says so | the quote above (as provided with this reviewer in mind) says so
+          Note: as provided with this review, the parser must reject it. | Note: the parser must reject it.
+          Note: As provided with this review, the parser must reject it. | Note: The parser must reject it.
+          X — as provided with this review, Y | X — Y
+          X – as provided with this review, Y | X – Y
+          X - as provided with this review, Y | X - Y
+          X — provided with this review, Y | X — Y
+          as provided with this review, the parser must reject it. | the parser must reject it.
+          as provided with this review the parser must reject it. | the parser must reject it.
+          """)
+  void providedWithThisReviewAfterAColonDashParenthesisOrAtTheStartGoesCleanly(
+      String leaked, String clean) {
+    var scrubbed = PromptLabelScrubber.scrub(leaked);
+    assertEquals(clean, scrubbed);
+    // No fragment of the note survives: neither its "as" nor a comma left where it stood.
+    assertFalse(scrubbed.matches("(?s).*(?:\\bas,|[:—–(-],|^,).*"), scrubbed);
+    assertEquals(clean, PromptLabelScrubber.scrub(clean));
   }
 
   @Test
@@ -949,5 +965,183 @@ class PromptLabelScrubberTest {
           List.of(PromptLabelScrubber.NUMBER_SEPARATOR.split(s, -1)),
           s);
     }
+  }
+
+  // #964 item 5, angular #179 inline 4151111263.
+  static final String WAIT_LEAK =
+      "the sink is `return this.sanitizer.bypassSecurityTrustHtml(renderShiftNotes(shift.signups));`"
+          + " feeding `[innerHTML]=\"notesFor(shift)\"` (line 24 — wait, the binding is"
+          + " `<div class=\"notes\" [innerHTML]=\"notesFor(shift)\"></div>`). Upstream, the note is"
+          + " not escaped.";
+
+  static final String WAIT_CLEAN =
+      "the sink is `return this.sanitizer.bypassSecurityTrustHtml(renderShiftNotes(shift.signups));`"
+          + " feeding `[innerHTML]=\"notesFor(shift)\"` (the binding is"
+          + " `<div class=\"notes\" [innerHTML]=\"notesFor(shift)\"></div>`). Upstream, the note is"
+          + " not escaped.";
+
+  // #964 round 15 (b), java #197 review 5375359719.
+  static final String RESTART_LEAK =
+      "line 28 `.header(\"Authorization\", \"Bearer \" + apiToken)`. BedReporter... rather, grep"
+          + " across the added files confirms BED_API_TOKEN appears only in the Dockerfile and the"
+          + " docs example; no `System.getenv(\"BED_API_TOKEN\")` call exists anywhere.";
+
+  static final String RESTART_CLEAN =
+      "line 28 `.header(\"Authorization\", \"Bearer \" + apiToken)`. Grep"
+          + " across the added files confirms BED_API_TOKEN appears only in the Dockerfile and the"
+          + " docs example; no `System.getenv(\"BED_API_TOKEN\")` call exists anywhere.";
+
+  @Test
+  void selfCorrectionsKeepTheCorrectionAndLoseWhatItCorrected() {
+    assertEquals(WAIT_CLEAN, PromptLabelScrubber.scrub(WAIT_LEAK));
+    assertEquals(RESTART_CLEAN, PromptLabelScrubber.scrub(RESTART_LEAK));
+    assertEquals(WAIT_CLEAN, PromptLabelScrubber.scrub(WAIT_CLEAN));
+    assertEquals(RESTART_CLEAN, PromptLabelScrubber.scrub(RESTART_CLEAN));
+  }
+
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          The binding is on line 24 — wait, it is on line 25. | The binding is on line 24 — it is on line 25.
+          The binding is on line 24 - Wait, it is on line 25. | The binding is on line 24 - it is on line 25.
+          (line 24 – wait, line 25) holds the binding. | (line 25) holds the binding.
+          BedReporter… rather, grep confirms it. | Grep confirms it.
+          It fails. Main... actually, the handler reads it. | It fails. The handler reads it.
+          Done.\\nBedReporter... wait, grep confirms it. | Done.\\nGrep confirms it.
+          main.tsx mounts the app and hosts the two confirmed findings | main.tsx mounts the app and hosts the two findings
+          Confirmed findings: two. | Findings: two.
+          a confirmed finding on line 4 | a finding on line 4
+          Scheduled executor that uploads due episodes; no findings in this batch | Scheduled executor that uploads due episodes
+          Scheduled executor that uploads due episodes (no findings in this batch) | Scheduled executor that uploads due episodes
+          Scheduled executor that uploads due episodes — no new findings for this batch. | Scheduled executor that uploads due episodes.
+          Uploads due episodes. No findings in this batch. | Uploads due episodes.
+          No findings in this batch. Uploads due episodes. | Uploads due episodes.
+          (no findings in this batch) Uploads due episodes. | Uploads due episodes.
+          Line one.\\nNo findings in this batch\\nLine three. | Line one.\\n\\nLine three.
+          Two findings were raised in this batch on the scheduler. | Two findings were raised on the scheduler.
+          the findings from this batch | the findings
+          There are no findings in this batch yet. | There are no findings yet.
+          There are no issues in this batch yet. | There are no issues yet.
+          BedReporter... Rather, grep confirms it. | Grep confirms it.
+          It fails. Main… Actually, the handler reads it. | It fails. The handler reads it.
+          It fails. `foo.bar()`... rather, grep confirms it. | It fails. Grep confirms it.
+          - `foo.bar()`… Wait, grep confirms it. | - Grep confirms it.
+          Uploads due episodes. No findings in this batch! Next. | Uploads due episodes. Next.
+          Uploads due episodes. No findings in this batch? Next. | Uploads due episodes. Next.
+          Uploads due episodes. No findings in this batch: none. | Uploads due episodes. none.
+          X (no findings in this batch), then uploads. | X, then uploads.
+          X. (no findings in this batch). Uploads due episodes. | X. Uploads due episodes.
+          X. (no findings in this batch) Uploads due episodes. | X. Uploads due episodes.
+          Uploads due episodes - no findings in this batch. | Uploads due episodes.
+          - no findings in this batch | - no findings
+          Notes:\\n  - no findings in this batch | Notes:\\n  - no findings
+          -no findings in this batch | -no findings
+          Uploads-no findings in this batch | Uploads-no findings
+          1. BedReporter... rather, grep confirms it. | 1. Grep confirms it.
+          Notes:\\n  - BedReporter... rather, grep confirms it. | Notes:\\n  - Grep confirms it.
+          > BedReporter... rather, grep confirms it. | > Grep confirms it.
+          It fails. notesFor(shift.signups)... rather, grep confirms it. | It fails. Grep confirms it.
+          (no findings in this batch). Uploads due episodes. | Uploads due episodes.
+          (no findings in this batch), then uploads. | then uploads.
+          Done (no findings in this batch | Done (no findings
+          Done (no findings in this batch so far) | Done (no findings so far)
+          Uploads. No findings in this batch | Uploads.
+          Uploads.\\nNo findings in this batch | Uploads.\\n
+          No findings in this batch were raised on the scheduler. | No findings were raised on the scheduler.
+          (no findings in this batch) no findings in this batch here | no findings here
+          """)
+  void scratchTextAndOtherStagesVocabularyAreRemoved(String leaked, String clean) {
+    var out = clean.replace("\\n", "\n");
+    var scrubbed = PromptLabelScrubber.scrub(leaked.replace("\\n", "\n"));
+    assertEquals(out, scrubbed);
+    // None of the working-note markers survives in the scrubbed text.
+    assertFalse(
+        scrubbed.matches("(?is).*(?:\\bwait,|\\brather,|\\bactually,|confirmed finding|batch).*"),
+        scrubbed);
+    assertEquals(out, PromptLabelScrubber.scrub(out));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The job processes every record in this batch before committing.",
+        "BatchImporter validates imported batches and rejects this batch of imports.",
+        "Two findings in this batch of imports look actionable.",
+        "It reports no findings in this batch of imports.",
+        "The confirmed bug is on line 4, and the unconfirmed findings are listed below.",
+        "Wait for the latch before reading the queue.",
+        "The loop must wait, then retry once.",
+        "The loop retries — wait, then retry once.",
+        "Sends with backoff (5s — wait, then retry once more)",
+        "The worker blocks — waiting, not spinning — until notified.",
+        "The values run 1...10, rather than 0...9.",
+        "It reads the header... and then the body.",
+        "BedReporter... however, grep confirms it.",
+        "It calls `foo.bar()`... rather, grep confirms it.",
+        "`foo.bar()`... however, grep confirms it.",
+        "It fails fast... rather, it surfaces the error to the caller.",
+        "The retry helps... actually, it makes things worse.",
+        "(line 24 — waits for the lock)"
+      })
+  void scratchTextNearMissesAreLeftAlone(String text) {
+    assertEquals(text, PromptLabelScrubber.scrub(text));
+  }
+
+  @Test
+  void aRestartAfterACodeSpanInsideAFencedBlockStays() {
+    var fenced = "```\n`foo.bar()`... rather, grep confirms it.\n```";
+    assertEquals(fenced, PromptLabelScrubber.scrub(fenced));
+    // After the fence closes, the same line is prose again.
+    assertEquals(
+        fenced + "\nGrep confirms it.",
+        PromptLabelScrubber.scrub(fenced + "\n`foo.bar()`... rather, grep confirms it."));
+  }
+
+  @Test
+  void scratchTextIsScrubbedOnEveryPostedSurface() {
+    var response =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "critical",
+                    "low",
+                    "angular/src/app/shifts.component.ts",
+                    24,
+                    "XSS",
+                    WAIT_LEAK,
+                    null,
+                    null)),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", RESTART_LEAK)),
+            new ReviewResponse.Summary(
+                1,
+                1,
+                0,
+                0,
+                0,
+                RESTART_LEAK,
+                "",
+                List.of(),
+                List.of(),
+                List.of(
+                    new ReviewResponse.FileSummary(
+                        "react/src/main.tsx",
+                        "Mounts the app and hosts the two confirmed findings"),
+                    new ReviewResponse.FileSummary(
+                        "kotlin/src/main/kotlin/pod/Scheduler.kt",
+                        "Uploads due episodes; no findings in this batch")),
+                ""));
+
+    var scrubbed = PromptLabelScrubber.scrub(response);
+
+    assertEquals(WAIT_CLEAN, scrubbed.findings().getFirst().description());
+    assertEquals(RESTART_CLEAN, scrubbed.previousFindingsStatus().getFirst().note());
+    assertEquals(RESTART_CLEAN, scrubbed.summary().overallAssessment());
+    assertEquals(
+        List.of("Mounts the app and hosts the two findings", "Uploads due episodes"),
+        scrubbed.summary().fileSummaries().stream()
+            .map(ReviewResponse.FileSummary::summary)
+            .toList());
   }
 }
