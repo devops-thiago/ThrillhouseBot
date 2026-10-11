@@ -4973,6 +4973,30 @@ class FollowUpAnalyzerTest {
     assertTrue(entryFor(entries, "Missing null check").holdsOpen());
   }
 
+  /**
+   * A finding the round itself reported superseded is counted by that status, so the backstop does
+   * not add a second; a superseded status naming no finding of the round changes nothing.
+   */
+  @Test
+  void aFindingTheRoundReportedSupersededIsNotSupersededTwice() {
+    var entries =
+        analyzer.heldPreviousFindings(
+            analyzer.parsePreviousResponses(List.of(PREVIOUS_JSON)),
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "superseded", "gone"),
+                new ReviewResponse.PreviousFindingStatus(0, "superseded", "no id"),
+                new ReviewResponse.PreviousFindingStatus(9, "superseded", "out of range")),
+            List.of(),
+            List.of(),
+            new DiffLineResolver(Map.of("src/B.java", patch(5))),
+            BOT_ID,
+            Map.of(),
+            () -> "+unrelated();");
+
+    assertEquals(1, entries.size());
+    assertEquals("Missing null check", entries.get(0).finding().title());
+  }
+
   @Test
   void anEarlierRoundFindingClearedFromTheConversationIsResolved() {
     var entries =
@@ -5171,6 +5195,8 @@ class FollowUpAnalyzerTest {
     assertTrue(analyzer.survivingEarlierRoundDeclines(statuses, threads, BOT_ID, null).isEmpty());
     assertTrue(
         analyzer.survivingEarlierRoundDeclines(statuses, threads, BOT_ID, () -> " ").isEmpty());
+    assertTrue(
+        analyzer.survivingEarlierRoundDeclines(statuses, threads, BOT_ID, () -> null).isEmpty());
     var secondReply = earlierRaceThread(RACE_WRONG_DECLINE, "Still declining: it is serialized.");
     assertTrue(
         analyzer

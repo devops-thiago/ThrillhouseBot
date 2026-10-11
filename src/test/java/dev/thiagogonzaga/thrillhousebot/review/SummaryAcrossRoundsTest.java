@@ -1404,8 +1404,9 @@ class SummaryAcrossRoundsTest {
       jsons.add(mapper.valueToTree(round).toString());
     }
     var files = new ArrayList<FileDiff>();
-    var patches = this.patches;
-    patches.forEach((path, patch) -> files.add(new FileDiff(path, "modified", 4, 0, 4, patch)));
+    var roundPatches = patches;
+    roundPatches.forEach(
+        (path, patch) -> files.add(new FileDiff(path, "modified", 4, 0, 4, patch)));
     return new ReviewContextLoader.ReviewContext(
         files,
         reviewedDiff,
@@ -1427,7 +1428,7 @@ class SummaryAcrossRoundsTest {
         "",
         "",
         files,
-        () -> new DiffLineResolver(patches),
+        () -> new DiffLineResolver(roundPatches),
         null,
         conversation,
         List.of());
