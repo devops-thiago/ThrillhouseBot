@@ -1582,7 +1582,9 @@ public class FindingPipeline {
     for (ReviewResponse.Finding cited : response.findings()) {
       // #1022: the diff's spelling of the path, persisted with the finding, so the thread GitHub
       // resolves case-sensitively opens and later rounds compare against the same path.
-      var finding = lineResolver.withDiffPath(cited);
+      // #924: then onto the lines its suggestion_old quotes, or without a suggestion block that
+      // cannot be placed there.
+      var finding = SuggestionAnchor.place(lineResolver.withDiffPath(cited), lineResolver);
       changed |= finding != cited;
       if (finding.suggestionOld() == null || finding.suggestionOld().isBlank()) {
         String fallback = lineResolver.getLineText(finding.file(), finding.line());
