@@ -3268,10 +3268,11 @@ public class FollowUpAnalyzer {
    *
    * <p>A prior "Things to double-check" item ({@link #isListedOnly}) has no thread but is still
    * open on the summary, so restating it there again counts one defect twice (#951). A new finding
-   * that would itself be listed there and {@link #restatesListed restates} such a prior is dropped
-   * the same way. One that would post inline is kept: a re-raise is the only way such a finding can
-   * get a thread, and the prior copy it restates at no lower severity leaves the open set instead
-   * ({@link #replacedPriors}).
+   * that would itself be listed there and {@link #restatesListed restates} such a prior, or an open
+   * threaded one, is dropped the same way: it is the pairing the summary's "Same issue as" note
+   * makes, so the note and the counts cannot disagree (#972). One that would post inline is kept: a
+   * re-raise is the only way such a finding can get a thread, and the prior copy it restates at no
+   * lower severity leaves the open set instead ({@link #replacedPriors}).
    *
    * @param priorAiResponses every completed prior round's parsed response, newest first
    */
@@ -3308,7 +3309,8 @@ public class FollowUpAnalyzer {
           Stream.concat(
                   threaded.stream().filter(prior -> duplicatesOpenThread(finding, prior)),
                   isListedOnly(finding)
-                      ? listed.stream().filter(prior -> restatesListed(finding, prior))
+                      ? Stream.concat(listed.stream(), threaded.stream())
+                          .filter(prior -> restatesListed(finding, prior))
                       : Stream.empty())
               .findFirst();
       if (duplicateOf.isEmpty()) {
