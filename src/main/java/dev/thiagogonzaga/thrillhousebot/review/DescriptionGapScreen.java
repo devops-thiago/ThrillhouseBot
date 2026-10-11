@@ -103,12 +103,12 @@ final class DescriptionGapScreen {
           Pattern.compile("(?i)\\b(?:fails?\\s++to|leaves?\\s++out)\\b"));
 
   /**
-   * An attribution verb introducing the quote directly, with "that" or a colon allowed between:
-   * "the description says: '…'", "the PR claims that '…'".
+   * An attribution verb ending the text before a quote, with "that", a colon or a comma allowed
+   * after it: "the description says: '…'", "the PR claims that '…'", "the description states, '…'".
    */
   private static final Pattern VERB_BEFORE_QUOTE =
       Pattern.compile(
-          "(?i)\\b(?:state|claim|say|promise|mention|read)s?(?:\\s++that)?\\s*+:?\\s*+$");
+          "(?i)\\b(?:state|claim|say|promise|mention|read)s?(?:\\s++that)?\\s*+[:,]?\\s*+$");
 
   /** A linked issue, or what it asks for. */
   private static final Pattern LINKED_ISSUE =
@@ -134,10 +134,12 @@ final class DescriptionGapScreen {
 
   /**
    * What ends a clause before a quote: punctuation that separates clauses, a sentence end, or a
-   * contrasting conjunction. A colon does not: "the description states: '…'" attributes the quote.
+   * contrasting conjunction. A colon does not: "the description states: '…'" attributes the quote;
+   * nor does a comma straight after the attribution verb ({@link #clauseOf}).
    */
   private static final Pattern CLAUSE_BREAK =
-      Pattern.compile("(?i)[,;!?\u2014\u2013]|\\.\\s|\\b(?:but|while|whereas|however)\\b");
+      Pattern.compile(
+          "(?i)[,;!?\u2014\u2013]|\\.\\s|\\b(?:but|while|whereas|however|although|though|yet)\\b");
 
   /** An editorial bracket holding one or two letters, as in "[t]he". */
   private static final Pattern EDITORIAL_LETTERS = Pattern.compile("\\[(\\p{L}{1,2})]");
@@ -200,11 +202,17 @@ final class DescriptionGapScreen {
   /**
    * The part of {@code lead} after its last clause break, so a cue in an earlier clause ("the
    * description says X, while the code reads '…'") does not attribute the quote to the description.
+   * A break that only punctuates the attribution ("the description states, '…'") is not one: the
+   * verb ends the text before it, and nothing but blanks follows it.
    */
   private static String clauseOf(String lead) {
     var breaks = CLAUSE_BREAK.matcher(lead);
     var start = 0;
     while (breaks.find()) {
+      if (lead.substring(breaks.end()).isBlank()
+          && VERB_BEFORE_QUOTE.matcher(lead.substring(0, breaks.start())).find()) {
+        break;
+      }
       start = breaks.end();
     }
     return lead.substring(start);
@@ -247,7 +255,8 @@ final class DescriptionGapScreen {
 
   /**
    * Whether every part of {@code quote} between omissions appears in {@code normalizedSource}, in
-   * order, on word boundaries.
+   * order, on word boundaries. Each part starts after the previous one does, so a tail that
+   * re-quotes the head's last words ("the cache is bounded … bounded by TTL") still appears.
    */
   static boolean appearsIn(String quote, String normalizedSource) {
     var haystack = " " + normalizedSource + " ";
@@ -261,7 +270,7 @@ final class DescriptionGapScreen {
       if (at < 0) {
         return false;
       }
-      from = at + needle.length() + 1;
+      from = at + 1;
     }
     return true;
   }

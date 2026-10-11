@@ -140,13 +140,17 @@ public class PrSummaryGenerator {
   /**
    * What marks a finding as a mismatch between the change and what the PR description or its linked
    * issue says (#964): "Description claims…", "the PR description states…", "contrary to the PR's
-   * stated behavior", "the linked issue asks…". One pattern per shape, and the verb vocabulary in
-   * named parts, so each stays well under the regex complexity bound. A finding's title and
-   * description are each matched on their own, so a shape cannot be pieced together across them.
+   * stated behavior", "the PR title says…", "the author claims…", "the linked issue asks…". One
+   * pattern per shape, and the verb vocabulary in named parts, so each stays well under the regex
+   * complexity bound. A finding's title and description are each matched on their own, so a shape
+   * cannot be pieced together across them.
    */
   private static final List<Pattern> DESCRIPTION_CLAIMS =
       List.of(
-          Pattern.compile("(?i)\\b(?:pr|pull request)(?:['’]s)?\\s++(?:description|body)\\b"),
+          Pattern.compile("(?i)\\b(?:pr|pull request)(?:['’]s)?\\s++(?:description|body|title)\\b"),
+          Pattern.compile(
+              "(?i)\\b(?:pr|pull request|author)(?:['’]s)?\\s++"
+                  + "(?:(?:state|claim|promise)s?|says|said)\\b"),
           Pattern.compile(
               "(?i)\\bdescription\\s++(?:\\w+\\s+)?(?:"
                   + CLAIMING_VERBS

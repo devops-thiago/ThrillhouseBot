@@ -2106,7 +2106,10 @@ class PrSummaryGeneratorTest {
         "The pull request's description mentions a five-minute cache.",
         "The cache here is inconsistent with the stated five-minute limit.",
         "Unlike the PR, the code retries once.",
-        "This contradicts the stated intent of the change."
+        "This contradicts the stated intent of the change.",
+        "The PR title says the cache is bounded; it is not.",
+        "The author claims five-minute caching; no cache exists.",
+        "The pull request states that retries back off; they do not."
       })
   void aDescriptionFindingWithAnyClaimVerbIsNamed(String description) {
     var finding = descriptionFinding("src/A.java", 3, "Retry path missing", description);

@@ -69,12 +69,19 @@ class DescriptionGapScreenTest {
     assertEquals(List.of(gap), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
   }
 
-  @Test
-  void aCueInAnEarlierClauseDoesNotAttributeTheQuote() {
-    var gap =
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
         "The description says the README moves unchanged, while the change's rename reads"
-            + " 'docs/RUST-V15.md is the new home'.";
-
+            + " 'docs/RUST-V15.md is the new home'.",
+        "The description says the README moves unchanged even though the change's rename reads"
+            + " 'docs/RUST-V15.md is the new home'.",
+        "The description says the README moves unchanged although the rename reads"
+            + " 'docs/RUST-V15.md is the new home'.",
+        "The description says the README moves unchanged yet the rename reads"
+            + " 'docs/RUST-V15.md is the new home'."
+      })
+  void aCueInAnEarlierClauseDoesNotAttributeTheQuote(String gap) {
     assertEquals(List.of(gap), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
   }
 
@@ -147,11 +154,30 @@ class DescriptionGapScreenTest {
     assertEquals(List.of(), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
   }
 
-  @Test
-  void aColonKeepsTheCueWithItsQuote() {
-    var gap = "The description states: 'the README moves to docs/RUST-V8.md'.";
-
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The description states: 'the README moves to docs/RUST-V8.md'.",
+        "The description states, 'the README moves to docs/RUST-V8.md'.",
+        "The description says that, 'the README moves to docs/RUST-V8.md'."
+      })
+  void aColonOrCommaAfterTheVerbKeepsTheCueWithItsQuote(String gap) {
     assertEquals(List.of(), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
+  }
+
+  @Test
+  void aCommaBeforeAnotherClauseStillBreaksIt() {
+    var gap = "The description states the path, the code reads 'docs/RUST-V15.md is the new home'.";
+
+    assertEquals(List.of(gap), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
+  }
+
+  @Test
+  void anOmissionPartMayReQuoteTheEndOfThePartBeforeIt() {
+    var source = DescriptionGapScreen.normalize("The cache is bounded by TTL.");
+
+    assertTrue(DescriptionGapScreen.appearsIn("The cache is bounded … bounded by TTL", source));
+    assertFalse(DescriptionGapScreen.appearsIn("bounded by TTL … the cache", source));
   }
 
   @Test
