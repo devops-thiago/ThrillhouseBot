@@ -269,6 +269,26 @@ class GitHubIssuesProviderTest {
     }
 
     @Test
+    void fencesAtTheEdgesOfTheBodyOpenAndCloseLikeAnyOther() {
+      // Opened on the body's first line, with or without a container marker before it.
+      for (var opener : List.of("```", "  ```", "> ```", "1. ```")) {
+        var body = opener + "\nCloses #1\n```\nFixes #2";
+        assertEquals(List.of(2), GitHubIssuesProvider.bodyReferences(body, "o", "r"), opener);
+      }
+      // Opened on the last line: it runs to the end, and so does one closed by nothing.
+      assertEquals(List.of(1), GitHubIssuesProvider.bodyReferences("Closes #1\n```", "o", "r"));
+      assertEquals(
+          List.of(2), GitHubIssuesProvider.bodyReferences("Fixes #2\n```\nCloses #1\n", "o", "r"));
+      // Closed on the last line, by an indented closer, or by one with trailing blanks.
+      assertEquals(
+          List.of(2),
+          GitHubIssuesProvider.bodyReferences("Fixes #2\n```\nCloses #1\n```", "o", "r"));
+      assertEquals(
+          List.of(2),
+          GitHubIssuesProvider.bodyReferences("```\nCloses #1\n  > ```\t \nFixes #2", "o", "r"));
+    }
+
+    @Test
     void stripsLongRunsOfMidLineMarkersInOnePass() {
       var body = "x ``` y ~~~ ".repeat(20_000) + "\n```x`\n".repeat(20_000) + "Closes #7";
       assertEquals(List.of(7), GitHubIssuesProvider.bodyReferences(body, "o", "r"));
