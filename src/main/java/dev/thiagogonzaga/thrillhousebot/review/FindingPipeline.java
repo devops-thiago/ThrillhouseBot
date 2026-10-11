@@ -351,7 +351,7 @@ public class FindingPipeline {
     plan.recordSummaryDegradation(SummaryDegradation.SKIPPED_AT_CALL_CAP);
     Log.warnf(
         "Review session %d skips its summary call: REVIEW_MAX_AI_CALLS=1 was spent by the review"
-            + " call; keeping the %d findings with a counts-only summary",
+            + " call; keeping the %d findings without a new summary",
         ledgerSessionId(session), refined.findings().size());
     return persistWithSummary(session, refined, PriorOverviewCarryover.fill(null, ctx), carry);
   }
@@ -663,7 +663,7 @@ public class FindingPipeline {
     Log.warnf(
         "Review session %d reached its token spend ceiling before the summary call (%d tokens"
             + " spent, ceiling %d — REVIEW_MAX_TOKENS_PER_REVIEW); %s and keeping the %d paid"
-            + " findings with a counts-only summary",
+            + " findings without a new summary",
         ledgerSessionId(session),
         tokenLedger.tokensSpent(ledgerSessionId(session)),
         tokenLedger.ceiling(),
@@ -704,7 +704,7 @@ public class FindingPipeline {
     Log.warnf(
         "Summary response for session %d was cut at the model's response-length cap"
             + " (max-output-tokens / REVIEW_CONCISE_MAX_OUTPUT_TOKENS) and no complete summary"
-            + " object could be salvaged; keeping the %d paid findings with a counts-only summary",
+            + " object could be salvaged; keeping the %d paid findings without a new summary",
         ledgerSessionId(session), refined.findings().size());
     return persistWithSummary(session, refined, PriorOverviewCarryover.fill(null, ctx), carry);
   }
@@ -732,7 +732,7 @@ public class FindingPipeline {
     plan.recordSummaryDegradation(SummaryDegradation.SUMMARY_FAILED);
     Log.warnf(
         "Summary call for session %d failed after %d attempt(s); keeping the %d paid findings"
-            + " with a counts-only summary",
+            + " without a new summary",
         ledgerSessionId(session), failure.attempts(), refined.findings().size());
     return persistWithSummary(session, refined, PriorOverviewCarryover.fill(null, ctx), carry);
   }
