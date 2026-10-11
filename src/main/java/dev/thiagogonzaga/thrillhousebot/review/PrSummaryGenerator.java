@@ -959,15 +959,35 @@ public class PrSummaryGenerator {
     return cleaned;
   }
 
+  /** A double-quoted label, removed before the syntax checks. */
+  private static final Pattern QUOTED_LABEL = Pattern.compile("\"[^\"\\n]*+\"");
+
+  /** A link ending its text: {@code -->}, {@code ==>} or {@code -.->}, then only blanks. */
+  private static final Pattern LINK_AT_END = Pattern.compile("(?:--|==|\\.-)>\\s*+$");
+
   /**
-   * A double-quoted label or an edge label between pipes, removed before the syntax checks. A link
-   * that ends right at a pipe ({@code -->|}, {@code ==>|}, {@code -.->|}) opens the next label
-   * rather than closing this one, so two labels left open on one line ({@code A -->|x B -->|y C})
-   * do not pair into one label that spans the arrow between them: their pipes stay and fail the
-   * check. Label text may still hold a link ({@code |calls a --> b|}), {@code --} or {@code ->}.
+   * {@code line} with its double-quoted labels and its edge labels between pipes each replaced by
+   * {@code L}, for the syntax checks. A pipe whose text up to the next pipe ends in a link ({@code
+   * A -->|x B -->|y C}) opens the next label rather than closing this one, so it is left in place
+   * and fails the check: two labels left open do not pair across the arrow between them. Label text
+   * may still hold a link ({@code |calls a --> b|}), {@code --} or {@code ->}.
    */
-  private static final Pattern MERMAID_LABEL =
-      Pattern.compile("\"[^\"\\n]*+\"|\\|(?:[^|\\n>]|>(?!\\s*+\\|)|(?<!--|==|\\.-)>)*+\\|");
+  private static String withoutLabels(String line) {
+    var text = QUOTED_LABEL.matcher(line).replaceAll("L");
+    var bare = new StringBuilder();
+    var from = 0;
+    var open = text.indexOf('|');
+    while (open >= 0) {
+      var close = text.indexOf('|', open + 1);
+      if (close < 0 || LINK_AT_END.matcher(text.substring(open + 1, close)).find()) {
+        break;
+      }
+      bare.append(text, from, open).append('L');
+      from = close + 1;
+      open = text.indexOf('|', from);
+    }
+    return bare.append(text, from, text.length()).toString();
+  }
 
   /**
    * A one-dash arrow: {@code ->} not preceded by another dash or a dot, which covers the sequence
@@ -1004,7 +1024,7 @@ public class PrSummaryGenerator {
       if (line.chars().filter(c -> c == '"').count() % 2 != 0) {
         return false;
       }
-      var bare = MERMAID_LABEL.matcher(line).replaceAll("L");
+      var bare = withoutLabels(line);
       // Statements joined by semicolons are judged one by one ("A --> B; class A,B hot").
       for (var statement : bare.split(";")) {
         if (!statementParses(statement.strip())) {
