@@ -3112,6 +3112,94 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void shouldPostTheDeltaCommentWhenASupersededFindingRefreshedTheSummary() {
+      when(followUpSummaryConfig.enabled()).thenReturn(true);
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = mock(ReviewSession.class);
+        session.id = 1L;
+        when(session.getRepository()).thenReturn("owner/repo");
+        when(session.getPrNumber()).thenReturn(42);
+        when(session.getPrTitle()).thenReturn("Test PR");
+        when(session.getCommitSha()).thenReturn("abcdefgh");
+        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+        when(checkRunClient.createCheckRun(
+                anyString(), anyString(), anyString(), anyString(), any()))
+            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+        doNothing()
+            .when(checkRunClient)
+            .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+        when(prClient.getPullRequestFiles(
+                anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
+        when(prClient.compareCommits(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+            .thenReturn(
+                List.of(
+                    new GitHubReviewClient.ReviewResponse(
+                        1L,
+                        "",
+                        "APPROVED",
+                        "abc12345",
+                        new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
+        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+        when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
+            .thenReturn(List.of("{\"round\":1}"));
+        when(followUpAnalyzer.parsePreviousResponses(List.of("{\"round\":1}")))
+            .thenReturn(List.of(new ReviewResponse(List.of(), List.of(), null)));
+        when(followUpAnalyzer.toStatuses(any()))
+            .thenReturn(
+                List.of(
+                    new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed"),
+                    new ReviewResult.PreviousFindingStatus(2, "superseded", "code gone")));
+        when(suggestionFormatter.formatReviewComment(any())).thenReturn("**Medium** — fix this");
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(
+                new ReviewResponse(
+                    List.of(
+                        new ReviewResponse.Finding(
+                            "medium", "src/Main.java", 10, "Style", "Improve naming", null, null)),
+                    List.of(),
+                    null));
+
+        orchestrator.review(
+            new ReviewOrchestrator.ReviewRequest(
+                "owner",
+                "repo",
+                42,
+                "abcdefgh",
+                "Test PR",
+                "",
+                "base1234567",
+                "main",
+                123L,
+                false));
+
+        // #927: the superseded status makes the summary edit stand in for the round, which used to
+        // skip the delta as well; an edit notifies nobody, so the delta still lands.
+        verify(commentClient)
+            .createComment(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(
+                    req ->
+                        req.body().startsWith(FollowUpDeltaSummary.DELTA_HEADING)
+                            && req.body().contains("**New findings this round:** 1")));
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
+    @Test
     void shouldStillPostTheReviewWhenTheDeltaCommentFailsToPost() {
       // The delta comment is enrichment, not the review: a failed post must be swallowed so the
       // review still reaches the PR and the session completes rather than failing.

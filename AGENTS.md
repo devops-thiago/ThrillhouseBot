@@ -142,7 +142,11 @@ same diff.
 Earlier rounds are read from the stored responses (`ReviewSession.aiResponseJson`), never from the
 text of the bot's reviews. Finding ids are positions in the effective round, the newest earlier
 round that raised findings (`FollowUpAnalyzer.effectivePreviousRoundIndex`, #455); the same number
-is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
+is the `finding=N` marker on the inline comment. Positions restart at 1 every round, so since
+#927 the marker also carries `key=` (8 hex digits of a SHA-256 over the finding's file, line and
+title, `SuggestionFormatter.findingKey`), which makes it unique across rounds; a keyed thread
+binds to a finding only by that key, and a pre-#927 marker without one binds by the finding's own
+content as before (`FollowUpAnalyzer.markerRootComment`). `SummaryAcrossRoundsTest` and
 `OpenThreadDuplicateGuardTest` drive most of the rules below through several rounds.
 
 - **A finding still open on its own thread is never posted again, from any round** (#939).

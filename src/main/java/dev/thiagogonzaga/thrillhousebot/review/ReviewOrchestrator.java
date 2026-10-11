@@ -383,9 +383,13 @@ public class ReviewOrchestrator {
       }
 
       boolean summaryPosted = publishSummaryBestEffort(auth, req, result);
-      // Opt-in follow-up delta comment. Runs only when no summary was posted this round, and its
-      // outcome is intentionally discarded — it must not feed summaryPosted below.
-      publishFollowUpDeltaBestEffort(auth, req, result, summaryPosted, previousFindings);
+      // Opt-in follow-up delta comment. Skipped only when this round created the summary comment
+      // (/summary on a pull request that had none): an in-place edit of the summary, which a
+      // superseded finding also reports as standing in for the round, notifies nobody, so it must
+      // not cost the round its delta (#927). The outcome is intentionally discarded — it must not
+      // feed summaryPosted below.
+      publishFollowUpDeltaBestEffort(
+          auth, req, result, summaryPosted && req.forceSummary(), previousFindings);
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       // summaryPosted gates the redundant-review skips: a failed summary post leaves review
@@ -574,11 +578,11 @@ public class ReviewOrchestrator {
       String auth,
       ReviewRequest req,
       ReviewResult result,
-      boolean summaryPosted,
+      boolean summaryCreated,
       List<ReviewResponse.Finding> previousFindings) {
     try {
       reviewPublisher.publishFollowUpDelta(
-          auth, req.owner(), req.repo(), req.prNumber(), result, summaryPosted, previousFindings);
+          auth, req.owner(), req.repo(), req.prNumber(), result, summaryCreated, previousFindings);
     } catch (RuntimeException e) {
       Log.warnf(
           e,

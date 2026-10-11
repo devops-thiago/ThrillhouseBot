@@ -16,7 +16,13 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.Locale;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.regex.Pattern;
 
@@ -25,7 +31,7 @@ import java.util.regex.Pattern;
 public class SuggestionFormatter {
 
   private static final Pattern FINDING_MARKER_PATTERN =
-      Pattern.compile("<!--\\s*thrillhousebot:finding=(\\d+)\\s*-->");
+      Pattern.compile("<!--\\s*thrillhousebot:finding=(\\d+)(?:\\s+key=([0-9a-f]{8}))?\\s*-->");
 
   /** What a code-fence info string may look like — a language tag, nothing else. */
   private static final Pattern LANGUAGE_TAG_PATTERN = Pattern.compile("[a-z0-9+#._-]{1,20}");
@@ -50,6 +56,53 @@ public class SuggestionFormatter {
    */
   public static String findingMarker(int findingId) {
     return "<!-- thrillhousebot:finding=" + findingId + " -->";
+  }
+
+  /**
+   * The marker a comment is posted with since #927: the position, plus a key over the finding's own
+   * file, line and title ({@link #findingKey}). Positions restart at 1 every round, so the position
+   * alone named a finding of every round at once; with the key the marker is unique across a pull
+   * request's rounds, and a thread binds to the finding that posted it. Comments posted before
+   * carry {@link #findingMarker(int)} and still parse.
+   */
+  public static String findingMarker(int findingId, String file, int line, String title) {
+    return "<!-- thrillhousebot:finding="
+        + findingId
+        + " key="
+        + findingKey(file, line, title)
+        + " -->";
+  }
+
+  /**
+   * Eight hex digits of a SHA-256 over a finding's file, line and title: the identity the marker
+   * carries, computed the same way when the comment is posted and when a later round looks for its
+   * thread.
+   */
+  public static String findingKey(String file, int line, String title) {
+    return findingKey("SHA-256", file, line, title);
+  }
+
+  /** As {@link #findingKey(String, int, String)}; the algorithm is a parameter for tests. */
+  static String findingKey(String algorithm, String file, int line, String title) {
+    try {
+      var digest =
+          MessageDigest.getInstance(algorithm)
+              .digest(
+                  (Objects.toString(file, "") + '\0' + line + '\0' + Objects.toString(title, ""))
+                      .getBytes(StandardCharsets.UTF_8));
+      return HexFormat.of().formatHex(digest, 0, 4);
+    } catch (GeneralSecurityException e) {
+      throw new IllegalStateException(algorithm + " is not available", e);
+    }
+  }
+
+  /** The key a comment's marker carries, or empty for a marker posted before #927 or none. */
+  public static Optional<String> parseFindingKey(String body) {
+    if (body == null || body.isBlank()) {
+      return Optional.empty();
+    }
+    var matcher = FINDING_MARKER_PATTERN.matcher(body);
+    return matcher.find() ? Optional.ofNullable(matcher.group(2)) : Optional.empty();
   }
 
   /**
@@ -249,7 +302,9 @@ public class SuggestionFormatter {
     }
 
     if (findingId > 0) {
-      sb.append("\n").append(findingMarker(findingId)).append("\n");
+      sb.append("\n")
+          .append(findingMarker(findingId, finding.file(), finding.line(), finding.title()))
+          .append("\n");
     }
 
     return sb.toString();

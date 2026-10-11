@@ -4929,6 +4929,62 @@ class FollowUpAnalyzerTest {
             .isEmpty());
   }
 
+  // #927: markers restart at 1 every round; the key makes each round's marker its finding's own.
+
+  private static GitHubReviewClient.PullRequestComment keyedRoot(
+      long id, ReviewResponse.Finding owner, ReviewResponse.Finding keyedAs, int position) {
+    return comment(
+        id,
+        null,
+        owner.file(),
+        "**🟠 HIGH — "
+            + owner.title()
+            + "**\n\nWhy.\n\n"
+            + SuggestionFormatter.findingMarker(
+                position, keyedAs.file(), keyedAs.line(), keyedAs.title()),
+        BOT);
+  }
+
+  @Test
+  void eachRoundsKeyedMarkerBindsItsOwnFindingAtTheSamePosition() {
+    var roundOne =
+        new ReviewResponse.Finding("high", "src/A.java", 10, "Shared title", "d", null, null);
+    var roundTwo =
+        new ReviewResponse.Finding("high", "src/A.java", 20, "Shared title", "d", null, null);
+    var threads =
+        List.of(keyedRoot(100L, roundOne, roundOne, 1), keyedRoot(200L, roundTwo, roundTwo, 1));
+
+    assertEquals(Map.of(1, 100L), analyzer.matchFindingThreads(List.of(roundOne), threads, BOT_ID));
+    assertEquals(Map.of(1, 200L), analyzer.matchFindingThreads(List.of(roundTwo), threads, BOT_ID));
+  }
+
+  @Test
+  void aKeyedMarkerOfAnotherFindingNeverBindsEvenWithTheSameTitle() {
+    var finding = new ReviewResponse.Finding("high", "src/A.java", 10, "Race", "d", null, null);
+    var other = new ReviewResponse.Finding("high", "src/A.java", 30, "Race", "d", null, null);
+
+    assertEquals(
+        Map.of(),
+        analyzer.matchFindingThreads(
+            List.of(finding), List.of(keyedRoot(100L, finding, other, 1)), BOT_ID),
+        "the comment says Race in its header, but its key names the finding on line 30");
+  }
+
+  @Test
+  void aMarkerPostedBeforeTheKeyStillBindsByItsContent() {
+    var finding = new ReviewResponse.Finding("high", "src/A.java", 10, "Race", "d", null, null);
+    var legacy =
+        comment(
+            100L,
+            null,
+            "src/A.java",
+            "**🟠 HIGH — Race**\n\n" + SuggestionFormatter.findingMarker(1),
+            BOT);
+
+    assertEquals(
+        Map.of(1, 100L), analyzer.matchFindingThreads(List.of(finding), List.of(legacy), BOT_ID));
+  }
+
   // #951: double-check items a later finding replaced.
 
   private static final ReviewResponse.Finding LISTED =

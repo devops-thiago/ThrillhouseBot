@@ -547,15 +547,29 @@ public class FollowUpAnalyzer {
       boolean requireOwnContent,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity) {
-    String marker = SuggestionFormatter.findingMarker(findingId);
+    var key = SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title());
     var markerMatches =
         botRootComments(inlineComments, botIdentity)
-            .filter(c -> c.body() != null && c.body().contains(marker))
+            .filter(c -> c.body() != null)
+            .filter(c -> SuggestionFormatter.parseFindingMarker(c.body()).orElse(-1) == findingId)
             .filter(c -> finding.file() == null || FilePaths.same(finding.file(), c.path()))
-            .filter(c -> !requireOwnContent || bodyCarriesOwnContent(finding, c.body()))
+            .filter(c -> !requireOwnContent || isOwnComment(finding, key, c.body()))
             .map(GitHubReviewClient.PullRequestComment::id)
             .toList();
     return markerMatches.isEmpty() ? null : markerMatches.get(markerMatches.size() - 1);
+  }
+
+  /**
+   * Whether a comment carrying the finding's position is its own. A marker posted since #927
+   * carries a key over the finding's file, line and title, which is unique across rounds: it
+   * decides alone, and a different key is a different finding that reused the position. A marker
+   * posted before carries none, and the finding's own content in the body decides ({@link
+   * #bodyCarriesOwnContent}).
+   */
+  private static boolean isOwnComment(ReviewResponse.Finding finding, String key, String body) {
+    return SuggestionFormatter.parseFindingKey(body)
+        .map(key::equals)
+        .orElseGet(() -> bodyCarriesOwnContent(finding, body));
   }
 
   /**
