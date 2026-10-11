@@ -232,11 +232,12 @@ class OverviewScreenTest {
   void aStandardsCodeIsNotTakenForAnInventedTicket() {
     var purpose =
         "Returns HTTP-404 for unknown routes. Adds FIPS-140 validation. Speaks HTTP-2 and"
-            + " OAUTH-2. Adds SAML-2.0 and SAML-2 logins over SOAP-1.2. Fixes ABCD-9.";
+            + " OAUTH-2. Adds SAML-2.0 and SAML-2 logins over SOAP-1.2. Hashes with SHAKE-256 and"
+            + " BASE-32. Fixes ABCD-9.";
 
     assertEquals(
         "Returns HTTP-404 for unknown routes. Adds FIPS-140 validation. Speaks HTTP-2 and OAUTH-2."
-            + " Adds SAML-2.0 and SAML-2 logins over SOAP-1.2.",
+            + " Adds SAML-2.0 and SAML-2 logins over SOAP-1.2. Hashes with SHAKE-256 and BASE-32.",
         OverviewScreen.withoutInventedTickets(purpose, "Title: routes\nReturns 404"));
   }
 
@@ -315,6 +316,13 @@ class OverviewScreenTest {
     assertTrue(OverviewScreen.talksAboutFindings("This file has two confirmed findings"));
     // An adverb before the count, and a spelled count above five, are bookkeeping too.
     assertTrue(OverviewScreen.talksAboutFindings("hosts only two findings"));
+    assertTrue(OverviewScreen.talksAboutFindings("This PR hosts the two findings"));
+    assertTrue(OverviewScreen.talksAboutFindings("The review has no findings here"));
+    // The cut never leaves a placeholder behind as the row's summary.
+    assertEquals("", OverviewScreen.screenedText("TBD, hosts the two findings", "+x", ""));
+    assertEquals(
+        "renders it",
+        OverviewScreen.screenedText("renders it; TBD, hosts the two findings", "+x", ""));
     assertTrue(OverviewScreen.talksAboutFindings("hosts six findings"));
     assertTrue(OverviewScreen.talksAboutFindings("holds exactly twelve findings"));
     // A comma part of findings talk inside a role clause is cut and the role kept.

@@ -143,7 +143,16 @@ final class OverviewScreen {
           "least",
           "most",
           "currently",
-          "still");
+          "still",
+          // The review or the change as the subject: "This PR hosts the two findings".
+          "pr",
+          "pull",
+          "request",
+          "review",
+          "change",
+          "diff",
+          "commit",
+          "round");
 
   /**
    * Words that, a word or two after a clause-opening "Findings", place the review's findings
@@ -175,7 +184,8 @@ final class OverviewScreen {
       Set.of(
           "HTTP", "HTTPS", "FIPS", "IEEE", "ECMA", "ANSI", "MPEG", "SMTP", "OAUTH", "SAML", "SOAP",
           "LDAP", "IMAP", "MQTT", "AMQP", "SNMP", "SASL", "XMPP", "HTML", "WCAG", "OPENAPI",
-          "JSONRPC");
+          "JSONRPC", "SHAKE", "BLAKE", "BASE", "ECDSA", "EDDSA", "ARGON", "CHACHA", "POLY", "LZMA",
+          "XXHASH", "MURMUR", "KECCAK", "PBKDF", "SCRYPT", "UUID", "ULID");
 
   /** A candidate sentence end: terminal punctuation followed by a blank ({@link #sentences}). */
   private static final Pattern SENTENCE_END = Pattern.compile("(?<=[.!?])\\s++");
@@ -290,6 +300,8 @@ final class OverviewScreen {
             .map(String::strip)
             .filter(c -> !c.isEmpty() && !isPlaceholder(c))
             .map(OverviewScreen::withoutFindingsParts)
+            // A part the cut leaves may be a placeholder ("TBD, hosts the two findings").
+            .filter(c -> !isPlaceholder(c))
             .toList();
     if (clauses.isEmpty() || !trueToTheFile(clauses.getFirst(), patch, known)) {
       return "";
