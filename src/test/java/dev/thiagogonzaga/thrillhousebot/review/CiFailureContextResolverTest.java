@@ -590,6 +590,8 @@ class CiFailureContextResolverTest {
           "\u00D7 rejects a full shift 3ms",
           "\u25CF ShiftBoard \u203A a full shift rejects further sign-ups",
           "FAIL src/app/shift-board.spec.ts",
+          "FAIL src/app/bookings.test.js",
+          "[ERROR] Tests run: 2, Errors: 1 <<< ERROR! - in com.acme.BedTest",
           "FAILED tests/test_store.py::test_search_escapes_event_name - AssertionError",
           "FAIL: test_hold_expiry (tests.test_holds.HoldTest)",
           "--- FAIL: TestTransactionsForVehicle (0.00s)",
@@ -614,7 +616,9 @@ class CiFailureContextResolverTest {
           "\u2714 overlapping bookings conflict (0.4ms)",
           "ok 2 - overlapping bookings conflict",
           "[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.6.0:test",
-          "FAIL"
+          "FAIL",
+          "FAIL build step",
+          "\u25CF Running coverage on untested files"
         })
     void otherFailureWordsAreNotATest(String line) {
       assertEquals(List.of(), lines(line + "\n"));
