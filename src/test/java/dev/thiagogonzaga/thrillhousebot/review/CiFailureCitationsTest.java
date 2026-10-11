@@ -113,6 +113,18 @@ class CiFailureCitationsTest {
     assertFalse(citations.cites(described("The 'tests' folder setup fails on Windows.")));
   }
 
+  /** A finding that denies the failure, or sets it aside, does not cite the check. */
+  @Test
+  void aDeniedOrDisclaimedFailureIsNotACitation() {
+    var citations = CiFailureCitations.parse(ROUND_12_SECTION);
+
+    assertFalse(
+        citations.cites(
+            described(
+                "The test check does not fail on this commit; the failure comes from the guard.")));
+    assertFalse(citations.cites(described("This is unrelated to the failing test check.")));
+  }
+
   @Test
   void checksTheSectionDidNotDetailAreRecordedToo() {
     var section =

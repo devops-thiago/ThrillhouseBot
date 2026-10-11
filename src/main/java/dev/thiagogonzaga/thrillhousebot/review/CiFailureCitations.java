@@ -63,6 +63,24 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   private static final List<String> FAILURE_WORDS =
       phrases("fail", "fails", "failed", "failing", "failure", "failures");
 
+  /**
+   * What a finding says when it mentions a failure without tying itself to it: the failure denied
+   * ("does not fail") or set aside ("unrelated to the failing check"). Either one in the finding
+   * withdraws the citation; under-citing only leaves the finding where it was.
+   */
+  private static final List<String> DISCLAIMERS =
+      phrases(
+          "not fail",
+          "does not fail",
+          "doesnt fail",
+          "dont fail",
+          "never fails",
+          "no failure",
+          "unrelated to",
+          "not related to",
+          "not caused by",
+          "not the cause");
+
   /** The words that make a name next to them the name of a check. */
   private static final List<String> CHECK_WORDS =
       List.of("check", "checks", "conclusion", "job", "workflow");
@@ -143,7 +161,7 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
                 + (finding.description() == null ? "" : finding.description()))
             .toLowerCase(Locale.ROOT);
     String text = normalized(raw);
-    if (!states(text, FAILURE_WORDS)) {
+    if (!states(text, FAILURE_WORDS) || states(text, DISCLAIMERS)) {
       return List.of();
     }
     return checks.stream()
