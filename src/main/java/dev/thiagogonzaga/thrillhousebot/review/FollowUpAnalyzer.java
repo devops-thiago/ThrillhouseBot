@@ -3265,10 +3265,7 @@ public class FollowUpAnalyzer {
     if (!hold.holdsOpen() || !replacedNow.containsKey(hold.finding())) {
       return null;
     }
-    return new HeldPrevious(
-        new ReviewResult.PreviousFindingStatus(
-            hold.status().id(), STATUS_UNRESOLVED, REPLACED_NOTE),
-        hold.finding());
+    return new HeldPrevious(hold.status().withNote(REPLACED_NOTE), hold.finding());
   }
 
   /**
