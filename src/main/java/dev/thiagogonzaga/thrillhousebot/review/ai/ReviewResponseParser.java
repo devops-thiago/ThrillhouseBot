@@ -47,6 +47,12 @@ public class ReviewResponseParser {
   private static final String FINDINGS = "findings";
   private static final String PREVIOUS_FINDINGS_STATUS = "previous_findings_status";
   private static final String SUMMARY = "summary";
+
+  /**
+   * The stored-only field ({@link ReviewResponse#closedEarlierRound}) a model answer may not set.
+   */
+  private static final String CLOSED_EARLIER_ROUND = "closed_earlier_round";
+
   private static final String DESCRIPTION_GAPS = "description_gaps";
   private static final String ADDRESSED_GAPS = "addressed_gaps";
   private static final String FILE_SUMMARIES = "file_summaries";
@@ -137,6 +143,9 @@ public class ReviewResponseParser {
       throw new IllegalArgumentException("Model returned an empty response");
     }
     var root = readDocuments(extractJson(raw, REVIEW_ROOT_KEYS, true));
+    // #1066: the earlier-round closes a round records are the verdict's, set only after it; a
+    // model answer that writes the field must not close earlier findings on later rounds.
+    root.remove(CLOSED_EARLIER_ROUND);
     if (summaryLane) {
       foldSummaryFields(root);
     }

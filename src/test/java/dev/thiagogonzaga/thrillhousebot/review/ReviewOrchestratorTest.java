@@ -269,6 +269,9 @@ class ReviewOrchestratorTest {
         .when(followUpAnalyzer.clearNamedInConversation(any(), any(), any(), any()))
         .thenAnswer(invocation -> invocation.getArgument(1));
     lenient()
+        .when(followUpAnalyzer.clearNamedInConversation(any(), any(), any(), any(), any()))
+        .thenAnswer(invocation -> invocation.getArgument(1));
+    lenient()
         .when(
             followUpAnalyzer.unresolvedFindings(
                 ArgumentMatchers.<List<ReviewResponse.Finding>>any(), any()))
@@ -6822,6 +6825,48 @@ class ReviewOrchestratorTest {
                 anyString(), anyString(), anyString(), anyString(), anyInt(), captor.capture());
         assertEquals("COMMENT", captor.getValue().event());
         assertTrue(captor.getValue().body().contains("remain unresolved"));
+      }
+    }
+
+    /**
+     * #1066: an earlier round's finding the round closed is recorded with the round's stored
+     * response, so the next round's replay no longer carries it.
+     */
+    @Test
+    void shouldRecordTheEarlierRoundFindingsTheRoundClosedWithItsStoredResponse() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = followUpSession();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
+            .thenReturn(List.of(PRIOR_FINDING_JSON));
+        when(followUpAnalyzer.buildPreviousFindingsContext(
+                anyList(), anyBoolean(), any(), any(), any(), eq(BOT_ID), any(), any()))
+            .thenReturn("previous context");
+        when(aiReviewService.review(any(ReviewSession.class), any()))
+            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+        var gone =
+            new ReviewResponse.Finding("high", "src/Old.java", 3, "Gone finding", "d", "x", null);
+        when(followUpAnalyzer.heldPreviousFindings(
+                any(), any(), any(), any(), any(), eq(BOT_ID), any(), any()))
+            .thenReturn(
+                List.of(
+                    new FollowUpAnalyzer.HeldPrevious(
+                        new ReviewResult.PreviousFindingStatus(
+                            FollowUpAnalyzer.EARLIER_ROUND_ID,
+                            "superseded",
+                            "gone",
+                            new ReviewResult.EarlierRound(gone, 77L)),
+                        gone)));
+
+        orchestrator.review(followUpRequest());
+
+        var stored = ArgumentCaptor.forClass(String.class);
+        verify(session, atLeastOnce()).setAiResponseJson(stored.capture());
+        var last = stored.getAllValues().get(stored.getAllValues().size() - 1);
+        assertTrue(last.contains("\"closed_earlier_round\""), last);
+        assertTrue(last.contains("Gone finding"), last);
       }
     }
 
