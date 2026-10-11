@@ -402,7 +402,7 @@ final class RebuttalContradiction {
           "not", "never", "no", "nor", "none", "nothing", "nobody", "neither", "without", "cannot",
           "cant", "wont", "isnt");
 
-  /** Verbs that refuse the statement's own subject when directly before it ({@link #denies}). */
+  /** Verbs that refuse the statement's subject in its own clause ({@link #denies}). */
   private static final Set<String> REFUSALS =
       Set.of(
           "reject",
@@ -448,28 +448,12 @@ final class RebuttalContradiction {
           "except");
 
   /**
-   * Words that may sit between a refusing verb and the statement it refuses without changing what
-   * it refuses: articles, quantifiers and the adverbs that only intensify the refusal ("rejects all
-   * concurrent requests", "prevents any simultaneous concurrent access").
+   * Words that open a subordinate clause: a refusing verb before one has an object of its own
+   * ("prevents a deadlock when called from multiple threads", "blocks until concurrent requests
+   * drain"), so it refuses that object, not the statement after them.
    */
-  private static final Set<String> REFUSAL_QUALIFIERS =
-      Set.of(
-          "a",
-          "an",
-          "the",
-          "all",
-          "any",
-          "every",
-          "each",
-          "some",
-          "multiple",
-          "simultaneous",
-          "parallel",
-          "further",
-          "explicitly",
-          "outright",
-          "silently",
-          "always");
+  private static final Set<String> SUBORDINATORS =
+      Set.of("when", "whenever", "if", "where", "until", "after", "before", "during", "as", "once");
 
   /** Words that turn a negator right before them into an affirmation: "not only shared …". */
   private static final Set<String> AFFIRMING = Set.of("only", "just", "merely");
@@ -480,19 +464,22 @@ final class RebuttalContradiction {
    * punctuation or clause opener ("and", "but", "which", "because" …) between ("not shared by every
    * goroutine", "is not ever really called from multiple threads", "nothing in it is shared across
    * goroutines", any n't contraction: "doesn't support concurrent use"), but not "not only" or "not
-   * just", which affirm; or a verb that refuses the statement's own subject, before it with only
-   * {@link #REFUSAL_QUALIFIERS} between ("rejects concurrent requests", "rejects all concurrent
-   * requests", "prevents any concurrent access"). A refusing verb whose own object is something
-   * else ("prevents a deadlock when called from multiple threads") refuses that object, not the
-   * statement. A verb that only protects shared state ("the lock guards every field shared by every
-   * request goroutine", "serializes concurrent requests") still says the path is reached
-   * concurrently, so it denies nothing. A gap is any horizontal space or hyphen, a non-breaking
-   * space included, and a word counts as one whatever its length (a long identifier). The words are
-   * read back from the statement, so the scan is linear in the clause.
+   * just", which affirm; or a verb that refuses the statement's subject anywhere in the same
+   * clause, whatever words sit between ("rejects concurrent requests", "rejects all incoming
+   * concurrent requests", "prevents any concurrent access"), unless a subordinating word ({@link
+   * #SUBORDINATORS}) opens a clause of its own between them: "prevents a deadlock when called from
+   * multiple threads" refuses the deadlock, not the statement. Lean to denying: a statement not
+   * quoted leaves the note saying the code does not confirm concurrency, while a denial quoted as
+   * concurrency tells the maintainer the opposite of what the code says. A verb that only protects
+   * shared state ("the lock guards every field shared by every request goroutine", "serializes
+   * concurrent requests") still says the path is reached concurrently, so it denies nothing. A gap
+   * is any horizontal space or hyphen, a non-breaking space included, and a word counts as one
+   * whatever its length (a long identifier). The words are read back from the statement, so the
+   * scan is linear in the clause.
    */
   private static boolean denies(String before) {
     var words = wordsBefore(before);
-    var onlyQualifiers = true;
+    var subordinate = false;
     for (var i = 0; i < words.size(); i++) {
       var word = words.get(i);
       if (isNegator(word)) {
@@ -501,10 +488,10 @@ final class RebuttalContradiction {
       if (CLAUSE_OPENERS.contains(word)) {
         return false;
       }
-      if (onlyQualifiers && REFUSALS.contains(word)) {
+      if (!subordinate && REFUSALS.contains(word)) {
         return true;
       }
-      onlyQualifiers = onlyQualifiers && REFUSAL_QUALIFIERS.contains(word);
+      subordinate = subordinate || SUBORDINATORS.contains(word);
     }
     return false;
   }
