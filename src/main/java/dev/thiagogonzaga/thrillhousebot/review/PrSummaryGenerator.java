@@ -897,8 +897,9 @@ public class PrSummaryGenerator {
    * Whether a flowchart's body passes the checks GitHub's Mermaid parser has failed on in posted
    * summaries (#952): a one-dash arrow ({@code A -> B}, or {@code ->>} borrowed from a sequence
    * diagram), a stray comma after a node ({@code PE["pending"],}), an odd number of double quotes
-   * on a line, or brackets that do not balance on a line once labels are removed. A diagram that
-   * would fail to render is omitted rather than posted as a broken block.
+   * on a line, an edge label left open ({@code A -->|x B}), or a node shape that does not parse
+   * once quoted labels are removed ({@link #shapesParse}). A diagram that would fail to render is
+   * omitted rather than posted as a broken block.
    */
   static boolean flowchartParses(String diagram) {
     var lines = diagram.lines().skip(1).map(String::strip).toList();
@@ -912,28 +913,45 @@ public class PrSummaryGenerator {
       var bare = MERMAID_LABEL.matcher(line).replaceAll("L");
       if (ONE_DASH_ARROW.matcher(bare).find()
           || (!COMMA_STATEMENT.matcher(bare).find() && STRAY_COMMA.matcher(bare).find())
-          || !balanced(bare)) {
+          || bare.indexOf('|') >= 0
+          || !shapesParse(bare)) {
         return false;
       }
     }
     return true;
   }
 
-  /** Whether every bracket on {@code line} closes in order. */
-  private static boolean balanced(String line) {
+  /**
+   * Whether every node shape on {@code line} parses once labels are removed: its brackets close in
+   * order, a bracket opens inside another only straight after it (the {@code [(db)]}, {@code
+   * ([stadium])} and {@code {{hex}}} shapes), and no unquoted label holds a colon, an ampersand or
+   * a semicolon. GitHub's parser rejects {@code A(f(x))} and {@code A(t: 3)}, which balance.
+   */
+  private static boolean shapesParse(String line) {
     var open = new ArrayDeque<Character>();
+    var previous = ' ';
     for (var c : line.toCharArray()) {
       if (OPENING_BRACKETS.indexOf(c) >= 0) {
+        if (!open.isEmpty() && OPENING_BRACKETS.indexOf(previous) < 0) {
+          return false;
+        }
         open.push(c);
-        continue;
+      } else {
+        var closing = CLOSING_BRACKETS.indexOf(c);
+        if (closing >= 0 && (open.isEmpty() || open.pop() != OPENING_BRACKETS.charAt(closing))) {
+          return false;
+        }
+        if (!open.isEmpty() && LABEL_BREAKERS.indexOf(c) >= 0) {
+          return false;
+        }
       }
-      var closing = CLOSING_BRACKETS.indexOf(c);
-      if (closing >= 0 && (open.isEmpty() || open.pop() != OPENING_BRACKETS.charAt(closing))) {
-        return false;
-      }
+      previous = c;
     }
     return open.isEmpty();
   }
+
+  /** Characters GitHub's parser rejects inside an unquoted label. */
+  private static final String LABEL_BREAKERS = ":&;";
 
   private static final String OPENING_BRACKETS = "([{";
 

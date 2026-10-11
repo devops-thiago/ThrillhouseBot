@@ -2039,7 +2039,13 @@ class PrSummaryGeneratorTest {
         "flowchart TD\n  A[\"x\"] --> B[\"y\"],",
         "graph LR\n  A[\"open --> B",
         "flowchart TD\n  A[\"x\"] --> B[\"y\"",
-        "flowchart TD\n  A(\"x\"] --> B"
+        "flowchart TD\n  A(\"x\"] --> B",
+        // Unquoted labels GitHub rejects though their brackets balance.
+        "flowchart TD\n  A(f(x)) --> B",
+        "flowchart TD\n  A(t: 3) --> B",
+        "flowchart TD\n  A[x & y] --> B",
+        // An edge label left open.
+        "flowchart TD\n  A -->|x B"
       })
   void aFlowchartThatWouldNotParseIsOmitted(String diagram) {
     assertFalse(PrSummaryGenerator.flowchartParses(diagram), diagram);
