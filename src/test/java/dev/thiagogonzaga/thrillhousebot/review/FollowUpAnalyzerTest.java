@@ -4807,6 +4807,24 @@ class FollowUpAnalyzerTest {
     assertTrue(note.endsWith("Reply again to keep the decline."), note);
   }
 
+  /** A line that denies the concurrency is never quoted as stating it. */
+  @Test
+  void earlierRoundDeclineHeldOnADeniedConcurrencyKeepsTheUnconfirmedReason() {
+    var note =
+        race(raceBackstop(
+                analyzer,
+                earlierRaceThread(RACE_WRONG_DECLINE),
+                () ->
+                    "+// rejects concurrent requests — one worker per shard\n"
+                        + "+// not shared by every goroutine, guarded by the mutex\n"
+                        + "+counter.bump();"))
+            .status()
+            .note();
+
+    assertTrue(note.contains("no review has weighed"), note);
+    assertFalse(note.contains("says this path runs concurrently"), note);
+  }
+
   // #963: a decline the model did not accept on the effective previous round is explained too.
 
   private static final String MODEL_REASON =

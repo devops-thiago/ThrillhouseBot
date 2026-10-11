@@ -264,18 +264,28 @@ final class RebuttalContradiction {
    * claiming the diff cannot confirm it would be wrong; otherwise {@link #unconfirmedPremiseNote}.
    */
   static String heldPremiseNote(String claim, String reviewedCode) {
-    var rightSide = rightSideText(reviewedCode);
-    var stated = earliestMatch(STATED_CONCURRENCY, rightSide);
-    if (stated == null) {
-      return unconfirmedPremiseNote(claim);
+    for (var line : rightSideText(reviewedCode).split("\n", -1)) {
+      if (earliestMatch(STATED_CONCURRENCY, line) != null && !DENIES.matcher(line).find()) {
+        return NOTE_LEAD_IN
+            + " the reply argues \""
+            + claim
+            + "\", but the reviewed code says this path runs concurrently — \""
+            + clip(line)
+            + "\". Reply again to keep the decline.";
+      }
     }
-    return NOTE_LEAD_IN
-        + " the reply argues \""
-        + claim
-        + "\", but the reviewed code says this path runs concurrently — \""
-        + lineAround(rightSide, stated.start())
-        + "\". Reply again to keep the decline.";
+    return unconfirmedPremiseNote(claim);
   }
+
+  /**
+   * Words that turn a {@link #STATED_CONCURRENCY} line into a denial ("not shared by every
+   * goroutine", "rejects concurrent requests"). Such a line says nothing for the note to quote, so
+   * it is skipped rather than cited as the opposite of what it says.
+   */
+  private static final Pattern DENIES =
+      ci(
+          "\\b(?:not|never|no|without|cannot|can'?t|won'?t|isn'?t|rejects?|prevents?|avoids?"
+              + "|guards?|forbids?|disallows?|blocks?|serializ\\w{0,4})\\b");
 
   /**
    * The note of a finding the review still reports open after a maintainer answered it on its
