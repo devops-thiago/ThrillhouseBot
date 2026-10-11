@@ -92,8 +92,19 @@ final class OverviewScreen {
           "three",
           "four",
           "five",
+          "six",
+          "seven",
+          "eight",
+          "nine",
+          "ten",
+          "eleven",
+          "twelve",
+          "dozen",
+          "dozens",
           "several",
-          "multiple");
+          "multiple",
+          "many",
+          "few");
 
   /**
    * Words that may stand before "finding(s)" in a clause about what the file holds rather than what
@@ -120,7 +131,19 @@ final class OverviewScreen {
           "carries",
           "with",
           "any",
-          "all");
+          "all",
+          "only",
+          "just",
+          "exactly",
+          "about",
+          "around",
+          "over",
+          "under",
+          "at",
+          "least",
+          "most",
+          "currently",
+          "still");
 
   /**
    * Words that, a word or two after a clause-opening "Findings", place the review's findings
@@ -141,22 +164,28 @@ final class OverviewScreen {
    * are not taken for one.
    */
   private static final Pattern TICKET_KEY =
-      Pattern.compile("(?<![\\w-])[A-Z]{4,15}-\\d{1,7}(?![\\w-])");
+      Pattern.compile("(?<![\\w-])[A-Z]{4,15}-\\d{1,7}(?![\\w-]|\\.\\d)");
 
   /**
    * Standards and protocol names that take the tracker-key shape with a number: "HTTP-404",
-   * "FIPS-140". A sentence naming one is not taken for one naming an invented ticket.
+   * "FIPS-140", "SAML-2". A sentence naming one is not taken for one naming an invented ticket. A
+   * dotted version ("SOAP-1.2", "SAML-2.0") is not a key at all ({@link #TICKET_KEY}).
    */
   private static final Set<String> STANDARD_PREFIXES =
-      Set.of("HTTP", "HTTPS", "FIPS", "IEEE", "ECMA", "ANSI", "MPEG", "SMTP", "OAUTH");
+      Set.of(
+          "HTTP", "HTTPS", "FIPS", "IEEE", "ECMA", "ANSI", "MPEG", "SMTP", "OAUTH", "SAML", "SOAP",
+          "LDAP", "IMAP", "MQTT", "AMQP", "SNMP", "SASL", "XMPP", "HTML", "WCAG", "OPENAPI",
+          "JSONRPC");
 
   /**
-   * A sentence end: terminal punctuation followed by a blank, except after "e.g.", "i.e.", "etc."
-   * and "vs.", which end an abbreviation mid-sentence.
+   * A sentence end: terminal punctuation followed by a blank, except after "e.g.", "i.e." and
+   * "vs.", which end an abbreviation mid-sentence, and after "etc." unless a capital letter
+   * follows: "etc." often ends a sentence too ("…, codecs, etc. Adds the rotator.").
    */
   private static final Pattern SENTENCE_END =
       Pattern.compile(
-          "(?i)(?<=[.!?])(?<!\\be\\.g\\.)(?<!\\bi\\.e\\.)(?<!\\betc\\.)(?<!\\bvs\\.)\\s++");
+          "(?<=[.!?])(?<!\\b[eE]\\.[gG]\\.)(?<!\\b[iI]\\.[eE]\\.)(?<!\\b[vV][sS]\\.)"
+              + "(?:(?<!\\b[eE][tT][cC]\\.)|(?=\\s++\\p{Lu}))\\s++");
 
   /**
    * {@code summary} with its file summaries mapped, screened and deduplicated, and its purpose
@@ -264,11 +293,23 @@ final class OverviewScreen {
         Arrays.stream(text.split(";"))
             .map(String::strip)
             .filter(c -> !c.isEmpty() && !isPlaceholder(c))
+            .map(OverviewScreen::withoutFindingsParts)
             .toList();
     if (clauses.isEmpty() || !trueToTheFile(clauses.getFirst(), patch, known)) {
       return "";
     }
     return String.join("; ", clauses.stream().filter(c -> trueToTheFile(c, patch, known)).toList());
+  }
+
+  /**
+   * {@code clause} less the comma-separated parts that talk about findings when some part does not
+   * ("renders the dashboard, hosts the two findings" keeps "renders the dashboard"); as it is when
+   * none or all of its parts do, so a clause that is only findings talk is still judged whole.
+   */
+  private static String withoutFindingsParts(String clause) {
+    var parts = Arrays.stream(clause.split(",")).map(String::strip).toList();
+    var kept = parts.stream().filter(part -> !talksAboutFindings(part)).toList();
+    return kept.isEmpty() || kept.size() == parts.size() ? clause : String.join(", ", kept);
   }
 
   private static boolean isPlaceholder(String text) {

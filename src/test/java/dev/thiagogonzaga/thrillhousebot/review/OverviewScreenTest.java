@@ -208,13 +208,27 @@ class OverviewScreenTest {
   }
 
   @Test
+  void aSentenceEndingInEtcIsSplitBeforeACapital() {
+    assertEquals(
+        "Lists the parsers, codecs, etc.",
+        OverviewScreen.withoutInventedTickets(
+            "Lists the parsers, codecs, etc. Adds ABCD-2 for the rotator.", "Title: parsers"));
+    // Followed by lower case, "etc." stays inside its sentence.
+    assertEquals(
+        "",
+        OverviewScreen.withoutInventedTickets(
+            "Lists parsers, etc. and adds ABCD-2 for the rotator.", "Title: parsers"));
+  }
+
+  @Test
   void aStandardsCodeIsNotTakenForAnInventedTicket() {
     var purpose =
         "Returns HTTP-404 for unknown routes. Adds FIPS-140 validation. Speaks HTTP-2 and"
-            + " OAUTH-2. Fixes ABCD-9.";
+            + " OAUTH-2. Adds SAML-2.0 and SAML-2 logins over SOAP-1.2. Fixes ABCD-9.";
 
     assertEquals(
-        "Returns HTTP-404 for unknown routes. Adds FIPS-140 validation. Speaks HTTP-2 and OAUTH-2.",
+        "Returns HTTP-404 for unknown routes. Adds FIPS-140 validation. Speaks HTTP-2 and OAUTH-2."
+            + " Adds SAML-2.0 and SAML-2 logins over SOAP-1.2.",
         OverviewScreen.withoutInventedTickets(purpose, "Title: routes\nReturns 404"));
   }
 
@@ -291,6 +305,17 @@ class OverviewScreenTest {
         "Returns no findings for an empty diff",
         OverviewScreen.screenedText("Returns no findings for an empty diff", "+x", ""));
     assertTrue(OverviewScreen.talksAboutFindings("This file has two confirmed findings"));
+    // An adverb before the count, and a spelled count above five, are bookkeeping too.
+    assertTrue(OverviewScreen.talksAboutFindings("hosts only two findings"));
+    assertTrue(OverviewScreen.talksAboutFindings("hosts six findings"));
+    assertTrue(OverviewScreen.talksAboutFindings("holds exactly twelve findings"));
+    // A comma part of findings talk inside a role clause is cut and the role kept.
+    assertEquals(
+        "renders the dashboard",
+        OverviewScreen.screenedText("renders the dashboard, hosts the two findings", "+x", ""));
+    assertEquals(
+        "Loads, parses and caches findings",
+        OverviewScreen.screenedText("Loads, parses and caches findings", "+x", ""));
     assertEquals(
         "Loads open findings from the store",
         OverviewScreen.screenedText("Loads open findings from the store", "+x", ""));
