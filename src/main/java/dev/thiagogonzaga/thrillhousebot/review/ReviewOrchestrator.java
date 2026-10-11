@@ -571,7 +571,13 @@ public class ReviewOrchestrator {
   private boolean publishSummaryBestEffort(String auth, ReviewRequest req, ReviewResult result) {
     try {
       return reviewPublisher.publishSummary(
-          auth, req.owner(), req.repo(), req.prNumber(), result, req.forceSummary());
+          auth,
+          req.owner(),
+          req.repo(),
+          req.prNumber(),
+          result,
+          req.forceSummary(),
+          PromptSections.prContext(req.prTitle(), req.prDescription()));
     } catch (RuntimeException e) {
       Log.warnf(
           e,
