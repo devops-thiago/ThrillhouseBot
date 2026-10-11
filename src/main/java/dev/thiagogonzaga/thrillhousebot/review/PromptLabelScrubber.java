@@ -690,11 +690,11 @@ public final class PromptLabelScrubber {
 
   /** Whether {@code at} lies inside a fenced block: an odd number of fence markers precede it. */
   private static boolean insideFence(String text, int at) {
-    int fences = 0;
+    boolean inside = false;
     for (int i = text.indexOf("```"); i >= 0 && i < at; i = text.indexOf("```", i + 3)) {
-      fences++;
+      inside = !inside;
     }
-    return fences % 2 == 1;
+    return inside;
   }
 
   /**
