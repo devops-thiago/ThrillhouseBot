@@ -472,6 +472,42 @@ class ReviewLearningsTest {
     assertEquals("maintainer", learning.author());
   }
 
+  /**
+   * #958: an earlier round's standing decline carries id 0 and its own thread; it is learned from
+   * that thread, about its own finding, and never from the previous round's finding 1.
+   */
+  @Test
+  void anEarlierRoundDeclineIsLearnedFromItsOwnThread() {
+    writeAccess("write");
+    when(store.save(any(), anyInt())).thenReturn(RecordOutcome.STORED);
+
+    var stored =
+        enabled()
+            .captureSurvivingDeclines(
+                new ReviewLearnings.DeclineCapture(
+                    "token",
+                    1L,
+                    "o",
+                    "r",
+                    161,
+                    List.of(RACE),
+                    List.of(
+                        new ReviewResult.PreviousFindingStatus(
+                            FollowUpAnalyzer.EARLIER_ROUND_ID,
+                            "justified",
+                            "settled",
+                            new ReviewResult.EarlierRound(NESTED, 500L))),
+                    thread(NESTED, 500L, FLAT_THREADS),
+                    List.of(),
+                    () -> PLAIN_DIFF));
+
+    assertEquals(1, stored);
+    var input = ArgumentCaptor.forClass(LearningInput.class);
+    verify(store).save(input.capture(), anyInt());
+    assertEquals(NESTED_TITLE, input.getValue().findingTitle());
+    assertEquals("https://github.com/o/r/pull/161#discussion_r501", input.getValue().sourceUrl());
+  }
+
   @Test
   void aConversationDeclineCitesTheIssueComment() {
     writeAccess("admin");
