@@ -113,7 +113,12 @@ class EvalCorpusTest {
       assertFalse(c.spec().keywords().isEmpty(), c.name() + ": keywords must not be empty");
       assertTrue(
           c.spec().keywords().stream()
-              .anyMatch(k -> c.spec().prDescription().toLowerCase(Locale.ROOT).contains(k)),
+              .anyMatch(
+                  k ->
+                      c.spec()
+                          .prDescription()
+                          .toLowerCase(Locale.ROOT)
+                          .contains(k.toLowerCase(Locale.ROOT))),
           c.name() + ": the description must make the claim the keywords name");
       assertNotNull(c.spec().changedFiles(), c.name() + ": changedFiles overview");
       assertNotNull(c.spec().findings(), c.name() + ": findings (may be empty)");

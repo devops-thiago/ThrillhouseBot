@@ -1419,7 +1419,7 @@ public class FindingPipeline {
           .append(fileCoverageMarker(file.filename(), responseCut, clipped))
           .append(")")
           // #920: what the file's added lines declare, the summary's evidence of what it does.
-          .append(ChangeSymbols.overviewSuffix(file.patch()))
+          .append(ChangeSymbols.overviewSuffix(file.filename(), file.patch()))
           .append("\n");
     }
     for (var name : plan.omittedFiles()) {

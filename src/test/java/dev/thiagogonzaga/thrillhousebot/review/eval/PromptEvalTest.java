@@ -158,7 +158,10 @@ class PromptEvalTest {
     var overview = new StringBuilder();
     for (var row : spec.changedFiles().split("\n")) {
       var path = row.substring(0, row.indexOf(' ') < 0 ? row.length() : row.indexOf(' '));
-      overview.append(row).append(ChangeSymbols.overviewSuffix(patches.get(path))).append('\n');
+      overview
+          .append(row)
+          .append(ChangeSymbols.overviewSuffix(path, patches.get(path)))
+          .append('\n');
     }
     var raw = new CompletableFuture<String>();
     prSummarizer
@@ -179,9 +182,9 @@ class PromptEvalTest {
           reviewResponseParser
               .parseSummary(raw.get(SAMPLE_TIMEOUT_MINUTES, TimeUnit.MINUTES))
               .summary();
-    } catch (IllegalArgumentException e) {
+    } catch (IllegalArgumentException _) {
       return "unparseable";
-    } catch (ExecutionException | TimeoutException e) {
+    } catch (ExecutionException | TimeoutException _) {
       return CALL_FAILED;
     }
     if (summary == null) {
@@ -210,11 +213,17 @@ class PromptEvalTest {
             sentence -> mentionsAny(keywords, sentence) && !REFUTATION.matcher(sentence).find());
   }
 
-  /** Words that mark a sentence as reporting a claim rather than stating it. */
+  /**
+   * What marks a sentence as reporting a claim rather than stating it: it names the claim as the
+   * description's, or says nothing in the change shows it. A bare negation does not ("sends
+   * reminders without a scheduler" still states them), so the cues are claim words and
+   * evidence-absence phrases, not "no" or "without" alone.
+   */
   private static final Pattern REFUTATION =
       Pattern.compile(
-          "(?i)\\b(?:claims?|claimed|description|unconfirmed|not|no|never|without|missing"
-              + "|lacks?|absent)\\b");
+          "(?i)\\b(?:claims?|claimed|description|unconfirmed|unsupported|unverified)\\b"
+              + "|\\bnot (?:implemented|backed|shown|present|found|evident)\\b"
+              + "|\\bno (?:changed )?(?:file|code|evidence)\\b");
 
   /**
    * The outcome of a sample whose model call failed or timed out: a failing sample, not a crash.
@@ -317,9 +326,9 @@ class PromptEvalTest {
     ReviewResponse parsed;
     try {
       parsed = reviewResponseParser.parse(raw.get(SAMPLE_TIMEOUT_MINUTES, TimeUnit.MINUTES));
-    } catch (IllegalArgumentException e) {
+    } catch (IllegalArgumentException _) {
       return "unparseable";
-    } catch (ExecutionException | TimeoutException e) {
+    } catch (ExecutionException | TimeoutException _) {
       return CALL_FAILED;
     }
     var found =

@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -41,6 +42,42 @@ import java.util.Set;
 public final class ChangeSymbols {
 
   private ChangeSymbols() {}
+
+  /**
+   * Extensions of documentation and data files, whose code-shaped lines (a {@code def} in a README
+   * example, a {@code class} in prose) are not the file's own declarations.
+   */
+  private static final Set<String> PROSE_EXTENSIONS =
+      Set.of(
+          "md",
+          "markdown",
+          "rst",
+          "adoc",
+          "txt",
+          "html",
+          "htm",
+          "json",
+          "yml",
+          "yaml",
+          "toml",
+          "xml",
+          "properties",
+          "ini",
+          "cfg",
+          "conf",
+          "csv",
+          "lock",
+          "svg");
+
+  /** Whether {@code path} is documentation or data, whose lines declare nothing. */
+  static boolean isProse(String path) {
+    if (path == null) {
+      return false;
+    }
+    var name = path.substring(path.lastIndexOf('/') + 1);
+    var dot = name.lastIndexOf('.');
+    return dot >= 0 && PROSE_EXTENSIONS.contains(name.substring(dot + 1).toLowerCase(Locale.ROOT));
+  }
 
   /** Names one row lists, at most; a longer list ends with an ellipsis. */
   static final int MAX_NAMES = 10;
@@ -135,11 +172,8 @@ public final class ChangeSymbols {
     if (head.indexOf(' ') < 0 || head.indexOf('=') >= 0) {
       return "";
     }
-    var start = head.length();
-    while (start > 0 && isWordChar(head.charAt(start - 1))) {
-      start--;
-    }
-    return head.substring(start);
+    var name = head.substring(head.lastIndexOf(' ') + 1);
+    return name.chars().allMatch(c -> isWordChar((char) c)) ? name : "";
   }
 
   /** The identifier {@code text} opens with, or {@code ""}. */
@@ -156,10 +190,14 @@ public final class ChangeSymbols {
   }
 
   /**
-   * The suffix an overview row carries for {@code patch}: {@code " — declares: a, b, c"}, cut at
-   * {@value #MAX_NAMES} names, or {@code ""} when it declares none.
+   * The suffix an overview row carries for the file at {@code path} with {@code patch}: {@code " —
+   * declares: a, b, c"}, cut at {@value #MAX_NAMES} names, or {@code ""} when it declares none or
+   * is documentation or data ({@link #isProse}).
    */
-  public static String overviewSuffix(String patch) {
+  public static String overviewSuffix(String path, String patch) {
+    if (isProse(path)) {
+      return "";
+    }
     var names = declaredNames(patch);
     if (names.isEmpty()) {
       return "";

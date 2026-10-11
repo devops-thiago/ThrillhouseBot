@@ -34,11 +34,21 @@ class PromptEvalGradingTest {
   }
 
   @Test
+  void anInnocentNegationDoesNotTurnAStatedClaimIntoARefutation() {
+    assertTrue(
+        PromptEvalTest.statesAsImplemented(
+            KEYWORDS, "A mailer sends confirmation and reminder e-mails without a scheduler."));
+  }
+
+  @Test
   void aSentenceReportingTheClaimAsUnconfirmedIsNot() {
     assertFalse(
         PromptEvalTest.statesAsImplemented(
             KEYWORDS,
             "Adds a booking service. The description's reminder claim is not backed by any file."));
+    assertFalse(
+        PromptEvalTest.statesAsImplemented(
+            KEYWORDS, "Reminders 15 minutes before a booking: no changed file sends them."));
     assertFalse(PromptEvalTest.statesAsImplemented(KEYWORDS, "Adds a booking service."));
   }
 }

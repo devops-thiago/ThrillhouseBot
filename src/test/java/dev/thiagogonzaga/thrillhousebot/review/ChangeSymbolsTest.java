@@ -83,10 +83,22 @@ class ChangeSymbolsTest {
 
     assertEquals(
         " — declares: f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, …",
-        ChangeSymbols.overviewSuffix(patch));
-    assertEquals(" — declares: only", ChangeSymbols.overviewSuffix("+def only():"));
-    assertEquals("", ChangeSymbols.overviewSuffix("+x = 1\n--- a\n+++ b"));
-    assertEquals("", ChangeSymbols.overviewSuffix(null));
-    assertEquals("", ChangeSymbols.overviewSuffix(" "));
+        ChangeSymbols.overviewSuffix("src/f.py", patch));
+    assertEquals(" — declares: only", ChangeSymbols.overviewSuffix("f.py", "+def only():"));
+    assertEquals("", ChangeSymbols.overviewSuffix("f.py", "+x = 1\n--- a\n+++ b"));
+    assertEquals("", ChangeSymbols.overviewSuffix("f.py", null));
+    assertEquals("", ChangeSymbols.overviewSuffix(null, " "));
+    assertEquals(" — declares: only", ChangeSymbols.overviewSuffix("Makefile", "+def only():"));
+  }
+
+  @Test
+  void documentationAndDataFilesDeclareNothing() {
+    // A README's example code or a YAML key is not the file's own declaration.
+    var example = "+```python\n+def example():\n+```\n+class Foo is described above.";
+    var code = "+def example():";
+
+    assertEquals("", ChangeSymbols.overviewSuffix("docs/CONFIG-PYTHON.md", example));
+    assertEquals("", ChangeSymbols.overviewSuffix("ci.YML", "+type: module"));
+    assertEquals(" — declares: example", ChangeSymbols.overviewSuffix("src/x.py", code));
   }
 }
