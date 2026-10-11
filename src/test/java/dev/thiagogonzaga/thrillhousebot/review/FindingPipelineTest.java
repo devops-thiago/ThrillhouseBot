@@ -1690,8 +1690,10 @@ class FindingPipelineTest {
         new DiffLineResolver(
             Map.of(
                 "Dockerfile",
-                "@@ -0,0 +1,2 @@\n+FROM node:20-alpine\n+COPY --from=busybox:1.36 /bin/busybox"
-                    + " /bin/busybox"),
+                """
+                @@ -0,0 +1,2 @@
+                +FROM node:20-alpine
+                +COPY --from=busybox:1.36 /bin/busybox /bin/busybox"""),
             List.of("Dockerfile"));
 
     var refined = pipeline.run(session, template, ctx, plan, resolver, ReviewEvidence.NONE);
