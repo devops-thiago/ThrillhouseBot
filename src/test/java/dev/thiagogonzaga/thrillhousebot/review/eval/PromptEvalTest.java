@@ -82,6 +82,9 @@ class PromptEvalTest {
   private static final long SAMPLE_TIMEOUT_MINUTES = 10;
   private static final int PARSE_ATTEMPTS = 3;
 
+  /** A generator sample with no parseable review: it matches no expectation, so it fails. */
+  private static final String UNPARSED = "unparsed";
+
   @Inject FindingVerificationService findingVerificationService;
   @Inject PrReviewer prReviewer;
   @Inject ReviewResponseParser reviewResponseParser;
@@ -187,7 +190,8 @@ class PromptEvalTest {
 
   /**
    * Runs the first-pass review prompt over the case's diff and reports whether any finding on the
-   * target file mentions one of the case's keywords ("must-find" / "must-not-find").
+   * target file mentions one of the case's keywords ("must-find" / "must-not-find"), or "unparsed"
+   * when no attempt returned a review.
    */
   private String generatorOutcome(EvalCase evalCase) throws Exception {
     // The changed test files, newline-separated, as the assembler lists them for the review call.
@@ -219,6 +223,9 @@ class PromptEvalTest {
             "",
             dimensionRouter.systemPromptFor(evalCase.files()));
     var parsed = review(inputs);
+    if (parsed == null) {
+      return UNPARSED;
+    }
     var found =
         parsed.findings().stream()
             .anyMatch(
@@ -230,8 +237,10 @@ class PromptEvalTest {
    * One review call, parsed. A response that does not parse, or a call that fails, is asked for
    * again, up to {@link #PARSE_ATTEMPTS} times, as {@code AiReviewService} retries any runtime
    * failure in production: one stray prose answer or one dropped stream used to abort the whole
-   * run, losing every sample already taken. A sample that never parses counts as a review that
-   * found nothing. A call that outlives {@link #SAMPLE_TIMEOUT_MINUTES} still ends the run.
+   * run, losing every sample already taken. A sample that never parses returns {@code null} and is
+   * scored {@link #UNPARSED}, a failed sample on every case, so a broken model or parser cannot
+   * pass the must-not-find cases as reviews that found nothing. A call that outlives {@link
+   * #SAMPLE_TIMEOUT_MINUTES} still ends the run.
    */
   private ReviewResponse review(AiReviewService.PromptInputs inputs) throws Exception {
     for (var attempt = 1; attempt <= PARSE_ATTEMPTS; attempt++) {
@@ -250,7 +259,8 @@ class PromptEvalTest {
         Log.infof("Eval sample attempt %d was not review JSON; retrying", attempt);
       }
     }
-    return new ReviewResponse(List.of(), List.of(), null);
+    Log.warnf("Eval sample produced no review in %d attempts", PARSE_ATTEMPTS);
+    return null;
   }
 
   private static boolean targetsCase(EvalCase evalCase, ReviewResponse.Finding finding) {
