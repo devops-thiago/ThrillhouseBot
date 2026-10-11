@@ -111,7 +111,8 @@ final class DefectIdentity {
           "concurrency",
           classPattern(
               "races?|racy|concurren\\w{0,12}|(?:un)?synchroni[sz]\\w{0,12}|thread-?safe\\w{0,6}"
-                  + "|atomic\\w{0,6}|deadlocks?|mutex\\w{0,4}|check-then-act"),
+                  + "|atomic\\w{0,6}|deadlocks?|mutex\\w{0,4}|check-then-act|simultaneous\\w{0,2}"
+                  + "|in parallel|at once|at the same time|interleav\\w{0,4}|toctou"),
           "off-by-one",
           classPattern("off[- ]by[- ]one|fencepost"),
           "injection",

@@ -193,8 +193,9 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
   `DefectIdentity.sameDefect`, which is symmetric: in one file, the same title, a similar title or
   a title-vs-description phrase within three lines, the same line with two shared title words or a
   common identifier, or titles that restate each other (shared phrase and 0.75 overlap); in any
-  file, a subject (key, symbol, or the class a file is named after) named by both titles plus
-  another shared title word or defect class (#956), or a description citing the other's
+  file, a key or symbol named by both titles plus another shared title word or defect class
+  (#956); a subject that is only the class a file is named after (common prose) pairs only when
+  one description also names a symbol of the other's title; or a description citing the other's
   `file:line` and naming a symbol of its title. Two vetoes come first: titles naming different
   identifiers (`namesDifferentIdentifiers`), and titles naming disjoint defect classes
   (`classesConflict`: a race is not an off-by-one, #964). A key named only in a description, or

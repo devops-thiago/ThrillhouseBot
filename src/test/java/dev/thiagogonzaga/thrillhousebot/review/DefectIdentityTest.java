@@ -632,6 +632,16 @@ class DefectIdentityTest {
             "d");
 
     assertTrue(DefectIdentity.classesConflict(race.title(), offByOne.title()));
+    // A race worded without "race" still names its class.
+    assertApart(
+        offByOne,
+        at(
+            "medium",
+            "low",
+            race.file(),
+            34,
+            "Per-address limit guard can be passed by two requests at once",
+            "d"));
     assertApart(offByOne, race);
   }
 
