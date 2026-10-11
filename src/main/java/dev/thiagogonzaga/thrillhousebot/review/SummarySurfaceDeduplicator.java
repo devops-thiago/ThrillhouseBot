@@ -339,12 +339,12 @@ final class SummarySurfaceDeduplicator {
         && overlap(candidateWords, claimWords) >= OVERLAP_THRESHOLD;
   }
 
-  /** Shared content words over the shorter side's count; 0 when either side has none. */
+  /**
+   * Shared content words over the shorter side's count. Both callers have checked the shorter side
+   * holds words first (a shared phrase, or {@value #MIN_OVERLAP_TOKENS} words).
+   */
   private static double overlap(Set<String> words, Set<String> otherWords) {
     int shorter = Math.min(words.size(), otherWords.size());
-    if (shorter == 0) {
-      return 0;
-    }
     long shared = otherWords.stream().filter(words::contains).count();
     return (double) shared / shorter;
   }

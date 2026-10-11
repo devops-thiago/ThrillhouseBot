@@ -706,5 +706,82 @@ class DefectIdentityTest {
     assertEquals(
         Set.of("complexity"), DefectIdentity.defectClasses("dedupe is O(n^2) over 2M samples"));
     assertFalse(DefectIdentity.classesConflict("Possible null user", "Unrelated wording"));
+    assertEquals(Set.of(), DefectIdentity.symbols(null));
+    assertEquals(Set.of(), DefectIdentity.symbols("go() fails"), "two-character names say nothing");
+  }
+
+  @Test
+  void theEdgesOfEachArmStayApart() {
+    var withFile = at("high", "high", "src/A.java", 1, "Race on the counter", "d");
+    assertFalse(
+        DefectIdentity.sameDefect(
+            at("high", "high", null, 1, "Race on the counter", "d"), withFile));
+    assertFalse(
+        DefectIdentity.sameDefect(
+            withFile, at("high", "high", null, 1, "Race on the counter", "d")));
+
+    // Titles that restate each other word for word but with opposite polarity are no pair.
+    assertFalse(
+        SummarySurfaceDeduplicator.titlesRestate(
+            "Request input is sanitized before the query runs",
+            "Request input is not sanitized before the query runs"));
+    assertFalse(
+        SummarySurfaceDeduplicator.titlesRestate(
+            "Cache entry expires after one hour in staging only",
+            "Cache entry expires immediately, so every request misses and recomputes the report"));
+
+    // A shared subject and a shared defect class, with no other shared word, pair.
+    assertTrue(
+        DefectIdentity.sameDefect(
+            at("high", "high", "src/Ledger.java", 5, "LedgerCache race", "d"),
+            at("medium", "low", "src/Api.java", 9, "LedgerCache unsynchronized", "d")));
+    // A file class name with a shared defect class, and nothing else, pairs too.
+    assertTrue(
+        DefectIdentity.sameDefect(
+            at("high", "high", "src/Ledger.java", 5, "Ledger race", "d"),
+            at("medium", "low", "src/Api.java", 9, "Concurrent Ledger writes", "d")));
+  }
+
+  @Test
+  void aCitationNeedsADescriptionATitleAFileNameAndALineInRange() {
+    var cited = at("medium", "low", "src/port/Main.scala", 32, "PortEvent.parse crashes", "d");
+    var citing = "Calls PortEvent.parse (src/port/Main.scala:%s).";
+
+    assertFalse(
+        DefectIdentity.sameDefect(
+            at("medium", "high", "src/port/Models.scala", 11, "Malformed line crashes", null),
+            cited));
+    assertFalse(
+        DefectIdentity.sameDefect(
+            at("medium", "high", "src/port/Models.scala", 11, "Malformed line crashes", "x"),
+            at("medium", "low", "src/port/Main.scala", 32, null, "d")));
+    assertFalse(
+        DefectIdentity.sameDefect(
+            at("medium", "high", "src/port/Models.scala", 11, "Malformed line crashes", "x"),
+            at("medium", "low", "src/port/", 32, "PortEvent.parse crashes", "d")));
+    for (var outOfRange : List.of("10", "40-50")) {
+      assertFalse(
+          DefectIdentity.sameDefect(
+              at(
+                  "medium",
+                  "high",
+                  "src/port/Models.scala",
+                  11,
+                  "Malformed line crashes",
+                  citing.formatted(outOfRange)),
+              cited),
+          outOfRange);
+    }
+    assertTrue(
+        DefectIdentity.sameDefect(
+            at(
+                "medium",
+                "high",
+                "src/port/Models.scala",
+                11,
+                "Handler panics on bad input",
+                citing.formatted("30")),
+            cited),
+        "one shared defect class (crash) is enough beside the citation");
   }
 }
