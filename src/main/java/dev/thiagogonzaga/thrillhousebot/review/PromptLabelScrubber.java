@@ -682,16 +682,26 @@ public final class PromptLabelScrubber {
   }
 
   /**
-   * {@link #restarted} for a {@link #RESTARTED_SENTENCE} match in {@code text}, which must open the
-   * text, a line (after any list or quote marker, which stays) or a sentence; anywhere else the
-   * start is part of a clause and the match stays. Decided here rather than by a lookbehind, which
-   * kept the pattern over the regex complexity budget.
+   * {@link #restarted} for a {@link #RESTARTED_SENTENCE} match in {@code text} when its broken-off
+   * start opens the text, a line or a sentence, after blanks and at most one list or quote marker
+   * ({@code -}, {@code *}, {@code +}, {@code >}) followed by a blank, which stays; anywhere else
+   * the start is part of a clause and the match stays. Decided here rather than by a lookbehind,
+   * which kept the pattern over the regex complexity budget.
    */
   private static String restartedSentence(String text, MatchResult m) {
-    int start = m.start();
-    boolean opens =
-        start == 0 || ".!?\n".indexOf(text.charAt(start - 1)) >= 0 || opensLine(text, start);
-    return opens ? restarted(m) : m.group();
+    return opensRestart(text, m.end(1)) ? restarted(m) : m.group();
+  }
+
+  /**
+   * Whether only blanks and at most one marker followed by a blank stand between {@code token} and
+   * the start of the text or a {@code .}, {@code !}, {@code ?} or line break before it.
+   */
+  private static boolean opensRestart(String text, int token) {
+    int at = skipBlanksBack(text, token, 0);
+    if (at > 0 && at < token && "-*+>".indexOf(text.charAt(at - 1)) >= 0) {
+      at = skipBlanksBack(text, at - 1, 0);
+    }
+    return at == 0 || ".!?\n".indexOf(text.charAt(at - 1)) >= 0;
   }
 
   /** Drops each {@link #RESTARTED_AFTER_CODE_SPAN} outside a fenced block. */
