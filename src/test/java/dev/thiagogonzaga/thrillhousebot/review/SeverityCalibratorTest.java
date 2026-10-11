@@ -734,7 +734,7 @@ class SeverityCalibratorTest {
   @CsvSource({
     "busybox:1.36,true",
     "ghcr.io/acme/tool:v0.4.25,true",
-    "\"busybox:1.36\",true",
+    "'\"busybox:1.36\"',true",
     "alpine@sha256:abc,true",
     "registry:5000/tools,false",
     "tools:edge,false",

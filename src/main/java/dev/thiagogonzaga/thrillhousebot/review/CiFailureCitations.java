@@ -56,6 +56,9 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   /** The line naming the failing checks the section did not detail. */
   private static final String NOT_DETAILED = CiFailureContextResolver.NOT_DETAILED;
 
+  /** The prefix of each check named under {@link #NOT_DETAILED}. */
+  private static final String NAMED_ONLY = CiFailureContextResolver.NAMED_ONLY;
+
   /** Characters of a check name repeated in a note; names are output the pull request controls. */
   static final int MAX_NAME_CHARS = 120;
 
@@ -111,12 +114,17 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       return NONE;
     }
     var names = new ArrayList<String>();
+    var namedOnly = false;
     for (String line : section.split("\n")) {
       int conclusion = line.lastIndexOf(CONCLUSION);
       if (line.startsWith(CHECK_HEADING) && conclusion > CHECK_HEADING.length()) {
         names.add(line.substring(CHECK_HEADING.length(), conclusion));
-      } else if (line.startsWith(NOT_DETAILED)) {
-        names.addAll(Arrays.asList(line.substring(NOT_DETAILED.length()).split(", ")));
+      } else if (line.equals(NOT_DETAILED)) {
+        namedOnly = true;
+      } else if (namedOnly && line.startsWith(NAMED_ONLY)) {
+        names.add(line.substring(NAMED_ONLY.length()));
+      } else {
+        namedOnly = false;
       }
     }
     var checks =

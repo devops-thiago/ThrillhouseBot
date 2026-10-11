@@ -130,14 +130,29 @@ class CiFailureCitationsTest {
   @Test
   void checksTheSectionDidNotDetailAreRecordedToo() {
     var section =
-        ROUND_12_SECTION + "\nAlso failing, not detailed: lint / eslint, build (windows-latest)\n";
+        ROUND_12_SECTION
+            + "\nAlso failing, not detailed:\n- lint / eslint\n- build (windows-latest)\n"
+            + "- deploy, staging\n";
 
     var citations = CiFailureCitations.parse(section);
 
     assertTrue(citations.cites(described("The eslint step of the lint / eslint check failed.")));
     assertTrue(citations.cites(described("The build (windows-latest) check fails in CI.")));
+    // A name holding a comma stays one check; no phantom "staging" check is recorded.
+    assertTrue(citations.cites(described("The deploy, staging job fails in CI.")));
+    assertFalse(citations.cites(described("The staging job fails in CI.")));
     assertTrue(citations.cites(described("The lint and eslint checks fail in CI on this line.")));
     assertFalse(citations.cites(described("Lint and eslint both fail on this line.")));
+  }
+
+  /** The named-only list ends at the first line that is not one of its entries. */
+  @Test
+  void theNamedOnlyListEndsAtItsFirstOtherLine() {
+    var citations =
+        CiFailureCitations.parse("Also failing, not detailed:\n- lint\n\n- a later dash line\n");
+
+    assertTrue(citations.cites(described("The lint check fails in CI.")));
+    assertFalse(citations.cites(described("The a later dash line check fails in CI.")));
   }
 
   /**
