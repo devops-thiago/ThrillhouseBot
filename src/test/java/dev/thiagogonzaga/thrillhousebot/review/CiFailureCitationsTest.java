@@ -125,6 +125,7 @@ class CiFailureCitationsTest {
     assertSame(CiFailureCitations.NONE, CiFailureCitations.parse(null));
     assertSame(CiFailureCitations.NONE, CiFailureCitations.parse("  "));
     assertSame(CiFailureCitations.NONE, CiFailureCitations.parse("### ··· (conclusion: failure)"));
+    assertSame(CiFailureCitations.NONE, CiFailureCitations.parse("### (conclusion: failure)"));
     assertFalse(CiFailureCitations.NONE.cites(ANGULAR_OFF_BY_ONE));
     assertNull(CiFailureCitations.NONE.noteFor(ANGULAR_OFF_BY_ONE));
   }

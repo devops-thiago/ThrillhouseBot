@@ -239,6 +239,16 @@ class EstablishedConfidenceFloorTest {
             empty, empty, null, FindingEvidence.NONE));
   }
 
+  /** A finding with no words asserts no sink; a missing diff shows no path. */
+  @Test
+  void aBareFindingOrAMissingDiffIsLeftAlone() {
+    var bare = new ReviewResponse.Finding("high", "low", "a.go", 1, null, null, null, null);
+    var sqli = finding("critical", "low", "SQL injection: vehicle ID concatenated", GO_SQLI);
+
+    assertEquals("low", floored(bare, GO_DIFF));
+    assertEquals("low", floored(sqli, null));
+  }
+
   @Test
   void theTwoComponentEvidenceCitesNoFailingCheck() {
     var evidence = new FindingEvidence(CitedLocations.NONE, ContextEvidence.NONE);

@@ -1247,9 +1247,10 @@ public class FindingVerificationService {
       }
     }
     List<String> diffLines =
-        diff == null
-            ? List.of()
-            : diff.lines().map(line -> collapsedWhitespace(line).strip()).toList();
+        Objects.requireNonNullElse(diff, "")
+            .lines()
+            .map(line -> collapsedWhitespace(line).strip())
+            .toList();
     var adjusted = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     var changed = false;
     for (ReviewResponse.Finding finding : response.findings()) {
@@ -1291,21 +1292,14 @@ public class FindingVerificationService {
    * the cost of a "medium" label on a claim it already makes in full.
    */
   private static boolean taintPathInDiff(ReviewResponse.Finding finding, List<String> diffLines) {
-    String text =
-        (finding.title() == null ? "" : finding.title())
-            + "\n"
-            + (finding.description() == null ? "" : finding.description());
-    String asserted = CONDITIONAL_CLAUSE.matcher(text).replaceAll(" ");
-    if (!namesInjectionSink(text)
-        || !claimsNothingNeutralizesIt(text)
-        || deniesTheSink(asserted)
-        || assertsMitigation(asserted)) {
+    if (!assertsUnmitigatedSink(finding)) {
       return false;
     }
+    String text = findingText(finding);
     var quotedLines = new HashSet<Integer>();
     for (Pattern span : List.of(QUOTED_SPAN, CALL_EXPRESSION)) {
       Matcher m = span.matcher(text);
-      while (m.find() && quotedLines.size() < TAINT_PATH_FRAGMENTS) {
+      while (m.find()) {
         String fragment = collapsedWhitespace(quotedText(m)).strip();
         if (fragment.length() >= MIN_FRAGMENT_CHARS) {
           IntStream.range(0, diffLines.size())
@@ -1338,13 +1332,23 @@ public class FindingVerificationService {
 
   private static boolean belowInjectionSinkFloor(ReviewResponse.Finding finding) {
     // Both enums declare constants most- to least-severe, so a higher ordinal is a lower rating.
-    if (RiskLevel.fromString(finding.risk()).ordinal() <= INJECTION_SINK_FLOOR.ordinal()) {
-      return false;
-    }
-    String text =
-        (finding.title() == null ? "" : finding.title())
-            + "\n"
-            + (finding.description() == null ? "" : finding.description());
+    return RiskLevel.fromString(finding.risk()).ordinal() > INJECTION_SINK_FLOOR.ordinal()
+        && assertsUnmitigatedSink(finding);
+  }
+
+  /** The finding's title and description, the text both injection-sink readings scan. */
+  private static String findingText(ReviewResponse.Finding finding) {
+    return (finding.title() == null ? "" : finding.title())
+        + "\n"
+        + (finding.description() == null ? "" : finding.description());
+  }
+
+  /**
+   * Whether the finding asserts an injection sink nothing neutralizes, the class {@link
+   * #floorInjectionSinkRisk} floors and {@link #floorEstablishedConfidence} reads.
+   */
+  private static boolean assertsUnmitigatedSink(ReviewResponse.Finding finding) {
+    String text = findingText(finding);
     // The trigger is read on the whole finding; the defeaters only on what it ASSERTS. A denial or
     // a mitigation raised as a hypothesis the finding then rejects is not a statement that the sink
     // is safe, and the review prompt mandates exactly that hypothesis on this class (#608).

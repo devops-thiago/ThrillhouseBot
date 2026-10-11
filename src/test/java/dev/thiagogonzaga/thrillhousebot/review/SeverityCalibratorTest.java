@@ -648,6 +648,8 @@ class SeverityCalibratorTest {
             null);
 
     assertEquals(List.of(), SeverityCalibrator.calibrate(response(raw)).findings());
+    assertEquals(
+        List.of(), SeverityCalibrator.calibrate(response(raw), (file, line) -> "  ").findings());
   }
 
   /**
