@@ -1040,10 +1040,11 @@ public record ReviewResult(
   /**
    * One previous finding's status this round.
    *
-   * @param earlierRound set on a status the approval backstop gave a finding of a round older than
-   *     the effective previous one: its {@code id} is relative to the round that raised the
-   *     finding, so it names nothing in the effective previous round's id space and the finding is
-   *     read from here instead (#959); {@code null} on every status that id space does name
+   * @param earlierRound set on every status the approval backstop gave: its {@code id} is relative
+   *     to the round that raised the finding (or {@link FollowUpAnalyzer#EARLIER_ROUND_ID}), which
+   *     is usually older than the effective previous round, so consumers read the finding from here
+   *     rather than map the id (#959); {@code null} on the model's statuses and the passes that
+   *     rewrite them, whose ids name the effective previous round's findings
    */
   @RegisterForReflection
   public record PreviousFindingStatus(
@@ -1056,7 +1057,7 @@ public record ReviewResult(
       this(id, status, note, null);
     }
 
-    /** Whether the backstop gave this status to a finding of an earlier round (#957, #959). */
+    /** Whether the approval backstop gave this status (#957, #959). */
     public boolean fromEarlierRound() {
       return earlierRound != null;
     }

@@ -940,6 +940,43 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void aFindingOnAPathTheDiffNeverHadIsNotSupersededOnAnUnchangedHead() throws Exception {
+    // #925: ThrillhouseBot-test#107 round 2, head unchanged at 77b8cd8, retired a finding stored at
+    // src/main/... while the file is under src/test/... The path never existed in the diff, so on
+    // the same head it is a path defect, not code that left the diff, whether the model reports
+    // the finding or omits it.
+    var resolver =
+        new DiffLineResolver(
+            Map.of("kotlin/src/test/kotlin/dev/tbtest/rooms/RoomsTest.kt", patch(23)));
+    var misPathed =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "kotlin/src/main/kotlin/dev/tbtest/rooms/RoomsTest.kt",
+            23,
+            "Mock stub contradicts the dispatcher",
+            "Desc",
+            null,
+            null);
+    var previousJson =
+        new ObjectMapper()
+            .writeValueAsString(new ReviewResponse(List.of(misPathed), List.of(), null));
+    var reported = List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still"));
+
+    var reportedRound = analyzer.supersedeVanished(previousJson, reported, resolver);
+    var omittedRound =
+        analyzer.addUnreportedVanished(List.of(misPathed), List.of(), resolver, Map.of());
+    assertEquals("superseded", reportedRound.getFirst().status(), "a moved head supersedes it");
+    assertEquals("superseded", omittedRound.getFirst().status(), "a moved head supersedes it");
+
+    for (var round : List.of(reportedRound, omittedRound)) {
+      var held = FollowUpAnalyzer.holdSupersededOnUnchangedHead(round, true);
+      assertEquals("unresolved", held.getFirst().status());
+      assertEquals(FollowUpAnalyzer.HEAD_UNCHANGED_NOTE, held.getFirst().note());
+    }
+  }
+
+  @Test
   void supersedeVanishedShouldNotSupersedeASettledId() {
     // Finding #2's code vanished, but a newer round already closed it (settled). It must not be
     // rewritten to superseded, or hasSupersededPrevious would pin on and re-post the summary every
@@ -5009,6 +5046,49 @@ class FollowUpAnalyzerTest {
     var note = held.get(0).status().note();
     assertTrue(note.startsWith(RebuttalContradiction.NOTE_LEAD_IN), note);
     assertTrue(note.contains("A second @thrillhousebot declined comment"), note);
+  }
+
+  /** With the re-check off a conversation decline stands unweighed, as on the effective round. */
+  @Test
+  void anEarlierRoundConversationDeclineStandsWhenTheRecheckIsOff() {
+    var held =
+        new FollowUpAnalyzer(new ObjectMapper(), false)
+            .heldPreviousFindings(
+                List.of(new ReviewResponse(RACE_PREVIOUS, List.of(), null)),
+                null,
+                List.of(),
+                declinesRace(ASYNC_AFTER_ACK),
+                new DiffLineResolver(Map.of(PAUSE_FILE, patch(60))),
+                BOT_ID,
+                Map.of(),
+                () -> DISPATCHING_DIFF);
+
+    assertEquals(1, held.size());
+    assertEquals("justified", held.get(0).status().status());
+  }
+
+  /** A thread whose only replies cannot hold write access names no decline to learn from. */
+  @Test
+  void anEarlierRoundThreadWithoutAWriteCapableReplyTeachesNothing() {
+    var finding = new ReviewResponse.Finding("high", "src/A.java", 10, "Race", "d", null, null);
+    var threads =
+        List.of(
+            comment(100L, null, "src/A.java", "**HIGH — Race**", BOT),
+            comment(101L, 100L, "src/A.java", RACE_STANDING_DECLINE, "outsider", "CONTRIBUTOR"));
+
+    assertTrue(
+        analyzer
+            .survivingEarlierRoundDeclines(
+                List.of(
+                    new ReviewResult.PreviousFindingStatus(
+                        FollowUpAnalyzer.EARLIER_ROUND_ID,
+                        "justified",
+                        "n",
+                        new ReviewResult.EarlierRound(finding, 100L))),
+                threads,
+                BOT_ID,
+                () -> "+counter.bump();")
+            .isEmpty());
   }
 
   /** One directive naming the same defect raised in two rounds is one decline, not two. */

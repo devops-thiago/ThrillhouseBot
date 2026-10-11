@@ -4588,7 +4588,11 @@ class ReviewOrchestratorTest {
     void shouldFileFindingOnTheFileWhenItsLineIsOutsideDiff() {
       var finding = new Finding(RiskLevel.MEDIUM, "missing.java", 10, "Bug", "desc", null, null);
       var result = resultWithFinding(finding, ReviewState.COMMENT);
-      var resolver = new DiffLineResolver(Map.of("src/Main.java", "@@ +1,1 @@\n+line"));
+      // missing.java is changed but has no patch to parse (binary, or too large to diff).
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", "@@ +1,1 @@\n+line"),
+              List.of("src/Main.java", "missing.java"));
       when(suggestionFormatter.formatReviewComment(eq(finding), eq(false), anyInt()))
           .thenReturn("body");
 
@@ -6153,6 +6157,29 @@ class ReviewOrchestratorTest {
       assertSame(exact, updated.findings().get(0));
       assertEquals("External/container", updated.findings().get(1).file());
       assertEquals("Subproject commit 498e11b", updated.findings().get(1).suggestionOld());
+    }
+
+    /**
+     * #945: ThrillhouseBot-test#150 cited {@code csharp/docs/CONFIG-CSHARP.md} for the changed
+     * {@code docs/CONFIG-CSHARP.md}. The finding leaves this step, which is what is persisted,
+     * posted and listed in the review body, on the changed file, anchored from it.
+     */
+    @Test
+    void movesAFindingOnAMistypedPathOntoTheChangedFileAndAnchorsItThere() {
+      var lineResolver =
+          new DiffLineResolver(
+              Map.of("docs/CONFIG-CSHARP.md", "@@ -6,0 +7,1 @@\n+| `PERMIT_TTL` | 30 |"),
+              List.of("docs/CONFIG-CSHARP.md", "csharp/src/Program.cs"));
+      var finding =
+          new ReviewResponse.Finding(
+              "medium", "high", "csharp/docs/CONFIG-CSHARP.md", 7, "Doc", "Desc", null, null);
+
+      var updated =
+          findingPipeline.populateMissingAnchors(
+              new ReviewResponse(List.of(finding), List.of(), null), lineResolver);
+
+      assertEquals("docs/CONFIG-CSHARP.md", updated.findings().getFirst().file());
+      assertEquals("| `PERMIT_TTL` | 30 |", updated.findings().getFirst().suggestionOld());
     }
 
     @Test
