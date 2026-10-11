@@ -667,7 +667,13 @@ diff contradicts keeps the finding open, and so does a lone "this cannot run
 concurrently" reply to a concurrency finding, because what makes a path
 concurrent (a server that handles each request on its own thread, an executor
 in another file) is rarely in the diff. Any other reply, or a second one,
-stands, and the finding is counted justified.
+stands: the finding is counted justified, its thread is resolved, and with
+review learnings on the reply is offered to the store under the same rules as
+any other decline. An older round's finding whose code left the diff is counted
+superseded, and one cleared or declined from the PR conversation is counted
+resolved or justified, so the summary's counts add up to the findings carried
+in. These are recomputed every round, so they never post a delta comment or
+re-post the summary by themselves.
 
 Set it to `false` to make a maintainer's reply final.
 
@@ -843,9 +849,14 @@ finding stays declined: once a round has recorded the decline `justified`, the
 finding is not raised again while the rule matches the same content (same file,
 title and anchor, and for a secret the same line). A secret finding ends with a
 hidden `thrillhousebot:scan-content` marker holding the first eight hex digits
-of a SHA-256 of the flagged line (for a private key, its block), which is how a
-later round tells a new value with the same prefix and length from the declined
-one. A new value, or any other change to the line apart from leading and
+of an HMAC-SHA-256 of the flagged line (for a private key, its block), keyed
+from `GITHUB_WEBHOOK_SECRET`, which is how a later round tells a new value with
+the same prefix and length from the declined one. The key means a reader of the
+pull request cannot test a guessed value against the marker. The same secret
+gives the same marker across rounds and restarts; changing the webhook secret
+makes each declined secret finding come back once, and the next decline stores
+the new marker. A decline recorded under the unkeyed marker of 0.7.0 keeps
+matching its line. A new value, or any other change to the line apart from leading and
 trailing whitespace, is raised again. A secret finding declined before 0.7.0 has
 no fingerprint, so its decline holds only until the head moves; it is then
 raised once more, with the marker.

@@ -438,9 +438,7 @@ public final class PromptLabelScrubber {
     var summary = scrubMarkdown(result.summaryMarkdown(), result.findings());
     // A status note is posted too: a reopened decline's note goes into the review body.
     var statuses =
-        result.previousStatuses().stream()
-            .map(s -> new ReviewResult.PreviousFindingStatus(s.id(), s.status(), scrub(s.note())))
-            .toList();
+        result.previousStatuses().stream().map(s -> s.withNote(scrub(s.note()))).toList();
     var openPrevious = scrubFindings(result.openPreviousFindings());
     if (findings.equals(result.findings())
         && Objects.equals(summary, result.summaryMarkdown())
