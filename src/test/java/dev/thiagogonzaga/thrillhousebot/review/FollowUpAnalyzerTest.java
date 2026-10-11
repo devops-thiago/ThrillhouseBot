@@ -4961,6 +4961,20 @@ class FollowUpAnalyzerTest {
                 + " request goroutine.");
     assertTrue(longWords.contains("no review has weighed"), longWords);
 
+    // Neither a word over forty characters, a non-breaking or wide gap, nor a typographic
+    // apostrophe hides the negator.
+    for (var denied :
+        List.of(
+            "+// The counter is not aVeryLongCamelCaseIdentifierLongerThanFortyCharacters thereby"
+                + " shared by every request goroutine.",
+            "+// The counter is not shared by every request goroutine.",
+            "+// The counter is not      shared by every request goroutine.",
+            "+// The counter isn’t shared by every request goroutine.",
+            "+// The counter is not thread-local-only shared by every request goroutine.")) {
+      var note = heldNote(denied);
+      assertTrue(note.contains("no review has weighed"), denied + " -> " + note);
+    }
+
     var otherClause =
         heldNote("+// The counter is not reset, it is shared by every request goroutine.");
     assertTrue(otherClause.contains("says this path runs concurrently"), otherClause);

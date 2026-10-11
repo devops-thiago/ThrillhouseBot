@@ -341,7 +341,7 @@ final class RebuttalContradiction {
 
   /** The marker that opens a whole-line comment: {@code //}, {@code #}, {@code *}, {@code --}. */
   private static final Pattern COMMENT_LINE =
-      Pattern.compile("[ \\t]{0,40}(?://+|#+|/?\\*+/?|--|;+)");
+      Pattern.compile("\\h{0,40}+(?://+|#+|/?\\*+/?|--|;+)");
 
   /**
    * What turns the {@link #STATED_CONCURRENCY} statement right after it into a denial: a negator at
@@ -350,13 +350,15 @@ final class RebuttalContradiction {
    * before it ("rejects concurrent requests", "prevents concurrent access"). A verb that only
    * protects shared state ("the lock guards every field shared by every request goroutine",
    * "serializes concurrent requests") still says the path is reached concurrently, so it denies
-   * nothing.
+   * nothing. A gap is any horizontal space, a non-breaking one included, and a word counts as one
+   * whatever its length (a long identifier); the possessive quantifiers keep the scan linear.
    */
   private static final Pattern DENIES =
       ci(
-          "(?:\\b(?:not|never|no|without|cannot|can'?t|won'?t|isn'?t)\\b"
-              + "(?:[ \\t-]{1,4}[\\w'-]{1,40}){0,2}"
-              + "|\\b(?:rejects?|prevents?|avoids?|forbids?|disallows?|blocks?)\\b)[ \\t-]{0,4}$");
+          "(?:\\b(?:not|never|no|without|cannot|can['’]?t|won['’]?t|isn['’]?t)\\b"
+              + "(?:[\\h-]{1,16}+[\\w'’]++(?:-[\\w'’]++)*+){0,2}"
+              + "|\\b(?:rejects?|prevents?|avoids?|forbids?|disallows?|blocks?)\\b)"
+              + "[\\h-]{0,16}+$");
 
   /**
    * The note of a finding the review still reports open after a maintainer answered it on its
