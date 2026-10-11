@@ -2043,6 +2043,12 @@ class PrSummaryGeneratorTest {
         "flowchart TD\n  A[x & y] --> B",
         // An edge label left open.
         "flowchart TD\n  A -->|x B",
+        // Two edge labels left open on one line do not pair across the arrow between them.
+        "flowchart TD\n  A -->|x B -->|y C",
+        // A directive or comment before the diagram type is not recognised, so the diagram goes.
+        "%%{init: {'theme': 'dark'}}%%\nflowchart TD\n  A -> B",
+        // A single-dash two-way edge is not a Mermaid link; the two-dash one is kept below.
+        "flowchart TD\n  A <-> B",
         "flowchart TD\n  A] --> B",
         // A flag shape that never closes, or one whose label breaks it.
         "flowchart TD\n  A>flag --> B",
@@ -2070,6 +2076,7 @@ class PrSummaryGeneratorTest {
       strings = {
         "flowchart TD\n  A[\"call foo() -> bar\"] --> B{\"ready?\"}\n  B -->|yes -> go| C",
         "flowchart LR\n  A -.-> B\n  B ==> C\n  C --- D\n  D -- text --> E\n  E <--> F",
+        "flowchart LR\n  A -->|x-y| B -->|re-try| C ==>|go| D",
         "graph TD\n  subgraph S [\"Store\"]\n    A([\"Fetch, merge\"]) --> B[(\"db\")]\n  end",
         "flowchart TD\n  %% a comment, with commas,\n  A --> B\n  class A,B hot\n  linkStyle 0,1 x",
         "flowchart TD\n  A --> B & C\n  C{{\"hex\"}} --> D",
