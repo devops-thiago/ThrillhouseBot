@@ -1011,7 +1011,9 @@ public class PrSummaryGenerator {
    * Whether every node shape on {@code line} parses once labels are removed: its brackets close in
    * order, a bracket opens inside another only straight after it (the {@code [(db)]}, {@code
    * ([stadium])} and {@code {{hex}}} shapes), and no unquoted label holds a colon, an ampersand or
-   * a semicolon. GitHub's parser rejects {@code A(f(x))} and {@code A(t: 3)}, which balance.
+   * a semicolon. GitHub's parser rejects {@code A(f(x))} and {@code A(t: 3)}, which balance. The
+   * asymmetric shape {@code A>flag]} opens with a {@code >} straight after the node id and closes
+   * with {@code ]}; an arrow's {@code >} follows a dash, an equals sign or a dot instead.
    */
   private static boolean shapesParse(String line) {
     var open = new ArrayDeque<Character>();
@@ -1030,6 +1032,11 @@ public class PrSummaryGenerator {
    * {@code open} for a bracket.
    */
   private static boolean acceptsNext(ArrayDeque<Character> open, char previous, char c) {
+    if (c == '>' && open.isEmpty() && (Character.isLetterOrDigit(previous) || previous == '_')) {
+      // The asymmetric shape's opener: it closes like a square bracket.
+      open.push('[');
+      return true;
+    }
     if (OPENING_BRACKETS.indexOf(c) >= 0) {
       var nestedMidLabel = !open.isEmpty() && OPENING_BRACKETS.indexOf(previous) < 0;
       open.push(c);

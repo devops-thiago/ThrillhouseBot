@@ -2044,6 +2044,9 @@ class PrSummaryGeneratorTest {
         // An edge label left open.
         "flowchart TD\n  A -->|x B",
         "flowchart TD\n  A] --> B",
+        // A flag shape that never closes, or one whose label breaks it.
+        "flowchart TD\n  A>flag --> B",
+        "flowchart TD\n  A>t: 3] --> B",
         "flowchart TD\n  A --> B,"
       })
   void aFlowchartThatWouldNotParseIsOmitted(String diagram) {
@@ -2068,7 +2071,10 @@ class PrSummaryGeneratorTest {
         "graph TD\n  subgraph S [\"Store\"]\n    A([\"Fetch, merge\"]) --> B[(\"db\")]\n  end",
         "flowchart TD\n  %% a comment, with commas,\n  A --> B\n  class A,B hot\n  linkStyle 0,1 x",
         "flowchart TD\n  A --> B & C\n  C{{\"hex\"}} --> D",
-        "flowchart TD\n\n  A --> B"
+        "flowchart TD\n\n  A --> B",
+        // The asymmetric (flag) shape, quoted and bare, beside arrows whose '>' follows a dash.
+        "flowchart TD\n  Deploy>\"release\"] --> Prod",
+        "flowchart TD\n  Deploy>release] -->Prod\n  Prod ==>Done"
       })
   void aFlowchartThatParsesIsKept(String diagram) {
     assertTrue(PrSummaryGenerator.flowchartParses(diagram), diagram);
