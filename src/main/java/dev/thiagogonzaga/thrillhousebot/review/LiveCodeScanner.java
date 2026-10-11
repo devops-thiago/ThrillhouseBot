@@ -44,13 +44,15 @@ import java.util.Set;
  * <p>The machine is deliberately one machine for every language in the corpus rather than a lexer
  * per language: the delimiter table is the union of the shapes the reviewed diffs actually carry.
  * Where one and the same delimiter reads differently by language — a backslash inside a backtick or
- * a triple quote, a terminator after a triple quote — the file the diff names settles a profile of
- * three booleans ({@link #fileNamed}) rather than a second machine. That answers every shape whose
- * delimiters are unambiguous across the corpus, and it cannot answer the two that are genuinely
- * ambiguous without knowing the language — Python's {@code //} floor division, which reads as a
- * comment start, and a Rust lifetime that pairs with a later apostrophe. Both are left as they
- * were, both fail by blanking rather than by matching, and both are recorded in {@code
- * RebuttalContradiction.rightSideCode} as the residue a language hint would close.
+ * a triple quote, a terminator after a triple quote, an apostrophe that may or may not open a
+ * string — the file the diff names settles a profile of four booleans ({@link #fileNamed}) rather
+ * than a second machine. That answers every shape whose delimiters are unambiguous across the
+ * corpus, and it cannot answer the two that are genuinely ambiguous without knowing the language —
+ * Python's {@code //} floor division, which reads as a comment start, and, in a fragment that names
+ * no file or a file whose apostrophe can be a lifetime, a Rust lifetime that pairs with a later
+ * apostrophe. Both are left as they were, both fail by blanking rather than by matching, and both
+ * are recorded in {@code RebuttalContradiction.rightSideCode} as the residue a language hint would
+ * close.
  *
  * <h2>Which way it errs</h2>
  *
@@ -209,6 +211,16 @@ final class LiveCodeScanner {
   private static final Set<String> TRIPLE_QUOTE_BODY_FOLLOWS_OPENER_EXTENSIONS =
       Set.of("kt", "kts", "py");
 
+  /**
+   * The file extensions whose {@code '} opens a string of any length and is never bare syntax — no
+   * lifetime, char literal or symbol — so a {@code '}-quoted span on one line is always a literal
+   * and {@link #isMisreadApostrophePair} has no premise there (#762).
+   */
+  private static final Set<String> SINGLE_QUOTE_STRING_EXTENSIONS =
+      Set.of(
+          "py", "pyi", "js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "vue", "svelte", "rb",
+          "php", "pl", "pm", "lua", "sh", "bash", "zsh", "sql", "groovy", "gradle", "dart");
+
   /** What the file being scanned settles; {@link Profile#UNNAMED} until a header names one. */
   private Profile profile = Profile.UNNAMED;
 
@@ -223,7 +235,7 @@ final class LiveCodeScanner {
    * hunk header of the same file.
    *
    * <p>This settles the lexical facts the delimiter table cannot carry on its own, because one and
-   * the same delimiter reads differently by language — a {@link Profile} of three booleans, not the
+   * the same delimiter reads differently by language — a {@link Profile} of four booleans, not the
    * lexer per language #791 declined. The backtick is both Go's raw string and JavaScript's
    * template literal, and the two disagree on a backslash: Go takes it literally, so a Windows path
    * may end right before the closer and honouring the escape there stepped over the closer and hid
@@ -232,8 +244,10 @@ final class LiveCodeScanner {
    * (#651 review). The triple quote is Java's text block, Python's string and Kotlin's raw string,
    * and Kotlin disagrees with the other two on the backslash, which it holds literally, and with
    * Java on the opener, which its body may follow on the same line — as Python's may, so the closer
-   * rule is off for both (#814). A fragment that names no file keeps the reading the table always
-   * had.
+   * rule is off for both (#814). The apostrophe is a Rust lifetime or a char literal in some
+   * languages and a string of any length in others, such as Python and TypeScript, where a quoted
+   * span is a literal whatever it holds (#762). A fragment that names no file keeps the reading the
+   * table always had.
    */
   void fileNamed(String path) {
     var dot = path.lastIndexOf('.');
@@ -376,12 +390,14 @@ final class LiveCodeScanner {
    * literal's remainder as live code, which is the over-fire direction. The region is carried on
    * the stack instead and closes on the line that closes it.
    */
-  private static boolean opensNoLiteral(String line, int i, int body, Delimiter delimiter) {
+  private boolean opensNoLiteral(String line, int i, int body, Delimiter delimiter) {
     var close = closerIndex(line, body, delimiter.close());
     if (close < 0) {
       return !continuesOnNextLine(line, body);
     }
-    return isMisreadApostrophePair(line, delimiter.open().charAt(0), i, close);
+    // In a file whose language spells strings with ' the pair is a literal, whatever it holds.
+    return !profile.singleQuoteStrings()
+        && isMisreadApostrophePair(line, delimiter.open().charAt(0), i, close);
   }
 
   /**
@@ -518,6 +534,12 @@ final class LiveCodeScanner {
    * as they were (#780) rather than grown, and the residue — two lifetimes with live code and no
    * semicolon between them — blanks that code, which keeps the decline. Double-quote and backtick
    * openers have no lifetime-style bare use, so the guard applies to {@code '} alone.
+   *
+   * <p>The tells are only consulted where {@code '} may be bare syntax: a fragment that names no
+   * file, or a file of a language whose apostrophe is a char literal or a lifetime. In a Python,
+   * JavaScript, TypeScript or other single-quote-string file ({@link Profile#singleQuoteStrings})
+   * the span is always a literal, so {@code msg = 'queue a pool.submit(; then wait'} is blanked
+   * rather than kept for its semicolon (#762).
    */
   private static boolean isMisreadApostrophePair(String line, char quote, int open, int close) {
     if (quote != '\'') {
@@ -609,26 +631,35 @@ final class LiveCodeScanner {
   /**
    * The lexical facts the delimiter table cannot settle on its own, because one and the same
    * delimiter reads differently by language: whether a backslash escapes inside a backtick literal,
-   * whether it escapes inside a triple-quoted one, and whether a statement terminator after a
-   * triple quote marks it as a closer. Computed once per file from the extension the diff names
-   * ({@link #fileNamed}) — three booleans, deliberately, rather than a grammar per language.
+   * whether it escapes inside a triple-quoted one, whether a statement terminator after a triple
+   * quote marks it as a closer, and whether {@code '} always opens a string. Computed once per file
+   * from the extension the diff names ({@link #fileNamed}) — four booleans, deliberately, rather
+   * than a grammar per language.
    */
   private record Profile(
       boolean templateEscapes,
       boolean tripleQuoteEscapes,
-      boolean tripleQuoteTerminatorMarksCloser) {
+      boolean tripleQuoteTerminatorMarksCloser,
+      boolean singleQuoteStrings) {
 
-    /** The reading a fragment that names no file gets: what the table's own columns say. */
+    /**
+     * The reading a fragment that names no file gets: what the table's own columns say, and an
+     * apostrophe that may be a lifetime.
+     */
     static final Profile UNNAMED =
         new Profile(
-            BACKTICK.escapes(), TRIPLE_QUOTE.escapes(), TRIPLE_QUOTE.terminatorMarksCloser());
+            BACKTICK.escapes(),
+            TRIPLE_QUOTE.escapes(),
+            TRIPLE_QUOTE.terminatorMarksCloser(),
+            false);
 
     /** The profile of a file with the given lower-case extension, empty when it has none. */
     static Profile forExtension(String extension) {
       return new Profile(
           TEMPLATE_LITERAL_EXTENSIONS.contains(extension),
           !RAW_TRIPLE_QUOTE_EXTENSIONS.contains(extension),
-          !TRIPLE_QUOTE_BODY_FOLLOWS_OPENER_EXTENSIONS.contains(extension));
+          !TRIPLE_QUOTE_BODY_FOLLOWS_OPENER_EXTENSIONS.contains(extension),
+          SINGLE_QUOTE_STRING_EXTENSIONS.contains(extension));
     }
 
     /** Whether a backslash escapes inside {@code delimiter} in this file. */
