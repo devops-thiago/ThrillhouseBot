@@ -709,15 +709,34 @@ class ReviewPromptAssemblerTest {
           "the trusted guidance precedes the fenced data");
     }
 
+    /**
+     * #922: the review call ties a failing test to the finding it raises; the summary call, which
+     * sees every finding, says which finding explains each failing check or that none does. Each
+     * call carries its own request above the same fenced list.
+     */
     @Test
-    void theSectionIsFoldedIntoTheReviewCallsTrailingGuidanceOnly() {
+    void theSectionRidesBothCallsWithADifferentRequestInEach() {
       var inputs = assemble(FAILURES);
 
-      assertTrue(inputs.repoInstructions().contains("## CI Failures on This Commit"));
-      assertFalse(
-          inputs.summaryInstructions().contains("CI Failures"),
-          "the summary call reviews no code and raises no finding");
+      assertTrue(inputs.repoInstructions().contains(PrReviewPrompts.CI_FAILURES_REQUEST));
+      assertFalse(inputs.repoInstructions().contains(PrReviewPrompts.CI_FAILURES_SUMMARY_REQUEST));
+      assertTrue(
+          inputs.summaryInstructions().contains(PrReviewPrompts.CI_FAILURES_SUMMARY_REQUEST));
+      assertFalse(inputs.summaryInstructions().contains(PrReviewPrompts.CI_FAILURES_REQUEST));
+      assertTrue(inputs.summaryInstructions().contains("### unit-tests (conclusion: failure)"));
       assertFalse(assemble("").repoInstructions().contains("CI Failures on This Commit"));
+      assertFalse(assemble("").summaryInstructions().contains("CI Failures on This Commit"));
+    }
+
+    @Test
+    void theSummarySectionFencesTheListBelowItsRequest() {
+      var section = ReviewPromptAssembler.ciFailuresSummarySection(FAILURES);
+
+      assertTrue(section.startsWith(PrReviewPrompts.CI_FAILURES_SUMMARY_REQUEST), section);
+      var fence = section.indexOf(PromptTemplateEscaper.fencePrefix());
+      assertTrue(fence > 0 && fence < section.indexOf("### unit-tests"), section);
+      assertEquals("", ReviewPromptAssembler.ciFailuresSummarySection(null));
+      assertEquals("", ReviewPromptAssembler.ciFailuresSummarySection(" \n "));
     }
 
     private static AiReviewService.PromptInputs assemble(String ciFailures) {

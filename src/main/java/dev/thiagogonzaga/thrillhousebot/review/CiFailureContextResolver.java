@@ -26,9 +26,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
@@ -40,8 +42,16 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * <p>The failing checks are not fetched here. They come from the {@link
  * CiStatusEvaluator.CiEvaluation} the CI gate reads for the same head, which carries each failing
  * check's name, conclusion and output panel ({@link CiStatusEvaluator.FailedCheck}); this class
- * only adds what that list cannot hold — one page of annotations per detailed check, and, behind a
- * separate switch, the tail of up to {@link #MAX_LOG_FETCHES} failing GitHub Actions job logs.
+ * only adds what that list cannot hold — one page of annotations per detailed check, the failing
+ * tests named in up to {@link #MAX_LOG_FETCHES} failing GitHub Actions job logs, and, behind a
+ * separate switch, the tail of those logs.
+ *
+ * <p>The failing tests are read from the log because that is the only place a test runner names
+ * them (#922). A failed Actions job's annotations carry "Process completed with exit code 1" and
+ * runner notices such as a Node.js deprecation, so across one corpus round twelve of twelve
+ * follow-up reviews saw only "test ❌ Failed", and one tied its finding to the deprecation notice.
+ * The whole downloaded window is scanned for the lines runners write about a failed test, because
+ * the last lines of a job log are the runner's own cleanup, not the test output.
  *
  * <p>Every string here is produced by code the pull request can change: a test can print anything,
  * including text shaped like an instruction or a prompt heading. So each field is stripped of
@@ -82,6 +92,9 @@ public class CiFailureContextResolver {
   /** Characters of log tail rendered per job. */
   static final int MAX_LOG_CHARS = 1_500;
 
+  /** Failing-test lines rendered per job, read from the whole downloaded window. */
+  static final int MAX_FAILING_TEST_LINES = 10;
+
   /** Characters of a check's output summary rendered. */
   static final int MAX_SUMMARY_CHARS = 600;
 
@@ -110,6 +123,129 @@ public class CiFailureContextResolver {
 
   // ANSI CSI sequences (colour, cursor movement) that CI runners emit into logs and summaries.
   private static final Pattern ANSI_CSI = Pattern.compile("\u001B\\[[0-?]*[ -/]*[@-~]");
+
+  /** The status Jest and Vitest open a failed test file's line with. */
+  private static final String JEST_FAILED_FILE = "FAIL ";
+
+  /** The status Jest and Vitest open a passed test file's line with. */
+  private static final String JEST_PASSED_FILE = "PASS ";
+
+  /** The bullet Jest heads each failed test, and its other notices, with. */
+  private static final String JEST_BULLET = "\u25CF ";
+
+  /**
+   * The lines test runners write about one failed test, each tried against a cleaned log line with
+   * its timestamp removed. Plain string tests where they suffice, and the few expressions anchored
+   * and possessive, so no line the pull request's own code prints can make one backtrack.
+   */
+  private static final List<Predicate<String>> FAILING_TEST_LINES =
+      List.of(
+          // Maven Surefire / Failsafe: the class line, and the summary's "Class.method:line" rows.
+          line -> line.contains("<<< FAILURE!") || line.contains("<<< ERROR!"),
+          CiFailureContextResolver::isSurefireRow,
+          // Gradle "FooTest > bar() FAILED", Karma "Chrome Headless (Linux) Suite name FAILED".
+          line -> line.endsWith(" FAILED") && (line.contains(" > ") || isKarmaLine(line)),
+          // TAP (node --test, prove): "not ok 3 - name".
+          Pattern.compile("^not ok \\d").asPredicate(),
+          // node --test spec reporter, Jest and Vitest: "✖ name", "✕ name", "× name", "● A › b".
+          line ->
+              line.startsWith("\u2716 ")
+                  || line.startsWith("\u2715 ")
+                  || line.startsWith("\u00D7 "),
+          line -> line.startsWith(JEST_BULLET) && line.contains(" \u203A "),
+          // Jest and Vitest file lines: "FAIL src/app.test.ts", "FAIL src/__tests__/app.js".
+          line -> isJestFile(line, JEST_FAILED_FILE),
+          // pytest "FAILED tests/test_x.py::test_y" and "ERROR tests/test_x.py::test_y" (an
+          // error in the test's setup): a Python file, not a logger's "ERROR app::db: refused".
+          // unittest "FAIL: test_y (module.Case)".
+          Pattern.compile("^(?:FAILED|ERROR) [^\\s:]++(?<=\\.py)::").asPredicate(),
+          Pattern.compile("^(?:FAIL|ERROR): \\w++ \\((?:\\w++\\.)++\\w++\\)").asPredicate(),
+          // go test "--- FAIL: TestY", cargo test "test y ... FAILED" and its doctest
+          // "test src/lib.rs - add (line 5) - compile fail ... FAILED".
+          line -> line.startsWith("--- FAIL: "),
+          Pattern.compile("^test \\S++ \\.\\.\\. FAILED").asPredicate(),
+          Pattern.compile("^test \\S++ - [^()\\s]++ \\(line \\d++\\)[^.]*+\\.\\.\\. FAILED")
+              .asPredicate(),
+          // dotnet test "Failed Ns.Class.Method [12 ms]" (a theory's arguments inlined in the
+          // name), ScalaTest "*** FAILED ***", munit "==> X".
+          CiFailureContextResolver::isDotnetFailedLine,
+          line -> line.contains("*** FAILED ***"),
+          line -> line.startsWith("==> X "),
+          // ctest "1 - name (Failed)", zig "1/5 test.name...FAIL (Error)" (older releases: "Test
+          // [1/5] test.name... FAIL (Error)"), rspec failed examples.
+          line -> line.endsWith("(Failed)"),
+          line -> line.contains("...FAIL (") || line.contains("... FAIL ("),
+          Pattern.compile("^rspec \\./[^\\s:]++:\\d").asPredicate());
+
+  /** A dotnet test duration as the console logger prints it: {@code [12 ms]}, {@code [< 1 ms]}. */
+  private static final Pattern DOTNET_DURATION = Pattern.compile("\\[(?:< )?+\\d[^\\]]*+]");
+
+  /**
+   * File extensions a tool's {@code name.ext:line} row ends its token with, where Surefire's row
+   * has a test method.
+   */
+  private static final Set<String> FILE_EXTENSIONS =
+      Set.of(
+          "java",
+          "kt",
+          "kts",
+          "groovy",
+          "scala",
+          "gradle",
+          "xml",
+          "properties",
+          "yml",
+          "yaml",
+          "json",
+          "js",
+          "jsx",
+          "mjs",
+          "cjs",
+          "ts",
+          "tsx",
+          "vue",
+          "css",
+          "scss",
+          "html",
+          "md",
+          "py",
+          "rb",
+          "go",
+          "rs",
+          "cs",
+          "sql",
+          "sh",
+          "txt");
+
+  /** The bullets Jest prints under a failed test file that head no test. */
+  private static final Set<String> JEST_NOTICES = Set.of("Console", "Test suite failed to run");
+
+  /** The browser names Karma prints before a browser's version on a test's result line. */
+  private static final Set<String> KARMA_BROWSERS =
+      Set.of(
+          "Chrome",
+          "Chrome Headless",
+          "HeadlessChrome",
+          "Chromium",
+          "Chromium Headless",
+          "Firefox",
+          "Firefox Headless",
+          "Safari",
+          "Mobile Safari",
+          "Edge",
+          "Opera",
+          "PhantomJS",
+          "Electron");
+
+  /** An indented {@code [ERROR]} row that opens with a token and a line number, not a column. */
+  private static final Pattern SUREFIRE_ROW =
+      Pattern.compile("^\\[ERROR] {2,}+([^\\s:]++):\\d++(?!:)");
+
+  /**
+   * The path GitHub Actions gives the runner's own annotations, which never name a test: the
+   * workflow directory itself, or a workflow file in it.
+   */
+  private static final String RUNNER_ANNOTATION_PATH = ".github";
 
   // The ISO-8601 timestamp GitHub Actions prefixes to every log line: tokens, not information.
   private static final Pattern LOG_TIMESTAMP =
@@ -186,7 +322,7 @@ public class CiFailureContextResolver {
       sb.append(failures.pending())
           .append(" other check(s) had not finished; their outcome is unknown to this review.\n");
     }
-    var logsLeft = includeLogs ? MAX_LOG_FETCHES : 0;
+    var logsLeft = MAX_LOG_FETCHES;
     var detailed = Math.min(failed.size(), MAX_CHECKS_DETAILED);
     for (var i = 0; i < detailed; i++) {
       var check = failed.get(i);
@@ -195,7 +331,7 @@ public class CiFailureContextResolver {
       appendAnnotations(sb, auth, owner, repo, check);
       if (logsLeft > 0 && logWorthy(check)) {
         logsLeft--;
-        appendLogTail(sb, auth, owner, repo, check.checkRunId());
+        appendLog(sb, auth, owner, repo, check.checkRunId());
       }
     }
     if (failed.size() > detailed) {
@@ -246,7 +382,15 @@ public class CiFailureContextResolver {
     if (page == null || page.isEmpty()) {
       return;
     }
-    var ordered = new ArrayList<>(page);
+    // A notice or warning the runner attaches to the workflow itself (a deprecated Node.js version,
+    // a cache miss) never explains a failed test, and one review tied its finding to exactly that
+    // (#922), so it is left out; the runner's failure-level "Process completed with exit code N" is
+    // kept, because it is true.
+    var ordered =
+        new ArrayList<>(page.stream().filter(annotation -> !isRunnerNotice(annotation)).toList());
+    if (ordered.isEmpty()) {
+      return;
+    }
     // Failure-level annotations first: a warning on the same page rarely explains the failure.
     ordered.sort(Comparator.comparingInt(CiFailureContextResolver::levelRank));
     var shown = Math.min(ordered.size(), MAX_ANNOTATIONS_PER_CHECK);
@@ -258,6 +402,87 @@ public class CiFailureContextResolver {
     for (var annotation : ordered.subList(0, shown)) {
       sb.append("- ").append(formatAnnotation(annotation)).append('\n');
     }
+  }
+
+  /**
+   * A warning or notice the runner attaches to the workflow itself: anything on the workflow
+   * directory, and on a workflow file a notice or a deprecation warning. Any other warning on a
+   * workflow file is about that file's own content (an unpinned action, a bad expression) and is
+   * kept.
+   */
+  private static boolean isRunnerNotice(GitHubCheckRunClient.Annotation annotation) {
+    var path = annotation.path();
+    if (levelRank(annotation) == 0 || path == null) {
+      return false;
+    }
+    if (path.equals(RUNNER_ANNOTATION_PATH)) {
+      return true;
+    }
+    return path.startsWith(RUNNER_ANNOTATION_PATH + "/")
+        && ("notice".equalsIgnoreCase(annotation.annotationLevel())
+            || oneLine(annotation.message()).toLowerCase(Locale.ROOT).contains("deprecated"));
+  }
+
+  /**
+   * Karma's "Chrome Headless 120.0.0.0 (Linux x86_64) Suite name FAILED": a browser Karma names,
+   * then its version number, right before the opening parenthesis. A build step whose name merely
+   * holds a parenthesis ("Upload coverage (codecov) FAILED"), even after a version ("node 20.11.0
+   * (alpine) build FAILED"), names no browser there.
+   */
+  private static boolean isKarmaLine(String line) {
+    var open = line.indexOf(" (");
+    if (open <= 0) {
+      return false;
+    }
+    var prefix = line.substring(0, open);
+    var space = prefix.lastIndexOf(' ');
+    if (space < 0 || !KARMA_BROWSERS.contains(prefix.substring(0, space))) {
+      return false;
+    }
+    var version = prefix.substring(space + 1);
+    return !version.isEmpty() && Character.isDigit(version.charAt(0)) && version.contains(".");
+  }
+
+  /**
+   * dotnet's "Failed Ns.Class.Method [12 ms]": the name runs to the duration in brackets that ends
+   * the line, so a theory's display name with its arguments ("Math.Add(x: 0, y: 1)") is one test.
+   */
+  private static boolean isDotnetFailedLine(String line) {
+    var duration = line.lastIndexOf(" [");
+    return line.startsWith("Failed ")
+        && duration > "Failed".length()
+        && DOTNET_DURATION.matcher(line.substring(duration + 1)).matches()
+        && isQualifiedTestName(line.substring("Failed ".length(), duration));
+  }
+
+  /**
+   * Whether {@code name} opens with a namespace-qualified method, as every dotnet test name does
+   * ({@code Ns.Class.Method}, then a theory's arguments): a step's "Failed 3 checks" or "Failed
+   * deploy" is not one.
+   */
+  private static boolean isQualifiedTestName(String name) {
+    var arguments = name.indexOf('(');
+    var method = arguments < 0 ? name : name.substring(0, arguments);
+    return method.indexOf(' ') < 0 && method.contains(".");
+  }
+
+  /**
+   * Surefire's summary row {@code [ERROR] BedTest.wardIsEscaped:42 expected …}: an indented {@code
+   * Class.method} token and the test's line number. A tool's output that Maven re-emits indented is
+   * not a test: a path ({@code src/app.ts:12}), a file name ({@code App.java:12}), a {@code
+   * file:line:column} position, or a bare {@code 12:5} position.
+   */
+  private static boolean isSurefireRow(String line) {
+    var row = SUREFIRE_ROW.matcher(line);
+    if (!row.find()) {
+      return false;
+    }
+    var test = row.group(1);
+    var method = test.substring(test.lastIndexOf('.') + 1);
+    return test.contains(".")
+        && test.indexOf('/') < 0
+        && test.indexOf('\\') < 0
+        && !FILE_EXTENSIONS.contains(method.toLowerCase(Locale.ROOT));
   }
 
   private static int levelRank(GitHubCheckRunClient.Annotation annotation) {
@@ -289,28 +514,83 @@ public class CiFailureContextResolver {
         && LOG_WORTHY_CONCLUSIONS.contains(check.conclusion().toLowerCase(Locale.ROOT));
   }
 
-  private void appendLogTail(StringBuilder sb, String auth, String owner, String repo, long jobId) {
-    var tail = logTail(auth, owner, repo, jobId);
+  /**
+   * The failing tests one job's log names, and with {@code include-logs} on its tail. The log is
+   * downloaded once for both; a log that cannot be read adds nothing.
+   */
+  private void appendLog(StringBuilder sb, String auth, String owner, String repo, long jobId) {
+    var bytes = logBytes(auth, owner, repo, jobId);
+    var failingTests = failingTestLines(bytes);
+    if (!failingTests.isEmpty()) {
+      sb.append("Failing tests named in the job log:\n");
+      failingTests.forEach(line -> sb.append("- ").append(line).append('\n'));
+    }
+    var tail = includeLogs ? renderLogTail(bytes) : "";
     if (!tail.isEmpty()) {
       sb.append("Job log tail:\n").append(tail).append('\n');
     }
   }
 
-  /** The rendered tail of one job's log, or {@code ""} when it could not be read. */
-  private String logTail(String auth, String owner, String repo, long jobId) {
-    byte[] bytes;
+  /** The end of one job's log, or no bytes when it could not be read. */
+  private byte[] logBytes(String auth, String owner, String repo, long jobId) {
     try (var response = actionsClient.downloadJobLogs(auth, ACCEPT, owner, repo, jobId)) {
       var location = response == null ? null : response.getLocation();
       if (location == null) {
         Log.debugf("Job log download for %d returned no redirect location", jobId);
-        return "";
+        return new byte[0];
       }
-      bytes = fetcher.fetchTail(location, LOG_TAIL_BYTES);
+      return fetcher.fetchTail(location, LOG_TAIL_BYTES);
     } catch (RuntimeException e) {
       Log.debugf(e, "Could not read the log of job %d", jobId);
-      return "";
+      return new byte[0];
     }
-    return renderLogTail(bytes);
+  }
+
+  /**
+   * The lines of a log tail that name a failed test, in log order, each once, at most {@link
+   * #MAX_FAILING_TEST_LINES}: the whole window is scanned, timestamps and control characters
+   * removed, and, as in {@link #renderLogTail}, a first line cut mid-way by a full window is
+   * dropped.
+   */
+  static List<String> failingTestLines(byte[] bytes) {
+    if (bytes == null || bytes.length == 0) {
+      return List.of();
+    }
+    var lines = clean(new String(bytes, StandardCharsets.UTF_8)).split("\n", -1);
+    var start = bytes.length >= LOG_TAIL_BYTES ? 1 : 0;
+    var found = new LinkedHashSet<String>();
+    // Jest heads a test declared outside any describe block "● name", with no " › " to tell it
+    // from its other bullets, so it is read only under a failed test file's line.
+    var underFailedJestFile = false;
+    for (var i = start; i < lines.length && found.size() < MAX_FAILING_TEST_LINES; i++) {
+      // Matched before it is clipped: several shapes are read at the line's end ("... FAILED").
+      var line = LOG_TIMESTAMP.matcher(lines[i]).replaceFirst("").strip();
+      if (isJestFile(line, JEST_FAILED_FILE)) {
+        underFailedJestFile = true;
+      } else if (isJestFile(line, JEST_PASSED_FILE)) {
+        underFailedJestFile = false;
+      }
+      if (namesAFailedTest(line) || (underFailedJestFile && isTopLevelJestTest(line))) {
+        found.add(clip(line, MAX_LINE_CHARS));
+      }
+    }
+    return List.copyOf(found);
+  }
+
+  /** Whether {@code line} is Jest's or Vitest's {@code status} line for a test file. */
+  private static boolean isJestFile(String line, String status) {
+    return line.startsWith(status)
+        && (line.contains(".test.") || line.contains(".spec.") || line.contains("__tests__/"));
+  }
+
+  /** Jest's "● name" for a test outside any describe block, not one of its other bullets. */
+  private static boolean isTopLevelJestTest(String line) {
+    return line.startsWith(JEST_BULLET)
+        && !JEST_NOTICES.contains(line.substring(JEST_BULLET.length()));
+  }
+
+  private static boolean namesAFailedTest(String line) {
+    return FAILING_TEST_LINES.stream().anyMatch(shape -> shape.test(line));
   }
 
   /**
@@ -319,7 +599,7 @@ public class CiFailureContextResolver {
    * the first line is a fragment cut mid-line, so it is dropped.
    */
   static String renderLogTail(byte[] bytes) {
-    if (bytes.length == 0) {
+    if (bytes == null || bytes.length == 0) {
       return "";
     }
     var lines = clean(new String(bytes, StandardCharsets.UTF_8)).split("\n", -1);
