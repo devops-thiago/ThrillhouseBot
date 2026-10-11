@@ -3421,7 +3421,12 @@ class ReviewOrchestratorTest {
             body.getValue()
                 .body()
                 .startsWith(
-                    PrSummaryGenerator.SUMMARY_MARKER + "\n" + PrSummaryGenerator.SUMMARY_HEADING));
+                    PrSummaryGenerator.SUMMARY_MARKER
+                        + "\n"
+                        + DescriptionGapCarryover.prTextMarker(
+                            PromptSections.prContext("(manual summary)", ""))
+                        + "\n"
+                        + PrSummaryGenerator.SUMMARY_HEADING));
         verify(reviewClient, never())
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
@@ -3580,6 +3585,9 @@ class ReviewOrchestratorTest {
                         req.body()
                             .equals(
                                 PrSummaryGenerator.SUMMARY_MARKER
+                                    + "\n"
+                                    + DescriptionGapCarryover.prTextMarker(
+                                        PromptSections.prContext("Test PR", ""))
                                     + "\n"
                                     + PrSummaryGenerator.SUMMARY_HEADING)));
         verify(reviewClient)
