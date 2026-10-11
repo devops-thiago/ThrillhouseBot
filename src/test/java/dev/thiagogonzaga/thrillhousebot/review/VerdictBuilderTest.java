@@ -791,6 +791,57 @@ class VerdictBuilderTest {
         checkSummary);
   }
 
+  /**
+   * #952 item 2: ThrillhouseBot-test#158's check run said "1 findings" while 20 were open, and #149
+   * said "6 findings: 0 critical, 0 high…" while 21 were. The line now leads with the open total
+   * and keeps the new count and its grades separate.
+   */
+  @Test
+  void checkRunCountsLineLeadsWithTheOpenTotalWhenEarlierFindingsAreStillOpen() {
+    var newFinding = new Finding(RiskLevel.MEDIUM, "a.java", 3, "New", "desc", null, null);
+    var statuses =
+        List.of(
+            new ReviewResult.PreviousFindingStatus(1, "unresolved", "still there"),
+            new ReviewResult.PreviousFindingStatus(2, "UNRESOLVED", "still there"),
+            new ReviewResult.PreviousFindingStatus(3, "resolved", "fixed"));
+    var followUp =
+        new ReviewResult(
+            List.of(newFinding),
+            0,
+            0,
+            1,
+            0,
+            RiskLevel.MEDIUM,
+            ReviewState.COMMENT,
+            false,
+            "",
+            statuses,
+            List.of(),
+            0);
+    var firstRound =
+        new ReviewResult(
+            List.of(newFinding),
+            0,
+            0,
+            1,
+            0,
+            RiskLevel.MEDIUM,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
+
+    assertEquals(
+        "3 open findings: 1 new (0 critical, 0 high, 1 medium, 0 low), 2 still open from earlier"
+            + " rounds",
+        VerdictBuilder.checkSummaryForResult(followUp));
+    assertEquals(
+        "1 findings: 0 critical, 0 high, 1 medium, 0 low",
+        VerdictBuilder.checkSummaryForResult(firstRound));
+  }
+
   @Test
   void clippedOnlyReviewIsDisclosedAsPartialAndHoldsApproval() {
     var ctx = contextWithLineCapOmissions(0);

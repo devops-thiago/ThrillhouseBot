@@ -49,6 +49,12 @@ public final class DiffLineResolver {
    */
   static final AtomicInteger CONSTRUCTION_COUNT = new AtomicInteger();
 
+  /**
+   * How far from the cited line {@link #locateQuote} still takes a quote's location as the one the
+   * finding means, matching {@code FindingQuoteValidator}'s disambiguation tolerance.
+   */
+  static final int NEAR_CITED_LINE = 3;
+
   private final Map<String, TreeSet<Integer>> rightSideLinesByFile;
   private final Map<String, List<String>> rightSideTextByFile;
   private final Map<String, List<Integer>> rightSideTextLineNumbersByFile;
@@ -458,6 +464,50 @@ public final class DiffLineResolver {
       return Optional.empty();
     }
     return Optional.of(new LineRange(startLine, endLine));
+  }
+
+  /**
+   * Where {@code quote} (a finding's {@code suggestion_old}) sits on the right side of {@code
+   * file}'s diff, as the first to the last matched line, chosen for the line the finding cites
+   * (#924).
+   *
+   * <p>The quote's trimmed, non-blank lines must appear as a contiguous, in-order run of right-side
+   * lines, as in {@link #isFindingPresent}. Of several such runs, the one holding {@code citedLine}
+   * wins, then the one within {@link #NEAR_CITED_LINE} lines of it (the quote validator's own
+   * tolerance), then the only one. Empty when the quote is blank, the file has no right side, the
+   * quote is not there (a deleted line is not), or the runs leave the choice open: a suggestion
+   * posted on a guessed location replaces code it does not quote.
+   */
+  public Optional<LineRange> locateQuote(String file, String quote, int citedLine) {
+    if (file == null) {
+      return Optional.empty();
+    }
+    List<Predicate<String>> quoteLines = normalizedAnchorLines(quote);
+    String key = resolveTextKeyForFileOrVariant(file);
+    if (quoteLines.isEmpty() || key == null) {
+      return Optional.empty();
+    }
+    List<String> text = rightSideTextByFile.get(key);
+    List<Integer> lineNumbers = rightSideTextLineNumbersByFile.get(key);
+    var runs = new ArrayList<LineRange>();
+    for (int i = 0; i + quoteLines.size() <= text.size(); i++) {
+      if (matchesAt(text, i, quoteLines)) {
+        runs.add(new LineRange(lineNumbers.get(i), lineNumbers.get(i + quoteLines.size() - 1)));
+      }
+    }
+    for (int tolerance : new int[] {0, NEAR_CITED_LINE}) {
+      List<LineRange> near =
+          runs.stream()
+              .filter(
+                  run ->
+                      citedLine >= run.startLine() - tolerance
+                          && citedLine <= run.endLine() + tolerance)
+              .toList();
+      if (!near.isEmpty()) {
+        return near.size() == 1 ? Optional.of(near.getFirst()) : Optional.empty();
+      }
+    }
+    return runs.size() == 1 ? Optional.of(runs.getFirst()) : Optional.empty();
   }
 
   /**
