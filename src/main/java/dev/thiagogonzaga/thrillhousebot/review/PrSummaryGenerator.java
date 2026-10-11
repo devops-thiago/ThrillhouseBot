@@ -978,6 +978,10 @@ public class PrSummaryGenerator {
   /** A comma straight after a node's closing bracket. */
   private static final Pattern COMMA_AFTER_NODE = Pattern.compile("[\\])}]\\s*+,");
 
+  /** A flowchart's type and direction opening its first line, with a statement-ending semicolon. */
+  private static final Pattern FLOWCHART_HEADER =
+      Pattern.compile("(?i)^(?:flowchart|graph)(?:\\s++(?:TB|TD|BT|RL|LR))?+\\s*+;?+");
+
   /** A comma ending a line. */
   private static final Pattern TRAILING_COMMA = Pattern.compile(",\\s*+$");
 
@@ -994,7 +998,9 @@ public class PrSummaryGenerator {
    * omitted rather than posted as a broken block.
    */
   static boolean flowchartParses(String diagram) {
-    var lines = diagram.lines().skip(1).map(String::strip).toList();
+    // The header line's own statements count too: "flowchart TD; A -> B" is one line.
+    var lines = new ArrayList<>(diagram.lines().map(String::strip).toList());
+    lines.set(0, FLOWCHART_HEADER.matcher(lines.getFirst()).replaceFirst(""));
     for (var line : lines) {
       if (line.isEmpty() || line.startsWith("%%")) {
         continue;
