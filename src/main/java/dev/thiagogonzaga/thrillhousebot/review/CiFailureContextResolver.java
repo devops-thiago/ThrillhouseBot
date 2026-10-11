@@ -136,23 +136,30 @@ public class CiFailureContextResolver {
                   && (line.contains(".test.")
                       || line.contains(".spec.")
                       || line.contains("__tests__/")),
-          // pytest "FAILED tests/test_x.py::test_y" and "ERROR tests/test_x.py::test_y" (an error
-          // in
-          // the test's setup), unittest "FAIL: test_y (module.Case)".
-          line -> (line.startsWith("FAILED ") || line.startsWith("ERROR ")) && line.contains("::"),
+          // pytest "FAILED tests/test_x.py::test_y" and "ERROR tests/test_x.py::test_y" (an
+          // error in the test's setup): a Python file, not a logger's "ERROR app::db: refused".
+          // unittest "FAIL: test_y (module.Case)".
+          Pattern.compile("^(?:FAILED|ERROR) [^\\s:]++(?<=\\.py)::").asPredicate(),
           Pattern.compile("^(?:FAIL|ERROR): \\w++ \\(").asPredicate(),
-          // go test "--- FAIL: TestY", cargo test "test y ... FAILED".
+          // go test "--- FAIL: TestY", cargo test "test y ... FAILED" and its doctest
+          // "test src/lib.rs - add (line 5) - compile fail ... FAILED".
           line -> line.startsWith("--- FAIL: "),
-          Pattern.compile("^test \\S++ \\.\\.\\. FAILED").asPredicate(),
-          // dotnet test "Failed Ns.Class.Method [12 ms]", ScalaTest "*** FAILED ***", munit
-          // "==> X".
-          Pattern.compile("^Failed \\S++ \\[").asPredicate(),
+          Pattern.compile(
+                  "^test (?:\\S++|\\S++ - [^()\\s]++ \\(line \\d++\\)(?: - \\w++(?: \\w++)*+)?+)"
+                      + " \\.\\.\\. FAILED")
+              .asPredicate(),
+          // dotnet test "Failed Ns.Class.Method [12 ms]" (a theory's arguments inlined in the
+          // name), ScalaTest "*** FAILED ***", munit "==> X".
+          CiFailureContextResolver::isDotnetFailedLine,
           line -> line.contains("*** FAILED ***"),
           line -> line.startsWith("==> X "),
           // ctest "1 - name (Failed)", zig "1/5 test.name...FAIL (Error)", rspec failed examples.
           line -> line.endsWith("(Failed)"),
           line -> line.contains("...FAIL ("),
           Pattern.compile("^rspec \\./[^\\s:]++:\\d").asPredicate());
+
+  /** A dotnet test duration as the console logger prints it: {@code [12 ms]}, {@code [< 1 ms]}. */
+  private static final Pattern DOTNET_DURATION = Pattern.compile("\\[(?:< )?+\\d[^\\]]*+]");
 
   /** The browser names Karma prints before a browser's version on a test's result line. */
   private static final Set<String> KARMA_BROWSERS =
@@ -373,6 +380,17 @@ public class CiFailureContextResolver {
     }
     var version = prefix.substring(space + 1);
     return !version.isEmpty() && Character.isDigit(version.charAt(0)) && version.contains(".");
+  }
+
+  /**
+   * dotnet's "Failed Ns.Class.Method [12 ms]": the name runs to the duration in brackets that ends
+   * the line, so a theory's display name with its arguments ("Math.Add(x: 0, y: 1)") is one test.
+   */
+  private static boolean isDotnetFailedLine(String line) {
+    var duration = line.lastIndexOf(" [");
+    return line.startsWith("Failed ")
+        && duration > "Failed".length()
+        && DOTNET_DURATION.matcher(line.substring(duration + 1)).matches();
   }
 
   /**
