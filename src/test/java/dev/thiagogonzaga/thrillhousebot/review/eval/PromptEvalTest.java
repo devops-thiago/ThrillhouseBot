@@ -217,10 +217,10 @@ class PromptEvalTest {
   }
 
   /**
-   * One review call, parsed. A response that is not review JSON is asked for again, up to {@link
-   * #PARSE_ATTEMPTS} times, as {@code AiReviewService} retries it in production: one stray prose
-   * answer used to abort the whole run, losing every sample already taken. A sample that never
-   * parses counts as a review that found nothing.
+   * One review call, parsed. A response that does not parse is asked for again, up to {@link
+   * #PARSE_ATTEMPTS} times, as {@code AiReviewService} retries any runtime failure in production:
+   * one stray prose answer used to abort the whole run, losing every sample already taken. A sample
+   * that never parses counts as a review that found nothing.
    */
   private ReviewResponse review(AiReviewService.PromptInputs inputs) throws Exception {
     for (var attempt = 1; attempt <= PARSE_ATTEMPTS; attempt++) {
@@ -233,7 +233,7 @@ class PromptEvalTest {
           .start();
       try {
         return reviewResponseParser.parse(raw.get(SAMPLE_TIMEOUT_MINUTES, TimeUnit.MINUTES));
-      } catch (IllegalArgumentException e) {
+      } catch (RuntimeException _) {
         Log.infof("Eval sample attempt %d was not review JSON; retrying", attempt);
       }
     }

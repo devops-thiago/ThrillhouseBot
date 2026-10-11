@@ -1,7 +1,7 @@
 {
   "kind": "generator",
   "sourcePr": 102,
-  "why": "Dogfood miss from PR #102 / issue #111: WebhookControllerTest stubbed reviewDispatcher.dispatch(...) to throw RuntimeException(\"executor saturated\"), but the real ReviewDispatcher.dispatch() catches RejectedExecutionException internally and returns false — it never throws to its caller. The green test made a broken rollback path look proven. With both the mock and the real method in the provided material, the review prompt must surface the unfaithful stub. Keywords cover how the finding is worded: on glm-5.3-flash it named the stub 'impossible' or said the real method 'no longer produces' the exception (#979), which the original four keywords missed.",
+  "why": "Dogfood miss from PR #102 / issue #111: WebhookControllerTest stubbed reviewDispatcher.dispatch(...) to throw RuntimeException(\"executor saturated\"), but the real ReviewDispatcher.dispatch() catches RejectedExecutionException internally and returns false — it never throws to its caller. The green test made a broken rollback path look proven. With both the mock and the real method in the provided material, the review prompt must surface the unfaithful stub. Keywords cover how the finding is worded: on glm-5.3-flash it said the stub 'fabricates' an impossible failure or that the real method 'no longer produces' the exception (#979), which the original four keywords missed. Each added keyword describes the stub against the real method; generic words that an unrelated finding on the test could use are left out.",
   "expectation": "must-find",
   "targetFile": "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java",
   "keywords": [
@@ -9,15 +9,12 @@
     "contradict",
     "never throw",
     "swallows",
-    "impossible",
-    "cannot throw",
-    "can't throw",
-    "does not throw",
-    "doesn't throw",
+    "fabricat",
+    "unfaithful",
     "no longer throws",
     "no longer produces",
-    "unfaithful",
-    "returns false"
+    "cannot throw",
+    "can't throw"
   ],
   "prTitle": "fix(webhook): roll back dedup slot when dispatch fails (#89)",
   "prDescription": "- [x] 🐛 Bug fix\n\nFixes #89\n\nAdds forget(deliveryId) when routeEvent catches a RuntimeException from a saturated review executor.",
