@@ -77,17 +77,15 @@ final class OverviewScreen {
           "summary",
           "lorem ipsum");
 
-  /** Words that, a word or two before "finding(s)", make a clause about the review. */
+  /**
+   * Words that, a word or two before "finding(s)", make a clause about the review: a count, or the
+   * verifier's verdict. A word that also names a file's role ("Loads open findings from the store",
+   * "Posts reported findings") is not one of them.
+   */
   private static final Set<String> FINDING_QUALIFIERS =
       Set.of(
           "confirmed",
           "verified",
-          "reported",
-          "open",
-          "posted",
-          "raised",
-          "tracked",
-          "inline",
           "no",
           "one",
           "two",
@@ -96,6 +94,14 @@ final class OverviewScreen {
           "five",
           "several",
           "multiple");
+
+  /**
+   * Words that, a word or two after a clause-opening "Findings", place the review's findings
+   * ("Findings are reported inline"). A file's role opens with what the file does, not with
+   * "Findings", so after it these read as bookkeeping; the {@link #FINDING_QUALIFIERS} do too.
+   */
+  private static final Set<String> FINDING_PLACEMENTS =
+      Set.of("reported", "open", "posted", "raised", "tracked", "inline");
 
   private static final Pattern NON_WORD = Pattern.compile("[^\\p{L}\\p{N}]+");
 
@@ -270,7 +276,9 @@ final class OverviewScreen {
     var from = opensClause ? at + 1 : Math.max(0, at - 2);
     var to = opensClause ? Math.min(words.length, at + 3) : at;
     for (var j = from; j < to; j++) {
-      if (FINDING_QUALIFIERS.contains(words[j]) || isCount(words[j])) {
+      if (FINDING_QUALIFIERS.contains(words[j])
+          || isCount(words[j])
+          || (opensClause && FINDING_PLACEMENTS.contains(words[j]))) {
         return true;
       }
     }

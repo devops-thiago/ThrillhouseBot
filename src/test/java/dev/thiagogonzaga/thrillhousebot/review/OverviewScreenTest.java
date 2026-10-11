@@ -257,6 +257,14 @@ class OverviewScreenTest {
     assertTrue(OverviewScreen.talksAboutFindings("Findings are reported inline for the parser"));
     assertTrue(OverviewScreen.talksAboutFindings("(Findings tracked elsewhere)"));
     assertFalse(OverviewScreen.talksAboutFindings("Findings model with a severity and a title"));
+    assertTrue(OverviewScreen.talksAboutFindings("Findings: two confirmed here"));
+    // Before the finding word, a role word is the file's role, not review bookkeeping.
+    assertFalse(OverviewScreen.talksAboutFindings("Loads open findings from the store"));
+    assertFalse(OverviewScreen.talksAboutFindings("Posts reported findings as inline threads"));
+    assertFalse(OverviewScreen.talksAboutFindings("Resolves tracked findings"));
+    assertEquals(
+        "Loads open findings from the store",
+        OverviewScreen.screenedText("Loads open findings from the store", "+x", ""));
     assertFalse(OverviewScreen.talksAboutFindings("Findings"));
     // The empty word before a leading parenthesis sits in the window and is no count.
     assertFalse(OverviewScreen.talksAboutFindings("(the findings tracker)"));
