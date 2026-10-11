@@ -154,6 +154,23 @@ public class CiFailureContextResolver {
           line -> line.contains("...FAIL ("),
           Pattern.compile("^rspec \\./[^\\s:]++:\\d").asPredicate());
 
+  /** The browser names Karma prints before a browser's version on a test's result line. */
+  private static final Set<String> KARMA_BROWSERS =
+      Set.of(
+          "Chrome",
+          "Chrome Headless",
+          "HeadlessChrome",
+          "Chromium",
+          "Chromium Headless",
+          "Firefox",
+          "Firefox Headless",
+          "Safari",
+          "Mobile Safari",
+          "Edge",
+          "Opera",
+          "PhantomJS",
+          "Electron");
+
   /** An indented {@code [ERROR]} row that opens with a token and a line number, not a column. */
   private static final Pattern SUREFIRE_ROW =
       Pattern.compile("^\\[ERROR] {2,}+([^\\s:]++):\\d++(?!:)");
@@ -339,9 +356,10 @@ public class CiFailureContextResolver {
   }
 
   /**
-   * Karma's "Chrome Headless 120.0.0.0 (Linux x86_64) Suite name FAILED": the browser's version
-   * number stands right before the opening parenthesis. A build step whose name merely holds a
-   * parenthesis ("Upload coverage (codecov) FAILED") has no version there.
+   * Karma's "Chrome Headless 120.0.0.0 (Linux x86_64) Suite name FAILED": a browser Karma names,
+   * then its version number, right before the opening parenthesis. A build step whose name merely
+   * holds a parenthesis ("Upload coverage (codecov) FAILED"), even after a version ("node 20.11.0
+   * (alpine) build FAILED"), names no browser there.
    */
   private static boolean isKarmaLine(String line) {
     var open = line.indexOf(" (");
@@ -349,7 +367,11 @@ public class CiFailureContextResolver {
       return false;
     }
     var prefix = line.substring(0, open);
-    var version = prefix.substring(prefix.lastIndexOf(' ') + 1);
+    var space = prefix.lastIndexOf(' ');
+    if (space < 0 || !KARMA_BROWSERS.contains(prefix.substring(0, space))) {
+      return false;
+    }
+    var version = prefix.substring(space + 1);
     return !version.isEmpty() && Character.isDigit(version.charAt(0)) && version.contains(".");
   }
 
@@ -365,7 +387,7 @@ public class CiFailureContextResolver {
       return false;
     }
     var test = row.group(1);
-    return test.indexOf('.') > 0 && test.indexOf('/') < 0 && test.indexOf('\\') < 0;
+    return test.contains(".") && test.indexOf('/') < 0 && test.indexOf('\\') < 0;
   }
 
   private static int levelRank(GitHubCheckRunClient.Annotation annotation) {
