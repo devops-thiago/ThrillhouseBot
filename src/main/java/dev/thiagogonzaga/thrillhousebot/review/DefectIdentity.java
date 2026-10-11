@@ -167,7 +167,8 @@ final class DefectIdentity {
         && (FindingDeduplicator.titleSimilarity(a.title(), b.title())
                 >= FindingDeduplicator.TITLE_SIMILARITY_THRESHOLD
             || SummarySurfaceDeduplicator.titleSharesPhraseWith(a.title(), b.description())
-            || SummarySurfaceDeduplicator.titleSharesPhraseWith(b.title(), a.description()))) {
+            || SummarySurfaceDeduplicator.titleSharesPhraseWith(b.title(), a.description())
+            || SummarySurfaceDeduplicator.titlesStateOneClaim(a.title(), b.title()))) {
       return true;
     }
     if (a.line() == b.line()

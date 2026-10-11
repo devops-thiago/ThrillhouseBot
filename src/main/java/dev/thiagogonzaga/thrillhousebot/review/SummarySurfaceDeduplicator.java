@@ -203,6 +203,16 @@ final class SummarySurfaceDeduplicator {
   }
 
   /**
+   * Whether two titles state one claim on both arms of {@link #restates}: a shared run of {@value
+   * #PHRASE_TOKENS} content words, or the {@value #OVERLAP_THRESHOLD} overlap. {@link
+   * DefectIdentity} applies it only to findings a few lines apart, where the old "Same issue as"
+   * note applied it (#639), and away from them asks {@link #titlesRestate} instead.
+   */
+  static boolean titlesStateOneClaim(String title, String otherTitle) {
+    return restates(claim(title), List.of(claim(otherTitle)));
+  }
+
+  /**
    * Whether two titles restate one claim: a shared run of {@value #PHRASE_TOKENS} content words and
    * at least {@value #RESTATEMENT_OVERLAP} of the shorter title's content words. Stricter than the
    * overlap arm alone, whose 0.5 three common words reach on a six-word title ("job", "list",
