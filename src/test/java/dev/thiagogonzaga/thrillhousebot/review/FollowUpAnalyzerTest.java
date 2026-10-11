@@ -4854,6 +4854,18 @@ class FollowUpAnalyzerTest {
     }
     var governed = heldNote("+// Counter is never called from multiple threads.");
     assertTrue(governed.contains("no review has weighed"), governed);
+
+    // A guard right before the statement protects shared state; it still says the path is shared.
+    for (var protecting :
+        List.of(
+            "+// The lock guards each field shared by every request goroutine.",
+            "+// The mutex serializes concurrent requests to the counter.")) {
+      var note = heldNote(protecting);
+      assertTrue(note.contains("says this path runs concurrently"), note);
+    }
+    // A verb refusing the statement's subject right before it denies it.
+    var refused = heldNote("+// The handler rejects concurrent requests with 409.");
+    assertTrue(refused.contains("no review has weighed"), refused);
   }
 
   /** A diff section is the declined file's only when its a/ or b/ path is that file exactly. */

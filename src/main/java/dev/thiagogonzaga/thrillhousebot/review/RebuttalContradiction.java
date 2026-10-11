@@ -309,15 +309,19 @@ final class RebuttalContradiction {
   private static final int DENIAL_WINDOW = 48;
 
   /**
-   * A denial word ending the text before a {@link #STATED_CONCURRENCY} statement, at most two words
-   * and no clause punctuation away from it, which turns the statement into a denial ("not shared by
-   * every goroutine", "rejects concurrent requests", "is never called from multiple threads").
+   * What turns the {@link #STATED_CONCURRENCY} statement right after it into a denial: a negator at
+   * most two words and no clause punctuation away ("not shared by every goroutine", "is never
+   * called from multiple threads"), or a verb that refuses the statement's own subject directly
+   * before it ("rejects concurrent requests", "prevents concurrent access"). A verb that only
+   * protects shared state ("the lock guards every field shared by every request goroutine",
+   * "serializes concurrent requests") still says the path is reached concurrently, so it denies
+   * nothing.
    */
   private static final Pattern DENIES =
       ci(
-          "\\b(?:not|never|no|without|cannot|can'?t|won'?t|isn'?t|rejects?|prevents?|avoids?"
-              + "|guards?|forbids?|disallows?|blocks?|serializ\\w{0,4})\\b"
-              + "(?:[ \\t-]{1,4}[\\w'-]{1,40}){0,2}[ \\t-]{0,4}$");
+          "(?:\\b(?:not|never|no|without|cannot|can'?t|won'?t|isn'?t)\\b"
+              + "(?:[ \\t-]{1,4}[\\w'-]{1,40}){0,2}"
+              + "|\\b(?:rejects?|prevents?|avoids?|forbids?|disallows?|blocks?)\\b)[ \\t-]{0,4}$");
 
   /**
    * The note of a finding the review still reports open after a maintainer answered it on its
