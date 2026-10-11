@@ -16,12 +16,19 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -210,5 +217,67 @@ class OverviewScreenTest {
 
     assertEquals(List.of(), screened.fileSummaries());
     assertEquals("", screened.prPurpose());
+  }
+
+  @Test
+  void aClauseOpeningWithPunctuationBeforeFindingsIsNotFindingsTalk() {
+    // The leading empty word the split yields must not read as a finding count.
+    assertFalse(OverviewScreen.talksAboutFindings("(findings tracker)"));
+    assertEquals(
+        "(findings tracker) page for the dashboard",
+        OverviewScreen.screenedText("(findings tracker) page for the dashboard", "+x", ""));
+    assertTrue(OverviewScreen.talksAboutFindings("hosts 2 findings"));
+  }
+
+  @Test
+  void theWarningNamesTheScreenWhenEveryRowWasDroppedByIt() {
+    var exactButPlaceholder = summary("p", List.of(row("react/src/main.tsx", "placeholder")));
+    var unmapped = summary("p", List.of(row("elsewhere/Unknown.kt", "something")));
+
+    var dropped = warningsWhileScreening(exactButPlaceholder);
+    var stray = warningsWhileScreening(unmapped);
+    var none = warningsWhileScreening(summary("p", List.of()));
+
+    assertEquals(1, dropped.size(), dropped.toString());
+    assertTrue(dropped.getFirst().contains("Dropped all 1 file summary"), dropped.toString());
+    assertEquals(1, stray.size(), stray.toString());
+    assertTrue(stray.getFirst().contains("none names a changed file"), stray.toString());
+    assertEquals(List.of(), none);
+  }
+
+  /** The warnings {@link OverviewScreen#screen} logs for {@code summary}, formatted. */
+  private static List<String> warningsWhileScreening(ReviewResponse.Summary summary) {
+    var warnings = new ArrayList<String>();
+    var logger = Logger.getLogger(OverviewScreen.class.getName());
+    var handler =
+        new Handler() {
+          @Override
+          public void publish(LogRecord entry) {
+            if (entry.getLevel().intValue() >= Level.WARNING.intValue()) {
+              var parameters = entry.getParameters();
+              warnings.add(
+                  parameters == null
+                      ? entry.getMessage()
+                      : String.format(entry.getMessage(), parameters));
+            }
+          }
+
+          @Override
+          public void flush() {
+            // Records land straight in the list; nothing is buffered.
+          }
+
+          @Override
+          public void close() {
+            // The list outlives the handler; nothing to release.
+          }
+        };
+    logger.addHandler(handler);
+    try {
+      OverviewScreen.screen(summary, FILES, "");
+    } finally {
+      logger.removeHandler(handler);
+    }
+    return warnings;
   }
 }

@@ -48,8 +48,8 @@ import java.util.stream.Collectors;
  *       dropped, so the row says it has no summary instead of printing one.
  *   <li><b>A file summary talks about the file, not the review.</b> A clause about findings ("hosts
  *       the two confirmed findings", "no findings in this batch") is review bookkeeping read as the
- *       file's role, and was wrong besides; it is cut, and a summary that is nothing but such a
- *       clause is dropped.
+ *       file's role, and was wrong besides; such a clause is cut, and a summary whose first clause
+ *       is one is dropped whole, since the first clause is the file's role.
  *   <li><b>A setting named in a file summary is in that file's change.</b> An {@code UPPER_SNAKE}
  *       name that neither the file's patch nor the findings and PR text contain is one the summary
  *       invented; the clause naming it is cut (the whole summary when it is the first). A file with
@@ -168,7 +168,12 @@ final class OverviewScreen {
       }
     }
     var dropped = entries.size() - kept.size();
-    if (!entries.isEmpty() && kept.stream().noneMatch(e -> patches.containsKey(e.path()))) {
+    if (!entries.isEmpty() && kept.isEmpty()) {
+      Log.warnf(
+          "Dropped all %d file summary(ies) at the overview screen; the Changed Files rows will"
+              + " read \"Not summarized\"",
+          entries.size());
+    } else if (!kept.isEmpty() && kept.stream().noneMatch(e -> patches.containsKey(e.path()))) {
       Log.warnf(
           "Summary call returned %d file summary(ies) and none names a changed file; the Changed"
               + " Files rows will read \"Not summarized\"",
@@ -245,11 +250,19 @@ final class OverviewScreen {
   /** Whether one of the two words before position {@code at} counts or qualifies findings. */
   private static boolean qualified(String[] words, int at) {
     for (var j = Math.max(0, at - 2); j < at; j++) {
-      if (FINDING_QUALIFIERS.contains(words[j]) || words[j].chars().allMatch(Character::isDigit)) {
+      if (FINDING_QUALIFIERS.contains(words[j]) || isCount(words[j])) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Whether {@code word} is a number. The empty word a clause opening with punctuation splits into
+   * is not one.
+   */
+  private static boolean isCount(String word) {
+    return !word.isEmpty() && word.chars().allMatch(Character::isDigit);
   }
 
   /**
