@@ -171,9 +171,10 @@ public class CiFailureContextResolver {
           CiFailureContextResolver::isDotnetFailedLine,
           line -> line.contains("*** FAILED ***"),
           line -> line.startsWith("==> X "),
-          // ctest "1 - name (Failed)", zig "1/5 test.name...FAIL (Error)", rspec failed examples.
+          // ctest "1 - name (Failed)", zig "1/5 test.name...FAIL (Error)" (older releases: "Test
+          // [1/5] test.name... FAIL (Error)"), rspec failed examples.
           line -> line.endsWith("(Failed)"),
-          line -> line.contains("...FAIL ("),
+          line -> line.contains("...FAIL (") || line.contains("... FAIL ("),
           Pattern.compile("^rspec \\./[^\\s:]++:\\d").asPredicate());
 
   /** A dotnet test duration as the console logger prints it: {@code [12 ms]}, {@code [< 1 ms]}. */

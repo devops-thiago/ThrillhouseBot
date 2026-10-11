@@ -613,6 +613,7 @@ class CiFailureContextResolverTest {
           "==> X port.EventRepositorySuite.findByContainer  0.012s",
           "1 - queue_test (Failed)",
           "1/5 queue.test.submit accepts copies equal to the maximum...FAIL (TooManyCopies)",
+          "Test [1/5] queue.test.submit accepts copies... FAIL (TestUnexpectedResult)",
           "rspec ./spec/booking_spec.rb:12 # Booking rejects overlaps"
         })
     void eachRunnersFailedTestLineIsNamed(String line) {
