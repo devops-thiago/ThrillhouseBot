@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -313,6 +314,71 @@ class RebuttalContradictionTest {
     assertTrue(
         RebuttalContradiction.find(RACE_FINDING, "It runs serially.", codeLine + "\n").isPresent(),
         "the dispatch sits outside the literal, so it is live code: " + codeLine);
+  }
+
+  /** A one-line patch of {@code path} adding {@code codeLine}. */
+  private static String namedPatch(String path, String codeLine) {
+    return "diff --git a/" + path + " b/" + path + "\n@@ -1,1 +1,2 @@\n+" + codeLine + "\n";
+  }
+
+  /**
+   * #762, reopened: in a language whose apostrophe always opens a string, a single-quoted span is a
+   * literal even when it holds a semicolon, which in a fragment naming no file marks a Rust
+   * lifetime pair. Its dispatch text is prose and must not overrule a correct serial decline.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "script.py",
+        "ui.ts",
+        "app/ui.tsx",
+        "lib/index.js",
+        "worker.rb",
+        "deploy.sh",
+        "src/worker.php"
+      })
+  void shouldNotTreatQuotedDispatchWithASemicolonAsEvidenceInASingleQuoteStringFile(String path) {
+    var code = namedPatch(path, "msg = 'queue a pool.submit(; then wait'");
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", code).isEmpty(),
+        "the quoted dispatch text is a string literal in " + path);
+  }
+
+  /** The other direction in the same files: real dispatch beside such a literal still registers. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "script.py|msg = 'queue a pool.submit(; then wait'; pool.submit(task)",
+        "ui.ts|pool.submit(task); log('queued; .execute( later')",
+        "ui.ts|log('a; b'); executor.execute(task); log('c; d')",
+      })
+  void shouldKeepRealDispatchBesideASemicolonLiteralInASingleQuoteStringFile(String pathAndLine) {
+    var parts = pathAndLine.split("\\|", 2);
+    var code = namedPatch(parts[0], parts[1]);
+    assertTrue(
+        RebuttalContradiction.find(RACE_FINDING, "It runs serially.", code).isPresent(),
+        "the dispatch sits outside the literal: " + pathAndLine);
+  }
+
+  /**
+   * Where the apostrophe can be a lifetime or a char literal, the tells still decide: a named Rust
+   * file and a Java file read the lifetime shapes exactly as a fragment naming no file does.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "    let f = &'a ctx; executor.submit(() -> run(ctx)); let nl = '\\n';",
+        "    foo::<'a>(executor.submit(|| ()), '\\n');",
+        "    fn go<'a>(e: &'a Exec) { e.submit(run); }",
+        "    fn f<T: 'a>(e: &mut Exec) { e.submit(run) } let c = '\\u{1F600}';",
+      })
+  void shouldKeepTheLifetimeTellsInARustFile(String codeLine) {
+    for (var path : List.of("src/lib.rs", "Worker.java")) {
+      assertTrue(
+          RebuttalContradiction.find(RACE_FINDING, "It runs serially.", namedPatch(path, codeLine))
+              .isPresent(),
+          "the lifetime pair is not a literal in " + path + ": " + codeLine);
+    }
   }
 
   /**
