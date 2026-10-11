@@ -425,7 +425,8 @@ public class ReviewDiffFormatter {
       return false;
     }
     var name = path.substring(path.lastIndexOf('/') + 1).toLowerCase(Locale.ROOT);
-    return BUILD_MANIFESTS.contains(name) || BUILD_MANIFEST_EXTENSIONS.stream().anyMatch(name::endsWith);
+    return BUILD_MANIFESTS.contains(name)
+        || BUILD_MANIFEST_EXTENSIONS.stream().anyMatch(name::endsWith);
   }
 
   /** Ignored paths the scope note names before rolling the rest up as a count. */

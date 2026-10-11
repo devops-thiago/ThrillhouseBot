@@ -884,8 +884,8 @@ class ReviewDiffFormatterTest {
 
     /**
      * #481 pin. The gitignore-style normalization changes what a pattern compiles to, so the
-     * shipped default list has to keep excluding exactly what it excluded before. Since #935 it
-     * no longer excludes a build manifest: the pom a Dockerfile's jar name depends on is reviewed.
+     * shipped default list has to keep excluding exactly what it excluded before. Since #935 it no
+     * longer excludes a build manifest: the pom a Dockerfile's jar name depends on is reviewed.
      */
     @Test
     void shouldExcludeTheSameFilesTheShippedDefaultsAlwaysDid() throws Exception {
@@ -923,7 +923,8 @@ class ReviewDiffFormatterTest {
 
     @Test
     void theScopeNoteNamesEveryIgnoredFileButNotAPureRename() {
-      var renamed = new GitHubPullRequestClient.FileDiff("new.md", "renamed", 0, 0, 0, null, "old.md");
+      var renamed =
+          new GitHubPullRequestClient.FileDiff("new.md", "renamed", 0, 0, 0, null, "old.md");
       var lock = file("go.sum", "modified", 40, 2, "@@ x");
       var source = file("main.go", "modified", 4, 1, "@@ y");
       var files = List.of(renamed, lock, source);
@@ -945,7 +946,8 @@ class ReviewDiffFormatterTest {
 
       var note = ReviewDiffFormatter.formatIgnoredFiles(files, List.of());
 
-      assertTrue(note.startsWith((ReviewDiffFormatter.IGNORED_NAMES_CAP + 2) + " files excluded"), note);
+      assertTrue(
+          note.startsWith((ReviewDiffFormatter.IGNORED_NAMES_CAP + 2) + " files excluded"), note);
       assertTrue(note.endsWith(", and 2 more)\n"), note);
     }
 
