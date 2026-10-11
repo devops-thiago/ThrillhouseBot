@@ -4786,7 +4786,8 @@ class FollowUpAnalyzerTest {
                 analyzer,
                 earlierRaceThread(RACE_WRONG_DECLINE),
                 () ->
-                    "+// Counter is shared by every net/http goroutine serving /reconcile.\n"
+                    " type Counter struct {\n"
+                        + "+// Counter is shared by every net/http goroutine serving /reconcile.\n"
                         + "+counter.bump();\n"
                         + "-// removed: called from multiple threads"));
 
@@ -4843,11 +4844,31 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
+  void aStatusNamingNoFindingIsNotExplained() {
+    var previous = analyzer.parsePreviousResponses(List.of(RACE_ROUND_JSON)).get(0).findings();
+    var statuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(0, "unresolved", MODEL_REASON),
+            new ReviewResponse.PreviousFindingStatus(9, "unresolved", MODEL_REASON));
+
+    assertEquals(
+        statuses,
+        analyzer.recheckDeclines(
+            previous,
+            statuses,
+            earlierRaceThread(RACE_WRONG_DECLINE),
+            List.of(),
+            BOT_ID,
+            () -> "+counter.bump();"));
+  }
+
+  @Test
   void aModelNoteIsLeftAsItIsWhenThereIsNothingToExplain() {
     assertEquals("still there", modelUnresolved(analyzer, "still there").get(0).note());
     var already = RebuttalContradiction.NOTE_LEAD_IN + " already explained.";
     assertEquals(already, modelUnresolved(analyzer, already, RACE_WRONG_DECLINE).get(0).note());
     assertEquals(" ", modelUnresolved(analyzer, " ", RACE_WRONG_DECLINE).get(0).note());
+    assertEquals(null, modelUnresolved(analyzer, null, RACE_WRONG_DECLINE).get(0).note());
     assertEquals(
         MODEL_REASON,
         modelUnresolved(
