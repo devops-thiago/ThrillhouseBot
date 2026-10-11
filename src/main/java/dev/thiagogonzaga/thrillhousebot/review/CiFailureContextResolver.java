@@ -148,7 +148,10 @@ public class CiFailureContextResolver {
           line -> line.contains("...FAIL ("),
           Pattern.compile("^rspec \\./[^\\s:]++:\\d").asPredicate());
 
-  /** The path GitHub Actions gives the runner's own annotations, which never name a test. */
+  /**
+   * The path GitHub Actions gives the runner's own annotations, which never name a test: the
+   * workflow directory itself, or a workflow file in it.
+   */
   private static final String RUNNER_ANNOTATION_PATH = ".github";
 
   // The ISO-8601 timestamp GitHub Actions prefixes to every log line: tokens, not information.
@@ -307,7 +310,10 @@ public class CiFailureContextResolver {
   }
 
   private static boolean isRunnerNotice(GitHubCheckRunClient.Annotation annotation) {
-    return levelRank(annotation) > 0 && RUNNER_ANNOTATION_PATH.equals(annotation.path());
+    var path = annotation.path();
+    return levelRank(annotation) > 0
+        && path != null
+        && (path.equals(RUNNER_ANNOTATION_PATH) || path.startsWith(RUNNER_ANNOTATION_PATH + "/"));
   }
 
   private static int levelRank(GitHubCheckRunClient.Annotation annotation) {
@@ -385,9 +391,10 @@ public class CiFailureContextResolver {
     var start = bytes.length >= LOG_TAIL_BYTES ? 1 : 0;
     var found = new LinkedHashSet<String>();
     for (var i = start; i < lines.length && found.size() < MAX_FAILING_TEST_LINES; i++) {
-      var line = clip(LOG_TIMESTAMP.matcher(lines[i]).replaceFirst("").strip(), MAX_LINE_CHARS);
+      // Matched before it is clipped: several shapes are read at the line's end ("... FAILED").
+      var line = LOG_TIMESTAMP.matcher(lines[i]).replaceFirst("").strip();
       if (namesAFailedTest(line)) {
-        found.add(line);
+        found.add(clip(line, MAX_LINE_CHARS));
       }
     }
     return List.copyOf(found);

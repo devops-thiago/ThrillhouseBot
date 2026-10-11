@@ -644,6 +644,17 @@ class CiFailureContextResolverTest {
       assertEquals(1, found.stream().filter(l -> l.contains("TestFirst")).count());
     }
 
+    /** A long line is matched whole, then clipped: "FAILED" at its end still names the test. */
+    @Test
+    void aLongLineIsMatchedBeforeItIsClipped() {
+      var line = "BookingTest > " + "a".repeat(400) + "() FAILED";
+
+      var found = lines(line + "\n");
+
+      assertEquals(1, found.size());
+      assertEquals(CiFailureContextResolver.MAX_LINE_CHARS, found.get(0).length());
+    }
+
     @Test
     void aFullWindowDropsItsFirstLineAsAFragment() {
       var bytes = new byte[CiFailureContextResolver.LOG_TAIL_BYTES];
@@ -681,6 +692,12 @@ class CiFailureContextResolverTest {
                     "warning",
                     "Node.js 20 actions are deprecated. Please update the following actions."),
                 annotation(".github", 26, "failure", "Process completed with exit code 1."),
+                annotation(
+                    ".github/workflows/ci.yml",
+                    12,
+                    "warning",
+                    "The set-output command is deprecated"),
+                annotation(null, 0, "notice", "Job summary uploaded"),
                 annotation("src/app.ts", 3, "warning", "Unused variable 'x'")));
 
     var section =
@@ -690,6 +707,8 @@ class CiFailureContextResolverTest {
     assertTrue(section.contains("Process completed with exit code 1."), section);
     assertTrue(section.contains("Unused variable"), section);
     assertFalse(section.contains("Node.js 20"), section);
+    assertFalse(section.contains("set-output"), section);
+    assertTrue(section.contains("Job summary uploaded"), section);
   }
 
   @Test
