@@ -148,10 +148,10 @@ class VerdictBuilderTest {
   private static ReviewResponse postedFindings(int posted, int verified) {
     var findings = new ArrayList<ReviewResponse.Finding>();
     for (var i = 0; i < posted; i++) {
-      var description = i < verified ? "d" : "d\n\n" + FindingVerificationService.UNVERIFIED_NOTE;
-      findings.add(
+      var finding =
           new ReviewResponse.Finding(
-              "low", "medium", "a.java", i + 1, "Finding " + i, description, null, null));
+              "low", "medium", "a.java", i + 1, "Finding " + i, "d", null, null);
+      findings.add(i < verified ? finding : FindingVerificationService.markUnscreened(finding));
     }
     return new ReviewResponse(findings, List.of(), null);
   }
@@ -2417,5 +2417,19 @@ class VerdictBuilderTest {
     assertEquals(
         new VerificationCoverage(4, 4),
         VerdictBuilder.postedCoverage(new VerificationCoverage(4, 4), List.of()));
+  }
+
+  @Test
+  void aFindingTheVerifierLeftUnscreenedCountsAsUncoveredThoughItHadNoDescription() {
+    // The fail-open path gives a finding with no description the note itself, so a null
+    // description on a posted finding never hides an unverified one.
+    var bare = new ReviewResponse.Finding("low", "high", "a.java", 4, "Bare", null, null, null);
+
+    var coverage =
+        VerdictBuilder.postedCoverage(
+            new VerificationCoverage(2, 1),
+            List.of(bare, FindingVerificationService.markUnscreened(bare)));
+
+    assertEquals(new VerificationCoverage(2, 1), coverage);
   }
 }
