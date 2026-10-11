@@ -121,7 +121,7 @@ public class CiFailureContextResolver {
           line -> line.contains("<<< FAILURE!") || line.contains("<<< ERROR!"),
           Pattern.compile("^\\[ERROR] {2,}+[^\\s:]++:\\d").asPredicate(),
           // Gradle "FooTest > bar() FAILED", Karma "Chrome Headless (Linux) Suite name FAILED".
-          line -> line.endsWith(" FAILED") && (line.contains(" > ") || line.contains(") ")),
+          line -> line.endsWith(" FAILED") && (line.contains(" > ") || isKarmaLine(line)),
           // TAP (node --test, prove): "not ok 3 - name".
           Pattern.compile("^not ok \\d").asPredicate(),
           // node --test spec reporter, Jest and Vitest: "✖ name", "✕ name", "× name", "● A › b".
@@ -309,11 +309,38 @@ public class CiFailureContextResolver {
     }
   }
 
+  /**
+   * A warning or notice the runner attaches to the workflow itself: anything on the workflow
+   * directory, and on a workflow file a notice or a deprecation warning. Any other warning on a
+   * workflow file is about that file's own content (an unpinned action, a bad expression) and is
+   * kept.
+   */
   private static boolean isRunnerNotice(GitHubCheckRunClient.Annotation annotation) {
     var path = annotation.path();
-    return levelRank(annotation) > 0
-        && path != null
-        && (path.equals(RUNNER_ANNOTATION_PATH) || path.startsWith(RUNNER_ANNOTATION_PATH + "/"));
+    if (levelRank(annotation) == 0 || path == null) {
+      return false;
+    }
+    if (path.equals(RUNNER_ANNOTATION_PATH)) {
+      return true;
+    }
+    return path.startsWith(RUNNER_ANNOTATION_PATH + "/")
+        && ("notice".equalsIgnoreCase(annotation.annotationLevel())
+            || oneLine(annotation.message()).toLowerCase(Locale.ROOT).contains("deprecated"));
+  }
+
+  /**
+   * Karma's "Chrome Headless 120.0.0.0 (Linux x86_64) Suite name FAILED": the browser's version
+   * number stands right before the opening parenthesis. A build step whose name merely holds a
+   * parenthesis ("Upload coverage (codecov) FAILED") has no version there.
+   */
+  private static boolean isKarmaLine(String line) {
+    var open = line.indexOf(" (");
+    if (open <= 0) {
+      return false;
+    }
+    var prefix = line.substring(0, open);
+    var version = prefix.substring(prefix.lastIndexOf(' ') + 1);
+    return Character.isDigit(version.charAt(0)) && version.contains(".");
   }
 
   private static int levelRank(GitHubCheckRunClient.Annotation annotation) {

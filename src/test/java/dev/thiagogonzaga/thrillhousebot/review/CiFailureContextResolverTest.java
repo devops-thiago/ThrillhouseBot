@@ -620,6 +620,10 @@ class CiFailureContextResolverTest {
           "[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.6.0:test",
           "FAIL",
           "FAIL build step",
+          "Upload coverage reports (codecov) FAILED",
+          "Run tests FAILED",
+          "(setup) step FAILED",
+          "Deploy 3 (staging) FAILED",
           "\u25CF Running coverage on untested files"
         })
     void otherFailureWordsAreNotATest(String line) {
@@ -698,6 +702,9 @@ class CiFailureContextResolverTest {
                     "warning",
                     "The set-output command is deprecated"),
                 annotation(null, 0, "notice", "Job summary uploaded"),
+                annotation(".github/workflows/ci.yml", 3, "notice", "Cache restored"),
+                annotation(
+                    ".github/workflows/ci.yml", 20, "warning", "Unpinned action actions/cache@v4"),
                 annotation("src/app.ts", 3, "warning", "Unused variable 'x'")));
 
     var section =
@@ -709,6 +716,8 @@ class CiFailureContextResolverTest {
     assertFalse(section.contains("Node.js 20"), section);
     assertFalse(section.contains("set-output"), section);
     assertTrue(section.contains("Job summary uploaded"), section);
+    assertFalse(section.contains("Cache restored"), section);
+    assertTrue(section.contains("Unpinned action actions/cache@v4"), section);
   }
 
   @Test
