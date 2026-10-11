@@ -90,7 +90,7 @@ class ReviewEvidenceTest {
     var ctx = context(files, coverage.toString());
 
     var evidence =
-        ReviewEvidence.forReview(new CitedLocationResolver(prClient), "t", "o", "r", "sha", ctx)
+        ReviewEvidence.forReview(new CitedLocationResolver(prClient), "t", "o", "r", "sha", ctx, "")
             .forFindings(findings);
 
     var last = findings.get(findings.size() - 1);
@@ -110,7 +110,7 @@ class ReviewEvidenceTest {
     var only = finding(path(0));
 
     var evidence =
-        ReviewEvidence.forReview(new CitedLocationResolver(prClient), "t", "o", "r", "sha", ctx)
+        ReviewEvidence.forReview(new CitedLocationResolver(prClient), "t", "o", "r", "sha", ctx, "")
             .forFindings(List.of(only));
 
     assertNotNull(evidence.citedLocations().forFinding(only), "the cited location resolves");

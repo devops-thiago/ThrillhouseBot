@@ -4936,6 +4936,170 @@ class FollowUpAnalyzerTest {
             .isEmpty());
   }
 
+  // #927: markers restart at 1 every round; the key makes each round's marker its finding's own.
+
+  private static GitHubReviewClient.PullRequestComment keyedRoot(
+      long id, ReviewResponse.Finding owner, ReviewResponse.Finding keyedAs, int position) {
+    return comment(
+        id,
+        null,
+        owner.file(),
+        "**🟠 HIGH — "
+            + owner.title()
+            + "**\n\nWhy.\n\n"
+            + SuggestionFormatter.findingMarker(
+                position, keyedAs.file(), keyedAs.line(), keyedAs.title()),
+        BOT);
+  }
+
+  @Test
+  void eachRoundsKeyedMarkerBindsItsOwnFindingAtTheSamePosition() {
+    var roundOne =
+        new ReviewResponse.Finding("high", "src/A.java", 10, "Shared title", "d", null, null);
+    var roundTwo =
+        new ReviewResponse.Finding("high", "src/A.java", 20, "Shared title", "d", null, null);
+    var threads =
+        List.of(keyedRoot(100L, roundOne, roundOne, 1), keyedRoot(200L, roundTwo, roundTwo, 1));
+
+    assertEquals(Map.of(1, 100L), analyzer.matchFindingThreads(List.of(roundOne), threads, BOT_ID));
+    assertEquals(Map.of(1, 200L), analyzer.matchFindingThreads(List.of(roundTwo), threads, BOT_ID));
+  }
+
+  @Test
+  void aKeyedMarkerOfAnotherFindingNeverBindsEvenWithTheSameTitle() {
+    var finding = new ReviewResponse.Finding("high", "src/A.java", 10, "Race", "d", null, null);
+    var other = new ReviewResponse.Finding("high", "src/A.java", 30, "Race", "d", null, null);
+
+    assertEquals(
+        Map.of(),
+        analyzer.matchFindingThreads(
+            List.of(finding), List.of(keyedRoot(100L, finding, other, 1)), BOT_ID),
+        "the comment says Race in its header, but its key names the finding on line 30");
+  }
+
+  /**
+   * The key is computed from the persisted finding on both sides: the round that raised it posted
+   * the marker from those fields, and every later lookup reads the same persisted finding. When a
+   * later round raises the defect again moved and reworded, its thread is still found from the
+   * earlier persisted copy, so the re-raise is dropped beside it and a maintainer's reply on it
+   * still settles it.
+   */
+  @Test
+  void aPersistedFindingKeepsItsThreadWhenALaterRoundMovesAndRewordsTheDefect() {
+    var raised =
+        new ReviewResponse.Finding(
+            "high", "high", "src/A.java", 10, "Race on shared counter", "d", null, null);
+    var movedAndReworded =
+        new ReviewResponse.Finding(
+            "high", "high", "src/A.java", 11, "Race on the shared counter", "d", null, null);
+    var other =
+        new ReviewResponse.Finding(
+            "medium", "high", "src/B.java", 5, "Missing null check", "d", null, null);
+    var roundOne = new ReviewResponse(List.of(raised), List.of(), null);
+    var roundTwo = new ReviewResponse(List.of(other), List.of(), null);
+    var threads = new ArrayList<GitHubReviewClient.PullRequestComment>();
+    threads.add(keyedRoot(100L, raised, raised, 1));
+    threads.add(keyedRoot(200L, other, other, 1));
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    var guarded =
+        FollowUpAnalyzer.withoutOpenThreadDuplicates(
+            new ReviewResponse(List.of(movedAndReworded), List.of(), null),
+            List.of(roundTwo, roundOne),
+            threads,
+            resolver,
+            Map.of(),
+            BOT_ID);
+    assertTrue(guarded.findings().isEmpty(), "the open thread of the persisted copy was found");
+
+    threads.add(
+        comment(
+            101L,
+            100L,
+            "src/A.java",
+            "Accepted risk: the counter is advisory and a lost increment is harmless.",
+            "maintainer"));
+    var settled =
+        analyzer
+            .heldPreviousFindings(
+                List.of(roundTwo, roundOne),
+                List.of(),
+                threads,
+                List.of(),
+                resolver,
+                BOT_ID,
+                Map.of(),
+                () -> "+counter.bump();")
+            .stream()
+            .filter(entry -> raised.title().equals(entry.finding().title()))
+            .findFirst()
+            .orElseThrow();
+    assertEquals("justified", settled.status().status());
+    assertEquals(100L, settled.status().earlierRound().threadRootId());
+  }
+
+  /**
+   * The lookup that only asks whether the finding's position is taken on the file never binds: a
+   * maintainer's reply on another finding's keyed thread at the same position, whose header even
+   * carries the same title, neither settles the held finding nor lets the title scan bind it there.
+   */
+  @Test
+  void aReplyOnAnotherFindingsKeyedThreadAtTheSamePositionNeverSettlesTheFinding() {
+    var raised =
+        new ReviewResponse.Finding("high", "high", "src/A.java", 10, "Race", "d", null, null);
+    var other =
+        new ReviewResponse.Finding("high", "high", "src/A.java", 30, "Race", "d", null, null);
+    var unrelated =
+        new ReviewResponse.Finding(
+            "medium", "high", "src/B.java", 5, "Missing null check", "d", null, null);
+    var roundOne = new ReviewResponse(List.of(raised), List.of(), null);
+    var roundTwo = new ReviewResponse(List.of(unrelated), List.of(), null);
+    var threads =
+        List.of(
+            keyedRoot(100L, raised, other, 1),
+            keyedRoot(200L, unrelated, unrelated, 1),
+            comment(
+                101L,
+                100L,
+                "src/A.java",
+                "Accepted risk: the counter is advisory and a lost increment is harmless.",
+                "maintainer"));
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    var held =
+        analyzer
+            .heldPreviousFindings(
+                List.of(roundTwo, roundOne),
+                List.of(),
+                threads,
+                List.of(),
+                resolver,
+                BOT_ID,
+                Map.of(),
+                () -> "+counter.bump();")
+            .stream()
+            .filter(entry -> raised.title().equals(entry.finding().title()))
+            .findFirst()
+            .orElseThrow();
+
+    assertEquals("unresolved", held.status().status());
+  }
+
+  @Test
+  void aMarkerPostedBeforeTheKeyStillBindsByItsContent() {
+    var finding = new ReviewResponse.Finding("high", "src/A.java", 10, "Race", "d", null, null);
+    var legacy =
+        comment(
+            100L,
+            null,
+            "src/A.java",
+            "**🟠 HIGH — Race**\n\n" + SuggestionFormatter.findingMarker(1),
+            BOT);
+
+    assertEquals(
+        Map.of(1, 100L), analyzer.matchFindingThreads(List.of(finding), List.of(legacy), BOT_ID));
+  }
+
   // #957: an earlier round's finding the backstop no longer holds still gets a status.
 
   /** The backstop over PREVIOUS_JSON whose diff carries only the files in {@code patches}. */

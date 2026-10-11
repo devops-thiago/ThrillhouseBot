@@ -36,7 +36,8 @@ response or the review.
 | `not_useful` | `reaction` (`-1`) | A 👎 on the finding comment |
 | `not_useful` | `reply_heuristic` | A reply containing `not useful`, `false positive`, `not a bug`, `not a real bug`, `not a real issue`, `noise`, 👎 or `:-1:` |
 
-Only comments with the hidden `<!-- thrillhousebot:finding=N -->` marker count,
+Only comments with the hidden `<!-- thrillhousebot:finding=N key=… -->` marker
+(or `<!-- thrillhousebot:finding=N -->` on comments posted before the key) count,
 and only reactions and replies from people with write access to the repository.
 The bot's own reactions, such as the 👀 it adds to acknowledge a command, are
 ignored.
