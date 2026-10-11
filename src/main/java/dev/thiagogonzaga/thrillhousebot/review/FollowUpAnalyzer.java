@@ -35,9 +35,11 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
@@ -1713,6 +1715,98 @@ public class FollowUpAnalyzer {
     return Character.getType(c) == Character.DASH_PUNCTUATION || c == '−';
   }
 
+  /**
+   * Whether a clear directive written as a reply on a finding's own review thread applies to that
+   * thread's finding (#1066). The thread names the finding, so a bare {@code @thrillhousebot
+   * resolved} closes it. A reply that names any {@code path:line} closes it only when one of them
+   * is this finding's own locator, whole ({@link #namesWholeLocator}): a directive naming another
+   * line of the same file, or another file, is about another finding, and the safe reading of it is
+   * to close nothing here. {@link MaintainerReplyService} decides with this same rule when it
+   * resolves the thread, and the review applies it to the status.
+   *
+   * @param path the file the thread's root comment is on
+   * @param lines the lines the finding may be cited at (null entries are ignored)
+   */
+  static boolean threadDirectiveNamesItsFinding(
+      String body, String path, Collection<Integer> lines) {
+    var naming = namingText(body);
+    if (!LOCATOR_SHAPE.matcher(naming).find()) {
+      return true;
+    }
+    return path != null
+        && lines.stream()
+            .filter(Objects::nonNull)
+            .anyMatch(line -> namesWholeLocator(naming, path + ":" + line));
+  }
+
+  /**
+   * Whether {@code naming} carries {@code locator} as a whole token: not continued after it (as
+   * {@link #namesLocator} reads the end, with no spaced range) and not a longer path before it, so
+   * {@code other/src/A.java:5} does not name {@code src/A.java:5}.
+   */
+  private static boolean namesWholeLocator(String naming, String locator) {
+    for (var at = naming.indexOf(locator); at >= 0; at = naming.indexOf(locator, at + 1)) {
+      var after = at + locator.length();
+      var whole =
+          (at == 0 || !isPathChar(naming.charAt(at - 1)))
+              && (after >= naming.length()
+                  || (!continuesLocator(naming, after) && !startsSpacedRange(naming, after)));
+      if (whole) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** A character a repository path can hold, so one before a locator makes it a longer path. */
+  private static boolean isPathChar(char c) {
+    return Character.isLetterOrDigit(c) || c == '/' || c == '.' || c == '_' || c == '-';
+  }
+
+  /**
+   * Note on a finding a maintainer closed with a clear directive written on its own review thread
+   * (#1066). Distinct from {@link #conversationClearedNote}: the reply on the thread already
+   * acknowledged the directive, so the thread gets no second reply when the review resolves it.
+   */
+  static String threadClearedNote(BotIdentity botIdentity) {
+    return "Cleared by a maintainer's @"
+        + botIdentity.primaryMention()
+        + " resolved reply on its review thread.";
+  }
+
+  /**
+   * Whether a maintainer cleared this finding with a clear directive replied on its own thread
+   * (#1066): a write-capable, non-bot reply that uses the directive ({@link #isClearDirective}) on
+   * the thread located by the finding's marker and own content ({@link #markerRootComment} with
+   * {@code requireOwnContent}), naming no other finding ({@link #threadDirectiveNamesItsFinding}).
+   * A thread found by title alone is not enough: clearing is the dangerous direction.
+   */
+  private static boolean clearedOnOwnThread(
+      ReviewResponse.Finding finding,
+      int findingId,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity) {
+    var root = markerRootComment(finding, findingId, true, inlineComments, botIdentity);
+    if (root == null) {
+      return false;
+    }
+    for (var c : inlineComments) {
+      if (root.equals(c.inReplyToId())
+          && c.user() != null
+          && !botIdentity.matches(c.user().login())
+          && mayHoldWriteAccess(c.authorAssociation())
+          && isClearDirective(c.body(), botIdentity)
+          && threadDirectiveNamesItsFinding(c.body(), finding.file(), List.of(finding.line()))) {
+        Log.infof(
+            "Clearing previous finding '%s' (%s:%d) — a maintainer replied an @thrillhousebot"
+                + " resolved directive on its review thread",
+            LogSafe.oneLine(finding.title()), LogSafe.oneLine(finding.file()), finding.line());
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** A non-bot conversation comment with a body and a write-capable author association. */
   private static boolean isMaintainerConversationComment(
       GitHubCommentClient.IssueComment comment, BotIdentity botIdentity) {
@@ -1753,30 +1847,64 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.PreviousFindingStatus> statuses,
       List<GitHubCommentClient.IssueComment> conversationComments,
       BotIdentity botIdentity) {
+    return clearNamedInConversation(
+        previous, statuses, conversationComments, List.of(), botIdentity);
+  }
+
+  /**
+   * Same as above, also applying a clear directive a maintainer replied on the finding's own review
+   * thread ({@link #clearedOnOwnThread}, #1066). The model reads that reply as conversation and may
+   * still answer {@code unresolved}; the directive is an instruction, so it is applied here the way
+   * the conversation one is.
+   */
+  public List<ReviewResponse.PreviousFindingStatus> clearNamedInConversation(
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity) {
     if (statuses == null || statuses.isEmpty()) {
       return statuses == null ? List.of() : statuses;
     }
-    if (previous == null
-        || previous.isEmpty()
-        || conversationComments == null
-        || conversationComments.isEmpty()) {
+    if (previous == null || previous.isEmpty()) {
       return statuses;
     }
     var rewritten = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
+    var changed = false;
     for (var status : statuses) {
       var id = status.id();
-      if (STATUS_UNRESOLVED.equalsIgnoreCase(status.status())
-          && id >= 1
-          && id <= previous.size()
-          && clearedInConversation(previous.get(id - 1), conversationComments, botIdentity)) {
-        rewritten.add(
-            new ReviewResponse.PreviousFindingStatus(
-                id, STATUS_RESOLVED, conversationClearedNote(botIdentity)));
-      } else {
-        rewritten.add(status);
-      }
+      var note =
+          STATUS_UNRESOLVED.equalsIgnoreCase(status.status()) && id >= 1 && id <= previous.size()
+              ? clearedNote(
+                  previous.get(id - 1), id, conversationComments, inlineComments, botIdentity)
+              : null;
+      changed |= note != null;
+      rewritten.add(
+          note == null
+              ? status
+              : new ReviewResponse.PreviousFindingStatus(id, STATUS_RESOLVED, note));
     }
-    return rewritten;
+    return changed ? rewritten : statuses;
+  }
+
+  /**
+   * The note a cleared finding is resolved under, or {@code null} when no maintainer cleared it: a
+   * directive on the PR conversation ({@link #clearedInConversation}) first, since its thread still
+   * needs the reply that records the close, then one replied on its own thread ({@link
+   * #clearedOnOwnThread}).
+   */
+  private static String clearedNote(
+      ReviewResponse.Finding finding,
+      int findingId,
+      List<GitHubCommentClient.IssueComment> conversationComments,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity) {
+    if (clearedInConversation(finding, conversationComments, botIdentity)) {
+      return conversationClearedNote(botIdentity);
+    }
+    return clearedOnOwnThread(finding, findingId, inlineComments, botIdentity)
+        ? threadClearedNote(botIdentity)
+        : null;
   }
 
   /** Maps each previous finding's prompt id to its bot root comment, for thread resolution. */
@@ -2634,6 +2762,19 @@ public class FollowUpAnalyzer {
       "Raised in an earlier review and answered by a maintainer on its review thread; the reply"
           + " settles it.";
 
+  /**
+   * Note on the {@code resolved} status of an earlier round's finding whose flagged code is still
+   * in the diff but whose suggested change now is too ({@link #suggestedFixLanded}, #1066).
+   */
+  static final String FIX_LANDED_NOTE =
+      "Raised in an earlier review; the change it suggested is now in the diff.";
+
+  /**
+   * The fewest non-whitespace characters one line of a suggested fix needs before its presence is
+   * evidence the fix landed: a lone brace or {@code return;} is in many diffs for other reasons.
+   */
+  static final int MIN_FIX_LINE_CHARS = 12;
+
   /** Note on the {@code unresolved} status of a finding the backstop holds without a reply. */
   static final String HELD_NOTE =
       "Flagged in an earlier round and still present; not addressed in this revision.";
@@ -2710,6 +2851,7 @@ public class FollowUpAnalyzer {
     // counts it, and a second "superseded" would count it twice.
     var supersededThisRound =
         reportedKeys(replay.reportedRound(), currentStatuses, STATUS_SUPERSEDED);
+    var accountedThisRound = accountedFindings(replay.reportedRound(), currentStatuses);
     closeReported(replay.open(), replay.reportedRound(), currentStatuses);
     var clusters = clusterByIdentity(replay.open());
     return heldFromClusters(
@@ -2721,7 +2863,32 @@ public class FollowUpAnalyzer {
             botIdentity,
             renameTargets,
             reviewedCode,
-            supersededThisRound));
+            supersededThisRound,
+            accountedThisRound));
+  }
+
+  /**
+   * The effective previous round's findings this round's statuses close (resolved, justified or
+   * superseded): what the round's own surfaces already name, so an older copy of one of them is not
+   * named again beside it (#1066).
+   */
+  private static List<ReviewResponse.Finding> accountedFindings(
+      List<ReviewResponse.Finding> reportedRound,
+      List<ReviewResponse.PreviousFindingStatus> statuses) {
+    var accounted = new ArrayList<ReviewResponse.Finding>();
+    if (statuses == null) {
+      return accounted;
+    }
+    for (var status : statuses) {
+      var id = status.id();
+      if ((isAddressedVerdict(status.status())
+              || STATUS_SUPERSEDED.equalsIgnoreCase(status.status()))
+          && id >= 1
+          && id <= reportedRound.size()) {
+        accounted.add(reportedRound.get(id - 1));
+      }
+    }
+    return accounted;
   }
 
   /**
@@ -2752,7 +2919,8 @@ public class FollowUpAnalyzer {
       BotIdentity botIdentity,
       Map<String, String> renameTargets,
       Supplier<String> reviewedCode,
-      Set<String> supersededThisRound) {}
+      Set<String> supersededThisRound,
+      List<ReviewResponse.Finding> accountedThisRound) {}
 
   /**
    * {@code statuses} without the {@code unresolved} entries that name no finding: an id outside the
@@ -2875,12 +3043,25 @@ public class FollowUpAnalyzer {
     for (var r = 0; r < chrono.size(); r++) {
       var round = chrono.get(r);
       closeAddressed(open, reportedRound, round.previousFindingsStatus());
+      closeEarlierRound(open, round.closedEarlierRound());
       addOpenFindings(open, round.findings(), r);
       if (!round.findings().isEmpty()) {
         reportedRound = round.findings();
       }
     }
     return new RoundReplay(open, reportedRound);
+  }
+
+  /**
+   * Removes the findings of older rounds a round recorded as closed ({@link
+   * ReviewResponse#closedEarlierRound}): their code left the diff or a maintainer cleared them, and
+   * that round resolved their threads and named them, so no later round closes or names them again
+   * (#1066).
+   */
+  private static void closeEarlierRound(
+      Map<String, OpenFinding> open, List<ReviewResponse.Finding> closed) {
+    // A finding with no file has no key and was never in the open set; removing null is a no-op.
+    closed.forEach(finding -> open.remove(findingKey(finding)));
   }
 
   /** What {@link #replayRounds} leaves: the open set and the round the current one reports on. */
@@ -3365,15 +3546,21 @@ public class FollowUpAnalyzer {
    * in (#957); a finding that left the open set with no status was in no bucket at all. In order:
    *
    * <ol>
+   *   <li>no member's code is still in the diff and the round's own status already reported that
+   *       finding superseded: no entry ({@code null});
+   *   <li>a maintainer cleared a member, from the PR conversation ({@link #clearedInConversation})
+   *       or with a directive replied on its own thread ({@link #clearedOnOwnThread}): {@code
+   *       resolved}, as {@link #clearNamedInConversation} records it, whether or not its code is
+   *       still in the diff, so the clear is not swallowed by the supersede below and the cleared
+   *       thread still gets its reply (#1066);
    *   <li>no member's code is still in the diff: {@code superseded}, as the effective previous
-   *       round's finding whose code left the diff is, or no entry when the round's own status
-   *       already reported that finding superseded ({@code null});
-   *   <li>a maintainer cleared a member from the PR conversation ({@link #clearedInConversation}):
-   *       {@code resolved}, as {@link #clearNamedInConversation} records it;
+   *       round's finding whose code left the diff is;
    *   <li>a maintainer declined a member from the PR conversation: re-checked as {@link
    *       #declineNamedInConversation} re-checks it — {@code justified}, or held when a lone
    *       decline's premise is contradicted by the reviewed code;
-   *   <li>no member's thread carries a maintainer reply: an {@code unresolved} hold;
+   *   <li>no member's thread carries a maintainer reply: {@code resolved} when every present
+   *       member's suggested fix is now in the diff ({@link #suggestedFixLanded}, #1066), else an
+   *       {@code unresolved} hold;
    *   <li>else the outcome of that reply ({@link #heldPreviousFindings(List, List, List, List,
    *       DiffLineResolver, BotIdentity, Map, Supplier)}).
    * </ol>
@@ -3386,10 +3573,11 @@ public class FollowUpAnalyzer {
    *
    * <p>Every status but a hold carries {@link #EARLIER_ROUND_ID}, and every status carries the
    * finding itself ({@link ReviewResult.EarlierRound}), which is how the consumers that would read
-   * a round-relative id tell it apart (#959). These statuses are not persisted, so they are
-   * recomputed every round; {@link ReviewResult#resolvedPreviousCount} and {@link
-   * ReviewResult#hasSupersededPrevious} leave them out, so a recomputed close never re-posts the
-   * delta comment or the summary (#470).
+   * a round-relative id tell it apart (#959). A {@code resolved} or {@code superseded} entry also
+   * carries the root of the finding's own thread ({@link #clusterThreadRoot}), so the thread is
+   * resolved, and the round records the close ({@link ReviewResponse#closedEarlierRound}), so a
+   * later round's replay no longer carries the finding and neither resolves nor names it again
+   * (#1066, #470). A hold and a standing decline are recomputed every round.
    *
    * <p>Presence is resolved through {@code renameTargets} the same way {@link #hasVanished} does:
    * the finding's flagged code lives at its rename target, not its pre-rename path, when the file
@@ -3406,32 +3594,56 @@ public class FollowUpAnalyzer {
       Supplier<String> code) {
     var facts = clusterFacts(cluster, directives, in);
     var target = facts.present();
-    if (target == null) {
-      return cluster.stream()
-              .anyMatch(m -> in.supersededThisRound().contains(findingKey(m.finding())))
-          ? null
-          : settled(facts.mostSevere(), STATUS_SUPERSEDED, SUPERSEDED_NOTE, null);
+    if (target == null
+        && cluster.stream()
+            .anyMatch(m -> in.supersededThisRound().contains(findingKey(m.finding())))) {
+      return null;
     }
-    if (facts.cleared()) {
-      return settled(target, STATUS_RESOLVED, conversationClearedNote(in.botIdentity()), null);
+    if (facts.clearedNote() != null) {
+      var cleared = target != null ? target : facts.mostSevere();
+      return closed(cluster, cleared, STATUS_RESOLVED, facts.clearedNote(), in);
+    }
+    if (target == null) {
+      return closed(cluster, facts.mostSevere(), STATUS_SUPERSEDED, SUPERSEDED_NOTE, in);
     }
     if (!facts.declines().isEmpty()) {
-      var reviewed = declineRecheckEnabled && code != null ? code.get() : null;
-      var status =
-          conversationDeclineStatus(
-              target.id(),
-              target.finding(),
-              facts.declines().stream().map(ConversationDecline::reason).toList(),
-              reviewed,
-              in.botIdentity());
-      return STATUS_UNRESOLVED.equals(status.status())
-          ? hold(target, status.note())
-          : settled(target, STATUS_JUSTIFIED, status.note(), null);
+      return conversationDeclineEntry(target, facts, in, code);
     }
+    if (facts.answered() == null) {
+      return suggestedFixLandedEverywhere(cluster, in)
+          ? closed(cluster, target, STATUS_RESOLVED, FIX_LANDED_NOTE, in)
+          : hold(target, HELD_NOTE);
+    }
+    return threadReplyEntry(target, facts, in, code);
+  }
+
+  /**
+   * {@link #backstopEntry}'s entry for a present finding a maintainer declined from the PR
+   * conversation: re-checked as {@link #declineNamedInConversation} re-checks it.
+   */
+  private HeldPrevious conversationDeclineEntry(
+      OpenFinding target, ClusterFacts facts, BackstopInputs in, Supplier<String> code) {
+    var reviewed = declineRecheckEnabled && code != null ? code.get() : null;
+    var status =
+        conversationDeclineStatus(
+            target.id(),
+            target.finding(),
+            facts.declines().stream().map(ConversationDecline::reason).toList(),
+            reviewed,
+            in.botIdentity());
+    return STATUS_UNRESOLVED.equals(status.status())
+        ? hold(target, status.note())
+        : settled(target, STATUS_JUSTIFIED, status.note(), null);
+  }
+
+  /**
+   * {@link #backstopEntry}'s entry for a present finding a maintainer answered on its thread: held
+   * when a lone decline does not hold up ({@link #reopenedEarlierDecline}), else a standing decline
+   * on that thread.
+   */
+  private HeldPrevious threadReplyEntry(
+      OpenFinding target, ClusterFacts facts, BackstopInputs in, Supplier<String> code) {
     var answered = facts.answered();
-    if (answered == null) {
-      return hold(target, HELD_NOTE);
-    }
     var reopened = reopenedEarlierDecline(answered, facts.answeredRoot(), in, code);
     return reopened != null
         ? hold(target, reopened)
@@ -3456,7 +3668,7 @@ public class FollowUpAnalyzer {
       OpenFinding present,
       OpenFinding answered,
       Long answeredRoot,
-      boolean cleared,
+      String clearedNote,
       Set<ConversationDecline> declines) {}
 
   private ClusterFacts clusterFacts(
@@ -3465,7 +3677,7 @@ public class FollowUpAnalyzer {
     OpenFinding present = null;
     OpenFinding answered = null;
     Long answeredRoot = null;
-    boolean cleared = false;
+    String clearedNote = null;
     var declines = Collections.<ConversationDecline>newSetFromMap(new IdentityHashMap<>());
     for (var member : cluster) {
       var finding = member.finding();
@@ -3484,10 +3696,118 @@ public class FollowUpAnalyzer {
         answered = member;
         answeredRoot = root;
       }
-      cleared |= clearedInConversation(finding, in.conversationComments(), in.botIdentity());
+      clearedNote = strongerClear(clearedNote, member, in);
       declines.addAll(namingDeclines(finding, directives));
     }
-    return new ClusterFacts(mostSevere, present, answered, answeredRoot, cleared, declines);
+    return new ClusterFacts(mostSevere, present, answered, answeredRoot, clearedNote, declines);
+  }
+
+  /**
+   * Whether every member of a cluster whose flagged code is still in the diff has its suggested fix
+   * in the diff too ({@link #suggestedFixLanded}), so an earlier round's finding fixed in place is
+   * closed rather than held (#1066). Every present member must agree: the members are one defect,
+   * and a fix that landed for one copy but not another leaves it open.
+   */
+  private static boolean suggestedFixLandedEverywhere(
+      List<OpenFinding> cluster, BackstopInputs in) {
+    return cluster.stream()
+        .map(OpenFinding::finding)
+        .filter(finding -> isStillPresent(finding, in.lineResolver(), in.renameTargets()))
+        .allMatch(finding -> suggestedFixLanded(finding, in.lineResolver(), in.renameTargets()));
+  }
+
+  /**
+   * Whether an earlier round's finding, whose flagged code is still in the diff, was fixed in place
+   * by the change it suggested (#1066). An older round's finding has no model verdict, so without
+   * this only a reply or a directive closed one whose anchor line survived the fix: adding a guard
+   * above the flagged line leaves that line, and the finding, in the diff.
+   *
+   * <p>The test is the suggestion with the flagged code subtracted: the lines of {@code
+   * suggestion_new} that {@code suggestion_old} does not carry, compared stripped. Every one must
+   * be an added line of the finding's file now, beside the flagged code: within as many lines of
+   * where its {@code suggestion_old} sits as the suggestion has ({@link
+   * DiffLineResolver#addsEveryLineNear}), since the same guard added for another defect elsewhere
+   * in the file says nothing about this one. At least one must hold {@link #MIN_FIX_LINE_CHARS}
+   * non-whitespace characters. A false close is worse than a missed one, so a finding with no
+   * suggestion or no flagged code to locate, a suggestion that only removes or reorders lines, one
+   * made only of short lines, and a file renamed with no content change all stay held.
+   */
+  static boolean suggestedFixLanded(
+      ReviewResponse.Finding finding,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets) {
+    var suggested = strippedLines(finding.suggestionNew());
+    var fixLines = new LinkedHashSet<>(suggested);
+    fixLines.removeAll(strippedLines(finding.suggestionOld()));
+    if (fixLines.stream().noneMatch(line -> nonWhitespaceLength(line) >= MIN_FIX_LINE_CHARS)) {
+      return false;
+    }
+    var path = renameTargets.getOrDefault(finding.file(), finding.file());
+    return !path.isBlank()
+        && lineResolver.addsEveryLineNear(
+            path, finding.suggestionOld(), finding.line(), fixLines, suggested.size());
+  }
+
+  /** The non-blank lines of {@code text}, stripped, in order; empty for a null text. */
+  private static Set<String> strippedLines(String text) {
+    var lines = new LinkedHashSet<String>();
+    if (text != null) {
+      for (var line : text.split("\n", -1)) {
+        var stripped = line.strip();
+        if (!stripped.isEmpty()) {
+          lines.add(stripped);
+        }
+      }
+    }
+    return lines;
+  }
+
+  private static int nonWhitespaceLength(String line) {
+    return (int) line.codePoints().filter(c -> !Character.isWhitespace(c)).count();
+  }
+
+  /**
+   * The note a cluster is cleared under after reading {@code member}: a conversation clear wins
+   * over a clear replied on a thread, because only the conversation one still needs the reply on
+   * the thread that records the close ({@code ReviewPublisher.resolveAddressedThreads}).
+   */
+  private static String strongerClear(String clearedNote, OpenFinding member, BackstopInputs in) {
+    if (conversationClearedNote(in.botIdentity()).equals(clearedNote)) {
+      return clearedNote;
+    }
+    var note =
+        clearedNote(
+            member.finding(),
+            member.id(),
+            in.conversationComments(),
+            in.inlineComments(),
+            in.botIdentity());
+    return note != null ? note : clearedNote;
+  }
+
+  /**
+   * The root of a settled cluster's own review thread, so the thread is resolved with it (#1066):
+   * {@code preferred}'s thread located by its marker and own content ({@link #markerRootComment}
+   * with {@code requireOwnContent}, no reply required), else the first other member's, else {@code
+   * null}. One defect raised in two rounds may have a thread per round; the status carries one.
+   */
+  private static Long clusterThreadRoot(
+      List<OpenFinding> cluster, OpenFinding preferred, BackstopInputs in) {
+    var own =
+        markerRootComment(
+            preferred.finding(), preferred.id(), true, in.inlineComments(), in.botIdentity());
+    if (own != null) {
+      return own;
+    }
+    for (var member : cluster) {
+      var root =
+          markerRootComment(
+              member.finding(), member.id(), true, in.inlineComments(), in.botIdentity());
+      if (root != null) {
+        return root;
+      }
+    }
+    return null;
   }
 
   /**
@@ -3510,6 +3830,34 @@ public class FollowUpAnalyzer {
             STATUS_UNRESOLVED,
             note,
             new ReviewResult.EarlierRound(target.finding(), null)),
+        target.finding());
+  }
+
+  /**
+   * An entry that closes a cluster (#1066): {@code target}'s status, carrying its own thread's root
+   * ({@link #clusterThreadRoot}) and every member, so the close is recorded for each round's copy.
+   */
+  private static HeldPrevious closed(
+      List<OpenFinding> cluster,
+      OpenFinding target,
+      String status,
+      String note,
+      BackstopInputs in) {
+    return new HeldPrevious(
+        new ReviewResult.PreviousFindingStatus(
+            EARLIER_ROUND_ID,
+            status,
+            note,
+            new ReviewResult.EarlierRound(
+                target.finding(),
+                clusterThreadRoot(cluster, target, in),
+                cluster.stream().map(OpenFinding::finding).toList(),
+                cluster.stream()
+                    .anyMatch(
+                        member ->
+                            in.accountedThisRound().stream()
+                                .anyMatch(
+                                    accounted -> isSameFinding(member.finding(), accounted))))),
         target.finding());
   }
 

@@ -24,11 +24,29 @@ import java.util.Objects;
 public record ReviewResponse(
     List<Finding> findings,
     @JsonProperty("previous_findings_status") List<PreviousFindingStatus> previousFindingsStatus,
-    Summary summary) {
+    Summary summary,
+    // The findings of rounds older than the effective previous one that this round closed (their
+    // code left the diff, or a maintainer cleared them), recorded so a later round does not close
+    // and name them again (#1066). Never written by the model: ReviewResponseParser drops the field
+    // from every answer, every lane rebuilds the response through the three-argument constructor
+    // before it is persisted, and the orchestrator sets it only after the verdict.
+    @JsonProperty("closed_earlier_round") List<Finding> closedEarlierRound) {
   public ReviewResponse {
     findings = List.copyOf(findings != null ? findings : List.of());
     previousFindingsStatus =
         List.copyOf(previousFindingsStatus != null ? previousFindingsStatus : List.of());
+    closedEarlierRound = List.copyOf(closedEarlierRound != null ? closedEarlierRound : List.of());
+  }
+
+  /** A response that closed no earlier round's finding: every model answer and rebuilt round. */
+  public ReviewResponse(
+      List<Finding> findings, List<PreviousFindingStatus> previousFindingsStatus, Summary summary) {
+    this(findings, previousFindingsStatus, summary, List.of());
+  }
+
+  /** This response recording {@code closed} as the earlier rounds' findings it closed. */
+  public ReviewResponse withClosedEarlierRound(List<Finding> closed) {
+    return new ReviewResponse(findings, previousFindingsStatus, summary, closed);
   }
 
   @RegisterForReflection

@@ -1083,4 +1083,47 @@ class DiffLineResolverTest {
     assertEquals(
         Optional.of(new DiffLineResolver.LineRange(1, 1)), resolver.locateQuote("a.txt", "a", 1));
   }
+
+  // #1066: the added lines the earlier-round fix check reads.
+
+  private static final String GUARDED =
+      String.join(
+          "\n",
+          "@@ -1,3 +1,8 @@",
+          " kept();",
+          "+requireNumeric(id);",
+          " String q = base + id;",
+          "+a();",
+          "+b();",
+          "+c();",
+          "+d();",
+          "+requireNumeric(id2);");
+
+  @Test
+  void addsEveryLineNearReadsOnlyAddedLinesBesideTheQuote() {
+    var resolver = new DiffLineResolver(Map.of("src/A.java", GUARDED));
+    var quote = "String q = base + id;";
+
+    assertTrue(
+        resolver.addsEveryLineNear("src/A.java", quote, 3, List.of("requireNumeric(id);"), 2));
+    assertFalse(
+        resolver.addsEveryLineNear("src/A.java", quote, 3, List.of("requireNumeric(id2);"), 2),
+        "the same kind of line added further away");
+    assertFalse(resolver.addsEveryLineNear("src/A.java", quote, 3, List.of("kept();"), 2));
+    assertFalse(resolver.addsEveryLineNear("src/A.java", quote, 3, List.of(), 2));
+    assertFalse(
+        resolver.addsEveryLineNear(
+            "src/A.java", "absent();", 3, List.of("requireNumeric(id);"), 2));
+    assertFalse(resolver.addsEveryLineNear(null, quote, 3, List.of("requireNumeric(id);"), 2));
+  }
+
+  @Test
+  void addsEveryLineNearReadsTheOneVariantAndRefusesTwo() {
+    var one = new DiffLineResolver(Map.of("module/src/A.java", GUARDED));
+    var two = new DiffLineResolver(Map.of("one/src/A.java", GUARDED, "two/src/A.java", GUARDED));
+    var quote = "String q = base + id;";
+
+    assertTrue(one.addsEveryLineNear("src/A.java", quote, 3, List.of("requireNumeric(id);"), 2));
+    assertFalse(two.addsEveryLineNear("src/A.java", quote, 3, List.of("requireNumeric(id);"), 2));
+  }
 }

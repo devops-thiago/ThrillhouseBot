@@ -69,7 +69,7 @@ same diff.
 | Per-call screen stages: one `FindingStage` per step over an immutable `ScreeningContext`; each lane is an explicit ordered stage list built in the `FindingScreen` constructor (the batch list omits dedupe), pinned by `FindingScreenTest` | `review/FindingScreen` over `EvidenceStage`, `QuoteValidationStage`, `FrameworkFilterStage`, `DedupeStage`, `RejectionScreenStage`, `VerificationStage`, `RememberVerdictsStage` |
 | Verifier | `review/ai/FindingVerificationService`, evidence from `review/ContextEvidenceResolver` and `review/CitedLocationResolver` |
 | Last steps on every lane, including the one with no review call: the always-on drop of model secret findings on a line that assigns only an interpolation or a placeholder (#926), the opt-in deterministic security scan (secrets, risky IaC), then the open-thread duplicate guard (#939) | `review/FindingPipeline.finish` → `review/SecurityScan.withoutStandInSecrets` (`SecretScanner.assignsOnlyStandIns`) → `review/SecurityScan.merge` (rules in `SecurityRule`, detection in `SecretScanner` and `IacScanner` over `PatchLines`) → `FollowUpAnalyzer.withoutOpenThreadDuplicates` |
-| Summary call, carried description gaps, reused overview, prompt-label scrub, persistence | `review/FindingPipeline.withSummary` (with `DescriptionGapCarryover`, `PriorOverviewCarryover`, `PromptLabelScrubber`), `persistWithSummary`. Every gap, fresh or carried, passes `DescriptionGapScreen` (a quoted claim must be in the PR text, a gap must cite the description or a linked issue, #946); on an unchanged head the call's `addressed_gaps` is ignored (#964) unless the PR text changed since the round that listed the gaps, read from the `<!-- thrillhousebot:pr-text=… -->` fingerprint `ReviewPublisher.publishSummary` writes under the summary marker; then it may release a description gap, never a linked-issue one, and an omission gap whose quoted passage the edited text now holds leaves (`DescriptionGapScreen.omissionCovered`, #1064) |
+| Summary call, carried description gaps, reused overview, prompt-label scrub, persistence | `review/FindingPipeline.withSummary` (with `DescriptionGapCarryover`, `PriorOverviewCarryover`, `PromptLabelScrubber`), `persistWithSummary`. Every gap, fresh or carried, passes `DescriptionGapScreen` (a quoted claim must be in the PR text, a gap must cite the description or a linked issue, #946); on an unchanged head the call's `addressed_gaps` is ignored (#964) unless the PR text changed since the round that listed the gaps, read from the `<!-- thrillhousebot:pr-text=… -->` fingerprint `ReviewPublisher.publishSummary` writes under the summary marker; then it may release a description gap, never a linked-issue one, and an omission gap whose quoted passage the edited text now holds leaves (`DescriptionGapScreen.omissionCovered`, #1064). On an unchanged head every degraded path keeps the previous overview and `VerdictBuilder` swaps in the carried-overview banner; an answer keeps earlier file summaries and the diagram it lacks (#965) |
 | Follow-up status reconciliation, in order: supersede, decline re-check, conversation clears, phantom ids, double-check replacement, approval backstop, still-open set | `review/VerdictBuilder.build` over `FollowUpAnalyzer` (`supersedeVanished`, `recheckDeclines`, `clearNamedInConversation`, `withoutPhantomUnresolved`, `replacedPriors`, `heldPreviousFindings`, `stillOpenFindings`) |
 | Verdict and check-run text | `review/VerdictBuilder.buildResult` |
 | Post review, inline comments, thread resolution. A finding on a path the pull request does not change (`DiffLineResolver.isChangedFile`, over every changed file, patch or not) is listed in the review body without trying a route (#925) | `review/ReviewPublisher`, `review/CheckRunManager` |
@@ -77,7 +77,7 @@ same diff.
 | CI hold and revisit | `review/CiHoldRegistry`, `review/CiHoldRevisit` |
 | Opt-in review learnings: capture after the post, from the round's final statuses | `review/ReviewLearnings.captureSurvivingDeclines` → `review/FollowUpAnalyzer.survivingDeclines` → `review/ReviewLearningService.save` |
 | `/learnings`, `/remember`, `/forget` | `webhook/LearningCommands` (routed by `CommentCommandService`) |
-| Maintainer replies and mentions | `review/MaintainerReplyService`, `review/MaintainerReplyDispatcher` |
+| Maintainer replies and mentions. A clear directive replied on a finding's thread is applied, never answered by the model: the thread is resolved and a fixed acknowledgement posted (`clearFromThread`, #1066) | `review/MaintainerReplyService`, `review/MaintainerReplyDispatcher` |
 | On-request commands (`/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`) | `review/AbstractPrSuggestionGenerator` and its subclasses |
 
 ## Model-call invariants
@@ -175,15 +175,31 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
   its finding and the root of its own thread, found by marker and content
   (`ReviewResult.EarlierRound`), which `ReviewPublisher.resolveAddressedThreads` resolves and
   `FollowUpAnalyzer.survivingEarlierRoundDeclines` offers to the learnings capture (#958).
-- **Every finding carried in gets a status, and an earlier round's status is not movement**
-  (#957, #959). `backstopEntry` gives each cluster one entry: a hold, `superseded` when its code
-  left the diff, `resolved`/`justified` for a conversation clear/decline (re-checked like the
-  effective round's), or the thread decline's outcome. Each backstop status carries
-  `ReviewResult.EarlierRound`; its id is relative to its own round, so `HeadMovedGuard.findingsToCarry`
-  skips it. These statuses are recomputed every round (never persisted), so
-  `ReviewResult.resolvedPreviousCount` and `hasSupersededPrevious` leave them out: counted, they
-  would post the delta comment and re-post the summary on every push (#470). The summary's status
-  table counts them.
+- **Every finding carried in gets a status, and an earlier round's close is recorded once**
+  (#957, #959, #1066). `backstopEntry` gives each cluster one entry: a hold, `resolved` for a
+  maintainer's clear (a conversation directive, or `@thrillhousebot resolved` replied on its own
+  thread, `clearedOnOwnThread`), `superseded` when its code left the diff, `resolved` when its
+  code is still there but its suggested fix landed (`suggestedFixLanded`: every line of
+  `suggestion_new` minus `suggestion_old` is an added line of the file within the suggestion's
+  length of where `suggestion_old` sits (`DiffLineResolver.addsEveryLineNear`), one of at least
+  `MIN_FIX_LINE_CHARS`; lean to hold, a false close is worse than a missed one), `justified` for a
+  conversation decline (re-checked like the effective round's), or the thread decline's outcome.
+  A clear is checked before presence, so it is not swallowed by the supersede. Each backstop
+  status carries `ReviewResult.EarlierRound`; its id is relative to its own round, so
+  `HeadMovedGuard.findingsToCarry` skips it. A `resolved` or `superseded` entry
+  (`PreviousFindingStatus.closesEarlierRound`) also carries its own thread's root
+  (`clusterThreadRoot`: marker and own content, no reply required), so `resolveAddressedThreads`
+  resolves it; it counts in `ReviewResult.resolvedPreviousCount` and `ClosedFindingNames` names it
+  from the finding, unless the round's own status already closes the effective round's copy of the
+  same defect (`EarlierRound.namedByTheRound`), so a defect is named once. The orchestrator then records those findings, every round's copy of the defect
+  (`EarlierRound.members`, `ReviewResult.earlierRoundClosedMembers`), with the round's stored response
+  (`ReviewResponse.closedEarlierRound`, never written by the model: `ReviewResponseParser` drops
+  it from every answer, and every lane rebuilds the response with the three-argument constructor
+  in `FindingPipeline.persistWithSummary`), and
+  `replayRounds` drops them from every later replay, so no later round resolves, names or counts
+  them again (#470). `hasSupersededPrevious` still leaves earlier rounds out, so an older close
+  never re-posts the summary. Holds and standing declines are recomputed every round. The
+  summary's status table counts every status.
 - **A "Things to double-check" item is counted once and replaced only by the same defect** (#951,
   #961). A listed-only repeat at no higher severity is dropped by the open-thread guard
   (`restatesListed`); a finding at the same or higher severity replaces the item
