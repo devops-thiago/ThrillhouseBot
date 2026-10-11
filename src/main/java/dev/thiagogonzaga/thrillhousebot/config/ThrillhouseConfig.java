@@ -350,7 +350,7 @@ public interface ThrillhouseConfig {
      * those as separate patterns.
      */
     @WithDefault(
-        "**/pom.xml,**/package-lock.json,**/pnpm-lock.yaml,**/go.sum,**/*.lock,**/*.generated.*,"
+        "**/package-lock.json,**/pnpm-lock.yaml,**/go.sum,**/*.lock,**/*.generated.*,"
             + "**/*.pb.go,**/*_pb2.py,**/*.min.js,**/*.min.css,**/*.map,"
             + "**/target/**,**/node_modules/**,**/dist/**,**/build/**,**/out/**,**/.next/**,"
             + "**/vendor/**,**/__pycache__/**,**/.venv/**,**/bin/**,**/obj/**")
