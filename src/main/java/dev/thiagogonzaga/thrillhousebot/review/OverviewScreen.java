@@ -211,9 +211,10 @@ final class OverviewScreen {
     if (isPlaceholder(text)) {
       return "";
     }
+    // Text that is not a placeholder holds a letter or digit, so at least one clause is left.
     var clauses =
         Arrays.stream(text.split(";")).map(String::strip).filter(c -> !c.isEmpty()).toList();
-    if (clauses.isEmpty() || !trueToTheFile(clauses.getFirst(), patch, known)) {
+    if (!trueToTheFile(clauses.getFirst(), patch, known)) {
       return "";
     }
     return String.join("; ", clauses.stream().filter(c -> trueToTheFile(c, patch, known)).toList());
