@@ -1033,6 +1033,13 @@ public final class PrReviewPrompts {
               A provided finding whose description says the change's end-to-end behavior is the
               inverse of what the description states is a gap as well: list it here in one line,
               naming the stated claim, because the author's own description is what it contradicts.
+              Every entry must name what the PR description (or a linked issue) says that the
+              change does not match — start it with "The description …" or "Linked issue #N: …".
+              When you quote the description, copy the words exactly as it writes them: an entry
+              whose quote is not in the description is dropped. A mismatch between the change's
+              own documentation, configuration or examples and its code is not a description gap
+              (the description never said it); leave it out. Before saying the description leaves
+              something out, check that it does not already mention it.
             - file_summaries: REQUIRED, and the field this call most often gets wrong. It is an
               array of { path, summary } objects that fills the rendered file-by-file walkthrough
               table; omitting it, or emitting [], leaves every row of that table blank, which is

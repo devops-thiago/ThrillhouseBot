@@ -1693,7 +1693,7 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
-  void descriptionGapsSectionStatesTheCheckRanWhenEveryBulletRestatesAFinding() {
+  void descriptionGapsSectionNamesTheFindingEveryBulletRestates() {
     var findings =
         List.of(
             new Finding(
@@ -1739,15 +1739,16 @@ class PrSummaryGeneratorTest {
 
     // #588 still collapses the bullet onto the finding — the claim is not stated twice...
     assertFalse(summary.contains("no rotation logic exists"), summary);
-    // ...but the section itself survives and says the check ran, so a review that compared the
-    // description against the diff no longer reads exactly like one that skipped it (#637).
+    // ...but the section itself survives and names the finding it collapsed onto (#637, #964),
+    // instead of saying that some finding below covers it.
     assertTrue(summary.contains("### ⚠️ Description vs. Implementation"), summary);
     assertTrue(
         summary.contains(
-            "Every mismatch found between the description and the change is reported as a finding"
-                + " below, so it is not repeated here."),
+            "- "
+                + PrSummaryGenerator.GAP_FINDING_PREFIX
+                + "LOGD_MAX_FILE_SIZE never enforced; no rotation despite docs (`src/rotator.c:45`)"),
         summary);
-    assertFalse(summary.contains("No mismatch found between the PR description"), summary);
+    assertFalse(summary.contains("is reported as a finding below"), summary);
   }
 
   @Test
@@ -1797,11 +1798,7 @@ class PrSummaryGeneratorTest {
     // The unhedged statement of the mismatch reaches the reader instead of being deleted in
     // favour of the hedged double-check bullet, which is the weaker surface of the two.
     assertTrue(summary.contains(gap), summary);
-    assertFalse(
-        summary.contains(
-            "Every mismatch found between the description and the change is reported as a finding"
-                + " below, so it is not repeated here."),
-        summary);
+    assertFalse(summary.contains(PrSummaryGenerator.GAP_FINDING_PREFIX), summary);
   }
 
   @Test
@@ -2118,5 +2115,171 @@ class PrSummaryGeneratorTest {
     assertEquals(
         "- _…and 1 more finding, each on its own review thread._\n",
         PrSummaryGenerator.keyFindingsMoreLine(1));
+  }
+
+  /** A finding reporting that the change contradicts the PR description (#964). */
+  private static Finding descriptionFinding(String file, int line, String title, String desc) {
+    return new Finding(RiskLevel.MEDIUM, Confidence.HIGH, file, line, title, desc, null, null);
+  }
+
+  private static ReviewResponse.Summary summaryWithGaps(List<String> gaps) {
+    return new ReviewResponse.Summary(1, 0, 0, 1, 0, "ok", "Adds a service.", gaps);
+  }
+
+  @Test
+  void aDescriptionFindingTheCallGaveNoGapForIsNamedInTheSection() {
+    // csharp #174: the section listed only the linked-issue gap while the finding said "No retry
+    // or backoff … contrary to the PR's stated behavior".
+    var retry =
+        descriptionFinding(
+            "csharp/IssuanceService.cs",
+            41,
+            "Registry calls are not retried",
+            "No retry or backoff wraps the registry call, contrary to the PR's stated behavior.");
+    var unrelated = finding(RiskLevel.HIGH, "csharp/Program.cs", 3, "Port is hardcoded");
+    var gap = "Linked issue #116: renewal reminders — no changed file sends them.";
+
+    var summary =
+        generator.generate(
+            2,
+            10,
+            0,
+            List.of(),
+            summaryWithGaps(List.of(gap)),
+            roundWith(List.of(unrelated, retry), List.of()));
+
+    assertTrue(
+        summary.contains(
+            PrSummaryGenerator.GAPS_HEADING
+                + "\n"
+                + PrSummaryGenerator.GAPS_INTRO_WITH_ISSUE
+                + "- "
+                + gap
+                + "\n- "
+                + PrSummaryGenerator.GAP_FINDING_PREFIX
+                + "Registry calls are not retried (`csharp/IssuanceService.cs:41`)\n\n"),
+        summary);
+    assertFalse(summary.contains(PrSummaryGenerator.GAP_FINDING_PREFIX + "Port"), summary);
+  }
+
+  @Test
+  void theSectionStaysWhileADescriptionFindingFromAnEarlierRoundIsOpen() {
+    // go #187 round 3: the call returned no gap and the section vanished while the caching gap
+    // finding raised in round 1 was still open.
+    var cache =
+        descriptionFinding(
+            "go/handler.go",
+            35,
+            "Description claims five-minute result caching; no cache exists in the code",
+            "The PR description states results are cached for five minutes.");
+
+    var summary =
+        generator.generate(
+            2, 10, 0, List.of(), summaryWithGaps(List.of()), roundWith(List.of(), List.of(cache)));
+
+    assertTrue(
+        summary.contains(
+            PrSummaryGenerator.GAPS_HEADING
+                + "\nThe PR description does not fully match the change:\n- "
+                + PrSummaryGenerator.GAP_FINDING_PREFIX
+                + "Description claims five-minute result caching; no cache exists in the code"
+                + " (`go/handler.go:35`)\n"),
+        summary);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The description omits the retry path, which the code never takes.",
+        "The description does not cover the new module.",
+        "The description promised retries; none exist.",
+        "The description leaves error handling unstated.",
+        "The description clearly asserts idempotency; the handler is not idempotent.",
+        "The description lists a retry path that no changed file has.",
+        "The PR body says results are cached.",
+        "The pull request's description mentions a five-minute cache.",
+        "The cache here is inconsistent with the stated five-minute limit.",
+        "Unlike the PR, the code retries once.",
+        "This contradicts the stated intent of the change.",
+        "The PR title says the cache is bounded; it is not.",
+        "The author claims five-minute caching; no cache exists.",
+        "The pull request states that retries back off; they do not."
+      })
+  void aDescriptionFindingWithAnyClaimVerbIsNamed(String description) {
+    var finding = descriptionFinding("src/A.java", 3, "Retry path missing", description);
+
+    assertEquals(
+        List.of(finding), PrSummaryGenerator.descriptionFindings(List.of(), List.of(finding)));
+  }
+
+  @Test
+  void aFindingWithNoDescriptionIsJudgedOnItsTitle() {
+    var finding = descriptionFinding("src/A.java", 3, "Description claims a bounded cache", null);
+
+    assertEquals(
+        List.of(finding), PrSummaryGenerator.descriptionFindings(List.of(), List.of(finding)));
+  }
+
+  @Test
+  void aShapePiecedTogetherAcrossTitleAndDescriptionIsNotAClaim() {
+    // The title ends in "description" and the description opens with a claim verb: read as one
+    // text they would spell "description does not", which neither says on its own.
+    var split =
+        descriptionFinding(
+            "src/A.java", 3, "Queries run against the description", "does not escape HTML");
+    var linked = descriptionFinding("src/B.java", 7, "Sync of the linked", "issue list is stale");
+
+    assertEquals(List.of(), PrSummaryGenerator.descriptionFindings(List.of(), List.of(split)));
+    var summary =
+        generator.generate(
+            1,
+            10,
+            0,
+            List.of(),
+            summaryWithGaps(List.of("The description promises retries; none exist.")),
+            roundWith(List.of(linked), List.of()));
+    assertFalse(summary.contains(PrSummaryGenerator.GAPS_INTRO_WITH_ISSUE), summary);
+    assertTrue(summary.contains("The PR description does not fully match the change:"), summary);
+  }
+
+  @Test
+  void aFindingAboutADescriptionFieldIsNotNamed() {
+    var finding =
+        descriptionFinding(
+            "src/A.java", 3, "Unescaped column", "The description column is rendered unescaped.");
+
+    assertEquals(List.of(), PrSummaryGenerator.descriptionFindings(List.of(), List.of(finding)));
+  }
+
+  @Test
+  void aLinkedIssueFindingSetsTheIntroThatNamesTheIssue() {
+    var criterion =
+        descriptionFinding(
+            "kotlin/Scheduler.kt", 20, "Past publish times are accepted", "The linked issue asks…");
+
+    var summary =
+        generator.generate(
+            1,
+            10,
+            0,
+            List.of(),
+            summaryWithGaps(List.of()),
+            roundWith(List.of(criterion), List.of()));
+
+    assertTrue(summary.contains(PrSummaryGenerator.GAPS_INTRO_WITH_ISSUE), summary);
+  }
+
+  @Test
+  void aFindingAGapCollapsedOntoIsNamedOnceThoughItAlsoReadsAsADescriptionFinding() {
+    var cache =
+        descriptionFinding(
+            "go/handler.go",
+            35,
+            "Description claims five-minute result caching; no cache exists",
+            "The PR description states results are cached for five minutes.");
+
+    var named = PrSummaryGenerator.descriptionFindings(List.of(cache), List.of(cache));
+
+    assertEquals(List.of(cache), named);
   }
 }
