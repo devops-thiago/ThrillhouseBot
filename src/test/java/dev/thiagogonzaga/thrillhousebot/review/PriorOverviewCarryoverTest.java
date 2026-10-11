@@ -136,16 +136,209 @@ class PriorOverviewCarryoverTest {
   }
 
   @Test
-  void aSummaryWithItsOwnOverviewIsLeftAlone() {
-    var purposeOnly =
-        new ReviewResponse.Summary(0, 0, 0, 0, 0, null, "Its own purpose.", List.of());
-    var filesOnly =
+  void aSummaryWithItsOwnOverviewAndDiagramIsLeftAlone() {
+    var complete =
         new ReviewResponse.Summary(
-            0, 0, 0, 0, 0, null, null, List.of(), List.of(), FILES, null, List.of());
+            0,
+            0,
+            0,
+            0,
+            0,
+            null,
+            "Its own purpose.",
+            List.of(),
+            List.of(),
+            List.of(new ReviewResponse.FileSummary("src/lib.rs", "its own line")),
+            "flowchart TD\n  X --> Y",
+            List.of());
     var ctx = context(List.of(round(PRIOR)), true);
 
-    assertSame(purposeOnly, PriorOverviewCarryover.fill(purposeOnly, ctx));
-    assertSame(filesOnly, PriorOverviewCarryover.fill(filesOnly, ctx));
+    assertSame(complete, PriorOverviewCarryover.fill(complete, ctx));
+    assertSame(complete, PriorOverviewCarryover.fill(complete, context(List.of(), true)));
+  }
+
+  @Test
+  void aSummaryWithItsOwnOverviewTakesTheEarlierSummaryForEachFileItLacksAndTheDiagram() {
+    // #964 (Round 15 group B): kotlin #204 round 2 kept its purpose paragraph but lost nine
+    // file summaries and the Control-Flow Diagram that round 1 had, on the same head.
+    var earlier =
+        new ReviewResponse.Summary(
+            1,
+            0,
+            1,
+            0,
+            0,
+            "ok",
+            "Adds a cache layer.",
+            List.of(),
+            List.of(),
+            List.of(
+                new ReviewResponse.FileSummary("src/lib.rs", "adds the cache layer"),
+                new ReviewResponse.FileSummary("src/http.rs", "routes cache reads"),
+                new ReviewResponse.FileSummary("src/blank.rs", " "),
+                new ReviewResponse.FileSummary(" ", "a line with no path")),
+            "flowchart TD\n  A --> B",
+            List.of());
+    var current =
+        new ReviewResponse.Summary(
+            2,
+            0,
+            0,
+            2,
+            0,
+            "fine",
+            "Its own purpose.",
+            List.of("a gap"),
+            List.of(),
+            List.of(
+                new ReviewResponse.FileSummary("src/lib.rs", "its own line"),
+                new ReviewResponse.FileSummary("src/http.rs", "")),
+            "",
+            List.of());
+
+    var kept = PriorOverviewCarryover.fill(current, context(List.of(round(earlier)), true));
+
+    assertEquals("Its own purpose.", kept.prPurpose());
+    assertEquals(
+        List.of(
+            new ReviewResponse.FileSummary("src/lib.rs", "its own line"),
+            new ReviewResponse.FileSummary("src/http.rs", "routes cache reads")),
+        kept.fileSummaries());
+    assertEquals("flowchart TD\n  A --> B", kept.walkthroughDiagram());
+    assertEquals(List.of("a gap"), kept.descriptionGaps());
+    assertEquals(2, kept.medium());
+    // On a moved head nothing is taken.
+    assertSame(
+        current, PriorOverviewCarryover.fill(current, context(List.of(round(earlier)), false)));
+  }
+
+  @Test
+  void onlyTheDiagramIsTakenWhenEveryFileIsCovered() {
+    var current =
+        new ReviewResponse.Summary(
+            0, 0, 0, 0, 0, null, "Its own purpose.", List.of(), List.of(), FILES, null, List.of());
+
+    var kept = PriorOverviewCarryover.fill(current, context(List.of(round(PRIOR)), true));
+
+    assertEquals(FILES, kept.fileSummaries());
+    assertEquals(PRIOR.walkthroughDiagram(), kept.walkthroughDiagram());
+  }
+
+  @Test
+  void withNoEarlierDiagramOnlyTheMissingFileIsTaken() {
+    var earlier =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            null,
+            "Adds a cache layer.",
+            List.of(),
+            List.of(),
+            List.of(new ReviewResponse.FileSummary("src/http.rs", "routes cache reads")),
+            null,
+            List.of());
+    var current =
+        new ReviewResponse.Summary(
+            0, 0, 0, 0, 0, null, "Its own purpose.", List.of(), List.of(), FILES, null, List.of());
+
+    var kept = PriorOverviewCarryover.fill(current, context(List.of(round(earlier)), true));
+
+    assertEquals(
+        List.of(
+            FILES.getFirst(), new ReviewResponse.FileSummary("src/http.rs", "routes cache reads")),
+        kept.fileSummaries());
+    assertNull(kept.walkthroughDiagram());
+  }
+
+  @Test
+  void anOverviewWithTheEarlierPurposeButOtherFilesIsNotCarried() {
+    var ctx = context(List.of(round(PRIOR)), true);
+    var samePurpose =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            null,
+            PRIOR.prPurpose(),
+            List.of(),
+            List.of(),
+            List.of(new ReviewResponse.FileSummary("src/other.rs", "x")),
+            null,
+            List.of());
+
+    assertFalse(PriorOverviewCarryover.carried(samePurpose, ctx));
+  }
+
+  @Test
+  void anEarlierSummaryForTheSameFileUnderAnotherSpellingIsNotTakenTwice() {
+    // The answer and the earlier round can spell one file with and without a leading directory;
+    // FilePaths.same holds them for one file, as the rest of the pipeline does.
+    var earlier =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            null,
+            "Adds a cache layer.",
+            List.of(),
+            List.of(),
+            List.of(
+                new ReviewResponse.FileSummary("repo/src/lib.rs", "the earlier line"),
+                new ReviewResponse.FileSummary("other/lib.rs", "a different lib.rs")),
+            null,
+            List.of());
+    var current =
+        new ReviewResponse.Summary(
+            0, 0, 0, 0, 0, null, "Its own purpose.", List.of(), List.of(), FILES, null, List.of());
+
+    var kept = PriorOverviewCarryover.fill(current, context(List.of(round(earlier)), true));
+
+    assertEquals(
+        List.of(
+            FILES.getFirst(), new ReviewResponse.FileSummary("other/lib.rs", "a different lib.rs")),
+        kept.fileSummaries());
+  }
+
+  @Test
+  void aDegradedRoundCarriesTheOverviewUnderItsOwnFindingCounts() {
+    var findings =
+        List.of(
+            finding(),
+            new ReviewResponse.Finding("critical", "high", "src/lib.rs", 9, "t", "d", null, null),
+            new ReviewResponse.Finding("low", "high", "src/lib.rs", 12, "t2", "d", null, null));
+
+    var kept = PriorOverviewCarryover.fillDegraded(context(List.of(round(PRIOR)), true), findings);
+
+    assertEquals(PRIOR.prPurpose(), kept.prPurpose());
+    assertEquals(FILES, kept.fileSummaries());
+    assertEquals(3, kept.totalFindings());
+    assertEquals(1, kept.critical());
+    assertEquals(1, kept.high());
+    assertEquals(0, kept.medium());
+    assertEquals(1, kept.low());
+    // No overview to carry: the counts-only shape, a null summary, as before.
+    assertNull(
+        PriorOverviewCarryover.fillDegraded(context(List.of(round(PRIOR)), false), findings));
+  }
+
+  @Test
+  void aCarriedOverviewIsToldApartFromTheRoundsOwn() {
+    var ctx = context(List.of(round(PRIOR)), true);
+    var carried = PriorOverviewCarryover.fill(null, ctx);
+    var own = new ReviewResponse.Summary(0, 0, 0, 0, 0, null, "Its own purpose.", List.of());
+
+    assertTrue(PriorOverviewCarryover.carried(carried, ctx));
+    assertFalse(PriorOverviewCarryover.carried(own, ctx));
+    assertFalse(PriorOverviewCarryover.carried(null, ctx));
+    assertFalse(PriorOverviewCarryover.carried(carried, context(List.of(round(PRIOR)), false)));
+    assertFalse(PriorOverviewCarryover.carried(carried, context(List.of(), true)));
   }
 
   @Test
