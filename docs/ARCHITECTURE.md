@@ -337,7 +337,11 @@ again.
    no round closed and the model did not report on, as long as its code is still in the diff. A
    decline on a finding from an older round is weighed as in step 2: the finding stays open when
    the decline is contradicted or rests on an unconfirmed premise, and otherwise counts as
-   justified without holding anything open.
+   justified without holding anything open; its thread, found by marker and content, is resolved
+   and the decline is offered to the learnings capture. Every other older-round finding still gets
+   a status: superseded when its code left the diff, resolved or justified when a maintainer
+   cleared or declined it on the PR conversation. These statuses are recomputed every round, so
+   they are counted in the summary but never post the delta comment or re-post the summary.
 
 The still-open set is the `unresolved` findings plus the backstop's holds, one entry per finding.
 That one set feeds the summary's counts and lists, the "Still present" count and the verdict.
