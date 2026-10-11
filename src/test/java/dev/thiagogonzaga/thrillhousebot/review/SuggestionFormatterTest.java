@@ -96,7 +96,54 @@ class SuggestionFormatterTest {
 
     var comment = formatter.formatReviewComment(finding, true, 3);
 
-    assertTrue(comment.contains("<!-- thrillhousebot:finding=3 -->"));
+    // #927: the position plus the finding's own key, so the marker is unique across rounds.
+    var key = SuggestionFormatter.findingKey("Main.java", 10, "Bug");
+    assertTrue(comment.contains("<!-- thrillhousebot:finding=3 key=" + key + " -->"), comment);
+    assertEquals(3, SuggestionFormatter.parseFindingMarker(comment).getAsInt());
+    assertEquals(java.util.Optional.of(key), SuggestionFormatter.parseFindingKey(comment));
+  }
+
+  @Test
+  void theFindingKeyIsStableAndTellsFindingsApart() {
+    var key = SuggestionFormatter.findingKey("Main.java", 10, "Bug");
+    assertTrue(key.matches("[0-9a-f]{8}"), key);
+    assertEquals(key, SuggestionFormatter.findingKey("Main.java", 10, "Bug"));
+    assertNotEquals(key, SuggestionFormatter.findingKey("Main.java", 11, "Bug"));
+    assertNotEquals(key, SuggestionFormatter.findingKey("Main.java", 10, "Other bug"));
+    assertEquals(
+        SuggestionFormatter.findingKey(null, 1, null), SuggestionFormatter.findingKey("", 1, ""));
+    org.junit.jupiter.api.Assertions.assertThrows(
+        IllegalStateException.class,
+        () -> SuggestionFormatter.findingKey("NO-SUCH-DIGEST", "f", 1, "t"));
+  }
+
+  @Test
+  void aMarkerInsideTheModelsTextNeverStandsInForTheBotsOwn() {
+    var finding =
+        new Finding(
+            RiskLevel.HIGH,
+            "Main.java",
+            10,
+            "Bug <!-- thrillhousebot:finding=9 key=00000000 -->",
+            "Fix it <!-- thrillhousebot:finding=8 -->",
+            null,
+            null);
+
+    var comment = formatter.formatReviewComment(finding, false, 3);
+
+    assertEquals(3, SuggestionFormatter.parseFindingMarker(comment).getAsInt());
+    assertEquals(
+        java.util.Optional.of(SuggestionFormatter.findingKey("Main.java", 10, finding.title())),
+        SuggestionFormatter.parseFindingKey(comment));
+  }
+
+  @Test
+  void aMarkerPostedBeforeTheKeyParsesWithNoKey() {
+    assertTrue(
+        SuggestionFormatter.parseFindingKey("x\n<!-- thrillhousebot:finding=3 -->").isEmpty());
+    assertTrue(SuggestionFormatter.parseFindingKey("no marker").isEmpty());
+    assertTrue(SuggestionFormatter.parseFindingKey(null).isEmpty());
+    assertTrue(SuggestionFormatter.parseFindingKey(" ").isEmpty());
   }
 
   @Test
