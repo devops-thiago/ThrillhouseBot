@@ -106,21 +106,15 @@ final class PriorOverviewCarryover {
   private static ReviewResponse.Summary supplemented(
       ReviewResponse.Summary current, ReviewResponse.Summary prior) {
     // Only the current answer's real summaries stay; a blank one gives way to the earlier entry.
-    var files = new ArrayList<ReviewResponse.FileSummary>();
+    var files =
+        new ArrayList<>(
+            current.fileSummaries().stream().filter(f -> !isBlank(f.summary())).toList());
     var covered = new HashSet<String>();
-    for (var own : current.fileSummaries()) {
-      if (!isBlank(own.summary())) {
-        files.add(own);
-        covered.add(own.path());
-      }
-    }
-    var kept = files.size();
-    for (var earlier : prior.fileSummaries()) {
-      if (isUsable(earlier) && covered.add(earlier.path())) {
-        files.add(earlier);
-      }
-    }
-    var added = files.size() - kept;
+    files.forEach(f -> covered.add(f.path()));
+    var earlier =
+        prior.fileSummaries().stream().filter(f -> isUsable(f) && covered.add(f.path())).toList();
+    files.addAll(earlier);
+    var added = earlier.size();
     var keepDiagram = isBlank(current.walkthroughDiagram()) && !isBlank(prior.walkthroughDiagram());
     if (added == 0 && !keepDiagram) {
       return current;
