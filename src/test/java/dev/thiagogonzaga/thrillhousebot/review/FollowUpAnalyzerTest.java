@@ -4860,6 +4860,19 @@ class FollowUpAnalyzerTest {
             diff --git src/A.java src/A.java
             +// Pool is shared by every request goroutine.""");
     assertTrue(malformed.contains("no review has weighed"), malformed);
+    var noNewPath =
+        heldNote(
+            """
+            diff --git a/src/A.java
+            +// Pool is shared by every request goroutine.""");
+    assertTrue(noNewPath.contains("no review has weighed"), noNewPath);
+
+    var renamedTo =
+        heldNote(
+            """
+            diff --git a/src/Old.java b/src/A.java
+            +// Counter is shared by every request goroutine.""");
+    assertTrue(renamedTo.contains("says this path runs concurrently"), renamedTo);
 
     var renamedFrom =
         heldNote(
