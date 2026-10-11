@@ -526,6 +526,26 @@ class DefectIdentityTest {
         item);
   }
 
+  /** Two titles in one file that open alike but name different places, far apart, stay apart. */
+  @Test
+  void titlesThatOpenAlikeInOneFileAreNotOneDefectAtAnyDistance() {
+    assertApart(
+        at(
+            "high",
+            "high",
+            "src/Auth.java",
+            120,
+            "Auth rejects valid tokens on the token refresh endpoint",
+            "d"),
+        at(
+            "medium",
+            "low",
+            "src/Auth.java",
+            32,
+            "Auth rejects valid tokens on the login page",
+            "d"));
+  }
+
   /** A class name shared by two titles, with a generic verb, is not one defect. */
   @Test
   void aFileClassNameWithGenericWordsIsNotTheSameDefect() {

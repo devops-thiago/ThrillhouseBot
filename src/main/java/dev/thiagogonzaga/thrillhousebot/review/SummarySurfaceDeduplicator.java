@@ -206,7 +206,9 @@ final class SummarySurfaceDeduplicator {
    * Whether two titles restate one claim: a shared run of {@value #PHRASE_TOKENS} content words and
    * at least {@value #RESTATEMENT_OVERLAP} of the shorter title's content words. Stricter than the
    * overlap arm alone, whose 0.5 three common words reach on a six-word title ("job", "list",
-   * "every") without the two naming one defect (#964).
+   * "every") without the two naming one defect (#964). The arm has no line bound, so the bar is
+   * three quarters: two titles that open alike and name different places ("Auth rejects valid
+   * tokens on the login page", "… on the token refresh endpoint") share two thirds and stay apart.
    */
   static boolean titlesRestate(String title, String otherTitle) {
     var claim = claim(title);
@@ -217,7 +219,7 @@ final class SummarySurfaceDeduplicator {
   }
 
   /** Fraction of the shorter title's content words two restating titles share. */
-  static final double RESTATEMENT_OVERLAP = 0.6;
+  static final double RESTATEMENT_OVERLAP = 0.75;
 
   /**
    * Collapses {@code descriptionGaps} and {@code fileSummaries} against the findings already

@@ -189,7 +189,7 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
   uses the same predicate, so the note and the counts never disagree (#972). All of them go through
   `DefectIdentity.sameDefect`, which is symmetric: in one file, the same title, a similar title or
   a title-vs-description phrase within three lines, the same line with two shared title words or a
-  common identifier, or titles that restate each other (shared phrase and 0.6 overlap); in any
+  common identifier, or titles that restate each other (shared phrase and 0.75 overlap); in any
   file, a subject (key, symbol, or the class a file is named after) named by both titles plus
   another shared title word or defect class (#956), or a description citing the other's
   `file:line` and naming a symbol of its title. Two vetoes come first: titles naming different
