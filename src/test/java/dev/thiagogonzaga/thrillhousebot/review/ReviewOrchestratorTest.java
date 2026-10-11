@@ -3116,81 +3116,12 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldPostTheDeltaCommentWhenASupersededFindingRefreshedTheSummary() {
-      when(followUpSummaryConfig.enabled()).thenReturn(true);
-      when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
-          .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
-        var session = mock(ReviewSession.class);
-        session.id = 1L;
-        when(session.getRepository()).thenReturn("owner/repo");
-        when(session.getPrNumber()).thenReturn(42);
-        when(session.getPrTitle()).thenReturn("Test PR");
-        when(session.getCommitSha()).thenReturn("abcdefgh");
-        when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
-        mockedStatic
-            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
-            .thenReturn(session);
+        var session = reviewAFollowUpWithASupersededPrevious(mockedStatic, false);
 
-        when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
-        when(checkRunClient.createCheckRun(
-                anyString(), anyString(), anyString(), anyString(), any()))
-            .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        doNothing()
-            .when(checkRunClient)
-            .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
-            .thenReturn(List.of());
-        when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
-        when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
-            .thenReturn(
-                List.of(
-                    new GitHubReviewClient.ReviewResponse(
-                        1L,
-                        "",
-                        "APPROVED",
-                        "abc12345",
-                        new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
-        when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
-            .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
-            .thenReturn(List.of("{\"round\":1}"));
-        when(followUpAnalyzer.parsePreviousResponses(List.of("{\"round\":1}")))
-            .thenReturn(List.of(new ReviewResponse(List.of(), List.of(), null)));
-        when(followUpAnalyzer.toStatuses(any()))
-            .thenReturn(
-                List.of(
-                    new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed"),
-                    new ReviewResult.PreviousFindingStatus(2, "superseded", "code gone")));
-        when(suggestionFormatter.formatReviewComment(any())).thenReturn("**Medium** — fix this");
-        when(aiReviewService.review(any(ReviewSession.class), any()))
-            .thenReturn(
-                new ReviewResponse(
-                    List.of(
-                        new ReviewResponse.Finding(
-                            "medium", "src/Main.java", 10, "Style", "Improve naming", null, null)),
-                    List.of(),
-                    null));
-
-        orchestrator.review(
-            new ReviewOrchestrator.ReviewRequest(
-                "owner",
-                "repo",
-                42,
-                "abcdefgh",
-                "Test PR",
-                "",
-                "base1234567",
-                "main",
-                123L,
-                false));
-
-        // #927: the superseded status makes the summary edit stand in for the round, which used to
-        // skip the delta as well; an edit notifies nobody, so the delta still lands. The summary
-        // was published this round (no summary comment existed, so the upsert posted one), so
-        // publishSummary returned hasSupersededPrevious() — true here — and the delta still landed.
+        // #927: the superseded status makes the summary stand in for the round, which used to skip
+        // the delta as well. This is no /summary round, so the delta lands beside the summary the
+        // upsert posted (none was left on the pull request).
         verify(commentClient)
             .createComment(
                 anyString(),
@@ -3212,6 +3143,122 @@ class ReviewOrchestratorTest {
                             && req.body().contains("**New findings this round:** 1")));
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
       }
+    }
+
+    @Test
+    void shouldSkipTheDeltaCommentOnASummaryCommandRoundThatPostedTheSummary() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = reviewAFollowUpWithASupersededPrevious(mockedStatic, true);
+
+        // /summary posts a fresh summary comment, so the delta is the one comment not posted.
+        verify(commentClient)
+            .createComment(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().startsWith(PrSummaryGenerator.SUMMARY_MARKER)));
+        verify(commentClient, never())
+            .createComment(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().startsWith(FollowUpDeltaSummary.DELTA_HEADING)));
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
+    /**
+     * Runs a follow-up round whose earlier round had one finding fixed and one superseded, which
+     * makes {@link ReviewPublisher#publishSummary} report the summary as standing in for the round
+     * (#927). {@code forceSummary} makes it a {@code /summary} round.
+     */
+    private ReviewSession reviewAFollowUpWithASupersededPrevious(
+        org.mockito.MockedStatic<ReviewSession> mockedStatic, boolean forceSummary) {
+      when(followUpSummaryConfig.enabled()).thenReturn(true);
+      when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+          .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
+      var session = mock(ReviewSession.class);
+      session.id = 1L;
+      when(session.getRepository()).thenReturn("owner/repo");
+      when(session.getPrNumber()).thenReturn(42);
+      when(session.getPrTitle()).thenReturn("Test PR");
+      when(session.getCommitSha()).thenReturn("abcdefgh");
+      when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+      mockedStatic
+          .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+          .thenReturn(session);
+
+      when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+      when(checkRunClient.createCheckRun(anyString(), anyString(), anyString(), anyString(), any()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+      doNothing()
+          .when(checkRunClient)
+          .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+      when(prClient.getPullRequestFiles(
+              anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(List.of());
+      when(prClient.compareCommits(
+              anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+      when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(
+              List.of(
+                  new GitHubReviewClient.ReviewResponse(
+                      1L,
+                      "",
+                      "APPROVED",
+                      "abc12345",
+                      new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
+      when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+          .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+      when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 42, 1L))
+          .thenReturn(List.of("{\"round\":1}"));
+      // The earlier round raised findings 1 and 2, so its statuses (1 fixed, 2 superseded because
+      // its code left the diff) are ones that round could have produced.
+      when(followUpAnalyzer.parsePreviousResponses(List.of("{\"round\":1}")))
+          .thenReturn(
+              List.of(
+                  new ReviewResponse(
+                      List.of(
+                          new ReviewResponse.Finding(
+                              "medium", "src/Main.java", 5, "Null check", "Guard it", null, null),
+                          new ReviewResponse.Finding(
+                              "low", "src/Old.java", 20, "Dead branch", "Drop it", null, null)),
+                      List.of(),
+                      null)));
+      when(followUpAnalyzer.toStatuses(any()))
+          .thenReturn(
+              List.of(
+                  new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed"),
+                  new ReviewResult.PreviousFindingStatus(2, "superseded", "code gone")));
+      when(suggestionFormatter.formatReviewComment(any())).thenReturn("**Medium** — fix this");
+      when(aiReviewService.review(any(ReviewSession.class), any()))
+          .thenReturn(
+              new ReviewResponse(
+                  List.of(
+                      new ReviewResponse.Finding(
+                          "medium", "src/Main.java", 10, "Style", "Improve naming", null, null)),
+                  List.of(),
+                  null));
+      orchestrator.review(
+          new ReviewOrchestrator.ReviewRequest(
+              "owner",
+              "repo",
+              42,
+              "abcdefgh",
+              "Test PR",
+              "",
+              "base1234567",
+              "main",
+              123L,
+              forceSummary,
+              "main",
+              forceSummary));
+      return session;
     }
 
     @Test

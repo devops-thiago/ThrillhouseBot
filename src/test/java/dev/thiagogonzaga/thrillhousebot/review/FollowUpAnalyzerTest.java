@@ -5038,6 +5038,53 @@ class FollowUpAnalyzerTest {
     assertEquals(100L, settled.status().earlierRound().threadRootId());
   }
 
+  /**
+   * The lookup that only asks whether the finding's position is taken on the file never binds: a
+   * maintainer's reply on another finding's keyed thread at the same position, whose header even
+   * carries the same title, neither settles the held finding nor lets the title scan bind it there.
+   */
+  @Test
+  void aReplyOnAnotherFindingsKeyedThreadAtTheSamePositionNeverSettlesTheFinding() {
+    var raised =
+        new ReviewResponse.Finding("high", "high", "src/A.java", 10, "Race", "d", null, null);
+    var other =
+        new ReviewResponse.Finding("high", "high", "src/A.java", 30, "Race", "d", null, null);
+    var unrelated =
+        new ReviewResponse.Finding(
+            "medium", "high", "src/B.java", 5, "Missing null check", "d", null, null);
+    var roundOne = new ReviewResponse(List.of(raised), List.of(), null);
+    var roundTwo = new ReviewResponse(List.of(unrelated), List.of(), null);
+    var threads =
+        List.of(
+            keyedRoot(100L, raised, other, 1),
+            keyedRoot(200L, unrelated, unrelated, 1),
+            comment(
+                101L,
+                100L,
+                "src/A.java",
+                "Accepted risk: the counter is advisory and a lost increment is harmless.",
+                "maintainer"));
+    var resolver = new DiffLineResolver(Map.of("src/A.java", patch(10), "src/B.java", patch(5)));
+
+    var held =
+        analyzer
+            .heldPreviousFindings(
+                List.of(roundTwo, roundOne),
+                List.of(),
+                threads,
+                List.of(),
+                resolver,
+                BOT_ID,
+                Map.of(),
+                () -> "+counter.bump();")
+            .stream()
+            .filter(entry -> raised.title().equals(entry.finding().title()))
+            .findFirst()
+            .orElseThrow();
+
+    assertEquals("unresolved", held.status().status());
+  }
+
   @Test
   void aMarkerPostedBeforeTheKeyStillBindsByItsContent() {
     var finding = new ReviewResponse.Finding("high", "src/A.java", 10, "Race", "d", null, null);

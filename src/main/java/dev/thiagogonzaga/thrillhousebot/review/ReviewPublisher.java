@@ -135,19 +135,20 @@ public class ReviewPublisher {
   /**
    * Posts the opt-in follow-up delta comment — the short "what moved since the last pass" note
    * described by {@link FollowUpDeltaSummary}. Independent of {@link #publishSummary}: it never
-   * runs on a first review, and never on a round that created a summary comment ({@code /summary}
-   * on a pull request that had none), so the first-run summary is never duplicated. A round that
-   * only edited the summary in place still posts it: the edit notifies nobody, and suppressing the
-   * delta whenever a superseded finding refreshed the summary left follow-up rounds with no delta
-   * at all (#927).
+   * runs on a first review, and never on a {@code /summary} round that posted the summary ({@link
+   * #publishSummary} with {@code forceSummary} always posts a new comment), so the delta never
+   * lands beside the summary that command was asked for. Every other follow-up round posts it: one
+   * whose summary a superseded finding refreshed in place (the edit notifies nobody, and
+   * suppressing the delta there left follow-up rounds with no delta at all, #927), and one whose
+   * upsert posted a new summary because none was left.
    *
    * <p>Its outcome deliberately does <em>not</em> feed the {@code summaryPosted} flag {@link
    * #postReview} keys its redundant-review skips on. That flag means "the PR already carries this
    * round's verdict in a comment"; a delta comment carries counts, not a verdict, so letting it
    * suppress the review would leave a clean follow-up with no stated outcome at all.
    *
-   * @param summaryCreated whether this round created a summary comment — when it did, this comment
-   *     is skipped rather than posted beside it
+   * @param summaryCommandPosted whether this is a {@code /summary} round whose summary comment was
+   *     posted — when it is, this comment is skipped rather than posted beside it
    * @param previousFindings the previous round's findings, in prompt-id order, so the comment can
    *     name the ones it closed by {@code path:line} and title instead of reporting a bare count
    *     (#714)
@@ -160,9 +161,11 @@ public class ReviewPublisher {
       String repo,
       int prNumber,
       ReviewResult result,
-      boolean summaryCreated,
+      boolean summaryCommandPosted,
       List<ReviewResponse.Finding> previousFindings) {
-    if (!config.review().followUpSummary().enabled() || result.isFirstReview() || summaryCreated) {
+    if (!config.review().followUpSummary().enabled()
+        || result.isFirstReview()
+        || summaryCommandPosted) {
       return false;
     }
     var body = FollowUpDeltaSummary.render(result, previousFindings);

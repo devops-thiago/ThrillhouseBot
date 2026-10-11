@@ -404,8 +404,8 @@ class ReviewPublisherTest {
   }
 
   @Test
-  void followUpDeltaIsSkippedWhenThisRoundCreatedASummary() {
-    // /summary created the summary comment this round, so the delta must not land beside it. An
+  void followUpDeltaIsSkippedOnASummaryCommandRoundThatPostedTheSummary() {
+    // /summary posted the summary comment this round, so the delta must not land beside it. An
     // in-place edit (a superseded finding refreshing the summary) is not this case (#927).
     followUpSummaryEnabled(true);
 

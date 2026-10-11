@@ -149,7 +149,9 @@ is the `finding=N` marker on the inline comment. Positions restart at 1 every ro
 #927 the marker also carries `key=` (8 hex digits of a SHA-256 over the finding's file, line and
 title, `SuggestionFormatter.findingKey`), which makes it unique across rounds; a keyed thread
 binds to a finding only by that key, and a pre-#927 marker without one binds by the finding's own
-content as before (`FollowUpAnalyzer.markerRootComment`). `SummaryAcrossRoundsTest` and
+content as before (`FollowUpAnalyzer.markerRootComment`). A position held by another finding's
+comment never binds; it only keeps the title scan for pre-marker comments from binding there
+(`positionMarkedOnFile`). `SummaryAcrossRoundsTest` and
 `OpenThreadDuplicateGuardTest` drive most of the rules below through several rounds.
 
 - **A finding still open on its own thread is never posted again, from any round** (#939).
