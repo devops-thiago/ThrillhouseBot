@@ -1023,6 +1023,11 @@ class PromptLabelScrubberTest {
           Two findings were raised in this batch on the scheduler. | Two findings were raised on the scheduler.
           the findings from this batch | the findings
           There are no findings in this batch yet. | There are no findings yet.
+          Notes:\\n  - BedReporter... rather, grep confirms it. | Notes:\\n  - Grep confirms it.
+          > BedReporter... rather, grep confirms it. | > Grep confirms it.
+          It fails. notesFor(shift.signups)... rather, grep confirms it. | It fails. Grep confirms it.
+          (no findings in this batch). Uploads due episodes. | Uploads due episodes.
+          (no findings in this batch), then uploads. | then uploads.
           No findings in this batch were raised on the scheduler. | No findings were raised on the scheduler.
           (no findings in this batch) no findings in this batch here | no findings here
           """)
@@ -1042,6 +1047,8 @@ class PromptLabelScrubberTest {
       strings = {
         "The job processes every record in this batch before committing.",
         "BatchImporter validates imported batches and rejects this batch of imports.",
+        "Two findings in this batch of imports look actionable.",
+        "It reports no findings in this batch of imports.",
         "The confirmed bug is on line 4, and the unconfirmed findings are listed below.",
         "Wait for the latch before reading the queue.",
         "The loop must wait, then retry once.",

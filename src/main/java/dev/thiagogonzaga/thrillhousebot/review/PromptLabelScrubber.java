@@ -335,8 +335,11 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern RESTARTED_SENTENCE =
       Pattern.compile(
-          "(?<![^.!?\\n])([ \\t]*)[^.!?\\n… \\t][^.!?\\n…]{0,59}(?:\\.\\.\\.|…)[ \\t]+"
-              + "(?i:rather|wait|actually),[ \\t]+(\\p{L})");
+          "(?<![^.!?\\n])([ \\t]*)([^.!?\\n… \\t](?:[^.!?\\n…]|\\.(?=\\w)){0,59})(?:\\.\\.\\.|…)"
+              + "[ \\t]+(?i:rather|wait|actually),[ \\t]+(\\p{L})");
+
+  /** A list or quote marker opening a line, which stays when the sentence after it goes. */
+  private static final Pattern LINE_MARKER = Pattern.compile("[-*+>][ \\t]+");
 
   /**
    * "hosts the two confirmed findings": the verifier's verdict name for a posted finding (#964).
@@ -352,14 +355,14 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern NO_FINDINGS_IN_BATCH =
       Pattern.compile(
-          "\\bno (?:new )?(?:finding|issue)s? (?:in|for|from) this batch\\b",
+          "\\bno (?:new )?(?:finding|issue)s? (?:in|for|from) this batch\\b(?! of\\b)",
           Pattern.CASE_INSENSITIVE);
 
   /** "the findings in this batch": the batch goes, the findings stay (#964). */
   private static final Pattern FINDINGS_IN_BATCH =
       Pattern.compile(
           "\\b(findings?(?: (?:were |was )?(?:raised|reported|found|flagged))?) (?:in|for|from)"
-              + " this batch\\b",
+              + " this batch\\b(?! of\\b)",
           Pattern.CASE_INSENSITIVE);
 
   private PromptLabelScrubber() {}
@@ -638,7 +641,12 @@ public final class PromptLabelScrubber {
     s =
         RESTARTED_SENTENCE
             .matcher(s)
-            .replaceAll(m -> Matcher.quoteReplacement(m.group(1) + capitalize(m.group(2))));
+            .replaceAll(
+                m -> {
+                  var marker = LINE_MARKER.matcher(m.group(2));
+                  var kept = marker.lookingAt() ? marker.group() : "";
+                  return Matcher.quoteReplacement(m.group(1) + kept + capitalize(m.group(3)));
+                });
     s = CONFIRMED_FINDINGS.matcher(s).replaceAll(m -> capitalizeLike(m.group(1), m.group(2)));
     s = removeNoFindingsAsides(s);
     return FINDINGS_IN_BATCH.matcher(s).replaceAll("$1");
@@ -653,39 +661,52 @@ public final class PromptLabelScrubber {
     var out = new StringBuilder(text.length());
     int at = 0;
     while (m.find()) {
-      int blank = skipBlanksBack(text, m.start(), at);
-      // Only what is still unwritten can be the aside's context; the start of the text opens a
-      // line.
-      char before;
-      if (blank > at) {
-        before = text.charAt(blank - 1);
-      } else {
-        before = at == 0 ? '\n' : ' ';
-      }
-      int start;
-      int end = m.end();
-      if (before == '(' && end < text.length() && text.charAt(end) == ')') {
-        start = skipBlanksBack(text, blank - 1, at);
-        end++;
-      } else if (";,—–".indexOf(before) >= 0) {
-        start = skipBlanksBack(text, blank - 1, at);
-      } else if (".!?\n".indexOf(before) >= 0) {
-        start = blank;
-        if (end < text.length() && text.charAt(end) == '.') {
-          end++;
-        } else if (end < text.length() && text.charAt(end) != '\n') {
-          continue; // the sentence goes on past the aside: leave it to FINDINGS_IN_BATCH
-        }
-      } else {
+      int[] aside = asideBounds(text, m.start(), m.end(), at);
+      if (aside.length == 0) {
         continue;
       }
-      out.append(text, at, start);
-      // An aside that started a line takes the blanks after it, so the line does not start with
-      // one.
-      boolean lineStart = start == 0 || text.charAt(start - 1) == '\n';
-      at = lineStart ? skipBlanks(text, end) : end;
+      out.append(text, at, aside[0]);
+      at = aside[1];
     }
     return out.append(text, at, text.length()).toString();
+  }
+
+  /**
+   * Where the aside around "no findings in this batch" at {@code start}..{@code end} begins and
+   * where the text after it resumes, or an empty array when its context makes it part of a sentence
+   * (left to {@link #FINDINGS_IN_BATCH}): inside a parenthetical, after a semicolon, comma or dash
+   * (with the separator), or as a sentence or line of its own (with its full stop). Nothing before
+   * {@code floor}, which is already written, is taken.
+   */
+  private static int[] asideBounds(String text, int start, int end, int floor) {
+    int blank = skipBlanksBack(text, start, floor);
+    boolean opensText = blank == 0;
+    char before = blank > floor ? text.charAt(blank - 1) : ' ';
+    int from;
+    int to = end;
+    if (before == '(' && to < text.length() && text.charAt(to) == ')') {
+      from = skipBlanksBack(text, blank - 1, floor);
+      to++;
+    } else if (";,—–".indexOf(before) >= 0) {
+      from = skipBlanksBack(text, blank - 1, floor);
+    } else if (opensText || ".!?\n".indexOf(before) >= 0) {
+      from = blank;
+      if (to < text.length() && text.charAt(to) == '.') {
+        to++;
+      } else if (to < text.length() && text.charAt(to) != '\n') {
+        return new int[0];
+      }
+    } else {
+      return new int[0];
+    }
+    if (from == 0 || text.charAt(from - 1) == '\n') {
+      // An aside that starts a line takes its trailing punctuation and blanks with it.
+      if (to < text.length() && ".,;".indexOf(text.charAt(to)) >= 0) {
+        to++;
+      }
+      to = skipBlanks(text, to);
+    }
+    return new int[] {from, to};
   }
 
   /**
