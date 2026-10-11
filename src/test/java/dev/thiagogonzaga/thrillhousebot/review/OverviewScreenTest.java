@@ -258,6 +258,8 @@ class OverviewScreenTest {
     assertTrue(OverviewScreen.talksAboutFindings("(Findings tracked elsewhere)"));
     assertFalse(OverviewScreen.talksAboutFindings("Findings model with a severity and a title"));
     assertFalse(OverviewScreen.talksAboutFindings("Findings"));
+    // The empty word before a leading parenthesis sits in the window and is no count.
+    assertFalse(OverviewScreen.talksAboutFindings("(the findings tracker)"));
     assertEquals(
         "Renders the parser",
         OverviewScreen.screenedText("Renders the parser; findings are reported inline", "+x", ""));
