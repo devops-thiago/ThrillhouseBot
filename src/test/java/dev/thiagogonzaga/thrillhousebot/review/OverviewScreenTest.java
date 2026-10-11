@@ -195,6 +195,19 @@ class OverviewScreenTest {
   }
 
   @Test
+  void anAbbreviationDoesNotEndTheSentenceItsTicketKeyIsIn() {
+    var purpose = "Adjusts limits, e.g. THRILLHOUSEBOT-100. Keeps the rest, i.e. the defaults.";
+
+    assertEquals(
+        "Keeps the rest, i.e. the defaults.",
+        OverviewScreen.withoutInventedTickets(purpose, "Title: limits"));
+    assertEquals(
+        "Adjusts limits, E.G. ABCD-1, vs. EFGH-2. Ships it.",
+        OverviewScreen.withoutInventedTickets(
+            "Adjusts limits, E.G. ABCD-1, vs. EFGH-2. Ships it.", "ABCD-1 EFGH-2"));
+  }
+
+  @Test
   void aStandardsCodeIsNotTakenForAnInventedTicket() {
     var purpose = "Returns HTTP-404 for unknown routes. Adds FIPS-140 validation. Fixes ABCD-9.";
 
@@ -290,6 +303,9 @@ class OverviewScreenTest {
 
     assertEquals(1, dropped.size(), dropped.toString());
     assertTrue(dropped.getFirst().contains("Dropped all 1 file summary"), dropped.toString());
+    assertTrue(
+        dropped.getFirst().endsWith("unless the previous overview of this head is carried"),
+        dropped.toString());
     assertEquals(1, stray.size(), stray.toString());
     assertTrue(
         stray.getFirst().contains("none is left on a changed file (0 failed"), stray.toString());

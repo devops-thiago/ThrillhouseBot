@@ -123,8 +123,13 @@ final class OverviewScreen {
   private static final Set<String> STANDARD_PREFIXES =
       Set.of("HTTP", "HTTPS", "FIPS", "IEEE", "ECMA", "ANSI", "MPEG", "SMTP", "OAUTH");
 
-  /** A sentence end: terminal punctuation followed by a blank. */
-  private static final Pattern SENTENCE_END = Pattern.compile("(?<=[.!?])\\s++");
+  /**
+   * A sentence end: terminal punctuation followed by a blank, except after "e.g.", "i.e.", "etc."
+   * and "vs.", which end an abbreviation mid-sentence.
+   */
+  private static final Pattern SENTENCE_END =
+      Pattern.compile(
+          "(?i)(?<=[.!?])(?<!\\be\\.g\\.)(?<!\\bi\\.e\\.)(?<!\\betc\\.)(?<!\\bvs\\.)\\s++");
 
   /**
    * {@code summary} with its file summaries mapped, screened and deduplicated, and its purpose
@@ -186,13 +191,14 @@ final class OverviewScreen {
     if (!entries.isEmpty() && kept.isEmpty()) {
       Log.warnf(
           "Dropped all %d file summary(ies) at the overview screen; the Changed Files rows will"
-              + " read \"Not summarized\"",
+              + " read \"Not summarized\" unless the previous overview of this head is carried",
           entries.size());
     } else if (!kept.isEmpty() && kept.stream().noneMatch(e -> patches.containsKey(e.path()))) {
       Log.warnf(
           "Summary call returned %d file summary(ies) and none is left on a changed file (%d"
               + " failed the overview screen, the rest name no changed file); the Changed Files"
-              + " rows will read \"Not summarized\"",
+              + " rows will read \"Not summarized\" unless the previous overview of this head is"
+              + " carried",
           entries.size(), dropped);
     } else if (dropped > 0) {
       Log.infof("Dropped %d file summary(ies) that failed the overview screen", dropped);
