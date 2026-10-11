@@ -368,7 +368,7 @@ untrusted data in the prompt and counted in the per-call token budget.
 |---|---|---|
 | `REVIEW_PATCH_COVERAGE_ENABLED` | Tell the review which added lines the repository's own coverage report never ran. Needs `coverage-artifact` in `.github/thrillhousebot.yml` (see [Repository configuration](#repository-configuration)) | `false` |
 | `REVIEW_CI_CONTEXT_ENABLED` | Include the checks that had already failed on the head commit. See [CI-failure context](#ci-failure-context) | `false` |
-| `REVIEW_CI_CONTEXT_INCLUDE_LOGS` | Also include the tail of up to two failing GitHub Actions job logs | `false` |
+| `REVIEW_CI_CONTEXT_INCLUDE_LOGS` | Also include the last 30 lines of up to two failing GitHub Actions job logs | `false` |
 | `REVIEW_CI_CONTEXT_MAX_CHARS` | Character cap on the CI section (500–20000) | `4000` |
 | `REVIEW_TICKET_CONTEXT_ENABLED` | Include the issues the PR links and list unaddressed acceptance criteria in the summary. See [Linked-issue context](#linked-issue-context) | `false` |
 | `REVIEW_TICKET_CONTEXT_PROVIDER` | Where issues are read from. Only `github` exists | `github` |
@@ -919,17 +919,26 @@ build step the change breaks. The checks come from the CI gate's own read (with
 `REVIEW_CI_GATING=off` that read is still made for this, and never holds
 approval). For each failing check, required or not, the prompt gets its name,
 conclusion, output title and summary, and up to eight annotations from one page,
-failures first. Five checks are described in full and any others by name.
-`REVIEW_CI_CONTEXT_INCLUDE_LOGS=true` adds the last 30 lines of up to two failing
-GitHub Actions job logs. The extra cost is one annotations request per detailed
-check that has annotations, plus one log download per job with logs on. Job logs
-use the `Actions: Read` permission the app already has.
+failures first; the runner's own notices on the workflow (a deprecated Node.js
+version, a cache miss) are left out. Five checks are described in full and any
+others by name. A failed GitHub Actions job's annotations rarely name the test
+(they say "Process completed with exit code 1"), so the log of up to two failing
+jobs is read and the lines that name a failed test (Surefire, Gradle, TAP and
+`node --test`, Jest, Vitest, pytest, unittest, `go test`, `cargo test`,
+`dotnet test`, ScalaTest, munit, CTest, Zig, RSpec) are listed, up to ten per job.
+`REVIEW_CI_CONTEXT_INCLUDE_LOGS=true` also adds the last 30 lines of those logs.
+The extra cost is one annotations request per detailed check that has
+annotations, plus one log download per failing Actions job (at most two). Job
+logs use the `Actions: Read` permission the app already has.
 
 Check output is written by the PR's own code, so it is handled like the PR
 description: ANSI codes and control and bidi characters are stripped, each field
 is clipped, and the list sits inside the untrusted-data fence. The model is told
-to use a failure to find the changed line that causes it, to quote the failure
-it relied on, and not to report a failure the diff does not explain.
+to use a failure to find the changed line that causes it, to name the failing
+test in the finding that explains it, to quote the failure it relied on, and not
+to report a failure the diff does not explain. The summary call gets the same
+list and says, for each failing check, which finding explains it or that none
+does.
 
 Checks still running add only a count next to a failure. An automatic review
 usually starts before CI finishes, so in practice the section shows up on a
