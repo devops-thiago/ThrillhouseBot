@@ -356,7 +356,8 @@ public final class FindingVerifierPrompts {
             A candidate may also carry a "context_evidence" field. Like "cited_location" it is not
             model output: it is the review's own context material — the coverage report's
             measurement for the file this finding cites, the maintainers' path-scoped rules that
-            govern that file — matched to this finding deterministically and quoted here. The review
+            govern that file, the CI checks this commit had already failed that the finding cites
+            — matched to this finding deterministically and quoted here. The review
             pass that raised the finding was given those sections and you are not, so without this
             field a finding grounded in one of them reads to you as a claim about material nobody
             showed you, and your rejection grounds above would delete it for that alone. Treat what
@@ -371,6 +372,10 @@ public final class FindingVerifierPrompts {
               — that attributed fact is not established, and the attribution earns the finding
               nothing. Judge what is left on the diff alone, and reject the finding when the
               attribution was all it had. A quoted measurement nobody took is not evidence.
+            - When the field records a failing CI check the finding cites, that check failing on
+              this commit is established: it is the provided CI context a test-failure claim
+              needs, so do not reject or demote the finding as an unsettled claim that a test
+              fails. Judge only whether the flagged line is what makes it fail.
             - Absence of the field means only that this finding matched nothing, or that what it
               matched outgrew the space this material is allowed. It implies nothing either way
               about the finding.
