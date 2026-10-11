@@ -21,6 +21,7 @@ import static org.junit.jupiter.params.provider.Arguments.arguments;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -1057,5 +1058,29 @@ class DiffLineResolverTest {
             "high", "high", "External/container", 1, "Title", "Desc", "old", "new");
 
     assertSame(cited, resolver.withDiffPath(cited));
+  }
+
+  // #924: where a finding's suggestion_old sits, for the line the finding cites.
+
+  @Test
+  void aQuoteIsLocatedOnTheRightSideOnly() {
+    var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
+
+    assertEquals(
+        Optional.of(new DiffLineResolver.LineRange(11, 12)),
+        resolver.locateQuote("main.py", "new_line()\n  added_line()", 40));
+    assertEquals(Optional.empty(), resolver.locateQuote("main.py", "old_line()", 11));
+    assertEquals(Optional.empty(), resolver.locateQuote("main.py", "  ", 11));
+    assertEquals(Optional.empty(), resolver.locateQuote(null, "new_line()", 11));
+    assertEquals(Optional.empty(), resolver.locateQuote("other.py", "new_line()", 11));
+  }
+
+  @Test
+  void overlappingRunsHoldingTheCitedLineLeaveTheLocationOpen() {
+    var resolver = new DiffLineResolver(Map.of("a.txt", "@@ -0,0 +1,3 @@\n+a\n+a\n+a"));
+
+    assertEquals(Optional.empty(), resolver.locateQuote("a.txt", "a\na", 2));
+    assertEquals(
+        Optional.of(new DiffLineResolver.LineRange(1, 1)), resolver.locateQuote("a.txt", "a", 1));
   }
 }
