@@ -1020,7 +1020,9 @@ public final class PrReviewPrompts {
               diff and are authoritative. Cover the change set as a whole: when it spans many files
               or several directories, say so and name the main areas it touches. Never present one
               extracted class, one file, or the one component that happens to carry findings as if
-              it were the whole pull request. Describe behavior, not a file listing.
+              it were the whole pull request. Describe behavior, not a file listing. Name an issue
+              or ticket only as the PR title, description or a linked issue writes it; never make
+              up a key.
             - description_gaps: when a PR description is provided, an array of concrete mismatches
               between what the author claims and what the change does — including a description
               whose scope is narrower than the change itself (it covers one component, or far fewer
@@ -1044,7 +1046,12 @@ public final class PrReviewPrompts {
               level of detail, is what is wanted and is NOT invention. What would be invention is
               naming methods, values or behavior the material does not show — so stay at the
               granularity the file list and findings justify, and prefer a rougher true line over
-              no line at all. "path" must match a path from the changed-file list below EXACTLY,
+              no line at all. Never name a setting, check, command or count for a file unless a
+              finding or the PR description names it for that file ("runs the unit tests", not
+              "runs build, test and scan checks"; "documents the configuration", not "documents
+              three settings"), and never write about the review itself ("hosts two findings",
+              "no findings in this batch"): a line says what the file is for in this change.
+              "path" must match a path from the changed-file list below EXACTLY,
               character for character (no a/ or b/ prefix, no truncation), and it names one file
               from that list — never a directory from the breakdown, which matches no file and is
               dropped. The object keys must be spelled exactly "path" and "summary" — not "file",

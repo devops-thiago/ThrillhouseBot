@@ -1,0 +1,172 @@
+/*
+ * Copyright 2026 Thiago Gonzaga
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package dev.thiagogonzaga.thrillhousebot.review;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+
+import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+/** Checking the summary call's overview against the change it describes (#964). */
+class OverviewScreenTest {
+
+  private static final List<FileDiff> FILES =
+      List.of(
+          new FileDiff("src/main/java/dev/acme/SecretScanner.java", "added", 9, 0, 9, "+class S {}"),
+          new FileDiff("react/src/Dashboard.tsx", "added", 5, 0, 5, "+export function D() {}"),
+          new FileDiff(
+              "docs/CONFIG-REACT.md",
+              "added",
+              4,
+              0,
+              4,
+              "+| VITE_API_URL | url |\n+| VITE_PAGE_SIZE | 50 |"),
+          new FileDiff("react/src/main.tsx", "added", 3, 0, 3, "+render()"),
+          new FileDiff("img/logo.png", "added", 0, 0, 0, null));
+
+  private static ReviewResponse.Summary summary(
+      String purpose, List<ReviewResponse.FileSummary> files) {
+    return new ReviewResponse.Summary(
+        1, 0, 1, 0, 0, "ok", purpose, List.of(), List.of(), files, null, List.of());
+  }
+
+  private static ReviewResponse.FileSummary row(String path, String text) {
+    return new ReviewResponse.FileSummary(path, text);
+  }
+
+  @Test
+  void aNearMissPathIsMappedAndAPlaceholderIsDropped() {
+    // devops-thiago/ThrillhouseBot#966: one junk entry with a misspelled path and the text
+    // "placeholder" blanked every row.
+    var screened =
+        OverviewScreen.screen(
+            summary(
+                "p",
+                List.of(
+                    row("src/main/java/dev/thiagosonzaga-placeholder/SecretScanner.java", "scans"),
+                    row("src/Dashboard.tsx", "renders the dashboard"),
+                    row("react/src/main.tsx", "placeholder"))),
+            FILES,
+            "");
+
+    assertEquals(
+        List.of(
+            row("src/main/java/dev/acme/SecretScanner.java", "scans"),
+            row("react/src/Dashboard.tsx", "renders the dashboard")),
+        screened.fileSummaries());
+  }
+
+  @Test
+  void anEntryNamingTheFileExactlyWinsOverANearMiss() {
+    var screened =
+        OverviewScreen.screen(
+            summary(
+                "p",
+                List.of(
+                    row("src/Dashboard.tsx", "a near miss"),
+                    row("react/src/Dashboard.tsx", "the exact one"))),
+            FILES,
+            "");
+
+    assertEquals(List.of(row("react/src/Dashboard.tsx", "the exact one")), screened.fileSummaries());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"placeholder", "TODO", "n/a", "…", "-", "  ", "Summary.", "TBD"})
+  void placeholderTextIsNotASummary(String text) {
+    assertEquals("", OverviewScreen.screenedText(text, "+x"));
+  }
+
+  @Test
+  void findingsTalkIsCutFromARow() {
+    // react #177: the main.tsx row said it "hosts the two confirmed findings"; kotlin #192: "no
+    // findings in this batch" with six open.
+    assertEquals(
+        "Entry point that renders the dashboard",
+        OverviewScreen.screenedText(
+            "Entry point that renders the dashboard; hosts the two confirmed findings", "+x"));
+    assertEquals("", OverviewScreen.screenedText("No findings in this batch", "+x"));
+    // A file about findings is still described.
+    assertEquals(
+        "Refines findings before they are posted",
+        OverviewScreen.screenedText("Refines findings before they are posted", "+x"));
+  }
+
+  @Test
+  void aSettingTheFilesPatchDoesNotHoldIsCut() {
+    var patch = "+| VITE_API_URL | url |\n+| VITE_PAGE_SIZE | 50 |";
+
+    assertEquals(
+        "Documents VITE_API_URL",
+        OverviewScreen.screenedText("Documents VITE_API_URL; adds MAX_PER_ZONE", patch));
+    assertEquals("", OverviewScreen.screenedText("Documents MAX_PER_ZONE and currency", patch));
+    // No patch to read: nothing is judged.
+    assertEquals("Logo for MAX_PER_ZONE", OverviewScreen.screenedText("Logo for MAX_PER_ZONE", ""));
+    assertEquals(
+        "Logo for MAX_PER_ZONE", OverviewScreen.screenedText("Logo for MAX_PER_ZONE", null));
+  }
+
+  @Test
+  void anInventedTicketKeyTakesItsSentenceOut() {
+    // c #205 round 2: "THRILLHOUSEBOT-122" appears nowhere in the PR or its issues.
+    var purpose =
+        "Adds a C log rotator (THRILLHOUSEBOT-122). It ships a Makefile. Fixes JIRA-7 and uses"
+            + " SHA-256.";
+
+    assertEquals(
+        "It ships a Makefile. Fixes JIRA-7 and uses SHA-256.",
+        OverviewScreen.withoutInventedTickets(purpose, "Title: rotator\nCloses jira-7"));
+    assertEquals("No key here.", OverviewScreen.withoutInventedTickets("No key here.", ""));
+    assertNull(OverviewScreen.withoutInventedTickets(null, ""));
+  }
+
+  @Test
+  void aSummaryThatPassesIsReturnedAsItIs() {
+    var clean = summary("Adds a dashboard.", List.of(row("react/src/main.tsx", "renders it")));
+
+    assertSame(clean, OverviewScreen.screen(clean, FILES, ""));
+    assertNull(OverviewScreen.screen(null, FILES, ""));
+  }
+
+  @Test
+  void aSummaryWhoseRowsNameNoChangedFileIsKeptForTheRendererToReport() {
+    var stray = summary("p", List.of(row("elsewhere/Unknown.kt", "something")));
+
+    var screened = OverviewScreen.screen(stray, FILES, "");
+
+    assertEquals(stray.fileSummaries(), screened.fileSummaries());
+  }
+
+  @Test
+  void anEntryWithNoPathOrTextIsDropped() {
+    var screened =
+        OverviewScreen.screen(
+            summary(
+                "p (THRILLHOUSEBOT-1).",
+                List.of(row(null, "x"), row("react/src/main.tsx", null))),
+            FILES,
+            "");
+
+    assertEquals(List.of(), screened.fileSummaries());
+    assertEquals("", screened.prPurpose());
+  }
+}
