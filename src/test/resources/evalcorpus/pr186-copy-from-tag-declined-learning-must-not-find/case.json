@@ -1,0 +1,11 @@
+{
+  "kind": "generator",
+  "sourcePr": 186,
+  "why": "Round 14 (#971), ThrillhouseBot-test#186 thread 4151807505: with a stored maintainer decision declining digest-pinning findings for images ('the release pipeline resolves every image to a digest at deploy time'), the review re-raised the same finding on a COPY --from image by arguing a COPY --from source is fetched at build time while base images are consumed at deploy time. A FROM base image is pulled at build time too, and the built image's digest pins both, so the finding is the declined one again. The learnings prompt must keep the decision covering this case.",
+  "expectation": "must-not-find",
+  "targetFile": "csharp/Dockerfile",
+  "keywords": ["digest", "mutable", "unpinned", "floating tag"],
+  "prTitle": "feat(csharp): parking permit service image with healthcheck",
+  "prDescription": "Adds the container image for the parking permit service, with a healthcheck binary copied from our published healthcheck image.",
+  "learnings": "- [L12] Declined finding \"Base image is not pinned by digest\" (medium) on csharp/Dockerfile — @devops-thiago, PR #180:\n  We don't pin images by digest in Dockerfiles: the release pipeline resolves every image to a digest at deploy time and the deployed manifest carries that digest."
+}

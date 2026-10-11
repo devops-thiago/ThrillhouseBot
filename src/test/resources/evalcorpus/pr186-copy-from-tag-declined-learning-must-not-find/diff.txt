@@ -1,0 +1,18 @@
+### csharp/Dockerfile (added, +14 -0)
+```diff
+@@ -0,0 +1,14 @@
++FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
++WORKDIR /src
++COPY src/ParkingPermits/ ./
++RUN dotnet publish -c Release -o /out
++
++FROM mcr.microsoft.com/dotnet/aspnet:10.0
++WORKDIR /app
++COPY --from=ghcr.io/devops-thiago/permit-healthcheck:1.4.0 /healthcheck /usr/local/bin/healthcheck
++COPY --from=build /out ./
++RUN adduser --disabled-password --gecos "" app && chown -R app /app
++USER app
++EXPOSE 8080
++HEALTHCHECK CMD ["/usr/local/bin/healthcheck", "--port", "8080"]
++ENTRYPOINT ["dotnet", "ParkingPermits.dll"]
+```
