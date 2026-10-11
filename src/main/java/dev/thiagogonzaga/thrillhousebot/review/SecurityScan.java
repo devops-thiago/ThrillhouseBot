@@ -100,7 +100,10 @@ import javax.crypto.spec.SecretKeySpec;
  * SecurityRule#topic}), so the reviewer does not post the same secret twice; the scan's finding is
  * the one kept, because it is the redacted one. On the very line a secret was matched, one rule
  * word in the model's title is enough (#932): a model's own "API token committed in source" finding
- * is the same leak in other words, and keeping it posted a second thread at a second severity.
+ * is the same leak in other words, and keeping it posted a second thread at a second severity. Near
+ * an IaC detection, one of the rule's {@linkplain SecurityRule#defectWords defect words} is enough
+ * (#921, #952): "Container reverts to root just before the entrypoint", anchored on the {@code
+ * ENTRYPOINT} line below a final-stage {@code USER root}, is the scan's finding in other words.
  */
 @ApplicationScoped
 public class SecurityScan {
@@ -119,6 +122,24 @@ public class SecurityScan {
    * other, so it cannot repeat a secret.
    */
   static final int MIN_TOPIC_WORDS = 2;
+
+  /**
+   * Title words that name an infrastructure defect no IaC rule raises, but that shares a rule's
+   * defect word: a root filesystem left writable, a root-owned path the image's user cannot write,
+   * a public subnet. A model title using one is its own finding, not a restatement of the scan's
+   * (#921). Hyphenated words are read joined ({@code read-only} as {@code readonly}).
+   */
+  static final Set<String> OTHER_IAC_DEFECT_WORDS =
+      Set.of(
+          "filesystem",
+          "readonly",
+          "writable",
+          "unwritable",
+          "owned",
+          "ownership",
+          "chown",
+          "subnet",
+          "subnets");
 
   /** Longest credential key name a title repeats. */
   private static final int MAX_KEY_NAME = 40;
@@ -399,6 +420,43 @@ public class SecurityScan {
         kept,
         statuses,
         scrub(FindingVerificationService.recount(response.summary(), kept), scrubber));
+  }
+
+  /**
+   * Drops a model finding that reports a hardcoded secret on a line whose credential-named keys are
+   * all assigned an interpolation or a placeholder ({@link SecretScanner#assignsOnlyStandIns}),
+   * such as {@code ENV API_TOKEN=${API_TOKEN}} or {@code FLEET_API_TOKEN=changeme} (#926). The
+   * finding reports a secret when its title uses one of {@link SecurityRule#GENERIC_SECRET}'s topic
+   * words; the line is the finding's own line on the new side of the diff, and a finding whose line
+   * is not in the diff is kept. Runs whether or not the scan is on: the scan is opt-in because it
+   * adds findings, and this only removes a model claim the line itself contradicts.
+   */
+  public ReviewResponse withoutStandInSecrets(
+      ReviewResponse response, DiffLineResolver lineResolver) {
+    var kept =
+        response.findings().stream()
+            .filter(finding -> !reportsStandInSecret(finding, lineResolver))
+            .toList();
+    if (kept.size() == response.findings().size()) {
+      return response;
+    }
+    Log.infof(
+        "Security scan: dropped %d model secret finding(s) on a line that assigns only an"
+            + " interpolation or a placeholder",
+        response.findings().size() - kept.size());
+    return new ReviewResponse(
+        kept,
+        response.previousFindingsStatus(),
+        FindingVerificationService.recount(response.summary(), kept));
+  }
+
+  private boolean reportsStandInSecret(
+      ReviewResponse.Finding finding, DiffLineResolver lineResolver) {
+    if (topicWords(words(finding.title()), SecurityRule.GENERIC_SECRET) == 0) {
+      return false;
+    }
+    var line = lineResolver.getLineText(finding.file(), finding.line());
+    return line != null && SecretScanner.assignsOnlyStandIns(line, entropyThreshold);
   }
 
   /**
@@ -915,7 +973,8 @@ public class SecurityScan {
       var scanned = detection.finding();
       if (FilePaths.same(finding.file(), scanned.file())
           && (nearbySameDefect(finding, scanned, titleWords, detection.rule())
-              || sameLineSecret(finding, scanned, titleWords, detection.rule()))) {
+              || sameLineSecret(finding, scanned, titleWords, detection.rule())
+              || nearbyIacDefect(finding, scanned, titleWords, detection.rule()))) {
         return true;
       }
     }
@@ -940,6 +999,23 @@ public class SecurityScan {
     return rule.category() == SecurityRule.Category.SECRET
         && finding.line() == scanned.line()
         && topicWords(titleWords, rule) >= 1;
+  }
+
+  /**
+   * Whether a model finding near an IaC detection names the rule's defect by one of its {@link
+   * SecurityRule#defectWords}, and no word of {@link #OTHER_IAC_DEFECT_WORDS}. A defect word alone
+   * can name a neighbouring defect too: "Root filesystem is writable" beside a final-stage {@code
+   * USER root}, or "Public subnet assigns public IPs" beside a public bucket ACL, are different
+   * findings, and their own words say so.
+   */
+  private static boolean nearbyIacDefect(
+      ReviewResponse.Finding finding,
+      ReviewResponse.Finding scanned,
+      Set<String> titleWords,
+      SecurityRule rule) {
+    return Math.abs(finding.line() - scanned.line()) <= FindingDeduplicator.LINE_TOLERANCE
+        && titleWords.stream().anyMatch(rule.defectWords()::contains)
+        && titleWords.stream().noneMatch(OTHER_IAC_DEFECT_WORDS::contains);
   }
 
   private static long topicWords(Set<String> titleWords, SecurityRule rule) {
