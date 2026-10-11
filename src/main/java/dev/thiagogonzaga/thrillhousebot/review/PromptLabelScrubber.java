@@ -361,7 +361,7 @@ public final class PromptLabelScrubber {
   /** "the findings in this batch": the batch goes, the findings stay (#964). */
   private static final Pattern FINDINGS_IN_BATCH =
       Pattern.compile(
-          "\\b(findings?(?: (?:were |was )?(?:raised|reported|found|flagged))?) (?:in|for|from)"
+          "\\b((?:finding|issue)s?(?: (?:were |was )?(?:raised|reported|found|flagged))?) (?:in|for|from)"
               + " this batch\\b(?! of\\b)",
           Pattern.CASE_INSENSITIVE);
 

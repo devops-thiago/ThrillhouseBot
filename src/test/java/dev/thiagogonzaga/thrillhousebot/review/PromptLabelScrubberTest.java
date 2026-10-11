@@ -1023,6 +1023,7 @@ class PromptLabelScrubberTest {
           Two findings were raised in this batch on the scheduler. | Two findings were raised on the scheduler.
           the findings from this batch | the findings
           There are no findings in this batch yet. | There are no findings yet.
+          There are no issues in this batch yet. | There are no issues yet.
           Notes:\\n  - BedReporter... rather, grep confirms it. | Notes:\\n  - Grep confirms it.
           > BedReporter... rather, grep confirms it. | > Grep confirms it.
           It fails. notesFor(shift.signups)... rather, grep confirms it. | It fails. Grep confirms it.
