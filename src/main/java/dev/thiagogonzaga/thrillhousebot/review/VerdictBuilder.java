@@ -235,10 +235,15 @@ public class VerdictBuilder {
             reviewedCode);
     // A finding that never posted inline has no thread to reply on, so the only maintainer action
     // that can close it is an "@thrillhousebot resolved" comment naming it on the PR conversation
-    // (#548). The model never sees that conversation, so its "unresolved" is rewritten here.
+    // (#548). The model never sees that conversation, so its "unresolved" is rewritten here. The
+    // same directive replied on the finding's own thread is applied too (#1066).
     effectiveStatuses =
         followUpAnalyzer.clearNamedInConversation(
-            ctx.previousFindingsList(), effectiveStatuses, ctx.conversationComments(), botIdentity);
+            ctx.previousFindingsList(),
+            effectiveStatuses,
+            ctx.conversationComments(),
+            ctx.inlineComments(),
+            botIdentity);
     // "Still present" counts these statuses and the summary lists one finding per id, so an id
     // reported unresolved twice, or one naming no finding, must not be counted either (#934).
     effectiveStatuses =
