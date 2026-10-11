@@ -2095,11 +2095,9 @@ public class FollowUpAnalyzer {
     if (!declineRecheckEnabled || previous == null || inlineComments == null) {
       return statuses;
     }
-    var explained = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
-    for (var status : statuses) {
-      explained.add(explainedStatus(status, previous, inlineComments, botIdentity));
-    }
-    return explained;
+    return statuses.stream()
+        .map(status -> explainedStatus(status, previous, inlineComments, botIdentity))
+        .toList();
   }
 
   private static ReviewResponse.PreviousFindingStatus explainedStatus(
@@ -3609,7 +3607,10 @@ public class FollowUpAnalyzer {
             .or(
                 () ->
                     RebuttalContradiction.unconfirmedPremise(finding, replies.get(0))
-                        .map(claim -> RebuttalContradiction.heldPremiseNote(claim, reviewed)))
+                        .map(
+                            claim ->
+                                RebuttalContradiction.heldPremiseNote(
+                                    claim, reviewed, finding.file())))
             .orElse(null);
     if (note != null) {
       Log.infof(

@@ -259,28 +259,53 @@ final class RebuttalContradiction {
           ci("\\bconcurrent (?:requests?|goroutines?|threads?|handlers?|callers?|access)\\b"));
 
   /**
-   * The note of a decline held by {@link #unconfirmedPremise} (#963): when the reviewed code states
-   * that the path runs concurrently ({@link #STATED_CONCURRENCY}), the note quotes that line, since
-   * claiming the diff cannot confirm it would be wrong; otherwise {@link #unconfirmedPremiseNote}.
+   * The note of a decline held by {@link #unconfirmedPremise} (#963): when the reviewed code of the
+   * finding's own file states that the path runs concurrently ({@link #STATED_CONCURRENCY}), the
+   * note quotes that line, since claiming the diff cannot confirm it would be wrong; otherwise
+   * {@link #unconfirmedPremiseNote}. A statement in another file says nothing about this path, and
+   * one the line denies ({@link #DENIES} before it) is not quoted as the opposite of what it says.
    */
-  static String heldPremiseNote(String claim, String reviewedCode) {
-    for (var line : rightSideText(reviewedCode).split("\n", -1)) {
-      if (earliestMatch(STATED_CONCURRENCY, line) != null && !DENIES.matcher(line).find()) {
-        return NOTE_LEAD_IN
-            + " the reply argues \""
-            + claim
-            + "\", but the reviewed code says this path runs concurrently — \""
-            + clip(line)
-            + "\". Reply again to keep the decline.";
-      }
-    }
-    return unconfirmedPremiseNote(claim);
+  static String heldPremiseNote(String claim, String reviewedCode, String file) {
+    return rightSideLines(reviewedCode, file).stream()
+        .filter(RebuttalContradiction::statesConcurrency)
+        .findFirst()
+        .map(
+            line ->
+                NOTE_LEAD_IN
+                    + REPLY_ARGUES
+                    + claim
+                    + "\", but the reviewed code says this path runs concurrently — \""
+                    + clip(line)
+                    + "\". Reply again to keep the decline.")
+        .orElseGet(() -> unconfirmedPremiseNote(claim));
   }
 
+  /** The start of every held decline's note: the claim the reply makes is quoted after it. */
+  private static final String REPLY_ARGUES = " the reply argues \"";
+
   /**
-   * Words that turn a {@link #STATED_CONCURRENCY} line into a denial ("not shared by every
-   * goroutine", "rejects concurrent requests"). Such a line says nothing for the note to quote, so
-   * it is skipped rather than cited as the opposite of what it says.
+   * Whether {@code line} states concurrency: a {@link #STATED_CONCURRENCY} match with no denial in
+   * the {@value #DENIAL_WINDOW} characters before it.
+   */
+  private static boolean statesConcurrency(String line) {
+    for (var pattern : STATED_CONCURRENCY) {
+      var matcher = pattern.matcher(line);
+      while (matcher.find()) {
+        var before = line.substring(Math.max(0, matcher.start() - DENIAL_WINDOW), matcher.start());
+        if (!DENIES.matcher(before).find()) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** How far before a concurrency statement a denial word negates it. */
+  private static final int DENIAL_WINDOW = 24;
+
+  /**
+   * Words that turn the {@link #STATED_CONCURRENCY} statement after them into a denial ("not shared
+   * by every goroutine", "rejects concurrent requests").
    */
   private static final Pattern DENIES =
       ci(
@@ -302,17 +327,24 @@ final class RebuttalContradiction {
   }
 
   /**
-   * The reviewed diff's added and context lines, removed lines left out, comments kept: the text a
-   * note may quote as what the code says.
+   * The added and context lines of the reviewed diff's section for {@code file}, removed lines left
+   * out, comments kept: the text a note may quote as what the code says. A section starts at a
+   * {@code diff --git} line or a {@code ### path} heading; lines before any section (a bare patch)
+   * count as the file's own.
    */
-  private static String rightSideText(String reviewedCode) {
+  private static List<String> rightSideLines(String reviewedCode, String file) {
     var kept = new ArrayList<String>();
+    var inFile = true;
     for (var line : reviewedCode.split("\n", -1)) {
-      if (line.startsWith("+") || line.startsWith(" ")) {
+      if (line.startsWith("diff --git ")) {
+        inFile = file != null && line.endsWith("/" + file);
+      } else if (line.startsWith("### ")) {
+        inFile = file != null && FilePaths.same(sectionPath(line), file);
+      } else if (inFile && (line.startsWith("+") || line.startsWith(" "))) {
         kept.add(line.substring(1));
       }
     }
-    return String.join("\n", kept);
+    return kept;
   }
 
   /**
@@ -322,7 +354,7 @@ final class RebuttalContradiction {
    */
   static String unconfirmedPremiseNote(String claim) {
     return NOTE_LEAD_IN
-        + " the reply argues \""
+        + REPLY_ARGUES
         + claim
         + "\", but no review has weighed that against this finding, which an earlier review"
         + " raised, and the reviewed code cannot confirm it: what runs a path concurrently (a server"
@@ -462,7 +494,7 @@ final class RebuttalContradiction {
     /** One-line status note naming the contradiction, for {@code previous_findings_status}. */
     String note() {
       return NOTE_LEAD_IN
-          + " the reply argues \""
+          + REPLY_ARGUES
           + claim
           + "\", but the reviewed code dispatches this path concurrently — \""
           + evidence

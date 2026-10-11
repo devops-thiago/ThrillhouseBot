@@ -4793,10 +4793,11 @@ class FollowUpAnalyzerTest {
                 analyzer,
                 earlierRaceThread(RACE_WRONG_DECLINE),
                 () ->
-                    " type Counter struct {\n"
-                        + "+// Counter is shared by every net/http goroutine serving /reconcile.\n"
-                        + "+counter.bump();\n"
-                        + "-// removed: called from multiple threads"));
+                    """
+                     type Counter struct {
+                    +// Counter is shared by every net/http goroutine serving /reconcile.
+                    +counter.bump();
+                    -// removed: called from multiple threads"""));
 
     assertTrue(entry.holdsOpen());
     var note = entry.status().note();
@@ -4807,22 +4808,56 @@ class FollowUpAnalyzerTest {
     assertTrue(note.endsWith("Reply again to keep the decline."), note);
   }
 
-  /** A line that denies the concurrency is never quoted as stating it. */
+  private String heldNote(String reviewedCode) {
+    return race(raceBackstop(analyzer, earlierRaceThread(RACE_WRONG_DECLINE), () -> reviewedCode))
+        .status()
+        .note();
+  }
+
+  /** A statement the line denies is never quoted as stating concurrency. */
   @Test
   void earlierRoundDeclineHeldOnADeniedConcurrencyKeepsTheUnconfirmedReason() {
     var note =
-        race(raceBackstop(
-                analyzer,
-                earlierRaceThread(RACE_WRONG_DECLINE),
-                () ->
-                    "+// rejects concurrent requests — one worker per shard\n"
-                        + "+// not shared by every goroutine, guarded by the mutex\n"
-                        + "+counter.bump();"))
-            .status()
-            .note();
+        heldNote(
+            """
+            +// rejects concurrent requests — one worker per shard
+            +// not shared by every goroutine, guarded by the mutex
+            +counter.bump();""");
 
     assertTrue(note.contains("no review has weighed"), note);
     assertFalse(note.contains("says this path runs concurrently"), note);
+  }
+
+  /** A guard word well before an affirmative statement on the same line does not deny it. */
+  @Test
+  void anUnrelatedGuardWordEarlierOnTheLineDoesNotDenyTheStatement() {
+    var note =
+        heldNote(
+            "+// Counter is guarded by the mutex below. It is shared by every request goroutine.");
+
+    assertTrue(note.contains("says this path runs concurrently"), note);
+  }
+
+  /** Only the declined finding's own file is read for the statement. */
+  @Test
+  void aConcurrencyStatementInAnotherFileIsNotQuoted() {
+    var otherFile =
+        heldNote(
+            """
+            ### src/Other.java (modified, +1 -0)
+            +// Pool is shared by every request goroutine.
+            diff --git a/src/A.java b/src/A.java
+            +counter.bump();""");
+    assertTrue(otherFile.contains("no review has weighed"), otherFile);
+
+    var ownFile =
+        heldNote(
+            """
+            diff --git a/src/Other.java b/src/Other.java
+            +counter.reset();
+            ### src/A.java (modified, +1 -0)
+            +// Counter is shared by every request goroutine.""");
+    assertTrue(ownFile.contains("says this path runs concurrently"), ownFile);
   }
 
   // #963: a decline the model did not accept on the effective previous round is explained too.
