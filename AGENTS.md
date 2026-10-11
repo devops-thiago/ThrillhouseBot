@@ -219,9 +219,11 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
   prefix. The verifier's carve-outs follow the same switch:
   `FindingVerificationService.verifierSystemPrompt` routes them by the files its candidates are
   anchored in (`ReviewDimensionRouter.dimensionsForPaths`).
-- The system prompt reaches the model as a `@V("reviewSystemPrompt")` parameter
-  (`PrReviewer.reviewStream`, `@SystemMessage("{{reviewSystemPrompt}}")`) carried by
-  `AiReviewService.PromptInputs.reviewSystemPrompt` (null reads as `SYSTEM`). The assembler sets
+- The review call's one template variable is the `AiReviewService.PromptInputs` record, bound as
+  `@V("inputs")` on `PrReviewer.reviewStream` (#993); `PrReviewPrompts.USER` reads its components
+  as `{{inputs.diff}}` and so on. The record is `@TemplateData` so the native image resolves them
+  without reflection. The system prompt reaches the model the same way
+  (`@SystemMessage("{{inputs.reviewSystemPrompt}}")`, null reads as `SYSTEM`). The assembler sets
   the whole PR's prompt, the planner sizes the overhead from it, and the pipeline narrows it per
   batch. A batch's prompt is never larger than the PR's.
 - A new dimension needs a block, a `ReviewDimension` constant, a router rule and a must-find eval
@@ -242,7 +244,7 @@ Two patterns. Pick the first unless the section must sit somewhere else in the u
    `patchCoverageSection`, `ciFailuresSection`, `learningsSection`). Every batch carries the slot,
    and `DiffBudgetPlanner.plan` already counts it as shared overhead
    (`DiffBudgetPlannerTest.ciFailuresLinkedIssuesAndLearningsTogetherAreAllChargedToTheSharedOverhead`).
-   No new `@V`, record component of `PromptInputs` or planner change is needed. Guidance for the
+   No new record component of `PromptInputs` or planner change is needed. Guidance for the
    summary call goes in `summaryInstructions` instead, which `FindingPipeline` counts when it clamps
    the summary input.
    A section can ride both slots with a different request in each: the linked-issue section
@@ -254,12 +256,13 @@ Two patterns. Pick the first unless the section must sit somewhere else in the u
    `FindingPipeline.BatchPrompts.forBatch`, as `heuristicFailureModesFor` does. That addition is
    not in the planned overhead, so keep it a small fixed constant the token safety margin absorbs.
 2. **A new template variable (lockstep).** A section that needs its own `{{#if}}` block in
-   `PrReviewPrompts.USER` changes all of these in one diff: the prompt constant, the `@V`
-   parameter on `PrReviewer.reviewStream`, a `PromptInputs` component (and its convenience
-   constructors), `AiReviewService.reviewStream`, `ReviewPromptAssembler.assemble`,
+   `PrReviewPrompts.USER` changes all of these in one diff: the prompt constant (read as
+   `{{inputs.<component>}}`), a `PromptInputs` component (and its convenience constructors),
+   `ReviewPromptAssembler.assemble`,
    the other places that rebuild the record (`DiffBudgetPlanner.boundPreviousFindings`,
    `FindingPipeline.BatchPrompts.withDiff`), and the `sharedOverhead` sum in
-   `DiffBudgetPlanner.plan`. Add the variable to `AiServicePromptRenderingTest`.
+   `DiffBudgetPlanner.plan`. Add the variable to `AiServicePromptRenderingTest`, including the
+   byte-for-byte rendering check.
 
 The verifier does not see review-call context. If a finding raised from the new section must
 survive verification, attach the supporting material per finding through
