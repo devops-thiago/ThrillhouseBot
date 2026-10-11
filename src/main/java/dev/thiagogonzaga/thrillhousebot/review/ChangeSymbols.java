@@ -19,6 +19,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * The names a file's added lines declare — functions, methods, classes, types — for the summary
@@ -37,7 +38,10 @@ import java.util.Set;
  * struct}, {@code enum}, {@code trait}, {@code object}, {@code type} or {@code record}, past any
  * modifiers; and a C-family method signature (a visibility modifier, a return type, a name and an
  * opening parenthesis). A name this misses only leaves the row with less evidence; nothing reads
- * the list as complete.
+ * the list as complete. A name that is not the file's own is worse, so a line inside a multi-line
+ * string or comment, or in a documentation or data file, declares nothing. A row also names the
+ * existing functions its added lines sit inside ({@link #changedNames}), so behaviour added to a
+ * function that already existed is not mistaken for behaviour nobody wrote.
  */
 public final class ChangeSymbols {
 
@@ -125,20 +129,65 @@ public final class ChangeSymbols {
 
   /**
    * The names {@code patch}'s added lines declare, in order and without repeats; empty for a null
-   * or blank patch.
+   * or blank patch. A line inside a multi-line string or comment (a docstring's usage example, a
+   * text block, a heredoc) declares nothing: {@link LiteralTracker} follows them across the hunk's
+   * added and context lines.
    */
   public static List<String> declaredNames(String patch) {
     if (patch == null || patch.isBlank()) {
       return List.of();
     }
     var names = new LinkedHashSet<String>();
-    patch
-        .lines()
-        .filter(line -> line.startsWith("+") && !line.startsWith("+++"))
-        .map(line -> declaredName(line.substring(1)))
-        .filter(name -> !name.isEmpty())
-        .forEach(names::add);
+    var literals = new LiteralTracker();
+    for (var line : patch.lines().toList()) {
+      if (line.startsWith("@@")) {
+        // Hunks are disjoint: what lies between them is unknown, so each starts in code.
+        literals = new LiteralTracker();
+        continue;
+      }
+      var added = isAddedLine(line);
+      if (!added && !line.startsWith(" ")) {
+        continue;
+      }
+      var code = line.substring(1);
+      var inCode = literals.inCode();
+      literals.advance(code);
+      var name = added && inCode ? declaredName(code) : "";
+      if (!name.isEmpty()) {
+        names.add(name);
+      }
+    }
     return List.copyOf(names);
+  }
+
+  /**
+   * The names of the existing functions and types {@code patch} adds lines inside, read from the
+   * hunk headers ({@code @@ -10,6 +10,9 @@ def send(self, to):}), in order and without repeats, and
+   * leaving out a name the patch itself declares. Added lines inside a function that already
+   * existed declare nothing, so without these a retry added to an existing {@code send} would leave
+   * its row with no evidence of where the change sits.
+   */
+  public static List<String> changedNames(String patch) {
+    if (patch == null || patch.isBlank()) {
+      return List.of();
+    }
+    var names = new LinkedHashSet<String>();
+    var header = "";
+    for (var line : patch.lines().toList()) {
+      if (line.startsWith("@@")) {
+        var close = line.indexOf("@@", 2);
+        header = close < 0 ? "" : declaredName(line.substring(close + 2));
+      } else if (!header.isEmpty() && isAddedLine(line)) {
+        names.add(header);
+        header = "";
+      }
+    }
+    declaredNames(patch).forEach(names::remove);
+    return List.copyOf(names);
+  }
+
+  private static boolean isAddedLine(String line) {
+    return line.startsWith("+") && !line.startsWith("+++");
   }
 
   /** The name one added line declares, or {@code ""}. */
@@ -191,18 +240,109 @@ public final class ChangeSymbols {
 
   /**
    * The suffix an overview row carries for the file at {@code path} with {@code patch}: {@code " —
-   * declares: a, b, c"}, cut at {@value #MAX_NAMES} names, or {@code ""} when it declares none or
-   * is documentation or data ({@link #isProse}).
+   * declares: a, b"} for the names its added lines declare and {@code " — changes: c"} for the
+   * existing ones its added lines sit inside ({@link #changedNames}), each cut at {@value
+   * #MAX_NAMES} names, or {@code ""} when there are none or the file is documentation or data
+   * ({@link #isProse}).
    */
   public static String overviewSuffix(String path, String patch) {
     if (isProse(path)) {
       return "";
     }
-    var names = declaredNames(patch);
+    return namesPart(" — declares: ", declaredNames(patch))
+        + namesPart(" — changes: ", changedNames(patch));
+  }
+
+  private static String namesPart(String label, List<String> names) {
     if (names.isEmpty()) {
       return "";
     }
     var shown = names.subList(0, Math.min(MAX_NAMES, names.size()));
-    return " — declares: " + String.join(", ", shown) + (names.size() > MAX_NAMES ? ", …" : "");
+    return label + String.join(", ", shown) + (names.size() > MAX_NAMES ? ", …" : "");
+  }
+
+  /**
+   * Follows multi-line strings and comments line by line, so a code-shaped line inside one is not
+   * read as a declaration: a triple-quoted string (a Python docstring, a Kotlin raw string, a Java
+   * text block), a backtick string, a block comment and a shell heredoc. Single-line strings are
+   * skipped so a delimiter inside one opens nothing, and a line comment ends the line. What it
+   * cannot place, like an unclosed quote, it leans to reading as not code: a name it misses only
+   * leaves the row with less evidence, while a name read from a string invents one.
+   */
+  static final class LiteralTracker {
+
+    /**
+     * A heredoc opener ({@code <<EOF}, {@code <<-'END'}): an upper-case word straight after the
+     * operator, or a quoted one, so a shift ({@code x << y}) opens nothing.
+     */
+    private static final Pattern HEREDOC =
+        Pattern.compile("<<[-~]?(?:\\s*(['\"])([A-Z_][A-Z0-9_]*)\\1|([A-Z_][A-Z0-9_]*)(?!\\w))");
+
+    /** What closes the string or comment the text so far ends inside; {@code null} in code. */
+    private String closer;
+
+    /** The word that ends the heredoc being read; {@code null} outside one. */
+    private String heredocEnd;
+
+    boolean inCode() {
+      return closer == null && heredocEnd == null;
+    }
+
+    /** Moves past one line of the new file's text. */
+    void advance(String text) {
+      if (heredocEnd != null) {
+        if (text.strip().equals(heredocEnd)) {
+          heredocEnd = null;
+        }
+        return;
+      }
+      String opened = null;
+      var i = 0;
+      while (i < text.length()) {
+        if (closer != null) {
+          var end = text.indexOf(closer, i);
+          if (end < 0) {
+            break;
+          }
+          i = end + closer.length();
+          closer = null;
+          continue;
+        }
+        var c = text.charAt(i);
+        if (text.startsWith("\"\"\"", i) || text.startsWith("'''", i)) {
+          closer = text.substring(i, i + 3);
+          i += 3;
+        } else if (text.startsWith("/*", i)) {
+          closer = "*/";
+          i += 2;
+        } else if (text.startsWith("//", i) || c == '#') {
+          break;
+        } else if (c == '`') {
+          closer = "`";
+          i++;
+        } else if (c == '"' || c == '\'') {
+          i = endOfQuoted(text, i);
+        } else {
+          var heredoc = HEREDOC.matcher(text).region(i, text.length());
+          if (heredoc.lookingAt()) {
+            opened = heredoc.group(2) != null ? heredoc.group(2) : heredoc.group(3);
+            i = heredoc.end();
+          } else {
+            i++;
+          }
+        }
+      }
+      heredocEnd = opened;
+    }
+
+    /** The index past the single-line string opening at {@code start}, or the line's end. */
+    private static int endOfQuoted(String text, int start) {
+      var quote = text.charAt(start);
+      var i = start + 1;
+      while (i < text.length() && text.charAt(i) != quote) {
+        i += text.charAt(i) == '\\' ? 2 : 1;
+      }
+      return Math.min(i + 1, text.length());
+    }
   }
 }

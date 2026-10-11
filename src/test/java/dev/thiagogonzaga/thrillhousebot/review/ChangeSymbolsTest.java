@@ -93,6 +93,117 @@ class ChangeSymbolsTest {
   }
 
   @Test
+  void aDefInsideADocstringIsNotTheFilesDeclaration() {
+    // A usage example in a docstring is not a function the file declares.
+    var patch =
+        """
+        @@ -0,0 +1,8 @@
+        +def f():
+        +    \"\"\"Usage:
+        +    def usage_example():
+        +    \"\"\"
+        +    return '''inline''' + "def x(): # not a comment" + 'it\\'s'
+        +class Real:
+        +    pass
+        """;
+
+    assertEquals(List.of("f", "Real"), ChangeSymbols.declaredNames(patch));
+  }
+
+  @Test
+  void aDocstringOpenedOnAContextLineStillCoversTheAddedLines() {
+    var patch =
+        """
+        @@ -3,4 +3,6 @@ def f():
+             '''Usage:
+        +    class Example:
+        -    removed line '''
+             '''
+        +def g():
+        \\ No newline at end of file
+        """;
+
+    assertEquals(List.of("g"), ChangeSymbols.declaredNames(patch));
+  }
+
+  @Test
+  void blockCommentsTextBlocksBacktickStringsAndHeredocsDeclareNothing() {
+    var patch =
+        """
+        @@ -0,0 +1,20 @@
+        +/* Example:
+        +class InComment {}
+        + */
+        +public void after() {
+        +String s = \"\"\"
+        +    public void inTextBlock() {
+        +    \"\"\";
+        +const t = `
+        +function inTemplate() {}
+        +`;
+        +cat <<-'EOF' > generated.py
+        +class InHeredoc:
+        +\tEOF
+        +cat <<END
+        +def in_unquoted_heredoc():
+        +END
+        +x = 1 << shift  // class InLineComment
+        +y = 1 << 2
+        +def last():
+        """;
+
+    assertEquals(List.of("after", "last"), ChangeSymbols.declaredNames(patch));
+  }
+
+  @Test
+  void eachHunkStartsInCode() {
+    // The second hunk's opening line closes nothing: what lies between hunks is unknown.
+    var patch = "@@ -1 +1 @@\n+s = \"\"\"open\n@@ -9 +9 @@\n+def after_hunk():";
+
+    assertEquals(List.of("after_hunk"), ChangeSymbols.declaredNames(patch));
+  }
+
+  @Test
+  void anUnclosedQuoteEndsWithItsLine() {
+    var patch = "+impl<'a> Foo for Bar {\n+    pub fn run(&self) {";
+
+    assertEquals(List.of("run"), ChangeSymbols.declaredNames(patch));
+  }
+
+  @Test
+  void addedLinesInsideAnExistingFunctionNameThatFunction() {
+    // A retry added inside an existing send declares nothing new; the hunk header names send.
+    var patch =
+        """
+        @@ -10,6 +10,9 @@ class Mailer:
+             def __init__(self):
+                 self.sent = 0
+        @@ -20,4 +20,8 @@     def send(self, to, subject, body):
+        +        for attempt in range(3):
+        +            if self._deliver(to, subject, body):
+        +                return True
+        @@ -40,3 +44,4 @@ def helper():
+        -        old()
+        @@ -50,3 +55,5 @@ public void notify(Booking b) {
+        +    audit(b);
+        +def helper2():
+        @@ -60,3 +66,4 @@
+        +    plain();
+        @@ -70,3 +77,4 @@ def helper2():
+        +    more()
+        @@ broken header with no close
+        +    x()
+        """;
+
+    assertEquals(List.of("send", "notify"), ChangeSymbols.changedNames(patch));
+    assertEquals(List.of(), ChangeSymbols.changedNames(null));
+    assertEquals(List.of(), ChangeSymbols.changedNames(" "));
+    assertEquals(
+        " — declares: helper2 — changes: send, notify",
+        ChangeSymbols.overviewSuffix("mailer.py", patch));
+  }
+
+  @Test
   void documentationAndDataFilesDeclareNothing() {
     // A README's example code or a YAML key is not the file's own declaration.
     var example = "+```python\n+def example():\n+```\n+class Foo is described above.";

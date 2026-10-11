@@ -36,6 +36,7 @@ public record EvalCase(String name, String diff, Spec spec) {
   static final String KIND_GENERATOR = "generator";
   static final String KIND_SUMMARY = "summary";
   static final String CLAIM_GAPPED = "claim-gapped";
+  static final String CLAIM_NOT_GAPPED = "claim-not-gapped";
   static final String MUST_FIND = "must-find";
   static final String MUST_NOT_FIND = "must-not-find";
 
@@ -119,7 +120,8 @@ public record EvalCase(String name, String diff, Spec spec) {
   /**
    * A summary-call case (#920): the PR text, the changed-files overview and the verified findings
    * go to the summary prompt, and the description claim the {@code keywords} name must come back as
-   * a description gap and nowhere it would read as implemented.
+   * a description gap and nowhere it would read as implemented ({@code claim-gapped}), or, for a
+   * claim the evidence can carry, must not come back as a gap ({@code claim-not-gapped}).
    */
   boolean isSummaryCase() {
     return KIND_SUMMARY.equals(spec.kind());

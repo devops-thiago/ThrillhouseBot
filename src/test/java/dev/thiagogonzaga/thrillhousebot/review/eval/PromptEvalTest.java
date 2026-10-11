@@ -244,7 +244,21 @@ class PromptEvalTest {
     if (evalCase.isVerifierCase()) {
       return evalCase.spec().expectedVerdicts().contains(outcome);
     }
-    return outcome.equals(evalCase.spec().expectation());
+    return evalCase.isSummaryCase()
+        ? summaryOutcomeMatches(evalCase.spec().expectation(), outcome)
+        : outcome.equals(evalCase.spec().expectation());
+  }
+
+  /**
+   * Whether a summary sample's outcome meets the case's expectation: "claim-not-gapped" is met by
+   * any answer that did not report the claim as a gap, stated or not, and a failed or unparseable
+   * call meets nothing.
+   */
+  static boolean summaryOutcomeMatches(String expectation, String outcome) {
+    if (EvalCase.CLAIM_NOT_GAPPED.equals(expectation)) {
+      return "claim-implemented".equals(outcome) || "claim-dropped".equals(outcome);
+    }
+    return outcome.equals(expectation);
   }
 
   private static String expectationOf(EvalCase evalCase) {

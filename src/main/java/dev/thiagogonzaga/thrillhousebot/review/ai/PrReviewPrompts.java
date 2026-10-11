@@ -1011,17 +1011,22 @@ public final class PrReviewPrompts {
               scope is narrower than the stated PR scope is wrong: few or no findings means the
               reviewed code looked fine, never that the change was small or touched one file.
             - Evidence and claims: what the change DOES comes from the changed-file list (each
-              row's path, counts and the names its added lines declare) and the findings. The PR
+              row's path, counts, the names its added lines declare and the existing functions
+              its added lines change) and the findings. The PR
               title and description are the author's CLAIMS about it, to be checked against that
-              evidence, never a source of facts. A behaviour the description claims that no file,
-              declared name or finding shows (a reminder, a retry with backoff, an audit trail, a
-              per-day limit, a document that is not in the list) is not described as implemented in
+              evidence, never a source of facts. A behaviour the description claims that no file, declared or changed name or
+              finding shows (a reminder, a retry with backoff, an audit trail, a per-day limit, a
+              document that is not in the list) is not described as implemented in
               overall_assessment, pr_purpose, file_summaries or walkthrough_diagram; it goes in
               description_gaps,
               stated as unconfirmed ("The description says reminder e-mails are sent 15 minutes
               before a booking; no changed file declares anything that sends them"). A file's name
               alone shows its area, not a specific behaviour: mailer.py shows mail is sent, not
-              which mail or when.
+              which mail or when. Lines added inside a function that already existed declare
+              nothing new; the row names that function instead ("changes: send"). A claim about
+              what such a changed function now does (a retry added to send) may be implemented
+              there, so it is not a description gap: report it as the description's claim
+              ("the description says send now retries"), never as fact and never as missing.
 
             The "summary" object must include:
             - total_findings, critical, high, medium, low: counts of the findings provided below
@@ -1059,7 +1064,7 @@ public final class PrReviewPrompts {
               worse than a rough line. You do not see the diff — and you are not being asked to
               describe it hunk by hunk. Write each line from the material you DO have: the
               changed-file list below (its path, change status, +added/-deleted counts, the names
-              its added lines declare and the directory breakdown), the findings already computed
+              its added lines declare or change and the directory breakdown), the findings already computed
               for that path, and the PR title and description where that evidence bears them out.
               A one-line statement of that file's role in this change, at that
               level of detail, is what is wanted and is NOT invention. What would be invention is
@@ -1173,7 +1178,7 @@ public final class PrReviewPrompts {
             populate summary.walkthrough_diagram with a single Mermaid diagram of the AFFECTED
             control flow:
             - You do not see the diff. Build the diagram from the material you do have — the
-              changed-file list with the names each file declares, and the findings — and name only
+              changed-file list with the names each file declares or changes, and the findings — and name only
               components and calls that material shows; never invent a step to complete the
               picture, and never draw a step only the PR description claims (a reminder, a retry
               loop, an audit log): an unconfirmed claim is a description gap, not a node.

@@ -107,7 +107,9 @@ class EvalCorpusTest {
       if (!c.isSummaryCase()) {
         continue;
       }
-      assertEquals(EvalCase.CLAIM_GAPPED, c.spec().expectation(), c.name() + ": expectation");
+      assertTrue(
+          Set.of(EvalCase.CLAIM_GAPPED, EvalCase.CLAIM_NOT_GAPPED).contains(c.spec().expectation()),
+          c.name() + ": expectation");
       assertNotNull(c.spec().prDescription(), c.name() + ": the description holding the claim");
       assertNotNull(c.spec().keywords(), c.name() + ": keywords naming the claim");
       assertFalse(c.spec().keywords().isEmpty(), c.name() + ": keywords must not be empty");

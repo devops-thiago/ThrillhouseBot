@@ -57,4 +57,15 @@ class PromptEvalGradingTest {
             KEYWORDS, "Reminders are stated in the PR body; no changed file sends them."));
     assertFalse(PromptEvalTest.statesAsImplemented(KEYWORDS, "Adds a booking service."));
   }
+
+  @Test
+  void aClaimTheEvidenceCanCarryPassesUnlessItIsGapped() {
+    var notGapped = EvalCase.CLAIM_NOT_GAPPED;
+    assertTrue(PromptEvalTest.summaryOutcomeMatches(notGapped, "claim-implemented"));
+    assertTrue(PromptEvalTest.summaryOutcomeMatches(notGapped, "claim-dropped"));
+    assertFalse(PromptEvalTest.summaryOutcomeMatches(notGapped, EvalCase.CLAIM_GAPPED));
+    assertFalse(PromptEvalTest.summaryOutcomeMatches(notGapped, PromptEvalTest.CALL_FAILED));
+    assertTrue(PromptEvalTest.summaryOutcomeMatches(EvalCase.CLAIM_GAPPED, EvalCase.CLAIM_GAPPED));
+    assertFalse(PromptEvalTest.summaryOutcomeMatches(EvalCase.CLAIM_GAPPED, "claim-dropped"));
+  }
 }

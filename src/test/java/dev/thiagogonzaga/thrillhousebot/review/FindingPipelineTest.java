@@ -1312,6 +1312,47 @@ class FindingPipelineTest {
   }
 
   @Test
+  void onlyTheSummaryCallSeesTheNamesARowDeclaresAndChanges() {
+    // #920: the names are the summary call's evidence. The review call's inputs are built before
+    // and apart from the changed-files overview, so they carry none of it.
+    var session = ReviewSession.create("owner/repo", 1, "Mailer retries", "sha");
+    var files =
+        List.of(
+            new FileDiff(
+                "a.java",
+                "modified",
+                2,
+                0,
+                2,
+                "@@ -4,2 +4,4 @@ public void send(String to) {\n+    retry();\n+public void retry() {"));
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var reviewCaptor = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    when(aiReviewService.reviewBatch(eq(session), reviewCaptor.capture(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var summaryCaptor = ArgumentCaptor.forClass(AiReviewService.SummaryInputs.class);
+    when(aiReviewService.summarize(eq(session), summaryCaptor.capture()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    pipeline.run(
+        session,
+        template,
+        reviewContext(files, files, null),
+        multiBatchPlan(),
+        new DiffLineResolver(Map.of()),
+        ReviewEvidence.NONE);
+
+    var overview = summaryCaptor.getValue().changedFiles();
+    assertTrue(
+        overview.contains("a.java (modified, +2 -0) — declares: retry — changes: send\n"),
+        overview);
+    for (var inputs : reviewCaptor.getAllValues()) {
+      assertFalse(inputs.toString().contains("declares:"), inputs.toString());
+      assertFalse(inputs.toString().contains("changes: send"), inputs.toString());
+    }
+    assertEquals(2, reviewCaptor.getAllValues().size());
+  }
+
+  @Test
   void budgetedSingleBatchSendsThePlannedTextNotTheRawDiff() {
     var session = ReviewSession.create("owner/repo", 1, "One big file", "sha");
     var ctx = reviewContext();

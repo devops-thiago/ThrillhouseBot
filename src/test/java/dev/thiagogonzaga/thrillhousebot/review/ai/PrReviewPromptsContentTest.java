@@ -691,6 +691,29 @@ class PrReviewPromptsContentTest {
   }
 
   @Test
+  void summaryPromptDoesNotGapAClaimAboutAChangedExistingFunction() {
+    // Lines added inside an existing function declare nothing, so the declared names alone would
+    // turn behaviour implemented there into a false description gap (#1063 review).
+    String sys = PrReviewPrompts.SUMMARY_SYSTEM;
+    assertContains(
+        sys,
+        "the existing functions\n  its added lines change",
+        "the changed functions are evidence like the declared names");
+    assertContains(
+        sys,
+        "the row names that function instead (\"changes: send\")",
+        "the prompt names the row's changes suffix");
+    assertContains(
+        sys,
+        "there, so it is not a description gap",
+        "a claim about a changed function is not a gap");
+    assertContains(
+        sys,
+        "never as fact and never as missing",
+        "a claim about a changed function is reported as the description's claim");
+  }
+
+  @Test
   void summaryPromptMakesEveryGapCiteTheDescriptionAndQuoteItExactly() {
     String sys = PrReviewPrompts.SUMMARY_SYSTEM;
     assertContains(
