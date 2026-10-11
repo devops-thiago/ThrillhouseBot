@@ -80,6 +80,27 @@ public final class PromptTemplateEscaper {
     return fenceWith(WIDEST_FENCE_HEX, " ");
   }
 
+  /**
+   * The content {@link #fence} wrapped, for code that checks model output against the text a call
+   * was given rather than sending it anywhere. Text not shaped as one fenced block (no fence line
+   * first and last, or two different ones) is returned as it is; {@code null} reads as {@code ""}.
+   */
+  public static String unfence(String fenced) {
+    if (fenced == null) {
+      return "";
+    }
+    var firstBreak = fenced.indexOf('\n');
+    var lastBreak = fenced.lastIndexOf('\n');
+    if (firstBreak == lastBreak || !fenced.startsWith(FENCE_PREFIX)) {
+      return fenced;
+    }
+    var opening = fenced.substring(0, firstBreak);
+    if (!opening.endsWith(FENCE_SUFFIX) || !fenced.substring(lastBreak + 1).equals(opening)) {
+      return fenced;
+    }
+    return fenced.substring(firstBreak + 1, lastBreak);
+  }
+
   private static String fenceWith(String token, String content) {
     String fenceLine = FENCE_PREFIX + token + FENCE_SUFFIX;
     return fenceLine + "\n" + content + "\n" + fenceLine;

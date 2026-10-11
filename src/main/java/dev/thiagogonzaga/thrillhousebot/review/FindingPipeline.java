@@ -630,12 +630,17 @@ public class FindingPipeline {
 
   /**
    * The description gaps carried into this round: the ones the bot's previous summary comment
-   * listed, checked against the issues this round's prompt links (#923).
+   * listed, checked against the issues this round's prompt links (#923), screened against the PR
+   * title and description the summary call reads (#946), and held on an unchanged head (#964).
    */
   private DescriptionGapCarryover.Carry carryFor(
       ReviewContextLoader.ReviewContext ctx, AiReviewService.PromptInputs promptInputs) {
     return DescriptionGapCarryover.of(
-        ctx.conversationComments(), botIdentity, promptInputs.linkedIssues());
+        ctx.conversationComments(),
+        botIdentity,
+        promptInputs.linkedIssues(),
+        PromptTemplateEscaper.unfence(promptInputs.prContext()),
+        ctx.previousRoundHeadUnchanged());
   }
 
   /**

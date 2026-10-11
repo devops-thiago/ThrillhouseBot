@@ -3679,6 +3679,87 @@ class FindingPipelineTest {
     assertNull(result.summary().prPurpose());
   }
 
+  @Test
+  void onAnUnchangedHeadTheCarriedGapStaysAndAMisquotedGapIsDropped() {
+    // #964: ThrillhouseBot-test#216 dropped an open criterion on a /review of the same head because
+    // the code-blind call named it addressed. #946: a gap quoting words the description does not
+    // hold is dropped, checked against the PR text the call read.
+    var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var misquote = "The PR description claims 'the README moves to docs/RUST-VEV10.md unchanged'.";
+    var answer =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            "ok",
+            "p",
+            List.of(misquote),
+            List.of(),
+            List.of(),
+            null,
+            List.of("G1: the test file covers it"));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), answer));
+    var listed = contextAfterASummaryListing(CARRIED_GAP);
+    var sameHead =
+        new ReviewContextLoader.ReviewContext(
+            listed.files(),
+            listed.diff(),
+            listed.baseComparison(),
+            listed.omittedFiles(),
+            listed.priorReviews(),
+            listed.priorAiResponseJsons(),
+            listed.priorAiResponses(),
+            listed.isFirstVisibleReview(),
+            listed.hasContext(),
+            listed.previousAiResponseJson(),
+            listed.inlineComments(),
+            listed.previousFindings(),
+            listed.instructions(),
+            listed.pathInstructions(),
+            listed.repoLabels(),
+            listed.projectStack(),
+            listed.linkedIssuesContext(),
+            listed.configKeyContext(),
+            listed.patchCoverage(),
+            listed.reviewableFiles(),
+            listed.lineResolverSupplier(),
+            listed.prTotals(),
+            listed.conversationComments(),
+            listed.unmatchedIgnoreGlobs(),
+            listed.carried(),
+            listed.coverageArtifactRefusal(),
+            true);
+    var inputs =
+        new AiReviewService.PromptInputs(
+            "d",
+            PromptTemplateEscaper.fence(
+                PromptSections.prContext("Bookings", "The README moves to `docs/RUST-V10.md`.")),
+            "base",
+            "stack",
+            "tests",
+            "",
+            "",
+            "labels",
+            null,
+            LINKED_113);
+
+    var result =
+        pipeline.run(
+            session,
+            inputs,
+            sameHead,
+            multiBatchPlan(),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    assertEquals(List.of(CARRIED_GAP), result.summary().descriptionGaps());
+  }
+
   /** #944: a prior round on the same head whose summary had an overview and a file summary. */
   private static ReviewContextLoader.ReviewContext contextAfterAnOverviewOnTheSameHead() {
     var prior =
