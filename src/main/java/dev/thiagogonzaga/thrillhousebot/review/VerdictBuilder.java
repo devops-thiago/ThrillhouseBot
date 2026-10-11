@@ -244,8 +244,9 @@ public class VerdictBuilder {
     effectiveStatuses =
         FollowUpAnalyzer.withoutPhantomUnresolved(ctx.previousFindingsList(), effectiveStatuses);
     // A double-check item that a later round, or this one, raised again at no lower severity is
-    // one defect with its later copy, which is the one counted (#951): the earlier copy leaves
-    // the statuses here and the backstop's holds below.
+    // one defect with its later copy, which is the one counted (#951). An earlier round's
+    // replacement already carries it, so its status and hold leave; this round's own replacement
+    // carries it below.
     // An item this round's own finding replaced was still open coming in, so it keeps a "still
     // present" status, carried by that finding, and the finding is listed as open since an
     // earlier review rather than as new (#969).
