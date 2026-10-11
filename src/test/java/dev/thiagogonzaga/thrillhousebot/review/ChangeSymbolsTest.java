@@ -67,6 +67,7 @@ class ChangeSymbolsTest {
         "public Foo(int x) {|''",
         "private int x = compute(y);|''",
         "public int count;|''",
+        "public void a.b(int x) {|''",
         "return value;|''",
         "func (broken {|''"
       })
