@@ -1538,7 +1538,7 @@ public class ReviewPublisher {
           reviewThreadService.threadsByRootComment(auth, req.owner(), req.repo(), req.prNumber());
       var resolved = 0;
       for (var status : addressed) {
-        var rootCommentId = rootByFinding.get(status.id());
+        var rootCommentId = threadRoot(status, rootByFinding);
         ReviewThreadService.ThreadRef thread =
             rootCommentId != null ? threads.get(rootCommentId) : null;
         if (thread == null || thread.resolved()) {
@@ -1559,6 +1559,18 @@ public class ReviewPublisher {
     } catch (RuntimeException e) {
       Log.warn("Failed to resolve addressed review threads (continuing)", e);
     }
+  }
+
+  /**
+   * The root comment of {@code status}'s thread, or {@code null}. An earlier round's status names
+   * no finding by id: it has only the thread the backstop located by the finding's marker and own
+   * content, when it carries one (#958).
+   */
+  private static Long threadRoot(
+      ReviewResult.PreviousFindingStatus status, Map<Integer, Long> rootByFinding) {
+    return status.fromEarlierRound()
+        ? status.earlierRound().threadRootId()
+        : rootByFinding.get(status.id());
   }
 
   /**
