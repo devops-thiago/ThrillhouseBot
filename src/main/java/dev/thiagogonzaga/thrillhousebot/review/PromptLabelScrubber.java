@@ -334,15 +334,14 @@ public final class PromptLabelScrubber {
   /**
    * "BedReporter... rather, grep across the added files confirms …": a sentence the model broke off
    * at an ellipsis and restarted (#964). The broken-off start goes with the marker, and the restart
-   * opens the sentence.
+   * opens the sentence; a list or quote marker before it stays. Only a start of one token — a name
+   * the model began to cite, possibly dotted — reads as broken off: "It fails fast... rather, it
+   * surfaces the error" is a whole clause, and "rather," there is the connective, so it stays.
    */
   private static final Pattern RESTARTED_SENTENCE =
       Pattern.compile(
-          "(?<![^.!?\\n])([ \\t]*)([^.!?\\n… \\t](?:[^.!?\\n…]|\\.(?=\\w)){0,59})(?:\\.\\.\\.|…)"
-              + "[ \\t]+(?:rather|wait|actually),[ \\t]+(\\p{L})");
-
-  /** A list or quote marker opening a line, which stays when the sentence after it goes. */
-  private static final Pattern LINE_MARKER = Pattern.compile("[-*+>][ \\t]+");
+          "(?<![^.!?\\n])([ \\t]*(?:[-*+>][ \\t]+)?)[^\\s.!?…](?:[^\\s.!?…]|\\.(?=\\w)){0,59}"
+              + "(?:\\.\\.\\.|…)[ \\t]+(?:rather|wait|actually),[ \\t]+(\\p{L})");
 
   /**
    * "hosts the two confirmed findings": the verifier's verdict name for a posted finding (#964).
@@ -642,12 +641,7 @@ public final class PromptLabelScrubber {
     s =
         RESTARTED_SENTENCE
             .matcher(s)
-            .replaceAll(
-                m -> {
-                  var marker = LINE_MARKER.matcher(m.group(2));
-                  var kept = marker.lookingAt() ? marker.group() : "";
-                  return Matcher.quoteReplacement(m.group(1) + kept + capitalize(m.group(3)));
-                });
+            .replaceAll(m -> Matcher.quoteReplacement(m.group(1) + capitalize(m.group(2))));
     s = CONFIRMED_FINDINGS.matcher(s).replaceAll(m -> capitalizeLike(m.group(1), m.group(2)));
     s = removeNoFindingsAsides(s);
     return FINDINGS_IN_BATCH.matcher(s).replaceAll("$1");

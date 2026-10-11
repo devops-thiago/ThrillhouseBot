@@ -1008,7 +1008,7 @@ class PromptLabelScrubberTest {
           The binding is on line 24 - Wait, it is on line 25. | The binding is on line 24 - it is on line 25.
           (line 24 – wait, line 25) holds the binding. | (line 25) holds the binding.
           BedReporter… rather, grep confirms it. | Grep confirms it.
-          It fails. The reader in Main... actually, the handler reads it. | It fails. The handler reads it.
+          It fails. Main... actually, the handler reads it. | It fails. The handler reads it.
           Done.\\nBedReporter... wait, grep confirms it. | Done.\\nGrep confirms it.
           main.tsx mounts the app and hosts the two confirmed findings | main.tsx mounts the app and hosts the two findings
           Confirmed findings: two. | Findings: two.
@@ -1074,6 +1074,8 @@ class PromptLabelScrubberTest {
         "The worker blocks — waiting, not spinning — until notified.",
         "The values run 1...10, rather than 0...9.",
         "It reads the header... and then the body.",
+        "It fails fast... rather, it surfaces the error to the caller.",
+        "The retry helps... actually, it makes things worse.",
         "(line 24 — waits for the lock)"
       })
   void scratchTextNearMissesAreLeftAlone(String text) {
