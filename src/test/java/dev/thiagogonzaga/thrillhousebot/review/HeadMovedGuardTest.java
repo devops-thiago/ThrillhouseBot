@@ -143,4 +143,42 @@ class HeadMovedGuardTest {
 
     assertEquals(List.of(carriedA, own), carry);
   }
+
+  /**
+   * #959: the backstop holds a finding an older round raised under the id that round gave it, here
+   * 3 — the position of a carried finding in the newest round's id space. It names that older
+   * finding, not the carried one, so it carries neither; the carried finding the model reported
+   * open under its own id is still carried.
+   */
+  @Test
+  void findingsToCarryReadsABackstopHoldByItsFindingNotItsId() {
+    var posted = new ReviewResponse.Finding("low", "low", "a.java", 1, "Posted", "d", "x", "y");
+    var carriedA =
+        new ReviewResponse.Finding("high", "high", "b.java", 2, "Carried A", "d", "x", "y");
+    var carriedB =
+        new ReviewResponse.Finding("high", "high", "c.java", 3, "Carried B", "d", "x", "y");
+    var olderRound =
+        new ReviewResponse.Finding("critical", "high", "e.java", 9, "Older", "d", "x", "y");
+    var merged = new ReviewResponse(List.of(posted, carriedA, carriedB), List.of(), null);
+    var ctx =
+        context(
+            List.of(merged),
+            new SupersededFindingsCarryover.Carried(
+                "abcdefgh", "d4389d2aa", List.of(carriedA, carriedB)));
+    var verdict =
+        result(
+            List.of(
+                new ReviewResult.PreviousFindingStatus(2, "unresolved", "still open"),
+                new ReviewResult.PreviousFindingStatus(
+                    3,
+                    "unresolved",
+                    "held by the backstop",
+                    new ReviewResult.EarlierRound(olderRound, null))));
+
+    var carry =
+        HeadMovedGuard.findingsToCarry(
+            ctx, new ReviewResponse(List.of(), List.of(), null), verdict);
+
+    assertEquals(List.of(carriedA), carry);
+  }
 }
