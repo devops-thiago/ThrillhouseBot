@@ -619,7 +619,9 @@ class SeverityCalibratorTest {
             "java/Dockerfile",
             11,
             "External image referenced by a mutable tag, no digest",
-            "The COPY --from source is not pinned to a digest, so the build inputs can change.",
+            "The COPY --from source image is not pinned to a digest, so the build inputs can"
+                + " change: busybox, grpc-health-probe, nginx-conf, permit-healthcheck and alpine"
+                + " all carry a tag.",
             null,
             null);
 
@@ -682,6 +684,33 @@ class SeverityCalibratorTest {
 
     var calibrated =
         SeverityCalibrator.calibrate(response(raw), (file, line) -> anchoredLine).findings();
+
+    assertEquals(1, calibrated.size());
+    assertGrade(calibrated.get(0), "low", "medium");
+  }
+
+  /**
+   * A finding about another reference whose anchor landed on the COPY --from line names no image of
+   * that line, so it is kept: the drop is for the image the finding is about.
+   */
+  @Test
+  void anUnpinnedBaseImageFindingAnchoredOnTheCopyLineIsKept() {
+    var misanchored =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            "Dockerfile",
+            2,
+            "Base image is unpinned",
+            "FROM node:20-alpine is an unpinned base image, so the build is not reproducible.",
+            null,
+            null);
+
+    var calibrated =
+        SeverityCalibrator.calibrate(
+                response(misanchored),
+                (file, line) -> "COPY --from=busybox:1.36 /bin/busybox /bin/busybox")
+            .findings();
 
     assertEquals(1, calibrated.size());
     assertGrade(calibrated.get(0), "low", "medium");

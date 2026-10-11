@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.function.BiFunction;
 import java.util.regex.Pattern;
 
@@ -476,9 +477,11 @@ public final class SeverityCalibrator {
   /**
    * Whether the line the finding is anchored on — the diff's text at its file and line, else its
    * own {@code suggestion_old} — is a {@code COPY --from=} instruction whose source is an external
-   * image named by an explicit version or a digest. Read token by token rather than by one
-   * expression, so the options a {@code COPY} can carry before {@code --from=} cost nothing to
-   * skip.
+   * image named by an explicit version or a digest, and the finding's own words name that image.
+   * The second half keeps a finding about another reference whose anchor merely landed on the
+   * {@code COPY} line (an unpinned {@code FROM} one line up) from being dropped for an image it
+   * never mentions. Read token by token rather than by one expression, so the options a {@code
+   * COPY} can carry before {@code --from=} cost nothing to skip.
    */
   private static boolean anchoredOnVersionedExternalSource(
       ReviewResponse.Finding finding, BiFunction<String, Integer, String> lineText) {
@@ -492,12 +495,32 @@ public final class SeverityCalibrator {
     if (tokens.length < 2 || !COPY_INSTRUCTION.equals(tokens[0].toLowerCase(Locale.ROOT))) {
       return false;
     }
+    String claim =
+        (Objects.toString(finding.title(), "") + "\n" + Objects.toString(finding.description(), ""))
+            .toLowerCase(Locale.ROOT);
     return Arrays.stream(tokens)
         .skip(1)
         .filter(token -> token.toLowerCase(Locale.ROOT).startsWith(FROM_OPTION))
         .findFirst()
-        .map(token -> isVersionedExternalImage(token.substring(FROM_OPTION.length())))
+        .map(token -> token.substring(FROM_OPTION.length()))
+        .filter(SeverityCalibrator::isVersionedExternalImage)
+        .map(source -> claim.contains(imageName(source)))
         .orElse(false);
+  }
+
+  /**
+   * The image's own name in a reference, lower-cased: the last path segment without its tag or
+   * digest ({@code ghcr.io/acme/nginx-conf:1.2.0} is {@code nginx-conf}).
+   */
+  private static String imageName(String source) {
+    String reference = source.replace("\"", "").replace("'", "").toLowerCase(Locale.ROOT);
+    String name = reference.substring(reference.lastIndexOf('/') + 1);
+    int end = name.length();
+    for (char mark : new char[] {':', '@'}) {
+      int at = name.indexOf(mark);
+      end = at >= 0 ? Math.min(end, at) : end;
+    }
+    return name.substring(0, end);
   }
 
   /**

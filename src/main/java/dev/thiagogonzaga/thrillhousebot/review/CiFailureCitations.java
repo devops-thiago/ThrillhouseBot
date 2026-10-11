@@ -74,6 +74,9 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
           "does not fail",
           "doesnt fail",
           "dont fail",
+          "wont fail",
+          "isnt failing",
+          "arent failing",
           "never fails",
           "no failure",
           "unrelated to",
@@ -89,6 +92,9 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   private static final List<String> QUOTES = List.of("\"\"", "``", "''", "\u201C\u201D");
 
   private static final Pattern NOT_A_WORD = Pattern.compile("[^a-z0-9]+");
+
+  /** The apostrophes a contraction is written with, dropped so "doesn't" reads as "doesnt". */
+  private static final Pattern APOSTROPHE = Pattern.compile("['\u2019]");
 
   /** Each failing check: its name as rendered, and as the padded words a finding is matched on. */
   private record Check(String name, String words) {}
@@ -173,13 +179,29 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   /** Whether the finding names this check quoted, or beside a word that makes it a check. */
   private static boolean namesAsACheck(Check check, String raw, String text) {
     String name = check.name().toLowerCase(Locale.ROOT);
-    String core = check.words().strip();
     return QUOTES.stream().anyMatch(pair -> raw.contains(pair.charAt(0) + name + pair.charAt(1)))
-        || CHECK_WORDS.stream()
-            .anyMatch(
-                word ->
-                    text.contains(" " + core + " " + word + " ")
-                        || text.contains(" " + word + " " + core + " "));
+        || besideACheckWord(check.words().strip(), text)
+        || namesEveryWordOfACompoundName(check.words().strip(), text);
+  }
+
+  private static boolean besideACheckWord(String core, String text) {
+    return CHECK_WORDS.stream()
+        .anyMatch(
+            word ->
+                text.contains(" " + core + " " + word + " ")
+                    || text.contains(" " + word + " " + core + " "));
+  }
+
+  /**
+   * A name of several words ({@code lint / eslint}) said in the finding's own order with other
+   * words between ("the lint and eslint checks fail"): every word of the name is in the text, and
+   * its last word stands beside a check word.
+   */
+  private static boolean namesEveryWordOfACompoundName(String core, String text) {
+    String[] words = core.split(" ");
+    return words.length > 1
+        && Arrays.stream(words).allMatch(word -> text.contains(" " + word + " "))
+        && besideACheckWord(words[words.length - 1], text);
   }
 
   private static boolean states(String normalized, List<String> words) {
@@ -192,7 +214,8 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
 
   /** Lower-case words separated by single spaces and padded, so a phrase matches whole words. */
   private static String normalized(String text) {
-    String words = NOT_A_WORD.matcher(text.toLowerCase(Locale.ROOT)).replaceAll(" ").strip();
+    String contracted = APOSTROPHE.matcher(text.toLowerCase(Locale.ROOT)).replaceAll("");
+    String words = NOT_A_WORD.matcher(contracted).replaceAll(" ").strip();
     return words.isEmpty() ? "" : " " + words + " ";
   }
 }

@@ -123,6 +123,8 @@ class CiFailureCitationsTest {
             described(
                 "The test check does not fail on this commit; the failure comes from the guard.")));
     assertFalse(citations.cites(described("This is unrelated to the failing test check.")));
+    assertFalse(citations.cites(described("The test check doesn't fail on this commit.")));
+    assertFalse(citations.cites(described("The test check won\u2019t fail for this line.")));
   }
 
   @Test
@@ -134,6 +136,8 @@ class CiFailureCitationsTest {
 
     assertTrue(citations.cites(described("The eslint step of the lint / eslint check failed.")));
     assertTrue(citations.cites(described("The build (windows-latest) check fails in CI.")));
+    assertTrue(citations.cites(described("The lint and eslint checks fail in CI on this line.")));
+    assertFalse(citations.cites(described("Lint and eslint both fail on this line.")));
   }
 
   @Test
