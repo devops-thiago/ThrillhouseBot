@@ -67,11 +67,25 @@ class SummarySurfaceDeduplicatorTest {
   @Test
   void collapsesThatSameGapOntoTheFindingWhenItPostsInline() {
     // Control for the test above: the pair matches, so demotion is the only thing that changed.
+    var inline = finding(DISPATCH_TITLE);
     var surfaces =
-        SummarySurfaceDeduplicator.collapse(
-            List.of(DISPATCH_GAP), Map.of(), List.of(finding(DISPATCH_TITLE)));
+        SummarySurfaceDeduplicator.collapse(List.of(DISPATCH_GAP), Map.of(), List.of(inline));
 
     assertEquals(List.of(), surfaces.descriptionGaps());
+    // #964: the section names the finding the gap collapsed onto.
+    assertEquals(List.of(inline), surfaces.gapFindings());
+  }
+
+  @Test
+  void aGapThatRestatesAnEarlierGapNamesNoFinding() {
+    var restated = DISPATCH_GAP + " Again.";
+
+    var surfaces =
+        SummarySurfaceDeduplicator.collapse(
+            List.of(DISPATCH_GAP, restated), Map.of(), List.of(finding("Unrelated port setting")));
+
+    assertEquals(List.of(DISPATCH_GAP), surfaces.descriptionGaps());
+    assertEquals(List.of(), surfaces.gapFindings());
   }
 
   @Test
