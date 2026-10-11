@@ -96,9 +96,8 @@ final class DefectIdentity {
    */
   private static final List<Pattern> SYMBOL_SHAPES =
       List.of(
-          Pattern.compile(
-              "\\b([A-Za-z_][A-Za-z0-9_]{1,63}(?:\\.[A-Za-z_][A-Za-z0-9_]{1,63}){1,4})"),
-          Pattern.compile("\\b([A-Za-z_][A-Za-z0-9_]{1,63})\\(\\)"),
+          Pattern.compile("\\b([A-Za-z_]\\w{1,63}(?:\\.[A-Za-z_]\\w{1,63}){1,4})"),
+          Pattern.compile("\\b([A-Za-z_]\\w{1,63})\\(\\)"),
           Pattern.compile("\\b([A-Z][a-z0-9]{1,63}(?:[A-Z][a-z0-9]{0,63}){1,16})\\b"));
 
   /**
@@ -247,7 +246,7 @@ final class DefectIdentity {
   private static boolean citesLine(String text, String fileName, int line) {
     var citation =
         Pattern.compile(
-                "(?<![A-Za-z0-9_])"
+                "(?<!\\w)"
                     + Pattern.quote(fileName)
                     + ":(\\d{1,6})(?:\\s{0,2}[-–]\\s{0,2}(\\d{1,6}))?",
                 Pattern.CASE_INSENSITIVE)
