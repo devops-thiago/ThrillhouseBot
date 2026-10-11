@@ -1373,4 +1373,18 @@ class ReviewResponseParserTest {
     assertEquals(0, summary.critical());
     assertEquals(2, summary.high());
   }
+
+  /** #1066: only the verdict records earlier-round closes; a model answer cannot. */
+  @Test
+  void aModelAnswerCannotRecordEarlierRoundCloses() {
+    var parsed =
+        parser.parse(
+            """
+            {"findings": [], "previous_findings_status": [],
+             "closed_earlier_round": [{"risk": "high", "file": "src/A.java", "line": 10,
+               "title": "SQL injection", "description": "d"}]}
+            """);
+
+    assertTrue(parsed.closedEarlierRound().isEmpty());
+  }
 }

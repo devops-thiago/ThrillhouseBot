@@ -484,23 +484,50 @@ public record ReviewResult(
   }
 
   /**
-   * How many previous findings this round closed as fixed. Strictly the {@code resolved} status:
-   * {@code justified} is a maintainer's decline, not a fix, and {@code superseded} is an auto-close
-   * because the targeted code left the diff — counting either as "resolved" would overstate what
-   * the round actually fixed.
+   * How many previous findings this round closed as fixed. For the effective previous round,
+   * strictly the {@code resolved} status: {@code justified} is a maintainer's decline, not a fix,
+   * and {@code superseded} is an auto-close because the targeted code left the diff — counting
+   * either as "resolved" would overstate what the round actually fixed.
    *
-   * <p>A status the backstop gave an earlier round's finding ({@link
-   * PreviousFindingStatus#fromEarlierRound}) is left out here and in {@link
-   * #hasSupersededPrevious}: those two say what this round moved, and an earlier round's status is
-   * recomputed every round because it is never persisted (#957). Counted as movement, a finding
-   * whose code left the diff rounds ago would post the delta comment and a "closed" review body on
-   * every push (#470). The summary's status table counts every status, so its counts still add up
-   * to the findings carried in.
+   * <p>An earlier round's finding has no model verdict, so its code leaving the diff is what says
+   * it was fixed: its {@code resolved} and {@code superseded} statuses ({@link
+   * #earlierRoundCloses}) count here, and {@code ClosedFindingNames} names each (#1066). The round
+   * records those closes with its response, so a later round no longer carries the finding and does
+   * not count it again (#470). {@link #hasSupersededPrevious} still leaves earlier rounds out: the
+   * summary is edited in place, and a re-post for an older round's close is the noise #470 removed.
    */
   public long resolvedPreviousCount() {
     return previousStatuses.stream()
-        .filter(s -> !s.fromEarlierRound() && "resolved".equalsIgnoreCase(s.status()))
-        .count();
+            .filter(s -> !s.fromEarlierRound() && "resolved".equalsIgnoreCase(s.status()))
+            .count()
+        + earlierRoundCloses().size();
+  }
+
+  /**
+   * The earlier rounds' findings this round closed (#1066): each {@code resolved} (a maintainer's
+   * clear, or its suggested fix landed) or {@code superseded} (its code left the diff) status the
+   * backstop gave a finding raised before the effective previous round, one per defect, in status
+   * order, leaving out a defect the round's own status already names. They are named under the
+   * round's closures.
+   */
+  public List<ReviewResponse.Finding> earlierRoundCloses() {
+    return previousStatuses.stream()
+        .filter(PreviousFindingStatus::closesEarlierRound)
+        .filter(s -> !s.earlierRound().namedByTheRound())
+        .map(s -> s.earlierRound().finding())
+        .toList();
+  }
+
+  /**
+   * Every stored copy of the defects {@link #earlierRoundCloses} names: what the round persists
+   * ({@code ReviewResponse.closedEarlierRound}) so that no later round carries any copy of a closed
+   * defect and closes or names it again (#1066).
+   */
+  public List<ReviewResponse.Finding> earlierRoundClosedMembers() {
+    return previousStatuses.stream()
+        .filter(PreviousFindingStatus::closesEarlierRound)
+        .flatMap(s -> s.earlierRound().members().stream())
+        .toList();
   }
 
   /**
@@ -1119,6 +1146,15 @@ public record ReviewResult(
       return earlierRound != null;
     }
 
+    /**
+     * Whether this status closes an earlier round's finding (#1066): the backstop's {@code
+     * resolved} or {@code superseded}, as opposed to a hold or a standing decline.
+     */
+    public boolean closesEarlierRound() {
+      return fromEarlierRound()
+          && ("resolved".equalsIgnoreCase(status) || "superseded".equalsIgnoreCase(status));
+    }
+
     /** The same status under another note. */
     public PreviousFindingStatus withNote(String newNote) {
       return new PreviousFindingStatus(id, status, newNote, earlierRound);
@@ -1130,11 +1166,32 @@ public record ReviewResult(
    * maintainer's decline on its own review thread settled it, that thread's root comment, located
    * by the finding's {@code finding=N} marker and its own content, never by the id alone (#958).
    *
-   * @param threadRootId the root comment of the thread the standing decline was written on, or
-   *     {@code null} when no thread of the finding's own settled it
+   * @param threadRootId the root comment of the finding's own thread, located by marker and
+   *     content: the thread a standing decline was written on, or the thread of a finding the round
+   *     closed (cleared or superseded, #1066); {@code null} when there is no such thread
+   * @param members every round's copy of the defect the status accounts for (one defect raised in
+   *     several rounds is several stored findings), so a close is recorded for all of them and no
+   *     later round carries a copy it left behind (#1066)
+   * @param namedByTheRound whether the round's own status already names this defect (the effective
+   *     previous round's copy of it reported resolved, justified or superseded), so a close of an
+   *     older copy resolves its thread and is recorded but is not counted or named a second time
    */
   @RegisterForReflection
-  public record EarlierRound(ReviewResponse.Finding finding, Long threadRootId) {}
+  public record EarlierRound(
+      ReviewResponse.Finding finding,
+      Long threadRootId,
+      List<ReviewResponse.Finding> members,
+      boolean namedByTheRound) {
+
+    public EarlierRound {
+      members = List.copyOf(members);
+    }
+
+    /** The status of a defect raised in one round only. */
+    public EarlierRound(ReviewResponse.Finding finding, Long threadRootId) {
+      this(finding, threadRootId, List.of(finding), false);
+    }
+  }
 
   @RegisterForReflection
   public record CiCheck(String name, String type, String status, String conclusion) {
