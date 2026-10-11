@@ -357,7 +357,13 @@ public class ReviewOrchestrator {
       // files this pull request changes are ever read.
       var evidence =
           ReviewEvidence.forReview(
-              citedLocationResolver, auth, req.owner(), req.repo(), req.commitSha(), ctx);
+              citedLocationResolver,
+              auth,
+              req.owner(),
+              req.repo(),
+              req.commitSha(),
+              ctx,
+              ciFailures);
       var aiResponse =
           findingPipeline.run(session, promptInputs, ctx, plan, lineResolver, evidence);
 
