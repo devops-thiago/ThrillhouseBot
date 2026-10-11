@@ -830,4 +830,46 @@ class DefectIdentityTest {
             cited),
         "one shared defect class (crash) is enough beside the citation");
   }
+
+  /** A citation worded in prose counts as one in the file:line form does. */
+  @Test
+  void aCitationMayBeWorded() {
+    var cited = at("medium", "low", "src/port/Main.scala", 32, "PortEvent.parse crashes", "d");
+    for (var citation :
+        List.of(
+            "Calls PortEvent.parse (src/port/Main.scala, lines 31-32).",
+            "Calls PortEvent.parse at line 32 of src/port/Main.scala.",
+            "Calls PortEvent.parse in lines 30 to 31 in Main.scala.",
+            "Calls PortEvent.parse (Main.scala:31..32).")) {
+      assertTrue(
+          DefectIdentity.sameDefect(
+              at("medium", "high", "src/port/Models.scala", 11, "Handler panics", citation), cited),
+          citation);
+    }
+    assertFalse(
+        DefectIdentity.sameDefect(
+            at(
+                "medium",
+                "high",
+                "src/port/Models.scala",
+                11,
+                "Handler panics",
+                "Calls PortEvent.parse at line 90 of src/port/Main.scala."),
+            cited));
+    // "malformed" names an input format as often as a crash; it is not the crash class.
+    assertEquals(Set.of(), DefectIdentity.defectClasses("Malformed date format in the config"));
+  }
+
+  /** The description arm reads only a shared run of words, never the loose overlap. */
+  @Test
+  void aTitleMatchesADescriptionOnlyByAPhrase() {
+    assertFalse(
+        SummarySurfaceDeduplicator.titleSharesPhraseWith(
+            "Cache entry expires after one hour",
+            "The hour cache entry is set; it expires once per deploy after restart."));
+    assertTrue(
+        SummarySurfaceDeduplicator.titleSharesPhraseWith(
+            "Only the first page of usage records reaches the aggregator",
+            "only the first page of usage records is returned"));
+  }
 }

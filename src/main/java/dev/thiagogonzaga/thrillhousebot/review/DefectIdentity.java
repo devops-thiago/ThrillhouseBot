@@ -126,7 +126,7 @@ final class DefectIdentity {
           "pagination",
           classPattern("pagination|paginat\\w{0,6}|first page|next page"),
           "crash",
-          classPattern("crash\\w{0,4}|panics?|panicking|malformed"),
+          classPattern("crash\\w{0,4}|panics?|panicking"),
           "unbounded",
           classPattern("unbounded|without bound|leaks?|leaking"),
           "nullness",
@@ -246,17 +246,27 @@ final class DefectIdentity {
 
   /** Whether {@code text} cites {@code fileName}{@code :line} or a range covering {@code line}. */
   private static boolean citesLine(String text, String fileName, int line) {
+    var name = Pattern.quote(fileName);
+    var range = "(\\d{1,6})(?:\\s{0,2}(?:[-–]|\\.\\.|to)\\s{0,2}(\\d{1,6}))?";
+    // "Main.scala:31-32", "Main.scala, lines 31-32", "line 32 of Main.scala", "Main.scala:31..32".
     var citation =
         Pattern.compile(
                 "(?<!\\w)"
-                    + Pattern.quote(fileName)
-                    + ":(\\d{1,6})(?:\\s{0,2}[-–]\\s{0,2}(\\d{1,6}))?",
+                    + name
+                    + "(?::|,?\\s{1,2}lines?\\s{1,2})"
+                    + range
+                    + "|\\blines?\\s{1,2}"
+                    + range
+                    + "\\s{1,2}(?:of|in)\\s{1,2}(?:\\S{0,200}/)?"
+                    + name,
                 Pattern.CASE_INSENSITIVE)
             .matcher(text);
     var tolerance = FollowUpAnalyzer.DUPLICATE_LINE_TOLERANCE;
     while (citation.find()) {
-      var from = Integer.parseInt(citation.group(1));
-      var to = citation.group(2) == null ? from : Integer.parseInt(citation.group(2));
+      var first = citation.group(1) != null ? 1 : 3;
+      var from = Integer.parseInt(citation.group(first));
+      var to =
+          citation.group(first + 1) == null ? from : Integer.parseInt(citation.group(first + 1));
       if (line >= Math.min(from, to) - tolerance && line <= Math.max(from, to) + tolerance) {
         return true;
       }

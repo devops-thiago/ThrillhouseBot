@@ -205,7 +205,10 @@ final class SummarySurfaceDeduplicator {
    * against it anywhere linked bullets to unrelated findings.
    */
   static boolean titleSharesPhraseWith(String title, String description) {
-    return restates(claim(title), List.of(claimsOf(title, description).get(1)));
+    var titleClaim = claim(title);
+    var descriptionClaim = claimsOf(title, description).get(1);
+    return !contradicts(titleClaim, descriptionClaim)
+        && sharesPhrase(titleClaim.phrases(), descriptionClaim.phrases());
   }
 
   /**
