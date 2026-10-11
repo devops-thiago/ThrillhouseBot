@@ -241,8 +241,17 @@ class GitHubIssuesProviderTest {
     void aFenceAtAValidLineStartStillHidesItsContents() {
       for (var opener :
           List.of(
-              "```", "   ```", "\t```", "> ```", ">```", "- ```", "* ~~~", "+ ```", "12. ```",
-              "3) ```", "> - ```")) {
+              "```",
+              "   ```",
+              ">    ```",
+              "> ```",
+              ">```",
+              "- ```",
+              "* ~~~",
+              "+ ```",
+              "12. ```",
+              "3) ```",
+              "> - ```")) {
         var close = opener.contains("~") ? "~~~" : "```";
         var body = "Intro.\n" + opener + "\nCloses #1\n" + close + "\nFixes #2";
         assertEquals(List.of(2), GitHubIssuesProvider.bodyReferences(body, "o", "r"), opener);
@@ -266,6 +275,16 @@ class GitHubIssuesProviderTest {
       assertEquals(
           List.of(4),
           GitHubIssuesProvider.bodyReferences("~~~\nFixes #1\n```\n~~~\nCloses #4", "o", "r"));
+    }
+
+    @Test
+    void anIndentedCodeBlockLineOpensNoFence() {
+      // Four columns of indentation make an indented code block, where a run is literal text;
+      // so do five after a list or blockquote marker, and a list number in non-ASCII digits.
+      for (var opener : List.of("    ```", "\t```", ">     ```", "-     ```", "\u0661. ```")) {
+        var body = "Intro.\n" + opener + "\nCloses #1\n\nFixes #2";
+        assertEquals(List.of(1, 2), GitHubIssuesProvider.bodyReferences(body, "o", "r"), opener);
+      }
     }
 
     @Test

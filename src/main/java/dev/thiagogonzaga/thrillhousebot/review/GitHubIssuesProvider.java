@@ -305,21 +305,26 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
     /**
      * Whether only blanks, blockquote markers ({@code >}) and at most one list marker ({@code -},
      * {@code *}, {@code +}, {@code 1.}, {@code 1)}) followed by a blank precede {@code i} on its
-     * line.
+     * line, with at most three columns of indentation right before {@code i} on a plain line and
+     * four after a marker: more makes the line an indented code block, where a run is literal.
      */
     private boolean atLineStart(int i) {
       var k = skipContainerBack(i);
+      var indent = indentBefore(i);
       if (k == 0 || body.charAt(k - 1) == '\n') {
-        return true;
+        // Only blanks and blockquote markers lie between k and i, so a marker there quotes the
+        // line.
+        var quoted = body.substring(k, i).indexOf('>') >= 0;
+        return indent <= (quoted ? 4 : 3);
       }
-      if (k == i) {
-        return false; // a list marker needs a blank between it and the fence
+      if (k == i || indent > 4) {
+        return false; // a list marker needs a blank, and no more than four, before the fence
       }
       var marker = k - 1;
       var m = body.charAt(marker);
       if (m == '.' || m == ')') {
         var digits = marker;
-        while (digits > 0 && marker - digits < 9 && Character.isDigit(body.charAt(digits - 1))) {
+        while (digits > 0 && marker - digits < 9 && isAsciiDigit(body.charAt(digits - 1))) {
           digits--;
         }
         if (digits == marker) {
@@ -331,6 +336,19 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
       }
       var before = skipContainerBack(marker);
       return before == 0 || body.charAt(before - 1) == '\n';
+    }
+
+    /** The columns of blanks right before {@code i}, a tab counting four. */
+    private int indentBefore(int i) {
+      var columns = 0;
+      for (var k = i; k > 0 && (body.charAt(k - 1) == ' ' || body.charAt(k - 1) == '\t'); k--) {
+        columns += body.charAt(k - 1) == '\t' ? 4 : 1;
+      }
+      return columns;
+    }
+
+    private static boolean isAsciiDigit(char c) {
+      return c >= '0' && c <= '9';
     }
 
     /** The start of the run of blanks and blockquote markers that ends at {@code i}. */
