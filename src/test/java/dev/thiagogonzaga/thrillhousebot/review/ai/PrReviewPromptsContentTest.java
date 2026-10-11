@@ -194,6 +194,11 @@ class PrReviewPromptsContentTest {
         user,
         "not such evidence",
         "a green test that misses the path must not be treated as disproof of the finding");
+    assertContains(
+        user,
+        "the failure is measured, not counted",
+        "the keep-it-low rule for a failing-test claim must yield to a CI failure that settles it"
+            + " (#952)");
   }
 
   @Test
@@ -727,6 +732,10 @@ class PrReviewPromptsContentTest {
         req,
         "not evidence that it passed",
         "a truncated or pending list must not read as a green result (#59)");
+    assertContains(
+        req,
+        "A failure the code explains is evidence, not arithmetic",
+        "a finding the failing test confirms must not be posted at low confidence (#952)");
   }
 
   @Test
@@ -1492,6 +1501,14 @@ class PrReviewPromptsContentTest {
         sys,
         "so it is never \"low\", and whether this",
         "the anchored classes' confidence must be fixed in both directions (#773)");
+    assertContains(
+        sys,
+        "instead of a digest: risk \"low\", confidence \"medium\". It is\n  informational",
+        "an unpinned tag breaks nothing at run time, so it is graded informational (#926)");
+    assertContains(
+        sys,
+        "is a versioned producer, not this defect: do not\n  report it",
+        "a versioned external image must not be reported as an unpinned reference (#926)");
   }
 
   /**
