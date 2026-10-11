@@ -39,9 +39,11 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -186,6 +188,12 @@ public class SecurityScan {
   private static final String STATUS_UNRESOLVED = "unresolved";
   private static final String STATUS_RESOLVED = "resolved";
   private static final String STATUS_JUSTIFIED = "justified";
+
+  /**
+   * Candidates the identity lookups and the duplicate check have weighed, for tests that pin how
+   * the matching scales (#1031). Counted, never read, in production.
+   */
+  static final AtomicLong IDENTITY_COMPARISONS = new AtomicLong();
 
   private final boolean secretsEnabled;
   private final boolean iacEnabled;
@@ -370,8 +378,14 @@ public class SecurityScan {
     int earlier = 0;
     int settled = 0;
     var claimed = claimDeclines(result.detections(), declines);
+    var priorsByIdentity =
+        PathIndex.of(
+            scanPriors.entrySet(),
+            entry -> entry.getValue().file(),
+            entry -> identityKey(entry.getValue()));
+    var earlierByIdentity = byIdentity(earlierOpen);
     for (var detection : result.detections()) {
-      int priorId = priorIdOf(detection.finding(), scanPriors, tracked.keySet());
+      int priorId = priorIdOf(detection.finding(), priorsByIdentity, tracked.keySet());
       boolean repeatsDecline = claimed.contains(detection.finding());
       if (priorId > 0) {
         tracked.put(priorId, detection);
@@ -380,7 +394,7 @@ public class SecurityScan {
         }
       } else if (repeatsDecline) {
         settled++;
-      } else if (repeatsEarlierRound(detection.finding(), earlierOpen)) {
+      } else if (repeatsEarlierRound(detection.finding(), earlierByIdentity)) {
         earlier++;
       } else {
         raised.add(detection.finding());
@@ -390,8 +404,9 @@ public class SecurityScan {
 
     var kept = new ArrayList<ReviewResponse.Finding>();
     int duplicates = 0;
+    var detectionsByFile = PathIndex.of(result.detections(), d -> d.finding().file(), d -> "");
     for (var finding : response.findings()) {
-      if (duplicatesDetection(finding, result.detections())) {
+      if (duplicatesDetection(finding, detectionsByFile)) {
         duplicates++;
       } else {
         kept.add(scrub(finding, scrubber));
@@ -676,22 +691,19 @@ public class SecurityScan {
    * secret finding carries no anchor and its title names only the value's prefix and length, so two
    * values of one format in one file share every other key; letting both detections claim the same
    * prior would leave the second prior unclaimed and close it as resolved while its value is still
-   * there.
+   * there. Only the priors with the detection's file, title and anchor are read, from an index
+   * (#1031), in id order, so the nearest wins and a tie goes to the lowest id as before.
    */
   private static int priorIdOf(
       ReviewResponse.Finding detection,
-      Map<Integer, ReviewResponse.Finding> scanPriors,
+      PathIndex<Map.Entry<Integer, ReviewResponse.Finding>> priorsByIdentity,
       Set<Integer> claimed) {
     int best = 0;
     int bestDistance = Integer.MAX_VALUE;
-    for (var entry : scanPriors.entrySet()) {
-      var prior = entry.getValue();
-      int distance = Math.abs(prior.line() - detection.line());
-      if (!claimed.contains(entry.getKey())
-          && distance < bestDistance
-          && FilePaths.same(prior.file(), detection.file())
-          && Objects.equals(prior.title(), detection.title())
-          && Objects.equals(stripped(prior.suggestionOld()), stripped(detection.suggestionOld()))) {
+    for (var entry : priorsByIdentity.candidates(detection.file(), identityKey(detection))) {
+      IDENTITY_COMPARISONS.incrementAndGet();
+      int distance = Math.abs(entry.getValue().line() - detection.line());
+      if (!claimed.contains(entry.getKey()) && distance < bestDistance) {
         best = entry.getKey();
         bestDistance = distance;
       }
@@ -701,17 +713,36 @@ public class SecurityScan {
 
   /**
    * Whether a detection repeats a scan finding an earlier round raised and left open: same file,
-   * title and anchor, the key {@link #priorIdOf} matches a previous-round finding by.
+   * title and anchor, the key {@link #priorIdOf} matches a previous-round finding by, read from an
+   * index.
    */
   private static boolean repeatsEarlierRound(
-      ReviewResponse.Finding detection, List<ReviewResponse.Finding> earlierOpen) {
-    return earlierOpen.stream()
-        .anyMatch(
-            prior ->
-                FilePaths.same(prior.file(), detection.file())
-                    && Objects.equals(prior.title(), detection.title())
-                    && Objects.equals(
-                        stripped(prior.suggestionOld()), stripped(detection.suggestionOld())));
+      ReviewResponse.Finding detection, PathIndex<ReviewResponse.Finding> earlierByIdentity) {
+    IDENTITY_COMPARISONS.incrementAndGet();
+    return !earlierByIdentity.candidates(detection.file(), identityKey(detection)).isEmpty();
+  }
+
+  /**
+   * The findings indexed by file ({@link FilePaths#same}) and {@link #identityKey}, so a lookup
+   * reads only the ones that can be the same identity.
+   */
+  private static PathIndex<ReviewResponse.Finding> byIdentity(
+      List<ReviewResponse.Finding> findings) {
+    return PathIndex.of(findings, ReviewResponse.Finding::file, SecurityScan::identityKey);
+  }
+
+  /**
+   * What two findings in the same file ({@link FilePaths#same}, which {@link PathIndex} applies)
+   * must share to be the same scan identity: the title and the stripped anchor, each
+   * length-prefixed so no two different pairs give one key. A lookup by it therefore returns only
+   * true matches.
+   */
+  private static String identityKey(ReviewResponse.Finding finding) {
+    return keyPart(finding.title()) + keyPart(stripped(finding.suggestionOld()));
+  }
+
+  private static String keyPart(String text) {
+    return text == null ? "-" : text.length() + ":" + text;
   }
 
   /**
@@ -746,18 +777,25 @@ public class SecurityScan {
    * {@link #scanFindings} admitted on an unchanged head, is matched by the other keys). Each
    * decline covers one detection, and pairs are made nearest by line first across all detections,
    * so a copy of a declined line added elsewhere does not take the decline from the line it was
-   * written on.
+   * written on. A detection is paired only with the declines in its identity group (#1031), visited
+   * in the same order as before, so the stable sort pairs them identically.
    */
   private static Set<ReviewResponse.Finding> claimDeclines(
       List<Detection> detections, List<ReviewResponse.Finding> declines) {
     record Pair(int detection, int decline, int distance) {}
+    var declinesByIdentity =
+        PathIndex.of(
+            IntStream.range(0, declines.size()).boxed().toList(),
+            k -> declines.get(k).file(),
+            k -> identityKey(declines.get(k)));
     var pairs = new ArrayList<Pair>();
     for (int d = 0; d < detections.size(); d++) {
       var detection = detections.get(d);
-      for (int k = 0; k < declines.size(); k++) {
+      var scanned = detection.finding();
+      for (int k : declinesByIdentity.candidates(scanned.file(), identityKey(scanned))) {
         var declined = declines.get(k);
         if (sameContent(declined, detection)) {
-          pairs.add(new Pair(d, k, Math.abs(declined.line() - detection.finding().line())));
+          pairs.add(new Pair(d, k, Math.abs(declined.line() - scanned.line())));
         }
       }
     }
@@ -774,20 +812,18 @@ public class SecurityScan {
   }
 
   /**
-   * Whether a declined finding covers a detection. A fingerprint on the declined finding must equal
-   * the detection's keyed fingerprint, or, for a marker posted before the fingerprint was keyed
-   * (#985), the detection's {@link Detection#legacyFingerprint}, so a decline recorded before an
-   * upgrade keeps matching rather than lapsing.
+   * Whether a declined finding the identity index paired with a detection (same file, title and
+   * anchor) covers its content. A fingerprint on the declined finding must equal the detection's
+   * keyed fingerprint, or, for a marker posted before the fingerprint was keyed (#985), the
+   * detection's {@link Detection#legacyFingerprint}, so a decline recorded before an upgrade keeps
+   * matching rather than lapsing.
    */
   private static boolean sameContent(ReviewResponse.Finding prior, Detection detection) {
-    var scanned = detection.finding();
+    IDENTITY_COMPARISONS.incrementAndGet();
     var priorFingerprint = fingerprintOf(prior.description());
-    return FilePaths.same(prior.file(), scanned.file())
-        && Objects.equals(prior.title(), scanned.title())
-        && Objects.equals(stripped(prior.suggestionOld()), stripped(scanned.suggestionOld()))
-        && (priorFingerprint == null
-            || priorFingerprint.equals(fingerprintOf(scanned.description()))
-            || priorFingerprint.equals(detection.legacyFingerprint()));
+    return priorFingerprint == null
+        || priorFingerprint.equals(fingerprintOf(detection.finding().description()))
+        || priorFingerprint.equals(detection.legacyFingerprint());
   }
 
   /** The content fingerprint a scan finding's description carries, or {@code null}. */
@@ -880,11 +916,12 @@ public class SecurityScan {
       Set<Integer> trackedIds,
       List<String> scannedFiles) {
     var cleared = new HashSet<Integer>();
+    var scanned = PathIndex.of(scannedFiles, file -> file, file -> "");
     for (var entry : scanPriors.entrySet()) {
       var prior = entry.getValue();
       if (halfEnabled(SecurityRule.fromTitle(prior.title()))
           && !trackedIds.contains(entry.getKey())
-          && scannedFiles.stream().anyMatch(f -> FilePaths.same(f, prior.file()))) {
+          && !scanned.candidates(prior.file(), "").isEmpty()) {
         cleared.add(entry.getKey());
       }
     }
@@ -961,20 +998,21 @@ public class SecurityScan {
    * the scan matched, one topic word is enough, because the line holds nothing else a credential
    * word could be about. The finding is then collapsed into the scan's, the redacted one. A title
    * that only names the key ({@code PAYMENT_API_KEY is never read}) is not a topic word, so a
-   * different defect on that line is kept ({@link #words}).
+   * different defect on that line is kept ({@link #words}). Only the detections in the finding's
+   * file ({@link FilePaths#same}) are read, from an index (#1031).
    */
   private static boolean duplicatesDetection(
-      ReviewResponse.Finding finding, List<Detection> detections) {
+      ReviewResponse.Finding finding, PathIndex<Detection> detectionsByFile) {
     if (finding.file() == null) {
       return false;
     }
     var titleWords = words(finding.title());
-    for (var detection : detections) {
+    for (var detection : detectionsByFile.candidates(finding.file(), "")) {
       var scanned = detection.finding();
-      if (FilePaths.same(finding.file(), scanned.file())
-          && (nearbySameDefect(finding, scanned, titleWords, detection.rule())
-              || sameLineSecret(finding, scanned, titleWords, detection.rule())
-              || nearbyIacDefect(finding, scanned, titleWords, detection.rule()))) {
+      IDENTITY_COMPARISONS.incrementAndGet();
+      if (nearbySameDefect(finding, scanned, titleWords, detection.rule())
+          || sameLineSecret(finding, scanned, titleWords, detection.rule())
+          || nearbyIacDefect(finding, scanned, titleWords, detection.rule())) {
         return true;
       }
     }
