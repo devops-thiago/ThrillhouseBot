@@ -1691,4 +1691,41 @@ class SummaryAcrossRoundsTest {
     assertEquals(0, fifth.resolvedPreviousCount());
     assertTrue(ClosedFindingNames.reviewBodySection(fifth, List.of(NEW_IN_ROUND_TWO)).isEmpty());
   }
+
+  /**
+   * #1066: the round reports the newer copy of a defect resolved and the backstop closes the older
+   * copy: the older thread is resolved and recorded, but the closure is counted and named once.
+   */
+  @Test
+  void aDefectTheRoundResolvesIsNotNamedAgainForItsOlderCopy() {
+    var drifted =
+        new ReviewResponse.Finding(
+            CRITICAL.risk(),
+            CRITICAL.confidence(),
+            FILE,
+            11,
+            CRITICAL.title(),
+            CRITICAL.description(),
+            CRITICAL.suggestionOld(),
+            CRITICAL.suggestionNew());
+    var roundOne = new ReviewResponse(List.of(CRITICAL), List.of(), null);
+    var roundTwo = new ReviewResponse(List.of(drifted, HIGH), List.of(), null);
+    patches = CRITICAL_FIXED;
+    var round =
+        new ReviewResponse(
+            List.of(),
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"),
+                new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there")),
+            null);
+
+    var result =
+        builder.build(followUp(List.of(roundTwo, roundOne), List.of()), round, CI_CLEAR, plan);
+
+    assertEquals(1, result.resolvedPreviousCount());
+    assertTrue(result.earlierRoundCloses().isEmpty());
+    assertEquals(List.of(CRITICAL), result.earlierRoundClosedMembers());
+    var named = ClosedFindingNames.reviewBodySection(result, List.of(drifted, HIGH));
+    assertEquals(1, named.split(CRITICAL.title(), -1).length - 1, named);
+  }
 }

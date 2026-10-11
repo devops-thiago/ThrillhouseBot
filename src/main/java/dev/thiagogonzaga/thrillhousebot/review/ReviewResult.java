@@ -490,11 +490,13 @@ public record ReviewResult(
    * The earlier rounds' findings this round closed (#1066): each {@code resolved} (a maintainer's
    * clear, or its suggested fix landed) or {@code superseded} (its code left the diff) status the
    * backstop gave a finding raised before the effective previous round, one per defect, in status
-   * order. Their threads are resolved and they are named under the round's closures.
+   * order, leaving out a defect the round's own status already names. They are named under the
+   * round's closures.
    */
   public List<ReviewResponse.Finding> earlierRoundCloses() {
     return previousStatuses.stream()
         .filter(PreviousFindingStatus::closesEarlierRound)
+        .filter(s -> !s.earlierRound().namedByTheRound())
         .map(s -> s.earlierRound().finding())
         .toList();
   }
@@ -1153,10 +1155,16 @@ public record ReviewResult(
    * @param members every round's copy of the defect the status accounts for (one defect raised in
    *     several rounds is several stored findings), so a close is recorded for all of them and no
    *     later round carries a copy it left behind (#1066)
+   * @param namedByTheRound whether the round's own status already names this defect (the effective
+   *     previous round's copy of it reported resolved, justified or superseded), so a close of an
+   *     older copy resolves its thread and is recorded but is not counted or named a second time
    */
   @RegisterForReflection
   public record EarlierRound(
-      ReviewResponse.Finding finding, Long threadRootId, List<ReviewResponse.Finding> members) {
+      ReviewResponse.Finding finding,
+      Long threadRootId,
+      List<ReviewResponse.Finding> members,
+      boolean namedByTheRound) {
 
     public EarlierRound {
       members = List.copyOf(members);
@@ -1164,7 +1172,7 @@ public record ReviewResult(
 
     /** The status of a defect raised in one round only. */
     public EarlierRound(ReviewResponse.Finding finding, Long threadRootId) {
-      this(finding, threadRootId, List.of(finding));
+      this(finding, threadRootId, List.of(finding), false);
     }
   }
 

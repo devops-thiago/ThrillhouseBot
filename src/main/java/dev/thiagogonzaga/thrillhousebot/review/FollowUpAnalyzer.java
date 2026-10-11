@@ -2851,6 +2851,7 @@ public class FollowUpAnalyzer {
     // counts it, and a second "superseded" would count it twice.
     var supersededThisRound =
         reportedKeys(replay.reportedRound(), currentStatuses, STATUS_SUPERSEDED);
+    var accountedThisRound = accountedFindings(replay.reportedRound(), currentStatuses);
     closeReported(replay.open(), replay.reportedRound(), currentStatuses);
     var clusters = clusterByIdentity(replay.open());
     return heldFromClusters(
@@ -2862,7 +2863,32 @@ public class FollowUpAnalyzer {
             botIdentity,
             renameTargets,
             reviewedCode,
-            supersededThisRound));
+            supersededThisRound,
+            accountedThisRound));
+  }
+
+  /**
+   * The effective previous round's findings this round's statuses close (resolved, justified or
+   * superseded): what the round's own surfaces already name, so an older copy of one of them is not
+   * named again beside it (#1066).
+   */
+  private static List<ReviewResponse.Finding> accountedFindings(
+      List<ReviewResponse.Finding> reportedRound,
+      List<ReviewResponse.PreviousFindingStatus> statuses) {
+    var accounted = new ArrayList<ReviewResponse.Finding>();
+    if (statuses == null) {
+      return accounted;
+    }
+    for (var status : statuses) {
+      var id = status.id();
+      if ((isAddressedVerdict(status.status())
+              || STATUS_SUPERSEDED.equalsIgnoreCase(status.status()))
+          && id >= 1
+          && id <= reportedRound.size()) {
+        accounted.add(reportedRound.get(id - 1));
+      }
+    }
+    return accounted;
   }
 
   /**
@@ -2893,7 +2919,8 @@ public class FollowUpAnalyzer {
       BotIdentity botIdentity,
       Map<String, String> renameTargets,
       Supplier<String> reviewedCode,
-      Set<String> supersededThisRound) {}
+      Set<String> supersededThisRound,
+      List<ReviewResponse.Finding> accountedThisRound) {}
 
   /**
    * {@code statuses} without the {@code unresolved} entries that name no finding: an id outside the
@@ -3824,7 +3851,13 @@ public class FollowUpAnalyzer {
             new ReviewResult.EarlierRound(
                 target.finding(),
                 clusterThreadRoot(cluster, target, in),
-                cluster.stream().map(OpenFinding::finding).toList())),
+                cluster.stream().map(OpenFinding::finding).toList(),
+                cluster.stream()
+                    .anyMatch(
+                        member ->
+                            in.accountedThisRound().stream()
+                                .anyMatch(
+                                    accounted -> isSameFinding(member.finding(), accounted))))),
         target.finding());
   }
 
