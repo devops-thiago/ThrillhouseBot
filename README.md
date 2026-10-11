@@ -107,7 +107,7 @@ command word gets a written answer instead.
 | `/learnings` | List what the bot remembers about this repository, with ids and source links | write |
 | `/remember <text>` | Remember a convention for later reviews of this repository | write |
 | `/forget <id>` | Retract one remembered learning | write |
-| `@thrillhousebot resolved <path>:<line> — <title>` | Close an earlier finding that has no review thread (see **Clearing a finding with no thread** under Configuration) | write |
+| `@thrillhousebot resolved <path>:<line> — <title>` | Close an earlier finding that has no review thread (see **Clearing a finding with no thread** under Configuration), or, replied on a finding's own thread, close that finding and resolve the thread | write |
 | `@thrillhousebot declined <path>:<line> — <title>` | Decline an earlier finding that has no review thread, with the reason on the following lines (see **Declining a finding with no thread** under Configuration) | write |
 
 **Access.** Every slash command except `/help` needs write access to the
@@ -683,8 +683,16 @@ review learnings on the reply is offered to the store under the same rules as
 any other decline. An older round's finding whose code left the diff is counted
 superseded, and one cleared or declined from the PR conversation is counted
 resolved or justified, so the summary's counts add up to the findings carried
-in. These are recomputed every round, so they never post a delta comment or
-re-post the summary by themselves.
+in. One whose flagged line is still there is closed as resolved when every line
+its suggestion adds is now an added line of the file beside the flagged code
+(with at least one real line of code among them); otherwise it stays open until a reply or a directive closes
+it. One whose code left the diff, whose suggested fix landed, or that a
+maintainer cleared, is closed once:
+its review thread is resolved, the review body names it under the round's
+closed findings, and the round records the close so later rounds neither name
+it nor count it again. A clear wins over the code leaving the diff, so the
+thread still gets the reply that records the clear. None of these re-post the
+summary.
 
 Set it to `false` to make a maintainer's reply final.
 
@@ -721,6 +729,15 @@ strict, and an ambiguous comment leaves the finding held:
 One comment may name several findings; each is matched on its own. A finding
 with neither title nor description cannot be named, so fix it or reply on its
 thread if it has one. The next review records a named finding **resolved**.
+
+**On a finding's own review thread**, reply `@thrillhousebot resolved` (the
+`path:line` and title are optional there, since the thread names the finding).
+The bot resolves the thread straight away and replies with a fixed
+acknowledgement, not a generated answer; if GitHub does not confirm the
+resolution, the reply says the next review closes the finding instead. The next
+review records the finding **resolved** either way. The same write-access rule
+applies, and a reply whose `path:line` is not that finding's own (another file,
+or another line of the same file) closes nothing on that thread.
 
 The bot answers the directive when it sees it, but it has no findings loaded
 then, so it says what the next review will evaluate. The exception is a
