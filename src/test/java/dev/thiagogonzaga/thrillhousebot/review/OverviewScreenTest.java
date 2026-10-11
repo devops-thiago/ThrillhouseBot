@@ -303,7 +303,9 @@ class OverviewScreenTest {
         "hosts six findings",
         "holds exactly twelve findings",
         "This PR hosts the two findings",
-        "The review has no findings here"
+        "The review has no findings here",
+        "Holds no security findings",
+        "hosts two high findings"
       })
   void aClauseAboutWhatTheFileHoldsIsFindingsTalk(String clause) {
     assertTrue(OverviewScreen.talksAboutFindings(clause));
@@ -338,6 +340,10 @@ class OverviewScreenTest {
         "Returns no findings for an empty diff",
         OverviewScreen.screenedText("Returns no findings for an empty diff", "+x", ""));
     assertEquals("", OverviewScreen.screenedText("TBD, hosts the two findings", "+x", ""));
+    // A comma inside a number does not split the clause.
+    assertEquals(
+        "Pages through 1,000 findings per request",
+        OverviewScreen.screenedText("Pages through 1,000 findings per request", "+x", ""));
     assertEquals(
         "renders it",
         OverviewScreen.screenedText("renders it; TBD, hosts the two findings", "+x", ""));

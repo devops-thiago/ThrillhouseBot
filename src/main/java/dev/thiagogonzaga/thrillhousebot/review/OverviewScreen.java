@@ -152,7 +152,16 @@ final class OverviewScreen {
           "change",
           "diff",
           "commit",
-          "round");
+          "round",
+          // A kind or grade of finding: "Holds no security findings".
+          "security",
+          "critical",
+          "high",
+          "medium",
+          "low",
+          "new",
+          "lint",
+          "style");
 
   /**
    * Words that, a word or two after a clause-opening "Findings", place the review's findings
@@ -315,7 +324,8 @@ final class OverviewScreen {
    * none or all of its parts do, so a clause that is only findings talk is still judged whole.
    */
   private static String withoutFindingsParts(String clause) {
-    var parts = Arrays.stream(clause.split(",")).map(String::strip).toList();
+    // A comma inside a number ("1,000 findings") does not separate parts.
+    var parts = Arrays.stream(clause.split(",(?=\\s)")).map(String::strip).toList();
     var kept = parts.stream().filter(part -> !talksAboutFindings(part)).toList();
     return kept.isEmpty() || kept.size() == parts.size() ? clause : String.join(", ", kept);
   }
@@ -331,11 +341,11 @@ final class OverviewScreen {
   }
 
   /**
-   * Whether {@code clause} is about the review's findings: "finding(s)" with a count or a review
-   * word one or two words before it ("the two confirmed findings", "no findings"), or "finding(s)"
-   * anywhere in a clause that names "this batch" ("no findings in this batch", the batch planner's
-   * split). "Refines findings before they are posted" and "Processes this batch of rows" describe a
-   * file and are not.
+   * Whether {@code clause} is about the review's findings: "finding(s)" whose preceding words only
+   * place or count findings ({@link #bookkeepingLead}), with a count or a review word one or two
+   * words before it ("the two confirmed findings", "no findings") or in a clause that names "this
+   * batch" ("no findings in this batch", the batch planner's split). "Refines findings before they
+   * are posted" and "Processes findings in this batch" describe a file and are not.
    */
   static boolean talksAboutFindings(String clause) {
     var lower = clause.toLowerCase(Locale.ROOT);
