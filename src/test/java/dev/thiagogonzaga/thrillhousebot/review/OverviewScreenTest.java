@@ -289,42 +289,58 @@ class OverviewScreenTest {
     assertEquals("", screened.prPurpose());
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "hosts 2 findings",
+        // A clause the finding word opens is judged by the words after it.
+        "Findings are reported inline for the parser",
+        "(Findings tracked elsewhere)",
+        "Findings: two confirmed here",
+        "This file has two confirmed findings",
+        // An adverb before the count, a spelled count above five, or the PR as the subject.
+        "hosts only two findings",
+        "hosts six findings",
+        "holds exactly twelve findings",
+        "This PR hosts the two findings",
+        "The review has no findings here"
+      })
+  void aClauseAboutWhatTheFileHoldsIsFindingsTalk(String clause) {
+    assertTrue(OverviewScreen.talksAboutFindings(clause));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // The leading empty word the split yields is no finding count.
+        "(findings tracker)",
+        "(the findings tracker)",
+        "Findings",
+        "Findings model with a severity and a title",
+        // What the file does, before the finding word, is its role.
+        "Loads open findings from the store",
+        "Posts reported findings as inline threads",
+        "Resolves tracked findings",
+        "Returns no findings for an empty diff",
+        "Re-checks confirmed findings against the code",
+        "Processes findings in this batch of files"
+      })
+  void aClauseAboutWhatTheFileDoesIsNotFindingsTalk(String clause) {
+    assertFalse(OverviewScreen.talksAboutFindings(clause));
+  }
+
   @Test
-  void aClauseOpeningWithPunctuationBeforeFindingsIsNotFindingsTalk() {
-    // The leading empty word the split yields must not read as a finding count.
-    assertFalse(OverviewScreen.talksAboutFindings("(findings tracker)"));
+  void theFindingsCutKeepsTheRoleAndLeavesNoPlaceholder() {
     assertEquals(
         "(findings tracker) page for the dashboard",
         OverviewScreen.screenedText("(findings tracker) page for the dashboard", "+x", ""));
-    assertTrue(OverviewScreen.talksAboutFindings("hosts 2 findings"));
-    // A clause the finding word opens is judged by the words after it.
-    assertTrue(OverviewScreen.talksAboutFindings("Findings are reported inline for the parser"));
-    assertTrue(OverviewScreen.talksAboutFindings("(Findings tracked elsewhere)"));
-    assertFalse(OverviewScreen.talksAboutFindings("Findings model with a severity and a title"));
-    assertTrue(OverviewScreen.talksAboutFindings("Findings: two confirmed here"));
-    // Before the finding word, a role word is the file's role, not review bookkeeping.
-    assertFalse(OverviewScreen.talksAboutFindings("Loads open findings from the store"));
-    assertFalse(OverviewScreen.talksAboutFindings("Posts reported findings as inline threads"));
-    assertFalse(OverviewScreen.talksAboutFindings("Resolves tracked findings"));
-    // A file that handles findings is described by what it does, before the finding word.
-    assertFalse(OverviewScreen.talksAboutFindings("Returns no findings for an empty diff"));
-    assertFalse(OverviewScreen.talksAboutFindings("Re-checks confirmed findings against the code"));
-    assertFalse(OverviewScreen.talksAboutFindings("Processes findings in this batch of files"));
     assertEquals(
         "Returns no findings for an empty diff",
         OverviewScreen.screenedText("Returns no findings for an empty diff", "+x", ""));
-    assertTrue(OverviewScreen.talksAboutFindings("This file has two confirmed findings"));
-    // An adverb before the count, and a spelled count above five, are bookkeeping too.
-    assertTrue(OverviewScreen.talksAboutFindings("hosts only two findings"));
-    assertTrue(OverviewScreen.talksAboutFindings("This PR hosts the two findings"));
-    assertTrue(OverviewScreen.talksAboutFindings("The review has no findings here"));
-    // The cut never leaves a placeholder behind as the row's summary.
     assertEquals("", OverviewScreen.screenedText("TBD, hosts the two findings", "+x", ""));
     assertEquals(
         "renders it",
         OverviewScreen.screenedText("renders it; TBD, hosts the two findings", "+x", ""));
-    assertTrue(OverviewScreen.talksAboutFindings("hosts six findings"));
-    assertTrue(OverviewScreen.talksAboutFindings("holds exactly twelve findings"));
     // A comma part of findings talk inside a role clause is cut and the role kept.
     assertEquals(
         "renders the dashboard",
@@ -335,9 +351,6 @@ class OverviewScreenTest {
     assertEquals(
         "Loads open findings from the store",
         OverviewScreen.screenedText("Loads open findings from the store", "+x", ""));
-    assertFalse(OverviewScreen.talksAboutFindings("Findings"));
-    // The empty word before a leading parenthesis sits in the window and is no count.
-    assertFalse(OverviewScreen.talksAboutFindings("(the findings tracker)"));
     assertEquals(
         "Renders the parser",
         OverviewScreen.screenedText("Renders the parser; findings are reported inline", "+x", ""));
