@@ -168,7 +168,19 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
   always stands. A decline on an older round's finding goes through the same test in the backstop
   (`backstopEntry`, `reopenedEarlierDecline`): held `unresolved` when contradicted or resting on
   an unconfirmed premise, otherwise `justified` with `EARLIER_ROUND_ID` (0). Id 0 maps to no
-  finding, so it resolves no thread and never becomes a learning.
+  finding, so nothing keyed by id resolves or learns from it; the standing decline instead carries
+  its finding and the root of its own thread, found by marker and content
+  (`ReviewResult.EarlierRound`), which `ReviewPublisher.resolveAddressedThreads` resolves and
+  `FollowUpAnalyzer.survivingEarlierRoundDeclines` offers to the learnings capture (#958).
+- **Every finding carried in gets a status, and an earlier round's status is not movement**
+  (#957, #959). `backstopEntry` gives each cluster one entry: a hold, `superseded` when its code
+  left the diff, `resolved`/`justified` for a conversation clear/decline (re-checked like the
+  effective round's), or the thread decline's outcome. Each backstop status carries
+  `ReviewResult.EarlierRound`; its id is relative to its own round, so `HeadMovedGuard.findingsToCarry`
+  skips it. These statuses are recomputed every round (never persisted), so
+  `ReviewResult.resolvedPreviousCount` and `hasSupersededPrevious` leave them out: counted, they
+  would post the delta comment and re-post the summary on every push (#470). The summary's status
+  table counts them.
 - **A "Things to double-check" item is counted once and replaced only by the same defect** (#951,
   #961). A listed-only repeat at no higher severity is dropped by the open-thread guard
   (`restatesListed`); a finding at the same or higher severity replaces the item

@@ -667,7 +667,13 @@ diff contradicts keeps the finding open, and so does a lone "this cannot run
 concurrently" reply to a concurrency finding, because what makes a path
 concurrent (a server that handles each request on its own thread, an executor
 in another file) is rarely in the diff. Any other reply, or a second one,
-stands, and the finding is counted justified.
+stands: the finding is counted justified, its thread is resolved, and with
+review learnings on the reply is offered to the store under the same rules as
+any other decline. An older round's finding whose code left the diff is counted
+superseded, and one cleared or declined from the PR conversation is counted
+resolved or justified, so the summary's counts add up to the findings carried
+in. These are recomputed every round, so they never post a delta comment or
+re-post the summary by themselves.
 
 Set it to `false` to make a maintainer's reply final.
 
