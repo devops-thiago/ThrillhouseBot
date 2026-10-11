@@ -1640,6 +1640,55 @@ class VerdictBuilderTest {
   }
 
   @Test
+  void everyFileTheIgnoreListWithheldIsNamedInTheScopeNote() {
+    // #935: java #124's scope note said only "1 pure rename omitted" while pom.xml, the file the
+    // finding needed, was withheld and showed only as "…and 1 more file(s)".
+    var lock = new FileDiff("go/go.sum", "modified", 30, 2, 32, "@@ x");
+    var source = new FileDiff("go/main.go", "modified", 3, 1, 4, "@@ -1 +1 @@\n-a\n+b");
+    var ctx =
+        new ReviewContextLoader.ReviewContext(
+            List.of(lock, source),
+            "diff",
+            "",
+            0,
+            List.of(),
+            List.of(),
+            List.of(),
+            true,
+            false,
+            null,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            PathScopedInstructions.NONE,
+            List.of(),
+            "",
+            "",
+            "",
+            "",
+            List.of(source),
+            () -> new DiffLineResolver(Map.of()),
+            null);
+    var realSummaryBuilder =
+        new VerdictBuilder(
+            new PrSummaryGenerator(false),
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            BlockingStrictness.BALANCED);
+
+    var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
+
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .startsWith(
+                PrSummaryGenerator.SUMMARY_HEADING
+                    + "\n\n> **AI review scope:** 1 file excluded from AI review by the ignore"
+                    + " list (go/go.sum)\n\n"),
+        result.summaryMarkdown());
+  }
+
+  @Test
   void pureRenameRollupIsInsertedIntoPositiveSummaryAsAiReviewScope() {
     var pureRename = new FileDiff("new/Pure.java", "renamed", 0, 0, 0, null, "old/Pure.java");
     var ctx =

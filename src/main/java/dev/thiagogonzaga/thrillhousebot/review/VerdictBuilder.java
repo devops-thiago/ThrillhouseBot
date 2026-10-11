@@ -298,6 +298,7 @@ public class VerdictBuilder {
             changedFiles,
             ReviewDiffFormatter.formatPureRenameRollup(
                 ReviewDiffFormatter.pureRenameFiles(ctx.files())),
+            ReviewDiffFormatter.formatIgnoredFiles(ctx.files(), ctx.reviewableFiles()),
             ReviewDiffFormatter.formatUnmatchedIgnoreGlobs(ctx.unmatchedIgnoreGlobs()),
             PatchCoverageResolver.formatScopeNote(ctx.coverageArtifactRefusal()),
             SupersededFindingsCarryover.formatScopeNote(ctx.carried()),
@@ -671,6 +672,7 @@ public class VerdictBuilder {
   private record SummaryInputs(
       List<PrSummaryGenerator.ChangedFile> changedFiles,
       String pureRenameRollup,
+      String ignoredFiles,
       String unmatchedIgnoreGlobs,
       String coverageArtifactNotRead,
       String carriedFromSupersededRun,
@@ -689,7 +691,7 @@ public class VerdictBuilder {
         aiResponse,
         isFirstReview,
         diffStats,
-        new SummaryInputs(changedFiles, "", "", "", "", "", unresolvedPrevious),
+        new SummaryInputs(changedFiles, "", "", "", "", "", "", unresolvedPrevious),
         ciEvaluation,
         backstopStatuses);
   }
@@ -842,6 +844,7 @@ public class VerdictBuilder {
   private static String reviewScopeNote(SummaryInputs summaryInputs) {
     var notes = new ArrayList<String>(4);
     addScopeNote(notes, summaryInputs.pureRenameRollup());
+    addScopeNote(notes, summaryInputs.ignoredFiles());
     addScopeNote(notes, summaryInputs.unmatchedIgnoreGlobs());
     addScopeNote(notes, summaryInputs.coverageArtifactNotRead());
     addScopeNote(notes, summaryInputs.carriedFromSupersededRun());
