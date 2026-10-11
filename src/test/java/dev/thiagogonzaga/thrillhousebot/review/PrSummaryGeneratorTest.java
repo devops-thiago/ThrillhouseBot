@@ -2099,13 +2099,50 @@ class PrSummaryGeneratorTest {
         "The description omits the retry path, which the code never takes.",
         "The description does not cover the new module.",
         "The description promised retries; none exist.",
-        "The description leaves error handling unstated."
+        "The description leaves error handling unstated.",
+        "The description clearly asserts idempotency; the handler is not idempotent.",
+        "The description lists a retry path that no changed file has.",
+        "The PR body says results are cached.",
+        "The pull request's description mentions a five-minute cache.",
+        "The cache here is inconsistent with the stated five-minute limit.",
+        "Unlike the PR, the code retries once.",
+        "This contradicts the stated intent of the change."
       })
   void aDescriptionFindingWithAnyClaimVerbIsNamed(String description) {
     var finding = descriptionFinding("src/A.java", 3, "Retry path missing", description);
 
     assertEquals(
         List.of(finding), PrSummaryGenerator.descriptionFindings(List.of(), List.of(finding)));
+  }
+
+  @Test
+  void aFindingWithNoDescriptionIsJudgedOnItsTitle() {
+    var finding = descriptionFinding("src/A.java", 3, "Description claims a bounded cache", null);
+
+    assertEquals(
+        List.of(finding), PrSummaryGenerator.descriptionFindings(List.of(), List.of(finding)));
+  }
+
+  @Test
+  void aShapePiecedTogetherAcrossTitleAndDescriptionIsNotAClaim() {
+    // The title ends in "description" and the description opens with a claim verb: read as one
+    // text they would spell "description does not", which neither says on its own.
+    var split =
+        descriptionFinding(
+            "src/A.java", 3, "Queries run against the description", "does not escape HTML");
+    var linked = descriptionFinding("src/B.java", 7, "Sync of the linked", "issue list is stale");
+
+    assertEquals(List.of(), PrSummaryGenerator.descriptionFindings(List.of(), List.of(split)));
+    var summary =
+        generator.generate(
+            1,
+            10,
+            0,
+            List.of(),
+            summaryWithGaps(List.of("The description promises retries; none exist.")),
+            roundWith(List.of(linked), List.of()));
+    assertFalse(summary.contains(PrSummaryGenerator.GAPS_INTRO_WITH_ISSUE), summary);
+    assertTrue(summary.contains("The PR description does not fully match the change:"), summary);
   }
 
   @Test

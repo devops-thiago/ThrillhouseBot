@@ -78,11 +78,64 @@ class DescriptionGapScreenTest {
     assertEquals(List.of(gap), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
   }
 
-  @Test
-  void aQuoteTheDescriptionIsSaidToLackIsNotTakenForItsClaim() {
-    var gap = "The description never mentions 'the Redis cache layer', which the change adds.";
-
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The description never mentions 'the Redis cache layer', which the change adds.",
+        "The description does not state 'the Redis cache layer' anywhere.",
+        "The description doesn't say 'the Redis cache layer' is added.",
+        "The description fails to mention 'the Redis cache layer'.",
+        "The description leaves out 'the Redis cache layer' entirely.",
+        "The description omits 'the Redis cache layer'.",
+        "Not mentioned in the description: 'the Redis cache layer'.",
+        "Nothing in the description covers 'the Redis cache layer'."
+      })
+  void aQuoteTheDescriptionIsSaidToLackIsNotTakenForItsClaim(String gap) {
     assertEquals(List.of(gap), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
+  }
+
+  @Test
+  void aNegationAboutTheCodeDoesNotUnsayWhatTheDescriptionIsSaidToSay() {
+    // The negation sits before the cue, and the verb introduces the quote: the quote is the
+    // description's claim, so a misquote of it is dropped.
+    var gap =
+        "The code doesn't do what the description says: 'emails are sent the instant an episode"
+            + " goes live'.";
+
+    assertEquals(List.of(), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
+  }
+
+  @Test
+  void aLongRunBetweenTheCueAndTheQuoteKeepsTheCue() {
+    var gap =
+        "The description states as its relocation guarantee that subscribers keep the old"
+            + " documentation path only until the rename lands with content unchanged and the"
+            + " quote reads 'the README moves to docs/RUST-VEV10.md unchanged'.";
+
+    assertEquals(List.of(), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The PR's description reads 'the README moves to docs/RUST-V8.md'.",
+        "The pull request states 'the README moves to docs/RUST-V8.md'.",
+        "The PR title says 'the README moves to docs/RUST-V8.md'.",
+        "The PR body claims that 'the README moves to docs/RUST-V8.md'.",
+        "The author promises 'the README moves to docs/RUST-V8.md'."
+      })
+  void everyCueAttributesTheQuoteToTheDescription(String gap) {
+    assertEquals(List.of(), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The page's <title> element reads 'Bookings dashboard home' on every route.",
+        "The response body reads 'retry after thirty seconds' on a conflict."
+      })
+  void aBareTitleOrBodyIsNotThePullRequests(String gap) {
+    assertFalse(DescriptionGapScreen.misquotes(gap, DescriptionGapScreen.normalize(RUST_159)));
   }
 
   @Test
@@ -173,10 +226,30 @@ class DescriptionGapScreenTest {
         "States that results are cached, but nothing caches them.",
         "Not mentioned: the change also adds a CI workflow and a Dockerfile.",
         "The stated five-minute cache is not implemented.",
-        "Scope is narrower than the change: only the scheduler is covered."
+        "Scope is narrower than the change: only the scheduler is covered.",
+        "The PR body says the cache is bounded; it is not.",
+        "The pull request's title names only the scheduler; the change also adds a CLI.",
+        "The PR says it adds retries; no retry loop exists.",
+        "Acceptance criteria require rejecting past dates; nothing does.",
+        "The Dockerfile the change adds is never mentioned.",
+        "Unmentioned: the change also adds a CI workflow.",
+        "Says the cache is bounded; it is not."
       })
   void aGapCitingTheDescriptionOrALinkedIssueIsKept(String gap) {
     assertTrue(DescriptionGapScreen.cites(gap), gap);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The configuration doc's comment mentions TRACKED_PORTS with a space separator while the"
+            + " parser splits on commas.",
+        "The page <title> is set after the content loads, so the tab reads blank at first.",
+        "The response body is parsed as JSON even when the content type is text."
+      })
+  void aGapNamingNeitherTheDescriptionNorAnIssueIsNotCiting(String gap) {
+    // A bare "mentions", "title" or "body" names the change's own documents or payloads.
+    assertFalse(DescriptionGapScreen.cites(gap), gap);
   }
 
   @Test

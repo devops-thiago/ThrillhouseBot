@@ -767,9 +767,12 @@ class DescriptionGapCarryoverTest {
 
     /** ThrillhouseBot-test#159's PR text. */
     private static final String PR_TEXT =
-        "Title: feat(rust): bookings\nDescription:\nThe README moves to `docs/RUST-V10.md`"
-            + " unchanged.\nNotification emails are sent to subscribers as soon as an episode"
-            + " goes live.\n";
+        """
+        Title: feat(rust): bookings
+        Description:
+        The README moves to `docs/RUST-V10.md` unchanged.
+        Notification emails are sent to subscribers as soon as an episode goes live.
+        """;
 
     private static final String MISQUOTE =
         "PR description claims '[t]he README moves to docs/RUST-VEV10.md unchanged' — the rename"

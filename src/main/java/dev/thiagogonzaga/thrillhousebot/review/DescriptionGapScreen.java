@@ -15,7 +15,6 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
@@ -43,6 +42,9 @@ import java.util.regex.Pattern;
  *
  * <p>The screen runs on the summary call's own gaps and on the gaps carried from the previous round
  * alike ({@link DescriptionGapCarryover.Carry#apply}), so a misquote carried over is dropped too.
+ *
+ * <p>The cues are lists of small patterns, one per shape, rather than one alternation each: the
+ * rule reads shape by shape, and each pattern stays well under the regex complexity bound.
  */
 final class DescriptionGapScreen {
 
@@ -51,45 +53,76 @@ final class DescriptionGapScreen {
   /** Words a quoted passage needs, after normalising, before it is judged. */
   static final int MIN_QUOTE_WORDS = 2;
 
-  /** Characters before a quote searched for the cue that attributes it to the description. */
-  private static final int CUE_WINDOW = 120;
-
   /**
    * A quoted passage: in double quotes, or in single quotes whose opening one does not follow a
    * letter and whose closing one is not followed by one, so the apostrophes of "PR's" and "doesn't"
    * neither open nor close it. Curly quotes are folded to these before matching.
    */
   private static final Pattern QUOTED =
-      Pattern.compile("\"([^\"\n]++)\"" + "|(?<![\\p{L}\\p{N}])'([^\n]+?)'(?![\\p{L}\\p{N}])");
+      Pattern.compile("\"([^\"\n]++)\"|(?<![\\p{L}\\p{N}])'([^\n]+?)'(?![\\p{L}\\p{N}])");
+
+  /** The pull request's own text named as such: its description, or its author. */
+  private static final Pattern PR_TEXT = Pattern.compile("(?i)\\b(?:description|author)\\b");
+
+  /** The pull request's title or body, named as the PR's: a bare "title" may be a page's. */
+  private static final Pattern PR_TITLE_OR_BODY =
+      Pattern.compile("(?i)\\b(?:pr|pull request)(?:['’]s)?\\s++(?:title|body)\\b");
+
+  /** The pull request stating or claiming something: "the PR states", "the pull request says". */
+  private static final Pattern PR_SAYS =
+      Pattern.compile(
+          "(?i)\\b(?:pr|pull request)(?:['’]s)?\\s++(?:(?:state|claim|promise|mention|read)s?|says)\\b");
+
+  /** A claim verb opening the text, its subject elided under the section's intro line. */
+  private static final Pattern LEADING_CLAIM_VERB =
+      Pattern.compile("(?i)^\\s*+(?:(?:claim|state|promise)s?|says)\\b");
 
   /**
    * What attributes the quote that follows it to the pull request's own text: the description, its
    * title or body, the author, or the PR stating or claiming something.
    */
-  private static final Pattern CLAIM_CUE =
-      Pattern.compile(
-          "(?i)\\b(?:description|title|body|author|(?:pr|pull request)(?:['’]s)?\\s++"
-              + "(?:states?|claims?|says|promises?|mentions?|reads?))\\b"
-              + "|^\\s*+(?:claims?|states?|says|promises?)\\b");
+  private static final List<Pattern> CLAIM_CUES =
+      List.of(PR_TEXT, PR_TITLE_OR_BODY, PR_SAYS, LEADING_CLAIM_VERB);
 
   /**
    * A clause saying the description does not hold something: the quote after it is what the change
-   * has and the description lacks, so it is not the description's claim.
+   * has and the description lacks, so it is not the description's claim. Negation words, then the
+   * verbs and the two-word verbs that say something is left out.
    */
-  private static final Pattern NEGATED_CUE =
+  private static final List<Pattern> NEGATED_CUES =
+      List.of(
+          Pattern.compile("(?i)\\b(?:not|never|no|nothing|without|missing|omitted)\\b"),
+          Pattern.compile("(?i)\\b(?:omits?|lacks?|doesn['’]t)\\b"),
+          Pattern.compile("(?i)\\b(?:fails?\\s++to|leaves?\\s++out)\\b"));
+
+  /**
+   * An attribution verb introducing the quote directly, with "that" or a colon allowed between:
+   * "the description says: '…'", "the PR claims that '…'".
+   */
+  private static final Pattern VERB_BEFORE_QUOTE =
       Pattern.compile(
-          "(?i)\\b(?:not|never|no|nothing|without|omits?|omitted|missing|lacks?"
-              + "|doesn['’]t|fails?\\s++to|leaves?\\s++out)\\b");
+          "(?i)\\b(?:state|claim|say|promise|mention|read)s?(?:\\s++that)?\\s*+:?\\s*+$");
+
+  /** A linked issue, or what it asks for. */
+  private static final Pattern LINKED_ISSUE =
+      Pattern.compile("(?i)\\b(?:linked issues?|issue\\s*+#\\d+|acceptance criteri\\w*)\\b");
 
   /**
    * What a gap bullet cites when it names the description or a linked issue. A bullet may elide its
-   * subject under the section's intro line ("Claims retries…"), so a leading claim verb counts.
+   * subject under the section's intro line ("Claims retries…", "Not mentioned: …"), so a claim
+   * word, a leading claim verb and a negated mention count. A bare "mentions" does not: "the
+   * configuration doc mentions …" cites the change's own documents.
    */
-  private static final Pattern CITATION =
-      Pattern.compile(
-          "(?i)\\b(?:description|pr body|pr title|title|author|linked issues?|issue\\s*+#\\d+"
-              + "|acceptance criteri\\w*|claim\\w*|promis\\w*|stated|mention\\w*|narrower)\\b"
-              + "|^\\s*+(?:states|says)\\b");
+  private static final List<Pattern> CITATIONS =
+      List.of(
+          PR_TEXT,
+          PR_TITLE_OR_BODY,
+          PR_SAYS,
+          LINKED_ISSUE,
+          Pattern.compile("(?i)\\b(?:claim\\w*|promis\\w*|stated|narrower)\\b"),
+          Pattern.compile(
+              "(?i)\\b(?:un|(?:not|never|nothing|doesn['’]t|without)\\s++)mention\\w*\\b"),
+          Pattern.compile("(?i)^\\s*+(?:states|says)\\b"));
 
   /**
    * What ends a clause before a quote: punctuation that separates clauses, a sentence end, or a
@@ -116,39 +149,38 @@ final class DescriptionGapScreen {
    *     an issue is a citation, not a misquote
    */
   static List<String> screen(List<String> gaps, String prText, String linkedIssues) {
-    var source = normalize(prText == null ? "" : prText);
-    var withIssues = normalize((prText == null ? "" : prText) + "\n" + linkedIssues);
-    var kept = new ArrayList<String>(gaps.size());
-    for (var gap : gaps) {
-      if (cites(gap) && (source.isEmpty() || !misquotes(gap, withIssues))) {
-        kept.add(gap);
-      }
-    }
-    return kept.size() == gaps.size() ? gaps : List.copyOf(kept);
+    var text = prText == null ? "" : prText;
+    var source = normalize(text);
+    var withIssues = normalize(text + "\n" + linkedIssues);
+    var kept =
+        gaps.stream()
+            .filter(gap -> cites(gap) && (source.isEmpty() || !misquotes(gap, withIssues)))
+            .toList();
+    return kept.size() == gaps.size() ? gaps : kept;
   }
 
   /** Whether {@code gap} names the description, its title, the author or a linked issue. */
   static boolean cites(String gap) {
-    return DescriptionGapCarryover.linkedIssueGap(gap) != null || CITATION.matcher(gap).find();
+    return DescriptionGapCarryover.linkedIssueGap(gap) != null || anyFinds(CITATIONS, gap);
   }
 
   /**
    * Whether {@code gap} attributes to the description a quoted passage that {@code
    * normalizedSource} (already {@linkplain #normalize normalised}) does not contain. Each quote is
-   * weighed on the text since the previous quote ended, so a quote giving what the change does
-   * after a quoted claim is not taken for a second claim.
+   * weighed on the clause before it, read from where the previous quote ended, so a quote giving
+   * what the change does after a quoted claim is not taken for a second claim. The clause is read
+   * whole: a long run between the cue and the quote does not lose the cue.
    */
   static boolean misquotes(String gap, String normalizedSource) {
     var text = foldQuotes(gap);
     var quotes = QUOTED.matcher(text);
     var since = 0;
     while (quotes.find()) {
-      var lead =
-          clauseOf(text.substring(Math.max(since, quotes.start() - CUE_WINDOW), quotes.start()));
+      var lead = clauseOf(text.substring(since, quotes.start()));
       since = quotes.end();
-      var quote = quotes.group(1) != null ? quotes.group(1) : quotes.group(2);
-      if (CLAIM_CUE.matcher(lead).find()
-          && !NEGATED_CUE.matcher(lead).find()
+      var quote = quotes.group(quotes.group(1) != null ? 1 : 2);
+      if (anyFinds(CLAIM_CUES, lead)
+          && !negated(lead)
           && judged(quote)
           && !appearsIn(quote, normalizedSource)) {
         return true;
@@ -168,6 +200,35 @@ final class DescriptionGapScreen {
       start = breaks.end();
     }
     return lead.substring(start);
+  }
+
+  /**
+   * Whether {@code lead} says the description lacks the quote rather than makes it. A negation
+   * anywhere in the clause counts ("Not mentioned in the description: '…'", "nothing in the
+   * description covers '…'"), except when an attribution verb introduces the quote directly: then
+   * only a negation after the cue negates the verb, so "the code doesn't do what the description
+   * says: '…'" still attributes the quote to the description, while "the description never mentions
+   * '…'" does not.
+   */
+  private static boolean negated(String lead) {
+    var from = VERB_BEFORE_QUOTE.matcher(lead).find() ? lastCueEnd(lead) : 0;
+    return anyFinds(NEGATED_CUES, lead.substring(from));
+  }
+
+  /** Where the last claim cue in {@code lead} ends; 0 without one. */
+  private static int lastCueEnd(String lead) {
+    var end = 0;
+    for (var cue : CLAIM_CUES) {
+      var found = cue.matcher(lead);
+      while (found.find()) {
+        end = Math.max(end, found.end());
+      }
+    }
+    return end;
+  }
+
+  private static boolean anyFinds(List<Pattern> patterns, String text) {
+    return patterns.stream().anyMatch(pattern -> pattern.matcher(text).find());
   }
 
   /** Whether a quote has enough words to be judged. */

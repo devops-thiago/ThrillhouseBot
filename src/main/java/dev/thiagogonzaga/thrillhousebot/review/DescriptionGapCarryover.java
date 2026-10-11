@@ -30,6 +30,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.IntStream;
 
 /**
  * Carries the Description vs. Implementation gaps across review rounds (#923), the way #917 carries
@@ -278,19 +279,14 @@ final class DescriptionGapCarryover {
   static List<String> listedGaps(String body) {
     var gaps = new ArrayList<String>();
     var lines = body.split("\n", -1);
-    var start = -1;
-    for (var i = 0; i < lines.length && start < 0; i++) {
-      if (lines[i].strip().equals(PrSummaryGenerator.GAPS_HEADING)) {
-        start = i + 1;
-      }
-    }
-    if (start < 0) {
+    var heading = gapsHeadingLine(lines);
+    if (heading < 0) {
       return List.of();
     }
     StringBuilder open = null;
-    for (var i = start; i < lines.length; i++) {
+    for (var i = heading + 1; i < lines.length; i++) {
       var line = lines[i].strip();
-      if (line.startsWith("#") || line.startsWith("---") || line.startsWith("<")) {
+      if (endsGapsSection(line)) {
         break;
       }
       if (line.startsWith("- ")) {
@@ -319,6 +315,19 @@ final class DescriptionGapCarryover {
     if (gap != null) {
       gaps.add(gap.toString());
     }
+  }
+
+  /** The line holding the Description vs. Implementation heading, or -1 without one. */
+  private static int gapsHeadingLine(String[] lines) {
+    return IntStream.range(0, lines.length)
+        .filter(i -> lines[i].strip().equals(PrSummaryGenerator.GAPS_HEADING))
+        .findFirst()
+        .orElse(-1);
+  }
+
+  /** Whether a stripped line after the heading starts the next section or the comment's footer. */
+  private static boolean endsGapsSection(String line) {
+    return line.startsWith("#") || line.startsWith("---") || line.startsWith("<");
   }
 
   /**

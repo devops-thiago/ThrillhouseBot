@@ -122,24 +122,46 @@ public class PrSummaryGenerator {
    */
   static final String GAP_FINDING_PREFIX = "Reported as a finding: ";
 
+  /** A linked issue named in a finding, for the section's intro line. */
+  private static final Pattern LINKED_ISSUE_MENTION = Pattern.compile("(?i)\\blinked\\s++issue\\b");
+
+  /** Verbs after "description" that say what it asserts: "the description claims/states/says…". */
+  private static final String CLAIMING_VERBS = "claim(?:s|ed)?|state[sd]?|says|said";
+
+  /** …what it promises or implies. */
+  private static final String PROMISING_VERBS = "promise[sd]?|asserts|implies|advertises";
+
+  /** …what it describes or covers. */
+  private static final String DESCRIBING_VERBS = "mentions?|describes?|lists|documents|covers";
+
+  /** …what it leaves out: "the description omits/does not/never/leaves…". */
+  private static final String DENYING_VERBS = "omit(?:s|ted)?|does\\s++not|doesn['’]t|never|leaves";
+
   /**
    * What marks a finding as a mismatch between the change and what the PR description or its linked
    * issue says (#964): "Description claims…", "the PR description states…", "contrary to the PR's
-   * stated behavior", "the linked issue asks…".
+   * stated behavior", "the linked issue asks…". One pattern per shape, and the verb vocabulary in
+   * named parts, so each stays well under the regex complexity bound. A finding's title and
+   * description are each matched on their own, so a shape cannot be pieced together across them.
    */
-  private static final Pattern DESCRIPTION_CLAIM =
-      Pattern.compile(
-          "(?i)\\b(?:(?:pr|pull request)(?:['’]s)?\\s++(?:description|body)"
-              + "|description\\s++(?:\\w+\\s+)?(?:claim(?:s|ed)?|state[sd]?|says|said"
-              + "|promise[sd]?|omit(?:s|ted)?|mentions?|describes?|lists|documents|advertises"
-              + "|asserts|implies|covers|does\\s++not|doesn['’]t|never|leaves)"
-              + "|stated\\s++(?:behaviou?r|intent|purpose)"
-              + "|(?:contrary to|contradicts|inconsistent with|unlike)\\s++the\\s++"
-              + "(?:pr|pull request|description|stated)"
-              + "|linked\\s++issue)\\b");
-
-  /** A linked issue named in a finding, for the section's intro line. */
-  private static final Pattern LINKED_ISSUE_MENTION = Pattern.compile("(?i)\\blinked\\s++issue\\b");
+  private static final List<Pattern> DESCRIPTION_CLAIMS =
+      List.of(
+          Pattern.compile("(?i)\\b(?:pr|pull request)(?:['’]s)?\\s++(?:description|body)\\b"),
+          Pattern.compile(
+              "(?i)\\bdescription\\s++(?:\\w+\\s+)?(?:"
+                  + CLAIMING_VERBS
+                  + "|"
+                  + PROMISING_VERBS
+                  + "|"
+                  + DESCRIBING_VERBS
+                  + "|"
+                  + DENYING_VERBS
+                  + ")\\b"),
+          Pattern.compile("(?i)\\bstated\\s++(?:behaviou?r|intent|purpose)\\b"),
+          Pattern.compile(
+              "(?i)\\b(?:contrary to|contradicts|inconsistent with|unlike)\\s++the\\s++"
+                  + "(?:pr|pull request|description|stated)\\b"),
+          LINKED_ISSUE_MENTION);
 
   /**
    * One changed file in the walkthrough: its path, the diff's authoritative change type, and
@@ -663,8 +685,7 @@ public class PrSummaryGenerator {
       return;
     }
     sb.append(GAPS_HEADING).append("\n");
-    var fromIssue =
-        findings.stream().anyMatch(f -> LINKED_ISSUE_MENTION.matcher(findingText(f)).find());
+    var fromIssue = findings.stream().anyMatch(PrSummaryGenerator::mentionsLinkedIssue);
     sb.append(fromIssue ? GAPS_INTRO_WITH_ISSUE : gapsIntro(gaps));
     for (String gap : gaps) {
       // One line per gap: a gap's own line break could otherwise end the section early, and the
@@ -687,21 +708,29 @@ public class PrSummaryGenerator {
   /**
    * The findings the Description vs. Implementation section names, once each: the ones a gap
    * collapsed onto, in the gaps' order, then every other finding whose title or description says it
-   * reports a mismatch with the PR description or a linked issue ({@link #DESCRIPTION_CLAIM}), in
+   * reports a mismatch with the PR description or a linked issue ({@link #DESCRIPTION_CLAIMS}), in
    * the order the summary lists findings.
    */
   static List<Finding> descriptionFindings(List<Finding> collapsedOnto, List<Finding> findings) {
     var named = new LinkedHashSet<Finding>(collapsedOnto);
-    findings.stream()
-        .filter(f -> DESCRIPTION_CLAIM.matcher(findingText(f)).find())
-        .forEach(named::add);
+    findings.stream().filter(PrSummaryGenerator::reportsDescriptionMismatch).forEach(named::add);
     return List.copyOf(named);
   }
 
-  private static String findingText(Finding finding) {
-    return Objects.requireNonNullElse(finding.title(), "")
-        + "\n"
-        + Objects.requireNonNullElse(finding.description(), "");
+  /** Whether the finding's title or its description, on its own, holds a description claim. */
+  private static boolean reportsDescriptionMismatch(Finding finding) {
+    return findingTexts(finding)
+        .anyMatch(text -> DESCRIPTION_CLAIMS.stream().anyMatch(p -> p.matcher(text).find()));
+  }
+
+  /** Whether the finding's title or its description names a linked issue. */
+  private static boolean mentionsLinkedIssue(Finding finding) {
+    return findingTexts(finding).anyMatch(text -> LINKED_ISSUE_MENTION.matcher(text).find());
+  }
+
+  /** The finding's title and description, each as its own text; a {@code null} one is left out. */
+  private static Stream<String> findingTexts(Finding finding) {
+    return Stream.of(finding.title(), finding.description()).filter(Objects::nonNull);
   }
 
   /** The intro line when a linked issue is among what the section lists. */
