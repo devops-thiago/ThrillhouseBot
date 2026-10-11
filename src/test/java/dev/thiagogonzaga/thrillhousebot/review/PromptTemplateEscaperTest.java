@@ -42,6 +42,7 @@ class PromptTemplateEscaperTest {
     assertEquals("", PromptTemplateEscaper.unfence(null));
     assertEquals("plain text", PromptTemplateEscaper.unfence("plain text"));
     assertEquals("one\nline", PromptTemplateEscaper.unfence("one\nline"));
+    assertEquals("three\nplain\nlines", PromptTemplateEscaper.unfence("three\nplain\nlines"));
     assertEquals(opening, PromptTemplateEscaper.unfence(opening));
     var mismatched = opening + "\nx\n" + otherClosing;
     assertEquals(mismatched, PromptTemplateEscaper.unfence(mismatched));
