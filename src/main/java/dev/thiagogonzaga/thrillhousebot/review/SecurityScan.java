@@ -121,6 +121,24 @@ public class SecurityScan {
    */
   static final int MIN_TOPIC_WORDS = 2;
 
+  /**
+   * Title words that name an infrastructure defect no IaC rule raises, but that shares a rule's
+   * defect word: a root filesystem left writable, a root-owned path the image's user cannot write,
+   * a public subnet. A model title using one is its own finding, not a restatement of the scan's
+   * (#921). Hyphenated words are read joined ({@code read-only} as {@code readonly}).
+   */
+  static final Set<String> OTHER_IAC_DEFECT_WORDS =
+      Set.of(
+          "filesystem",
+          "readonly",
+          "writable",
+          "unwritable",
+          "owned",
+          "ownership",
+          "chown",
+          "subnet",
+          "subnets");
+
   /** Longest credential key name a title repeats. */
   private static final int MAX_KEY_NAME = 40;
 
@@ -892,9 +910,10 @@ public class SecurityScan {
 
   /**
    * Whether a model finding near an IaC detection names the rule's defect by one of its {@link
-   * SecurityRule#defectWords}. The words are chosen so that none describes a different defect that
-   * can sit within the tolerance: {@code root} near a final-stage {@code USER root} cannot be a
-   * root-owned path the image's user cannot write, because the image's user is root.
+   * SecurityRule#defectWords}, and no word of {@link #OTHER_IAC_DEFECT_WORDS}. A defect word alone
+   * can name a neighbouring defect too: "Root filesystem is writable" beside a final-stage {@code
+   * USER root}, or "Public subnet assigns public IPs" beside a public bucket ACL, are different
+   * findings, and their own words say so.
    */
   private static boolean nearbyIacDefect(
       ReviewResponse.Finding finding,
@@ -902,7 +921,8 @@ public class SecurityScan {
       Set<String> titleWords,
       SecurityRule rule) {
     return Math.abs(finding.line() - scanned.line()) <= FindingDeduplicator.LINE_TOLERANCE
-        && titleWords.stream().anyMatch(rule.defectWords()::contains);
+        && titleWords.stream().anyMatch(rule.defectWords()::contains)
+        && titleWords.stream().noneMatch(OTHER_IAC_DEFECT_WORDS::contains);
   }
 
   private static long topicWords(Set<String> titleWords, SecurityRule rule) {

@@ -828,7 +828,9 @@ secret, when it sits on the matched line and its title uses one of the rule's
 words, or, for an IaC rule, when it is within three lines and its title uses a
 word that names that rule's defect (`root`, `privileged`,
 `hostNetwork`/`hostPID`/`hostIPC`, `SSH`/`RDP`/`WinRM`/`Telnet`, `public`,
-`wildcard`/`administrator`, `encryption`/`encrypted`/`unencrypted`). A title
+`wildcard`/`administrator`, `encryption`/`encrypted`/`unencrypted`) and no word
+naming a neighbouring defect (`filesystem`, `read-only`, `writable`,
+`root-owned`, `subnet`). A title
 that only names a key (`PAYMENT_API_KEY is never read`) is a different defect
 and is kept.
 

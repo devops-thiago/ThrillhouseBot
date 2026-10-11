@@ -492,6 +492,30 @@ class SecurityScanTest {
   }
 
   @Test
+  void aNeighbouringDefectThatSharesADefectWordIsKept() {
+    var dockerfile = added("node/Dockerfile", "FROM node:20", "USER root", "ENTRYPOINT [\"node\"]");
+    for (var title :
+        List.of(
+            "Root filesystem is not read-only",
+            "Container root filesystem is writable",
+            "/app is left root-owned")) {
+      var merged =
+          merge(
+              scan(false, true),
+              response(modelFinding("node/Dockerfile", 3, title, "d")),
+              List.of(dockerfile));
+      assertEquals(2, merged.findings().size(), title);
+    }
+    var bucket = added("s3.tf", "  acl = \"public-read\"", "  subnet_id = aws_subnet.a.id");
+    var subnet =
+        merge(
+            scan(false, true),
+            response(modelFinding("s3.tf", 2, "Public subnet assigns public IPs", "d")),
+            List.of(bucket));
+    assertEquals(2, subnet.findings().size());
+  }
+
+  @Test
   void aDefectWordBeyondTheLineToleranceIsADifferentFinding() {
     var lines = new ArrayList<>(List.of("FROM node:20", "USER root"));
     for (int i = 0; i < FindingDeduplicator.LINE_TOLERANCE + 1; i++) {
