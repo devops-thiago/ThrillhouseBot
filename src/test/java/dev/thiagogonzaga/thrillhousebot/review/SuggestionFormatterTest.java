@@ -108,8 +108,8 @@ class SuggestionFormatterTest {
     var key = SuggestionFormatter.findingKey("Main.java", 10, "Bug");
     assertTrue(key.matches("[0-9a-f]{8}"), key);
     assertEquals(key, SuggestionFormatter.findingKey("Main.java", 10, "Bug"));
-    assertFalse(key.equals(SuggestionFormatter.findingKey("Main.java", 11, "Bug")));
-    assertFalse(key.equals(SuggestionFormatter.findingKey("Main.java", 10, "Other bug")));
+    assertNotEquals(key, SuggestionFormatter.findingKey("Main.java", 11, "Bug"));
+    assertNotEquals(key, SuggestionFormatter.findingKey("Main.java", 10, "Other bug"));
     assertEquals(
         SuggestionFormatter.findingKey(null, 1, null), SuggestionFormatter.findingKey("", 1, ""));
     org.junit.jupiter.api.Assertions.assertThrows(
