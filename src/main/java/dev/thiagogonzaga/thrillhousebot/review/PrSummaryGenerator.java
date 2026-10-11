@@ -130,7 +130,9 @@ public class PrSummaryGenerator {
   private static final Pattern DESCRIPTION_CLAIM =
       Pattern.compile(
           "(?i)\\b(?:(?:pr|pull request)(?:['’]s)?\\s++(?:description|body)"
-              + "|description\\s++(?:claims?|states?|says|promises?)"
+              + "|description\\s++(?:\\w+\\s+)?(?:claim(?:s|ed)?|state[sd]?|says|said"
+              + "|promise[sd]?|omit(?:s|ted)?|mentions?|describes?|lists|documents|advertises"
+              + "|asserts|implies|covers|does\\s++not|doesn['’]t|never|leaves)"
               + "|stated\\s++(?:behaviou?r|intent|purpose)"
               + "|(?:contrary to|contradicts|inconsistent with|unlike)\\s++the\\s++"
               + "(?:pr|pull request|description|stated)"

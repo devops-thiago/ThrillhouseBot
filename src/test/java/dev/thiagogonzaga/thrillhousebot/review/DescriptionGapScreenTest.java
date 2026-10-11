@@ -79,6 +79,20 @@ class DescriptionGapScreenTest {
   }
 
   @Test
+  void aQuoteTheDescriptionIsSaidToLackIsNotTakenForItsClaim() {
+    var gap = "The description never mentions 'the Redis cache layer', which the change adds.";
+
+    assertEquals(List.of(gap), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
+  }
+
+  @Test
+  void anElidedSubjectStillAttributesTheQuote() {
+    var gap = "Claims 'the README moves to docs/RUST-V8.md' while the rename is elsewhere.";
+
+    assertEquals(List.of(), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
+  }
+
+  @Test
   void aColonKeepsTheCueWithItsQuote() {
     var gap = "The description states: 'the README moves to docs/RUST-V8.md'.";
 

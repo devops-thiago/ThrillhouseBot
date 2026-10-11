@@ -69,7 +69,17 @@ final class DescriptionGapScreen {
   private static final Pattern CLAIM_CUE =
       Pattern.compile(
           "(?i)\\b(?:description|title|body|author|(?:pr|pull request)(?:['’]s)?\\s++"
-              + "(?:states?|claims?|says|promises?|mentions?|reads?))\\b");
+              + "(?:states?|claims?|says|promises?|mentions?|reads?))\\b"
+              + "|^\\s*+(?:claims?|states?|says|promises?)\\b");
+
+  /**
+   * A clause saying the description does not hold something: the quote after it is what the change
+   * has and the description lacks, so it is not the description's claim.
+   */
+  private static final Pattern NEGATED_CUE =
+      Pattern.compile(
+          "(?i)\\b(?:not|never|no|nothing|without|omits?|omitted|missing|lacks?"
+              + "|doesn['’]t|fails?\\s++to|leaves?\\s++out)\\b");
 
   /**
    * What a gap bullet cites when it names the description or a linked issue. A bullet may elide its
@@ -137,7 +147,10 @@ final class DescriptionGapScreen {
           clauseOf(text.substring(Math.max(since, quotes.start() - CUE_WINDOW), quotes.start()));
       since = quotes.end();
       var quote = quotes.group(1) != null ? quotes.group(1) : quotes.group(2);
-      if (CLAIM_CUE.matcher(lead).find() && judged(quote) && !appearsIn(quote, normalizedSource)) {
+      if (CLAIM_CUE.matcher(lead).find()
+          && !NEGATED_CUE.matcher(lead).find()
+          && judged(quote)
+          && !appearsIn(quote, normalizedSource)) {
         return true;
       }
     }

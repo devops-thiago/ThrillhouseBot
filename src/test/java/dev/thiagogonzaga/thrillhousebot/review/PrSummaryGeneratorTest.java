@@ -23,6 +23,8 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class PrSummaryGeneratorTest {
 
@@ -2089,6 +2091,30 @@ class PrSummaryGeneratorTest {
                 + "Description claims five-minute result caching; no cache exists in the code"
                 + " (`go/handler.go:35`)\n"),
         summary);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The description omits the retry path, which the code never takes.",
+        "The description does not cover the new module.",
+        "The description promised retries; none exist.",
+        "The description leaves error handling unstated."
+      })
+  void aDescriptionFindingWithAnyClaimVerbIsNamed(String description) {
+    var finding = descriptionFinding("src/A.java", 3, "Retry path missing", description);
+
+    assertEquals(
+        List.of(finding), PrSummaryGenerator.descriptionFindings(List.of(), List.of(finding)));
+  }
+
+  @Test
+  void aFindingAboutADescriptionFieldIsNotNamed() {
+    var finding =
+        descriptionFinding(
+            "src/A.java", 3, "Unescaped column", "The description column is rendered unescaped.");
+
+    assertEquals(List.of(), PrSummaryGenerator.descriptionFindings(List.of(), List.of(finding)));
   }
 
   @Test
