@@ -203,6 +203,13 @@ final class SecretScanner {
       Pattern.compile("\\$[A-Za-z_]\\w{0,100}+|%[A-Za-z_]\\w{0,100}+%");
 
   /**
+   * A shell reference with a default ({@code ${VAR:-default}}, {@code ${VAR-default}}, {@code
+   * ${VAR:=default}}, {@code ${VAR=default}}); group 1 is the default, which is written out.
+   */
+  private static final Pattern SHELL_DEFAULT =
+      Pattern.compile("\\$\\{[A-Za-z_]\\w{0,100}+:?[-=]([^}]{0,200}+)}");
+
+  /**
    * Case-insensitive fragments that mark a value as a placeholder rather than a credential. Each is
    * a word no provider's random alphabet produces by chance at a rate that matters.
    */
@@ -403,10 +410,26 @@ final class SecretScanner {
   }
 
   /**
-   * Whether every credential-named key the line assigns gets an {@link #isInterpolation
-   * interpolation} or a {@link #isPlaceholder placeholder}, at least one key is assigned, and no
-   * rule of {@link #scan} matches the line (#926). Such a line names where a credential comes from,
-   * or stands in for one in documentation: {@code ENV API_TOKEN=${API_TOKEN}}, {@code
+   * Whether a value stands in for a credential rather than writing one out: an {@link
+   * #isInterpolation interpolation} or a {@link #isPlaceholder placeholder}. A shell default
+   * ({@code ${API_TOKEN:-…}}) is written out, so it counts only when the default is empty or itself
+   * a stand-in: {@code ${API_TOKEN:-changeme}} is one, {@code ${API_TOKEN:-q8#Lm2…}} is a committed
+   * credential.
+   */
+  private static boolean isStandIn(String value) {
+    Matcher shellDefault = SHELL_DEFAULT.matcher(value);
+    if (shellDefault.matches()) {
+      var fallback = shellDefault.group(1);
+      return fallback.isEmpty() || isStandIn(fallback);
+    }
+    return isInterpolation(value) || isPlaceholder(value);
+  }
+
+  /**
+   * Whether every credential-named key the line assigns gets a {@link #isStandIn stand-in}, with a
+   * shell default only when the default is one too, at least one key is assigned, and no rule of
+   * {@link #scan} matches the line (#926). Such a line names where a credential comes from, or
+   * stands in for one in documentation: {@code ENV API_TOKEN=${API_TOKEN}}, {@code
    * FLEET_API_TOKEN=changeme}.
    */
   static boolean assignsOnlyStandIns(String line, double entropyThreshold) {
@@ -420,7 +443,7 @@ final class SecretScanner {
         continue;
       }
       var value = assigned.group(3);
-      if (!isInterpolation(value) && !isPlaceholder(value)) {
+      if (!isStandIn(value)) {
         return false;
       }
       any = true;

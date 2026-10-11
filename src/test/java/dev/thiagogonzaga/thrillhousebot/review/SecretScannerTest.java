@@ -472,7 +472,10 @@ class SecretScannerTest {
             "FLEET_API_TOKEN=changeme",
             "LOG_PATH=/data FLEET_API_TOKEN=changeme",
             "export API_TOKEN=$API_TOKEN DB_PASSWORD=%DB_PASSWORD%",
-            "  client_secret: '<your-client-secret>'")) {
+            "  client_secret: '<your-client-secret>'",
+            "ENV API_TOKEN=${API_TOKEN:-}",
+            "ENV API_TOKEN=${API_TOKEN:-changeme}",
+            "ENV API_TOKEN=${API_TOKEN:-${FALLBACK_TOKEN}}")) {
       assertTrue(SecretScanner.assignsOnlyStandIns(line, THRESHOLD), line);
     }
     var literal = fake.genericSecret(32);
@@ -480,6 +483,8 @@ class SecretScannerTest {
         List.of(
             "API_TOKEN=${API_TOKEN} DB_PASSWORD=\"" + literal + "\"",
             "API_TOKEN=" + literal,
+            "ENV API_TOKEN=${API_TOKEN:-" + literal + "}",
+            "ENV API_TOKEN=${API_TOKEN=hunter2}",
             "ARG API_TOKEN",
             "Rotate the API token every quarter.",
             "API_TOKEN=${API_TOKEN} # " + fake.githubToken(),
