@@ -130,6 +130,9 @@ public class CiFailureContextResolver {
   /** The status Jest and Vitest open a passed test file's line with. */
   private static final String JEST_PASSED_FILE = "PASS ";
 
+  /** The bullet Jest heads each failed test, and its other notices, with. */
+  private static final String JEST_BULLET = "\u25CF ";
+
   /**
    * The lines test runners write about one failed test, each tried against a cleaned log line with
    * its timestamp removed. Plain string tests where they suffice, and the few expressions anchored
@@ -149,7 +152,7 @@ public class CiFailureContextResolver {
               line.startsWith("\u2716 ")
                   || line.startsWith("\u2715 ")
                   || line.startsWith("\u00D7 "),
-          line -> line.startsWith("\u25CF ") && line.contains(" \u203A "),
+          line -> line.startsWith(JEST_BULLET) && line.contains(" \u203A "),
           // Jest and Vitest file lines: "FAIL src/app.test.ts", "FAIL src/__tests__/app.js".
           line -> isJestFile(line, JEST_FAILED_FILE),
           // pytest "FAILED tests/test_x.py::test_y" and "ERROR tests/test_x.py::test_y" (an
@@ -212,8 +215,6 @@ public class CiFailureContextResolver {
           "sql",
           "sh",
           "txt");
-
-  private static final String JEST_BULLET = "\u25CF ";
 
   /** The bullets Jest prints under a failed test file that head no test. */
   private static final Set<String> JEST_NOTICES = Set.of("Console", "Test suite failed to run");

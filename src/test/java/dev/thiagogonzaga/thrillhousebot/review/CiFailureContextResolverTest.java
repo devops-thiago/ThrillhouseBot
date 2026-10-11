@@ -671,8 +671,14 @@ class CiFailureContextResolverTest {
       assertEquals(
           List.of("FAIL src/app/shift-board.test.ts", "\u25CF rejects a full shift"),
           lines(
-              "FAIL src/app/shift-board.test.ts\n\u25CF rejects a full shift\n\n  expect(x)\n"
-                  + "\u25CF Console\n\u25CF Test suite failed to run\n"));
+              """
+              FAIL src/app/shift-board.test.ts
+              \u25CF rejects a full shift
+
+                expect(x)
+              \u25CF Console
+              \u25CF Test suite failed to run
+              """));
       assertEquals(
           List.of("FAIL src/app/a.test.ts"),
           lines("FAIL src/app/a.test.ts\nPASS src/app/b.test.ts\n\u25CF a passing note\n"));
