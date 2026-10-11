@@ -343,9 +343,10 @@ final class OverviewScreen {
   /**
    * Whether {@code clause} is about the review's findings: "finding(s)" whose preceding words only
    * place or count findings ({@link #bookkeepingLead}), with a count or a review word one or two
-   * words before it ("the two confirmed findings", "no findings") or in a clause that names "this
-   * batch" ("no findings in this batch", the batch planner's split). "Refines findings before they
-   * are posted" and "Processes findings in this batch" describe a file and are not.
+   * words before it ("the two confirmed findings", "no findings"), a verb of holding anywhere
+   * before it ("Hosts all the findings from the review"), or in a clause that names "this batch"
+   * ("no findings in this batch", the batch planner's split). "Refines findings before they are
+   * posted" and "Processes findings in this batch" describe a file and are not.
    */
   static boolean talksAboutFindings(String clause) {
     var lower = clause.toLowerCase(Locale.ROOT);
@@ -354,12 +355,18 @@ final class OverviewScreen {
     for (var i = 0; i < words.length; i++) {
       if (words[i].startsWith("finding")
           && bookkeepingLead(words, i)
-          && (aboutTheBatch || qualified(words, i))) {
+          && (aboutTheBatch
+              || qualified(words, i)
+              || Arrays.stream(words, 0, i).anyMatch(HOLDING_VERBS::contains))) {
         return true;
       }
     }
     return false;
   }
+
+  /** The verbs of holding: a file that hosts or holds findings is talked about, not described. */
+  private static final Set<String> HOLDING_VERBS =
+      Set.of("hosts", "host", "holds", "has", "have", "contains", "carries");
 
   /**
    * Whether every word before position {@code at} only places or counts findings ("hosts the two
@@ -457,6 +464,8 @@ final class OverviewScreen {
       return purpose;
     }
     var source = known.toUpperCase(Locale.ROOT);
+    // The material may write the key without its hyphen ("SHAKE256", "SHAKE 256").
+    var runTogether = NON_WORD.matcher(source).replaceAll("");
     return sentences(purpose).stream()
         .filter(
             sentence ->
@@ -464,7 +473,11 @@ final class OverviewScreen {
                     .matcher(sentence)
                     .results()
                     .map(MatchResult::group)
-                    .allMatch(key -> source.contains(key) || isStandardCode(key)))
+                    .allMatch(
+                        key ->
+                            source.contains(key)
+                                || isStandardCode(key)
+                                || runTogether.contains(key.replace("-", ""))))
         .collect(Collectors.joining(" "));
   }
 }

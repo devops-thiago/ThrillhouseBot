@@ -229,6 +229,15 @@ class OverviewScreenTest {
   }
 
   @Test
+  void aKeyTheMaterialWritesWithoutItsHyphenIsKnown() {
+    assertEquals(
+        "Hashes with BLAKE3-256 for the cache. Uses WHIRL-512.",
+        OverviewScreen.withoutInventedTickets(
+            "Hashes with BLAKE3-256 for the cache. Uses WHIRL-512. Fixes ABCD-9.",
+            "Title: cache\nWHIRL 512 digests"));
+  }
+
+  @Test
   void aStandardsCodeIsNotTakenForAnInventedTicket() {
     var purpose =
         "Returns HTTP-404 for unknown routes. Adds FIPS-140 validation. Speaks HTTP-2 and"
@@ -305,6 +314,7 @@ class OverviewScreenTest {
         "This PR hosts the two findings",
         "The review has no findings here",
         "Holds no security findings",
+        "Hosts all the findings from the review",
         "hosts two high findings"
       })
   void aClauseAboutWhatTheFileHoldsIsFindingsTalk(String clause) {
