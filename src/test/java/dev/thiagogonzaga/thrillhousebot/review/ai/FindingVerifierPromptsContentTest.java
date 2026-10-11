@@ -213,6 +213,18 @@ class FindingVerifierPromptsContentTest {
         sys,
         "The field never rewrites the finding's own \"file\" and \"line\"",
         "the maintainer must still see the citation the model wrote (#650)");
+    assertContains(
+        sys,
+        "nothing was resolved for this finding, or\n"
+            + "that what was resolved outgrew the space this material is allowed",
+        "a resolved note dropped at the evidence budget leaves the field absent too, so absence"
+            + " must name both causes (#1033)");
+    assertContains(
+        sys,
+        "outgrew the space this material is allowed. It implies nothing\neither way about the"
+            + " finding",
+        "an absent cited location must stay neutral: it establishes neither correctness nor a"
+            + " defect (#1033)");
   }
 
   @Test

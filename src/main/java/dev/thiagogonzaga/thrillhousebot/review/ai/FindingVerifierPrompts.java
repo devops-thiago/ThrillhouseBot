@@ -349,7 +349,8 @@ public final class FindingVerifierPrompts {
               there; reject it unless the rest of the material independently establishes the defect
               at a location the finding does name.
             The field never rewrites the finding's own "file" and "line", which stay as the review
-            raised them. Its absence means only that nothing was resolved, and implies nothing
+            raised them. Its absence means only that nothing was resolved for this finding, or
+            that what was resolved outgrew the space this material is allowed. It implies nothing
             either way about the finding.
 
             A candidate may also carry a "context_evidence" field. Like "cited_location" it is not
