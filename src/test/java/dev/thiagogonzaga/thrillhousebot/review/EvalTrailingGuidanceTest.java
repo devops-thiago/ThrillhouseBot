@@ -41,7 +41,11 @@ class EvalTrailingGuidanceTest {
   void theNoNewlineCaseCarriesTheHeuristicFailureModeRequest() throws IOException {
     var guidance =
         EvalTrailingGuidance.forCase(
-            corpusDiff("pr100-no-newline-indicator-must-find"), "", "Extends the validator.", "");
+            corpusDiff("pr100-no-newline-indicator-must-find"),
+            "",
+            "Extends the validator.",
+            "",
+            "");
 
     assertTrue(guidance.contains(PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST), guidance);
     assertFalse(guidance.contains(PrReviewPrompts.MOCK_FIDELITY_REQUEST), guidance);
@@ -60,6 +64,7 @@ class EvalTrailingGuidanceTest {
             corpusDiff("pr102-mock-contradicts-dispatch-must-find"),
             tests,
             "- [x] 🐛 Bug fix\n\nFixes #89",
+            "",
             "");
 
     assertEquals(
@@ -71,10 +76,22 @@ class EvalTrailingGuidanceTest {
 
   @Test
   void patchCoverageIsFencedAsTheAssemblerSendsIt() {
-    var guidance = EvalTrailingGuidance.forCase("", "", "", "- src/A.java: 3");
+    var guidance = EvalTrailingGuidance.forCase("", "", "", "- src/A.java: 3", "");
 
     assertTrue(guidance.startsWith(PrReviewPrompts.PATCH_COVERAGE_REQUEST), guidance);
     assertTrue(guidance.contains(PromptTemplateEscaper.fencePrefix()), guidance);
-    assertEquals("", EvalTrailingGuidance.forCase("", "", "", ""));
+    assertEquals("", EvalTrailingGuidance.forCase("", "", "", "", ""));
+  }
+
+  /** A case that pins a stored decision carries it fenced, last, as the assembler sends it. */
+  @Test
+  void learningsAreFencedAfterTheOtherSections() {
+    var guidance =
+        EvalTrailingGuidance.forCase("", "", "", "- src/A.java: 3", "- COPY --from tags: declined");
+
+    var coverage = guidance.indexOf(PrReviewPrompts.PATCH_COVERAGE_REQUEST);
+    var learnings = guidance.indexOf(PrReviewPrompts.LEARNINGS_REQUEST);
+    assertTrue(coverage >= 0 && learnings > coverage, guidance);
+    assertTrue(guidance.indexOf("- COPY --from tags: declined") > learnings, guidance);
   }
 }

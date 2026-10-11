@@ -196,13 +196,15 @@ class PromptEvalTest {
             evalCase.files().stream().map(GitHubPullRequestClient.FileDiff::filename).toList());
     // The trailing guidance a review of this diff carries (#979): mock fidelity when tests changed,
     // bug-fix efficacy when the body declares a fix, the heuristic failure-mode request when the
-    // added lines introduce a parsing or matching rule, and the patch-coverage list (#115).
+    // added lines introduce a parsing or matching rule, the patch-coverage list (#115), and the
+    // stored maintainer decisions a case pins (#971).
     var repoInstructions =
         EvalTrailingGuidance.forCase(
             evalCase.diff(),
             relatedTests,
             orEmpty(evalCase.spec().prDescription()),
-            orEmpty(evalCase.spec().patchCoverage()));
+            orEmpty(evalCase.spec().patchCoverage()),
+            orEmpty(evalCase.spec().learnings()));
     var inputs =
         new AiReviewService.PromptInputs(
             PromptTemplateEscaper.fence(evalCase.diff()),

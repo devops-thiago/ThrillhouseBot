@@ -48,16 +48,23 @@ public final class EvalTrailingGuidance {
    * @param relatedTests the changed test files, newline-separated, as the assembler lists them
    * @param prDescription the pull request body
    * @param patchCoverage the rendered uncovered-lines section, or blank
+   * @param learnings the stored maintainer decisions the review recalls, or blank
    */
   public static String forCase(
-      String diff, String relatedTests, String prDescription, String patchCoverage) {
+      String diff,
+      String relatedTests,
+      String prDescription,
+      String patchCoverage,
+      String learnings) {
     return ReviewPromptAssembler.combineSections(
         ReviewPromptAssembler.combineSections(
-            ReviewPromptAssembler.mockFidelitySection(relatedTests),
-            ReviewPromptAssembler.bugFixEfficacySection(prDescription, "")),
-        ReviewPromptAssembler.combineSections(
-            ReviewPromptAssembler.heuristicFailureModesSection(
-                FindingPipeline.heuristicScanSource(diff)),
-            ReviewPromptAssembler.patchCoverageSection(patchCoverage)));
+            ReviewPromptAssembler.combineSections(
+                ReviewPromptAssembler.mockFidelitySection(relatedTests),
+                ReviewPromptAssembler.bugFixEfficacySection(prDescription, "")),
+            ReviewPromptAssembler.combineSections(
+                ReviewPromptAssembler.heuristicFailureModesSection(
+                    FindingPipeline.heuristicScanSource(diff)),
+                ReviewPromptAssembler.patchCoverageSection(patchCoverage))),
+        ReviewPromptAssembler.learningsSection(learnings));
   }
 }
