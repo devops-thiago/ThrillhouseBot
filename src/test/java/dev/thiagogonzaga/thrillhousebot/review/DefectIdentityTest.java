@@ -387,4 +387,509 @@ class DefectIdentityTest {
                 POLL_INTERVAL.description()));
     assertEquals(Optional.empty(), SummarySurfaceDeduplicator.restatedBy(bullet, List.of(inline)));
   }
+
+  // #956, #972, #964: ThrillhouseBot-test's titles, verbatim. Each pair is asked of sameDefect and
+  // of the summary's "Same issue as" pairing, which must agree.
+
+  private static void assertPaired(ReviewResponse.Finding later, ReviewResponse.Finding item) {
+    assertTrue(DefectIdentity.sameDefect(later, item), later.title());
+    assertTrue(DefectIdentity.sameDefect(item, later), "symmetric: " + later.title());
+    assertEquals(
+        Optional.of(Finding.fromAiResponse(later)),
+        SummarySurfaceDeduplicator.restatedBy(
+            Finding.fromAiResponse(item), List.of(Finding.fromAiResponse(later))));
+  }
+
+  private static void assertApart(ReviewResponse.Finding later, ReviewResponse.Finding item) {
+    assertFalse(DefectIdentity.sameDefect(later, item), later.title());
+    assertFalse(DefectIdentity.sameDefect(item, later), "symmetric: " + later.title());
+    assertEquals(
+        Optional.empty(),
+        SummarySurfaceDeduplicator.restatedBy(
+            Finding.fromAiResponse(item), List.of(Finding.fromAiResponse(later))));
+    assertFalse(FollowUpAnalyzer.replacesUnthreaded(later, item));
+  }
+
+  /** ThrillhouseBot-test#151: the same missing key restated on its paired code file (#956). */
+  @Test
+  void aKeyRestatedOnItsPairedCodeFileIsTheSameDefect() {
+    var docItem =
+        at(
+            "low",
+            "low",
+            "docs/CONFIG-GO.md",
+            7,
+            "FUELRECON_DATABASE_URL is read by the service but absent from the config table",
+            "d");
+    var codeItem =
+        at(
+            "medium",
+            "low",
+            "go/config.go",
+            40,
+            "FUELRECON_DATABASE_URL is read by the code but absent from the configuration"
+                + " documentation",
+            "d");
+
+    assertPaired(codeItem, docItem);
+    assertTrue(FollowUpAnalyzer.replacesUnthreaded(codeItem, docItem));
+  }
+
+  /**
+   * ThrillhouseBot-test#219: one key, two defects (a blank documented default, a parsed value
+   * nothing enforces). The key alone does not pair them, nor does a key the other finding names
+   * only in its description.
+   */
+  @Test
+  void aSharedKeyAloneIsNotTheSameDefect() {
+    var docItem =
+        at(
+            "low",
+            "low",
+            "docs/CONFIG-RUST.md",
+            10,
+            "COLDCHAIN_MAX_BATCH documentation leaves the default blank and the type unstated",
+            "d");
+    var enforced =
+        at(
+            "medium",
+            "high",
+            "rust/src/config.rs",
+            24,
+            "COLDCHAIN_MAX_BATCH is parsed into Config but never enforced anywhere",
+            "d");
+    assertApart(enforced, docItem);
+
+    var mentionsTheKey =
+        at(
+            "medium",
+            "high",
+            "rust/src/batch.rs",
+            7,
+            "Batch writer ignores the configured limit and the documented default",
+            "The writer never reads COLDCHAIN_MAX_BATCH, so the documented default is not applied.");
+    assertApart(mentionsTheKey, docItem);
+  }
+
+  /** ThrillhouseBot-test#186: a reworded concurrency re-raise two lines away (#972). */
+  @Test
+  void aReworderedRaceTwoLinesAwayNamingTheSameTypeIsTheSameDefect() {
+    var item =
+        at(
+            "medium",
+            "low",
+            "csharp/src/ParkingPermits/ZoneQuota.cs",
+            13,
+            "ZoneQuota mutates an unsynchronized Dictionary from concurrent request handlers and the"
+                + " expiry worker",
+            "d");
+    var inline =
+        at(
+            "high",
+            "high",
+            "csharp/src/ParkingPermits/ZoneQuota.cs",
+            15,
+            "ZoneQuota dictionary is read and written from concurrent HTTP requests with no"
+                + " synchronization",
+            "d");
+
+    assertPaired(inline, item);
+    assertTrue(FollowUpAnalyzer.replacesUnthreaded(inline, item));
+  }
+
+  /** ThrillhouseBot-test#209: the waitlist nothing serves, raised on its caller's file (#972). */
+  @Test
+  void aDefectRaisedOnTheFileThatCallsTheClassIsTheSameDefect() {
+    var item =
+        at(
+            "medium",
+            "low",
+            "java/src/main/java/com/acme/beds/Waitlist.java",
+            24,
+            "Waitlist is never served: ordered() and topN() have no production caller",
+            "d");
+    var inline =
+        at(
+            "high",
+            "high",
+            "java/src/main/java/com/acme/beds/BedAllocator.java",
+            47,
+            "Nothing ever serves the waitlist; freed beds go to whoever asks next, not highest"
+                + " acuity",
+            "The waitlist in this diff is write-only: no production code ever calls"
+                + " Waitlist.ordered() or Waitlist.topN().");
+
+    assertPaired(inline, item);
+    // The file's class name alone is common prose; without the symbol it stays apart.
+    assertApart(
+        at("high", "high", inline.file(), inline.line(), inline.title(), "Beds are freed early."),
+        item);
+  }
+
+  /** Two titles in one file that open alike but name different places, far apart, stay apart. */
+  @Test
+  void titlesThatOpenAlikeInOneFileAreNotOneDefectAtAnyDistance() {
+    assertApart(
+        at(
+            "high",
+            "high",
+            "src/Auth.java",
+            120,
+            "Auth rejects valid tokens on the token refresh endpoint",
+            "d"),
+        at(
+            "medium",
+            "low",
+            "src/Auth.java",
+            32,
+            "Auth rejects valid tokens on the login page",
+            "d"));
+  }
+
+  /** A class name shared by two titles, with a generic verb, is not one defect. */
+  @Test
+  void aFileClassNameWithGenericWordsIsNotTheSameDefect() {
+    assertApart(
+        at(
+            "high",
+            "high",
+            "src/Dashboard.java",
+            88,
+            "Auth always rejects the first valid token after startup",
+            "d"),
+        at(
+            "medium",
+            "low",
+            "src/Auth.java",
+            32,
+            "Auth rejects valid tokens when the cache is cold",
+            "d"));
+  }
+
+  /** ThrillhouseBot-test#212: the crash raised where the parse is called, citing it (#972). */
+  @Test
+  void aFindingCitingTheOtherFindingsCodeAndLocationIsTheSameDefect() {
+    var item =
+        at(
+            "medium",
+            "low",
+            "scala/src/main/scala/port/Main.scala",
+            32,
+            "PortEvent.parse indexes f(4) without checking the field count, crashing on malformed"
+                + " lines",
+            "d");
+    var citing =
+        "The /events handler feeds the untrusted request body straight into it: `reply(ex, 202,"
+            + " s\"accepted ${tracker.ingest(lines.map(PortEvent.parse))}\")`"
+            + " (scala/src/main/scala/port/Main.scala:31-32).";
+    var inline =
+        at(
+            "medium",
+            "high",
+            "scala/src/main/scala/port/Models.scala",
+            11,
+            "Malformed event line crashes POST /events with no HTTP response",
+            citing);
+    assertPaired(inline, item);
+
+    var elsewhere = citing.replace("Main.scala:31-32", "Main.scala:80");
+    assertApart(
+        at("medium", "high", inline.file(), inline.line(), inline.title(), elsewhere), item);
+    assertApart(
+        at(
+            "medium",
+            "high",
+            inline.file(),
+            inline.line(),
+            inline.title(),
+            citing.replace("PortEvent.parse", "decode")),
+        item);
+    assertApart(
+        at("medium", "high", inline.file(), inline.line(), "Event handler logs too much", citing),
+        item);
+  }
+
+  /** ThrillhouseBot-test#186 (round 14): a race and an off-by-one on one limit check (#964). */
+  @Test
+  void twoDefectClassesOnOneLineAreTwoDefects() {
+    var race =
+        at(
+            "medium",
+            "low",
+            "csharp/src/ParkingPermits/IssuanceService.cs",
+            34,
+            "Per-address limit is a check-then-act race: concurrent applications both pass the"
+                + " count guard",
+            "d");
+    var offByOne =
+        at(
+            "high",
+            "high",
+            "csharp/src/ParkingPermits/IssuanceService.cs",
+            34,
+            "Per-address limit check is off by one: an address at the maximum still gets another"
+                + " permit",
+            "d");
+
+    assertTrue(DefectIdentity.classesConflict(race.title(), offByOne.title()));
+    // A race worded without "race" still names its class.
+    assertApart(
+        offByOne,
+        at(
+            "medium",
+            "low",
+            race.file(),
+            34,
+            "Per-address limit guard can be passed by two requests at once",
+            "d"));
+    assertApart(offByOne, race);
+  }
+
+  /** ThrillhouseBot-test#196 (round 15): one key, a docs gap and a hardcoded credential. */
+  @Test
+  void aDocumentationGapIsNotTheCredentialFindingOnTheSameKey() {
+    assertApart(
+        at(
+            "high",
+            "high",
+            "python/marketplace/config.py",
+            5,
+            "Security scan: hardcoded credential in PAYMENT_API_KEY (aWpm…, 40 chars)",
+            "d"),
+        at(
+            "medium",
+            "low",
+            "python/marketplace/config.py",
+            13,
+            "docs recommend setting PAYMENT_API_KEY via env, but the code never reads it",
+            "d"));
+  }
+
+  /** ThrillhouseBot-test#214 and #175 (rounds 16 and 13): common words, or another key. */
+  @Test
+  void commonTitleWordsOrAnotherKeyNeverPair() {
+    assertApart(
+        at(
+            "medium",
+            "high",
+            "zig/src/queue.zig",
+            58,
+            "Approval list records every submission and held jobs can never print",
+            "d"),
+        at(
+            "medium",
+            "low",
+            "zig/src/queue.zig",
+            70,
+            "dequeue scans the whole job list on every job",
+            "d"));
+    var databaseUrl =
+        at(
+            "low",
+            "high",
+            "docs/CONFIG-GO.md",
+            10,
+            "FUELRECON_DATABASE_URL is read by the service but absent from the configuration table",
+            "d");
+    assertApart(
+        databaseUrl,
+        at(
+            "low",
+            "low",
+            "docs/CONFIG-GO.md",
+            10,
+            "Configuration table documents no units or default for FUELRECON_PAGE_TIMEOUT",
+            "d"));
+    assertApart(
+        databaseUrl,
+        at(
+            "low",
+            "low",
+            "docs/CONFIG-GO.md",
+            9,
+            "FUELRECON_PROVIDER_HOSTS is comma-separated but never documented as a list",
+            "d"));
+  }
+
+  @Test
+  void subjectsAndDefectClassesAreReadFromTheTitle() {
+    assertEquals(
+        Set.of("portevent.parse", "portevent"),
+        DefectIdentity.subjects(
+            Finding.fromAiResponse(
+                at("low", "low", "src/Main.scala", 1, "PortEvent.parse indexes f(4)", "d"))));
+    assertEquals(
+        Set.of("topn", "ordered", "waitlist"),
+        DefectIdentity.subjects(
+            Finding.fromAiResponse(
+                at(
+                    "low",
+                    "low",
+                    "src/Waitlist.java",
+                    1,
+                    "Waitlist is never served: ordered() and topN() have no caller",
+                    "d"))));
+    assertTrue(
+        DefectIdentity.subjects(Finding.fromAiResponse(at("low", "low", "Makefile", 1, null, "d")))
+            .isEmpty());
+    assertEquals(Set.of(), DefectIdentity.defectClasses(null));
+    assertEquals(
+        Set.of("complexity"), DefectIdentity.defectClasses("dedupe is O(n^2) over 2M samples"));
+    assertFalse(DefectIdentity.classesConflict("Possible null user", "Unrelated wording"));
+    assertEquals(
+        Set.of("nullness"),
+        DefectIdentity.defectClasses("Logger throws NullPointerException on anonymous requests"));
+    assertEquals(
+        Set.of("nullness"), DefectIdentity.defectClasses("Nullable user reaches the logger"));
+    assertEquals(Set.of(), DefectIdentity.symbols(null));
+    assertEquals(Set.of(), DefectIdentity.symbols("go() fails"), "two-character names say nothing");
+  }
+
+  /**
+   * The unverified note a fail-open round appends to every finding it kept says nothing about
+   * either defect: an identifier it happens to contain ("audit") does not pair two findings.
+   */
+  @Test
+  void theUnverifiedNoteNeverPairsTwoFindings() {
+    var description =
+        "The handler rejects the request.\n\n"
+            + dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService.UNVERIFIED_NOTE;
+    var later = at("high", "medium", MAIN, 46, "Request rejected on retry", description);
+    var prior = at("low", "low", MAIN, 46, "Is the `audit` table created?", "d");
+
+    assertFalse(DefectIdentity.sameDefect(later, prior));
+    assertTrue(
+        DefectIdentity.sameDefect(
+            at("high", "medium", MAIN, 46, "Request rejected on retry", "writes the audit row"),
+            prior),
+        "the same identifier in the finding's own words still pairs");
+  }
+
+  @Test
+  void theEdgesOfEachArmStayApart() {
+    var withFile = at("high", "high", "src/A.java", 1, "Race on the counter", "d");
+    assertFalse(
+        DefectIdentity.sameDefect(
+            at("high", "high", null, 1, "Race on the counter", "d"), withFile));
+    assertFalse(
+        DefectIdentity.sameDefect(
+            withFile, at("high", "high", null, 1, "Race on the counter", "d")));
+
+    // Titles that restate each other word for word but with opposite polarity are no pair.
+    assertFalse(
+        SummarySurfaceDeduplicator.titlesRestate(
+            "Request input is sanitized before the query runs",
+            "Request input is not sanitized before the query runs"));
+    assertFalse(
+        SummarySurfaceDeduplicator.titlesRestate(
+            "Cache entry expires after one hour in staging only",
+            "Cache entry expires immediately, so every request misses and recomputes the report"));
+
+    // A shared subject and a shared defect class, with no other shared word, pair.
+    assertTrue(
+        DefectIdentity.sameDefect(
+            at("high", "high", "src/Ledger.java", 5, "LedgerCache race", "d"),
+            at("medium", "low", "src/Api.java", 9, "LedgerCache unsynchronized", "d")));
+    // A file class name is prose ("main", "config"): a shared word or defect class beside it is not
+    // enough; only a description naming a symbol of the other's title corroborates it.
+    assertFalse(
+        DefectIdentity.sameDefect(
+            at("high", "high", "src/Ledger.java", 5, "Ledger race", "d"),
+            at("medium", "low", "src/Api.java", 9, "Concurrent Ledger writes", "d")));
+    assertFalse(
+        DefectIdentity.sameDefect(
+            at("medium", "low", "api/Main.java", 5, "Main thread races the expiry worker", "d"),
+            at(
+                "high",
+                "high",
+                "worker/ThreadWorker.java",
+                9,
+                "Main thread races the shutdown hook",
+                "d")));
+  }
+
+  @Test
+  void aCitationNeedsADescriptionATitleAFileNameAndALineInRange() {
+    var cited = at("medium", "low", "src/port/Main.scala", 32, "PortEvent.parse crashes", "d");
+    var citing = "Calls PortEvent.parse (src/port/Main.scala:%s).";
+
+    assertFalse(
+        DefectIdentity.sameDefect(
+            at("medium", "high", "src/port/Models.scala", 11, "Malformed line crashes", null),
+            cited));
+    assertFalse(
+        DefectIdentity.sameDefect(
+            at("medium", "high", "src/port/Models.scala", 11, "Malformed line crashes", "x"),
+            at("medium", "low", "src/port/Main.scala", 32, null, "d")));
+    assertFalse(
+        DefectIdentity.sameDefect(
+            at("medium", "high", "src/port/Models.scala", 11, "Malformed line crashes", "x"),
+            at("medium", "low", "src/port/", 32, "PortEvent.parse crashes", "d")));
+    for (var outOfRange : List.of("10", "40-50")) {
+      assertFalse(
+          DefectIdentity.sameDefect(
+              at(
+                  "medium",
+                  "high",
+                  "src/port/Models.scala",
+                  11,
+                  "Malformed line crashes",
+                  citing.formatted(outOfRange)),
+              cited),
+          outOfRange);
+    }
+    assertTrue(
+        DefectIdentity.sameDefect(
+            at(
+                "medium",
+                "high",
+                "src/port/Models.scala",
+                11,
+                "Handler panics on bad input",
+                citing.formatted("30")),
+            cited),
+        "one shared defect class (crash) is enough beside the citation");
+  }
+
+  /** A citation worded in prose counts as one in the file:line form does. */
+  @Test
+  void aCitationMayBeWorded() {
+    var cited = at("medium", "low", "src/port/Main.scala", 32, "PortEvent.parse crashes", "d");
+    for (var citation :
+        List.of(
+            "Calls PortEvent.parse (src/port/Main.scala, lines 31-32).",
+            "Calls PortEvent.parse at line 32 of src/port/Main.scala.",
+            "Calls PortEvent.parse in lines 30 to 31 in Main.scala.",
+            "Calls PortEvent.parse (Main.scala:31..32).")) {
+      assertTrue(
+          DefectIdentity.sameDefect(
+              at("medium", "high", "src/port/Models.scala", 11, "Handler panics", citation), cited),
+          citation);
+    }
+    assertFalse(
+        DefectIdentity.sameDefect(
+            at(
+                "medium",
+                "high",
+                "src/port/Models.scala",
+                11,
+                "Handler panics",
+                "Calls PortEvent.parse at line 90 of src/port/Main.scala."),
+            cited));
+    // "malformed" names an input format as often as a crash; it is not the crash class.
+    assertEquals(Set.of(), DefectIdentity.defectClasses("Malformed date format in the config"));
+  }
+
+  /** The description arm reads only a shared run of words, never the loose overlap. */
+  @Test
+  void aTitleMatchesADescriptionOnlyByAPhrase() {
+    assertFalse(
+        SummarySurfaceDeduplicator.titleSharesPhraseWith(
+            "Cache entry expires after one hour",
+            "The hour cache entry is set; it expires once per deploy after restart."));
+    assertTrue(
+        SummarySurfaceDeduplicator.titleSharesPhraseWith(
+            "Only the first page of usage records reaches the aggregator",
+            "only the first page of usage records is returned"));
+  }
 }
