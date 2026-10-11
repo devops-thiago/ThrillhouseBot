@@ -336,7 +336,7 @@ public final class PromptLabelScrubber {
   private static final Pattern RESTARTED_SENTENCE =
       Pattern.compile(
           "(?<![^.!?\\n])([ \\t]*)([^.!?\\n… \\t](?:[^.!?\\n…]|\\.(?=\\w)){0,59})(?:\\.\\.\\.|…)"
-              + "[ \\t]+(?i:rather|wait|actually),[ \\t]+(\\p{L})");
+              + "[ \\t]+(?:rather|wait|actually),[ \\t]+(\\p{L})");
 
   /** A list or quote marker opening a line, which stays when the sentence after it goes. */
   private static final Pattern LINE_MARKER = Pattern.compile("[-*+>][ \\t]+");
@@ -699,14 +699,19 @@ public final class PromptLabelScrubber {
     } else {
       return new int[0];
     }
-    if (from == 0 || text.charAt(from - 1) == '\n') {
-      // An aside that starts a line takes its trailing punctuation and blanks with it.
-      if (to < text.length() && ".,;".indexOf(text.charAt(to)) >= 0) {
-        to++;
-      }
-      to = skipBlanks(text, to);
+    return new int[] {from, lineStartTailEnd(text, from, to)};
+  }
+
+  /**
+   * Where the text after an aside spanning {@code from}..{@code to} resumes: an aside that starts a
+   * line takes the punctuation and blanks after it, so the line does not start with either.
+   */
+  private static int lineStartTailEnd(String text, int from, int to) {
+    if (from > 0 && text.charAt(from - 1) != '\n') {
+      return to;
     }
-    return new int[] {from, to};
+    int end = to < text.length() && ".,;".indexOf(text.charAt(to)) >= 0 ? to + 1 : to;
+    return skipBlanks(text, end);
   }
 
   /**

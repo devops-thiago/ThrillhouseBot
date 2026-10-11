@@ -1028,6 +1028,10 @@ class PromptLabelScrubberTest {
           It fails. notesFor(shift.signups)... rather, grep confirms it. | It fails. Grep confirms it.
           (no findings in this batch). Uploads due episodes. | Uploads due episodes.
           (no findings in this batch), then uploads. | then uploads.
+          Done (no findings in this batch | Done (no findings
+          Done (no findings in this batch so far) | Done (no findings so far)
+          Uploads. No findings in this batch | Uploads.
+          Uploads.\\nNo findings in this batch | Uploads.\\n
           No findings in this batch were raised on the scheduler. | No findings were raised on the scheduler.
           (no findings in this batch) no findings in this batch here | no findings here
           """)
