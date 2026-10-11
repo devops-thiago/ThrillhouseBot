@@ -60,6 +60,7 @@ public final class DiffLineResolver {
   private final Map<String, List<Integer>> rightSideTextLineNumbersByFile;
   private final Map<String, Map<Integer, String>> rightSideLineTextByFile;
   private final Map<String, TreeSet<Integer>> rightSideHunkStartsByFile;
+  private final Map<String, Set<String>> addedTextByFile;
   private final Set<String> changedFiles;
 
   public DiffLineResolver(Map<String, String> patchesByFile) {
@@ -81,6 +82,7 @@ public final class DiffLineResolver {
     this.rightSideTextLineNumbersByFile = new HashMap<>();
     this.rightSideLineTextByFile = new HashMap<>();
     this.rightSideHunkStartsByFile = new HashMap<>();
+    this.addedTextByFile = new HashMap<>();
     patchesByFile.forEach(
         (file, patch) -> {
           RightSide rightSide = parseRightSide(patch);
@@ -89,6 +91,7 @@ public final class DiffLineResolver {
           rightSideTextLineNumbersByFile.put(file, rightSide.textLineNumbers());
           rightSideLineTextByFile.put(file, rightSide.lineText());
           rightSideHunkStartsByFile.put(file, rightSide.hunkStarts());
+          addedTextByFile.put(file, rightSide.added());
         });
   }
 
@@ -134,6 +137,34 @@ public final class DiffLineResolver {
     }
     return presentInFileOrVariant(
         rightSideTextByFile, file, text -> containsContiguous(text, anchorLines));
+  }
+
+  /**
+   * Whether every one of {@code lines} (each already stripped) is an added line of {@code file} in
+   * the current diff (#1066). Read from the file's own non-empty entry, else from its one {@link
+   * FilePaths#same} variant; with no entry, or two variants, the answer is {@code false}, which
+   * keeps a finding held rather than closing it on a guess.
+   */
+  public boolean addsEveryLine(String file, Collection<String> lines) {
+    if (file == null || lines.isEmpty()) {
+      return false;
+    }
+    Set<String> exact = addedTextByFile.get(file);
+    if (exact != null && !exact.isEmpty()) {
+      return exact.containsAll(lines);
+    }
+    Set<String> resolved = null;
+    for (var entry : addedTextByFile.entrySet()) {
+      if (!entry.getKey().equals(file)
+          && !entry.getValue().isEmpty()
+          && FilePaths.same(file, entry.getKey())) {
+        if (resolved != null) {
+          return false;
+        }
+        resolved = entry.getValue();
+      }
+    }
+    return resolved != null && resolved.containsAll(lines);
   }
 
   /**
@@ -553,7 +584,8 @@ public final class DiffLineResolver {
       List<String> text,
       List<Integer> textLineNumbers,
       Map<Integer, String> lineText,
-      TreeSet<Integer> hunkStarts) {}
+      TreeSet<Integer> hunkStarts,
+      Set<String> added) {}
 
   /**
    * Walks a unified-diff patch once, collecting the right-side line numbers and the trimmed text of
@@ -571,8 +603,9 @@ public final class DiffLineResolver {
     var textLineNumbers = new ArrayList<Integer>();
     var lineText = new HashMap<Integer, String>();
     var hunkStarts = new TreeSet<Integer>();
+    var added = new HashSet<String>();
     if (patch == null || patch.isBlank()) {
-      return new RightSide(lines, text, textLineNumbers, lineText, hunkStarts);
+      return new RightSide(lines, text, textLineNumbers, lineText, hunkStarts, added);
     }
 
     var newLine = 0;
@@ -587,10 +620,13 @@ public final class DiffLineResolver {
       }
       if (inHunk && isRightSideLine(rawLine)) {
         appendRightSide(lines, text, textLineNumbers, lineText, newLine, rawLine);
+        if (rawLine.charAt(0) == '+') {
+          added.add(rawLine.substring(1).strip());
+        }
         newLine++;
       }
     }
-    return new RightSide(lines, text, textLineNumbers, lineText, hunkStarts);
+    return new RightSide(lines, text, textLineNumbers, lineText, hunkStarts, added);
   }
 
   /** The 1-based right-side start line of a hunk header, or empty if the line is not one. */

@@ -35,6 +35,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -2730,6 +2731,19 @@ public class FollowUpAnalyzer {
       "Raised in an earlier review and answered by a maintainer on its review thread; the reply"
           + " settles it.";
 
+  /**
+   * Note on the {@code resolved} status of an earlier round's finding whose flagged code is still
+   * in the diff but whose suggested change now is too ({@link #suggestedFixLanded}, #1066).
+   */
+  static final String FIX_LANDED_NOTE =
+      "Raised in an earlier review; the change it suggested is now in the diff.";
+
+  /**
+   * The fewest non-whitespace characters one line of a suggested fix needs before its presence is
+   * evidence the fix landed: a lone brace or {@code return;} is in many diffs for other reasons.
+   */
+  static final int MIN_FIX_LINE_CHARS = 12;
+
   /** Note on the {@code unresolved} status of a finding the backstop holds without a reply. */
   static final String HELD_NOTE =
       "Flagged in an earlier round and still present; not addressed in this revision.";
@@ -3490,7 +3504,9 @@ public class FollowUpAnalyzer {
    *   <li>a maintainer declined a member from the PR conversation: re-checked as {@link
    *       #declineNamedInConversation} re-checks it — {@code justified}, or held when a lone
    *       decline's premise is contradicted by the reviewed code;
-   *   <li>no member's thread carries a maintainer reply: an {@code unresolved} hold;
+   *   <li>no member's thread carries a maintainer reply: {@code resolved} when every present
+   *       member's suggested fix is now in the diff ({@link #suggestedFixLanded}, #1066), else an
+   *       {@code unresolved} hold;
    *   <li>else the outcome of that reply ({@link #heldPreviousFindings(List, List, List, List,
    *       DiffLineResolver, BotIdentity, Map, Supplier)}).
    * </ol>
@@ -3556,7 +3572,10 @@ public class FollowUpAnalyzer {
     }
     var answered = facts.answered();
     if (answered == null) {
-      return hold(target, HELD_NOTE);
+      return suggestedFixLandedEverywhere(cluster, in)
+          ? settled(
+              target, STATUS_RESOLVED, FIX_LANDED_NOTE, clusterThreadRoot(cluster, target, in))
+          : hold(target, HELD_NOTE);
     }
     var reopened = reopenedEarlierDecline(answered, facts.answeredRoot(), in, code);
     return reopened != null
@@ -3614,6 +3633,65 @@ public class FollowUpAnalyzer {
       declines.addAll(namingDeclines(finding, directives));
     }
     return new ClusterFacts(mostSevere, present, answered, answeredRoot, clearedNote, declines);
+  }
+
+  /**
+   * Whether every member of a cluster whose flagged code is still in the diff has its suggested fix
+   * in the diff too ({@link #suggestedFixLanded}), so an earlier round's finding fixed in place is
+   * closed rather than held (#1066). Every present member must agree: the members are one defect,
+   * and a fix that landed for one copy but not another leaves it open.
+   */
+  private static boolean suggestedFixLandedEverywhere(
+      List<OpenFinding> cluster, BackstopInputs in) {
+    return cluster.stream()
+        .map(OpenFinding::finding)
+        .filter(finding -> isStillPresent(finding, in.lineResolver(), in.renameTargets()))
+        .allMatch(finding -> suggestedFixLanded(finding, in.lineResolver(), in.renameTargets()));
+  }
+
+  /**
+   * Whether an earlier round's finding, whose flagged code is still in the diff, was fixed in place
+   * by the change it suggested (#1066). An older round's finding has no model verdict, so without
+   * this only a reply or a directive closed one whose anchor line survived the fix: adding a guard
+   * above the flagged line leaves that line, and the finding, in the diff.
+   *
+   * <p>The test is the suggestion with the flagged code subtracted: the lines of {@code
+   * suggestion_new} that {@code suggestion_old} does not carry, compared stripped. Every one must
+   * be an added line of the finding's file now ({@link DiffLineResolver#addsEveryLine}), and at
+   * least one must hold {@link #MIN_FIX_LINE_CHARS} non-whitespace characters. A false close is
+   * worse than a missed one, so a finding with no suggestion, a suggestion that only removes or
+   * reorders lines, a suggestion made only of short lines, and a file renamed with no content
+   * change all stay held.
+   */
+  static boolean suggestedFixLanded(
+      ReviewResponse.Finding finding,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets) {
+    var fixLines = strippedLines(finding.suggestionNew());
+    fixLines.removeAll(strippedLines(finding.suggestionOld()));
+    if (fixLines.stream().noneMatch(line -> nonWhitespaceLength(line) >= MIN_FIX_LINE_CHARS)) {
+      return false;
+    }
+    var path = renameTargets.getOrDefault(finding.file(), finding.file());
+    return !path.isBlank() && lineResolver.addsEveryLine(path, fixLines);
+  }
+
+  /** The non-blank lines of {@code text}, stripped, in order; empty for a null text. */
+  private static Set<String> strippedLines(String text) {
+    var lines = new LinkedHashSet<String>();
+    if (text != null) {
+      for (var line : text.split("\n", -1)) {
+        var stripped = line.strip();
+        if (!stripped.isEmpty()) {
+          lines.add(stripped);
+        }
+      }
+    }
+    return lines;
+  }
+
+  private static int nonWhitespaceLength(String line) {
+    return (int) line.codePoints().filter(c -> !Character.isWhitespace(c)).count();
   }
 
   /**

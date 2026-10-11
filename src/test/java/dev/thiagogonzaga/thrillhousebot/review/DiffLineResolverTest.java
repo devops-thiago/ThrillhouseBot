@@ -1083,4 +1083,34 @@ class DiffLineResolverTest {
     assertEquals(
         Optional.of(new DiffLineResolver.LineRange(1, 1)), resolver.locateQuote("a.txt", "a", 1));
   }
+
+  // #1066: the added lines the earlier-round fix check reads.
+
+  @Test
+  void addsEveryLineReadsOnlyAddedLinesOfTheFile() {
+    var resolver =
+        new DiffLineResolver(
+            Map.of("src/A.java", "@@ -1,2 +1,3 @@\n kept();\n+  added();\n-removed();\n+more();"));
+
+    assertTrue(resolver.addsEveryLine("src/A.java", List.of("added();", "more();")));
+    assertFalse(resolver.addsEveryLine("src/A.java", List.of("added();", "kept();")));
+    assertFalse(resolver.addsEveryLine("src/A.java", List.of("removed();")));
+    assertFalse(resolver.addsEveryLine("src/A.java", List.of()));
+    assertFalse(resolver.addsEveryLine(null, List.of("added();")));
+    assertFalse(resolver.addsEveryLine("src/Other.java", List.of("added();")));
+  }
+
+  @Test
+  void addsEveryLineFallsBackToTheOneVariantAndRefusesTwo() {
+    var one = new DiffLineResolver(Map.of("module/src/A.java", "@@ -0,0 +1 @@\n+added();"));
+    var two =
+        new DiffLineResolver(
+            Map.of(
+                "one/src/A.java", "@@ -0,0 +1 @@\n+added();",
+                "two/src/A.java", "@@ -0,0 +1 @@\n+added();"));
+
+    assertTrue(one.addsEveryLine("src/A.java", List.of("added();")));
+    assertFalse(one.addsEveryLine("src/A.java", List.of("other();")));
+    assertFalse(two.addsEveryLine("src/A.java", List.of("added();")));
+  }
 }

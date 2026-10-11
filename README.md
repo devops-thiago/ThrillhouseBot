@@ -680,7 +680,11 @@ review learnings on the reply is offered to the store under the same rules as
 any other decline. An older round's finding whose code left the diff is counted
 superseded, and one cleared or declined from the PR conversation is counted
 resolved or justified, so the summary's counts add up to the findings carried
-in. One whose code left the diff, or that a maintainer cleared, is closed once:
+in. One whose flagged line is still there is closed as resolved when every line
+its suggestion adds is now an added line of the file (with at least one real line
+of code among them); otherwise it stays open until a reply or a directive closes
+it. One whose code left the diff, whose suggested fix landed, or that a
+maintainer cleared, is closed once:
 its review thread is resolved, the review body names it under the round's
 closed findings, and the round records the close so later rounds neither name
 it nor count it again. A clear wins over the code leaving the diff, so the

@@ -5592,4 +5592,146 @@ class FollowUpAnalyzerTest {
         statuses.subList(1, 5), FollowUpAnalyzer.withoutReplaced(previous, statuses, replaced));
     assertSame(statuses, FollowUpAnalyzer.withoutReplaced(previous, statuses, Set.of()));
   }
+
+  // --- #1066 B: an earlier round's finding fixed in place, its anchor line still in the diff
+
+  /** Round one's SQL finding with a suggestion, then a round that raised something else. */
+  private List<FollowUpAnalyzer.HeldPrevious> fixCheckOver(
+      String suggestionNew, String aPatch, Map<String, String> renames) {
+    var roundOne =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "critical",
+                    "src/A.java",
+                    10,
+                    "SQL injection",
+                    "raw query",
+                    "String q = base + id;",
+                    suggestionNew)),
+            List.of(),
+            null);
+    var roundTwo =
+        new ReviewResponse(
+            List.of(new ReviewResponse.Finding("low", "src/C.java", 1, "New", "n", null, null)),
+            List.of(),
+            null);
+    return analyzer.heldPreviousFindings(
+        List.of(roundTwo, roundOne),
+        List.of(),
+        List.of(SQL_THREAD),
+        List.of(),
+        new DiffLineResolver(Map.of("src/A.java", aPatch, "src/C.java", patch(1))),
+        BOT_ID,
+        renames,
+        () -> "+unrelated();");
+  }
+
+  private static final String GUARD_ADDED =
+      "@@ -9,2 +9,3 @@\n context();\n+requireNumeric(id);\n String q = base + id;";
+
+  @Test
+  void anEarlierRoundFindingWhoseSuggestedFixLandedAboveItsAnchorIsResolved() {
+    var entry =
+        entryFor(
+            fixCheckOver("requireNumeric(id);\nString q = base + id;", GUARD_ADDED, Map.of()),
+            "SQL injection");
+
+    assertEquals("resolved", entry.status().status());
+    assertEquals(FollowUpAnalyzer.FIX_LANDED_NOTE, entry.status().note());
+    assertEquals(300L, entry.status().earlierRound().threadRootId());
+    assertTrue(entry.status().closesEarlierRound());
+  }
+
+  /** Lean to hold: every shape the fix check cannot vouch for stays open. */
+  @Test
+  void anEarlierRoundFindingStaysHeldWhenItsSuggestedFixIsNotShownToHaveLanded() {
+    var contextOnly = "@@ -9,2 +9,2 @@\n requireNumeric(id);\n String q = base + id;";
+    var partly = "@@ -9,2 +9,3 @@\n context();\n+requireNumeric(id);\n String q = base + id;";
+
+    assertTrue(entryFor(fixCheckOver(null, GUARD_ADDED, Map.of()), "SQL injection").holdsOpen());
+    assertTrue(
+        entryFor(fixCheckOver("String q = base + id;", GUARD_ADDED, Map.of()), "SQL injection")
+            .holdsOpen(),
+        "a suggestion that adds nothing");
+    assertTrue(
+        entryFor(
+                fixCheckOver("return;\nString q = base + id;", GUARD_ADDED, Map.of()),
+                "SQL injection")
+            .holdsOpen(),
+        "a suggestion made only of short lines");
+    assertTrue(
+        entryFor(
+                fixCheckOver("requireNumeric(id);\nString q = base + id;", contextOnly, Map.of()),
+                "SQL injection")
+            .holdsOpen(),
+        "a fix line that is only context was there before");
+    assertTrue(
+        entryFor(
+                fixCheckOver(
+                    "requireNumeric(id);\nlogAccess(user, id);\nString q = base + id;",
+                    partly,
+                    Map.of()),
+                "SQL injection")
+            .holdsOpen(),
+        "one suggested line is missing");
+    assertTrue(
+        entryFor(
+                fixCheckOver(
+                    "requireNumeric(id);\nString q = base + id;",
+                    GUARD_ADDED,
+                    Map.of("src/A.java", "")),
+                "SQL injection")
+            .holdsOpen(),
+        "a content-identical rename");
+  }
+
+  /** One defect raised twice: a fix that landed for one present copy only leaves it open. */
+  @Test
+  void aClusterStaysHeldUnlessEveryPresentMembersFixLanded() {
+    var roundOne =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "high",
+                    "src/A.java",
+                    10,
+                    "SQL injection",
+                    "raw query",
+                    "String q = base + id;",
+                    "requireNumeric(id);\nString q = base + id;")),
+            List.of(),
+            null);
+    var roundTwo =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "critical",
+                    "src/A.java",
+                    11,
+                    "SQL injection",
+                    "raw query",
+                    "String q = base + id;",
+                    "validateWithAllowList(id);\nString q = base + id;")),
+            List.of(),
+            null);
+    var roundThree =
+        new ReviewResponse(
+            List.of(new ReviewResponse.Finding("low", "src/C.java", 1, "New", "n", null, null)),
+            List.of(),
+            null);
+
+    var entries =
+        analyzer.heldPreviousFindings(
+            List.of(roundThree, roundTwo, roundOne),
+            List.of(),
+            List.of(),
+            List.of(),
+            new DiffLineResolver(Map.of("src/A.java", GUARD_ADDED, "src/C.java", patch(1))),
+            BOT_ID,
+            Map.of(),
+            () -> "+unrelated();");
+
+    assertTrue(entryFor(entries, "SQL injection").holdsOpen());
+  }
 }

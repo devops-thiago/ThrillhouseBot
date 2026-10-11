@@ -178,7 +178,10 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
 - **Every finding carried in gets a status, and an earlier round's close is recorded once**
   (#957, #959, #1066). `backstopEntry` gives each cluster one entry: a hold, `resolved` for a
   maintainer's clear (a conversation directive, or `@thrillhousebot resolved` replied on its own
-  thread, `clearedOnOwnThread`), `superseded` when its code left the diff, `justified` for a
+  thread, `clearedOnOwnThread`), `superseded` when its code left the diff, `resolved` when its
+  code is still there but its suggested fix landed (`suggestedFixLanded`: every line of
+  `suggestion_new` minus `suggestion_old` is an added line of the file, one of at least
+  `MIN_FIX_LINE_CHARS`; lean to hold, a false close is worse than a missed one), `justified` for a
   conversation decline (re-checked like the effective round's), or the thread decline's outcome.
   A clear is checked before presence, so it is not swallowed by the supersede. Each backstop
   status carries `ReviewResult.EarlierRound`; its id is relative to its own round, so
