@@ -241,7 +241,9 @@ Two patterns. Pick the first unless the section must sit somewhere else in the u
    the summary input.
    A section can ride both slots with a different request in each: the linked-issue section
    (`linkedIssuesSection`) gives the review call `TicketContextPrompts.REVIEW_REQUEST` and the
-   summary call `TicketContextPrompts.SUMMARY_REQUEST`, each with its own fence.
+   summary call `TicketContextPrompts.SUMMARY_REQUEST`, each with its own fence, and the CI-failure
+   section gives the summary call `PrReviewPrompts.CI_FAILURES_SUMMARY_REQUEST`
+   (`ciFailuresSummarySection`, #922).
 
    A section triggered by the diff text cannot be decided in the assembler: with budgeting on
    (the default) `ReviewContextLoader` leaves `ctx.diff()` empty. Decide it per batch in

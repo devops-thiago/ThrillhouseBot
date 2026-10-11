@@ -26,9 +26,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
@@ -40,8 +42,16 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * <p>The failing checks are not fetched here. They come from the {@link
  * CiStatusEvaluator.CiEvaluation} the CI gate reads for the same head, which carries each failing
  * check's name, conclusion and output panel ({@link CiStatusEvaluator.FailedCheck}); this class
- * only adds what that list cannot hold — one page of annotations per detailed check, and, behind a
- * separate switch, the tail of up to {@link #MAX_LOG_FETCHES} failing GitHub Actions job logs.
+ * only adds what that list cannot hold — one page of annotations per detailed check, the failing
+ * tests named in up to {@link #MAX_LOG_FETCHES} failing GitHub Actions job logs, and, behind a
+ * separate switch, the tail of those logs.
+ *
+ * <p>The failing tests are read from the log because that is the only place a test runner names
+ * them (#922). A failed Actions job's annotations carry "Process completed with exit code 1" and
+ * runner notices such as a Node.js deprecation, so across one corpus round twelve of twelve
+ * follow-up reviews saw only "test ❌ Failed", and one tied its finding to the deprecation notice.
+ * The whole downloaded window is scanned for the lines runners write about a failed test, because
+ * the last lines of a job log are the runner's own cleanup, not the test output.
  *
  * <p>Every string here is produced by code the pull request can change: a test can print anything,
  * including text shaped like an instruction or a prompt heading. So each field is stripped of
@@ -82,6 +92,9 @@ public class CiFailureContextResolver {
   /** Characters of log tail rendered per job. */
   static final int MAX_LOG_CHARS = 1_500;
 
+  /** Failing-test lines rendered per job, read from the whole downloaded window. */
+  static final int MAX_FAILING_TEST_LINES = 10;
+
   /** Characters of a check's output summary rendered. */
   static final int MAX_SUMMARY_CHARS = 600;
 
@@ -96,6 +109,47 @@ public class CiFailureContextResolver {
 
   // ANSI CSI sequences (colour, cursor movement) that CI runners emit into logs and summaries.
   private static final Pattern ANSI_CSI = Pattern.compile("\u001B\\[[0-?]*[ -/]*[@-~]");
+
+  /**
+   * The lines test runners write about one failed test, each tried against a cleaned log line with
+   * its timestamp removed. Plain string tests where they suffice, and the few expressions anchored
+   * and possessive, so no line the pull request's own code prints can make one backtrack.
+   */
+  private static final List<Predicate<String>> FAILING_TEST_LINES =
+      List.of(
+          // Maven Surefire / Failsafe: the class line, and the summary's "Class.method:line" rows.
+          line -> line.contains("<<< FAILURE!") || line.contains("<<< ERROR!"),
+          Pattern.compile("^\\[ERROR] {2,}+[^\\s:]++:\\d").asPredicate(),
+          // Gradle "FooTest > bar() FAILED", Karma "Chrome Headless (Linux) Suite name FAILED".
+          line -> line.endsWith(" FAILED") && (line.contains(" > ") || line.contains(") ")),
+          // TAP (node --test, prove): "not ok 3 - name".
+          Pattern.compile("^not ok \\d").asPredicate(),
+          // node --test spec reporter, Jest and Vitest: "✖ name", "✕ name", "× name", "● A › b".
+          line ->
+              line.startsWith("\u2716 ")
+                  || line.startsWith("\u2715 ")
+                  || line.startsWith("\u00D7 "),
+          line -> line.startsWith("\u25CF ") && line.contains(" \u203A "),
+          // Jest and Vitest file lines: "FAIL src/app.test.ts".
+          line -> line.startsWith("FAIL ") && (line.contains(".test.") || line.contains(".spec.")),
+          // pytest "FAILED tests/test_x.py::test_y", unittest "FAIL: test_y (module.Case)".
+          line -> line.startsWith("FAILED ") && line.contains("::"),
+          Pattern.compile("^(?:FAIL|ERROR): \\w++ \\(").asPredicate(),
+          // go test "--- FAIL: TestY", cargo test "test y ... FAILED".
+          line -> line.startsWith("--- FAIL: "),
+          Pattern.compile("^test \\S++ \\.\\.\\. FAILED").asPredicate(),
+          // dotnet test "Failed Ns.Class.Method [12 ms]", ScalaTest "*** FAILED ***", munit "==>
+          // X".
+          Pattern.compile("^Failed \\S++ \\[").asPredicate(),
+          line -> line.contains("*** FAILED ***"),
+          line -> line.startsWith("==> X "),
+          // ctest "1 - name (Failed)", zig "1/5 test.name...FAIL (Error)", rspec failed examples.
+          line -> line.endsWith("(Failed)"),
+          line -> line.contains("...FAIL ("),
+          Pattern.compile("^rspec \\./[^\\s:]++:\\d").asPredicate());
+
+  /** The path GitHub Actions gives the runner's own annotations, which never name a test. */
+  private static final String RUNNER_ANNOTATION_PATH = ".github";
 
   // The ISO-8601 timestamp GitHub Actions prefixes to every log line: tokens, not information.
   private static final Pattern LOG_TIMESTAMP =
@@ -172,7 +226,7 @@ public class CiFailureContextResolver {
       sb.append(failures.pending())
           .append(" other check(s) had not finished; their outcome is unknown to this review.\n");
     }
-    var logsLeft = includeLogs ? MAX_LOG_FETCHES : 0;
+    var logsLeft = MAX_LOG_FETCHES;
     var detailed = Math.min(failed.size(), MAX_CHECKS_DETAILED);
     for (var i = 0; i < detailed; i++) {
       var check = failed.get(i);
@@ -181,7 +235,7 @@ public class CiFailureContextResolver {
       appendAnnotations(sb, auth, owner, repo, check);
       if (logsLeft > 0 && logWorthy(check)) {
         logsLeft--;
-        appendLogTail(sb, auth, owner, repo, check.checkRunId());
+        appendLog(sb, auth, owner, repo, check.checkRunId());
       }
     }
     if (failed.size() > detailed) {
@@ -230,7 +284,15 @@ public class CiFailureContextResolver {
     if (page == null || page.isEmpty()) {
       return;
     }
-    var ordered = new ArrayList<>(page);
+    // A notice or warning the runner attaches to the workflow itself (a deprecated Node.js version,
+    // a cache miss) never explains a failed test, and one review tied its finding to exactly that
+    // (#922), so it is left out; the runner's failure-level "Process completed with exit code N" is
+    // kept, because it is true.
+    var ordered =
+        new ArrayList<>(page.stream().filter(annotation -> !isRunnerNotice(annotation)).toList());
+    if (ordered.isEmpty()) {
+      return;
+    }
     // Failure-level annotations first: a warning on the same page rarely explains the failure.
     ordered.sort(Comparator.comparingInt(CiFailureContextResolver::levelRank));
     var shown = Math.min(ordered.size(), MAX_ANNOTATIONS_PER_CHECK);
@@ -242,6 +304,10 @@ public class CiFailureContextResolver {
     for (var annotation : ordered.subList(0, shown)) {
       sb.append("- ").append(formatAnnotation(annotation)).append('\n');
     }
+  }
+
+  private static boolean isRunnerNotice(GitHubCheckRunClient.Annotation annotation) {
+    return levelRank(annotation) > 0 && RUNNER_ANNOTATION_PATH.equals(annotation.path());
   }
 
   private static int levelRank(GitHubCheckRunClient.Annotation annotation) {
@@ -273,28 +339,62 @@ public class CiFailureContextResolver {
         && LOG_WORTHY_CONCLUSIONS.contains(check.conclusion().toLowerCase(Locale.ROOT));
   }
 
-  private void appendLogTail(StringBuilder sb, String auth, String owner, String repo, long jobId) {
-    var tail = logTail(auth, owner, repo, jobId);
+  /**
+   * The failing tests one job's log names, and with {@code include-logs} on its tail. The log is
+   * downloaded once for both; a log that cannot be read adds nothing.
+   */
+  private void appendLog(StringBuilder sb, String auth, String owner, String repo, long jobId) {
+    var bytes = logBytes(auth, owner, repo, jobId);
+    var failingTests = failingTestLines(bytes);
+    if (!failingTests.isEmpty()) {
+      sb.append("Failing tests named in the job log:\n");
+      failingTests.forEach(line -> sb.append("- ").append(line).append('\n'));
+    }
+    var tail = includeLogs ? renderLogTail(bytes) : "";
     if (!tail.isEmpty()) {
       sb.append("Job log tail:\n").append(tail).append('\n');
     }
   }
 
-  /** The rendered tail of one job's log, or {@code ""} when it could not be read. */
-  private String logTail(String auth, String owner, String repo, long jobId) {
-    byte[] bytes;
+  /** The end of one job's log, or no bytes when it could not be read. */
+  private byte[] logBytes(String auth, String owner, String repo, long jobId) {
     try (var response = actionsClient.downloadJobLogs(auth, ACCEPT, owner, repo, jobId)) {
       var location = response == null ? null : response.getLocation();
       if (location == null) {
         Log.debugf("Job log download for %d returned no redirect location", jobId);
-        return "";
+        return new byte[0];
       }
-      bytes = fetcher.fetchTail(location, LOG_TAIL_BYTES);
+      return fetcher.fetchTail(location, LOG_TAIL_BYTES);
     } catch (RuntimeException e) {
       Log.debugf(e, "Could not read the log of job %d", jobId);
-      return "";
+      return new byte[0];
     }
-    return renderLogTail(bytes);
+  }
+
+  /**
+   * The lines of a log tail that name a failed test, in log order, each once, at most {@link
+   * #MAX_FAILING_TEST_LINES}: the whole window is scanned, timestamps and control characters
+   * removed, and, as in {@link #renderLogTail}, a first line cut mid-way by a full window is
+   * dropped.
+   */
+  static List<String> failingTestLines(byte[] bytes) {
+    if (bytes == null || bytes.length == 0) {
+      return List.of();
+    }
+    var lines = clean(new String(bytes, StandardCharsets.UTF_8)).split("\n", -1);
+    var start = bytes.length >= LOG_TAIL_BYTES ? 1 : 0;
+    var found = new LinkedHashSet<String>();
+    for (var i = start; i < lines.length && found.size() < MAX_FAILING_TEST_LINES; i++) {
+      var line = clip(LOG_TIMESTAMP.matcher(lines[i]).replaceFirst("").strip(), MAX_LINE_CHARS);
+      if (namesAFailedTest(line)) {
+        found.add(line);
+      }
+    }
+    return List.copyOf(found);
+  }
+
+  private static boolean namesAFailedTest(String line) {
+    return FAILING_TEST_LINES.stream().anyMatch(shape -> shape.test(line));
   }
 
   /**
@@ -303,7 +403,7 @@ public class CiFailureContextResolver {
    * the first line is a fragment cut mid-line, so it is dropped.
    */
   static String renderLogTail(byte[] bytes) {
-    if (bytes.length == 0) {
+    if (bytes == null || bytes.length == 0) {
       return "";
     }
     var lines = clean(new String(bytes, StandardCharsets.UTF_8)).split("\n", -1);

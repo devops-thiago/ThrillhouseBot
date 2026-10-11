@@ -568,9 +568,9 @@ public interface ThrillhouseConfig {
     boolean enabled();
 
     /**
-     * Also read the tail of each failing GitHub Actions job's log (a bounded number of jobs). Needs
-     * the {@code Actions: Read} permission the App manifest already requests, and costs one log
-     * download per job, so it is a separate switch. Ignored unless {@link #enabled()}.
+     * Also show the tail of each failing GitHub Actions job's log (a bounded number of jobs). The
+     * logs are read with {@link #enabled()} alone, for the failing tests they name (#922); this
+     * switch adds their last lines verbatim. Ignored unless {@link #enabled()}.
      */
     @WithName("include-logs")
     @WithDefault("false")

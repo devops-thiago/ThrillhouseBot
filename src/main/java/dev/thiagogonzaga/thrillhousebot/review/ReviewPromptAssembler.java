@@ -174,7 +174,9 @@ public class ReviewPromptAssembler {
                 diagramGuidance),
             combineSections(
                 globalInstructions,
-                linkedIssuesSection(TicketContextPrompts.SUMMARY_REQUEST, linkedIssues)));
+                combineSections(
+                    linkedIssuesSection(TicketContextPrompts.SUMMARY_REQUEST, linkedIssues),
+                    ciFailuresSummarySection(ciFailures))));
     return new AiReviewService.PromptInputs(
         fencedDiff,
         PromptTemplateEscaper.fence(PromptSections.prContext(req.prTitle(), req.prDescription())),
@@ -272,6 +274,19 @@ public class ReviewPromptAssembler {
       return "";
     }
     return PrReviewPrompts.CI_FAILURES_REQUEST + "\n\n" + PromptTemplateEscaper.fence(ciFailures);
+  }
+
+  /**
+   * The same failing checks for the summary call (#922), which ties each one to the finding that
+   * explains it or says none does; empty when the review has no CI-failure section.
+   */
+  static String ciFailuresSummarySection(String ciFailures) {
+    if (ciFailures == null || ciFailures.isBlank()) {
+      return "";
+    }
+    return PrReviewPrompts.CI_FAILURES_SUMMARY_REQUEST
+        + "\n\n"
+        + PromptTemplateEscaper.fence(ciFailures);
   }
 
   /**
