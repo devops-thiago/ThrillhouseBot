@@ -2354,7 +2354,10 @@ class VerdictBuilderTest {
             "d",
             null,
             null);
-    var posted = new ArrayList<>(postedFindings(2, 2).findings());
+    var posted = new ArrayList<>(postedFindings(1, 1).findings());
+    posted.add(
+        new ReviewResponse.Finding(
+            "low", "medium", "a.java", 9, "No description", null, null, null));
     posted.add(secret);
 
     var coverage =

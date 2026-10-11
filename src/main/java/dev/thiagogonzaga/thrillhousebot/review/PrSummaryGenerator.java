@@ -886,8 +886,11 @@ public class PrSummaryGenerator {
    */
   private static final Pattern ONE_DASH_ARROW = Pattern.compile("(?<![-.])->");
 
-  /** A comma straight after a node's closing bracket, or ending a line. */
-  private static final Pattern STRAY_COMMA = Pattern.compile("(?:[\\])}]\\s*+,)|(?:,\\s*+$)");
+  /** A comma straight after a node's closing bracket. */
+  private static final Pattern COMMA_AFTER_NODE = Pattern.compile("[\\])}]\\s*+,");
+
+  /** A comma ending a line. */
+  private static final Pattern TRAILING_COMMA = Pattern.compile(",\\s*+$");
 
   /** Flowchart statements whose syntax allows commas: class lists, styles, link styles, clicks. */
   private static final Pattern COMMA_STATEMENT =
@@ -912,7 +915,7 @@ public class PrSummaryGenerator {
       }
       var bare = MERMAID_LABEL.matcher(line).replaceAll("L");
       if (ONE_DASH_ARROW.matcher(bare).find()
-          || (!COMMA_STATEMENT.matcher(bare).find() && STRAY_COMMA.matcher(bare).find())
+          || (!COMMA_STATEMENT.matcher(bare).find() && hasStrayComma(bare))
           || bare.indexOf('|') >= 0
           || !shapesParse(bare)) {
         return false;
@@ -931,23 +934,34 @@ public class PrSummaryGenerator {
     var open = new ArrayDeque<Character>();
     var previous = ' ';
     for (var c : line.toCharArray()) {
-      if (OPENING_BRACKETS.indexOf(c) >= 0) {
-        if (!open.isEmpty() && OPENING_BRACKETS.indexOf(previous) < 0) {
-          return false;
-        }
-        open.push(c);
-      } else {
-        var closing = CLOSING_BRACKETS.indexOf(c);
-        if (closing >= 0 && (open.isEmpty() || open.pop() != OPENING_BRACKETS.charAt(closing))) {
-          return false;
-        }
-        if (!open.isEmpty() && LABEL_BREAKERS.indexOf(c) >= 0) {
-          return false;
-        }
+      if (!acceptsNext(open, previous, c)) {
+        return false;
       }
       previous = c;
     }
     return open.isEmpty();
+  }
+
+  /**
+   * Whether {@code c}, after {@code previous}, keeps the shapes on its line parsing; pushes or pops
+   * {@code open} for a bracket.
+   */
+  private static boolean acceptsNext(ArrayDeque<Character> open, char previous, char c) {
+    if (OPENING_BRACKETS.indexOf(c) >= 0) {
+      var nestedMidLabel = !open.isEmpty() && OPENING_BRACKETS.indexOf(previous) < 0;
+      open.push(c);
+      return !nestedMidLabel;
+    }
+    var closing = CLOSING_BRACKETS.indexOf(c);
+    if (closing >= 0) {
+      return !open.isEmpty() && open.pop() == OPENING_BRACKETS.charAt(closing);
+    }
+    return open.isEmpty() || LABEL_BREAKERS.indexOf(c) < 0;
+  }
+
+  /** Whether {@code line} has a comma after a node or at its end. */
+  private static boolean hasStrayComma(String line) {
+    return COMMA_AFTER_NODE.matcher(line).find() || TRAILING_COMMA.matcher(line).find();
   }
 
   /** Characters GitHub's parser rejects inside an unquoted label. */

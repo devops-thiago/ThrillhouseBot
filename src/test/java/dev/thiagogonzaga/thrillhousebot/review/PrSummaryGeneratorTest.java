@@ -2045,7 +2045,8 @@ class PrSummaryGeneratorTest {
         "flowchart TD\n  A(t: 3) --> B",
         "flowchart TD\n  A[x & y] --> B",
         // An edge label left open.
-        "flowchart TD\n  A -->|x B"
+        "flowchart TD\n  A -->|x B",
+        "flowchart TD\n  A] --> B"
       })
   void aFlowchartThatWouldNotParseIsOmitted(String diagram) {
     assertFalse(PrSummaryGenerator.flowchartParses(diagram), diagram);
@@ -2068,7 +2069,8 @@ class PrSummaryGeneratorTest {
         "flowchart LR\n  A -.-> B\n  B ==> C\n  C --- D\n  D -- text --> E\n  E <--> F",
         "graph TD\n  subgraph S [\"Store\"]\n    A([\"Fetch, merge\"]) --> B[(\"db\")]\n  end",
         "flowchart TD\n  %% a comment, with commas,\n  A --> B\n  class A,B hot\n  linkStyle 0,1 x",
-        "flowchart TD\n  A --> B & C\n  C{{\"hex\"}} --> D"
+        "flowchart TD\n  A --> B & C\n  C{{\"hex\"}} --> D",
+        "flowchart TD\n\n  A --> B"
       })
   void aFlowchartThatParsesIsKept(String diagram) {
     assertTrue(PrSummaryGenerator.flowchartParses(diagram), diagram);
