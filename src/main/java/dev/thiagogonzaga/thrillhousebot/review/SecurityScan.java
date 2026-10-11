@@ -397,12 +397,10 @@ public class SecurityScan {
    */
   public ReviewResponse withoutStandInSecrets(
       ReviewResponse response, DiffLineResolver lineResolver) {
-    var kept = new ArrayList<ReviewResponse.Finding>(response.findings().size());
-    for (var finding : response.findings()) {
-      if (!reportsStandInSecret(finding, lineResolver)) {
-        kept.add(finding);
-      }
-    }
+    var kept =
+        response.findings().stream()
+            .filter(finding -> !reportsStandInSecret(finding, lineResolver))
+            .toList();
     if (kept.size() == response.findings().size()) {
       return response;
     }

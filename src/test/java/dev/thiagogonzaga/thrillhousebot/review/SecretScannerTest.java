@@ -470,6 +470,7 @@ class SecretScannerTest {
         List.of(
             "ENV FUELRECON_API_TOKEN=${FUELRECON_API_TOKEN}",
             "FLEET_API_TOKEN=changeme",
+            "LOG_PATH=/data FLEET_API_TOKEN=changeme",
             "export API_TOKEN=$API_TOKEN DB_PASSWORD=%DB_PASSWORD%",
             "  client_secret: '<your-client-secret>'")) {
       assertTrue(SecretScanner.assignsOnlyStandIns(line, THRESHOLD), line);

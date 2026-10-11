@@ -102,7 +102,7 @@ final class SecretScanner {
 
   /** The words that mark a key as naming a credential. */
   private static final String CREDENTIAL_WORD =
-      "(?:password|passwd|secret|token|api[_-]?key|apikey"
+      "(?:password|passwd|secret|token|api[_-]?key"
           + "|access[_-]?key|private[_-]?key|client[_-]?secret)";
 
   /**
@@ -179,24 +179,28 @@ final class SecretScanner {
    * Every value a line assigns to a credential-named key, quoted or not (#926): the generic rule
    * reads only quoted literals, because an unquoted right-hand side is where the credential is
    * supposed to come from, but a model finding about {@code ENV API_TOKEN=${API_TOKEN}} is about
-   * exactly that unquoted value. A {@code {{ template }}} value is read whole, spaces included.
+   * exactly that unquoted value. A {@code {{ template }}} value is read whole, spaces included. The
+   * key (group 1) is any identifier; {@link #CREDENTIAL_KEY} decides whether it names a credential.
    */
   private static final Pattern ASSIGNED_VALUE =
       Pattern.compile(
-          "(?i)[A-Za-z0-9_.-]{0,40}"
-              + CREDENTIAL_WORD
-              + "[A-Za-z0-9_.-]{0,40}+[\"']?\\s{0,4}+(?::=|=>|=|:)\\s{0,4}+([\"'`]?)"
-              + "(\\{\\{[^}\\n]{1,200}+}}|[^\\s\"'`,;]{1,256}+)\\1");
+          "([\\w.-]{1,80}+)[\"']?\\s{0,4}+(?::=|=>|=|:)\\s{0,4}+([\"'`]?)"
+              + "(\\{\\{[^}\\n]{1,200}+}}|[^\\s\"'`,;]{1,256}+)\\2");
+
+  /** A key that names a credential. */
+  private static final Pattern CREDENTIAL_KEY = Pattern.compile("(?i)" + CREDENTIAL_WORD);
 
   /**
    * A value read from the environment or a template rather than written out (#926): {@code ${VAR}},
-   * {@code ${VAR:-default}}, {@code $VAR}, Windows {@code %VAR%}, {@code $(command)} and {@code {{
-   * template }}}. The whole value must be one such reference.
+   * {@code ${VAR:-default}}, {@code $(command)} and {@code {{ template }}} here, and {@code $VAR}
+   * and Windows {@code %VAR%} in {@link #VARIABLE_REFERENCE}. The whole value must be one such
+   * reference.
    */
   private static final Pattern INTERPOLATION =
-      Pattern.compile(
-          "\\$\\{[^}]{1,200}+}|\\$[A-Za-z_][A-Za-z0-9_]{0,100}+|%[A-Za-z_][A-Za-z0-9_]{0,100}+%"
-              + "|\\$\\([^)]{1,200}+\\)|\\{\\{[^}]{1,200}+}}");
+      Pattern.compile("\\$\\{[^}]{1,200}+}|\\$\\([^)]{1,200}+\\)|\\{\\{[^}]{1,200}+}}");
+
+  private static final Pattern VARIABLE_REFERENCE =
+      Pattern.compile("\\$[A-Za-z_]\\w{0,100}+|%[A-Za-z_]\\w{0,100}+%");
 
   /**
    * Case-insensitive fragments that mark a value as a placeholder rather than a credential. Each is
@@ -340,7 +344,7 @@ final class SecretScanner {
 
   /** Whether the whole value is a reference to the environment or a template; see INTERPOLATION. */
   static boolean isInterpolation(String value) {
-    return INTERPOLATION.matcher(value).matches();
+    return INTERPOLATION.matcher(value).matches() || VARIABLE_REFERENCE.matcher(value).matches();
   }
 
   /**
@@ -357,7 +361,10 @@ final class SecretScanner {
     Matcher assigned = ASSIGNED_VALUE.matcher(line);
     boolean any = false;
     while (assigned.find()) {
-      var value = assigned.group(2);
+      if (!CREDENTIAL_KEY.matcher(assigned.group(1)).find()) {
+        continue;
+      }
+      var value = assigned.group(3);
       if (!isInterpolation(value) && !isPlaceholder(value)) {
         return false;
       }

@@ -73,7 +73,7 @@ enum SecurityRule {
           "world",
           "open",
           "exposed",
-          "public",
+          Topics.PUBLIC,
           "winrm",
           "telnet"),
       Set.of("ssh", "rdp", "winrm", "telnet")),
@@ -85,8 +85,8 @@ enum SecurityRule {
           + " an S3 Block Public Access setting switched off. Every object in the bucket becomes"
           + " readable (or writable) by anyone. Keep Block Public Access on and serve public"
           + " content through a CDN origin access identity or pre-signed URLs instead.",
-      Set.of("s3", "bucket", "public", "acl", "access", "block"),
-      Set.of("public")),
+      Set.of("s3", "bucket", Topics.PUBLIC, "acl", "access", "block"),
+      Set.of(Topics.PUBLIC)),
   IAM_WILDCARD(
       Category.IAC,
       "IAM policy allows every action on every resource",
@@ -216,6 +216,7 @@ enum SecurityRule {
   private static final class Topics {
     static final String PRIVILEGE = "privilege";
     static final String PRIVILEGES = "privileges";
+    static final String PUBLIC = "public";
 
     static final Set<String> SECRET =
         Set.of(
