@@ -77,7 +77,7 @@ same diff.
 | CI hold and revisit | `review/CiHoldRegistry`, `review/CiHoldRevisit` |
 | Opt-in review learnings: capture after the post, from the round's final statuses | `review/ReviewLearnings.captureSurvivingDeclines` → `review/FollowUpAnalyzer.survivingDeclines` → `review/ReviewLearningService.save` |
 | `/learnings`, `/remember`, `/forget` | `webhook/LearningCommands` (routed by `CommentCommandService`) |
-| Maintainer replies and mentions | `review/MaintainerReplyService`, `review/MaintainerReplyDispatcher` |
+| Maintainer replies and mentions. A clear directive replied on a finding's thread is applied, never answered by the model: the thread is resolved and a fixed acknowledgement posted (`clearFromThread`, #1066) | `review/MaintainerReplyService`, `review/MaintainerReplyDispatcher` |
 | On-request commands (`/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`) | `review/AbstractPrSuggestionGenerator` and its subclasses |
 
 ## Model-call invariants
@@ -175,15 +175,31 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
   its finding and the root of its own thread, found by marker and content
   (`ReviewResult.EarlierRound`), which `ReviewPublisher.resolveAddressedThreads` resolves and
   `FollowUpAnalyzer.survivingEarlierRoundDeclines` offers to the learnings capture (#958).
-- **Every finding carried in gets a status, and an earlier round's status is not movement**
-  (#957, #959). `backstopEntry` gives each cluster one entry: a hold, `superseded` when its code
-  left the diff, `resolved`/`justified` for a conversation clear/decline (re-checked like the
-  effective round's), or the thread decline's outcome. Each backstop status carries
-  `ReviewResult.EarlierRound`; its id is relative to its own round, so `HeadMovedGuard.findingsToCarry`
-  skips it. These statuses are recomputed every round (never persisted), so
-  `ReviewResult.resolvedPreviousCount` and `hasSupersededPrevious` leave them out: counted, they
-  would post the delta comment and re-post the summary on every push (#470). The summary's status
-  table counts them.
+- **Every finding carried in gets a status, and an earlier round's close is recorded once**
+  (#957, #959, #1066). `backstopEntry` gives each cluster one entry: a hold, `resolved` for a
+  maintainer's clear (a conversation directive, or `@thrillhousebot resolved` replied on its own
+  thread, `clearedOnOwnThread`), `superseded` when its code left the diff, `resolved` when its
+  code is still there but its suggested fix landed (`suggestedFixLanded`: every line of
+  `suggestion_new` minus `suggestion_old` is an added line of the file within the suggestion's
+  length of where `suggestion_old` sits (`DiffLineResolver.addsEveryLineNear`), one of at least
+  `MIN_FIX_LINE_CHARS`; lean to hold, a false close is worse than a missed one), `justified` for a
+  conversation decline (re-checked like the effective round's), or the thread decline's outcome.
+  A clear is checked before presence, so it is not swallowed by the supersede. Each backstop
+  status carries `ReviewResult.EarlierRound`; its id is relative to its own round, so
+  `HeadMovedGuard.findingsToCarry` skips it. A `resolved` or `superseded` entry
+  (`PreviousFindingStatus.closesEarlierRound`) also carries its own thread's root
+  (`clusterThreadRoot`: marker and own content, no reply required), so `resolveAddressedThreads`
+  resolves it; it counts in `ReviewResult.resolvedPreviousCount` and `ClosedFindingNames` names it
+  from the finding, unless the round's own status already closes the effective round's copy of the
+  same defect (`EarlierRound.namedByTheRound`), so a defect is named once. The orchestrator then records those findings, every round's copy of the defect
+  (`EarlierRound.members`, `ReviewResult.earlierRoundClosedMembers`), with the round's stored response
+  (`ReviewResponse.closedEarlierRound`, never written by the model: `ReviewResponseParser` drops
+  it from every answer, and every lane rebuilds the response with the three-argument constructor
+  in `FindingPipeline.persistWithSummary`), and
+  `replayRounds` drops them from every later replay, so no later round resolves, names or counts
+  them again (#470). `hasSupersededPrevious` still leaves earlier rounds out, so an older close
+  never re-posts the summary. Holds and standing declines are recomputed every round. The
+  summary's status table counts every status.
 - **A "Things to double-check" item is counted once and replaced only by the same defect** (#951,
   #961). A listed-only repeat at no higher severity is dropped by the open-thread guard
   (`restatesListed`); a finding at the same or higher severity replaces the item
