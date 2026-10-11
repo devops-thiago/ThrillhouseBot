@@ -315,6 +315,8 @@ class OverviewScreenTest {
         "The review has no findings here",
         "Holds no security findings",
         "Hosts all the findings from the review",
+        "Hosts all of the findings",
+        "and hosts the two findings",
         "hosts two high findings"
       })
   void aClauseAboutWhatTheFileHoldsIsFindingsTalk(String clause) {
@@ -335,7 +337,10 @@ class OverviewScreenTest {
         "Resolves tracked findings",
         "Returns no findings for an empty diff",
         "Re-checks confirmed findings against the code",
-        "Processes findings in this batch of files"
+        "Processes findings in this batch of files",
+        // A finding word that names a part of the file.
+        "Contains the findings table for the dashboard",
+        "Holds the findings store"
       })
   void aClauseAboutWhatTheFileDoesIsNotFindingsTalk(String clause) {
     assertFalse(OverviewScreen.talksAboutFindings(clause));
@@ -357,6 +362,12 @@ class OverviewScreenTest {
     assertEquals(
         "renders it",
         OverviewScreen.screenedText("renders it; TBD, hosts the two findings", "+x", ""));
+    assertEquals(
+        "Renders it",
+        OverviewScreen.screenedText("Renders it, and hosts the two findings", "+x", ""));
+    assertEquals(
+        "Contains the findings table for the dashboard",
+        OverviewScreen.screenedText("Contains the findings table for the dashboard", "+x", ""));
     // A comma part of findings talk inside a role clause is cut and the role kept.
     assertEquals(
         "renders the dashboard",

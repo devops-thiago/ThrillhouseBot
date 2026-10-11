@@ -161,7 +161,11 @@ final class OverviewScreen {
           "low",
           "new",
           "lint",
-          "style");
+          "style",
+          // Plain connectives inside a holding clause: "hosts all of the findings", "renders it,
+          // and hosts the two findings".
+          "and",
+          "of");
 
   /**
    * Words that, a word or two after a clause-opening "Findings", place the review's findings
@@ -354,6 +358,7 @@ final class OverviewScreen {
     var aboutTheBatch = lower.contains("this batch");
     for (var i = 0; i < words.length; i++) {
       if (words[i].startsWith("finding")
+          && !namesAnArtifact(words, i)
           && bookkeepingLead(words, i)
           && (aboutTheBatch
               || qualified(words, i)
@@ -363,6 +368,54 @@ final class OverviewScreen {
     }
     return false;
   }
+
+  /**
+   * Whether the finding word at {@code at} names a part of the file rather than the review's
+   * findings: "Contains the findings table for the dashboard", "Holds the findings store".
+   */
+  private static boolean namesAnArtifact(String[] words, int at) {
+    return at + 1 < words.length && FINDINGS_ARTIFACTS.contains(words[at + 1]);
+  }
+
+  /** Nouns a finding word qualifies when it names a part of the file: a table, a list, a store… */
+  private static final Set<String> FINDINGS_ARTIFACTS =
+      Set.of(
+          "table",
+          "list",
+          "panel",
+          "page",
+          "view",
+          "model",
+          "component",
+          "store",
+          "schema",
+          "query",
+          "endpoint",
+          "api",
+          "tracker",
+          "card",
+          "widget",
+          "type",
+          "class",
+          "record",
+          "service",
+          "repository",
+          "filter",
+          "parser",
+          "renderer",
+          "formatter",
+          "section",
+          "tab",
+          "grid",
+          "chart",
+          "map",
+          "cache",
+          "queue",
+          "dto",
+          "entity",
+          "column",
+          "field",
+          "route");
 
   /** The verbs of holding: a file that hosts or holds findings is talked about, not described. */
   private static final Set<String> HOLDING_VERBS =
