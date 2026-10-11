@@ -214,7 +214,7 @@ class CiFailureContextResolverTest {
 
       assertTrue(section.contains("### job5 "), section);
       assertFalse(section.contains("### job6"), section);
-      assertTrue(section.contains("\nAlso failing, not detailed: job6, job7\n"), section);
+      assertTrue(section.contains("\nAlso failing, not detailed:\n- job6\n- job7\n"), section);
     }
 
     @Test
