@@ -25,10 +25,13 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -109,20 +112,60 @@ public class PrSummaryGenerator {
   static final String GAPS_HEADING = "### ⚠️ Description vs. Implementation";
 
   /**
-   * Body for the state where the model reported gaps but #588 collapsed every one of them onto a
-   * finding that states the same thing. The claim still reaches the reader at its most specific
-   * surface, so it is not repeated here — but the check plainly ran, and saying so is what keeps a
-   * collapsed section from reading exactly like a skipped one (#637).
-   *
-   * <p>"Reported as a finding below" is load-bearing, and the deduplicator holds it up: it
-   * collapses a gap only onto a finding that posts inline, so a gap whose every match was demoted
-   * into the collapsed double-check block survives as a bullet and this body is never reached for
-   * it (#718). Reaching it means at least one gap collapsed onto a finding published as a finding
-   * proper.
+   * Opening of a Description vs. Implementation bullet that names a finding instead of restating it
+   * (#964). The section used to say only that every mismatch "is reported as a finding below" once
+   * #588 had collapsed each gap onto a finding: it named none, it was said over findings that did
+   * not concern the description at all, and a description finding the summary call gave no gap for
+   * was missing from the section, sometimes from Key Findings too. The section now names each such
+   * finding by title and location. The carry-over skips these bullets: the finding is carried on
+   * its own, and keeps the bullet listed for as long as it is open.
    */
-  static final String GAPS_ALL_REPORTED_AS_FINDINGS =
-      "Every mismatch found between the description and the change is reported as a finding below,"
-          + " so it is not repeated here.";
+  static final String GAP_FINDING_PREFIX = "Reported as a finding: ";
+
+  /** A linked issue named in a finding, for the section's intro line. */
+  private static final Pattern LINKED_ISSUE_MENTION = Pattern.compile("(?i)\\blinked\\s++issue\\b");
+
+  /** Verbs after "description" that say what it asserts: "the description claims/states/says…". */
+  private static final String CLAIMING_VERBS = "claim(?:s|ed)?|state[sd]?|says|said";
+
+  /** …what it promises or implies. */
+  private static final String PROMISING_VERBS = "promise[sd]?|asserts|implies|advertises";
+
+  /** …what it describes or covers. */
+  private static final String DESCRIBING_VERBS = "mentions?|describes?|lists|documents|covers";
+
+  /** …what it leaves out: "the description omits/does not/never/leaves…". */
+  private static final String DENYING_VERBS = "omit(?:s|ted)?|does\\s++not|doesn['’]t|never|leaves";
+
+  /**
+   * What marks a finding as a mismatch between the change and what the PR description or its linked
+   * issue says (#964): "Description claims…", "the PR description states…", "contrary to the PR's
+   * stated behavior", "the PR title says…", "the author claims…", "the linked issue asks…". One
+   * pattern per shape, and the verb vocabulary in named parts, so each stays well under the regex
+   * complexity bound. A finding's title and description are each matched on their own, so a shape
+   * cannot be pieced together across them.
+   */
+  private static final List<Pattern> DESCRIPTION_CLAIMS =
+      List.of(
+          Pattern.compile("(?i)\\b(?:pr|pull request)(?:['’]s)?\\s++(?:description|body|title)\\b"),
+          Pattern.compile(
+              "(?i)\\b(?:pr|pull request|author)(?:['’]s)?\\s++"
+                  + "(?:(?:state|claim|promise)s?|says|said)\\b"),
+          Pattern.compile(
+              "(?i)\\bdescription\\s++(?:\\w+\\s+)?(?:"
+                  + CLAIMING_VERBS
+                  + "|"
+                  + PROMISING_VERBS
+                  + "|"
+                  + DESCRIBING_VERBS
+                  + "|"
+                  + DENYING_VERBS
+                  + ")\\b"),
+          Pattern.compile("(?i)\\bstated\\s++(?:behaviou?r|intent|purpose)\\b"),
+          Pattern.compile(
+              "(?i)\\b(?:contrary to|contradicts|inconsistent with|unlike)\\s++the\\s++"
+                  + "(?:pr|pull request|description|stated)\\b"),
+          LINKED_ISSUE_MENTION);
 
   /**
    * One changed file in the walkthrough: its path, the diff's authoritative change type, and
@@ -187,13 +230,15 @@ public class PrSummaryGenerator {
     // One observation must be published once. The findings are the most specific surface, so a
     // description-gap bullet — or a walkthrough clause appended after the row's file summary —
     // that only restates one of them is collapsed away before anything is rendered (#588).
-    var reportedGaps = descriptionGaps(aiSummary);
     var surfaces =
         SummarySurfaceDeduplicator.collapse(
-            reportedGaps, summariesByPath(aiSummary), result.findings());
+            descriptionGaps(aiSummary), summariesByPath(aiSummary), result.findings());
 
     appendPrPurpose(sb, aiSummary);
-    appendDescriptionGaps(sb, reportedGaps.size(), surfaces.descriptionGaps());
+    appendDescriptionGaps(
+        sb,
+        surfaces.descriptionGaps(),
+        descriptionFindings(surfaces.gapFindings(), result.findings()));
     appendWalkthroughDiagram(sb, aiSummary);
 
     sb.append("### Changes Overview\n");
@@ -608,15 +653,17 @@ public class PrSummaryGenerator {
   }
 
   /**
-   * Renders the Description vs. Implementation section in the two states that carry information,
-   * and omits it when the check ran and found no mismatch (#867).
+   * Renders the Description vs. Implementation section when there is something to list, and omits
+   * it when the check ran and found no mismatch (#867).
    *
-   * <p>The rendered states are: gaps survived, so they are listed; and the model reported gaps but
-   * every one of them restated an inline finding and #588 collapsed them all away, which used to
-   * delete the whole section along with them (the sharpest measured case — the review found the
-   * contradicted bug and still said nothing about the description). The collapsed state keeps its
-   * heading and says the mismatches are reported as findings below, because there the check found
-   * something and an absent section would hide that.
+   * <p>It lists the gaps that survived, then names every finding that reports a mismatch with the
+   * description or a linked issue ({@link #descriptionFindings}): the findings #588 collapsed a gap
+   * onto, and any other finding saying the change contradicts the description. Before #964 a
+   * section whose every gap had collapsed said only that each mismatch "is reported as a finding
+   * below", naming none, sometimes over a finding that was not about the description; and a
+   * description finding the summary call gave no gap for left the section out entirely, even while
+   * that finding was open from an earlier round. Naming the finding keeps the section for as long
+   * as the finding is open, because the findings rendered are the pull request's open set (#917).
    *
    * <p>#637 made the clean state explicit because an absent section could mean either "checked,
    * matched" or "never checked". That ambiguity no longer needs a line on every clean review: the
@@ -634,28 +681,65 @@ public class PrSummaryGenerator {
    * alone. The old clean line was vacuous there; omitting it is the better outcome.
    *
    * <p>The gaps rendered here include the ones an earlier round listed and nothing has resolved
-   * since ({@link DescriptionGapCarryover}, #923). Before that carry-over, a round whose summary
-   * call dropped an earlier linked-issue gap and returned only gaps that restated findings reached
-   * the collapsed state, and {@link #GAPS_ALL_REPORTED_AS_FINDINGS} was asserted over a gap no
-   * finding covered. A carried gap is weighed against the findings like any other, so that line now
-   * appears only when every gap on the pull request really collapsed onto a finding.
+   * since ({@link DescriptionGapCarryover}, #923).
    */
-  private static void appendDescriptionGaps(StringBuilder sb, int reported, List<String> gaps) {
-    if (!gaps.isEmpty()) {
-      sb.append(GAPS_HEADING).append("\n");
-      sb.append(gapsIntro(gaps));
-      for (String gap : gaps) {
-        // One line per gap: a gap's own line break could otherwise end the section early, and the
-        // next round reads these bullets back as the gaps it carries (#923).
-        sb.append("- ").append(MarkdownSafe.oneLine(gap)).append("\n");
-      }
-      sb.append("\n");
+  private static void appendDescriptionGaps(
+      StringBuilder sb, List<String> gaps, List<Finding> findings) {
+    if (gaps.isEmpty() && findings.isEmpty()) {
       return;
     }
-    if (reported > 0) {
-      sb.append(GAPS_HEADING).append("\n").append(GAPS_ALL_REPORTED_AS_FINDINGS).append("\n\n");
+    sb.append(GAPS_HEADING).append("\n");
+    var fromIssue = findings.stream().anyMatch(PrSummaryGenerator::mentionsLinkedIssue);
+    sb.append(fromIssue ? GAPS_INTRO_WITH_ISSUE : gapsIntro(gaps));
+    for (String gap : gaps) {
+      // One line per gap: a gap's own line break could otherwise end the section early, and the
+      // next round reads these bullets back as the gaps it carries (#923).
+      sb.append("- ").append(MarkdownSafe.oneLine(gap)).append("\n");
     }
+    for (Finding f : findings) {
+      sb.append("- ")
+          .append(GAP_FINDING_PREFIX)
+          .append(MarkdownSafe.inline(f.title()))
+          .append(" (`")
+          .append(MarkdownSafe.inlineCode(f.file()))
+          .append(":")
+          .append(f.line())
+          .append("`)\n");
+    }
+    sb.append("\n");
   }
+
+  /**
+   * The findings the Description vs. Implementation section names, once each: the ones a gap
+   * collapsed onto, in the gaps' order, then every other finding whose title or description says it
+   * reports a mismatch with the PR description or a linked issue ({@link #DESCRIPTION_CLAIMS}), in
+   * the order the summary lists findings.
+   */
+  static List<Finding> descriptionFindings(List<Finding> collapsedOnto, List<Finding> findings) {
+    var named = new LinkedHashSet<Finding>(collapsedOnto);
+    findings.stream().filter(PrSummaryGenerator::reportsDescriptionMismatch).forEach(named::add);
+    return List.copyOf(named);
+  }
+
+  /** Whether the finding's title or its description, on its own, holds a description claim. */
+  private static boolean reportsDescriptionMismatch(Finding finding) {
+    return findingTexts(finding)
+        .anyMatch(text -> DESCRIPTION_CLAIMS.stream().anyMatch(p -> p.matcher(text).find()));
+  }
+
+  /** Whether the finding's title or its description names a linked issue. */
+  private static boolean mentionsLinkedIssue(Finding finding) {
+    return findingTexts(finding).anyMatch(text -> LINKED_ISSUE_MENTION.matcher(text).find());
+  }
+
+  /** The finding's title and description, each as its own text; a {@code null} one is left out. */
+  private static Stream<String> findingTexts(Finding finding) {
+    return Stream.of(finding.title(), finding.description()).filter(Objects::nonNull);
+  }
+
+  /** The intro line when a linked issue is among what the section lists. */
+  static final String GAPS_INTRO_WITH_ISSUE =
+      "The PR description or its linked issue does not fully match the change:\n";
 
   /** The prefix the summary call gives an unmet acceptance criterion of a linked issue (#58). */
   static final String LINKED_ISSUE_GAP_PREFIX = "linked issue #";
@@ -670,7 +754,7 @@ public class PrSummaryGenerator {
         gaps.stream()
             .anyMatch(g -> g.strip().toLowerCase(Locale.ROOT).startsWith(LINKED_ISSUE_GAP_PREFIX));
     return fromIssue
-        ? "The PR description or its linked issue does not fully match the change:\n"
+        ? GAPS_INTRO_WITH_ISSUE
         : "The PR description does not fully match the change:\n";
   }
 

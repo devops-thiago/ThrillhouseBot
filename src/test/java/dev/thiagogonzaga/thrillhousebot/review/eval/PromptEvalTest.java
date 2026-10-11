@@ -32,11 +32,15 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponseParser;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -172,23 +176,50 @@ class PromptEvalTest {
     ReviewResponse.Summary summary;
     try {
       summary =
-          reviewResponseParser.parse(raw.get(SAMPLE_TIMEOUT_MINUTES, TimeUnit.MINUTES)).summary();
+          reviewResponseParser
+              .parseSummary(raw.get(SAMPLE_TIMEOUT_MINUTES, TimeUnit.MINUTES))
+              .summary();
     } catch (IllegalArgumentException e) {
       return "unparseable";
+    } catch (ExecutionException | TimeoutException e) {
+      return CALL_FAILED;
     }
     if (summary == null) {
       return "no-summary";
     }
     var implemented = new StringBuilder(orEmpty(summary.prPurpose()));
+    implemented.append('\n').append(orEmpty(summary.overallAssessment()));
     summary.fileSummaries().forEach(f -> implemented.append('\n').append(orEmpty(f.summary())));
     implemented.append('\n').append(orEmpty(summary.walkthroughDiagram()));
-    if (mentionsAny(spec.keywords(), implemented.toString())) {
+    if (statesAsImplemented(spec.keywords(), implemented.toString())) {
       return "claim-implemented";
     }
     return mentionsAny(spec.keywords(), String.join("\n", summary.descriptionGaps()))
         ? EvalCase.CLAIM_GAPPED
         : "claim-dropped";
   }
+
+  /**
+   * Whether a sentence of {@code text} mentions a keyword without refuting it: "the description's
+   * reminder claim is not backed by any changed file" names the claim to say it is unconfirmed,
+   * which is what the prompt asks for, so only a sentence with no refutation cue counts.
+   */
+  static boolean statesAsImplemented(List<String> keywords, String text) {
+    return Arrays.stream(text.split("(?<=[.!?\n])"))
+        .anyMatch(
+            sentence -> mentionsAny(keywords, sentence) && !REFUTATION.matcher(sentence).find());
+  }
+
+  /** Words that mark a sentence as reporting a claim rather than stating it. */
+  private static final Pattern REFUTATION =
+      Pattern.compile(
+          "(?i)\\b(?:claims?|claimed|description|unconfirmed|not|no|never|without|missing"
+              + "|lacks?|absent)\\b");
+
+  /**
+   * The outcome of a sample whose model call failed or timed out: a failing sample, not a crash.
+   */
+  static final String CALL_FAILED = "call-failed";
 
   private static boolean mentionsAny(List<String> keywords, String text) {
     var lower = text.toLowerCase(Locale.ROOT);
@@ -288,6 +319,8 @@ class PromptEvalTest {
       parsed = reviewResponseParser.parse(raw.get(SAMPLE_TIMEOUT_MINUTES, TimeUnit.MINUTES));
     } catch (IllegalArgumentException e) {
       return "unparseable";
+    } catch (ExecutionException | TimeoutException e) {
+      return CALL_FAILED;
     }
     var found =
         parsed.findings().stream()

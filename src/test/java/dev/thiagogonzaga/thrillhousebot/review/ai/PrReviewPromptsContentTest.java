@@ -674,11 +674,11 @@ class PrReviewPromptsContentTest {
         "the description is a claim to check, not a source of facts (#920)");
     assertContains(
         sys,
-        "is not described as implemented in\n  pr_purpose, file_summaries or walkthrough_diagram",
+        "overall_assessment, pr_purpose, file_summaries or walkthrough_diagram",
         "an unsupported claim never reads as implemented (#920)");
     assertContains(
         sys,
-        "it goes in description_gaps",
+        "it goes in\n  description_gaps",
         "an unsupported claim is reported as a description gap (#920)");
     assertContains(
         sys,
@@ -688,6 +688,27 @@ class PrReviewPromptsContentTest {
         PrReviewPrompts.DIAGRAM_REQUEST,
         "never draw a step only the PR description claims",
         "the diagram must not draw an unconfirmed claim (#920, zig #178's retry loop)");
+  }
+
+  @Test
+  void summaryPromptMakesEveryGapCiteTheDescriptionAndQuoteItExactly() {
+    String sys = PrReviewPrompts.SUMMARY_SYSTEM;
+    assertContains(
+        sys,
+        "start it with \"The description …\" or \"Linked issue #N: …\"",
+        "a gap must cite the description or a linked issue (#964)");
+    assertContains(
+        sys,
+        "copy the words exactly as it writes them",
+        "a quoted claim must be the description's own words (#946)");
+    assertContains(
+        sys,
+        "own documentation, configuration or examples and its code is not a description gap",
+        "a docs-vs-code mismatch is not a description gap (#964)");
+    assertContains(
+        sys,
+        "check that it does not already mention it",
+        "an omission gap must not invent an omission the description covers (#946)");
   }
 
   @Test
