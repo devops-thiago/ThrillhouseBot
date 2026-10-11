@@ -162,8 +162,8 @@ public class SecurityScan {
   private static final String STATUS_JUSTIFIED = "justified";
 
   /**
-   * Comparisons the identity match ({@code sameIdentity}) and the duplicate check have made, for
-   * tests that pin how the matching scales (#1031). Counted, never read, in production.
+   * Candidates the identity lookups and the duplicate check have weighed, for tests that pin how
+   * the matching scales (#1031). Counted, never read, in production.
    */
   static final AtomicLong IDENTITY_COMPARISONS = new AtomicLong();
 
@@ -603,11 +603,9 @@ public class SecurityScan {
     int best = 0;
     int bestDistance = Integer.MAX_VALUE;
     for (var entry : priorsByIdentity.candidates(detection.file(), identityKey(detection))) {
-      var prior = entry.getValue();
-      int distance = Math.abs(prior.line() - detection.line());
-      if (!claimed.contains(entry.getKey())
-          && distance < bestDistance
-          && sameIdentity(prior, detection)) {
+      IDENTITY_COMPARISONS.incrementAndGet();
+      int distance = Math.abs(entry.getValue().line() - detection.line());
+      if (!claimed.contains(entry.getKey()) && distance < bestDistance) {
         best = entry.getKey();
         bestDistance = distance;
       }
@@ -622,8 +620,8 @@ public class SecurityScan {
    */
   private static boolean repeatsEarlierRound(
       ReviewResponse.Finding detection, PathIndex<ReviewResponse.Finding> earlierByIdentity) {
-    return earlierByIdentity.candidates(detection.file(), identityKey(detection)).stream()
-        .anyMatch(prior -> sameIdentity(prior, detection));
+    IDENTITY_COMPARISONS.incrementAndGet();
+    return !earlierByIdentity.candidates(detection.file(), identityKey(detection)).isEmpty();
   }
 
   /**
@@ -635,21 +633,18 @@ public class SecurityScan {
     return PathIndex.of(findings, ReviewResponse.Finding::file, SecurityScan::identityKey);
   }
 
-  /** Same file ({@link FilePaths#same}), same title and same stripped anchor. */
-  private static boolean sameIdentity(ReviewResponse.Finding prior, ReviewResponse.Finding other) {
-    IDENTITY_COMPARISONS.incrementAndGet();
-    return FilePaths.same(prior.file(), other.file())
-        && Objects.equals(prior.title(), other.title())
-        && Objects.equals(stripped(prior.suggestionOld()), stripped(other.suggestionOld()));
-  }
-
   /**
-   * What two findings in the same file must share besides the file to be the same scan identity:
-   * the title and the stripped anchor. A {@link PathIndex} key; candidates are still compared in
-   * full by {@link #sameIdentity}.
+   * What two findings in the same file ({@link FilePaths#same}, which {@link PathIndex} applies)
+   * must share to be the same scan identity: the title and the stripped anchor, each
+   * length-prefixed so no two different pairs give one key. A lookup by it therefore returns only
+   * true matches.
    */
   private static String identityKey(ReviewResponse.Finding finding) {
-    return finding.title() + '\n' + stripped(finding.suggestionOld());
+    return keyPart(finding.title()) + keyPart(stripped(finding.suggestionOld()));
+  }
+
+  private static String keyPart(String text) {
+    return text == null ? "-" : text.length() + ":" + text;
   }
 
   /**
@@ -717,12 +712,16 @@ public class SecurityScan {
     return claimed;
   }
 
+  /**
+   * Whether a declined finding the identity index paired with a detection covers its content: no
+   * fingerprint on the decline, or the same one.
+   */
   private static boolean sameContent(
       ReviewResponse.Finding prior, ReviewResponse.Finding detection) {
+    IDENTITY_COMPARISONS.incrementAndGet();
     var priorFingerprint = fingerprintOf(prior.description());
-    return sameIdentity(prior, detection)
-        && (priorFingerprint == null
-            || priorFingerprint.equals(fingerprintOf(detection.description())));
+    return priorFingerprint == null
+        || priorFingerprint.equals(fingerprintOf(detection.description()));
   }
 
   /** The content fingerprint a scan finding's description carries, or {@code null}. */
