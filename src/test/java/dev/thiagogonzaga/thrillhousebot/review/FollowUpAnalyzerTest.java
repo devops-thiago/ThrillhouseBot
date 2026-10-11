@@ -5232,23 +5232,59 @@ class FollowUpAnalyzerTest {
                     "@thrillhousebot resolved src/B.java:5 — Missing null check",
                     "maintainer")));
 
+    var otherLine =
+        entriesOver(
+            patches,
+            List.of(),
+            List.of(
+                SQL_THREAD,
+                comment(
+                    400L,
+                    300L,
+                    "src/A.java",
+                    "@thrillhousebot resolved src/A.java:15 — other bug",
+                    "maintainer")));
+
     assertTrue(entryFor(outsider, "SQL injection").holdsOpen());
-    assertFalse("resolved".equals(entryFor(otherFile, "SQL injection").status().status()));
+    assertNotEquals("resolved", entryFor(otherLine, "SQL injection").status().status());
+    assertNotEquals("resolved", entryFor(otherFile, "SQL injection").status().status());
   }
 
   @Test
-  void threadDirectiveNamesItsFileUnlessItNamesAnotherOne() {
+  void threadDirectiveNamesItsFindingOnlyByItsOwnWholeLocator() {
+    var lines = java.util.Arrays.asList(10, null);
     assertTrue(
-        FollowUpAnalyzer.threadDirectiveNamesItsFile("@thrillhousebot resolved", "src/A.java"));
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved", "src/A.java", lines));
     assertTrue(
-        FollowUpAnalyzer.threadDirectiveNamesItsFile(
-            "@thrillhousebot resolved `src/A.java:10` — t", "src/A.java"));
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved `src/A.java:10` — t", "src/A.java", lines));
+    assertTrue(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved src/A.java:10", "src/A.java", lines));
     assertFalse(
-        FollowUpAnalyzer.threadDirectiveNamesItsFile(
-            "@thrillhousebot resolved src/B.java:10 — t", "src/A.java"));
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved src/A.java:15 — other bug", "src/A.java", lines),
+        "another line of the same file is another finding");
     assertFalse(
-        FollowUpAnalyzer.threadDirectiveNamesItsFile(
-            "@thrillhousebot resolved src/B.java:10", null));
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved other/src/A.java:10 — t", "src/A.java", lines),
+        "a longer path is another file");
+    assertFalse(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved src/A.java:100 — t", "src/A.java", lines));
+    assertFalse(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved src/A.java:10-12", "src/A.java", lines));
+    assertFalse(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved src/A.java:10 - 12", "src/A.java", lines));
+    assertFalse(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved src/B.java:10 — t", "src/A.java", lines));
+    assertFalse(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved src/B.java:10", null, lines));
   }
 
   /** The effective round: a clear replied on the finding's own thread rewrites its unresolved. */
@@ -5634,7 +5670,7 @@ class FollowUpAnalyzerTest {
   void anEarlierRoundFindingWhoseSuggestedFixLandedAboveItsAnchorIsResolved() {
     var entry =
         entryFor(
-            fixCheckOver("requireNumeric(id);\nString q = base + id;", GUARD_ADDED, Map.of()),
+            fixCheckOver("requireNumeric(id);\n\nString q = base + id;", GUARD_ADDED, Map.of()),
             "SQL injection");
 
     assertEquals("resolved", entry.status().status());
@@ -5684,6 +5720,16 @@ class FollowUpAnalyzerTest {
                 "SQL injection")
             .holdsOpen(),
         "a content-identical rename");
+    assertTrue(
+        entryFor(
+                fixCheckOver(
+                    "requireNumeric(id);\nString q = base + id;",
+                    "@@ -9,2 +9,8 @@\n context();\n String q = base + id;\n+a();\n+b();\n+c();"
+                        + "\n+d();\n+e();\n+requireNumeric(id);",
+                    Map.of()),
+                "SQL injection")
+            .holdsOpen(),
+        "the same guard added elsewhere in the file");
   }
 
   /** One defect raised twice: a fix that landed for one present copy only leaves it open. */
@@ -5733,5 +5779,66 @@ class FollowUpAnalyzerTest {
             () -> "+unrelated();");
 
     assertTrue(entryFor(entries, "SQL injection").holdsOpen());
+  }
+
+  /** A reply from a deleted account carries no author, so it clears nothing. */
+  @Test
+  void aThreadDirectiveWithNoAuthorClearsNothing() {
+    var orphan =
+        new GitHubReviewClient.PullRequestComment(
+            400L, 300L, "src/A.java", "@thrillhousebot resolved", null, "MEMBER");
+
+    var entries =
+        entriesOver(
+            Map.of("src/A.java", patch(10), "src/B.java", patch(5)),
+            List.of(),
+            List.of(SQL_THREAD, orphan));
+
+    assertTrue(entryFor(entries, "SQL injection").holdsOpen());
+  }
+
+  /**
+   * One defect raised in two rounds, the older copy cleared from the conversation and the newer on
+   * its thread: the conversation note is kept, so the thread still gets the directive's reply.
+   */
+  @Test
+  void aConversationClearOnOneMemberKeepsItsNoteOverAThreadClearOnAnother() {
+    var roundOne =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": "SQL injection",
+           "description": "raw query"}
+        ]}
+        """;
+    var roundTwo =
+        """
+        {"findings": [
+          {"risk": "critical", "file": "src/A.java", "line": 11, "title": "SQL injection",
+           "description": "raw query"}
+        ]}
+        """;
+    var roundThree =
+        """
+        {"findings": [
+          {"risk": "low", "file": "src/C.java", "line": 1, "title": "New", "description": "n"}
+        ]}
+        """;
+
+    var entries =
+        analyzer.heldPreviousFindings(
+            analyzer.parsePreviousResponses(List.of(roundThree, roundTwo, roundOne)),
+            List.of(),
+            List.of(
+                SQL_THREAD,
+                comment(400L, 300L, "src/A.java", "@thrillhousebot resolved", "maintainer")),
+            List.of(maintainerSays(CLEARS_FINDING_ONE)),
+            new DiffLineResolver(Map.of("src/A.java", patch(10), "src/C.java", patch(1))),
+            BOT_ID,
+            Map.of(),
+            () -> "+unrelated();");
+
+    var cleared = entryFor(entries, "SQL injection");
+    assertEquals("resolved", cleared.status().status());
+    assertEquals(FollowUpAnalyzer.conversationClearedNote(BOT_ID), cleared.status().note());
   }
 }

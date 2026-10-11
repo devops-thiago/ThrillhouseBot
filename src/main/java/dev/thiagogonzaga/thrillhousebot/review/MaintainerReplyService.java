@@ -32,6 +32,7 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -217,8 +218,8 @@ public class MaintainerReplyService {
    * reply is a deterministic acknowledgement, never a generated answer that could claim a
    * resolution that did not happen. The review applies the same directive to the finding's status
    * ({@code FollowUpAnalyzer.clearNamedInConversation}), by the same two rules: a write-capable
-   * author, and a naming that carries no other file ({@link
-   * FollowUpAnalyzer#threadDirectiveNamesItsFile}).
+   * author, and a naming that names no other finding ({@link
+   * FollowUpAnalyzer#threadDirectiveNamesItsFinding}).
    *
    * @param botRoot the thread's root comment when it is the bot's, else {@code null}
    */
@@ -229,8 +230,9 @@ public class MaintainerReplyService {
       ack = clearDirectiveUnauthorizedAck(botIdentity);
     } else if (botRoot == null) {
       ack = THREAD_CLEAR_NOT_A_FINDING_ACK;
-    } else if (!FollowUpAnalyzer.threadDirectiveNamesItsFile(task.question(), botRoot.path())) {
-      ack = THREAD_CLEAR_OTHER_FILE_ACK;
+    } else if (!FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+        task.question(), botRoot.path(), Arrays.asList(botRoot.line(), botRoot.originalLine()))) {
+      ack = THREAD_CLEAR_OTHER_FINDING_ACK;
     } else {
       ack = resolveThread(auth, task) ? threadClearedAck(botIdentity) : THREAD_CLEAR_PENDING_ACK;
     }
@@ -285,11 +287,11 @@ public class MaintainerReplyService {
         + " thread is resolved. Re-open it if that was not intended.";
   }
 
-  /** Acknowledgement when the directive's naming carries a file other than the thread's own. */
-  static final String THREAD_CLEAR_OTHER_FILE_ACK =
-      "That reply names a `path:line` in a different file from this thread's finding, so nothing"
-          + " was closed here. Reply on that finding's own thread, or post the directive on the PR"
-          + " conversation.";
+  /** Acknowledgement when the directive's naming is not this thread's finding's locator. */
+  static final String THREAD_CLEAR_OTHER_FINDING_ACK =
+      "That reply names a `path:line` that is not this thread's finding, so nothing was closed"
+          + " here. Reply on that finding's own thread, post the directive on the PR conversation,"
+          + " or reply `@thrillhousebot resolved` here with no locator to close this one.";
 
   /** Acknowledgement when the directive is replied on a thread that is not one of the bot's. */
   static final String THREAD_CLEAR_NOT_A_FINDING_ACK =

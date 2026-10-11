@@ -681,8 +681,8 @@ any other decline. An older round's finding whose code left the diff is counted
 superseded, and one cleared or declined from the PR conversation is counted
 resolved or justified, so the summary's counts add up to the findings carried
 in. One whose flagged line is still there is closed as resolved when every line
-its suggestion adds is now an added line of the file (with at least one real line
-of code among them); otherwise it stays open until a reply or a directive closes
+its suggestion adds is now an added line of the file beside the flagged code
+(with at least one real line of code among them); otherwise it stays open until a reply or a directive closes
 it. One whose code left the diff, whose suggested fix landed, or that a
 maintainer cleared, is closed once:
 its review thread is resolved, the review body names it under the round's
@@ -733,8 +733,8 @@ The bot resolves the thread straight away and replies with a fixed
 acknowledgement, not a generated answer; if GitHub does not confirm the
 resolution, the reply says the next review closes the finding instead. The next
 review records the finding **resolved** either way. The same write-access rule
-applies, and a reply whose `path:line` names a different file closes nothing on
-that thread.
+applies, and a reply whose `path:line` is not that finding's own (another file,
+or another line of the same file) closes nothing on that thread.
 
 The bot answers the directive when it sees it, but it has no findings loaded
 then, so it says what the next review will evaluate. The exception is a

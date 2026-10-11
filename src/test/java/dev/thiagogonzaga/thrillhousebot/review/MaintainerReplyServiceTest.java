@@ -156,7 +156,15 @@ class MaintainerReplyServiceTest {
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(
             List.of(
-                comment(99L, null, BOT, "**HIGH — possible NPE** on user lookup"),
+                new GitHubReviewClient.PullRequestComment(
+                    99L,
+                    null,
+                    "src/Foo.java",
+                    "**HIGH — possible NPE** on user lookup",
+                    new GitHubReviewClient.ReviewResponse.User(BOT),
+                    null,
+                    10,
+                    10),
                 comment(1000L, 99L, "octocat", "@thrillhousebot resolved")));
   }
 
@@ -260,7 +268,45 @@ class MaintainerReplyServiceTest {
     service.handle(threadReply("@thrillhousebot resolved src/Bar.java:3 — other", "OWNER"));
 
     verifyNoInteractions(reviewThreadService, replyAssistant);
-    assertEquals(MaintainerReplyService.THREAD_CLEAR_OTHER_FILE_ACK, threadAck());
+    assertEquals(MaintainerReplyService.THREAD_CLEAR_OTHER_FINDING_ACK, threadAck());
+  }
+
+  /** Another line of the same file is another finding too. */
+  @Test
+  void aClearDirectiveNamingAnotherLineOfTheSameFileResolvesNothingHere() {
+    authorize();
+    botFindingThread();
+
+    service.handle(threadReply("@thrillhousebot resolved src/Foo.java:15 — other bug", "OWNER"));
+
+    verifyNoInteractions(reviewThreadService, replyAssistant);
+    assertEquals(MaintainerReplyService.THREAD_CLEAR_OTHER_FINDING_ACK, threadAck());
+  }
+
+  /** An outdated thread keeps its original line, which the locator may name. */
+  @Test
+  void aClearDirectiveNamingTheThreadsOriginalLineResolvesIt() {
+    authorize();
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(
+            List.of(
+                new GitHubReviewClient.PullRequestComment(
+                    99L,
+                    null,
+                    "src/Foo.java",
+                    "**HIGH — possible NPE**",
+                    new GitHubReviewClient.ReviewResponse.User(BOT),
+                    null,
+                    null,
+                    10)));
+    when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 42))
+        .thenReturn(Map.of(99L, new ReviewThreadService.ThreadRef("T99", false)));
+    when(reviewThreadService.resolve(AUTH, "T99")).thenReturn(true);
+
+    service.handle(threadReply("@thrillhousebot resolved src/Foo.java:10", "OWNER"));
+
+    assertEquals(MaintainerReplyService.threadClearedAck(BotIdentity.from(null)), threadAck());
   }
 
   @Test

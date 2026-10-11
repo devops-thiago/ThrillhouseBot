@@ -39,6 +39,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
@@ -1717,16 +1718,49 @@ public class FollowUpAnalyzer {
   /**
    * Whether a clear directive written as a reply on a finding's own review thread applies to that
    * thread's finding (#1066). The thread names the finding, so a bare {@code @thrillhousebot
-   * resolved} closes it. A reply that names a {@code path:line} closes it only when the naming
-   * carries the thread's own file: a directive naming a different file is about another finding,
-   * and the safe reading of it is to close nothing here. {@link MaintainerReplyService} decides
-   * with this same rule when it resolves the thread, and the review applies it to the status.
+   * resolved} closes it. A reply that names any {@code path:line} closes it only when one of them
+   * is this finding's own locator, whole ({@link #namesWholeLocator}): a directive naming another
+   * line of the same file, or another file, is about another finding, and the safe reading of it is
+   * to close nothing here. {@link MaintainerReplyService} decides with this same rule when it
+   * resolves the thread, and the review applies it to the status.
    *
    * @param path the file the thread's root comment is on
+   * @param lines the lines the finding may be cited at (null entries are ignored)
    */
-  static boolean threadDirectiveNamesItsFile(String body, String path) {
+  static boolean threadDirectiveNamesItsFinding(
+      String body, String path, Collection<Integer> lines) {
     var naming = namingText(body);
-    return !LOCATOR_SHAPE.matcher(naming).find() || (path != null && naming.contains(path));
+    if (!LOCATOR_SHAPE.matcher(naming).find()) {
+      return true;
+    }
+    return path != null
+        && lines.stream()
+            .filter(Objects::nonNull)
+            .anyMatch(line -> namesWholeLocator(naming, path + ":" + line));
+  }
+
+  /**
+   * Whether {@code naming} carries {@code locator} as a whole token: not continued after it (as
+   * {@link #namesLocator} reads the end, with no spaced range) and not a longer path before it, so
+   * {@code other/src/A.java:5} does not name {@code src/A.java:5}.
+   */
+  private static boolean namesWholeLocator(String naming, String locator) {
+    for (var at = naming.indexOf(locator); at >= 0; at = naming.indexOf(locator, at + 1)) {
+      var after = at + locator.length();
+      var whole =
+          (at == 0 || !isPathChar(naming.charAt(at - 1)))
+              && (after >= naming.length()
+                  || (!continuesLocator(naming, after) && !startsSpacedRange(naming, after)));
+      if (whole) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** A character a repository path can hold, so one before a locator makes it a longer path. */
+  private static boolean isPathChar(char c) {
+    return Character.isLetterOrDigit(c) || c == '/' || c == '.' || c == '_' || c == '-';
   }
 
   /**
@@ -1744,17 +1778,14 @@ public class FollowUpAnalyzer {
    * Whether a maintainer cleared this finding with a clear directive replied on its own thread
    * (#1066): a write-capable, non-bot reply that uses the directive ({@link #isClearDirective}) on
    * the thread located by the finding's marker and own content ({@link #markerRootComment} with
-   * {@code requireOwnContent}), naming no other file ({@link #threadDirectiveNamesItsFile}). A
-   * thread found by title alone is not enough: clearing is the dangerous direction.
+   * {@code requireOwnContent}), naming no other finding ({@link #threadDirectiveNamesItsFinding}).
+   * A thread found by title alone is not enough: clearing is the dangerous direction.
    */
   private static boolean clearedOnOwnThread(
       ReviewResponse.Finding finding,
       int findingId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity) {
-    if (inlineComments == null || inlineComments.isEmpty()) {
-      return false;
-    }
     var root = markerRootComment(finding, findingId, true, inlineComments, botIdentity);
     if (root == null) {
       return false;
@@ -1765,7 +1796,7 @@ public class FollowUpAnalyzer {
           && !botIdentity.matches(c.user().login())
           && mayHoldWriteAccess(c.authorAssociation())
           && isClearDirective(c.body(), botIdentity)
-          && threadDirectiveNamesItsFile(c.body(), finding.file())) {
+          && threadDirectiveNamesItsFinding(c.body(), finding.file(), List.of(finding.line()))) {
         Log.infof(
             "Clearing previous finding '%s' (%s:%d) — a maintainer replied an @thrillhousebot"
                 + " resolved directive on its review thread",
@@ -3002,12 +3033,8 @@ public class FollowUpAnalyzer {
    */
   private static void closeEarlierRound(
       Map<String, OpenFinding> open, List<ReviewResponse.Finding> closed) {
-    for (var finding : closed) {
-      var key = findingKey(finding);
-      if (key != null) {
-        open.remove(key);
-      }
-    }
+    // A finding with no file has no key and was never in the open set; removing null is a no-op.
+    closed.forEach(finding -> open.remove(findingKey(finding)));
   }
 
   /** What {@link #replayRounds} leaves: the open set and the round the current one reports on. */
@@ -3558,25 +3585,44 @@ public class FollowUpAnalyzer {
           clusterThreadRoot(cluster, facts.mostSevere(), in));
     }
     if (!facts.declines().isEmpty()) {
-      var reviewed = declineRecheckEnabled && code != null ? code.get() : null;
-      var status =
-          conversationDeclineStatus(
-              target.id(),
-              target.finding(),
-              facts.declines().stream().map(ConversationDecline::reason).toList(),
-              reviewed,
-              in.botIdentity());
-      return STATUS_UNRESOLVED.equals(status.status())
-          ? hold(target, status.note())
-          : settled(target, STATUS_JUSTIFIED, status.note(), null);
+      return conversationDeclineEntry(target, facts, in, code);
     }
-    var answered = facts.answered();
-    if (answered == null) {
+    if (facts.answered() == null) {
       return suggestedFixLandedEverywhere(cluster, in)
           ? settled(
               target, STATUS_RESOLVED, FIX_LANDED_NOTE, clusterThreadRoot(cluster, target, in))
           : hold(target, HELD_NOTE);
     }
+    return threadReplyEntry(target, facts, in, code);
+  }
+
+  /**
+   * {@link #backstopEntry}'s entry for a present finding a maintainer declined from the PR
+   * conversation: re-checked as {@link #declineNamedInConversation} re-checks it.
+   */
+  private HeldPrevious conversationDeclineEntry(
+      OpenFinding target, ClusterFacts facts, BackstopInputs in, Supplier<String> code) {
+    var reviewed = declineRecheckEnabled && code != null ? code.get() : null;
+    var status =
+        conversationDeclineStatus(
+            target.id(),
+            target.finding(),
+            facts.declines().stream().map(ConversationDecline::reason).toList(),
+            reviewed,
+            in.botIdentity());
+    return STATUS_UNRESOLVED.equals(status.status())
+        ? hold(target, status.note())
+        : settled(target, STATUS_JUSTIFIED, status.note(), null);
+  }
+
+  /**
+   * {@link #backstopEntry}'s entry for a present finding a maintainer answered on its thread: held
+   * when a lone decline does not hold up ({@link #reopenedEarlierDecline}), else a standing decline
+   * on that thread.
+   */
+  private HeldPrevious threadReplyEntry(
+      OpenFinding target, ClusterFacts facts, BackstopInputs in, Supplier<String> code) {
+    var answered = facts.answered();
     var reopened = reopenedEarlierDecline(answered, facts.answeredRoot(), in, code);
     return reopened != null
         ? hold(target, reopened)
@@ -3657,23 +3703,28 @@ public class FollowUpAnalyzer {
    *
    * <p>The test is the suggestion with the flagged code subtracted: the lines of {@code
    * suggestion_new} that {@code suggestion_old} does not carry, compared stripped. Every one must
-   * be an added line of the finding's file now ({@link DiffLineResolver#addsEveryLine}), and at
-   * least one must hold {@link #MIN_FIX_LINE_CHARS} non-whitespace characters. A false close is
-   * worse than a missed one, so a finding with no suggestion, a suggestion that only removes or
-   * reorders lines, a suggestion made only of short lines, and a file renamed with no content
-   * change all stay held.
+   * be an added line of the finding's file now, beside the flagged code: within as many lines of
+   * where its {@code suggestion_old} sits as the suggestion has ({@link
+   * DiffLineResolver#addsEveryLineNear}), since the same guard added for another defect elsewhere
+   * in the file says nothing about this one. At least one must hold {@link #MIN_FIX_LINE_CHARS}
+   * non-whitespace characters. A false close is worse than a missed one, so a finding with no
+   * suggestion or no flagged code to locate, a suggestion that only removes or reorders lines, one
+   * made only of short lines, and a file renamed with no content change all stay held.
    */
   static boolean suggestedFixLanded(
       ReviewResponse.Finding finding,
       DiffLineResolver lineResolver,
       Map<String, String> renameTargets) {
-    var fixLines = strippedLines(finding.suggestionNew());
+    var suggested = strippedLines(finding.suggestionNew());
+    var fixLines = new LinkedHashSet<>(suggested);
     fixLines.removeAll(strippedLines(finding.suggestionOld()));
     if (fixLines.stream().noneMatch(line -> nonWhitespaceLength(line) >= MIN_FIX_LINE_CHARS)) {
       return false;
     }
     var path = renameTargets.getOrDefault(finding.file(), finding.file());
-    return !path.isBlank() && lineResolver.addsEveryLine(path, fixLines);
+    return !path.isBlank()
+        && lineResolver.addsEveryLineNear(
+            path, finding.suggestionOld(), finding.line(), fixLines, suggested.size());
   }
 
   /** The non-blank lines of {@code text}, stripped, in order; empty for a null text. */
