@@ -86,7 +86,7 @@ class ThrottledInlineCommentTest {
   private static final AtomicInteger PR_NUMBERS = new AtomicInteger(919_000);
 
   private final Finding finding =
-      new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Bug", "desc", "old", "new");
+      new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Bug", "desc", "new", "newer");
 
   private int prNumber;
   private FakeReviewClient reviewClient;

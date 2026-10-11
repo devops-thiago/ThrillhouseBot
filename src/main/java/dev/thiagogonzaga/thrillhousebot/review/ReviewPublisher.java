@@ -1048,16 +1048,6 @@ public class ReviewPublisher {
    */
   private Delivery postFindingComment(
       CommentTarget target, Finding finding, int findingId, DiffLineResolver lineResolver) {
-    return GitHubReviewClient.asOneComment(
-        target.owner(),
-        target.repo(),
-        target.prNumber(),
-        () -> postFindingCommentRoutes(target, finding, findingId, lineResolver));
-  }
-
-  /** The routes themselves, in preference order. See {@link #postFindingComment}. */
-  private Delivery postFindingCommentRoutes(
-      CommentTarget target, Finding finding, int findingId, DiffLineResolver lineResolver) {
     if (!lineResolver.isChangedFile(finding.file())) {
       // #925: no changed file matched the path (FindingPipeline already mapped every one that
       // did), and GitHub opens no thread, on a line or on the file, outside the pull request's own
@@ -1068,6 +1058,16 @@ public class ReviewPublisher {
           LogSafe.oneLine(finding.file()), finding.line());
       return Delivery.OUTSIDE_PULL_REQUEST;
     }
+    return GitHubReviewClient.asOneComment(
+        target.owner(),
+        target.repo(),
+        target.prNumber(),
+        () -> postFindingCommentRoutes(target, finding, findingId, lineResolver));
+  }
+
+  /** The routes themselves, in preference order. See {@link #postFindingComment}. */
+  private Delivery postFindingCommentRoutes(
+      CommentTarget target, Finding finding, int findingId, DiffLineResolver lineResolver) {
     var line = lineResolver.resolveRightSideLine(finding.file(), finding.line());
     if (line.isEmpty()) {
       Log.debugf(
@@ -1090,12 +1090,7 @@ public class ReviewPublisher {
             ? lineResolver.resolveSuggestionRange(finding.file(), finding.suggestionOld())
             : Optional.<DiffLineResolver.LineRange>empty();
 
-    // A multi-line suggestion posted against a single line corrupts code when applied (only the
-    // anchor line is overwritten), so with no resolvable range the suggestion block is dropped.
-    // hasSuggestion() guarantees a non-blank suggestionOld, so the newline check is safe.
-    var multiLineSuggestion =
-        finding.hasSuggestion() && finding.suggestionOld().strip().contains("\n");
-    var includeSuggestion = finding.hasSuggestion() && (!multiLineSuggestion || range.isPresent());
+    var includeSuggestion = suggestionFits(lineResolver, finding, resolvedLine, range.isPresent());
 
     var rejection =
         tryPostInlineComment(target, finding, findingId, resolvedLine, range, includeSuggestion);
@@ -1133,6 +1128,32 @@ public class ReviewPublisher {
         "GitHub rejected inline comment for %s:%d (%s) — filing it on the file instead",
         LogSafe.oneLine(finding.file()), finding.line(), reason);
     return postFileLevelComment(target, finding, findingId);
+  }
+
+  /**
+   * Whether {@code finding}'s suggestion block can be posted on {@code line}, or on the range
+   * resolved for it.
+   *
+   * <p>A multi-line suggestion posted against a single line corrupts code when applied (only the
+   * anchor line is overwritten), so with no resolvable range the suggestion block is dropped. A
+   * single-line suggestion replaces the line it is posted on, so it is posted only on the line its
+   * {@code suggestion_old} quotes (#924): {@code FindingPipeline} has moved the finding there
+   * already, and this keeps any finding that reaches here otherwise from deleting a line nobody
+   * flagged.
+   */
+  private static boolean suggestionFits(
+      DiffLineResolver lineResolver, Finding finding, int line, boolean rangeResolved) {
+    if (!finding.hasSuggestion()) {
+      return false;
+    }
+    // hasSuggestion() guarantees a non-blank suggestionOld, so the newline check is safe.
+    if (finding.suggestionOld().strip().contains("\n")) {
+      return rangeResolved;
+    }
+    return lineResolver
+        .locateQuote(finding.file(), finding.suggestionOld(), line)
+        .filter(quoted -> quoted.startLine() == line)
+        .isPresent();
   }
 
   /**
@@ -1517,7 +1538,7 @@ public class ReviewPublisher {
           reviewThreadService.threadsByRootComment(auth, req.owner(), req.repo(), req.prNumber());
       var resolved = 0;
       for (var status : addressed) {
-        var rootCommentId = rootByFinding.get(status.id());
+        var rootCommentId = threadRoot(status, rootByFinding);
         ReviewThreadService.ThreadRef thread =
             rootCommentId != null ? threads.get(rootCommentId) : null;
         if (thread == null || thread.resolved()) {
@@ -1538,6 +1559,18 @@ public class ReviewPublisher {
     } catch (RuntimeException e) {
       Log.warn("Failed to resolve addressed review threads (continuing)", e);
     }
+  }
+
+  /**
+   * The root comment of {@code status}'s thread, or {@code null}. An earlier round's status names
+   * no finding by id: it has only the thread the backstop located by the finding's marker and own
+   * content, when it carries one (#958).
+   */
+  private static Long threadRoot(
+      ReviewResult.PreviousFindingStatus status, Map<Integer, Long> rootByFinding) {
+    return status.fromEarlierRound()
+        ? status.earlierRound().threadRootId()
+        : rootByFinding.get(status.id());
   }
 
   /**

@@ -347,14 +347,7 @@ public class VerdictBuilder {
   private static String verdictSummaryFor(ReviewResult result) {
     var truncationSuffix = truncationSuffixFor(result);
     if (result.hasIssues()) {
-      return String.format(
-              "%d findings: %d critical, %d high, %d medium, %d low",
-              result.totalFindings(),
-              result.criticalCount(),
-              result.highCount(),
-              result.mediumCount(),
-              result.lowCount())
-          + truncationSuffix;
+      return newFindingsSummary(result) + truncationSuffix;
     }
     boolean approvedDespiteCi = result.reviewState() == ReviewState.APPROVE;
     // "No new issues found, but CI …" alone read as the whole story on a follow-up round whose
@@ -404,6 +397,27 @@ public class VerdictBuilder {
       return PrSummaryGenerator.ZERO_ISSUES_MESSAGE + truncationSuffix;
     }
     return ReviewResult.unresolvedPreviousMessage(unresolved) + truncationSuffix;
+  }
+
+  /**
+   * The counts line of a round that raised findings. With earlier findings still open it leads with
+   * the open total and keeps the new count and its grades separate (#952): a follow-up that raised
+   * one finding on a pull request with twenty open read "1 findings" on the check run, while the
+   * summary comment and the verdict counted twenty-one. The still-open count is {@link
+   * ReviewResult#unresolvedPreviousCount()}, the one every other surface states.
+   */
+  private static String newFindingsSummary(ReviewResult result) {
+    var grades =
+        String.format(
+            "%d critical, %d high, %d medium, %d low",
+            result.criticalCount(), result.highCount(), result.mediumCount(), result.lowCount());
+    var stillOpen = result.unresolvedPreviousCount();
+    if (stillOpen == 0) {
+      return result.totalFindings() + " findings: " + grades;
+    }
+    return String.format(
+        "%d open findings: %d new (%s), %d still open from earlier rounds",
+        result.totalFindings() + stillOpen, result.totalFindings(), grades, stillOpen);
   }
 
   /**
