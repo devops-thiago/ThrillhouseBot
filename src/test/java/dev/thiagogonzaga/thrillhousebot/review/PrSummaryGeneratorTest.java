@@ -2105,6 +2105,9 @@ class PrSummaryGeneratorTest {
         // Interior link characters in a label, and comma statements after a semicolon.
         "flowchart LR\n  A -->|retry--fallback| B ==>|a==b| C",
         "flowchart LR\n  A -->|calls a --> b| B -->|then c ==> d| C",
+        // A closed label whose text ends in a link, before one node.
+        "flowchart LR\n  A -->|goes -->| B",
+        "flowchart LR\n  A -->|goes -->| B[\"end\"] --> C",
         "flowchart TD; A --> B; class A,B hot",
         "flowchart TD\n  A --> B; style A fill:#f9f,stroke:#333",
         "graph TD\n  subgraph S [\"Store\"]\n    A([\"Fetch, merge\"]) --> B[(\"db\")]\n  end",

@@ -966,11 +966,19 @@ public class PrSummaryGenerator {
   private static final Pattern LINK_AT_END = Pattern.compile("(?:--|==|\\.-)>\\s*+$");
 
   /**
+   * What a closed edge label is followed by: one node id, then the end, a link, an {@code &}, a
+   * statement end or the node's shape. Two words ({@code y C}) are not a node.
+   */
+  private static final Pattern NODE_AFTER_LABEL =
+      Pattern.compile("^\\s*+\\w++(?:\\s*+$|\\s*+[-=.<&;]|[\\[({>])");
+
+  /**
    * {@code line} with its double-quoted labels and its edge labels between pipes each replaced by
    * {@code L}, for the syntax checks. A pipe whose text up to the next pipe ends in a link ({@code
    * A -->|x B -->|y C}) opens the next label rather than closing this one, so it is left in place
    * and fails the check: two labels left open do not pair across the arrow between them. Label text
-   * may still hold a link ({@code |calls a --> b|}), {@code --} or {@code ->}.
+   * may still hold a link ({@code |calls a --> b|}, {@code |goes -->|} before a node), {@code --}
+   * or {@code ->}.
    */
   private static String withoutLabels(String line) {
     var text = QUOTED_LABEL.matcher(line).replaceAll("L");
@@ -979,7 +987,7 @@ public class PrSummaryGenerator {
     var open = text.indexOf('|');
     while (open >= 0) {
       var close = text.indexOf('|', open + 1);
-      if (close < 0 || LINK_AT_END.matcher(text.substring(open + 1, close)).find()) {
+      if (close < 0 || opensTheNextLabel(text, open, close)) {
         break;
       }
       bare.append(text, from, open).append('L');
@@ -987,6 +995,16 @@ public class PrSummaryGenerator {
       open = text.indexOf('|', from);
     }
     return bare.append(text, from, text.length()).toString();
+  }
+
+  /**
+   * Whether the pipe at {@code close} opens the next label instead of closing the one at {@code
+   * open}: the text between them ends in a link ({@code A -->|x B -->|y C}) and no single node
+   * follows. A closed label may end in a link itself ({@code A -->|goes -->| B}).
+   */
+  private static boolean opensTheNextLabel(String text, int open, int close) {
+    return LINK_AT_END.matcher(text.substring(open + 1, close)).find()
+        && !NODE_AFTER_LABEL.matcher(text.substring(close + 1)).find();
   }
 
   /**
