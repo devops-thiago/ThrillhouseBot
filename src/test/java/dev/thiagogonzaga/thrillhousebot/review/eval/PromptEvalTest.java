@@ -210,20 +210,25 @@ class PromptEvalTest {
   static boolean statesAsImplemented(List<String> keywords, String text) {
     return Arrays.stream(text.split("(?<=[.!?\n])"))
         .anyMatch(
-            sentence -> mentionsAny(keywords, sentence) && !REFUTATION.matcher(sentence).find());
+            sentence ->
+                mentionsAny(keywords, sentence)
+                    && REFUTATION.stream().noneMatch(cue -> cue.matcher(sentence).find()));
   }
 
   /**
    * What marks a sentence as reporting a claim rather than stating it: it names the claim as the
-   * description's, or says nothing in the change shows it. A bare negation does not ("sends
-   * reminders without a scheduler" still states them), so the cues are claim words and
+   * description's or the PR text's, or says nothing in the change shows it. A bare negation does
+   * not ("sends reminders without a scheduler" still states them), so the cues are claim words and
    * evidence-absence phrases, not "no" or "without" alone.
    */
-  private static final Pattern REFUTATION =
-      Pattern.compile(
-          "(?i)\\b(?:claims?|claimed|description|unconfirmed|unsupported|unverified)\\b"
-              + "|\\bnot (?:implemented|backed|shown|present|found|evident)\\b"
-              + "|\\bno (?:changed )?(?:file|code|evidence)\\b");
+  private static final List<Pattern> REFUTATION =
+      List.of(
+          Pattern.compile(
+              "(?i)\\b(?:claims?|claimed|description|unconfirmed|unsupported|unverified)\\b"),
+          Pattern.compile("(?i)\\bnot (?:implemented|backed|shown|present|found|evident)\\b"),
+          Pattern.compile("(?i)\\bno (?:changed )?(?:file|code|evidence)\\b"),
+          Pattern.compile("(?i)\\b(?:pr|pull request) (?:text|body|title)\\b"),
+          Pattern.compile("(?i)\\b(?:stated|according to|only (?:from|in) the)\\b"));
 
   /**
    * The outcome of a sample whose model call failed or timed out: a failing sample, not a crash.

@@ -49,6 +49,12 @@ class PromptEvalGradingTest {
     assertFalse(
         PromptEvalTest.statesAsImplemented(
             KEYWORDS, "Reminders 15 minutes before a booking: no changed file sends them."));
+    assertFalse(
+        PromptEvalTest.statesAsImplemented(
+            KEYWORDS, "Reminder e-mails before a booking start come only from the PR text."));
+    assertFalse(
+        PromptEvalTest.statesAsImplemented(
+            KEYWORDS, "Reminders are stated in the PR body; no changed file sends them."));
     assertFalse(PromptEvalTest.statesAsImplemented(KEYWORDS, "Adds a booking service."));
   }
 }
