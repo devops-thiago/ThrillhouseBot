@@ -1505,6 +1505,12 @@ public class FollowUpAnalyzer {
    */
   private static List<String> conversationDeclineReasons(
       ReviewResponse.Finding finding, List<ConversationDecline> directives) {
+    return namingDeclines(finding, directives).stream().map(ConversationDecline::reason).toList();
+  }
+
+  /** The directives in {@code directives} that name {@code finding}, in comment order. */
+  private static List<ConversationDecline> namingDeclines(
+      ReviewResponse.Finding finding, List<ConversationDecline> directives) {
     if (directives.isEmpty() || finding.file() == null) {
       return List.of();
     }
@@ -1515,7 +1521,6 @@ public class FollowUpAnalyzer {
     String locator = finding.file() + ":" + finding.line();
     return directives.stream()
         .filter(decline -> namesFinding(decline.naming(), locator, anchor))
-        .map(ConversationDecline::reason)
         .toList();
   }
 
@@ -2178,6 +2183,54 @@ public class FollowUpAnalyzer {
     return surviving;
   }
 
+  /**
+   * The standing declines on earlier rounds' threads that are safe to remember (#958), under every
+   * rule {@link #survivingDeclines} applies to the effective previous round's: the re-check is
+   * enabled and had reviewed code, the backstop recorded the decline {@code justified} after
+   * re-checking it ({@link #heldPreviousFindings(List, List, List, List, DiffLineResolver,
+   * BotIdentity, Map, Supplier)}), and every write-capable reply on the thread is a non-blank
+   * reason resting on no premise the code could contradict.
+   *
+   * <p>Such a status names no finding by id ({@link #EARLIER_ROUND_ID}), so the decline is read off
+   * the thread the backstop located by the finding's marker and own content ({@link
+   * ReviewResult.EarlierRound#threadRootId}). A status without that thread names nothing to learn
+   * from and is skipped.
+   *
+   * @param statuses the round's final statuses
+   */
+  public List<SurvivingDecline> survivingEarlierRoundDeclines(
+      List<ReviewResult.PreviousFindingStatus> statuses,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity,
+      Supplier<String> reviewedCode) {
+    var declined =
+        statuses.stream()
+            .filter(s -> STATUS_JUSTIFIED.equalsIgnoreCase(s.status()))
+            .filter(s -> s.fromEarlierRound() && s.earlierRound().threadRootId() != null)
+            .toList();
+    if (!declineRecheckEnabled || declined.isEmpty() || reviewedCode == null) {
+      return List.of();
+    }
+    var code = reviewedCode.get();
+    if (code == null || code.isBlank()) {
+      return List.of();
+    }
+    var repliesByRoot =
+        inlineComments.stream()
+            .filter(c -> c.inReplyToId() != null)
+            .collect(Collectors.groupingBy(GitHubReviewClient.PullRequestComment::inReplyToId));
+    var surviving = new ArrayList<SurvivingDecline>();
+    for (var status : declined) {
+      var sources =
+          threadDeclineSources(status.earlierRound().threadRootId(), repliesByRoot, botIdentity);
+      if (!sources.isEmpty()
+          && sources.stream().allMatch(source -> isRememberable(source.reason()))) {
+        surviving.add(survivingDecline(status.earlierRound().finding(), sources));
+      }
+    }
+    return surviving;
+  }
+
   private static SurvivingDecline survivingDecline(
       ReviewResponse.Finding finding, List<DeclineSource> sources) {
     var first = sources.get(0);
@@ -2209,18 +2262,25 @@ public class FollowUpAnalyzer {
       BotIdentity botIdentity) {
     Long rootId = rootCommentId(finding, id, inlineComments, botIdentity);
     if (rootId != null) {
-      var replies =
-          repliesByRoot.getOrDefault(rootId, List.of()).stream()
-              .filter(c -> c.user() != null && !botIdentity.matches(c.user().login()))
-              .filter(c -> mayHoldWriteAccess(c.authorAssociation()))
-              .filter(c -> c.body() != null && !c.body().isBlank())
-              .map(c -> new DeclineSource(c.id(), true, c.user().login(), c.body()))
-              .toList();
+      var replies = threadDeclineSources(rootId, repliesByRoot, botIdentity);
       if (!replies.isEmpty()) {
         return replies;
       }
     }
     return conversationDeclineSources(finding, conversationComments, botIdentity);
+  }
+
+  /** The write-capable human replies with a body on the thread rooted at {@code rootId}. */
+  private static List<DeclineSource> threadDeclineSources(
+      Long rootId,
+      Map<Long, List<GitHubReviewClient.PullRequestComment>> repliesByRoot,
+      BotIdentity botIdentity) {
+    return repliesByRoot.getOrDefault(rootId, List.of()).stream()
+        .filter(c -> c.user() != null && !botIdentity.matches(c.user().login()))
+        .filter(c -> mayHoldWriteAccess(c.authorAssociation()))
+        .filter(c -> c.body() != null && !c.body().isBlank())
+        .map(c -> new DeclineSource(c.id(), true, c.user().login(), c.body()))
+        .toList();
   }
 
   private static List<DeclineSource> conversationDeclineSources(
@@ -2635,8 +2695,11 @@ public class FollowUpAnalyzer {
    * reported {@code justified}. Either way the finding is accounted for.
    *
    * <p>A standing decline's status carries id {@link #EARLIER_ROUND_ID}: its round-relative id
-   * would name an unrelated finding of the effective previous round to everything keyed by id —
-   * thread resolution and the learnings capture — so it names none. It still counts as "Justified".
+   * would name an unrelated finding of the effective previous round to everything keyed by id, so
+   * it names none. It still counts as "Justified", and it carries the finding and the root of the
+   * thread the decline was written on ({@link ReviewResult.EarlierRound}), found by the finding's
+   * marker and own content, so the thread is resolved and the decline offered to the learnings
+   * capture through that thread rather than through an id (#958).
    *
    * @param reviewedCode the diff text the review call saw, or {@code null} when there is none to
    *     re-check against; read at most once per decline
@@ -2655,8 +2718,14 @@ public class FollowUpAnalyzer {
       return List.of();
     }
     var chrono = toChronological(priorAiResponses);
-    var open = openFindingsAcrossRounds(chrono, currentStatuses);
-    var clusters = clusterByIdentity(open);
+    var replay = replayRounds(chrono);
+    // A superseded status is not an accounting the backstop trusts while the code is present, so
+    // closeReported keeps such a finding; once its code is gone the round's own status already
+    // counts it, and a second "superseded" would count it twice.
+    var supersededThisRound =
+        reportedKeys(replay.reportedRound(), currentStatuses, STATUS_SUPERSEDED);
+    closeReported(replay.open(), replay.reportedRound(), currentStatuses);
+    var clusters = clusterByIdentity(replay.open());
     return heldFromClusters(
         clusters,
         new BackstopInputs(
@@ -2665,7 +2734,28 @@ public class FollowUpAnalyzer {
             lineResolver,
             botIdentity,
             renameTargets,
-            reviewedCode));
+            reviewedCode,
+            supersededThisRound));
+  }
+
+  /**
+   * The {@link #findingKey}s of {@code reportedRound}'s findings a status of {@code status} names.
+   */
+  private static Set<String> reportedKeys(
+      List<ReviewResponse.Finding> reportedRound,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      String status) {
+    var keys = new HashSet<String>();
+    if (statuses == null) {
+      return keys;
+    }
+    for (var reported : statuses) {
+      var id = reported.id();
+      if (status.equalsIgnoreCase(reported.status()) && id >= 1 && id <= reportedRound.size()) {
+        keys.add(findingKey(reportedRound.get(id - 1)));
+      }
+    }
+    return keys;
   }
 
   /** What {@link #heldFromClusters} reads besides the clusters themselves. */
@@ -2675,7 +2765,8 @@ public class FollowUpAnalyzer {
       DiffLineResolver lineResolver,
       BotIdentity botIdentity,
       Map<String, String> renameTargets,
-      Supplier<String> reviewedCode) {}
+      Supplier<String> reviewedCode,
+      Set<String> supersededThisRound) {}
 
   /**
    * {@code statuses} without the {@code unresolved} entries that name no finding: an id outside the
@@ -2764,29 +2855,17 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * The still-open prior findings keyed by content (a finding carried across rounds is held at most
-   * once; insertion order is preserved for stable, deterministic output). Each round closes what
-   * the next round's status addressed, and {@code currentStatuses} — which reports on the round
-   * {@link #effectivePreviousFindings} named — drops everything the current round accounted for.
+   * The prior findings no later round closed, keyed by content (a finding carried across rounds is
+   * kept at most once, in insertion order), and the round the current one reports on, after
+   * replaying every prior round oldest → newest. Each round closes what its own status block marked
+   * resolved or justified on the round it reported on; the current round's statuses are left to the
+   * caller, which decides what counts as accounting for a finding.
    *
    * <p>The round a {@code previous_findings_status} block reports on is the newest <em>earlier</em>
    * round that actually raised findings, not simply the round before it. A round that found nothing
    * exposes no ids to reference, so the next round is shown — and reports on — the last round that
    * did. Pairing a status block with an empty round instead left every id unmappable, so nothing
    * ever closed and the held set drifted upward with each further round (#455).
-   */
-  private Map<String, OpenFinding> openFindingsAcrossRounds(
-      List<ReviewResponse> chrono, List<ReviewResponse.PreviousFindingStatus> currentStatuses) {
-    var replay = replayRounds(chrono);
-    closeReported(replay.open(), replay.reportedRound(), currentStatuses);
-    return replay.open();
-  }
-
-  /**
-   * The prior findings no later round closed, and the round the current one reports on, after
-   * replaying every prior round oldest → newest. Each round closes what its own status block marked
-   * resolved or justified on the round it reported on; the current round's statuses are left to the
-   * caller, which decides what counts as accounting for a finding.
    */
   private static RoundReplay replayRounds(List<ReviewResponse> chrono) {
     var open = new LinkedHashMap<String, OpenFinding>();
@@ -3180,8 +3259,8 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * One entry per cluster whose code is still present and that no maintainer dispositioned from the
-   * PR conversation: an {@code unresolved} hold, or the outcome of a decline on its thread.
+   * One entry per cluster the round's own statuses do not already count: an {@code unresolved}
+   * hold, or the status that accounts for a finding the backstop no longer holds (#957).
    */
   private List<HeldPrevious> heldFromClusters(List<List<OpenFinding>> clusters, BackstopInputs in) {
     var held = new ArrayList<HeldPrevious>();
@@ -3197,16 +3276,36 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * The backstop's entry for one cluster, or {@code null} when its code is gone or a maintainer
-   * cleared or declined it from the PR conversation ({@link #dispositionedInConversation} — the
-   * only hatches a finding with no thread has, #548, #709). The entry is about the most severe
-   * still-present member (the earliest among equals): an {@code unresolved} hold when no member's
-   * thread carries a maintainer reply, else the outcome of that reply ({@link
-   * #heldPreviousFindings(List, List, List, List, DiffLineResolver, BotIdentity, Map, Supplier)}).
+   * The backstop's entry for one cluster, about its most severe still-present member (the earliest
+   * among equals). Every cluster gets one, so the summary's counts add up to the findings carried
+   * in (#957); a finding that left the open set with no status was in no bucket at all. In order:
+   *
+   * <ol>
+   *   <li>no member's code is still in the diff: {@code superseded}, as the effective previous
+   *       round's finding whose code left the diff is, or no entry when the round's own status
+   *       already reported that finding superseded ({@code null});
+   *   <li>a maintainer cleared a member from the PR conversation ({@link #clearedInConversation}):
+   *       {@code resolved}, as {@link #clearNamedInConversation} records it;
+   *   <li>a maintainer declined a member from the PR conversation: re-checked as {@link
+   *       #declineNamedInConversation} re-checks it — {@code justified}, or held when a lone
+   *       decline's premise is contradicted by the reviewed code;
+   *   <li>no member's thread carries a maintainer reply: an {@code unresolved} hold;
+   *   <li>else the outcome of that reply ({@link #heldPreviousFindings(List, List, List, List,
+   *       DiffLineResolver, BotIdentity, Map, Supplier)}).
+   * </ol>
+   *
+   * <p>The conversation directives are the only hatches a finding with no thread has (#548, #709).
    * The reply is located by the round-relative marker ({@link OpenFinding#id()}) plus the finding's
    * own content rather than by title, so a null-title finding's thread is still seen and a
    * thread-less finding cannot bind to a different finding that reused the same marker index in
    * another round.
+   *
+   * <p>Every status but a hold carries {@link #EARLIER_ROUND_ID}, and every status carries the
+   * finding itself ({@link ReviewResult.EarlierRound}), which is how the consumers that would read
+   * a round-relative id tell it apart (#959). These statuses are not persisted, so they are
+   * recomputed every round; {@link ReviewResult#resolvedPreviousCount} and {@link
+   * ReviewResult#hasSupersededPrevious} leave them out, so a recomputed close never re-posts the
+   * delta comment or the summary (#470).
    *
    * <p>Presence is resolved through {@code renameTargets} the same way {@link #hasVanished} does:
    * the finding's flagged code lives at its rename target, not its pre-rename path, when the file
@@ -3221,15 +3320,77 @@ public class FollowUpAnalyzer {
       List<ConversationDecline> directives,
       BackstopInputs in,
       Supplier<String> code) {
-    OpenFinding target = null;
+    var facts = clusterFacts(cluster, directives, in);
+    var target = facts.present();
+    if (target == null) {
+      return cluster.stream()
+              .anyMatch(m -> in.supersededThisRound().contains(findingKey(m.finding())))
+          ? null
+          : settled(facts.mostSevere(), STATUS_SUPERSEDED, SUPERSEDED_NOTE, null);
+    }
+    if (facts.cleared()) {
+      return settled(target, STATUS_RESOLVED, conversationClearedNote(in.botIdentity()), null);
+    }
+    if (!facts.declines().isEmpty()) {
+      var reviewed = declineRecheckEnabled && code != null ? code.get() : null;
+      var status =
+          conversationDeclineStatus(
+              target.id(),
+              target.finding(),
+              facts.declines().stream().map(ConversationDecline::reason).toList(),
+              reviewed,
+              in.botIdentity());
+      return STATUS_UNRESOLVED.equals(status.status())
+          ? hold(target, status.note())
+          : settled(target, STATUS_JUSTIFIED, status.note(), null);
+    }
+    var answered = facts.answered();
+    if (answered == null) {
+      return hold(target, HELD_NOTE);
+    }
+    var reopened = reopenedEarlierDecline(answered, facts.answeredRoot(), in, code);
+    return reopened != null
+        ? hold(target, reopened)
+        : settled(
+            target,
+            STATUS_JUSTIFIED,
+            STANDING_DECLINE_NOTE,
+            ownThreadRoot(answered, facts.answeredRoot(), in));
+  }
+
+  /**
+   * What {@link #backstopEntry} decides on, read off every member of one cluster: the most severe
+   * member, the most severe one still in the diff, the first one answered on its own thread, and
+   * whether a maintainer named one in a conversation directive.
+   *
+   * @param declines the decline directives naming any member, each once: one directive naming two
+   *     members (the same defect raised in two rounds) is one decline, so the one-push-back count
+   *     is not doubled. Kept by identity, since the directives are parsed once per round
+   */
+  private record ClusterFacts(
+      OpenFinding mostSevere,
+      OpenFinding present,
+      OpenFinding answered,
+      Long answeredRoot,
+      boolean cleared,
+      Set<ConversationDecline> declines) {}
+
+  private ClusterFacts clusterFacts(
+      List<OpenFinding> cluster, List<ConversationDecline> directives, BackstopInputs in) {
+    OpenFinding mostSevere = null;
+    OpenFinding present = null;
     OpenFinding answered = null;
     Long answeredRoot = null;
-    boolean dispositioned = false;
+    boolean cleared = false;
+    var declines = Collections.<ConversationDecline>newSetFromMap(new IdentityHashMap<>());
     for (var member : cluster) {
       var finding = member.finding();
-      if ((target == null || moreSevere(finding, target.finding()))
+      if (mostSevere == null || moreSevere(finding, mostSevere.finding())) {
+        mostSevere = member;
+      }
+      if ((present == null || moreSevere(finding, present.finding()))
           && isStillPresent(finding, in.lineResolver(), in.renameTargets())) {
-        target = member;
+        present = member;
       }
       var root =
           answered == null
@@ -3239,28 +3400,44 @@ public class FollowUpAnalyzer {
         answered = member;
         answeredRoot = root;
       }
-      dispositioned |=
-          dispositionedInConversation(
-              finding, in.conversationComments(), directives, in.botIdentity());
+      cleared |= clearedInConversation(finding, in.conversationComments(), in.botIdentity());
+      declines.addAll(namingDeclines(finding, directives));
     }
-    if (target == null || dispositioned) {
-      return null;
-    }
-    if (answered == null) {
-      return hold(target, HELD_NOTE);
-    }
-    var reopened = reopenedEarlierDecline(answered, answeredRoot, in, code);
-    return reopened != null
-        ? hold(target, reopened)
-        : new HeldPrevious(
-            new ReviewResult.PreviousFindingStatus(
-                EARLIER_ROUND_ID, STATUS_JUSTIFIED, STANDING_DECLINE_NOTE),
-            target.finding());
+    return new ClusterFacts(mostSevere, present, answered, answeredRoot, cleared, declines);
+  }
+
+  /**
+   * The root of the thread a standing decline was written on when it is the answered finding's own
+   * thread by marker and content ({@link #markerRootComment} with {@code requireOwnContent}), else
+   * {@code null}. A thread found only by the title scan for pre-marker comments is not resolved or
+   * learned from on that evidence alone (#958).
+   */
+  private static Long ownThreadRoot(OpenFinding answered, Long answeredRoot, BackstopInputs in) {
+    var own =
+        markerRootComment(
+            answered.finding(), answered.id(), true, in.inlineComments(), in.botIdentity());
+    return answeredRoot.equals(own) ? own : null;
   }
 
   private static HeldPrevious hold(OpenFinding target, String note) {
     return new HeldPrevious(
-        new ReviewResult.PreviousFindingStatus(target.id(), STATUS_UNRESOLVED, note),
+        new ReviewResult.PreviousFindingStatus(
+            target.id(),
+            STATUS_UNRESOLVED,
+            note,
+            new ReviewResult.EarlierRound(target.finding(), null)),
+        target.finding());
+  }
+
+  /** An entry that accounts for a finding the backstop does not hold, under no round's id. */
+  private static HeldPrevious settled(
+      OpenFinding target, String status, String note, Long threadRootId) {
+    return new HeldPrevious(
+        new ReviewResult.PreviousFindingStatus(
+            EARLIER_ROUND_ID,
+            status,
+            note,
+            new ReviewResult.EarlierRound(target.finding(), threadRootId)),
         target.finding());
   }
 

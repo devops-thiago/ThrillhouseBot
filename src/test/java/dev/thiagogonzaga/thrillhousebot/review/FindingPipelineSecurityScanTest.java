@@ -249,6 +249,38 @@ class FindingPipelineSecurityScanTest {
   }
 
   @Test
+  void aModelSecretFindingOnAnInterpolationIsDroppedBeforeTheMerge() {
+    // #926: the round-12 ARG/ENV decoy.
+    var dockerfile = added("go/Dockerfile", "ENV FUELRECON_API_TOKEN=${FUELRECON_API_TOKEN}");
+    var modelFinding =
+        new ReviewResponse.Finding(
+            "medium",
+            "medium",
+            "go/Dockerfile",
+            1,
+            "API token passed as build arg is persisted in the image config via ENV",
+            "d",
+            null,
+            null);
+    when(aiReviewService.review(any(), any()))
+        .thenReturn(new ReviewResponse(List.of(modelFinding), List.of(), null));
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(batch(dockerfile)), List.of(), List.of(), true, null, null, null, null);
+
+    var result =
+        pipeline.run(
+            session(),
+            new AiReviewService.PromptInputs("d", "ctx", "", "", "", "", ""),
+            context(List.of(dockerfile)),
+            plan,
+            new DiffLineResolver(Map.of(dockerfile.filename(), dockerfile.patch())),
+            ReviewEvidence.NONE);
+
+    assertTrue(result.findings().isEmpty(), result.findings().toString());
+  }
+
+  @Test
   void multiCallMergesTheScanAfterTheBatches() {
     var key = fake.stripeLiveKey();
     var secretFile = added("billing/config.env", "STRIPE_KEY=" + key);

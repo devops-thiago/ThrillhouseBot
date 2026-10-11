@@ -347,22 +347,30 @@ public class ReviewLearnings {
     if (!settings.enabled()) {
       return 0;
     }
-    var justifiedIds =
+    var justified =
         capture.statuses().stream()
             .filter(s -> STATUS_JUSTIFIED.equalsIgnoreCase(s.status()))
-            .map(ReviewResult.PreviousFindingStatus::id)
             .toList();
-    if (justifiedIds.isEmpty()) {
+    if (justified.isEmpty()) {
       return 0;
     }
+    // An earlier round's standing decline names no finding by id; it is read off its own thread
+    // (#958). Every other one is read by its id in the previous round.
     var surviving =
-        followUpAnalyzer.survivingDeclines(
-            capture.previous(),
-            justifiedIds,
-            capture.inlineComments(),
-            capture.conversationComments(),
-            botIdentity,
-            capture.reviewedCode());
+        new ArrayList<>(
+            followUpAnalyzer.survivingDeclines(
+                capture.previous(),
+                justified.stream()
+                    .filter(s -> !s.fromEarlierRound())
+                    .map(ReviewResult.PreviousFindingStatus::id)
+                    .toList(),
+                capture.inlineComments(),
+                capture.conversationComments(),
+                botIdentity,
+                capture.reviewedCode()));
+    surviving.addAll(
+        followUpAnalyzer.survivingEarlierRoundDeclines(
+            justified, capture.inlineComments(), botIdentity, capture.reviewedCode()));
     var permissionCache = new HashMap<String, Boolean>();
     var stored = 0;
     for (var decline : surviving) {
