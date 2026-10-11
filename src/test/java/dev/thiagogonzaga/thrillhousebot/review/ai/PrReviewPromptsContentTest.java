@@ -683,6 +683,27 @@ class PrReviewPromptsContentTest {
   }
 
   @Test
+  void summaryPromptMakesEveryGapCiteTheDescriptionAndQuoteItExactly() {
+    String sys = PrReviewPrompts.SUMMARY_SYSTEM;
+    assertContains(
+        sys,
+        "start it with \"The description …\" or \"Linked issue #N: …\"",
+        "a gap must cite the description or a linked issue (#964)");
+    assertContains(
+        sys,
+        "copy the words exactly as it writes them",
+        "a quoted claim must be the description's own words (#946)");
+    assertContains(
+        sys,
+        "own documentation, configuration or examples and its code is not a description gap",
+        "a docs-vs-code mismatch is not a description gap (#964)");
+    assertContains(
+        sys,
+        "check that it does not already mention it",
+        "an omission gap must not invent an omission the description covers (#946)");
+  }
+
+  @Test
   void summaryUserPromptFramesTheFileListAsAuthoritativeScope() {
     String user = PrReviewPrompts.SUMMARY_USER;
     assertContains(
