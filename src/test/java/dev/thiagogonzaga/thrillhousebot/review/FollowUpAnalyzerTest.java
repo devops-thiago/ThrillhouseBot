@@ -4828,14 +4828,45 @@ class FollowUpAnalyzerTest {
     assertFalse(note.contains("says this path runs concurrently"), note);
   }
 
-  /** A guard word well before an affirmative statement on the same line does not deny it. */
+  /**
+   * A denial word well before an affirmative statement on the same line does not deny it; the same
+   * word right before the statement does.
+   */
   @Test
-  void anUnrelatedGuardWordEarlierOnTheLineDoesNotDenyTheStatement() {
-    var note =
+  void onlyADenialJustBeforeTheStatementDeniesIt() {
+    var far =
         heldNote(
-            "+// Counter is guarded by the mutex below. It is shared by every request goroutine.");
+            "+// Not a cache: it is reset on every deploy, and it is shared by every request"
+                + " goroutine.");
+    assertTrue(far.contains("says this path runs concurrently"), far);
 
-    assertTrue(note.contains("says this path runs concurrently"), note);
+    var near = heldNote("+// Not shared by every request goroutine.");
+    assertTrue(near.contains("no review has weighed"), near);
+  }
+
+  /** A diff section is the declined file's only when its a/ or b/ path is that file exactly. */
+  @Test
+  void aDiffSectionIsTheFilesOnlyByAnExactPath() {
+    var suffix =
+        heldNote(
+            """
+            diff --git a/other/src/A.java b/other/src/A.java
+            +// Pool is shared by every request goroutine.""");
+    assertTrue(suffix.contains("no review has weighed"), suffix);
+
+    var malformed =
+        heldNote(
+            """
+            diff --git src/A.java src/A.java
+            +// Pool is shared by every request goroutine.""");
+    assertTrue(malformed.contains("no review has weighed"), malformed);
+
+    var renamedFrom =
+        heldNote(
+            """
+            diff --git a/src/A.java b/src/Counter.java
+            +// Counter is shared by every request goroutine.""");
+    assertTrue(renamedFrom.contains("says this path runs concurrently"), renamedFrom);
   }
 
   /** Only the declined finding's own file is read for the statement. */

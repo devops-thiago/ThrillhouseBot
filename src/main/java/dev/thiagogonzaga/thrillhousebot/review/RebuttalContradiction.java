@@ -337,14 +337,29 @@ final class RebuttalContradiction {
     var inFile = true;
     for (var line : reviewedCode.split("\n", -1)) {
       if (line.startsWith("diff --git ")) {
-        inFile = line.endsWith("/" + file);
+        inFile = namesFile(line, file);
       } else if (line.startsWith("### ")) {
-        inFile = FilePaths.same(sectionPath(line), file);
+        inFile = sectionPath(line).equals(file);
       } else if (inFile && (line.startsWith("+") || line.startsWith(" "))) {
         kept.add(line.substring(1));
       }
     }
     return kept;
+  }
+
+  /**
+   * Whether a {@code diff --git a/<old> b/<new>} line names {@code file} exactly as its old or new
+   * path. A suffix is not enough: {@code b/other/src/A.java} is another file than {@code
+   * src/A.java}. The finding's path is the diff's own spelling (#1022), so an exact match is the
+   * file's section.
+   */
+  private static boolean namesFile(String diffLine, String file) {
+    var paths = diffLine.substring("diff --git ".length());
+    var split = paths.indexOf(" b/");
+    if (!paths.startsWith("a/") || split < 0) {
+      return false;
+    }
+    return paths.substring(2, split).equals(file) || paths.substring(split + 3).equals(file);
   }
 
   /**
