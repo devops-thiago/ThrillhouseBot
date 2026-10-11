@@ -687,7 +687,7 @@ public final class PromptLabelScrubber {
     if (before == '(' && to < text.length() && text.charAt(to) == ')') {
       from = skipBlanksBack(text, blank - 1, floor);
       to++;
-    } else if (";,—–".indexOf(before) >= 0) {
+    } else if (followsClauseSeparator(text, blank, floor)) {
       from = skipBlanksBack(text, blank - 1, floor);
     } else if (opensText || ".!?\n".indexOf(before) >= 0) {
       from = blank;
@@ -700,6 +700,25 @@ public final class PromptLabelScrubber {
       return new int[0];
     }
     return new int[] {from, lineStartTailEnd(text, from, to)};
+  }
+
+  /**
+   * Whether a semicolon, comma or dash ends at {@code blank}: an em or en dash, or a hyphen
+   * standing alone after other text on its line — one that opens a line is a list marker, not a
+   * separator.
+   */
+  private static boolean followsClauseSeparator(String text, int blank, int floor) {
+    if (blank <= floor) {
+      return false;
+    }
+    char separator = text.charAt(blank - 1);
+    if (";,—–".indexOf(separator) >= 0) {
+      return true;
+    }
+    return separator == '-'
+        && blank - 1 > floor
+        && isBlank(text.charAt(blank - 2))
+        && !opensLine(text, blank - 1);
   }
 
   /**

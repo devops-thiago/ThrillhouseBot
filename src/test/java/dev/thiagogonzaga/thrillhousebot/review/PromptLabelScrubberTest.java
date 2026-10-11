@@ -1024,6 +1024,12 @@ class PromptLabelScrubberTest {
           the findings from this batch | the findings
           There are no findings in this batch yet. | There are no findings yet.
           There are no issues in this batch yet. | There are no issues yet.
+          Uploads due episodes - no findings in this batch. | Uploads due episodes.
+          - no findings in this batch | - no findings
+          Notes:\\n  - no findings in this batch | Notes:\\n  - no findings
+          -no findings in this batch | -no findings
+          Uploads-no findings in this batch | Uploads-no findings
+          1. BedReporter... rather, grep confirms it. | 1. Grep confirms it.
           Notes:\\n  - BedReporter... rather, grep confirms it. | Notes:\\n  - Grep confirms it.
           > BedReporter... rather, grep confirms it. | > Grep confirms it.
           It fails. notesFor(shift.signups)... rather, grep confirms it. | It fails. Grep confirms it.
