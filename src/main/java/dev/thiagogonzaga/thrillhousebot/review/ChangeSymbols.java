@@ -140,21 +140,18 @@ public final class ChangeSymbols {
     var names = new LinkedHashSet<String>();
     var literals = new LiteralTracker();
     for (var line : patch.lines().toList()) {
+      var added = isAddedLine(line);
       if (line.startsWith("@@")) {
         // Hunks are disjoint: what lies between them is unknown, so each starts in code.
         literals = new LiteralTracker();
-        continue;
-      }
-      var added = isAddedLine(line);
-      if (!added && !line.startsWith(" ")) {
-        continue;
-      }
-      var code = line.substring(1);
-      var inCode = literals.inCode();
-      literals.advance(code);
-      var name = added && inCode ? declaredName(code) : "";
-      if (!name.isEmpty()) {
-        names.add(name);
+      } else if (added || line.startsWith(" ")) {
+        var code = line.substring(1);
+        var inCode = literals.inCode();
+        literals.advance(code);
+        var name = added && inCode ? declaredName(code) : "";
+        if (!name.isEmpty()) {
+          names.add(name);
+        }
       }
     }
     return List.copyOf(names);
@@ -284,6 +281,9 @@ public final class ChangeSymbols {
     /** The word that ends the heredoc being read; {@code null} outside one. */
     private String heredocEnd;
 
+    /** The word that ends a heredoc the current line opens; it starts on the next line. */
+    private String openedHeredoc;
+
     boolean inCode() {
       return closer == null && heredocEnd == null;
     }
@@ -296,43 +296,55 @@ public final class ChangeSymbols {
         }
         return;
       }
-      String opened = null;
+      openedHeredoc = null;
       var i = 0;
       while (i < text.length()) {
-        if (closer != null) {
-          var end = text.indexOf(closer, i);
-          if (end < 0) {
-            break;
-          }
-          i = end + closer.length();
-          closer = null;
-          continue;
-        }
-        var c = text.charAt(i);
-        if (text.startsWith("\"\"\"", i) || text.startsWith("'''", i)) {
-          closer = text.substring(i, i + 3);
-          i += 3;
-        } else if (text.startsWith("/*", i)) {
-          closer = "*/";
-          i += 2;
-        } else if (text.startsWith("//", i) || c == '#') {
-          break;
-        } else if (c == '`') {
-          closer = "`";
-          i++;
-        } else if (c == '"' || c == '\'') {
-          i = endOfQuoted(text, i);
-        } else {
-          var heredoc = HEREDOC.matcher(text).region(i, text.length());
-          if (heredoc.lookingAt()) {
-            opened = heredoc.group(2) != null ? heredoc.group(2) : heredoc.group(3);
-            i = heredoc.end();
-          } else {
-            i++;
-          }
-        }
+        i = closer == null ? pastCode(text, i) : pastCloser(text, i);
       }
-      heredocEnd = opened;
+      heredocEnd = openedHeredoc;
+    }
+
+    /** The index past the {@link #closer} at or after {@code i}, or the line's end. */
+    private int pastCloser(String text, int i) {
+      var end = text.indexOf(closer, i);
+      if (end < 0) {
+        return text.length();
+      }
+      var next = end + closer.length();
+      closer = null;
+      return next;
+    }
+
+    /**
+     * The index past the code at {@code i}: an opened string or comment sets {@link #closer}, a
+     * single-line string is skipped, a line comment ends the line, a heredoc is noted.
+     */
+    private int pastCode(String text, int i) {
+      var c = text.charAt(i);
+      if (text.startsWith("\"\"\"", i) || text.startsWith("'''", i)) {
+        closer = text.substring(i, i + 3);
+        return i + 3;
+      }
+      if (text.startsWith("/*", i)) {
+        closer = "*/";
+        return i + 2;
+      }
+      if (text.startsWith("//", i) || c == '#') {
+        return text.length();
+      }
+      if (c == '`') {
+        closer = "`";
+        return i + 1;
+      }
+      if (c == '"' || c == '\'') {
+        return endOfQuoted(text, i);
+      }
+      var heredoc = HEREDOC.matcher(text).region(i, text.length());
+      if (!heredoc.lookingAt()) {
+        return i + 1;
+      }
+      openedHeredoc = heredoc.group(heredoc.group(2) != null ? 2 : 3);
+      return heredoc.end();
     }
 
     /** The index past the single-line string opening at {@code start}, or the line's end. */
