@@ -130,10 +130,16 @@ public class CiFailureContextResolver {
                   || line.startsWith("\u2715 ")
                   || line.startsWith("\u00D7 "),
           line -> line.startsWith("\u25CF ") && line.contains(" \u203A "),
-          // Jest and Vitest file lines: "FAIL src/app.test.ts".
-          line -> line.startsWith("FAIL ") && (line.contains(".test.") || line.contains(".spec.")),
-          // pytest "FAILED tests/test_x.py::test_y", unittest "FAIL: test_y (module.Case)".
-          line -> line.startsWith("FAILED ") && line.contains("::"),
+          // Jest and Vitest file lines: "FAIL src/app.test.ts", "FAIL src/__tests__/app.js".
+          line ->
+              line.startsWith("FAIL ")
+                  && (line.contains(".test.")
+                      || line.contains(".spec.")
+                      || line.contains("__tests__/")),
+          // pytest "FAILED tests/test_x.py::test_y" and "ERROR tests/test_x.py::test_y" (an error
+          // in
+          // the test's setup), unittest "FAIL: test_y (module.Case)".
+          line -> (line.startsWith("FAILED ") || line.startsWith("ERROR ")) && line.contains("::"),
           Pattern.compile("^(?:FAIL|ERROR): \\w++ \\(").asPredicate(),
           // go test "--- FAIL: TestY", cargo test "test y ... FAILED".
           line -> line.startsWith("--- FAIL: "),
