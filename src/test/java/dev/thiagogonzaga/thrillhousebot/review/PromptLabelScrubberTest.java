@@ -1082,6 +1082,8 @@ class PromptLabelScrubberTest {
         "It calls `foo.bar()`... rather, grep confirms it.",
         "`foo.bar()`... however, grep confirms it.",
         "It fails fast... rather, it surfaces the error to the caller.",
+        // A dotted token mid-clause is part of that clause, not a broken-off start.
+        "It calls foo.bar()... rather, grep confirms it.",
         "The retry helps... actually, it makes things worse.",
         "(line 24 — waits for the lock)"
       })

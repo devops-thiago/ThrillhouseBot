@@ -340,7 +340,7 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern RESTARTED_SENTENCE =
       Pattern.compile(
-          "([ \\t]*(?:[-*+>][ \\t]+)?)[^\\s.!?…](?:[^\\s.!?…]|\\.(?=\\w)){0,59}"
+          "([ \\t]*)[^\\s.!?…](?:[^\\s.!?…]|\\.(?=\\w)){0,59}"
               + "(?:\\.\\.\\.|…)[ \\t]+(\\p{L}{4,8}),[ \\t]+(\\p{L})");
 
   /**
@@ -683,13 +683,15 @@ public final class PromptLabelScrubber {
 
   /**
    * {@link #restarted} for a {@link #RESTARTED_SENTENCE} match in {@code text}, which must open the
-   * text, a line or a sentence; anywhere else the start is part of a clause and the match stays.
-   * Decided here rather than by a lookbehind, which kept the pattern over the regex complexity
-   * budget.
+   * text, a line (after any list or quote marker, which stays) or a sentence; anywhere else the
+   * start is part of a clause and the match stays. Decided here rather than by a lookbehind, which
+   * kept the pattern over the regex complexity budget.
    */
   private static String restartedSentence(String text, MatchResult m) {
     int start = m.start();
-    return start == 0 || ".!?\n".indexOf(text.charAt(start - 1)) >= 0 ? restarted(m) : m.group();
+    boolean opens =
+        start == 0 || ".!?\n".indexOf(text.charAt(start - 1)) >= 0 || opensLine(text, start);
+    return opens ? restarted(m) : m.group();
   }
 
   /** Drops each {@link #RESTARTED_AFTER_CODE_SPAN} outside a fenced block. */
