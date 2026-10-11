@@ -675,9 +675,11 @@ the claim and the contradicting line. The check is conservative:
   decline the re-check overturns reads "Decline re-checked against the code
   and not accepted: …" with the code (a line, or a comment that says the path
   runs concurrently) that refutes the reply. Otherwise the model's status note
-  is quoted as it is under "Reply on this finding's thread weighed, finding
-  kept open: …", since the reply may decline the finding or acknowledge it. A
-  finding nobody replied to, or whose status note is empty, gets no such note.
+  is quoted under "Reply on this finding's thread weighed, finding kept open:
+  …", since the reply may decline the finding or acknowledge it; while the
+  thread has a single reply, the note ends with "If the reply declines the
+  finding, reply again to keep the decline." A finding nobody replied to, or
+  whose status note is empty, gets no such note.
 
 A follow-up round's model reports on the findings of the newest round that
 raised any. A decline on a finding from an older round is weighed by the

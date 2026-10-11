@@ -355,18 +355,20 @@ final class RebuttalContradiction {
    * What turns the {@link #STATED_CONCURRENCY} statement after it into a denial: a negator in the
    * same clause, at most {@value #DENIAL_WORDS} words before it with no clause punctuation or
    * clause conjunction ("and", "but", "which", "because" …) between ("not shared by every
-   * goroutine", "is not ever really called from multiple threads", any n't contraction: "doesn't
-   * support concurrent use"), but not "not only" or "not just", which affirm; or a verb that
-   * refuses the statement's own subject directly before it ("rejects concurrent requests",
-   * "prevents concurrent access", "prohibits concurrent access"). A verb that only protects shared
-   * state ("the lock guards every field shared by every request goroutine", "serializes concurrent
-   * requests") still says the path is reached concurrently, so it denies nothing. A gap is any
-   * horizontal space, a non-breaking one included, and a word counts as one whatever its length (a
-   * long identifier); the possessive quantifiers keep the scan linear.
+   * goroutine", "is not ever really called from multiple threads", "nothing in it is shared across
+   * goroutines", any n't contraction: "doesn't support concurrent use"), but not "not only" or "not
+   * just", which affirm; or a verb that refuses the statement's own subject directly before it
+   * ("rejects concurrent requests", "prevents concurrent access", "prohibits concurrent access"). A
+   * verb that only protects shared state ("the lock guards every field shared by every request
+   * goroutine", "serializes concurrent requests") still says the path is reached concurrently, so
+   * it denies nothing. A gap is any horizontal space, a non-breaking one included, and a word
+   * counts as one whatever its length (a long identifier); the possessive quantifiers keep the scan
+   * linear.
    */
   private static final Pattern DENIES =
       ci(
-          "(?:\\b(?:not|never|no|nor|without|cannot|cant|wont|isnt|\\w{1,8}n['’]t)\\b"
+          "(?:\\b(?:not|never|no|nor|none|nothing|nobody|neither|without|cannot|cant|wont|isnt"
+              + "|\\w{1,8}n['’]t)\\b"
               + "(?![\\h-]{1,16}+(?:only|just|merely)\\b)"
               + "(?:[\\h-]{1,16}+(?!(?:and|but|or|nor|which|that|while|whereas|because|since|so"
               + "|though|although|yet|unless|except)\\b)[\\w'’]++(?:-[\\w'’]++)*+){0,"

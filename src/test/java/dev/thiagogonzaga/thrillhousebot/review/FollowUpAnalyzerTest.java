@@ -4967,6 +4967,9 @@ class FollowUpAnalyzerTest {
     for (var denied :
         List.of(
             "+// The counter is not ever really shared by every request goroutine.",
+            "+// Nothing in this struct is shared across goroutines.",
+            "+// None of these fields are shared by every request goroutine.",
+            "+// Neither field is used by all goroutines.",
             "+// Never is the pool really shared by every request goroutine.")) {
       var note = heldNote(denied);
       assertTrue(note.contains("no review has weighed"), denied + " -> " + note);
