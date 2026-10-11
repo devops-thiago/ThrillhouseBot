@@ -207,9 +207,11 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
   /**
    * {@code body} with the Markdown regions GitHub does not read links from replaced by a space:
    * HTML comments (an unclosed one runs to the end, as in HTML), fenced blocks of three or more
-   * backticks or tildes (an unclosed one runs to the end), and code spans of any backtick count,
-   * which may wrap a line but not cross a blank one. A backtick run with no matching closer is
-   * literal text. Linear in the body's length for any input a PR body can hold.
+   * backticks or tildes opened at the start of a line, after any indentation, blockquote marker or
+   * list marker (an unclosed one runs to the end), and code spans of any backtick count, which may
+   * wrap a line but not cross a blank one. A backtick run with no matching closer is literal text,
+   * and so is a run of tildes or backticks in the middle of a line that opens no span (#1032).
+   * Linear in the body's length for any input a PR body can hold.
    */
   static String withoutNonLinkRegions(String body) {
     return new NonLinkStripper(body).strip();
@@ -266,16 +268,136 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
         run++;
       }
       var width = run - i;
-      if (width >= 3) {
-        var close = body.indexOf(body.substring(i, run), run);
-        return close < 0 ? body.length() : close + width;
+      if (width >= 3 && opensFence(c, i, run)) {
+        return fenceEnd(c, width, run);
       }
-      var close = c == '~' ? -1 : closingRun(run, width); // one or two tildes are text
+      // Tildes that open no fence are text; backticks that open no fence follow the code-span
+      // rule at any width, so an unmatched run in the middle of a line stays literal (#1032).
+      var close = c == '~' ? -1 : closingRun(run, width);
       if (close < 0) {
         literalEnd = run;
         return i;
       }
       return close + width;
+    }
+
+    /**
+     * Whether the run of three or more {@code c} from {@code start} to {@code run} opens a fenced
+     * block: only indentation, blockquote markers and a list marker stand before it on its line,
+     * and a backtick fence's info string holds no backtick (GFM). A run anywhere else is not a
+     * fence (#1032).
+     */
+    private boolean opensFence(char c, int start, int run) {
+      if (!atLineStart(start)) {
+        return false;
+      }
+      if (c == '~') {
+        return true;
+      }
+      for (var k = run; k < body.length() && body.charAt(k) != '\n'; k++) {
+        if (body.charAt(k) == '`') {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    /**
+     * Whether only blanks, blockquote markers ({@code >}) and at most one list marker ({@code -},
+     * {@code *}, {@code +}, {@code 1.}, {@code 1)}) followed by a blank precede {@code i} on its
+     * line, with at most three columns of indentation right before {@code i} on a plain line and
+     * four after a marker: more makes the line an indented code block, where a run is literal.
+     */
+    private boolean atLineStart(int i) {
+      var k = skipContainerBack(i);
+      var indent = indentBefore(i);
+      if (k == 0 || body.charAt(k - 1) == '\n') {
+        // Only blanks and blockquote markers lie between k and i, so a marker there quotes the
+        // line.
+        var quoted = body.substring(k, i).indexOf('>') >= 0;
+        return indent <= (quoted ? 4 : 3);
+      }
+      if (k == i || indent > 4) {
+        return false; // a list marker needs a blank, and no more than four, before the fence
+      }
+      var marker = listMarkerStart(k - 1);
+      if (marker < 0) {
+        return false;
+      }
+      var before = skipContainerBack(marker);
+      return before == 0 || body.charAt(before - 1) == '\n';
+    }
+
+    /**
+     * Where the list marker whose last character sits at {@code last} starts — a bullet ({@code -},
+     * {@code *}, {@code +}) or an ordered marker of one to nine ASCII digits and {@code .} or
+     * {@code )} — or {@code -1} when no marker ends there.
+     */
+    private int listMarkerStart(int last) {
+      var m = body.charAt(last);
+      if (m == '-' || m == '*' || m == '+') {
+        return last;
+      }
+      if (m != '.' && m != ')') {
+        return -1;
+      }
+      var digits = last;
+      while (digits > 0 && last - digits < 9 && isAsciiDigit(body.charAt(digits - 1))) {
+        digits--;
+      }
+      return digits == last ? -1 : digits;
+    }
+
+    /** The columns of blanks right before {@code i}, a tab counting four. */
+    private int indentBefore(int i) {
+      var columns = 0;
+      for (var k = i; k > 0 && (body.charAt(k - 1) == ' ' || body.charAt(k - 1) == '\t'); k--) {
+        columns += body.charAt(k - 1) == '\t' ? 4 : 1;
+      }
+      return columns;
+    }
+
+    private static boolean isAsciiDigit(char c) {
+      return c >= '0' && c <= '9';
+    }
+
+    /** The start of the run of blanks and blockquote markers that ends at {@code i}. */
+    private int skipContainerBack(int i) {
+      var k = i;
+      while (k > 0 && " \t>".indexOf(body.charAt(k - 1)) >= 0) {
+        k--;
+      }
+      return k;
+    }
+
+    /**
+     * The end of the fenced block whose opening run of {@code width} {@code c} ends at {@code
+     * from}: the end of the first later line that holds, after blanks and blockquote markers, a run
+     * of at least {@code width} {@code c} and nothing else, or the end of the body when no line
+     * closes it.
+     */
+    private int fenceEnd(char c, int width, int from) {
+      var newline = body.indexOf('\n', from);
+      while (newline >= 0) {
+        var j = newline + 1;
+        while (j < body.length() && " \t>".indexOf(body.charAt(j)) >= 0) {
+          j++;
+        }
+        var run = j;
+        while (run < body.length() && body.charAt(run) == c) {
+          run++;
+        }
+        var trail = run;
+        while (trail < body.length() && (body.charAt(trail) == ' ' || body.charAt(trail) == '\t')) {
+          trail++;
+        }
+        var lineEnd = trail == body.length() || body.charAt(trail) == '\n';
+        if (run - j >= width && lineEnd) {
+          return trail;
+        }
+        newline = body.indexOf('\n', trail);
+      }
+      return body.length();
     }
 
     /**

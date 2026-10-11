@@ -40,6 +40,8 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 
 /**
@@ -503,6 +505,141 @@ class VerdictBuilderTest {
         checkSummary.contains(
             "The summary was not generated (summary call failed after its retries)."),
         checkSummary);
+  }
+
+  /** #965: the previous round, on the head this one reviews, whose overview is carried. */
+  private static ReviewContextLoader.ReviewContext contextAfterAnOverviewOnTheSameHead(
+      boolean headUnchanged) {
+    var file = new FileDiff("a.java", "modified", 1, 0, 1, "");
+    var prior =
+        new ReviewResponse(
+            List.of(),
+            List.of(),
+            new ReviewResponse.Summary(
+                0,
+                0,
+                0,
+                0,
+                0,
+                null,
+                "Adds a cache layer.",
+                List.of(),
+                List.of(),
+                List.of(new ReviewResponse.FileSummary("a.java", "adds the cache")),
+                null,
+                List.of()));
+    return new ReviewContextLoader.ReviewContext(
+        List.of(file),
+        "diff",
+        "",
+        0,
+        List.of(),
+        List.of(),
+        List.of(prior),
+        false,
+        true,
+        null,
+        List.of(),
+        "",
+        new InstructionsResolver.ResolvedInstructions("", ""),
+        PathScopedInstructions.NONE,
+        List.of(),
+        "",
+        "",
+        "",
+        "",
+        List.of(file),
+        () -> new DiffLineResolver(Map.of()),
+        null,
+        List.of(),
+        List.of(),
+        SupersededFindingsCarryover.Carried.NONE,
+        "",
+        headUnchanged);
+  }
+
+  /** The degraded round's response: the previous round's overview, carried whole. */
+  private static ReviewResponse carriedOverviewResponse(ReviewContextLoader.ReviewContext ctx) {
+    return new ReviewResponse(List.of(), List.of(), PriorOverviewCarryover.fill(null, ctx));
+  }
+
+  @Test
+  void aFailedSummaryOnTheSameHeadSaysTheOverviewIsCarried() {
+    // #965: the summary call failed on the head the previous round reviewed, and that round's
+    // overview is shown; the banner must not say only the counts are shown.
+    var ctx = contextAfterAnOverviewOnTheSameHead(true);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    plan.recordSummaryDegradation(SummaryDegradation.SUMMARY_FAILED);
+
+    var result = builder.build(ctx, carriedOverviewResponse(ctx), CI_CLEAR, plan);
+
+    var markdown = result.summaryMarkdown();
+    assertTrue(
+        markdown.startsWith(
+            """
+            > ⚠️ **Summary carried over.** The summary call failed after its retries, so the \
+            overview below is carried from the previous review of this same commit and only the \
+            finding counts are new.
+
+            """),
+        markdown);
+    assertFalse(markdown.contains("**Summary unavailable.**"), markdown);
+  }
+
+  @Test
+  void aCarriedOverviewWithNoDegradationGetsNoBanner() {
+    // The call answered with no overview and the previous one was filled in (#944): nothing was
+    // degraded, so nothing is disclosed.
+    var ctx = contextAfterAnOverviewOnTheSameHead(true);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+
+    var result = builder.build(ctx, carriedOverviewResponse(ctx), CI_CLEAR, plan);
+
+    assertFalse(
+        result.summaryMarkdown().contains("Summary carried over"), result.summaryMarkdown());
+  }
+
+  @Test
+  void aMovedHeadKeepsTheCountsOnlyBanner() {
+    var ctx = contextAfterAnOverviewOnTheSameHead(false);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    plan.recordSummaryDegradation(SummaryDegradation.SKIPPED_AT_CEILING);
+
+    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+
+    assertTrue(result.summaryMarkdown().contains("**Summary skipped.**"), result.summaryMarkdown());
+    assertFalse(result.summaryMarkdown().contains("carried"), result.summaryMarkdown());
+  }
+
+  @Test
+  void aCarriedOverviewUnderFileGapsAddsTheCarriedLineToTheCoverageBanner() {
+    var ctx = contextAfterAnOverviewOnTheSameHead(true);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of("big.java"), List.of(), true, null, null, null, null);
+    plan.recordSummaryDegradation(SummaryDegradation.SKIPPED_AT_CEILING);
+
+    var result = builder.build(ctx, carriedOverviewResponse(ctx), CI_CLEAR, plan);
+
+    assertTrue(result.truncated());
+    assertTrue(
+        result.summaryMarkdown().contains(ReviewResult.OVERVIEW_CARRIED_LINE),
+        result.summaryMarkdown());
+  }
+
+  @ParameterizedTest
+  @EnumSource(SummaryDegradation.class)
+  void everyDegradationNamesItsCauseWhenTheOverviewIsCarried(SummaryDegradation degradation) {
+    var notice = ReviewResult.overviewCarriedNotice(degradation);
+
+    assertTrue(notice.startsWith("> ⚠️ **Summary carried over.** "), notice);
+    assertTrue(notice.contains("only the finding counts are new"), notice);
   }
 
   @Test
@@ -1618,6 +1755,55 @@ class VerdictBuilderTest {
                     "old/Edited.java")));
 
     assertEquals(Map.of("old/Pure.java", "", "old/Edited.java", "new/Edited.java"), targets);
+  }
+
+  @Test
+  void everyFileTheIgnoreListWithheldIsNamedInTheScopeNote() {
+    // #935: java #124's scope note said only "1 pure rename omitted" while pom.xml, the file the
+    // finding needed, was withheld and showed only as "…and 1 more file(s)".
+    var lock = new FileDiff("go/go.sum", "modified", 30, 2, 32, "@@ x");
+    var source = new FileDiff("go/main.go", "modified", 3, 1, 4, "@@ -1 +1 @@\n-a\n+b");
+    var ctx =
+        new ReviewContextLoader.ReviewContext(
+            List.of(lock, source),
+            "diff",
+            "",
+            0,
+            List.of(),
+            List.of(),
+            List.of(),
+            true,
+            false,
+            null,
+            List.of(),
+            "",
+            new InstructionsResolver.ResolvedInstructions("", ""),
+            PathScopedInstructions.NONE,
+            List.of(),
+            "",
+            "",
+            "",
+            "",
+            List.of(source),
+            () -> new DiffLineResolver(Map.of()),
+            null);
+    var realSummaryBuilder =
+        new VerdictBuilder(
+            new PrSummaryGenerator(false),
+            followUpAnalyzer,
+            BotIdentity.from(List.of("thrillhousebot[bot]")),
+            BlockingStrictness.BALANCED);
+
+    var result = realSummaryBuilder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, FULL_COVERAGE);
+
+    assertTrue(
+        result
+            .summaryMarkdown()
+            .startsWith(
+                PrSummaryGenerator.SUMMARY_HEADING
+                    + "\n\n> **AI review scope:** 1 file excluded from AI review by the ignore"
+                    + " list (go/go.sum)\n\n"),
+        result.summaryMarkdown());
   }
 
   @Test

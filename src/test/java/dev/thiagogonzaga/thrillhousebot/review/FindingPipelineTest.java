@@ -3680,6 +3680,87 @@ class FindingPipelineTest {
     assertNull(result.summary().prPurpose());
   }
 
+  @Test
+  void onAnUnchangedHeadTheCarriedGapStaysAndAMisquotedGapIsDropped() {
+    // #964: ThrillhouseBot-test#216 dropped an open criterion on a /review of the same head because
+    // the code-blind call named it addressed. #946: a gap quoting words the description does not
+    // hold is dropped, checked against the PR text the call read.
+    var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var misquote = "The PR description claims 'the README moves to docs/RUST-VEV10.md unchanged'.";
+    var answer =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            "ok",
+            "p",
+            List.of(misquote),
+            List.of(),
+            List.of(),
+            null,
+            List.of("G1: the test file covers it"));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), answer));
+    var listed = contextAfterASummaryListing(CARRIED_GAP);
+    var sameHead =
+        new ReviewContextLoader.ReviewContext(
+            listed.files(),
+            listed.diff(),
+            listed.baseComparison(),
+            listed.omittedFiles(),
+            listed.priorReviews(),
+            listed.priorAiResponseJsons(),
+            listed.priorAiResponses(),
+            listed.isFirstVisibleReview(),
+            listed.hasContext(),
+            listed.previousAiResponseJson(),
+            listed.inlineComments(),
+            listed.previousFindings(),
+            listed.instructions(),
+            listed.pathInstructions(),
+            listed.repoLabels(),
+            listed.projectStack(),
+            listed.linkedIssuesContext(),
+            listed.configKeyContext(),
+            listed.patchCoverage(),
+            listed.reviewableFiles(),
+            listed.lineResolverSupplier(),
+            listed.prTotals(),
+            listed.conversationComments(),
+            listed.unmatchedIgnoreGlobs(),
+            listed.carried(),
+            listed.coverageArtifactRefusal(),
+            true);
+    var inputs =
+        new AiReviewService.PromptInputs(
+            "d",
+            PromptTemplateEscaper.fence(
+                PromptSections.prContext("Bookings", "The README moves to `docs/RUST-V10.md`.")),
+            "base",
+            "stack",
+            "tests",
+            "",
+            "",
+            "labels",
+            null,
+            LINKED_113);
+
+    var result =
+        pipeline.run(
+            session,
+            inputs,
+            sameHead,
+            multiBatchPlan(),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    assertEquals(List.of(CARRIED_GAP), result.summary().descriptionGaps());
+  }
+
   /** #944: a prior round on the same head whose summary had an overview and a file summary. */
   private static ReviewContextLoader.ReviewContext contextAfterAnOverviewOnTheSameHead() {
     var prior =
@@ -3756,7 +3837,7 @@ class FindingPipelineTest {
   }
 
   @Test
-  void aFailedSummaryCallKeepsTheCountsOnlyShapeItsBannerDescribes() {
+  void aFailedSummaryCallOnTheSameHeadKeepsThePreviousOverview() {
     var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -3768,6 +3849,71 @@ class FindingPipelineTest {
             session,
             new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", ""),
             contextAfterAnOverviewOnTheSameHead(),
+            multiBatchPlan(),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    // #965: the head is the one the previous round reviewed, so its overview still holds.
+    assertEquals("Adds a cache layer.", result.summary().prPurpose());
+    assertEquals(
+        List.of(new ReviewResponse.FileSummary("a.java", "adds the cache")),
+        result.summary().fileSummaries());
+  }
+
+  @Test
+  void eachDegradedPathOnTheSameHeadKeepsThePreviousOverview() {
+    // #965: the ceiling skip, the refusal mid-call and a cut with nothing salvaged.
+    var skipped = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    when(aiReviewService.reviewBatch(any(), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(tokenLedger.ceilingReached(anyLong())).thenReturn(true);
+    var atCeiling = runOnTheSameHead(skipped);
+    assertEquals(SummaryDegradation.SKIPPED_AT_CEILING, atCeiling.plan().summaryDegradation());
+    assertEquals("Adds a cache layer.", atCeiling.result().summary().prPurpose());
+    when(tokenLedger.ceilingReached(anyLong())).thenReturn(false);
+
+    var refused = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    when(aiReviewService.summarize(eq(refused), any()))
+        .thenThrow(new TokenSpendCeilingExceededException(1, 1));
+    assertEquals("Adds a cache layer.", runOnTheSameHead(refused).result().summary().prPurpose());
+
+    var cut = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    when(aiReviewService.summarize(eq(cut), any()))
+        .thenThrow(new AiResponseTruncatedException("cut", "{\"summary\":{\"pr_pur", false));
+    var truncated = runOnTheSameHead(cut);
+    assertEquals(SummaryDegradation.RESPONSE_CUT, truncated.plan().summaryDegradation());
+    assertEquals("Adds a cache layer.", truncated.result().summary().prPurpose());
+  }
+
+  private record DegradedRun(ReviewResponse result, DiffBudgetPlanner.BudgetPlan plan) {}
+
+  private DegradedRun runOnTheSameHead(ReviewSession session) {
+    var plan = multiBatchPlan();
+    var result =
+        pipeline.run(
+            session,
+            new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", ""),
+            contextAfterAnOverviewOnTheSameHead(),
+            plan,
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+    return new DegradedRun(result, plan);
+  }
+
+  @Test
+  void aFailedSummaryCallOnAMovedHeadKeepsTheCountsOnlyShapeItsBannerDescribes() {
+    var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenThrow(new AiReviewException("transient", 1, null));
+    var sameHead = contextAfterAnOverviewOnTheSameHead();
+
+    var result =
+        pipeline.run(
+            session,
+            new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", ""),
+            litigatedContext(sameHead.priorAiResponses(), List.of()),
             multiBatchPlan(),
             new DiffLineResolver(Map.of()),
             ReviewEvidence.NONE);
