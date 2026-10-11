@@ -961,12 +961,13 @@ public class PrSummaryGenerator {
 
   /**
    * A double-quoted label or an edge label between pipes, removed before the syntax checks. An edge
-   * label holds no link ({@code --}, {@code ==}, {@code -.}), so two labels left open on one line
-   * ({@code A -->|x B -->|y C}) do not pair into one label that spans the arrow between them: their
-   * pipes stay and fail the check. A {@code ->} in label text ({@code |yes -> go|}) is kept.
+   * label holds no arrowhead of a link ({@code -->}, {@code ==>}, {@code -.->}), so two labels left
+   * open on one line ({@code A -->|x B -->|y C}) do not pair into one label that spans the arrow
+   * between them: their pipes stay and fail the check. Label text may still hold {@code --}, {@code
+   * ==} or a lone {@code ->} ({@code |retry--fallback|}, {@code |yes -> go|}).
    */
   private static final Pattern MERMAID_LABEL =
-      Pattern.compile("\"[^\"\\n]*+\"|\\|(?:[^|\\n=-]|[=-](?![-=.]))*+\\|");
+      Pattern.compile("\"[^\"\\n]*+\"|\\|(?:[^|\\n>]|(?<!--|==|\\.-)>)*+\\|");
 
   /**
    * A one-dash arrow: {@code ->} not preceded by another dash or a dot, which covers the sequence
@@ -1004,15 +1005,26 @@ public class PrSummaryGenerator {
         return false;
       }
       var bare = MERMAID_LABEL.matcher(line).replaceAll("L");
-      if (ONE_DASH_ARROW.matcher(bare).find()
-          || bare.contains(">>")
-          || (!COMMA_STATEMENT.matcher(bare).find() && hasStrayComma(bare))
-          || bare.indexOf('|') >= 0
-          || !shapesParse(bare)) {
-        return false;
+      // Statements joined by semicolons are judged one by one ("A --> B; class A,B hot").
+      for (var statement : bare.split(";")) {
+        if (!statementParses(statement.strip())) {
+          return false;
+        }
       }
     }
     return true;
+  }
+
+  /**
+   * Whether one flowchart statement, its labels removed, passes the checks of {@link
+   * #flowchartParses}.
+   */
+  private static boolean statementParses(String statement) {
+    return !ONE_DASH_ARROW.matcher(statement).find()
+        && !statement.contains(">>")
+        && (COMMA_STATEMENT.matcher(statement).find() || !hasStrayComma(statement))
+        && statement.indexOf('|') < 0
+        && shapesParse(statement);
   }
 
   /**

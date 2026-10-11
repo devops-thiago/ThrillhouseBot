@@ -2101,6 +2101,10 @@ class PrSummaryGeneratorTest {
         "flowchart TD\n  A[\"call foo() -> bar\"] --> B{\"ready?\"}\n  B -->|yes -> go| C",
         "flowchart LR\n  A -.-> B\n  B ==> C\n  C --- D\n  D -- text --> E\n  E <--> F",
         "flowchart LR\n  A -->|x-y| B -->|re-try| C ==>|go| D",
+        // Interior link characters in a label, and comma statements after a semicolon.
+        "flowchart LR\n  A -->|retry--fallback| B ==>|a==b| C",
+        "flowchart TD; A --> B; class A,B hot",
+        "flowchart TD\n  A --> B; style A fill:#f9f,stroke:#333",
         "graph TD\n  subgraph S [\"Store\"]\n    A([\"Fetch, merge\"]) --> B[(\"db\")]\n  end",
         "flowchart TD\n  %% a comment, with commas,\n  A --> B\n  class A,B hot\n  linkStyle 0,1 x",
         "flowchart TD\n  A --> B & C\n  C{{\"hex\"}} --> D",
