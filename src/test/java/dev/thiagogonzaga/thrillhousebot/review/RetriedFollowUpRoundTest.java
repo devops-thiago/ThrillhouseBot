@@ -266,15 +266,7 @@ class RetriedFollowUpRoundTest {
                 nan),
             List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
             null);
-    when(prReviewer.reviewStream(
-            anyString(),
-            anyString(),
-            anyString(),
-            anyString(),
-            anyString(),
-            anyString(),
-            anyString(),
-            anyString()))
+    when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
         .thenAnswer(inv -> new FakeTokenStream("I reviewed the diff; here are my findings."))
         .thenAnswer(inv -> new FakeTokenStream(mapper.writeValueAsString(retried)));
     var previousFindings =
@@ -302,18 +294,11 @@ class RetriedFollowUpRoundTest {
             ReviewEvidence.NONE);
 
     // Both attempts carried the follow-up context, earlier rounds' open findings included.
-    var sent = ArgumentCaptor.forClass(String.class);
-    verify(prReviewer, times(2))
-        .reviewStream(
-            anyString(),
-            anyString(),
-            anyString(),
-            anyString(),
-            anyString(),
-            sent.capture(),
-            anyString(),
-            anyString());
-    assertEquals(List.of(previousFindings, previousFindings), sent.getAllValues());
+    var sent = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+    verify(prReviewer, times(2)).reviewStream(sent.capture());
+    assertEquals(
+        List.of(previousFindings, previousFindings),
+        sent.getAllValues().stream().map(AiReviewService.PromptInputs::previousFindings).toList());
     assertTrue(previousFindings.contains("Still open from earlier rounds"), previousFindings);
     assertTrue(previousFindings.contains(offByOne.title()), previousFindings);
 
@@ -383,16 +368,7 @@ class RetriedFollowUpRoundTest {
 
     assertEquals(
         List.of(), titles(response.findings()), "no second thread for the scan's findings");
-    verify(prReviewer, times(0))
-        .reviewStream(
-            anyString(),
-            anyString(),
-            anyString(),
-            anyString(),
-            anyString(),
-            anyString(),
-            anyString(),
-            anyString());
+    verify(prReviewer, times(0)).reviewStream(any(AiReviewService.PromptInputs.class));
   }
 
   private static DiffBudgetPlanner.BudgetPlan plan() {

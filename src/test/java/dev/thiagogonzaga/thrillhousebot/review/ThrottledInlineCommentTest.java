@@ -86,7 +86,7 @@ class ThrottledInlineCommentTest {
   private static final AtomicInteger PR_NUMBERS = new AtomicInteger(919_000);
 
   private final Finding finding =
-      new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Bug", "desc", "old", "new");
+      new Finding(RiskLevel.HIGH, "src/Main.java", 10, "Bug", "desc", "new", "newer");
 
   private int prNumber;
   private FakeReviewClient reviewClient;
@@ -300,6 +300,80 @@ class ThrottledInlineCommentTest {
   }
 
   /**
+   * #925 — a finding on a path the pull request does not change, which no changed file matched
+   * (round 9 cited {@code kotlin/src/main/kotlin/dev/tbtest/rooms/Dockerfile}), is not offered to
+   * GitHub at all: the line and the file routes would both be refused. It reaches the review body
+   * with a note that says why, beside a finding GitHub did refuse.
+   */
+  @Test
+  void aFindingOnAFileThePullRequestDoesNotChangeIsListedWithoutAnyRoute() {
+    reviewClient.refuse = attempt -> unresolvablePath();
+    var invented =
+        new Finding(
+            RiskLevel.HIGH,
+            "kotlin/src/main/kotlin/dev/tbtest/rooms/Dockerfile",
+            16,
+            "Runs as root",
+            "desc",
+            null,
+            null);
+
+    var warnings =
+        publisherLogs(
+            () ->
+                publisher.postReview(
+                    "Bearer tok",
+                    "owner",
+                    "repo",
+                    prNumber,
+                    "sha",
+                    result(invented, finding),
+                    resolver()));
+
+    assertTrue(
+        reviewClient.attempts.stream().noneMatch(a -> invented.file().equals(a.path())),
+        () -> "attempts: " + reviewClient.attempts);
+    var body = reviewClient.reviewBodies.getLast();
+    assertTrue(body.contains("2 issue(s) GitHub accepted no review thread for:"), body);
+    assertTrue(body.contains("`kotlin/src/main/kotlin/dev/tbtest/rooms/Dockerfile:16`"), body);
+    assertTrue(
+        body.contains(
+            "1 of these name a file this pull request does not change, and no changed file"
+                + " matches that path, so no thread was opened for them"),
+        body);
+    assertTrue(
+        body.contains("1 of these were refused by GitHub: `path could not be resolved`."), body);
+    assertTrue(
+        warnings.stream()
+            .anyMatch(w -> w.contains("1 name a file this pull request does not change")),
+        () -> "warnings: " + warnings);
+  }
+
+  /** Every unthreaded finding naming a file outside the pull request reads "All of these". */
+  @Test
+  void onlyFindingsOutsideThePullRequestAreAllNamedSo() {
+    var outside = new Finding(RiskLevel.HIGH, "nowhere/Gone.java", 3, "Bug", "desc", null, null);
+
+    var inline =
+        publisher.postInlineComments(
+            "Bearer tok", "owner", "repo", prNumber, "sha", result(outside), resolver());
+    publisher.postReview(
+        "Bearer tok", "owner", "repo", prNumber, "sha", result(outside), resolver());
+
+    assertEquals(List.of(outside), inline.unanchored());
+    assertEquals(1, inline.outsidePullRequest());
+    assertEquals(0, inline.throttled());
+    assertEquals(Map.of(), inline.refusals());
+    assertEquals(List.of(), reviewClient.attempts);
+    assertTrue(
+        reviewClient
+            .reviewBodies
+            .getLast()
+            .contains("All of these name a file this pull request does not change"),
+        reviewClient.reviewBodies.getLast());
+  }
+
+  /**
    * One finding throttled through every retry and one whose line and file GitHub refused: the
    * review body says how many of its unthreaded findings the rate limit accounts for.
    */
@@ -339,8 +413,10 @@ class ThrottledInlineCommentTest {
         0);
   }
 
+  /** {@code src/Other.java} is changed with no patch to parse, so it has no commentable line. */
   private static DiffLineResolver resolver() {
-    return new DiffLineResolver(Map.of("src/Main.java", "@@ -10,1 +10,1 @@\n-old\n+new"));
+    return new DiffLineResolver(
+        Map.of("src/Main.java", "@@ -10,1 +10,1 @@\n-old\n+new"), List.of("src/Other.java"));
   }
 
   private ReviewPublisher.InlineCommentResult postFinding() {
