@@ -90,13 +90,23 @@ class CiFailureCitationsTest {
     assertNull(citations.noteFor(lint));
   }
 
-  /** Naming the check without a failure, or without the CI that ran it, is not a citation. */
+  /**
+   * A check named "test" is a word every test-failure claim uses, so only the check named as a
+   * check — quoted, or beside "check", "conclusion" or "job" — is a citation, and only together
+   * with a failure.
+   */
   @Test
   void aNameAloneIsNotACitation() {
     var citations = CiFailureCitations.parse(ROUND_12_SECTION);
 
     assertFalse(citations.cites(described("The new test asserts the wrong capacity.")));
     assertFalse(citations.cites(described("The test fails when copies equals the maximum.")));
+    assertFalse(
+        citations.cites(
+            described("The added e2e test would fail in CI because the fallback never runs.")));
+    assertFalse(citations.cites(described("The \"test\" check passes on this commit.")));
+    assertTrue(citations.cites(described("The test job fails on this line.")));
+    assertTrue(citations.cites(described("CI's `test` run fails here.")));
   }
 
   @Test
@@ -107,7 +117,7 @@ class CiFailureCitationsTest {
     var citations = CiFailureCitations.parse(section);
 
     assertTrue(citations.cites(described("The eslint step of the lint / eslint check failed.")));
-    assertTrue(citations.cites(described("CI shows build (windows-latest) failing on it.")));
+    assertTrue(citations.cites(described("The build (windows-latest) check fails in CI.")));
   }
 
   @Test

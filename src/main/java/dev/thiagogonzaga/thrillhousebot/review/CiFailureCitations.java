@@ -36,8 +36,11 @@ import java.util.regex.Pattern;
  *
  * <p>The section is read back from its rendered text, as {@code CiFailureContextResolver} writes
  * it, because what counts is what the reviewer was shown. A finding cites a check when its own
- * words name that check, a failure and the CI that reported it; naming a check the section does not
- * record cites nothing, so a finding cannot buy the floor by saying "CI fails".
+ * words say something failed and name that check AS a check: quoted ({@code "test"}), or beside the
+ * word that makes it one ({@code test check}, {@code test (conclusion: failure)}, {@code the
+ * unit-tests job}). A bare co-occurrence is not a citation: a check named {@code test} would
+ * otherwise be cited by any finding that says a test would fail in CI. Naming a check the section
+ * does not record cites nothing, so a finding cannot buy the floor by saying "CI fails".
  */
 final class CiFailureCitations implements FindingVerificationService.FailingChecks {
 
@@ -60,9 +63,12 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   private static final List<String> FAILURE_WORDS =
       phrases("fail", "fails", "failed", "failing", "failure", "failures");
 
-  /** ... and that CI reported it. */
-  private static final List<String> CI_WORDS =
-      phrases("ci", "check", "checks", "conclusion", "workflow", "job", "pipeline");
+  /** The words that make a name next to them the name of a check. */
+  private static final List<String> CHECK_WORDS =
+      List.of("check", "checks", "conclusion", "job", "workflow");
+
+  /** The quote marks a finding names a check between. */
+  private static final List<String> QUOTES = List.of("\"", "`", "'", "\u201C");
 
   private static final Pattern NOT_A_WORD = Pattern.compile("[^a-z0-9]+");
 
@@ -131,15 +137,31 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     if (checks.isEmpty()) {
       return List.of();
     }
-    String text =
-        normalized(
-            (finding.title() == null ? "" : finding.title())
+    String raw =
+        ((finding.title() == null ? "" : finding.title())
                 + "\n"
-                + (finding.description() == null ? "" : finding.description()));
-    if (!states(text, FAILURE_WORDS) || !states(text, CI_WORDS)) {
+                + (finding.description() == null ? "" : finding.description()))
+            .toLowerCase(Locale.ROOT);
+    String text = normalized(raw);
+    if (!states(text, FAILURE_WORDS)) {
       return List.of();
     }
-    return checks.stream().filter(check -> text.contains(check.words())).map(Check::name).toList();
+    return checks.stream()
+        .filter(check -> namesAsACheck(check, raw, text))
+        .map(Check::name)
+        .toList();
+  }
+
+  /** Whether the finding names this check quoted, or beside a word that makes it a check. */
+  private static boolean namesAsACheck(Check check, String raw, String text) {
+    String name = check.name().toLowerCase(Locale.ROOT);
+    String core = check.words().strip();
+    return QUOTES.stream().anyMatch(quote -> raw.contains(quote + name))
+        || CHECK_WORDS.stream()
+            .anyMatch(
+                word ->
+                    text.contains(" " + core + " " + word + " ")
+                        || text.contains(" " + word + " " + core + " "));
   }
 
   private static boolean states(String normalized, List<String> words) {
