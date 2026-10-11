@@ -165,10 +165,14 @@ class DescriptionGapScreenTest {
     assertEquals(List.of(), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
   }
 
-  @Test
-  void aCommaBeforeAnotherClauseStillBreaksIt() {
-    var gap = "The description states the path, the code reads 'docs/RUST-V15.md is the new home'.";
-
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The description states the path, the code reads 'docs/RUST-V15.md is the new home'.",
+        "The description names the moved README, 'docs/RUST-V15.md is the new home' is the"
+            + " rename's own line."
+      })
+  void aCommaThatDoesNotFollowTheVerbStillBreaksTheClause(String gap) {
     assertEquals(List.of(gap), DescriptionGapScreen.screen(List.of(gap), RUST_159, ""));
   }
 
