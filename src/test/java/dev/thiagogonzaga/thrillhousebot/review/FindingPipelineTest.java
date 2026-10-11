@@ -1792,9 +1792,10 @@ class FindingPipelineTest {
     when(aiReviewService.summarize(eq(session), captor.capture()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
 
-    var result =
-        pipeline.run(
-            session, template, ctx, plan, new DiffLineResolver(Map.of()), ReviewEvidence.NONE);
+    // The finding's suggestion_old is line 1 of a.java, so its suggestion is kept (#924).
+    var lineResolver = new DiffLineResolver(Map.of("a.java", "@@ -0,0 +1,1 @@\n+old line"));
+
+    var result = pipeline.run(session, template, ctx, plan, lineResolver, ReviewEvidence.NONE);
 
     verify(aiReviewService, times(1)).review(eq(session), any());
     verify(aiReviewService, times(1)).summarize(eq(session), any());
