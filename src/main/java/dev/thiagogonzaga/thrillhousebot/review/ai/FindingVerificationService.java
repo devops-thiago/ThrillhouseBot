@@ -42,6 +42,7 @@ import java.util.Set;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /**
@@ -1240,17 +1241,12 @@ public class FindingVerificationService {
     if (response.findings().isEmpty()) {
       return response;
     }
-    var raisedAboveLow = new HashSet<String>();
-    for (ReviewResponse.Finding finding : raised.findings()) {
-      if (Confidence.fromString(finding.confidence()) != Confidence.LOW) {
-        raisedAboveLow.add(identity(finding));
-      }
-    }
-    List<String> diffLines =
-        Objects.requireNonNullElse(diff, "")
-            .lines()
-            .map(line -> collapsedWhitespace(line).strip())
-            .toList();
+    Set<String> raisedAboveLow =
+        raised.findings().stream()
+            .filter(finding -> Confidence.fromString(finding.confidence()) != Confidence.LOW)
+            .map(FindingVerificationService::identity)
+            .collect(Collectors.toSet());
+    List<String> diffLines = codeLines(diff);
     var adjusted = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     var changed = false;
     for (ReviewResponse.Finding finding : response.findings()) {
@@ -1310,6 +1306,26 @@ public class FindingVerificationService {
       }
     }
     return quotedLines.size() >= TAINT_PATH_FRAGMENTS;
+  }
+
+  /**
+   * The diff's code lines — added, removed and context lines inside its hunks — with the line
+   * marker dropped and whitespace collapsed. File headings, fences and hunk headers are left out,
+   * so a finding that only names two files, whose paths appear in those headings, quotes no code.
+   */
+  private static List<String> codeLines(String diff) {
+    return Objects.requireNonNullElse(diff, "")
+        .lines()
+        .filter(FindingVerificationService::isCodeLine)
+        .map(line -> collapsedWhitespace(line.substring(1)).strip())
+        .toList();
+  }
+
+  private static boolean isCodeLine(String line) {
+    return !line.isEmpty()
+        && "+- ".indexOf(line.charAt(0)) >= 0
+        && !line.startsWith("+++")
+        && !line.startsWith("---");
   }
 
   /** A finding's location and title, which the audit never rewrites. */

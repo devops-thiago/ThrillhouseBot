@@ -663,6 +663,7 @@ class SeverityCalibratorTest {
         "COPY --from=busybox /bin/busybox /bin/busybox",
         "COPY --from=busybox:latest /bin/busybox /bin/busybox",
         "COPY --from=tools:${TOOLS_VERSION} /bin/tool /bin/tool",
+        "COPY --from=tools:${BUILD_2} /bin/tool /bin/tool",
         "COPY --chown=app:app ./dist /app",
         "FROM golang:1.22 AS build",
         "COPY"

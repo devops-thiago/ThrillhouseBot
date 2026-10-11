@@ -386,19 +386,22 @@ public final class SeverityCalibrator {
     if (response.findings().isEmpty()) {
       return response;
     }
-    var adjusted = new ArrayList<ReviewResponse.Finding>(response.findings().size());
-    var changed = false;
+    var kept = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     for (ReviewResponse.Finding finding : response.findings()) {
-      InfrastructureClass anchored = classify(finding);
-      if (anchored == InfrastructureClass.MUTABLE_EXTERNAL_REFERENCE
+      if (classify(finding) == InfrastructureClass.MUTABLE_EXTERNAL_REFERENCE
           && anchoredOnVersionedExternalSource(finding, lineText)) {
         Log.infof(
             "Dropping unpinned-reference finding '%s' (%s:%d): it is anchored on a COPY --from"
                 + " source that names an external image by an explicit version",
             LogSafe.oneLine(finding.title()), LogSafe.oneLine(finding.file()), finding.line());
-        changed = true;
-        continue;
+      } else {
+        kept.add(finding);
       }
+    }
+    var adjusted = new ArrayList<ReviewResponse.Finding>(kept.size());
+    var changed = kept.size() != response.findings().size();
+    for (ReviewResponse.Finding finding : kept) {
+      InfrastructureClass anchored = classify(finding);
       if (anchored == null || alreadyAnchored(finding, anchored)) {
         adjusted.add(finding);
         continue;
@@ -503,7 +506,8 @@ public final class SeverityCalibrator {
    * registry path, a tag or a digest. The tag is read after the last path separator, so a registry
    * port ({@code registry:5000/tools}) is not taken for one. A tag is a version when it is not
    * {@code latest} and carries a digit ({@code 1.36}, {@code v0.4.25}, {@code 3.9-alpine}); an
-   * untagged image is {@code latest}, and an {@code ${ARG}} tag is not decided here.
+   * untagged image is {@code latest}, and a tag built from a build argument ({@code ${TOOLS_2}}) is
+   * never a version, whatever characters the argument's name holds: its value is not in the file.
    */
   static boolean isVersionedExternalImage(String source) {
     String reference = source.replace("\"", "").replace("'", "");
@@ -516,7 +520,9 @@ public final class SeverityCalibrator {
       return false;
     }
     String tag = name.substring(colon + 1);
-    return !"latest".equalsIgnoreCase(tag) && tag.chars().anyMatch(Character::isDigit);
+    return !"latest".equalsIgnoreCase(tag)
+        && tag.indexOf('$') < 0
+        && tag.chars().anyMatch(Character::isDigit);
   }
 
   /** Whether the finding is anchored in one of the declarative artifacts these classes live in. */

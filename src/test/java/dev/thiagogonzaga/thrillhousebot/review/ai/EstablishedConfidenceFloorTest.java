@@ -191,6 +191,20 @@ class EstablishedConfidenceFloorTest {
         "low", floored(finding("high", "low", "SQL injection: organizer", twoQuotes), oneLine));
   }
 
+  /** File names match the diff's headings, which are not code: naming two files quotes none. */
+  @Test
+  void quotingTheFilesAPathRunsThroughIsNotQuotingItsCode() {
+    String filesOnly =
+        "In `go/handler.go` the vehicle ID reaches `go/store.go`, where it is concatenated into"
+            + " the SQL query; nothing escapes or parameterizes it, an SQL injection.";
+
+    assertEquals(
+        "low",
+        floored(
+            finding("critical", "low", "SQL injection: vehicle ID", filesOnly),
+            "--- a/go/handler.go\n+++ b/go/store.go\n" + GO_DIFF));
+  }
+
   /** A finding that says the value IS parameterized is not the unmitigated class at all. */
   @Test
   void aFindingThatRulesTheSinkOutStaysLow() {
