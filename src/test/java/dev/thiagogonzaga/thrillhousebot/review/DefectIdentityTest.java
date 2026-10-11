@@ -755,11 +755,22 @@ class DefectIdentityTest {
         DefectIdentity.sameDefect(
             at("high", "high", "src/Ledger.java", 5, "LedgerCache race", "d"),
             at("medium", "low", "src/Api.java", 9, "LedgerCache unsynchronized", "d")));
-    // A file class name with a shared defect class, and nothing else, pairs too.
-    assertTrue(
+    // A file class name is prose ("main", "config"): a shared word or defect class beside it is not
+    // enough; only a description naming a symbol of the other's title corroborates it.
+    assertFalse(
         DefectIdentity.sameDefect(
             at("high", "high", "src/Ledger.java", 5, "Ledger race", "d"),
             at("medium", "low", "src/Api.java", 9, "Concurrent Ledger writes", "d")));
+    assertFalse(
+        DefectIdentity.sameDefect(
+            at("medium", "low", "api/Main.java", 5, "Main thread races the expiry worker", "d"),
+            at(
+                "high",
+                "high",
+                "worker/ThreadWorker.java",
+                9,
+                "Main thread races the shutdown hook",
+                "d")));
   }
 
   @Test

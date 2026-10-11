@@ -187,11 +187,12 @@ final class DefectIdentity {
    * defects.
    *
    * <p>A subject that is only a file's class name is as common as prose ("Auth rejects valid tokens
-   * when the cache is cold", "Auth always rejects the first valid token after startup"), so it
-   * pairs two findings only with corroboration: a shared defect class, or one finding's description
-   * naming a symbol of the other's title (the waitlist finding on {@code BedAllocator.java}
-   * explains that nothing calls {@code Waitlist.ordered()} or {@code topN()}, the symbols the
-   * {@code Waitlist.java} item's title names).
+   * when the cache is cold", "Auth always rejects the first valid token after startup"; "Main
+   * thread races …" on two unrelated files), so a shared word or defect class beside it is not
+   * enough: it pairs two findings only when one finding's description names a symbol of the other's
+   * title (the waitlist finding on {@code BedAllocator.java} explains that nothing calls {@code
+   * Waitlist.ordered()} or {@code topN()}, the symbols the {@code Waitlist.java} item's title
+   * names).
    */
   private static boolean sharesSubject(Finding a, Finding b) {
     var shared = new HashSet<String>();
@@ -210,7 +211,6 @@ final class DefectIdentity {
     var symbols = symbols(a.title());
     symbols.addAll(symbols(b.title()));
     return shared.stream().anyMatch(symbols::contains)
-        || sharesClass
         || namesSymbolOf(a.description(), b)
         || namesSymbolOf(b.description(), a);
   }
