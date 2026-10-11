@@ -1024,6 +1024,10 @@ class PromptLabelScrubberTest {
           the findings from this batch | the findings
           There are no findings in this batch yet. | There are no findings yet.
           There are no issues in this batch yet. | There are no issues yet.
+          BedReporter... Rather, grep confirms it. | Grep confirms it.
+          It fails. Main… Actually, the handler reads it. | It fails. The handler reads it.
+          It fails. `foo.bar()`... rather, grep confirms it. | It fails. Grep confirms it.
+          - `foo.bar()`… Wait, grep confirms it. | - Grep confirms it.
           Uploads due episodes. No findings in this batch! Next. | Uploads due episodes. Next.
           Uploads due episodes. No findings in this batch? Next. | Uploads due episodes. Next.
           Uploads due episodes. No findings in this batch: none. | Uploads due episodes. none.
@@ -1074,12 +1078,25 @@ class PromptLabelScrubberTest {
         "The worker blocks — waiting, not spinning — until notified.",
         "The values run 1...10, rather than 0...9.",
         "It reads the header... and then the body.",
+        "BedReporter... however, grep confirms it.",
+        "It calls `foo.bar()`... rather, grep confirms it.",
+        "`foo.bar()`... however, grep confirms it.",
         "It fails fast... rather, it surfaces the error to the caller.",
         "The retry helps... actually, it makes things worse.",
         "(line 24 — waits for the lock)"
       })
   void scratchTextNearMissesAreLeftAlone(String text) {
     assertEquals(text, PromptLabelScrubber.scrub(text));
+  }
+
+  @Test
+  void aRestartAfterACodeSpanInsideAFencedBlockStays() {
+    var fenced = "```\n`foo.bar()`... rather, grep confirms it.\n```";
+    assertEquals(fenced, PromptLabelScrubber.scrub(fenced));
+    // After the fence closes, the same line is prose again.
+    assertEquals(
+        fenced + "\nGrep confirms it.",
+        PromptLabelScrubber.scrub(fenced + "\n`foo.bar()`... rather, grep confirms it."));
   }
 
   @Test

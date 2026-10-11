@@ -341,7 +341,21 @@ public final class PromptLabelScrubber {
   private static final Pattern RESTARTED_SENTENCE =
       Pattern.compile(
           "(?<![^.!?\\n])([ \\t]*(?:[-*+>][ \\t]+)?)[^\\s.!?…](?:[^\\s.!?…]|\\.(?=\\w)){0,59}"
-              + "(?:\\.\\.\\.|…)[ \\t]+(?:rather|wait|actually),[ \\t]+(\\p{L})");
+              + "(?:\\.\\.\\.|…)[ \\t]+(\\p{L}{4,8}),[ \\t]+(\\p{L})");
+
+  /**
+   * The same restart when the broken-off start is one code span: "`foo.bar()`... rather, grep
+   * confirms it." The span is the name the model began to cite, so it goes with the marker. Read on
+   * the whole text, since prose is otherwise scrubbed between code spans, and never inside a fenced
+   * block.
+   */
+  private static final Pattern RESTARTED_AFTER_CODE_SPAN =
+      Pattern.compile(
+          "(?<![^.!?\\n])([ \\t]*(?:[-*+>][ \\t]+)?)`[^`\\n]{1,80}`"
+              + "(?:\\.\\.\\.|…)[ \\t]+(\\p{L}{4,8}),[ \\t]+(\\p{L})");
+
+  /** The words that restart a broken-off sentence, in any case: "rather,", "Wait,", "actually,". */
+  private static final Set<String> RESTART_CONNECTORS = Set.of("rather", "wait", "actually");
 
   /**
    * "hosts the two confirmed findings": the verifier's verdict name for a posted finding (#964).
@@ -386,6 +400,13 @@ public final class PromptLabelScrubber {
     if (text == null || text.isEmpty()) {
       return text;
     }
+    return scrubAroundCode(removeRestartsAfterCodeSpans(text), realPaths);
+  }
+
+  /**
+   * {@code text} scrubbed between its code spans, fenced blocks and markers, which stay as written.
+   */
+  private static String scrubAroundCode(String text, Collection<String> realPaths) {
     var out = new StringBuilder(text.length());
     int prose = 0;
     int i = 0;
@@ -638,13 +659,42 @@ public final class PromptLabelScrubber {
   private static String removeScratchText(String text) {
     var s = PARENTHETICAL_SELF_CORRECTION.matcher(text).replaceAll("(");
     s = DASH_SELF_CORRECTION.matcher(s).replaceAll(" $1 ");
-    s =
-        RESTARTED_SENTENCE
-            .matcher(s)
-            .replaceAll(m -> Matcher.quoteReplacement(m.group(1) + capitalize(m.group(2))));
+    s = RESTARTED_SENTENCE.matcher(s).replaceAll(m -> Matcher.quoteReplacement(restarted(m)));
     s = CONFIRMED_FINDINGS.matcher(s).replaceAll(m -> capitalizeLike(m.group(1), m.group(2)));
     s = removeNoFindingsAsides(s);
     return FINDINGS_IN_BATCH.matcher(s).replaceAll("$1");
+  }
+
+  /**
+   * A restart {@code m} found by {@link #RESTARTED_SENTENCE} or {@link #RESTARTED_AFTER_CODE_SPAN}
+   * without its broken-off start: the marker before it and the capitalized restart, or the match
+   * unchanged when its connector is not a restart word.
+   */
+  private static String restarted(MatchResult m) {
+    if (!RESTART_CONNECTORS.contains(m.group(2).toLowerCase(Locale.ROOT))) {
+      return m.group();
+    }
+    return m.group(1) + capitalize(m.group(3));
+  }
+
+  /** Drops each {@link #RESTARTED_AFTER_CODE_SPAN} outside a fenced block. */
+  private static String removeRestartsAfterCodeSpans(String text) {
+    if (!text.contains("`")) {
+      return text;
+    }
+    return RESTARTED_AFTER_CODE_SPAN
+        .matcher(text)
+        .replaceAll(
+            m -> Matcher.quoteReplacement(insideFence(text, m.start()) ? m.group() : restarted(m)));
+  }
+
+  /** Whether {@code at} lies inside a fenced block: an odd number of fence markers precede it. */
+  private static boolean insideFence(String text, int at) {
+    int fences = 0;
+    for (int i = text.indexOf("```"); i >= 0 && i < at; i = text.indexOf("```", i + 3)) {
+      fences++;
+    }
+    return fences % 2 == 1;
   }
 
   /**
