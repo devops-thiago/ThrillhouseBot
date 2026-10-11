@@ -5014,6 +5014,24 @@ class FollowUpAnalyzerTest {
 
     var guardClause = heldNote("+// The mutex guards it: shared by every thread.");
     assertTrue(guardClause.contains("says this path runs concurrently"), guardClause);
+
+    // The scan stops at the start of the line, and a tab is a gap like a space.
+    for (var denied :
+        List.of(
+            "+Never shared by every request goroutine.",
+            "+// The counter is not\tshared by every request goroutine.")) {
+      var note = heldNote(denied);
+      assertTrue(note.contains("no review has weighed"), denied + " -> " + note);
+    }
+    // Nothing before the statement, or an n't word longer than a contraction (an identifier),
+    // denies nothing.
+    for (var affirmed :
+        List.of(
+            "+shared by every request goroutine.",
+            "+// See flag_wouldn't shared by every request goroutine.")) {
+      var note = heldNote(affirmed);
+      assertTrue(note.contains("says this path runs concurrently"), affirmed + " -> " + note);
+    }
   }
 
   /** A statement wrapped across comment lines is read whole, a wrapped denial included. */

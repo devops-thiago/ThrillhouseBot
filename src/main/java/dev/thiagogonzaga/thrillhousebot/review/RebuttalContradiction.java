@@ -465,9 +465,31 @@ final class RebuttalContradiction {
    * statement, so the scan is linear in the clause.
    */
   private static boolean denies(String before) {
+    var words = wordsBefore(before);
+    if (!words.isEmpty() && REFUSALS.contains(words.getFirst())) {
+      return true;
+    }
+    for (var i = 0; i < words.size(); i++) {
+      var word = words.get(i);
+      if (isNegator(word)) {
+        return i == 0 || !AFFIRMING.contains(words.get(i - 1));
+      }
+      if (CLAUSE_OPENERS.contains(word)) {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The words before a statement, lowercased, nearest first: at most {@value #DENIAL_WORDS} beyond
+   * the nearest, read back until a gap wider than {@value #MAX_GAP} characters or anything that is
+   * neither a gap nor a word character (clause punctuation) ends the clause.
+   */
+  private static List<String> wordsBefore(String before) {
+    var words = new ArrayList<String>();
     var end = before.length();
-    String nearer = null;
-    for (var read = 0; read <= DENIAL_WORDS; read++) {
+    while (words.size() <= DENIAL_WORDS) {
       var wordEnd = end;
       while (wordEnd > 0 && isGap(before.charAt(wordEnd - 1))) {
         wordEnd--;
@@ -477,22 +499,12 @@ final class RebuttalContradiction {
         start--;
       }
       if (end - wordEnd > MAX_GAP || start == wordEnd) {
-        return false;
+        break;
       }
-      var word = before.substring(start, wordEnd).toLowerCase(Locale.ROOT);
-      if (isNegator(word)) {
-        return nearer == null || !AFFIRMING.contains(nearer);
-      }
-      if (CLAUSE_OPENERS.contains(word)) {
-        return false;
-      }
-      if (read == 0 && REFUSALS.contains(word)) {
-        return true;
-      }
-      nearer = word;
+      words.add(before.substring(start, wordEnd).toLowerCase(Locale.ROOT));
       end = start;
     }
-    return false;
+    return words;
   }
 
   private static boolean isNegator(String word) {
