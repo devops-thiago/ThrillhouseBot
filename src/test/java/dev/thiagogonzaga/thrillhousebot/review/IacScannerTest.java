@@ -16,8 +16,10 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -481,6 +483,71 @@ class IacScannerTest {
         scanNew("p.json", "{", "  \"NotAction\": \"*\",", "  \"Resource\": \"*\"", "}").isEmpty());
     assertTrue(
         scanNew("p.json", "{", "  \"Action\": \"s3:*\",", "  \"Resource\": \"*\"", "}").isEmpty());
+  }
+
+  @Test
+  void aWildcardAnywhereInAOneLineActionListIsReported() {
+    for (var actions :
+        List.of(
+            "[\"*\", \"s3:GetObject\"]",
+            "[\"s3:GetObject\", \"*\", \"s3:PutObject\"]",
+            "[\"s3:GetObject\", \"s3:*\", \"*\"]",
+            "[ '*' ]")) {
+      var hits =
+          scanNew("p.json", "{", "  \"Action\": " + actions + ",", "  \"Resource\": \"*\"", "}");
+      assertEquals(List.of(SecurityRule.IAM_WILDCARD), rules(hits), actions);
+      assertEquals(2, hits.get(0).line(), actions);
+    }
+    assertEquals(
+        1,
+        scanNew(
+                "iam.tf",
+                "statement {",
+                "  actions   = [\"s3:GetObject\", \"*\"]",
+                "  resources = [\"arn:aws:s3:::logs/*\", \"*\"]",
+                "}")
+            .size());
+  }
+
+  @Test
+  void aListWithoutABareWildcardIsNotReported() {
+    for (var actions :
+        List.of(
+            "[\"s3:GetObject\", \"s3:PutObject\"]",
+            "[\"s3:GetObject\", \"s3:*\"]",
+            "[\"s3:GetObject\", \"*:Get\"]")) {
+      assertTrue(
+          scanNew("p.json", "{", "  \"Action\": " + actions + ",", "  \"Resource\": \"*\"", "}")
+              .isEmpty(),
+          actions);
+    }
+    assertTrue(
+        scanNew(
+                "p.json",
+                "{",
+                "  \"Action\": [\"s3:GetObject\", \"*\"],",
+                "  \"Resource\": [\"arn:aws:s3:::logs/*\"]",
+                "}")
+            .isEmpty());
+  }
+
+  @Test
+  void theWildcardListMatchStaysLinearOnAdversarialLines() {
+    var lines =
+        List.of(
+            "  \"Action\": [" + "\"s3:GetObject\", ".repeat(500) + "\"s3:PutObject\"",
+            "  \"Action\": [" + "\"*x\", ".repeat(500),
+            "  \"Action\": [" + "\"" + "a".repeat(5000),
+            "  \"Action\": [" + "\"a\" ,  ".repeat(500) + "\"*\" x");
+    assertTimeoutPreemptively(
+        Duration.ofSeconds(5),
+        () -> {
+          for (int i = 0; i < 20; i++) {
+            for (var line : lines) {
+              assertTrue(scanNew("p.json", line, "  \"Resource\": \"*\"").isEmpty(), line);
+            }
+          }
+        });
   }
 
   // --- Kubernetes ---

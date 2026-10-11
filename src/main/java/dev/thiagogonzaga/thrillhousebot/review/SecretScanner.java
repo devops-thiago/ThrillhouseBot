@@ -244,6 +244,17 @@ final class SecretScanner {
   private static final Pattern IDENTIFIER_SEPARATOR = Pattern.compile("[._/-]");
 
   /**
+   * A construct only a regular expression writes (#981): a group or lookaround opener {@code (?}, a
+   * character class holding a range ({@code [A-Za-z0-9_-]}), or a class escape ({@code \d}, {@code
+   * \w}, {@code \s}, {@code \b}). Bounded, so a long value costs one linear pass.
+   */
+  private static final Pattern REGEX_CONSTRUCT =
+      Pattern.compile("\\(\\?|\\[[^\\]]{0,64}?[A-Za-z0-9]-[A-Za-z0-9]|\\\\[dDwWsSbB]");
+
+  /** The characters that carry a regular expression's structure. */
+  private static final String REGEX_STRUCTURE = "()[]{}\\|?*+^$";
+
+  /**
    * The start of a PEM body: base64 of at least a line's worth, either on the line after the header
    * or after a literal {@code \n} on the header's own line (a key pasted into a JSON or YAML
    * string), or the {@code Proc-Type} header of a legacy encrypted key. A header with no body
@@ -283,12 +294,55 @@ final class SecretScanner {
     Matcher generic = GENERIC_ASSIGNMENT.matcher(line);
     while (generic.find()) {
       var value = generic.group(3);
-      if (claimed(hits, value) || !looksLikeSecret(value, entropyThreshold)) {
+      if (claimed(hits, value)
+          || insideStringLiteral(line, generic)
+          || !looksLikeSecret(value, entropyThreshold)) {
         continue;
       }
       hits.add(new Hit(SecurityRule.GENERIC_SECRET, value, generic.group(1)));
     }
     return hits;
+  }
+
+  /**
+   * Whether a generic match is sample text quoted inside another string literal (#981), such as
+   * {@code "client_secret: 'abcdefgh12345'",} in a test's list of inputs: a quote opens right
+   * before the key, is not closed before the value's own quote, and is a different quote character
+   * from the value's. A quoted key in JSON, YAML or a dictionary ({@code "apiKey": "…"}, {@code
+   * {"token": '…'}}) closes its quote before the operator, so it is still read as an assignment.
+   * The rule reads only quoted values, so an unquoted value inside a string ({@code "password=…"})
+   * is not an assignment to it either way.
+   *
+   * <p>The enclosing string must also sit where a list element or a call argument does: first on
+   * its line, or right after {@code (}, {@code [}, {@code {} or {@code ,}. A string a command runs
+   * ({@code sh -c 'DB_PASSWORD="…"'}, {@code ExecStart=… 'API_KEY="…"'}) follows a word or an
+   * operator, so a real credential there is still reported. A command string passed as a list
+   * element ({@code ["sh", "-c", "PASSWORD='…'"]}) is the case this cannot tell from sample text.
+   */
+  private static boolean insideStringLiteral(String line, Matcher generic) {
+    int keyStart = generic.start(1);
+    if (keyStart == 0) {
+      return false;
+    }
+    char before = line.charAt(keyStart - 1);
+    if (before != '"' && before != '\'' && before != '`') {
+      return false;
+    }
+    return line.charAt(generic.start(2)) != before
+        && line.substring(generic.end(1), generic.start(2)).indexOf(before) < 0
+        && inElementPosition(line, keyStart - 1);
+  }
+
+  /**
+   * Whether the string opening at {@code quote} is first on its line or follows {@code (}, {@code
+   * [}, {@code {} or {@code ,}, ignoring whitespace.
+   */
+  private static boolean inElementPosition(String line, int quote) {
+    int i = quote - 1;
+    while (i >= 0 && Character.isWhitespace(line.charAt(i))) {
+      i--;
+    }
+    return i < 0 || "([{,".indexOf(line.charAt(i)) >= 0;
   }
 
   /** Whether a private-key header is followed by a key body; see {@link #PEM_BODY}. */
@@ -324,7 +378,8 @@ final class SecretScanner {
         || value.startsWith("./")
         || value.startsWith("~/")
         || value.contains("://")
-        || isIdentifier(value)) {
+        || isIdentifier(value)
+        || isRegex(value)) {
       return false;
     }
     return characterClasses(value) >= 2
@@ -371,6 +426,20 @@ final class SecretScanner {
       any = true;
     }
     return any && scan(line, null, entropyThreshold).isEmpty();
+  }
+
+  /**
+   * Whether the value is a regular expression rather than a credential (#981), such as {@code
+   * TOKEN_END = "(?![A-Za-z0-9_-])"}: it holds a {@link #REGEX_CONSTRUCT} and at least a quarter of
+   * its characters are {@link #REGEX_STRUCTURE}. A password with the odd bracket or question mark
+   * has neither a construct nor that density.
+   */
+  private static boolean isRegex(String value) {
+    if (!REGEX_CONSTRUCT.matcher(value).find()) {
+      return false;
+    }
+    long structure = value.chars().filter(c -> REGEX_STRUCTURE.indexOf(c) >= 0).count();
+    return structure * 4 >= value.length();
   }
 
   /** Whether a matched value is a documentation or template stand-in. */
