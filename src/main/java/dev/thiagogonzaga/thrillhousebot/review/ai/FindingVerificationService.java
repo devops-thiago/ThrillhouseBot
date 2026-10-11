@@ -33,13 +33,18 @@ import jakarta.inject.Inject;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 /**
  * Second-pass audit of review findings: a skeptical verifier call re-evaluates each candidate
@@ -599,6 +604,31 @@ public class FindingVerificationService {
               + "[^;:.!?\\n\\r\\u2013\\u2014])*",
           Pattern.CASE_INSENSITIVE);
 
+  /**
+   * Code a finding quotes: a span between backticks, straight or curly double quotes, or single
+   * quotes, on one line. A single quote counts only outside a word, so the apostrophes of "can't"
+   * and "user's" never pair up into a span. The group of the alternative that matched is the quoted
+   * text.
+   */
+  private static final Pattern QUOTED_SPAN =
+      Pattern.compile(
+          "`([^`\\n]{1,300})`|[\"\u201C]([^\"\u201C\u201D\\n]{1,300})[\"\u201D]|(?<!\\w)'([^'\\n]{1,300})'(?!\\w)");
+
+  /**
+   * A call expression a finding names without quoting it ({@code r.PathValue("id")}, {@code
+   * q.get("ward")}): a dotted name and an argument list with no nested parentheses.
+   */
+  private static final Pattern CALL_EXPRESSION =
+      Pattern.compile("([A-Za-z_][\\w.]{0,80}\\([^()\\n]{0,80}\\))");
+
+  private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s+");
+
+  /** Quoted code shorter than this is a name or a word, not a fragment of the path. */
+  private static final int MIN_FRAGMENT_CHARS = 6;
+
+  /** The sink and the value's way to it: code quoted from two different lines of the diff. */
+  private static final int TAINT_PATH_FRAGMENTS = 2;
+
   /** The floor an unmitigated-injection-sink finding may never publish below (#570). */
   private static final RiskLevel INJECTION_SINK_FLOOR = RiskLevel.HIGH;
 
@@ -732,16 +762,20 @@ public class FindingVerificationService {
       String previousFindings,
       FindingEvidence evidence,
       Consumer<VerificationCoverage> coverageSink) {
-    return floorInjectionSinkRisk(
-        audit(
-            ledgerSessionId,
-            response,
-            prContext,
-            diff,
-            projectStack,
-            previousFindings,
-            evidence,
-            coverageSink));
+    return floorEstablishedConfidence(
+        floorInjectionSinkRisk(
+            audit(
+                ledgerSessionId,
+                response,
+                prContext,
+                diff,
+                projectStack,
+                previousFindings,
+                evidence,
+                coverageSink)),
+        response,
+        diff,
+        evidence);
   }
 
   /**
@@ -1179,15 +1213,172 @@ public class FindingVerificationService {
         adjusted, response.previousFindingsStatus(), recount(response.summary(), adjusted));
   }
 
-  private static boolean belowInjectionSinkFloor(ReviewResponse.Finding finding) {
-    // Both enums declare constants most- to least-severe, so a higher ordinal is a lower rating.
-    if (RiskLevel.fromString(finding.risk()).ordinal() <= INJECTION_SINK_FLOOR.ordinal()) {
+  /**
+   * Deterministic confidence floor for two findings whose evidence is established rather than hoped
+   * for: neither publishes at confidence "low", the label that sends a medium finding to the
+   * collapsed "Things to double-check" block and tells every reader to discount a high one.
+   *
+   * <ul>
+   *   <li>An unmitigated injection sink whose taint path is in the diff (#926): the finding asserts
+   *       the class {@link #floorInjectionSinkRisk} floors, and it quotes code from two different
+   *       lines of the diff verbatim — the sink and the value's way to it. Round 10 posted four
+   *       CRITICAL SQL injections at "low" confidence, each quoting the request read and the
+   *       concatenated query from the same diff; nothing about that path was unseen.
+   *   <li>A finding that cites a check this commit's CI had already failed (#952): {@link
+   *       FindingEvidence#failingChecks} says the review's CI context records it. A test failure
+   *       counted by hand is a hypothesis; the same failure reported by CI is a measurement, and
+   *       two HIGH off-by-ones the failing test confirmed were posted as low-confidence items.
+   * </ul>
+   *
+   * <p>Only "low" moves, and only to "medium": blocking under the default strictness needs "high",
+   * so a floored finding still informs the verdict without deciding it, and every hedge, verifier
+   * demotion or unverified cap that left a finding at "medium" stands. Risk is never touched.
+   *
+   * <p>The audit also answers "low" when the defect is real but the suggested fix is not, and a
+   * floored finding posts inline with its suggestion. So when it was the audit that took the
+   * finding down to "low" — the review raised it higher in {@code raised} — the lifted finding
+   * keeps its anchor but loses {@code suggestion_new}: the established evidence restores the
+   * finding, not a fix the audit may have judged unreliable.
+   *
+   * @param raised the findings as the review raised them, before the audit
+   */
+  static ReviewResponse floorEstablishedConfidence(
+      ReviewResponse response, ReviewResponse raised, String diff, FindingEvidence evidence) {
+    if (response.findings().isEmpty()) {
+      return response;
+    }
+    Set<String> raisedAboveLow =
+        raised.findings().stream()
+            .filter(finding -> Confidence.fromString(finding.confidence()) != Confidence.LOW)
+            .map(FindingVerificationService::identity)
+            .collect(Collectors.toSet());
+    List<String> diffLines = codeLines(diff);
+    var adjusted = new ArrayList<ReviewResponse.Finding>(response.findings().size());
+    var changed = false;
+    for (ReviewResponse.Finding finding : response.findings()) {
+      if (Confidence.fromString(finding.confidence()) != Confidence.LOW
+          || !(evidence.failingChecks().cites(finding) || taintPathInDiff(finding, diffLines))) {
+        adjusted.add(finding);
+        continue;
+      }
+      boolean auditLowered = raisedAboveLow.contains(identity(finding));
+      Log.infof(
+          "Raising %s finding '%s' from low to medium confidence: its evidence is established%s",
+          LogSafe.oneLine(finding.risk()),
+          LogSafe.oneLine(finding.title()),
+          auditLowered ? "; the audit lowered it, so its suggested fix is dropped" : "");
+      adjusted.add(
+          new ReviewResponse.Finding(
+              finding.risk(),
+              MEDIUM_LABEL,
+              finding.file(),
+              finding.line(),
+              finding.title(),
+              finding.description(),
+              finding.suggestionOld(),
+              auditLowered ? null : finding.suggestionNew()));
+      changed = true;
+    }
+    if (!changed) {
+      return response;
+    }
+    return new ReviewResponse(adjusted, response.previousFindingsStatus(), response.summary());
+  }
+
+  /**
+   * Whether the finding asserts an unmitigated injection sink, on the same reading {@link
+   * #floorInjectionSinkRisk} uses, and quotes code from at least {@link #TAINT_PATH_FRAGMENTS}
+   * different lines of the diff. Counting lines rather than fragments keeps two quotes of the one
+   * concatenated query from passing for a path; two lines are the sink and the value's way to it in
+   * every round-10 case, though a finding quoting two lines of the sink alone would pass too, at
+   * the cost of a "medium" label on a claim it already makes in full.
+   */
+  private static boolean taintPathInDiff(ReviewResponse.Finding finding, List<String> diffLines) {
+    if (!assertsUnmitigatedSink(finding)) {
       return false;
     }
-    String text =
-        (finding.title() == null ? "" : finding.title())
-            + "\n"
-            + (finding.description() == null ? "" : finding.description());
+    String text = findingText(finding);
+    // Each distinct fragment once (a call expression can also be a quoted span), and the diff is
+    // scanned only until the second line is found.
+    var fragments = new LinkedHashSet<String>();
+    for (Pattern span : List.of(QUOTED_SPAN, CALL_EXPRESSION)) {
+      Matcher m = span.matcher(text);
+      while (m.find()) {
+        fragments.add(collapsedWhitespace(quotedText(m)).strip());
+      }
+    }
+    var quotedLines = new HashSet<Integer>();
+    for (String fragment : fragments) {
+      if (fragment.length() >= MIN_FRAGMENT_CHARS) {
+        IntStream.range(0, diffLines.size())
+            .filter(i -> diffLines.get(i).contains(fragment))
+            .findFirst()
+            .ifPresent(quotedLines::add);
+        if (quotedLines.size() >= TAINT_PATH_FRAGMENTS) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The diff's code lines — added, removed and context lines inside its hunks — with the line
+   * marker dropped and whitespace collapsed. File headings, fences and hunk headers are left out,
+   * so a finding that only names two files, whose paths appear in those headings, quotes no code.
+   */
+  private static List<String> codeLines(String diff) {
+    return Objects.requireNonNullElse(diff, "")
+        .lines()
+        .filter(FindingVerificationService::isCodeLine)
+        .map(line -> collapsedWhitespace(line.substring(1)).strip())
+        .toList();
+  }
+
+  private static boolean isCodeLine(String line) {
+    return !line.isEmpty()
+        && "+- ".indexOf(line.charAt(0)) >= 0
+        && !line.startsWith("+++")
+        && !line.startsWith("---");
+  }
+
+  /** A finding's location and title, which the audit never rewrites. */
+  private static String identity(ReviewResponse.Finding finding) {
+    return finding.file() + "\u0000" + finding.line() + "\u0000" + finding.title();
+  }
+
+  /** The text of whichever alternative of a span pattern matched. */
+  private static String quotedText(Matcher m) {
+    return IntStream.rangeClosed(1, m.groupCount())
+        .mapToObj(m::group)
+        .filter(Objects::nonNull)
+        .findFirst()
+        .orElse("");
+  }
+
+  private static String collapsedWhitespace(String text) {
+    return WHITESPACE_RUN.matcher(text).replaceAll(" ");
+  }
+
+  private static boolean belowInjectionSinkFloor(ReviewResponse.Finding finding) {
+    // Both enums declare constants most- to least-severe, so a higher ordinal is a lower rating.
+    return RiskLevel.fromString(finding.risk()).ordinal() > INJECTION_SINK_FLOOR.ordinal()
+        && assertsUnmitigatedSink(finding);
+  }
+
+  /** The finding's title and description, the text both injection-sink readings scan. */
+  private static String findingText(ReviewResponse.Finding finding) {
+    return (finding.title() == null ? "" : finding.title())
+        + "\n"
+        + (finding.description() == null ? "" : finding.description());
+  }
+
+  /**
+   * Whether the finding asserts an injection sink nothing neutralizes, the class {@link
+   * #floorInjectionSinkRisk} floors and {@link #floorEstablishedConfidence} reads.
+   */
+  private static boolean assertsUnmitigatedSink(ReviewResponse.Finding finding) {
+    String text = findingText(finding);
     // The trigger is read on the whole finding; the defeaters only on what it ASSERTS. A denial or
     // a mitigation raised as a hypothesis the finding then rejects is not a statement that the sink
     // is safe, and the review prompt mandates exactly that hypothesis on this class (#608).
@@ -1574,11 +1765,32 @@ public class FindingVerificationService {
    * travel as one value because they are one thing to the verifier — material it was not given and
    * cannot look up — and because they are charged to one character budget.
    */
-  public record FindingEvidence(CitedLocations citedLocations, ContextEvidence contextEvidence) {
+  public record FindingEvidence(
+      CitedLocations citedLocations, ContextEvidence contextEvidence, FailingChecks failingChecks) {
 
     /** Attaches nothing, the honest default for a caller that resolved no evidence. */
     public static final FindingEvidence NONE =
-        new FindingEvidence(CitedLocations.NONE, ContextEvidence.NONE);
+        new FindingEvidence(CitedLocations.NONE, ContextEvidence.NONE, FailingChecks.NONE);
+
+    /** Evidence from a review whose CI context recorded no failing check. */
+    public FindingEvidence(CitedLocations citedLocations, ContextEvidence contextEvidence) {
+      this(citedLocations, contextEvidence, FailingChecks.NONE);
+    }
+  }
+
+  /**
+   * Whether a finding cites a check this commit's CI had already failed when the review started, as
+   * the review's CI-failure context recorded it (#952). Read by {@link
+   * #floorEstablishedConfidence}.
+   */
+  @FunctionalInterface
+  public interface FailingChecks {
+
+    /** Records no failing check, so no finding cites one. */
+    FailingChecks NONE = finding -> false;
+
+    /** Whether this finding cites a failing check of this commit. */
+    boolean cites(ReviewResponse.Finding finding);
   }
 
   String renderCandidates(List<ReviewResponse.Finding> findings, FindingEvidence evidence)

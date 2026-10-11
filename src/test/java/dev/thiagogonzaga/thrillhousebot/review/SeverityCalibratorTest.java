@@ -90,8 +90,8 @@ class SeverityCalibratorTest {
     ReviewResponse.Finding rust =
         calibrateOne(finding("medium", "high", "rust/Dockerfile", UNPINNED_RUST));
 
-    assertGrade(node, "medium", "medium");
-    assertGrade(rust, "medium", "medium");
+    assertGrade(node, "low", "medium");
+    assertGrade(rust, "low", "medium");
   }
 
   @Test
@@ -134,10 +134,10 @@ class SeverityCalibratorTest {
 
   /** The anchor pins: a level above it is as much a miscalibration as one below. */
   @ParameterizedTest
-  @CsvSource({"critical,high", "high,medium", "medium,low", "low,high"})
-  void anUnpinnedReferenceIsMediumWhateverTheReviewRatedIt(String risk, String confidence) {
+  @CsvSource({"critical,high", "high,medium", "medium,medium", "medium,low", "low,high"})
+  void anUnpinnedReferenceIsLowWhateverTheReviewRatedIt(String risk, String confidence) {
     assertGrade(
-        calibrateOne(finding(risk, confidence, "Dockerfile", UNPINNED_NODE)), "medium", "medium");
+        calibrateOne(finding(risk, confidence, "Dockerfile", UNPINNED_NODE)), "low", "medium");
   }
 
   @Test
@@ -180,7 +180,7 @@ class SeverityCalibratorTest {
                 "The image drops to a non-root user, but FROM node:20-alpine is an unpinned base"
                     + " image, so the build is not reproducible."));
 
-    assertGrade(both, "medium", "medium");
+    assertGrade(both, "low", "medium");
   }
 
   /** Unpinned is said of things that are not external references, and those are not the class. */
@@ -213,7 +213,7 @@ class SeverityCalibratorTest {
                 "Dockerfile",
                 "FROM ubuntu:latest resolves to a different image on every build."));
 
-    assertGrade(latest, "medium", "medium");
+    assertGrade(latest, "low", "medium");
   }
 
   /** The colon is Docker tag syntax, so the occurrence names the reference by itself. */
@@ -227,7 +227,7 @@ class SeverityCalibratorTest {
                 "Dockerfile",
                 "FROM alpine:latest — the tag drifts under the build."));
 
-    assertGrade(terse, "medium", "medium");
+    assertGrade(terse, "low", "medium");
   }
 
   /** An article between the words is the same claim. */
@@ -380,7 +380,7 @@ class SeverityCalibratorTest {
   void aVariantDockerfileIsStillTheArtifact() {
     assertGrade(
         calibrateOne(finding("low", "low", "docker/Dockerfile.prod", UNPINNED_RUST)),
-        "medium",
+        "low",
         "medium");
   }
 
@@ -388,9 +388,7 @@ class SeverityCalibratorTest {
   @Test
   void aContainerfileIsTheSameArtifactAsADockerfile() {
     assertGrade(
-        calibrateOne(finding("low", "low", "build/Containerfile", UNPINNED_RUST)),
-        "medium",
-        "medium");
+        calibrateOne(finding("low", "low", "build/Containerfile", UNPINNED_RUST)), "low", "medium");
   }
 
   @Test
@@ -545,7 +543,7 @@ class SeverityCalibratorTest {
 
   @Test
   void aResponseAlreadyAtTheAnchorIsReturnedUntouched() {
-    ReviewResponse graded = response(finding("medium", "medium", "Dockerfile", UNPINNED_NODE));
+    ReviewResponse graded = response(finding("low", "medium", "Dockerfile", UNPINNED_NODE));
 
     assertSame(graded, SeverityCalibrator.calibrate(graded));
   }
@@ -557,7 +555,7 @@ class SeverityCalibratorTest {
     assertSame(empty, SeverityCalibrator.calibrate(empty));
   }
 
-  /** Calibration regrades; it never drops, adds or rewords, so precision cannot move. */
+  /** Calibration regrades; it never adds or rewords, and keeps every finding but one class. */
   @Test
   void everyFindingSurvivesWithItsTextAndAnchorIntact() {
     ReviewResponse.Finding raw =
@@ -593,7 +591,157 @@ class SeverityCalibratorTest {
 
     assertEquals(2, calibrated.summary().totalFindings());
     assertEquals(1, calibrated.summary().high(), "high");
-    assertEquals(1, calibrated.summary().medium(), "medium");
-    assertEquals(0, calibrated.summary().low(), "low");
+    assertEquals(0, calibrated.summary().medium(), "medium");
+    assertEquals(1, calibrated.summary().low(), "low");
+  }
+
+  /**
+   * The round-10 corpus (#926): the unpinned-tag finding anchored on a {@code COPY --from=} line
+   * whose source is an external image with an explicit version is the answer keys' "legitimate
+   * external producer", not a moving reference, so it is not reported at all.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "COPY --from=busybox:1.36 /bin/busybox /usr/local/bin/busybox",
+        "COPY --from=busybox:1.36.1 /bin/busybox /bin/busybox",
+        "COPY --chown=app:app --from=ghcr.io/grpc-ecosystem/grpc-health-probe:v0.4.25"
+            + " /ko-app/grpc-health-probe /bin/grpc_health_probe",
+        "  copy --from=ghcr.io/devops-thiago/nginx-conf:1.2.0 /etc/nginx /etc/nginx",
+        "COPY --from=registry.example.com:5000/tools/permit-healthcheck:1.4.0 /hc /hc",
+        "COPY --from=alpine@sha256:0123abcd /bin/sh /bin/sh"
+      })
+  void anUnpinnedFindingOnAVersionedCopyFromSourceIsDropped(String anchoredLine) {
+    var raw =
+        new ReviewResponse.Finding(
+            "medium",
+            "medium",
+            "java/Dockerfile",
+            11,
+            "External image referenced by a mutable tag, no digest",
+            "The COPY --from source image is not pinned to a digest, so the build inputs can"
+                + " change: busybox, grpc-health-probe, nginx-conf, permit-healthcheck and alpine"
+                + " all carry a tag.",
+            null,
+            null);
+
+    ReviewResponse calibrated =
+        SeverityCalibrator.calibrate(
+            response(raw), (file, line) -> line == 11 ? anchoredLine : null);
+
+    assertEquals(List.of(), calibrated.findings());
+    assertEquals(0, calibrated.summary().totalFindings());
+  }
+
+  /** Without the diff's line, the finding's own quote of it is read. */
+  @Test
+  void theSuggestionOldNamesTheAnchoredLineWhenTheDiffDoesNot() {
+    var raw =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            "csharp/Dockerfile",
+            10,
+            "permit-healthcheck image is not pinned by digest",
+            "ghcr.io/devops-thiago/permit-healthcheck:1.4.0 carries no digest, so the image can"
+                + " change.",
+            "COPY --from=ghcr.io/devops-thiago/permit-healthcheck:1.4.0 /hc /usr/local/bin/hc\n"
+                + "USER app",
+            null);
+
+    assertEquals(List.of(), SeverityCalibrator.calibrate(response(raw)).findings());
+    assertEquals(
+        List.of(), SeverityCalibrator.calibrate(response(raw), (file, line) -> "  ").findings());
+  }
+
+  /**
+   * Only a versioned external source drops the finding: a stage name, an untagged or latest image,
+   * an ARG-built tag, and a base image named by a version all stay, at the reference class's grade.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "COPY --from=build /app/dist /app/dist",
+        "COPY --from=busybox /bin/busybox /bin/busybox",
+        "COPY --from=busybox:latest /bin/busybox /bin/busybox",
+        "COPY --from=tools:${TOOLS_VERSION} /bin/tool /bin/tool",
+        "COPY --from=tools:${BUILD_2} /bin/tool /bin/tool",
+        "COPY --chown=app:app ./dist /app",
+        "FROM golang:1.22 AS build",
+        "COPY"
+      })
+  void anUnpinnedFindingOnAnyOtherLineIsKeptAtLow(String anchoredLine) {
+    var raw =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            "go/Dockerfile",
+            1,
+            "Base images pinned by mutable tags",
+            UNPINNED_NODE,
+            null,
+            null);
+
+    var calibrated =
+        SeverityCalibrator.calibrate(response(raw), (file, line) -> anchoredLine).findings();
+
+    assertEquals(1, calibrated.size());
+    assertGrade(calibrated.get(0), "low", "medium");
+  }
+
+  /**
+   * A finding about another reference whose anchor landed on the COPY --from line names no image of
+   * that line, so it is kept: the drop is for the image the finding is about.
+   */
+  @Test
+  void anUnpinnedBaseImageFindingAnchoredOnTheCopyLineIsKept() {
+    var misanchored =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            "Dockerfile",
+            2,
+            "Base image is unpinned",
+            "FROM node:20-alpine is an unpinned base image, so the build is not reproducible.",
+            null,
+            null);
+
+    var calibrated =
+        SeverityCalibrator.calibrate(
+                response(misanchored),
+                (file, line) -> "COPY --from=busybox:1.36 /bin/busybox /bin/busybox")
+            .findings();
+
+    assertEquals(1, calibrated.size());
+    assertGrade(calibrated.get(0), "low", "medium");
+  }
+
+  /** The drop is for the reference class only: another class on a COPY --from line keeps it. */
+  @Test
+  void anotherClassOnAVersionedCopyFromLineIsKept() {
+    var raw = finding("low", "low", "Dockerfile", NO_USER_CSHARP);
+
+    var calibrated =
+        SeverityCalibrator.calibrate(
+                response(raw), (file, line) -> "COPY --from=busybox:1.36 /bin/busybox /bin/busybox")
+            .findings();
+
+    assertEquals(1, calibrated.size());
+    assertGrade(calibrated.get(0), "medium", "medium");
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "busybox:1.36,true",
+    "ghcr.io/acme/tool:v0.4.25,true",
+    "'\"busybox:1.36\"',true",
+    "alpine@sha256:abc,true",
+    "registry:5000/tools,false",
+    "tools:edge,false",
+    "build,false",
+    "busybox:LATEST,false"
+  })
+  void aVersionIsAnExplicitTagWithADigitOrADigest(String source, boolean versioned) {
+    assertEquals(versioned, SeverityCalibrator.isVersionedExternalImage(source));
   }
 }

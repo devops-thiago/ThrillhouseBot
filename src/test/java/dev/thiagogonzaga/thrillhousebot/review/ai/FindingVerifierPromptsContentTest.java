@@ -256,6 +256,14 @@ class FindingVerifierPromptsContentTest {
         "absence has two causes and the prompt must not name only one of them (#475 review)");
     assertContains(
         sys,
+        "the CI checks this commit had already failed that the finding cites",
+        "a finding tied to a failing check must reach the verifier with that check (#952)");
+    assertContains(
+        sys,
+        "that check failing on\n  this commit is established",
+        "a failure CI reported is not an unsettled test-failure claim to demote (#952)");
+    assertContains(
+        sys,
         "That is the general rule for every context section",
         "the next context dimension must follow this pattern rather than add a slot (#475)");
   }

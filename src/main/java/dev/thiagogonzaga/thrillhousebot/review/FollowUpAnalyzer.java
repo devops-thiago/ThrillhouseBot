@@ -501,8 +501,9 @@ public class FollowUpAnalyzer {
    * to an <em>earlier, unrelated</em> round's same-index thread (F2 — the sibling defect of F5):
    *
    * <ol>
-   *   <li>the finding's own {@code finding=N} thread ({@code requireOwnContent}: its title, or its
-   *       description when it has no title, in the comment) — the unambiguous match;
+   *   <li>the finding's own {@code finding=N} thread ({@link #markerRootComment}: its key, or for a
+   *       marker posted before #927 its title, or its description when it has no title, in the
+   *       comment) — the unambiguous match;
    *   <li>otherwise, when a {@code finding=N} comment <em>does</em> exist on the file it belongs to
    *       a different finding (the index recurs across rounds), so nothing binds rather than
    *       binding to it;
@@ -515,49 +516,88 @@ public class FollowUpAnalyzer {
       int findingId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity) {
-    Long own = markerRootComment(finding, findingId, true, inlineComments, botIdentity);
+    Long own = markerRootComment(finding, findingId, inlineComments, botIdentity);
     if (own != null) {
       return own;
     }
-    if (markerRootComment(finding, findingId, false, inlineComments, botIdentity) != null) {
+    if (positionMarkedOnFile(finding, findingId, inlineComments, botIdentity)) {
       return null;
     }
     return rootCommentByTitle(finding, inlineComments, botIdentity);
   }
 
   /**
-   * The newest bot root comment on the finding's file carrying its {@code findingId} marker, or
-   * {@code null} when none does. Markers reuse the same indices every review round, so a PR with
-   * several rounds carries several comments with this exact marker; restricting to the finding's
-   * file and taking the newest match binds the latest round's findings to their own threads, not a
-   * previous round's thread that happens to share the index. Title-independent, so it locates a
-   * null-title finding's thread that {@link #rootCommentsByTitle} cannot.
+   * The newest bot root comment on the finding's file that is the finding's own: it carries the
+   * finding's {@code findingId} marker and is its comment ({@link #isOwnComment}), or {@code null}
+   * when none is. Markers reuse the same indices every review round, so a PR with several rounds
+   * carries several comments with the same position; restricting to the finding's file and taking
+   * the newest match binds the latest round's findings to their own threads. Title-independent for
+   * a keyed marker, so it locates a null-title finding's thread that {@link #rootCommentsByTitle}
+   * cannot.
    *
-   * <p>The newest-match heuristic alone is not enough when the finding had <em>no</em> thread of
-   * its own that round (its line was outside the diff, so it was summary-only): the newest {@code
+   * <p>Position and file alone are not enough when the finding had <em>no</em> thread of its own
+   * that round (its line was outside the diff, so it was summary-only): the newest {@code
    * finding=N} comment on the file can then be an <em>earlier, unrelated</em> round's finding that
-   * happens to reuse index {@code N}. {@code requireOwnContent} closes that gap for the
-   * safety-critical clearing decision — when set, a match must also carry the finding's own content
-   * ({@link #bodyCarriesOwnContent}: its title in the comment header, or its description when it
-   * has no title), so a thread-less finding cannot bind to a different finding's same-index thread.
-   * A finding with neither title nor description matches nothing under {@code requireOwnContent},
-   * so the caller holds rather than risks an over-clear.
+   * reused index {@code N}. So a match must also be the finding's own comment: a keyed marker by
+   * its key alone, a marker posted before #927 by the finding's own content ({@link
+   * #bodyCarriesOwnContent}: its title in the comment header, or its description when it has no
+   * title). A pre-key finding with neither title nor description matches nothing, so the caller
+   * holds rather than risks an over-clear.
    */
   private static Long markerRootComment(
       ReviewResponse.Finding finding,
       int findingId,
-      boolean requireOwnContent,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity) {
-    String marker = SuggestionFormatter.findingMarker(findingId);
-    var markerMatches =
-        botRootComments(inlineComments, botIdentity)
-            .filter(c -> c.body() != null && c.body().contains(marker))
-            .filter(c -> finding.file() == null || FilePaths.same(finding.file(), c.path()))
-            .filter(c -> !requireOwnContent || bodyCarriesOwnContent(finding, c.body()))
+    var key = SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title());
+    var own =
+        markedOnFile(finding, findingId, inlineComments, botIdentity)
+            .filter(c -> isOwnComment(finding, key, c.body()))
             .map(GitHubReviewClient.PullRequestComment::id)
             .toList();
-    return markerMatches.isEmpty() ? null : markerMatches.get(markerMatches.size() - 1);
+    return own.isEmpty() ? null : own.get(own.size() - 1);
+  }
+
+  /**
+   * Whether any bot root comment on the finding's file carries its {@code findingId} position,
+   * whoever's it is. Never a binding: the callers ask it only after {@link #markerRootComment}
+   * found no own comment, and a {@code true} then means the position belongs to another finding (a
+   * keyed one with a different key, or a pre-key one without this finding's content), so the title
+   * scan for pre-marker comments must not run and bind this finding to it.
+   */
+  private static boolean positionMarkedOnFile(
+      ReviewResponse.Finding finding,
+      int findingId,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity) {
+    return markedOnFile(finding, findingId, inlineComments, botIdentity).findAny().isPresent();
+  }
+
+  /**
+   * Bot root comments on the finding's file whose marker carries {@code findingId}, oldest first.
+   */
+  private static java.util.stream.Stream<GitHubReviewClient.PullRequestComment> markedOnFile(
+      ReviewResponse.Finding finding,
+      int findingId,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity) {
+    return botRootComments(inlineComments, botIdentity)
+        .filter(c -> c.body() != null)
+        .filter(c -> SuggestionFormatter.parseFindingMarker(c.body()).orElse(-1) == findingId)
+        .filter(c -> finding.file() == null || FilePaths.same(finding.file(), c.path()));
+  }
+
+  /**
+   * Whether a comment carrying the finding's position is its own. A marker posted since #927
+   * carries a key over the finding's file, line and title, which is unique across rounds: it
+   * decides alone, and a different key is a different finding that reused the position. A marker
+   * posted before carries none, and the finding's own content in the body decides ({@link
+   * #bodyCarriesOwnContent}).
+   */
+  private static boolean isOwnComment(ReviewResponse.Finding finding, String key, String body) {
+    return SuggestionFormatter.parseFindingKey(body)
+        .map(key::equals)
+        .orElseGet(() -> bodyCarriesOwnContent(finding, body));
   }
 
   /**
@@ -622,10 +662,11 @@ public class FollowUpAnalyzer {
    * a reply on a same-title sibling's thread (a different index) from clearing this finding.
    *
    * <p>Because clearing the hold is the dangerous direction (over-clearing re-introduces the silent
-   * approve-over-open), the marked thread is resolved with {@code requireOwnContent}: a thread-less
-   * finding (no inline comment that round) must not bind to an earlier round's <em>different</em>
-   * finding that merely reuses index {@code N} on the same file and was answered. The content key
-   * is the finding's title in the comment header, or its description when it has no title — so a
+   * approve-over-open), the marked thread must be the finding's own ({@link #markerRootComment}): a
+   * thread-less finding (no inline comment that round) must not bind to an earlier round's
+   * <em>different</em> finding that merely reuses index {@code N} on the same file and was
+   * answered. A keyed marker decides by its key; for a marker posted before #927 the content key is
+   * the finding's title in the comment header, or its description when it has no title — so a
    * null-title finding is matched by its own description rather than the recurring marker alone.
    *
    * <p>When no own-content match is found but a {@code finding=N} comment <em>does</em> exist on
@@ -639,11 +680,11 @@ public class FollowUpAnalyzer {
       int findingId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity) {
-    Long own = markerRootComment(finding, findingId, true, inlineComments, botIdentity);
+    Long own = markerRootComment(finding, findingId, inlineComments, botIdentity);
     if (own != null) {
       return hasHumanReply(own, inlineComments, botIdentity) ? own : null;
     }
-    if (markerRootComment(finding, findingId, false, inlineComments, botIdentity) != null) {
+    if (positionMarkedOnFile(finding, findingId, inlineComments, botIdentity)) {
       return null;
     }
     return answeredRootComment(finding, inlineComments, botIdentity);
@@ -1777,16 +1818,16 @@ public class FollowUpAnalyzer {
   /**
    * Whether a maintainer cleared this finding with a clear directive replied on its own thread
    * (#1066): a write-capable, non-bot reply that uses the directive ({@link #isClearDirective}) on
-   * the thread located by the finding's marker and own content ({@link #markerRootComment} with
-   * {@code requireOwnContent}), naming no other finding ({@link #threadDirectiveNamesItsFinding}).
-   * A thread found by title alone is not enough: clearing is the dangerous direction.
+   * the thread located by the finding's marker and own key or content ({@link #markerRootComment}),
+   * naming no other finding ({@link #threadDirectiveNamesItsFinding}). A thread found by title
+   * alone is not enough: clearing is the dangerous direction.
    */
   private static boolean clearedOnOwnThread(
       ReviewResponse.Finding finding,
       int findingId,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
       BotIdentity botIdentity) {
-    var root = markerRootComment(finding, findingId, true, inlineComments, botIdentity);
+    var root = markerRootComment(finding, findingId, inlineComments, botIdentity);
     if (root == null) {
       return false;
     }
@@ -3841,22 +3882,21 @@ public class FollowUpAnalyzer {
 
   /**
    * The root of a settled cluster's own review thread, so the thread is resolved with it (#1066):
-   * {@code preferred}'s thread located by its marker and own content ({@link #markerRootComment}
-   * with {@code requireOwnContent}, no reply required), else the first other member's, else {@code
-   * null}. One defect raised in two rounds may have a thread per round; the status carries one.
+   * {@code preferred}'s thread located by its marker and own key or content ({@link
+   * #markerRootComment}, no reply required), else the first other member's, else {@code null}. One
+   * defect raised in two rounds may have a thread per round; the status carries one.
    */
   private static Long clusterThreadRoot(
       List<OpenFinding> cluster, OpenFinding preferred, BackstopInputs in) {
     var own =
         markerRootComment(
-            preferred.finding(), preferred.id(), true, in.inlineComments(), in.botIdentity());
+            preferred.finding(), preferred.id(), in.inlineComments(), in.botIdentity());
     if (own != null) {
       return own;
     }
     for (var member : cluster) {
       var root =
-          markerRootComment(
-              member.finding(), member.id(), true, in.inlineComments(), in.botIdentity());
+          markerRootComment(member.finding(), member.id(), in.inlineComments(), in.botIdentity());
       if (root != null) {
         return root;
       }
@@ -3866,14 +3906,13 @@ public class FollowUpAnalyzer {
 
   /**
    * The root of the thread a standing decline was written on when it is the answered finding's own
-   * thread by marker and content ({@link #markerRootComment} with {@code requireOwnContent}), else
-   * {@code null}. A thread found only by the title scan for pre-marker comments is not resolved or
-   * learned from on that evidence alone (#958).
+   * thread by marker and own key or content ({@link #markerRootComment}), else {@code null}. A
+   * thread found only by the title scan for pre-marker comments is not resolved or learned from on
+   * that evidence alone (#958).
    */
   private static Long ownThreadRoot(OpenFinding answered, Long answeredRoot, BackstopInputs in) {
     var own =
-        markerRootComment(
-            answered.finding(), answered.id(), true, in.inlineComments(), in.botIdentity());
+        markerRootComment(answered.finding(), answered.id(), in.inlineComments(), in.botIdentity());
     return answeredRoot.equals(own) ? own : null;
   }
 
