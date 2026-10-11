@@ -1024,6 +1024,8 @@ class PromptLabelScrubberTest {
           the findings from this batch | the findings
           There are no findings in this batch yet. | There are no findings yet.
           There are no issues in this batch yet. | There are no issues yet.
+          + BedReporter... rather, grep confirms it. | + Grep confirms it.
+          Done. - BedReporter... rather, grep confirms it. | Done. - Grep confirms it.
           BedReporter... Rather, grep confirms it. | Grep confirms it.
           It fails. Main… Actually, the handler reads it. | It fails. The handler reads it.
           It fails. `foo.bar()`... rather, grep confirms it. | It fails. Grep confirms it.
@@ -1082,6 +1084,11 @@ class PromptLabelScrubberTest {
         "It calls `foo.bar()`... rather, grep confirms it.",
         "`foo.bar()`... however, grep confirms it.",
         "It fails fast... rather, it surfaces the error to the caller.",
+        // A dotted token mid-clause is part of that clause, not a broken-off start.
+        "It calls foo.bar()... rather, grep confirms it.",
+        // Two stacked markers, or an ordered one, are not the single marker a restart may follow.
+        "> * BedReporter... rather, grep confirms it.",
+        "1) BedReporter... rather, grep confirms it.",
         "The retry helps... actually, it makes things worse.",
         "(line 24 — waits for the lock)"
       })
