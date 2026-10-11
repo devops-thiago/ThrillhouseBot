@@ -64,15 +64,15 @@ same diff.
 | Fence untrusted input, build review and summary guidance, pick the system prompt | `review/ReviewPromptAssembler` (with `PromptSections`, `PromptTemplateEscaper`, `ReviewDimensionRouter`) |
 | Token budget and batches | `review/DiffBudgetPlanner` (`plan`, `boundPreviousFindings`, `perCallInputBudget`) |
 | Model calls: single call, batches, retries, sequential retry, truncation salvage, summary call | `review/FindingPipeline.run` → `review/ai/AiReviewService` (`review`, `reviewBatch`, `summarize`) |
-| Post-model chain, single call, in order: evidence, quote validation, framework filter, dedupe, rejection memory, verifier, remember verdicts (`FindingScreen.screenSingleCall`), then severity calibration, replied-duplicate and litigated drops, anchors and the diff's path spelling (#1022) | `review/FindingPipeline.refine` over `review/FindingScreen` |
-| Post-model chain, multi call: per batch evidence, quote validation, framework filter, rejection memory, verifier, remember verdicts (`refineBatchOutcome` → `FindingScreen.screenBatch`); after all batches status merge, dedupe, replied-duplicate and litigated drops, anchors and the diff's path spelling. No severity calibration on this lane | `review/FindingPipeline.runMultiCall` |
+| Post-model chain, single call, in order: evidence, quote validation, framework filter, dedupe, rejection memory, verifier, remember verdicts (`FindingScreen.screenSingleCall`), then severity calibration, replied-duplicate and litigated drops, anchors and the changed file a mistyped path names (`DiffLineResolver.diffPathFor`: case, then a unique path suffix, then a unique file name; #1022, #945) | `review/FindingPipeline.refine` over `review/FindingScreen` |
+| Post-model chain, multi call: per batch evidence, quote validation, framework filter, rejection memory, verifier, remember verdicts (`refineBatchOutcome` → `FindingScreen.screenBatch`); after all batches status merge, dedupe, replied-duplicate and litigated drops, anchors and the mapped path. No severity calibration on this lane | `review/FindingPipeline.runMultiCall` |
 | Per-call screen stages: one `FindingStage` per step over an immutable `ScreeningContext`; each lane is an explicit ordered stage list built in the `FindingScreen` constructor (the batch list omits dedupe), pinned by `FindingScreenTest` | `review/FindingScreen` over `EvidenceStage`, `QuoteValidationStage`, `FrameworkFilterStage`, `DedupeStage`, `RejectionScreenStage`, `VerificationStage`, `RememberVerdictsStage` |
 | Verifier | `review/ai/FindingVerificationService`, evidence from `review/ContextEvidenceResolver` and `review/CitedLocationResolver` |
 | Last steps on every lane, including the one with no review call: the always-on drop of model secret findings on a line that assigns only an interpolation or a placeholder (#926), the opt-in deterministic security scan (secrets, risky IaC), then the open-thread duplicate guard (#939) | `review/FindingPipeline.finish` → `review/SecurityScan.withoutStandInSecrets` (`SecretScanner.assignsOnlyStandIns`) → `review/SecurityScan.merge` (rules in `SecurityRule`, detection in `SecretScanner` and `IacScanner` over `PatchLines`) → `FollowUpAnalyzer.withoutOpenThreadDuplicates` |
 | Summary call, carried description gaps, reused overview, prompt-label scrub, persistence | `review/FindingPipeline.withSummary` (with `DescriptionGapCarryover`, `PriorOverviewCarryover`, `PromptLabelScrubber`), `persistWithSummary` |
 | Follow-up status reconciliation, in order: supersede, decline re-check, conversation clears, phantom ids, double-check replacement, approval backstop, still-open set | `review/VerdictBuilder.build` over `FollowUpAnalyzer` (`supersedeVanished`, `recheckDeclines`, `clearNamedInConversation`, `withoutPhantomUnresolved`, `replacedPriors`, `heldPreviousFindings`, `stillOpenFindings`) |
 | Verdict and check-run text | `review/VerdictBuilder.buildResult` |
-| Post review, inline comments, thread resolution | `review/ReviewPublisher`, `review/CheckRunManager` |
+| Post review, inline comments, thread resolution. A finding on a path the pull request does not change (`DiffLineResolver.isChangedFile`, over every changed file, patch or not) is listed in the review body without trying a route (#925) | `review/ReviewPublisher`, `review/CheckRunManager` |
 | Summary comment: render over the round plus the still-open set, edit in place by marker | `review/PrSummaryGenerator` (`currentState`), `review/ReviewPublisher.publishSummary` / `upsertSummaryComment` |
 | CI hold and revisit | `review/CiHoldRegistry`, `review/CiHoldRevisit` |
 | Opt-in review learnings: capture after the post, from the round's final statuses | `review/ReviewLearnings.captureSurvivingDeclines` → `review/FollowUpAnalyzer.survivingDeclines` → `review/ReviewLearningService.save` |
@@ -214,9 +214,11 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
   prefix. The verifier's carve-outs follow the same switch:
   `FindingVerificationService.verifierSystemPrompt` routes them by the files its candidates are
   anchored in (`ReviewDimensionRouter.dimensionsForPaths`).
-- The system prompt reaches the model as a `@V("reviewSystemPrompt")` parameter
-  (`PrReviewer.reviewStream`, `@SystemMessage("{{reviewSystemPrompt}}")`) carried by
-  `AiReviewService.PromptInputs.reviewSystemPrompt` (null reads as `SYSTEM`). The assembler sets
+- The review call's one template variable is the `AiReviewService.PromptInputs` record, bound as
+  `@V("inputs")` on `PrReviewer.reviewStream` (#993); `PrReviewPrompts.USER` reads its components
+  as `{{inputs.diff}}` and so on. The record is `@TemplateData` so the native image resolves them
+  without reflection. The system prompt reaches the model the same way
+  (`@SystemMessage("{{inputs.reviewSystemPrompt}}")`, null reads as `SYSTEM`). The assembler sets
   the whole PR's prompt, the planner sizes the overhead from it, and the pipeline narrows it per
   batch. A batch's prompt is never larger than the PR's.
 - A new dimension needs a block, a `ReviewDimension` constant, a router rule and a must-find eval
@@ -237,7 +239,7 @@ Two patterns. Pick the first unless the section must sit somewhere else in the u
    `patchCoverageSection`, `ciFailuresSection`, `learningsSection`). Every batch carries the slot,
    and `DiffBudgetPlanner.plan` already counts it as shared overhead
    (`DiffBudgetPlannerTest.ciFailuresLinkedIssuesAndLearningsTogetherAreAllChargedToTheSharedOverhead`).
-   No new `@V`, record component of `PromptInputs` or planner change is needed. Guidance for the
+   No new record component of `PromptInputs` or planner change is needed. Guidance for the
    summary call goes in `summaryInstructions` instead, which `FindingPipeline` counts when it clamps
    the summary input.
    A section can ride both slots with a different request in each: the linked-issue section
@@ -249,12 +251,13 @@ Two patterns. Pick the first unless the section must sit somewhere else in the u
    `FindingPipeline.BatchPrompts.forBatch`, as `heuristicFailureModesFor` does. That addition is
    not in the planned overhead, so keep it a small fixed constant the token safety margin absorbs.
 2. **A new template variable (lockstep).** A section that needs its own `{{#if}}` block in
-   `PrReviewPrompts.USER` changes all of these in one diff: the prompt constant, the `@V`
-   parameter on `PrReviewer.reviewStream`, a `PromptInputs` component (and its convenience
-   constructors), `AiReviewService.reviewStream`, `ReviewPromptAssembler.assemble`,
+   `PrReviewPrompts.USER` changes all of these in one diff: the prompt constant (read as
+   `{{inputs.<component>}}`), a `PromptInputs` component (and its convenience constructors),
+   `ReviewPromptAssembler.assemble`,
    the other places that rebuild the record (`DiffBudgetPlanner.boundPreviousFindings`,
    `FindingPipeline.BatchPrompts.withDiff`), and the `sharedOverhead` sum in
-   `DiffBudgetPlanner.plan`. Add the variable to `AiServicePromptRenderingTest`.
+   `DiffBudgetPlanner.plan`. Add the variable to `AiServicePromptRenderingTest`, including the
+   byte-for-byte rendering check.
 
 The verifier does not see review-call context. If a finding raised from the new section must
 survive verification, attach the supporting material per finding through
