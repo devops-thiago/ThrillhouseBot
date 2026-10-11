@@ -739,6 +739,24 @@ class PrReviewPromptsContentTest {
         "the learning id must not reach review text (#950)");
   }
 
+  /**
+   * #979: a parser of a known format is probed with that format's own special lines; the unified
+   * diff's no-newline marker was missed on every sample when the request only spoke of "a line with
+   * no trailing newline".
+   */
+  @Test
+  void heuristicRequestProbesAFormatsOwnSpecialLines() {
+    String req = PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST;
+    assertContains(
+        req,
+        "list that format's own special lines and run\n  each through the rule",
+        "a format parser must be probed with the format's special lines (#979)");
+    assertContains(
+        req,
+        "\"\\ No newline at end of file\" marker",
+        "the unified diff's no-newline marker is the probe pr100 needs (#979)");
+  }
+
   @Test
   void patchCoverageRequestMakesUntestedChangedLogicReportable() {
     String req = PrReviewPrompts.PATCH_COVERAGE_REQUEST;

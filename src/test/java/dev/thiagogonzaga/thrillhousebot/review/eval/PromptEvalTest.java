@@ -18,15 +18,17 @@ package dev.thiagogonzaga.thrillhousebot.review.eval;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.review.EvalTrailingGuidance;
 import dev.thiagogonzaga.thrillhousebot.review.PromptSections;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
-import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewer;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponseParser;
+import io.quarkus.logging.Log;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import java.util.List;
@@ -75,6 +77,7 @@ class PromptEvalTest {
   private static final int SAMPLES = Integer.getInteger("eval.samples", 3);
   private static final int TOLERATED = Integer.getInteger("eval.tolerated", 0);
   private static final long SAMPLE_TIMEOUT_MINUTES = 10;
+  private static final int PARSE_ATTEMPTS = 3;
 
   @Inject FindingVerificationService findingVerificationService;
   @Inject PrReviewer prReviewer;
@@ -118,6 +121,7 @@ class PromptEvalTest {
           .append(")\n");
     }
 
+    Log.infof("Prompt eval report:%n%s", report);
     assertTrue(
         failed <= TOLERATED,
         "Prompt eval regressions: "
@@ -178,50 +182,62 @@ class PromptEvalTest {
    * target file mentions one of the case's keywords ("must-find" / "must-not-find").
    */
   private String generatorOutcome(EvalCase evalCase) throws Exception {
-    var raw = new CompletableFuture<String>();
-    // Mirror production trailing guidance for mock-fidelity cases: when the fixture diff
-    // changes tests, inject MOCK_FIDELITY_REQUEST so the live eval exercises the same block
-    // ReviewPromptAssembler adds on the review path.
+    // The changed test files, newline-separated, as the assembler lists them for the review call.
     var relatedTests =
-        evalCase.diff().contains("Test.java")
-            ? "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java"
-            : "";
-    // Same for a case that pins patch-coverage behavior (#115): the guidance and the
-    // uncovered-line list travel together, exactly as ReviewPromptAssembler sends them.
-    var coverage = orEmpty(evalCase.spec().patchCoverage());
+        EvalTrailingGuidance.relatedTests(
+            evalCase.files().stream().map(GitHubPullRequestClient.FileDiff::filename).toList());
+    // The trailing guidance a review of this diff carries (#979): mock fidelity when tests changed,
+    // bug-fix efficacy when the body declares a fix, the heuristic failure-mode request when the
+    // added lines introduce a parsing or matching rule, and the patch-coverage list (#115).
     var repoInstructions =
-        joinSections(
-            relatedTests.isBlank() ? "" : PrReviewPrompts.MOCK_FIDELITY_REQUEST,
-            coverage.isBlank()
-                ? ""
-                : PrReviewPrompts.PATCH_COVERAGE_REQUEST
-                    + "\n\n"
-                    + PromptTemplateEscaper.escape(coverage));
-    prReviewer
-        .reviewStream(
-            new AiReviewService.PromptInputs(
-                PromptTemplateEscaper.fence(evalCase.diff()),
-                PromptTemplateEscaper.escape(
-                    PromptSections.prContext(
-                        orEmpty(evalCase.spec().prTitle()),
-                        orEmpty(evalCase.spec().prDescription()))),
-                "",
-                "",
-                PromptTemplateEscaper.escape(relatedTests),
-                "",
-                repoInstructions,
-                "",
-                dimensionRouter.systemPromptFor(evalCase.files())))
-        .onPartialResponse(token -> {})
-        .onCompleteResponse(response -> raw.complete(response.aiMessage().text()))
-        .onError(raw::completeExceptionally)
-        .start();
-    var parsed = reviewResponseParser.parse(raw.get(SAMPLE_TIMEOUT_MINUTES, TimeUnit.MINUTES));
+        EvalTrailingGuidance.forCase(
+            evalCase.diff(),
+            relatedTests,
+            orEmpty(evalCase.spec().prDescription()),
+            orEmpty(evalCase.spec().patchCoverage()));
+    var inputs =
+        new AiReviewService.PromptInputs(
+            PromptTemplateEscaper.fence(evalCase.diff()),
+            PromptTemplateEscaper.fence(
+                PromptSections.prContext(
+                    orEmpty(evalCase.spec().prTitle()), orEmpty(evalCase.spec().prDescription()))),
+            "",
+            "",
+            PromptTemplateEscaper.fence(relatedTests),
+            "",
+            repoInstructions,
+            "",
+            dimensionRouter.systemPromptFor(evalCase.files()));
+    var parsed = review(inputs);
     var found =
         parsed.findings().stream()
             .anyMatch(
                 finding -> targetsCase(evalCase, finding) && mentionsKeyword(evalCase, finding));
     return found ? EvalCase.MUST_FIND : EvalCase.MUST_NOT_FIND;
+  }
+
+  /**
+   * One review call, parsed. A response that is not review JSON is asked for again, up to {@link
+   * #PARSE_ATTEMPTS} times, as {@code AiReviewService} retries it in production: one stray prose
+   * answer used to abort the whole run, losing every sample already taken. A sample that never
+   * parses counts as a review that found nothing.
+   */
+  private ReviewResponse review(AiReviewService.PromptInputs inputs) throws Exception {
+    for (var attempt = 1; attempt <= PARSE_ATTEMPTS; attempt++) {
+      var raw = new CompletableFuture<String>();
+      prReviewer
+          .reviewStream(inputs)
+          .onPartialResponse(token -> {})
+          .onCompleteResponse(response -> raw.complete(response.aiMessage().text()))
+          .onError(raw::completeExceptionally)
+          .start();
+      try {
+        return reviewResponseParser.parse(raw.get(SAMPLE_TIMEOUT_MINUTES, TimeUnit.MINUTES));
+      } catch (IllegalArgumentException e) {
+        Log.infof("Eval sample attempt %d was not review JSON; retrying", attempt);
+      }
+    }
+    return new ReviewResponse(List.of(), List.of(), null);
   }
 
   private static boolean targetsCase(EvalCase evalCase, ReviewResponse.Finding finding) {
@@ -239,13 +255,5 @@ class PromptEvalTest {
 
   private static String orEmpty(String value) {
     return value == null ? "" : value;
-  }
-
-  /** Blank-dropping join, mirroring {@code ReviewPromptAssembler.combineSections}. */
-  private static String joinSections(String first, String second) {
-    if (first.isBlank()) {
-      return second;
-    }
-    return second.isBlank() ? first : first + "\n\n" + second;
   }
 }
