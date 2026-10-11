@@ -819,10 +819,17 @@ public class DiffBudgetPlanner {
     // key throws. Unnamed last: packing is impact-descending, so whatever sorts last is what the
     // bin cap omits first, and a degenerate entry must never displace a well-formed file — a
     // finding on a file the model cannot name has no path to anchor an inline comment to anyway.
+    // Build manifests go first (#935): they are small, so impact-descending packing put them last,
+    // where the bin cap omits first, yet they decide what the build produces — the proof of a
+    // Dockerfile copying a jar the pom never builds sits in the pom.
     ordered.sort(
-        Comparator.comparingInt(
-                (GitHubPullRequestClient.FileDiff f) -> f.additions() + f.deletions())
-            .reversed()
+        Comparator.comparing(
+                (GitHubPullRequestClient.FileDiff f) ->
+                    !ReviewDiffFormatter.isBuildManifest(f.filename()))
+            .thenComparing(
+                Comparator.comparingInt(
+                        (GitHubPullRequestClient.FileDiff f) -> f.additions() + f.deletions())
+                    .reversed())
             .thenComparing(
                 GitHubPullRequestClient.FileDiff::filename,
                 Comparator.nullsLast(Comparator.naturalOrder())));
