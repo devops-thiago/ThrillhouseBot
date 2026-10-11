@@ -2867,6 +2867,21 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.Finding> previous,
       List<ReviewResponse.PreviousFindingStatus> statuses,
       List<HeldPrevious> held) {
+    return stillOpenFindings(previous, statuses, held, Map.of());
+  }
+
+  /**
+   * As {@link #stillOpenFindings(List, List, List)}, listing each item this round replaced ({@code
+   * replacedNow}, {@link #replacedThisRound}) as its replacement (#969). The summary folds an entry
+   * equal to one of the round's findings into it ({@code PrSummaryGenerator#currentState}), so the
+   * replacement is listed and counted once, marked open since an earlier review, and the "Still
+   * present" count still matches the list.
+   */
+  public static List<Finding> stillOpenFindings(
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      List<HeldPrevious> held,
+      Map<ReviewResponse.Finding, ReviewResponse.Finding> replacedNow) {
     var unresolvedIds =
         statuses.stream()
             .filter(status -> STATUS_UNRESOLVED.equalsIgnoreCase(status.status()))
@@ -2876,6 +2891,7 @@ public class FollowUpAnalyzer {
     return Stream.concat(
             unresolvedIds.stream().map(id -> previous.get(id - 1)),
             held.stream().filter(HeldPrevious::holdsOpen).map(HeldPrevious::finding))
+        .map(finding -> replacedNow.getOrDefault(finding, finding))
         .map(Finding::fromAiResponse)
         .toList();
   }
@@ -3252,17 +3268,99 @@ public class FollowUpAnalyzer {
       List<ReviewResponse.Finding> previous,
       List<ReviewResponse.PreviousFindingStatus> statuses,
       Set<ReviewResponse.Finding> replaced) {
+    return withoutReplaced(previous, statuses, replaced, Map.of());
+  }
+
+  /**
+   * As {@link #withoutReplaced(List, List, Set)}, except that an item this round's own finding
+   * replaced ({@code replacedNow}, {@link #replacedThisRound}) keeps an {@code unresolved} status
+   * under {@link #REPLACED_NOTE} (#969): it was carried into this round, so the status table counts
+   * it as still present, carried by its replacement, and its buckets add up to the findings carried
+   * in. {@link #stillOpenFindings} lists the replacement in its place, once.
+   */
+  public static List<ReviewResponse.PreviousFindingStatus> withoutReplaced(
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      Set<ReviewResponse.Finding> replaced,
+      Map<ReviewResponse.Finding, ReviewResponse.Finding> replacedNow) {
     if (replaced.isEmpty()) {
       return statuses;
     }
-    return statuses.stream()
-        .filter(
-            status ->
-                !STATUS_UNRESOLVED.equalsIgnoreCase(status.status())
-                    || status.id() < 1
-                    || status.id() > previous.size()
-                    || !replaced.contains(previous.get(status.id() - 1)))
-        .toList();
+    var kept = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
+    for (var status : statuses) {
+      var id = status.id();
+      var finding =
+          STATUS_UNRESOLVED.equalsIgnoreCase(status.status()) && id >= 1 && id <= previous.size()
+              ? previous.get(id - 1)
+              : null;
+      if (finding == null || !replaced.contains(finding)) {
+        kept.add(status);
+      } else if (replacedNow.containsKey(finding)) {
+        kept.add(new ReviewResponse.PreviousFindingStatus(id, STATUS_UNRESOLVED, REPLACED_NOTE));
+      }
+    }
+    return kept;
+  }
+
+  /**
+   * A backstop entry once replacement is applied (#951, #969): the entry as it is when its finding
+   * was not replaced; its hold under {@link #REPLACED_NOTE} when this round's own finding replaced
+   * it, so the status table still counts it; {@code null} when a finding replaced it otherwise,
+   * since the replacing finding counts it.
+   */
+  public static HeldPrevious carriedByReplacement(
+      HeldPrevious hold,
+      Set<ReviewResponse.Finding> replaced,
+      Map<ReviewResponse.Finding, ReviewResponse.Finding> replacedNow) {
+    if (!replaced.contains(hold.finding())) {
+      return hold;
+    }
+    if (!hold.holdsOpen() || !replacedNow.containsKey(hold.finding())) {
+      return null;
+    }
+    return new HeldPrevious(hold.status().withNote(REPLACED_NOTE), hold.finding());
+  }
+
+  /**
+   * Note on the status of a double-check item this round raised again as a new finding (#969). The
+   * item stays open, as that finding, so it is still present; it is counted once, listed once.
+   */
+  static final String REPLACED_NOTE =
+      "Raised again in this round as a new finding, which carries it; counted once, as that"
+          + " finding.";
+
+  /**
+   * The prior double-check items a finding of {@code current} replaces this round (#969), each
+   * mapped to the finding replacing it, by identity: the items {@link #replacedPriors} names that
+   * no later earlier round's finding had replaced already. Such an item was still open coming into
+   * this round, so its replacement is the same defect open since an earlier review, not a new one.
+   * An item an earlier round replaced was carried by that round's finding instead.
+   *
+   * @param priorAiResponses every completed prior round's parsed response, newest first
+   */
+  public static Map<ReviewResponse.Finding, ReviewResponse.Finding> replacedThisRound(
+      List<ReviewResponse> priorAiResponses, List<ReviewResponse.Finding> current) {
+    Map<ReviewResponse.Finding, ReviewResponse.Finding> replaced = new IdentityHashMap<>();
+    if (priorAiResponses == null) {
+      return replaced;
+    }
+    var chrono = toChronological(priorAiResponses);
+    for (var r = 0; r < chrono.size(); r++) {
+      if (chrono.get(r) == null) {
+        continue;
+      }
+      var laterRounds = laterFindings(chrono, r, List.of());
+      for (var prior : chrono.get(r).findings()) {
+        if (isListedOnly(prior)
+            && laterRounds.stream().noneMatch(finding -> replacesUnthreaded(finding, prior))) {
+          current.stream()
+              .filter(finding -> replacesUnthreaded(finding, prior))
+              .findFirst()
+              .ifPresent(finding -> replaced.put(prior, finding));
+        }
+      }
+    }
+    return replaced;
   }
 
   /**

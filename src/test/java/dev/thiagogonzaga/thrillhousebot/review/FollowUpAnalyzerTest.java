@@ -5362,6 +5362,64 @@ class FollowUpAnalyzerTest {
             .isEmpty());
   }
 
+  // #969: an item this round's own finding replaced stays counted, carried by the replacement.
+
+  @Test
+  void replacedThisRoundNamesOnlyItemsNoEarlierRoundReplaced() {
+    var item =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            "src/A.java",
+            10,
+            "Possible null user before logging",
+            "d",
+            null,
+            null);
+    var inline =
+        new ReviewResponse.Finding(
+            "high", "high", "src/A.java", 10, "Possible null user before logging", "d", null, null);
+    var roundOne = new ReviewResponse(List.of(item), List.of(), null);
+
+    assertTrue(FollowUpAnalyzer.replacedThisRound(null, List.of(inline)).isEmpty());
+    var now =
+        FollowUpAnalyzer.replacedThisRound(
+            java.util.Arrays.asList(null, roundOne), List.of(inline));
+    assertSame(inline, now.get(item));
+    var roundTwo = new ReviewResponse(List.of(inline), List.of(), null);
+    assertTrue(
+        FollowUpAnalyzer.replacedThisRound(List.of(roundTwo, roundOne), List.of(inline)).isEmpty(),
+        "round two replaced it already, so it is not this round's replacement");
+  }
+
+  @Test
+  void carriedByReplacementKeepsOnlyAHoldThisRoundReplaced() {
+    var item =
+        new ReviewResponse.Finding("medium", "low", "src/A.java", 10, "Item", "d", null, null);
+    var hold =
+        new FollowUpAnalyzer.HeldPrevious(
+            new ReviewResult.PreviousFindingStatus(
+                1, "unresolved", "held", new ReviewResult.EarlierRound(item, null)),
+            item);
+    var standing =
+        new FollowUpAnalyzer.HeldPrevious(
+            new ReviewResult.PreviousFindingStatus(
+                0, "justified", "settled", new ReviewResult.EarlierRound(item, null)),
+            item);
+    Set<ReviewResponse.Finding> replaced =
+        java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    replaced.add(item);
+    Map<ReviewResponse.Finding, ReviewResponse.Finding> now = new java.util.IdentityHashMap<>();
+    now.put(item, item);
+
+    assertSame(hold, FollowUpAnalyzer.carriedByReplacement(hold, Set.of(), Map.of()));
+    assertEquals(null, FollowUpAnalyzer.carriedByReplacement(hold, replaced, Map.of()));
+    assertEquals(null, FollowUpAnalyzer.carriedByReplacement(standing, replaced, now));
+    var carried = FollowUpAnalyzer.carriedByReplacement(hold, replaced, now);
+    assertEquals(FollowUpAnalyzer.REPLACED_NOTE, carried.status().note());
+    assertEquals(hold.status().earlierRound(), carried.status().earlierRound());
+  }
+
   // #951: double-check items a later finding replaced.
 
   private static final ReviewResponse.Finding LISTED =
