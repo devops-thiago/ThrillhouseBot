@@ -186,6 +186,13 @@ final class DefectIdentity {
    * #972). The subject alone is not enough: a docs finding about {@code COLDCHAIN_MAX_BATCH}'s
    * blank default and a code finding that it is never enforced name the same key and are two
    * defects.
+   *
+   * <p>A subject that is only a file's class name is as common as prose ("Auth rejects valid tokens
+   * when the cache is cold", "Auth always rejects the first valid token after startup"), so it
+   * pairs two findings only with corroboration: a shared defect class, or one finding's description
+   * naming a symbol of the other's title (the waitlist finding on {@code BedAllocator.java}
+   * explains that nothing calls {@code Waitlist.ordered()} or {@code topN()}, the symbols the
+   * {@code Waitlist.java} item's title names).
    */
   private static boolean sharesSubject(Finding a, Finding b) {
     var shared = new HashSet<String>();
@@ -197,7 +204,21 @@ final class DefectIdentity {
     var words = new HashSet<>(SummarySurfaceDeduplicator.claim(a.title()).wordSet());
     words.retainAll(SummarySurfaceDeduplicator.claim(b.title()).wordSet());
     shared.forEach(subject -> words.removeAll(SummarySurfaceDeduplicator.claim(subject).wordSet()));
-    return !words.isEmpty() || sharesClass(a.title(), b.title());
+    var sharesClass = sharesClass(a.title(), b.title());
+    if (words.isEmpty() && !sharesClass) {
+      return false;
+    }
+    var symbols = symbols(a.title());
+    symbols.addAll(symbols(b.title()));
+    return shared.stream().anyMatch(symbols::contains)
+        || sharesClass
+        || namesSymbolOf(a.description(), b)
+        || namesSymbolOf(b.description(), a);
+  }
+
+  /** Whether {@code text} names a symbol of {@code other}'s title. */
+  private static boolean namesSymbolOf(String text, Finding other) {
+    return !collectNamed(symbols(other.title()), text, new HashSet<>()).isEmpty();
   }
 
   /**
@@ -243,25 +264,36 @@ final class DefectIdentity {
   }
 
   /**
-   * The subjects a finding's title names, lowercased: its identifiers, its symbols, and the class
-   * its own file is named after when the title names it ({@code Waitlist} for a finding on {@code
+   * The subjects a finding's title names, lowercased: its {@link #symbols}, and the class its own
+   * file is named after when the title names it ({@code Waitlist} for a finding on {@code
    * Waitlist.java} titled "Waitlist is never served"). Names under three characters say nothing.
    */
   static Set<String> subjects(Finding finding) {
     var title = Objects.toString(finding.title(), "");
-    var names = identifiers(title);
-    for (var shape : SYMBOL_SHAPES) {
-      var matcher = shape.matcher(title);
-      while (matcher.find()) {
-        names.add(matcher.group(1).toLowerCase(Locale.ROOT));
-      }
-    }
+    var names = symbols(title);
     var file = Objects.toString(finding.file(), "");
     var stem = file.substring(file.lastIndexOf('/') + 1);
     var dot = stem.indexOf('.');
     stem = (dot > 0 ? stem.substring(0, dot) : stem).toLowerCase(Locale.ROOT);
-    if (namesWhole(title.toLowerCase(Locale.ROOT), stem)) {
+    if (stem.length() >= 3 && namesWhole(title.toLowerCase(Locale.ROOT), stem)) {
       names.add(stem);
+    }
+    return names;
+  }
+
+  /**
+   * The code names a title carries, lowercased: its identifiers and the broader {@link
+   * #SYMBOL_SHAPES}. Names under three characters say nothing.
+   */
+  static Set<String> symbols(String title) {
+    var names = identifiers(title);
+    if (title != null) {
+      for (var shape : SYMBOL_SHAPES) {
+        var matcher = shape.matcher(title);
+        while (matcher.find()) {
+          names.add(matcher.group(1).toLowerCase(Locale.ROOT));
+        }
+      }
     }
     names.removeIf(name -> name.length() < 3);
     return names;

@@ -516,9 +516,34 @@ class DefectIdentityTest {
             47,
             "Nothing ever serves the waitlist; freed beds go to whoever asks next, not highest"
                 + " acuity",
-            "d");
+            "The waitlist in this diff is write-only: no production code ever calls"
+                + " Waitlist.ordered() or Waitlist.topN().");
 
     assertPaired(inline, item);
+    // The file's class name alone is common prose; without the symbol it stays apart.
+    assertApart(
+        at("high", "high", inline.file(), inline.line(), inline.title(), "Beds are freed early."),
+        item);
+  }
+
+  /** A class name shared by two titles, with a generic verb, is not one defect. */
+  @Test
+  void aFileClassNameWithGenericWordsIsNotTheSameDefect() {
+    assertApart(
+        at(
+            "high",
+            "high",
+            "src/Dashboard.java",
+            88,
+            "Auth always rejects the first valid token after startup",
+            "d"),
+        at(
+            "medium",
+            "low",
+            "src/Auth.java",
+            32,
+            "Auth rejects valid tokens when the cache is cold",
+            "d"));
   }
 
   /** ThrillhouseBot-test#212: the crash raised where the parse is called, citing it (#972). */
