@@ -402,17 +402,34 @@ public record ReviewResult(
   }
 
   /**
-   * {@link #keyFindings()}, ranked over every finding together by severity alone, with {@code
-   * preferred} breaking a tie. The summary passes the findings open since an earlier review: the
-   * cap then never cuts one of them for a finding of lower severity, and at equal severity it keeps
-   * the one no fresh inline comment on this round already points at (#934).
+   * {@link #keyFindings()}, ranked over every finding together by severity first. At equal severity
+   * a deterministic scan finding comes first (#964: five model HIGHs pushed the scan's HIGH secret
+   * out of the list on zig #190 and rust #195, though a pattern match is the most certain finding
+   * there is), then a {@code preferred} one, then the more confident. The summary passes the
+   * findings open since an earlier review as {@code preferred}: the cap then never cuts one of them
+   * for a finding of lower severity, and at equal severity it keeps the one no fresh inline comment
+   * on this round already points at (#934). What the cap leaves out is counted by {@link
+   * #keyFindingsLeftOut()}.
    */
   public List<Finding> keyFindings(Predicate<Finding> preferred) {
     return findings.stream()
         .filter(Finding::postsInline)
-        .sorted(Comparator.comparing(Finding::risk).thenComparing(f -> preferred.test(f) ? 0 : 1))
+        .sorted(
+            Comparator.comparing(Finding::risk)
+                .thenComparing(f -> SecurityRule.fromTitle(f.title()) != null ? 0 : 1)
+                .thenComparing(f -> preferred.test(f) ? 0 : 1)
+                .thenComparing(Finding::confidence))
         .limit(KEY_FINDINGS_COUNT)
         .toList();
+  }
+
+  /**
+   * How many findings that post inline the Key Findings cap leaves out, so the section can say so
+   * rather than read as the whole list (#964: still-open HIGHs silently dropped out of it).
+   */
+  public int keyFindingsLeftOut() {
+    return Math.max(
+        0, (int) findings.stream().filter(Finding::postsInline).count() - KEY_FINDINGS_COUNT);
   }
 
   /**

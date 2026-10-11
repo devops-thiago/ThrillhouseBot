@@ -21,8 +21,11 @@ import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class PrSummaryGeneratorTest {
 
@@ -2022,5 +2025,89 @@ class PrSummaryGeneratorTest {
         PrSummaryGenerator.reRaises(
             finding(RiskLevel.HIGH, "src/A.java", 5, "Title"),
             finding(RiskLevel.HIGH, "src/A.java", 5, null)));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // react #154 round 1: one-dash arrows.
+        "flowchart TD\n  A[\"Poller\"] -> B[\"Tracker\"]",
+        // #152 round 2: a sequence-diagram arrow in a flowchart.
+        "flowchart TD\n  A[\"Client\"] ->> B[\"Server\"]",
+        // #154 round 2: a stray comma after a node.
+        "flowchart TD\n  PE[\"pending\"],\n  PE --> DONE[\"done\"]",
+        "flowchart TD\n  A[\"x\"] --> B[\"y\"],",
+        "graph LR\n  A[\"open --> B",
+        "flowchart TD\n  A[\"x\"] --> B[\"y\"",
+        "flowchart TD\n  A(\"x\"] --> B"
+      })
+  void aFlowchartThatWouldNotParseIsOmitted(String diagram) {
+    assertFalse(PrSummaryGenerator.flowchartParses(diagram), diagram);
+    var summary =
+        generator.generate(
+            1,
+            10,
+            0,
+            List.of(),
+            new ReviewResponse.Summary(
+                0, 0, 0, 0, 0, "ok", "p", List.of(), List.of(), List.of(), diagram, List.of()),
+            roundWith(List.of(), List.of()));
+    assertFalse(summary.contains("Control-Flow Diagram"), summary);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "flowchart TD\n  A[\"call foo() -> bar\"] --> B{\"ready?\"}\n  B -->|yes -> go| C",
+        "flowchart LR\n  A -.-> B\n  B ==> C\n  C --- D\n  D -- text --> E\n  E <--> F",
+        "graph TD\n  subgraph S [\"Store\"]\n    A([\"Fetch, merge\"]) --> B[(\"db\")]\n  end",
+        "flowchart TD\n  %% a comment, with commas,\n  A --> B\n  class A,B hot\n  linkStyle 0,1 x",
+        "flowchart TD\n  A --> B & C\n  C{{\"hex\"}} --> D"
+      })
+  void aFlowchartThatParsesIsKept(String diagram) {
+    assertTrue(PrSummaryGenerator.flowchartParses(diagram), diagram);
+  }
+
+  @Test
+  void theScanSecretKeepsItsKeyFindingsPlaceAgainstFiveModelHighs() {
+    // zig #190, rust #195: five model HIGHs filled the list and the deterministic HIGH secret,
+    // listed last, was cut.
+    var own = new ArrayList<Finding>();
+    for (var i = 0; i < 5; i++) {
+      own.add(finding(RiskLevel.HIGH, "src/A.java", 10 + i, "Model high " + i));
+    }
+    var secret =
+        finding(
+            RiskLevel.HIGH,
+            "src/Config.java",
+            3,
+            SecurityRule.GITHUB_TOKEN.secretTitleHead() + " (ghp_…, 40 chars)");
+    own.add(secret);
+    own.add(finding(RiskLevel.MEDIUM, "src/A.java", 40, "Model medium"));
+
+    var summary = generator.generate(1, 10, 0, List.of(), null, roundWith(own, List.of()));
+
+    var keyFindings = summary.substring(summary.indexOf("### Key Findings"));
+    assertTrue(keyFindings.indexOf(secret.title()) > 0, summary);
+    assertTrue(keyFindings.indexOf(secret.title()) < keyFindings.indexOf("Model high 0"), summary);
+    assertFalse(keyFindings.contains("Model high 4"), summary);
+    assertTrue(keyFindings.contains(PrSummaryGenerator.keyFindingsMoreLine(2)), summary);
+  }
+
+  @Test
+  void keyFindingsWithinTheCapCarryNoMoreLine() {
+    var summary =
+        generator.generate(
+            1,
+            10,
+            0,
+            List.of(),
+            null,
+            roundWith(List.of(finding(RiskLevel.HIGH, "src/A.java", 1, "Only one")), List.of()));
+
+    assertFalse(summary.contains("more finding"), summary);
+    assertEquals(
+        "- _…and 1 more finding, each on its own review thread._\n",
+        PrSummaryGenerator.keyFindingsMoreLine(1));
   }
 }

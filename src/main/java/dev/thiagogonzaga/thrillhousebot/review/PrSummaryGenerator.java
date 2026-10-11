@@ -20,6 +20,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -29,6 +30,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -343,6 +345,18 @@ public class PrSummaryGenerator {
         finding.suggestionNew());
   }
 
+  /**
+   * The line closing Key Findings when the cap left findings out (#964), so the list does not read
+   * as every finding there is.
+   */
+  static String keyFindingsMoreLine(int leftOut) {
+    return "- _…and "
+        + leftOut
+        + " more finding"
+        + (leftOut == 1 ? "" : "s")
+        + ", each on its own review thread._\n";
+  }
+
   /** Suffix on a Key Findings or double-check bullet for a finding raised by an earlier review. */
   static final String CARRIED_NOTE = "_(open since an earlier review)_";
 
@@ -412,6 +426,10 @@ public class PrSummaryGenerator {
             sb.append(" ").append(CARRIED_NOTE);
           }
           sb.append("\n");
+        }
+        var leftOut = result.keyFindingsLeftOut();
+        if (leftOut > 0) {
+          sb.append(keyFindingsMoreLine(leftOut));
         }
         sb.append("\n");
       }
@@ -842,7 +860,81 @@ public class PrSummaryGenerator {
     if (firstLine.startsWith("sequencediagram") && hasBracketLabeledParticipant(cleaned)) {
       return null;
     }
+    if ((firstLine.startsWith("flowchart") || firstLine.startsWith("graph"))
+        && !flowchartParses(cleaned)) {
+      return null;
+    }
     return cleaned;
+  }
+
+  /** A double-quoted label or an edge label between pipes, removed before the syntax checks. */
+  private static final Pattern MERMAID_LABEL = Pattern.compile("\"[^\"\\n]*+\"|\\|[^|\\n]*+\\|");
+
+  /**
+   * A one-dash arrow: {@code ->} not preceded by another dash or a dot, which covers the sequence
+   * diagram's {@code ->>} as well. Flowchart arrows are {@code -->}, {@code -.->}, {@code ==>} and
+   * the like, so a lone {@code ->} is a parse error that drops the whole diagram.
+   */
+  private static final Pattern ONE_DASH_ARROW = Pattern.compile("(?<![-.])->");
+
+  /** A comma straight after a node's closing bracket, or ending a line. */
+  private static final Pattern STRAY_COMMA = Pattern.compile("[\\])}]\\s*+,|,\\s*+$");
+
+  /** Flowchart statements whose syntax allows commas: class lists, styles, link styles, clicks. */
+  private static final Pattern COMMA_STATEMENT =
+      Pattern.compile("(?i)^(?:class|classdef|style|linkstyle|click)\\b");
+
+  /**
+   * Whether a flowchart's body passes the checks GitHub's Mermaid parser has failed on in posted
+   * summaries (#952): a one-dash arrow ({@code A -> B}, or {@code ->>} borrowed from a sequence
+   * diagram), a stray comma after a node ({@code PE["pending"],}), an odd number of double quotes
+   * on a line, or brackets that do not balance on a line once labels are removed. A diagram that
+   * would fail to render is omitted rather than posted as a broken block.
+   */
+  static boolean flowchartParses(String diagram) {
+    var lines = diagram.lines().skip(1).map(String::strip).toList();
+    for (var line : lines) {
+      if (line.isEmpty() || line.startsWith("%%")) {
+        continue;
+      }
+      if (line.chars().filter(c -> c == '"').count() % 2 != 0) {
+        return false;
+      }
+      var bare = MERMAID_LABEL.matcher(line).replaceAll("L");
+      if (ONE_DASH_ARROW.matcher(bare).find()
+          || (!COMMA_STATEMENT.matcher(bare).find() && STRAY_COMMA.matcher(bare).find())
+          || !balanced(bare)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Whether every bracket on {@code line} closes in order. */
+  private static boolean balanced(String line) {
+    var open = new ArrayDeque<Character>();
+    for (var c : line.toCharArray()) {
+      switch (c) {
+        case '[', '(', '{' -> open.push(c);
+        case ']', ')', '}' -> {
+          if (open.isEmpty() || open.pop() != matching(c)) {
+            return false;
+          }
+        }
+        default -> {
+          // Not a bracket.
+        }
+      }
+    }
+    return open.isEmpty();
+  }
+
+  private static char matching(char closing) {
+    return switch (closing) {
+      case ']' -> '[';
+      case ')' -> '(';
+      default -> '{';
+    };
   }
 
   /**
