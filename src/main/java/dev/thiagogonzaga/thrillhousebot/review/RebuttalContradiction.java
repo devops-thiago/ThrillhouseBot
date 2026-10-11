@@ -447,6 +447,30 @@ final class RebuttalContradiction {
           "unless",
           "except");
 
+  /**
+   * Words that may sit between a refusing verb and the statement it refuses without changing what
+   * it refuses: articles, quantifiers and the adverbs that only intensify the refusal ("rejects all
+   * concurrent requests", "prevents any simultaneous concurrent access").
+   */
+  private static final Set<String> REFUSAL_QUALIFIERS =
+      Set.of(
+          "a",
+          "an",
+          "the",
+          "all",
+          "any",
+          "every",
+          "each",
+          "some",
+          "multiple",
+          "simultaneous",
+          "parallel",
+          "further",
+          "explicitly",
+          "outright",
+          "silently",
+          "always");
+
   /** Words that turn a negator right before them into an affirmation: "not only shared …". */
   private static final Set<String> AFFIRMING = Set.of("only", "just", "merely");
 
@@ -456,19 +480,19 @@ final class RebuttalContradiction {
    * punctuation or clause opener ("and", "but", "which", "because" …) between ("not shared by every
    * goroutine", "is not ever really called from multiple threads", "nothing in it is shared across
    * goroutines", any n't contraction: "doesn't support concurrent use"), but not "not only" or "not
-   * just", which affirm; or a verb that refuses the statement's own subject directly before it
-   * ("rejects concurrent requests", "prevents concurrent access", "prohibits concurrent access"). A
-   * verb that only protects shared state ("the lock guards every field shared by every request
-   * goroutine", "serializes concurrent requests") still says the path is reached concurrently, so
-   * it denies nothing. A gap is any horizontal space or hyphen, a non-breaking space included, and
-   * a word counts as one whatever its length (a long identifier). The words are read back from the
-   * statement, so the scan is linear in the clause.
+   * just", which affirm; or a verb that refuses the statement's own subject, before it with only
+   * {@link #REFUSAL_QUALIFIERS} between ("rejects concurrent requests", "rejects all concurrent
+   * requests", "prevents any concurrent access"). A refusing verb whose own object is something
+   * else ("prevents a deadlock when called from multiple threads") refuses that object, not the
+   * statement. A verb that only protects shared state ("the lock guards every field shared by every
+   * request goroutine", "serializes concurrent requests") still says the path is reached
+   * concurrently, so it denies nothing. A gap is any horizontal space or hyphen, a non-breaking
+   * space included, and a word counts as one whatever its length (a long identifier). The words are
+   * read back from the statement, so the scan is linear in the clause.
    */
   private static boolean denies(String before) {
     var words = wordsBefore(before);
-    if (!words.isEmpty() && REFUSALS.contains(words.getFirst())) {
-      return true;
-    }
+    var onlyQualifiers = true;
     for (var i = 0; i < words.size(); i++) {
       var word = words.get(i);
       if (isNegator(word)) {
@@ -477,6 +501,10 @@ final class RebuttalContradiction {
       if (CLAUSE_OPENERS.contains(word)) {
         return false;
       }
+      if (onlyQualifiers && REFUSALS.contains(word)) {
+        return true;
+      }
+      onlyQualifiers = onlyQualifiers && REFUSAL_QUALIFIERS.contains(word);
     }
     return false;
   }

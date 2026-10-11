@@ -4871,10 +4871,18 @@ class FollowUpAnalyzerTest {
             "+// The scheduler excludes concurrent callers.",
             "+// The cache doesn't support concurrent use.",
             "+// The workers aren’t shared by every request goroutine.",
-            "+// The pool shouldn't be shared across goroutines.")) {
+            "+// The pool shouldn't be shared across goroutines.",
+            // Articles, quantifiers and intensifiers between the verb and its subject change
+            // nothing.
+            "+// The handler rejects all concurrent requests with 409.",
+            "+// The config prevents any simultaneous concurrent access.",
+            "+// The scheduler explicitly refuses the concurrent callers.")) {
       var note = heldNote(refusing);
       assertTrue(note.contains("no review has weighed"), refusing + " -> " + note);
     }
+    // A refusing verb with an object of its own refuses that object, not the statement.
+    var otherObject = heldNote("+// This prevents a deadlock when called from multiple threads.");
+    assertTrue(otherObject.contains("says this path runs concurrently"), otherObject);
   }
 
   /** A diff section is the declined file's only when its a/ or b/ path is that file exactly. */
