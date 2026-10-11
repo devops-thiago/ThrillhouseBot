@@ -107,6 +107,10 @@ class CiFailureCitationsTest {
     assertFalse(citations.cites(described("The \"test\" check passes on this commit.")));
     assertTrue(citations.cites(described("The test job fails on this line.")));
     assertTrue(citations.cites(described("CI's `test` run fails here.")));
+    assertTrue(citations.cites(described("The \u201Ctest\u201D run fails here.")));
+    assertFalse(
+        citations.cites(described("The quoted \"testing harness\" fails to reset its clock.")));
+    assertFalse(citations.cites(described("The 'tests' folder setup fails on Windows.")));
   }
 
   @Test

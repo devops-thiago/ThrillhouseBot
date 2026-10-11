@@ -67,8 +67,8 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   private static final List<String> CHECK_WORDS =
       List.of("check", "checks", "conclusion", "job", "workflow");
 
-  /** The quote marks a finding names a check between. */
-  private static final List<String> QUOTES = List.of("\"", "`", "'", "\u201C");
+  /** The quote pairs a finding names a check between, opening mark first. */
+  private static final List<String> QUOTES = List.of("\"\"", "``", "''", "\u201C\u201D");
 
   private static final Pattern NOT_A_WORD = Pattern.compile("[^a-z0-9]+");
 
@@ -156,7 +156,7 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   private static boolean namesAsACheck(Check check, String raw, String text) {
     String name = check.name().toLowerCase(Locale.ROOT);
     String core = check.words().strip();
-    return QUOTES.stream().anyMatch(quote -> raw.contains(quote + name))
+    return QUOTES.stream().anyMatch(pair -> raw.contains(pair.charAt(0) + name + pair.charAt(1)))
         || CHECK_WORDS.stream()
             .anyMatch(
                 word ->
