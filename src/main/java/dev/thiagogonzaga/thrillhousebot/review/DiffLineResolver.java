@@ -60,6 +60,7 @@ public final class DiffLineResolver {
   private final Map<String, List<Integer>> rightSideTextLineNumbersByFile;
   private final Map<String, Map<Integer, String>> rightSideLineTextByFile;
   private final Map<String, TreeSet<Integer>> rightSideHunkStartsByFile;
+  private final Map<String, Map<Integer, String>> addedTextByFile;
   private final Set<String> changedFiles;
 
   public DiffLineResolver(Map<String, String> patchesByFile) {
@@ -81,6 +82,7 @@ public final class DiffLineResolver {
     this.rightSideTextLineNumbersByFile = new HashMap<>();
     this.rightSideLineTextByFile = new HashMap<>();
     this.rightSideHunkStartsByFile = new HashMap<>();
+    this.addedTextByFile = new HashMap<>();
     patchesByFile.forEach(
         (file, patch) -> {
           RightSide rightSide = parseRightSide(patch);
@@ -89,6 +91,7 @@ public final class DiffLineResolver {
           rightSideTextLineNumbersByFile.put(file, rightSide.textLineNumbers());
           rightSideLineTextByFile.put(file, rightSide.lineText());
           rightSideHunkStartsByFile.put(file, rightSide.hunkStarts());
+          addedTextByFile.put(file, rightSide.added());
         });
   }
 
@@ -134,6 +137,31 @@ public final class DiffLineResolver {
     }
     return presentInFileOrVariant(
         rightSideTextByFile, file, text -> containsContiguous(text, anchorLines));
+  }
+
+  /**
+   * Whether every one of {@code lines} (each already stripped) is an added line of {@code file}
+   * within {@code margin} lines of where {@code quote} sits ({@link #locateQuote} for {@code
+   * citedLine}) in the current diff (#1066). The same text added elsewhere in the file is not
+   * evidence about this location. With the quote not located (absent, ambiguous, or the file in no
+   * single diff entry) or no lines to look for, the answer is {@code false}, which keeps a finding
+   * held rather than closing it on a guess.
+   */
+  public boolean addsEveryLineNear(
+      String file, String quote, int citedLine, Collection<String> lines, int margin) {
+    var at = locateQuote(file, quote, citedLine);
+    if (at.isEmpty() || lines.isEmpty()) {
+      return false;
+    }
+    var added = addedTextByFile.get(resolveTextKeyForFileOrVariant(file));
+    var from = at.get().startLine() - margin;
+    var to = at.get().endLine() + margin;
+    return lines.stream()
+        .allMatch(
+            line ->
+                added.entrySet().stream()
+                    .anyMatch(
+                        e -> e.getKey() >= from && e.getKey() <= to && e.getValue().equals(line)));
   }
 
   /**
@@ -553,7 +581,8 @@ public final class DiffLineResolver {
       List<String> text,
       List<Integer> textLineNumbers,
       Map<Integer, String> lineText,
-      TreeSet<Integer> hunkStarts) {}
+      TreeSet<Integer> hunkStarts,
+      Map<Integer, String> added) {}
 
   /**
    * Walks a unified-diff patch once, collecting the right-side line numbers and the trimmed text of
@@ -571,8 +600,9 @@ public final class DiffLineResolver {
     var textLineNumbers = new ArrayList<Integer>();
     var lineText = new HashMap<Integer, String>();
     var hunkStarts = new TreeSet<Integer>();
+    var added = new HashMap<Integer, String>();
     if (patch == null || patch.isBlank()) {
-      return new RightSide(lines, text, textLineNumbers, lineText, hunkStarts);
+      return new RightSide(lines, text, textLineNumbers, lineText, hunkStarts, added);
     }
 
     var newLine = 0;
@@ -587,10 +617,13 @@ public final class DiffLineResolver {
       }
       if (inHunk && isRightSideLine(rawLine)) {
         appendRightSide(lines, text, textLineNumbers, lineText, newLine, rawLine);
+        if (rawLine.charAt(0) == '+') {
+          added.put(newLine, rawLine.substring(1).strip());
+        }
         newLine++;
       }
     }
-    return new RightSide(lines, text, textLineNumbers, lineText, hunkStarts);
+    return new RightSide(lines, text, textLineNumbers, lineText, hunkStarts, added);
   }
 
   /** The 1-based right-side start line of a hunk header, or empty if the line is not one. */
