@@ -41,7 +41,10 @@ import java.util.List;
  * <p>Every finding the {@code resolved} count covers is named, not only the directive-cleared ones:
  * the list has to add up to the integer it explains, and a fix that landed is just as unnamed
  * without it. Ids are 1-based positions in the previous round, so an id outside that list names
- * nothing and is skipped rather than guessed at — the count stays authoritative either way.
+ * nothing and is skipped rather than guessed at — the count stays authoritative either way. A
+ * finding raised before the previous round has no id there: one the round closed (its code left the
+ * diff, or a maintainer cleared it) is named from the finding its status carries, once, since the
+ * round records the close and a later round no longer carries it (#1066).
  */
 final class ClosedFindingNames {
 
@@ -85,18 +88,19 @@ final class ClosedFindingNames {
    */
   static String bulletList(
       ReviewResult result, List<ReviewResponse.Finding> previousFindings, String indent) {
-    if (previousFindings == null || previousFindings.isEmpty()) {
-      return "";
-    }
+    var previous = previousFindings == null ? List.<ReviewResponse.Finding>of() : previousFindings;
     var named = new ArrayList<String>();
     for (var status : result.previousStatuses()) {
+      // An earlier round's status carries id 0, which names no finding here.
       if (!"resolved".equalsIgnoreCase(status.status())
           || status.id() < 1
-          || status.id() > previousFindings.size()) {
+          || status.id() > previous.size()) {
         continue;
       }
-      named.add(describe(previousFindings.get(status.id() - 1)));
+      named.add(describe(previous.get(status.id() - 1)));
     }
+    // An earlier round's finding carries itself, not an id into the previous round (#1066).
+    result.earlierRoundCloses().forEach(finding -> named.add(describe(finding)));
     if (named.isEmpty()) {
       return "";
     }

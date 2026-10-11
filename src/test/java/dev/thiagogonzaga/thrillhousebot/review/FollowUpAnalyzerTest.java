@@ -5058,10 +5058,17 @@ class FollowUpAnalyzerTest {
   /** The backstop over PREVIOUS_JSON whose diff carries only the files in {@code patches}. */
   private List<FollowUpAnalyzer.HeldPrevious> entriesOver(
       Map<String, String> patches, List<GitHubCommentClient.IssueComment> conversation) {
+    return entriesOver(patches, conversation, List.of());
+  }
+
+  private List<FollowUpAnalyzer.HeldPrevious> entriesOver(
+      Map<String, String> patches,
+      List<GitHubCommentClient.IssueComment> conversation,
+      List<GitHubReviewClient.PullRequestComment> threads) {
     return analyzer.heldPreviousFindings(
         analyzer.parsePreviousResponses(List.of(PREVIOUS_JSON)),
         List.of(),
-        List.of(),
+        threads,
         conversation,
         new DiffLineResolver(patches),
         BOT_ID,
@@ -5077,17 +5084,146 @@ class FollowUpAnalyzerTest {
         .orElseThrow();
   }
 
+  /** The bot's root comment for PREVIOUS_JSON's first finding, as it posts one. */
+  private static final GitHubReviewClient.PullRequestComment SQL_THREAD =
+      comment(
+          300L,
+          null,
+          "src/A.java",
+          "**🔴 CRITICAL — SQL injection**\n\nraw query\n\n" + SuggestionFormatter.findingMarker(1),
+          BOT);
+
+  /**
+   * #1066: the superseded status carries the root of the finding's own thread, found by marker and
+   * content with no reply required, so the thread is resolved.
+   */
   @Test
   void anEarlierRoundFindingWhoseCodeLeftTheDiffIsSuperseded() {
-    var entries = entriesOver(Map.of("src/B.java", patch(5)), List.of());
+    var entries = entriesOver(Map.of("src/B.java", patch(5)), List.of(), List.of(SQL_THREAD));
 
     assertEquals(2, entries.size(), "every finding carried in has an entry");
     var gone = entryFor(entries, "SQL injection");
     assertFalse(gone.holdsOpen());
     assertEquals("superseded", gone.status().status());
     assertEquals(FollowUpAnalyzer.EARLIER_ROUND_ID, gone.status().id());
-    assertEquals(new ReviewResult.EarlierRound(gone.finding(), null), gone.status().earlierRound());
+    assertEquals(new ReviewResult.EarlierRound(gone.finding(), 300L), gone.status().earlierRound());
+    assertTrue(gone.status().closesEarlierRound());
     assertTrue(entryFor(entries, "Missing null check").holdsOpen());
+  }
+
+  /** A finding with no thread of its own carries no root; nothing else is bound in its place. */
+  @Test
+  void anEarlierRoundFindingWithNoThreadOfItsOwnIsSupersededWithNoRoot() {
+    var otherFindingsThread =
+        comment(
+            301L,
+            null,
+            "src/A.java",
+            "**🟠 HIGH — Another defect**\n\n" + SuggestionFormatter.findingMarker(1),
+            BOT);
+
+    var gone =
+        entryFor(
+            entriesOver(Map.of("src/B.java", patch(5)), List.of(), List.of(otherFindingsThread)),
+            "SQL injection");
+
+    assertEquals("superseded", gone.status().status());
+    assertNull(gone.status().earlierRound().threadRootId());
+  }
+
+  /**
+   * One defect raised in two rounds: the most severe member has no thread of its own, so the root
+   * is the other member's thread.
+   */
+  @Test
+  void aSupersededClusterCarriesTheRootOfAnyMembersOwnThread() {
+    var roundOne =
+        """
+        {"findings": [
+          {"risk": "low", "file": "src/A.java", "line": 10, "title": "SQL injection",
+           "description": "raw query"}
+        ]}
+        """;
+    var roundTwo =
+        """
+        {"findings": [
+          {"risk": "medium", "file": "src/B.java", "line": 5, "title": "Missing null check",
+           "description": "may NPE"},
+          {"risk": "critical", "file": "src/A.java", "line": 11, "title": "SQL injection",
+           "description": "raw query"}
+        ]}
+        """;
+    var roundThree =
+        """
+        {"findings": [
+          {"risk": "low", "file": "src/C.java", "line": 1, "title": "New", "description": "n"}
+        ]}
+        """;
+
+    var entries =
+        analyzer.heldPreviousFindings(
+            analyzer.parsePreviousResponses(List.of(roundThree, roundTwo, roundOne)),
+            List.of(),
+            List.of(SQL_THREAD),
+            List.of(),
+            new DiffLineResolver(Map.of("src/B.java", patch(5), "src/C.java", patch(1))),
+            BOT_ID,
+            Map.of(),
+            () -> "+unrelated();");
+
+    var gone = entryFor(entries, "SQL injection");
+    assertEquals("superseded", gone.status().status());
+    assertEquals("critical", gone.finding().risk());
+    assertEquals(300L, gone.status().earlierRound().threadRootId());
+  }
+
+  /** A round that recorded an earlier round's close takes the finding out of every later replay. */
+  @Test
+  void anEarlierRoundFindingARoundRecordedClosedIsNotCarriedAgain() {
+    var roundOne = analyzer.parsePreviousResponses(List.of(PREVIOUS_JSON)).get(0);
+    var roundTwo =
+        new ReviewResponse(
+            List.of(new ReviewResponse.Finding("low", "src/C.java", 1, "New", "n", null, null)),
+            List.of(),
+            null,
+            List.of(roundOne.findings().get(0)));
+
+    var entries =
+        analyzer.heldPreviousFindings(
+            List.of(roundTwo, roundOne),
+            List.of(),
+            List.of(SQL_THREAD),
+            List.of(),
+            new DiffLineResolver(Map.of("src/B.java", patch(5), "src/C.java", patch(1))),
+            BOT_ID,
+            Map.of(),
+            () -> "+unrelated();");
+
+    assertTrue(entries.stream().noneMatch(e -> "SQL injection".equals(e.finding().title())));
+    assertTrue(entryFor(entries, "Missing null check").holdsOpen());
+  }
+
+  /** The recorded close survives the round trip through the stored JSON. */
+  @Test
+  void theRecordedEarlierRoundCloseIsReadBackFromTheStoredResponse() throws Exception {
+    var finding =
+        new ReviewResponse.Finding("high", "src/A.java", 10, "SQL injection", "d", null, null);
+    var stored =
+        new ObjectMapper()
+            .writeValueAsString(
+                new ReviewResponse(List.of(), List.of(), null)
+                    .withClosedEarlierRound(List.of(finding)));
+
+    var read = analyzer.parsePreviousResponses(List.of(stored)).get(0);
+
+    assertEquals(List.of(finding), read.closedEarlierRound());
+    assertTrue(
+        analyzer
+            .parsePreviousResponses(List.of(PREVIOUS_JSON))
+            .get(0)
+            .closedEarlierRound()
+            .isEmpty(),
+        "a response stored before the field reads as closing nothing");
   }
 
   /**
@@ -5131,12 +5267,176 @@ class FollowUpAnalyzerTest {
         cleared.status());
   }
 
+  /**
+   * #1066: a maintainer's clear is not swallowed by the supersede. The finding is counted once, as
+   * cleared, and its thread is carried so it gets the reply that records the clear.
+   */
   @Test
-  void anEarlierRoundFindingWhoseCodeLeftTheDiffIsNotAlsoCountedCleared() {
+  void anEarlierRoundFindingClearedAfterItsCodeLeftTheDiffIsResolvedOnItsThread() {
     var entries =
-        entriesOver(Map.of("src/B.java", patch(5)), List.of(maintainerSays(CLEARS_FINDING_ONE)));
+        entriesOver(
+            Map.of("src/B.java", patch(5)),
+            List.of(maintainerSays(CLEARS_FINDING_ONE)),
+            List.of(SQL_THREAD));
 
-    assertEquals("superseded", entryFor(entries, "SQL injection").status().status());
+    var cleared = entryFor(entries, "SQL injection");
+    assertEquals("resolved", cleared.status().status());
+    assertEquals(FollowUpAnalyzer.conversationClearedNote(BOT_ID), cleared.status().note());
+    assertEquals(300L, cleared.status().earlierRound().threadRootId());
+  }
+
+  /** #1066: a clear directive replied on the finding's own thread clears it in the review too. */
+  @Test
+  void anEarlierRoundFindingClearedOnItsOwnThreadIsResolved() {
+    var entries =
+        entriesOver(
+            Map.of("src/A.java", patch(10), "src/B.java", patch(5)),
+            List.of(),
+            List.of(
+                SQL_THREAD,
+                comment(
+                    400L,
+                    300L,
+                    "src/A.java",
+                    "@thrillhousebot resolved src/A.java:10 — SQL injection",
+                    "maintainer")));
+
+    var cleared = entryFor(entries, "SQL injection");
+    assertEquals("resolved", cleared.status().status());
+    assertEquals(FollowUpAnalyzer.threadClearedNote(BOT_ID), cleared.status().note());
+    assertEquals(300L, cleared.status().earlierRound().threadRootId());
+  }
+
+  /** A conversation clear wins over a thread clear: only it needs the reply on the thread. */
+  @Test
+  void aConversationClearWinsOverAThreadClearForTheNote() {
+    var entries =
+        entriesOver(
+            Map.of("src/A.java", patch(10), "src/B.java", patch(5)),
+            List.of(maintainerSays(CLEARS_FINDING_ONE)),
+            List.of(
+                SQL_THREAD,
+                comment(400L, 300L, "src/A.java", "@thrillhousebot resolved", "maintainer")));
+
+    assertEquals(
+        FollowUpAnalyzer.conversationClearedNote(BOT_ID),
+        entryFor(entries, "SQL injection").status().note());
+  }
+
+  /**
+   * Lean to hold: a thread directive from a non-maintainer, or naming another file, clears nothing.
+   */
+  @Test
+  void aThreadDirectiveWithoutWriteAccessOrNamingAnotherFileClearsNothing() {
+    var patches = Map.of("src/A.java", patch(10), "src/B.java", patch(5));
+    var outsider =
+        entriesOver(
+            patches,
+            List.of(),
+            List.of(
+                SQL_THREAD,
+                comment(400L, 300L, "src/A.java", "@thrillhousebot resolved", "drive-by", "NONE")));
+    var otherFile =
+        entriesOver(
+            patches,
+            List.of(),
+            List.of(
+                SQL_THREAD,
+                comment(
+                    400L,
+                    300L,
+                    "src/A.java",
+                    "@thrillhousebot resolved src/B.java:5 — Missing null check",
+                    "maintainer")));
+
+    var otherLine =
+        entriesOver(
+            patches,
+            List.of(),
+            List.of(
+                SQL_THREAD,
+                comment(
+                    400L,
+                    300L,
+                    "src/A.java",
+                    "@thrillhousebot resolved src/A.java:15 — other bug",
+                    "maintainer")));
+
+    assertTrue(entryFor(outsider, "SQL injection").holdsOpen());
+    assertNotEquals("resolved", entryFor(otherLine, "SQL injection").status().status());
+    assertNotEquals("resolved", entryFor(otherFile, "SQL injection").status().status());
+  }
+
+  @Test
+  void threadDirectiveNamesItsFindingOnlyByItsOwnWholeLocator() {
+    var lines = java.util.Arrays.asList(10, null);
+    assertTrue(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved", "src/A.java", lines));
+    assertTrue(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved `src/A.java:10` — t", "src/A.java", lines));
+    assertTrue(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved src/A.java:10", "src/A.java", lines));
+    assertFalse(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved src/A.java:15 — other bug", "src/A.java", lines),
+        "another line of the same file is another finding");
+    assertFalse(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved other/src/A.java:10 — t", "src/A.java", lines),
+        "a longer path is another file");
+    assertFalse(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved src/A.java:100 — t", "src/A.java", lines));
+    assertTrue(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "src/A.java:10 is fixed. @thrillhousebot resolved", "src/A.java", lines),
+        "the locator may open the reply");
+    for (var longer :
+        List.of(
+            "x.src/A.java:10",
+            "x_src/A.java:10",
+            "x-src/A.java:10",
+            "xsrc/A.java:10",
+            "9src/A.java:10")) {
+      assertFalse(
+          FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+              "@thrillhousebot resolved " + longer, "src/A.java", lines),
+          longer);
+    }
+    assertFalse(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved src/A.java:10-12", "src/A.java", lines));
+    assertFalse(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved src/A.java:10 - 12", "src/A.java", lines));
+    assertFalse(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved src/B.java:10 — t", "src/A.java", lines));
+    assertFalse(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "@thrillhousebot resolved src/B.java:10", null, lines));
+  }
+
+  /** The effective round: a clear replied on the finding's own thread rewrites its unresolved. */
+  @Test
+  void clearNamedInConversationAppliesAClearRepliedOnTheFindingsOwnThread() {
+    var threads =
+        List.of(
+            SQL_THREAD,
+            comment(400L, 300L, "src/A.java", "@thrillhousebot resolved", "maintainer"));
+
+    var rewritten =
+        analyzer.clearNamedInConversation(
+            previousFindings(), bothUnresolved(), List.of(), threads, BOT_ID);
+
+    assertEquals(
+        new ReviewResponse.PreviousFindingStatus(
+            1, "resolved", FollowUpAnalyzer.threadClearedNote(BOT_ID)),
+        rewritten.get(0));
+    assertEquals("unresolved", rewritten.get(1).status());
   }
 
   @Test
@@ -5460,5 +5760,227 @@ class FollowUpAnalyzerTest {
     assertEquals(
         statuses.subList(1, 5), FollowUpAnalyzer.withoutReplaced(previous, statuses, replaced));
     assertSame(statuses, FollowUpAnalyzer.withoutReplaced(previous, statuses, Set.of()));
+  }
+
+  // --- #1066 B: an earlier round's finding fixed in place, its anchor line still in the diff
+
+  /** Round one's SQL finding with a suggestion, then a round that raised something else. */
+  private List<FollowUpAnalyzer.HeldPrevious> fixCheckOver(
+      String suggestionNew, String aPatch, Map<String, String> renames) {
+    var roundOne =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "critical",
+                    "src/A.java",
+                    10,
+                    "SQL injection",
+                    "raw query",
+                    "String q = base + id;",
+                    suggestionNew)),
+            List.of(),
+            null);
+    var roundTwo =
+        new ReviewResponse(
+            List.of(new ReviewResponse.Finding("low", "src/C.java", 1, "New", "n", null, null)),
+            List.of(),
+            null);
+    return analyzer.heldPreviousFindings(
+        List.of(roundTwo, roundOne),
+        List.of(),
+        List.of(SQL_THREAD),
+        List.of(),
+        new DiffLineResolver(Map.of("src/A.java", aPatch, "src/C.java", patch(1))),
+        BOT_ID,
+        renames,
+        () -> "+unrelated();");
+  }
+
+  private static final String GUARD_ADDED =
+      "@@ -9,2 +9,3 @@\n context();\n+requireNumeric(id);\n String q = base + id;";
+
+  @Test
+  void anEarlierRoundFindingWhoseSuggestedFixLandedAboveItsAnchorIsResolved() {
+    var entry =
+        entryFor(
+            fixCheckOver("requireNumeric(id);\n\nString q = base + id;", GUARD_ADDED, Map.of()),
+            "SQL injection");
+
+    assertEquals("resolved", entry.status().status());
+    assertEquals(FollowUpAnalyzer.FIX_LANDED_NOTE, entry.status().note());
+    assertEquals(300L, entry.status().earlierRound().threadRootId());
+    assertTrue(entry.status().closesEarlierRound());
+  }
+
+  /** Lean to hold: every shape the fix check cannot vouch for stays open. */
+  @Test
+  void anEarlierRoundFindingStaysHeldWhenItsSuggestedFixIsNotShownToHaveLanded() {
+    var contextOnly = "@@ -9,2 +9,2 @@\n requireNumeric(id);\n String q = base + id;";
+    var partly = "@@ -9,2 +9,3 @@\n context();\n+requireNumeric(id);\n String q = base + id;";
+
+    assertTrue(entryFor(fixCheckOver(null, GUARD_ADDED, Map.of()), "SQL injection").holdsOpen());
+    assertTrue(
+        entryFor(fixCheckOver("String q = base + id;", GUARD_ADDED, Map.of()), "SQL injection")
+            .holdsOpen(),
+        "a suggestion that adds nothing");
+    assertTrue(
+        entryFor(
+                fixCheckOver("return;\nString q = base + id;", GUARD_ADDED, Map.of()),
+                "SQL injection")
+            .holdsOpen(),
+        "a suggestion made only of short lines");
+    assertTrue(
+        entryFor(
+                fixCheckOver("requireNumeric(id);\nString q = base + id;", contextOnly, Map.of()),
+                "SQL injection")
+            .holdsOpen(),
+        "a fix line that is only context was there before");
+    assertTrue(
+        entryFor(
+                fixCheckOver(
+                    "requireNumeric(id);\nlogAccess(user, id);\nString q = base + id;",
+                    partly,
+                    Map.of()),
+                "SQL injection")
+            .holdsOpen(),
+        "one suggested line is missing");
+    assertTrue(
+        entryFor(
+                fixCheckOver(
+                    "requireNumeric(id);\nString q = base + id;",
+                    GUARD_ADDED,
+                    Map.of("src/A.java", "")),
+                "SQL injection")
+            .holdsOpen(),
+        "a content-identical rename");
+    assertTrue(
+        entryFor(
+                fixCheckOver(
+                    "requireNumeric(id);\nString q = base + id;",
+                    String.join(
+                        "\n",
+                        "@@ -9,2 +9,8 @@",
+                        " context();",
+                        " String q = base + id;",
+                        "+a();",
+                        "+b();",
+                        "+c();",
+                        "+d();",
+                        "+e();",
+                        "+requireNumeric(id);"),
+                    Map.of()),
+                "SQL injection")
+            .holdsOpen(),
+        "the same guard added elsewhere in the file");
+  }
+
+  /** One defect raised twice: a fix that landed for one present copy only leaves it open. */
+  @Test
+  void aClusterStaysHeldUnlessEveryPresentMembersFixLanded() {
+    var roundOne =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "high",
+                    "src/A.java",
+                    10,
+                    "SQL injection",
+                    "raw query",
+                    "String q = base + id;",
+                    "requireNumeric(id);\nString q = base + id;")),
+            List.of(),
+            null);
+    var roundTwo =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    "critical",
+                    "src/A.java",
+                    11,
+                    "SQL injection",
+                    "raw query",
+                    "String q = base + id;",
+                    "validateWithAllowList(id);\nString q = base + id;")),
+            List.of(),
+            null);
+    var roundThree =
+        new ReviewResponse(
+            List.of(new ReviewResponse.Finding("low", "src/C.java", 1, "New", "n", null, null)),
+            List.of(),
+            null);
+
+    var entries =
+        analyzer.heldPreviousFindings(
+            List.of(roundThree, roundTwo, roundOne),
+            List.of(),
+            List.of(),
+            List.of(),
+            new DiffLineResolver(Map.of("src/A.java", GUARD_ADDED, "src/C.java", patch(1))),
+            BOT_ID,
+            Map.of(),
+            () -> "+unrelated();");
+
+    assertTrue(entryFor(entries, "SQL injection").holdsOpen());
+  }
+
+  /** A reply from a deleted account carries no author, so it clears nothing. */
+  @Test
+  void aThreadDirectiveWithNoAuthorClearsNothing() {
+    var orphan =
+        new GitHubReviewClient.PullRequestComment(
+            400L, 300L, "src/A.java", "@thrillhousebot resolved", null, "MEMBER");
+
+    var entries =
+        entriesOver(
+            Map.of("src/A.java", patch(10), "src/B.java", patch(5)),
+            List.of(),
+            List.of(SQL_THREAD, orphan));
+
+    assertTrue(entryFor(entries, "SQL injection").holdsOpen());
+  }
+
+  /**
+   * One defect raised in two rounds, the older copy cleared from the conversation and the newer on
+   * its thread: the conversation note is kept, so the thread still gets the directive's reply.
+   */
+  @Test
+  void aConversationClearOnOneMemberKeepsItsNoteOverAThreadClearOnAnother() {
+    var roundOne =
+        """
+        {"findings": [
+          {"risk": "high", "file": "src/A.java", "line": 10, "title": "SQL injection",
+           "description": "raw query"}
+        ]}
+        """;
+    var roundTwo =
+        """
+        {"findings": [
+          {"risk": "critical", "file": "src/A.java", "line": 11, "title": "SQL injection",
+           "description": "raw query"}
+        ]}
+        """;
+    var roundThree =
+        """
+        {"findings": [
+          {"risk": "low", "file": "src/C.java", "line": 1, "title": "New", "description": "n"}
+        ]}
+        """;
+
+    var entries =
+        analyzer.heldPreviousFindings(
+            analyzer.parsePreviousResponses(List.of(roundThree, roundTwo, roundOne)),
+            List.of(),
+            List.of(
+                SQL_THREAD,
+                comment(400L, 300L, "src/A.java", "@thrillhousebot resolved", "maintainer")),
+            List.of(maintainerSays(CLEARS_FINDING_ONE)),
+            new DiffLineResolver(Map.of("src/A.java", patch(10), "src/C.java", patch(1))),
+            BOT_ID,
+            Map.of(),
+            () -> "+unrelated();");
+
+    var cleared = entryFor(entries, "SQL injection");
+    assertEquals("resolved", cleared.status().status());
+    assertEquals(FollowUpAnalyzer.conversationClearedNote(BOT_ID), cleared.status().note());
   }
 }

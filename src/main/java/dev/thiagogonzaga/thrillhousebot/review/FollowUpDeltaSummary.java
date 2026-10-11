@@ -42,9 +42,10 @@ import java.util.Optional;
  * maintainer) is in none of them — it is neither newly fixed nor still open — and {@code
  * superseded} is not counted either: it is an auto-close because the targeted code left the diff,
  * not something the round fixed. A superseded round also re-posts the full summary, and the caller
- * skips this comment whenever that re-post lands. Nor is a close the backstop gives an earlier
- * round's finding: it is recomputed every round, so counting it would post this comment on every
- * push (#957, {@link ReviewResult#resolvedPreviousCount}).
+ * skips this comment whenever that re-post lands. An earlier round's finding the round closed
+ * (cleared, or its code left the diff) is counted and named: it has no model verdict, and the round
+ * records the close, so it is counted on that round only and never posts this comment again (#957,
+ * #1066, {@link ReviewResult#resolvedPreviousCount}).
  *
  * <p>The counts are only as good as the previous-finding statuses handed to them: issue #455
  * records that a round returning zero findings corrupts the previous-findings context, which can
