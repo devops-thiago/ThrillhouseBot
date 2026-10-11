@@ -209,10 +209,12 @@ class OverviewScreenTest {
 
   @Test
   void aStandardsCodeIsNotTakenForAnInventedTicket() {
-    var purpose = "Returns HTTP-404 for unknown routes. Adds FIPS-140 validation. Fixes ABCD-9.";
+    var purpose =
+        "Returns HTTP-404 for unknown routes. Adds FIPS-140 validation. Speaks HTTP-2 and"
+            + " OAUTH-2. Fixes ABCD-9.";
 
     assertEquals(
-        "Returns HTTP-404 for unknown routes. Adds FIPS-140 validation.",
+        "Returns HTTP-404 for unknown routes. Adds FIPS-140 validation. Speaks HTTP-2 and OAUTH-2.",
         OverviewScreen.withoutInventedTickets(purpose, "Title: routes\nReturns 404"));
   }
 
@@ -281,6 +283,14 @@ class OverviewScreenTest {
     assertFalse(OverviewScreen.talksAboutFindings("Loads open findings from the store"));
     assertFalse(OverviewScreen.talksAboutFindings("Posts reported findings as inline threads"));
     assertFalse(OverviewScreen.talksAboutFindings("Resolves tracked findings"));
+    // A file that handles findings is described by what it does, before the finding word.
+    assertFalse(OverviewScreen.talksAboutFindings("Returns no findings for an empty diff"));
+    assertFalse(OverviewScreen.talksAboutFindings("Re-checks confirmed findings against the code"));
+    assertFalse(OverviewScreen.talksAboutFindings("Processes findings in this batch of files"));
+    assertEquals(
+        "Returns no findings for an empty diff",
+        OverviewScreen.screenedText("Returns no findings for an empty diff", "+x", ""));
+    assertTrue(OverviewScreen.talksAboutFindings("This file has two confirmed findings"));
     assertEquals(
         "Loads open findings from the store",
         OverviewScreen.screenedText("Loads open findings from the store", "+x", ""));

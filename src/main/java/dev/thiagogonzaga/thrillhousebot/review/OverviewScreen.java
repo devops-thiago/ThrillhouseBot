@@ -96,6 +96,33 @@ final class OverviewScreen {
           "multiple");
 
   /**
+   * Words that may stand before "finding(s)" in a clause about what the file holds rather than what
+   * it does: articles, the file itself, and the verbs of holding.
+   */
+  private static final Set<String> BOOKKEEPING_LEAD =
+      Set.of(
+          "the",
+          "a",
+          "an",
+          "this",
+          "file",
+          "here",
+          "it",
+          "there",
+          "is",
+          "are",
+          "has",
+          "have",
+          "hosts",
+          "host",
+          "holds",
+          "contains",
+          "carries",
+          "with",
+          "any",
+          "all");
+
+  /**
    * Words that, a word or two after a clause-opening "Findings", place the review's findings
    * ("Findings are reported inline"). A file's role opens with what the file does, not with
    * "Findings", so after it these read as bookkeeping; the {@link #FINDING_QUALIFIERS} do too.
@@ -266,11 +293,29 @@ final class OverviewScreen {
     var words = NON_WORD.split(lower);
     var aboutTheBatch = lower.contains("this batch");
     for (var i = 0; i < words.length; i++) {
-      if (words[i].startsWith("finding") && (aboutTheBatch || qualified(words, i))) {
+      if (words[i].startsWith("finding")
+          && bookkeepingLead(words, i)
+          && (aboutTheBatch || qualified(words, i))) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Whether every word before position {@code at} only places or counts findings ("hosts the two
+   * confirmed", "no", "holds 3"), so the clause says what the file holds rather than what it does.
+   * A clause whose finding word follows what the file does ("Returns no findings for an empty
+   * diff", "Re-checks confirmed findings") describes a file that handles findings.
+   */
+  private static boolean bookkeepingLead(String[] words, int at) {
+    return Arrays.stream(words, 0, at)
+        .allMatch(
+            word ->
+                word.isEmpty()
+                    || BOOKKEEPING_LEAD.contains(word)
+                    || FINDING_QUALIFIERS.contains(word)
+                    || isCount(word));
   }
 
   /**
