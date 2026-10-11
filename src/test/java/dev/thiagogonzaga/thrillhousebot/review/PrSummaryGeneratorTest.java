@@ -2051,6 +2051,11 @@ class PrSummaryGeneratorTest {
         "flowchart TD\n  A -->> B",
         // A single-dash two-way edge is not a Mermaid link; the two-dash one is kept below.
         "flowchart TD\n  A <-> B",
+        // A stray dot before an arrowhead, and a direction Mermaid does not have.
+        "flowchart TD\n  A .-> B",
+        "flowchart XY\n  A --> B",
+        "flowchart TD XY\n  A --> B",
+        "graph LR LR\n  A --> B",
         // Statements on the header line, separated by semicolons, are checked too.
         "flowchart TD; A -> B; B --> C",
         // A comma between two bare node ids.
@@ -2115,6 +2120,8 @@ class PrSummaryGeneratorTest {
         "flowchart TD\n  A --> B & C\n  C{{\"hex\"}} --> D",
         "flowchart TD\n\n  A --> B",
         "flowchart TD; A --> B; B --> C",
+        "flowchart BT\n  A -.-> B",
+        "graph RL\n  A --> B",
         "flowchart TD\n  A[a, b] --> B(c, d)",
         "graph",
         // The asymmetric (flag) shape, quoted and bare, beside arrows whose '>' follows a dash.

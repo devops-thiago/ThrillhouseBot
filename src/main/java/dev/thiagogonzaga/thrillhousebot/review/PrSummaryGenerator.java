@@ -1008,16 +1008,21 @@ public class PrSummaryGenerator {
   }
 
   /**
-   * A one-dash arrow: {@code ->} not preceded by another dash or a dot, which covers the sequence
-   * diagram's {@code ->>} as well; a doubled arrowhead ({@code A-->>B}) is refused beside it.
-   * Flowchart arrows are {@code -->}, {@code -.->}, {@code ==>} and the like, so a lone {@code ->}
-   * is a parse error that drops the whole diagram.
+   * An arrowhead that ends no link: {@code ->} not preceded by a dash or by the {@code -.} of a
+   * dotted link, which covers the sequence diagram's {@code ->>} and a stray-dot {@code .->} as
+   * well; a doubled arrowhead ({@code A-->>B}) is refused beside it. Flowchart arrows are {@code
+   * -->}, {@code -.->}, {@code ==>} and the like, so any other {@code ->} is a parse error that
+   * drops the whole diagram.
    */
-  private static final Pattern ONE_DASH_ARROW = Pattern.compile("(?<![-.])->");
+  private static final Pattern ONE_DASH_ARROW = Pattern.compile("(?<!-|-\\.)->");
 
-  /** A flowchart's type and direction opening its first line, with a statement-ending semicolon. */
+  /**
+   * A flowchart's header: its type, then one of Mermaid's fixed directions or none, then the end of
+   * the line or a semicolon before its first statement. A first line that does not open this way
+   * ({@code flowchart XY}) does not parse.
+   */
   private static final Pattern FLOWCHART_HEADER =
-      Pattern.compile("(?i)^(?:flowchart|graph)(?:\\s++(?:TB|TD|BT|RL|LR))?+\\s*+;?+");
+      Pattern.compile("^(?:flowchart|graph)(?:\\s++(?:TB|TD|BT|RL|LR))?+\\s*+(?:;|$)");
 
   /** Flowchart statements whose syntax allows commas: class lists, styles, link styles, clicks. */
   private static final Pattern COMMA_STATEMENT =
@@ -1034,7 +1039,11 @@ public class PrSummaryGenerator {
   static boolean flowchartParses(String diagram) {
     // The header line's own statements count too: "flowchart TD; A -> B" is one line.
     var lines = new ArrayList<>(diagram.lines().map(String::strip).toList());
-    lines.set(0, FLOWCHART_HEADER.matcher(lines.getFirst()).replaceFirst(""));
+    var header = FLOWCHART_HEADER.matcher(lines.getFirst());
+    if (!header.find()) {
+      return false;
+    }
+    lines.set(0, lines.getFirst().substring(header.end()));
     for (var line : lines) {
       if (line.isEmpty() || line.startsWith("%%")) {
         continue;
