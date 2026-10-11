@@ -1025,8 +1025,10 @@ public final class PrReviewPrompts {
               which mail or when. Lines added inside a function that already existed declare
               nothing new; the row names that function instead ("changes: send"). A claim about
               what such a changed function now does (a retry added to send) may be implemented
-              there, so it is not a description gap: report it as the description's claim
-              ("the description says send now retries"), never as fact and never as missing.
+              there, so it is not a description gap: report it in pr_purpose or that file's
+              file_summaries line as the description's claim ("the description says send now
+              retries"), never as fact and never as missing, and leave it out of
+              description_gaps.
 
             The "summary" object must include:
             - total_findings, critical, high, medium, low: counts of the findings provided below

@@ -709,8 +709,12 @@ class PrReviewPromptsContentTest {
         "a claim about a changed function is not a gap");
     assertContains(
         sys,
-        "never as fact and never as missing",
-        "a claim about a changed function is reported as the description's claim");
+        "report it in pr_purpose or that file's\n  file_summaries line as the description's claim",
+        "a claim about a changed function is reported as the description's claim, outside the gaps");
+    assertContains(
+        sys,
+        "never as fact and never as missing, and leave it out of\n  description_gaps",
+        "the attributed claim never lands in description_gaps, which the eval grades as a gap");
   }
 
   @Test

@@ -252,7 +252,9 @@ class PromptEvalTest {
   /**
    * Whether a summary sample's outcome meets the case's expectation: "claim-not-gapped" is met by
    * any answer that did not report the claim as a gap, stated or not, and a failed or unparseable
-   * call meets nothing.
+   * call meets nothing. Any mention in description_gaps counts as a gap: the summary prompt reports
+   * a claim a changed function can carry in pr_purpose or the file's summary and keeps it out of
+   * description_gaps.
    */
   static boolean summaryOutcomeMatches(String expectation, String outcome) {
     if (EvalCase.CLAIM_NOT_GAPPED.equals(expectation)) {
