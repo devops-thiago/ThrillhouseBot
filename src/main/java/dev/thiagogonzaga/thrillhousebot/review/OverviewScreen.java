@@ -85,6 +85,8 @@ final class OverviewScreen {
           "reported",
           "open",
           "posted",
+          "raised",
+          "tracked",
           "inline",
           "no",
           "one",
@@ -107,6 +109,13 @@ final class OverviewScreen {
    */
   private static final Pattern TICKET_KEY =
       Pattern.compile("(?<![\\w-])[A-Z]{4,15}-\\d{1,7}(?![\\w-])");
+
+  /**
+   * Standards and protocol names that take the tracker-key shape with a number: "HTTP-404",
+   * "FIPS-140". A sentence naming one is not taken for one naming an invented ticket.
+   */
+  private static final Set<String> STANDARD_PREFIXES =
+      Set.of("HTTP", "HTTPS", "FIPS", "IEEE", "ECMA", "ANSI", "MPEG", "SMTP", "OAUTH");
 
   /** A sentence end: terminal punctuation followed by a blank. */
   private static final Pattern SENTENCE_END = Pattern.compile("(?<=[.!?])\\s++");
@@ -211,10 +220,13 @@ final class OverviewScreen {
     if (isPlaceholder(text)) {
       return "";
     }
-    // Text that is not a placeholder holds a letter or digit, so at least one clause is left.
+    // A placeholder clause ("TBD; renders the dashboard") is dropped like a placeholder summary.
     var clauses =
-        Arrays.stream(text.split(";")).map(String::strip).filter(c -> !c.isEmpty()).toList();
-    if (!trueToTheFile(clauses.getFirst(), patch, known)) {
+        Arrays.stream(text.split(";"))
+            .map(String::strip)
+            .filter(c -> !c.isEmpty() && !isPlaceholder(c))
+            .toList();
+    if (clauses.isEmpty() || !trueToTheFile(clauses.getFirst(), patch, known)) {
       return "";
     }
     return String.join("; ", clauses.stream().filter(c -> trueToTheFile(c, patch, known)).toList());
@@ -249,9 +261,15 @@ final class OverviewScreen {
     return false;
   }
 
-  /** Whether one of the two words before position {@code at} counts or qualifies findings. */
+  /**
+   * Whether one of the two words before position {@code at} counts or qualifies findings; when the
+   * finding word opens the clause ("Findings are reported inline"), one of the two words after it.
+   */
   private static boolean qualified(String[] words, int at) {
-    for (var j = Math.max(0, at - 2); j < at; j++) {
+    var opensClause = Arrays.stream(words, 0, at).allMatch(String::isEmpty);
+    var from = opensClause ? at + 1 : Math.max(0, at - 2);
+    var to = opensClause ? Math.min(words.length, at + 3) : at;
+    for (var j = from; j < to; j++) {
       if (FINDING_QUALIFIERS.contains(words[j]) || isCount(words[j])) {
         return true;
       }
@@ -282,6 +300,11 @@ final class OverviewScreen {
         .anyMatch(name -> !patch.contains(name) && !known.contains(name));
   }
 
+  /** Whether a tracker-shaped {@code key} is a standard's name and number ("HTTP-404"). */
+  private static boolean isStandardCode(String key) {
+    return STANDARD_PREFIXES.contains(key.substring(0, key.indexOf('-')));
+  }
+
   /** {@code purpose} without the sentences naming a ticket key {@code known} does not hold. */
   static String withoutInventedTickets(String purpose, String known) {
     if (purpose == null || !TICKET_KEY.matcher(purpose).find()) {
@@ -294,7 +317,8 @@ final class OverviewScreen {
                 TICKET_KEY
                     .matcher(sentence)
                     .results()
-                    .allMatch(key -> source.contains(key.group())))
+                    .map(MatchResult::group)
+                    .allMatch(key -> source.contains(key) || isStandardCode(key)))
         .collect(Collectors.joining(" "));
   }
 }

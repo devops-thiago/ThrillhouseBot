@@ -177,6 +177,27 @@ class OverviewScreenTest {
   }
 
   @Test
+  void aPlaceholderClauseIsDroppedFromARow() {
+    assertEquals(
+        "renders the dashboard",
+        OverviewScreen.screenedText("TBD; renders the dashboard", "+x", ""));
+    assertEquals(
+        "renders the dashboard",
+        OverviewScreen.screenedText("renders the dashboard; n/a", "+x", ""));
+    // Nothing but placeholder clauses is no summary.
+    assertEquals("", OverviewScreen.screenedText("TBD; n/a", "+x", ""));
+  }
+
+  @Test
+  void aStandardsCodeIsNotTakenForAnInventedTicket() {
+    var purpose = "Returns HTTP-404 for unknown routes. Adds FIPS-140 validation. Fixes ABCD-9.";
+
+    assertEquals(
+        "Returns HTTP-404 for unknown routes. Adds FIPS-140 validation.",
+        OverviewScreen.withoutInventedTickets(purpose, "Title: routes\nReturns 404"));
+  }
+
+  @Test
   void anInventedTicketKeyTakesItsSentenceOut() {
     // c #205 round 2: "THRILLHOUSEBOT-122" appears nowhere in the PR or its issues.
     var purpose =
@@ -232,6 +253,14 @@ class OverviewScreenTest {
         "(findings tracker) page for the dashboard",
         OverviewScreen.screenedText("(findings tracker) page for the dashboard", "+x", ""));
     assertTrue(OverviewScreen.talksAboutFindings("hosts 2 findings"));
+    // A clause the finding word opens is judged by the words after it.
+    assertTrue(OverviewScreen.talksAboutFindings("Findings are reported inline for the parser"));
+    assertTrue(OverviewScreen.talksAboutFindings("(Findings tracked elsewhere)"));
+    assertFalse(OverviewScreen.talksAboutFindings("Findings model with a severity and a title"));
+    assertFalse(OverviewScreen.talksAboutFindings("Findings"));
+    assertEquals(
+        "Renders the parser",
+        OverviewScreen.screenedText("Renders the parser; findings are reported inline", "+x", ""));
   }
 
   @Test
