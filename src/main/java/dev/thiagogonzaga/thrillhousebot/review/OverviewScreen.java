@@ -48,8 +48,8 @@ import java.util.stream.Collectors;
  *       dropped, so the row says it has no summary instead of printing one.
  *   <li><b>A file summary talks about the file, not the review.</b> A clause about findings ("hosts
  *       the two confirmed findings", "no findings in this batch") is review bookkeeping read as the
- *       file's role, and was wrong besides; it is cut, and a summary that is nothing but such a
- *       clause is dropped.
+ *       file's role, and was wrong besides; it is cut, and a summary whose first clause (the file's
+ *       role) is one is dropped.
  *   <li><b>A setting named in a file summary is in that file's change.</b> An {@code UPPER_SNAKE}
  *       name that neither the file's patch nor the findings and PR text contain is one the summary
  *       invented; the clause naming it is cut (the whole summary when it is the first). A file with
@@ -170,9 +170,10 @@ final class OverviewScreen {
     var dropped = entries.size() - kept.size();
     if (!entries.isEmpty() && kept.stream().noneMatch(e -> patches.containsKey(e.path()))) {
       Log.warnf(
-          "Summary call returned %d file summary(ies) and none names a changed file; the Changed"
-              + " Files rows will read \"Not summarized\"",
-          entries.size());
+          "Summary call returned %d file summary(ies) and none is left on a changed file (%d"
+              + " failed the overview screen, the rest name no changed file); the Changed Files"
+              + " rows will read \"Not summarized\"",
+          entries.size(), dropped);
     } else if (dropped > 0) {
       Log.infof("Dropped %d file summary(ies) that failed the overview screen", dropped);
     }
@@ -245,7 +246,9 @@ final class OverviewScreen {
   /** Whether one of the two words before position {@code at} counts or qualifies findings. */
   private static boolean qualified(String[] words, int at) {
     for (var j = Math.max(0, at - 2); j < at; j++) {
-      if (FINDING_QUALIFIERS.contains(words[j]) || words[j].chars().allMatch(Character::isDigit)) {
+      var word = words[j];
+      if (FINDING_QUALIFIERS.contains(word)
+          || (!word.isEmpty() && word.chars().allMatch(Character::isDigit))) {
         return true;
       }
     }
