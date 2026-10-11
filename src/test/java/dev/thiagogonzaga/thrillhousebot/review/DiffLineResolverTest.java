@@ -1087,8 +1087,17 @@ class DiffLineResolverTest {
   // #1066: the added lines the earlier-round fix check reads.
 
   private static final String GUARDED =
-      "@@ -1,3 +1,8 @@\n kept();\n+requireNumeric(id);\n String q = base + id;\n+a();\n+b();"
-          + "\n+c();\n+d();\n+requireNumeric(id2);";
+      String.join(
+          "\n",
+          "@@ -1,3 +1,8 @@",
+          " kept();",
+          "+requireNumeric(id);",
+          " String q = base + id;",
+          "+a();",
+          "+b();",
+          "+c();",
+          "+d();",
+          "+requireNumeric(id2);");
 
   @Test
   void addsEveryLineNearReadsOnlyAddedLinesBesideTheQuote() {

@@ -5273,6 +5273,22 @@ class FollowUpAnalyzerTest {
     assertFalse(
         FollowUpAnalyzer.threadDirectiveNamesItsFinding(
             "@thrillhousebot resolved src/A.java:100 — t", "src/A.java", lines));
+    assertTrue(
+        FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+            "src/A.java:10 is fixed. @thrillhousebot resolved", "src/A.java", lines),
+        "the locator may open the reply");
+    for (var longer :
+        List.of(
+            "x.src/A.java:10",
+            "x_src/A.java:10",
+            "x-src/A.java:10",
+            "xsrc/A.java:10",
+            "9src/A.java:10")) {
+      assertFalse(
+          FollowUpAnalyzer.threadDirectiveNamesItsFinding(
+              "@thrillhousebot resolved " + longer, "src/A.java", lines),
+          longer);
+    }
     assertFalse(
         FollowUpAnalyzer.threadDirectiveNamesItsFinding(
             "@thrillhousebot resolved src/A.java:10-12", "src/A.java", lines));
@@ -5724,8 +5740,17 @@ class FollowUpAnalyzerTest {
         entryFor(
                 fixCheckOver(
                     "requireNumeric(id);\nString q = base + id;",
-                    "@@ -9,2 +9,8 @@\n context();\n String q = base + id;\n+a();\n+b();\n+c();"
-                        + "\n+d();\n+e();\n+requireNumeric(id);",
+                    String.join(
+                        "\n",
+                        "@@ -9,2 +9,8 @@",
+                        " context();",
+                        " String q = base + id;",
+                        "+a();",
+                        "+b();",
+                        "+c();",
+                        "+d();",
+                        "+e();",
+                        "+requireNumeric(id);"),
                     Map.of()),
                 "SQL injection")
             .holdsOpen(),
