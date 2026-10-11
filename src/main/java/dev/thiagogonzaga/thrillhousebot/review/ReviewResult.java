@@ -631,6 +631,41 @@ public record ReviewResult(
       """;
 
   /**
+   * The banner of a degraded summary whose overview is carried from the previous review of the same
+   * commit (#965), in place of the counts-only banners above, which would say only the counts are
+   * shown under an overview that is plainly there. It names the same cause and setting the
+   * counts-only banner of {@code degradation} names.
+   */
+  static String overviewCarriedNotice(SummaryDegradation degradation) {
+    var cause =
+        switch (degradation) {
+          case RESPONSE_CUT ->
+              "The model's summary response was cut at its length cap (max-output-tokens /"
+                  + " REVIEW_CONCISE_MAX_OUTPUT_TOKENS)";
+          case SKIPPED_AT_CEILING ->
+              "The review's token spend ceiling (REVIEW_MAX_TOKENS_PER_REVIEW) was reached before"
+                  + " the summary could be generated";
+          case SKIPPED_AT_CALL_CAP ->
+              "REVIEW_MAX_AI_CALLS=1 leaves no call for the summary after the review call";
+          case SUMMARY_FAILED -> "The summary call failed after its retries";
+          case NONE -> "The summary was not regenerated";
+        };
+    return "> ⚠️ **Summary carried over.** "
+        + cause
+        + ", so the overview below is carried from the previous review of this same commit and"
+        + " only the finding counts are new.\n\n";
+  }
+
+  /**
+   * The line added under the partial-review banner when the degraded summary's overview is carried
+   * from the previous review of the same commit (#965): that banner names the summary degradation
+   * as one of its clauses, and this says what the overview below it is.
+   */
+  static final String OVERVIEW_CARRIED_LINE =
+      "> The overview below is carried from the previous review of this same commit; only the"
+          + " finding counts are new.\n\n";
+
+  /**
    * True when at least one outstanding finding was severe enough to block but its confidence, not
    * its risk, is why this review is not requesting changes.
    */

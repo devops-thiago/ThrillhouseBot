@@ -291,7 +291,8 @@ public class VerdictBuilder {
             PatchCoverageResolver.formatScopeNote(ctx.coverageArtifactRefusal()),
             SupersededFindingsCarryover.formatScopeNote(ctx.carried()),
             reasoningStepDownNote(plan.reasoningStepDown()),
-            openPrevious),
+            openPrevious,
+            PriorOverviewCarryover.carried(effectiveResponse.summary(), ctx)),
         ciEvaluation,
         backstopStatuses);
   }
@@ -626,7 +627,8 @@ public class VerdictBuilder {
       String coverageArtifactNotRead,
       String carriedFromSupersededRun,
       String reasoningStepDown,
-      List<Finding> openPrevious) {}
+      List<Finding> openPrevious,
+      boolean overviewCarried) {}
 
   ReviewResult buildResult(
       ReviewResponse aiResponse,
@@ -640,7 +642,7 @@ public class VerdictBuilder {
         aiResponse,
         isFirstReview,
         diffStats,
-        new SummaryInputs(changedFiles, "", "", "", "", "", unresolvedPrevious),
+        new SummaryInputs(changedFiles, "", "", "", "", "", unresolvedPrevious, false),
         ciEvaluation,
         backstopStatuses);
   }
@@ -732,9 +734,15 @@ public class VerdictBuilder {
     if (withheldByConfidence > 0) {
       summaryMarkdown = ReviewResult.confidenceHoldNotice(withheldByConfidence) + summaryMarkdown;
     }
+    // #965: a degraded summary on the head the previous round reviewed shows that round's overview,
+    // so its banner says the overview is carried rather than that only the counts are shown.
+    var carriedOverview =
+        summaryInputs.overviewCarried()
+            && diffStats.truncation().summaryDegradation() != SummaryDegradation.NONE;
     if (diffStats.truncated()) {
       summaryMarkdown =
           ReviewResult.truncationNotice(diffStats.omittedFiles(), diffStats.truncation())
+              + (carriedOverview ? ReviewResult.OVERVIEW_CARRIED_LINE : "")
               + summaryMarkdown;
     } else {
       // Summary-only degradation (no file gap): the findings are complete, so the partial-review
@@ -742,13 +750,16 @@ public class VerdictBuilder {
       // banner names the cut, the token spend ceiling (#518) or the failed summary call (#851),
       // without holding the verdict.
       summaryMarkdown =
-          switch (diffStats.truncation().summaryDegradation()) {
-            case RESPONSE_CUT -> ReviewResult.SUMMARY_CUT_NOTICE + summaryMarkdown;
-            case SKIPPED_AT_CEILING -> ReviewResult.SUMMARY_SKIPPED_NOTICE + summaryMarkdown;
-            case SKIPPED_AT_CALL_CAP -> ReviewResult.SUMMARY_CALL_CAP_NOTICE + summaryMarkdown;
-            case SUMMARY_FAILED -> ReviewResult.SUMMARY_FAILED_NOTICE + summaryMarkdown;
-            case NONE -> summaryMarkdown;
-          };
+          carriedOverview
+              ? ReviewResult.overviewCarriedNotice(diffStats.truncation().summaryDegradation())
+                  + summaryMarkdown
+              : switch (diffStats.truncation().summaryDegradation()) {
+                case RESPONSE_CUT -> ReviewResult.SUMMARY_CUT_NOTICE + summaryMarkdown;
+                case SKIPPED_AT_CEILING -> ReviewResult.SUMMARY_SKIPPED_NOTICE + summaryMarkdown;
+                case SKIPPED_AT_CALL_CAP -> ReviewResult.SUMMARY_CALL_CAP_NOTICE + summaryMarkdown;
+                case SUMMARY_FAILED -> ReviewResult.SUMMARY_FAILED_NOTICE + summaryMarkdown;
+                case NONE -> summaryMarkdown;
+              };
       // Verification-only degradation (#623): the findings post either way — the verifier fails
       // open by design — but a finding set no second stage screened must say so. When a
       // file-coverage gap exists the truncation banner above already folds this clause in.

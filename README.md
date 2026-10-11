@@ -636,8 +636,11 @@ does", per-file summaries) and no such section means the check ran and found
 nothing; a counts-only summary means it did not run, and says why. A gap stays
 listed on later rounds until the summary call says what resolved it, the same
 gap is reported again, or the PR stops linking the issue the gap names. A
-follow-up on the head the previous round reviewed whose summary call returns no
-overview keeps that round's overview and file summaries.
+follow-up on the head the previous round reviewed keeps that round's overview
+where its own summary has none: the whole overview when the summary call returns
+none or is skipped, cut or failed (the banner then says the overview is carried
+and only the counts are new), and otherwise each file summary and the diagram
+the new answer leaves out.
 
 ### Re-checking declines
 

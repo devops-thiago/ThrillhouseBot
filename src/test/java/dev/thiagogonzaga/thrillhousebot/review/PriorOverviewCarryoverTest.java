@@ -136,16 +136,105 @@ class PriorOverviewCarryoverTest {
   }
 
   @Test
-  void aSummaryWithItsOwnOverviewIsLeftAlone() {
-    var purposeOnly =
-        new ReviewResponse.Summary(0, 0, 0, 0, 0, null, "Its own purpose.", List.of());
-    var filesOnly =
+  void aSummaryWithItsOwnOverviewAndDiagramIsLeftAlone() {
+    var complete =
         new ReviewResponse.Summary(
-            0, 0, 0, 0, 0, null, null, List.of(), List.of(), FILES, null, List.of());
+            0,
+            0,
+            0,
+            0,
+            0,
+            null,
+            "Its own purpose.",
+            List.of(),
+            List.of(),
+            List.of(new ReviewResponse.FileSummary("src/lib.rs", "its own line")),
+            "flowchart TD\n  X --> Y",
+            List.of());
     var ctx = context(List.of(round(PRIOR)), true);
 
-    assertSame(purposeOnly, PriorOverviewCarryover.fill(purposeOnly, ctx));
-    assertSame(filesOnly, PriorOverviewCarryover.fill(filesOnly, ctx));
+    assertSame(complete, PriorOverviewCarryover.fill(complete, ctx));
+    assertSame(complete, PriorOverviewCarryover.fill(complete, context(List.of(), true)));
+  }
+
+  @Test
+  void aSummaryWithItsOwnOverviewTakesTheEarlierSummaryForEachFileItLacksAndTheDiagram() {
+    // #964 (Round 15 group B): kotlin #204 round 2 kept its purpose paragraph but lost nine
+    // file summaries and the Control-Flow Diagram that round 1 had, on the same head.
+    var earlier =
+        new ReviewResponse.Summary(
+            1,
+            0,
+            1,
+            0,
+            0,
+            "ok",
+            "Adds a cache layer.",
+            List.of(),
+            List.of(),
+            List.of(
+                new ReviewResponse.FileSummary("src/lib.rs", "adds the cache layer"),
+                new ReviewResponse.FileSummary("src/http.rs", "routes cache reads"),
+                new ReviewResponse.FileSummary("src/blank.rs", " ")),
+            "flowchart TD\n  A --> B",
+            List.of());
+    var current =
+        new ReviewResponse.Summary(
+            2,
+            0,
+            0,
+            2,
+            0,
+            "fine",
+            "Its own purpose.",
+            List.of("a gap"),
+            List.of(),
+            List.of(
+                new ReviewResponse.FileSummary("src/lib.rs", "its own line"),
+                new ReviewResponse.FileSummary("src/http.rs", "")),
+            "",
+            List.of());
+
+    var kept = PriorOverviewCarryover.fill(current, context(List.of(round(earlier)), true));
+
+    assertEquals("Its own purpose.", kept.prPurpose());
+    assertEquals(
+        List.of(
+            new ReviewResponse.FileSummary("src/lib.rs", "its own line"),
+            new ReviewResponse.FileSummary("src/http.rs", ""),
+            new ReviewResponse.FileSummary("src/http.rs", "routes cache reads")),
+        kept.fileSummaries());
+    assertEquals("flowchart TD\n  A --> B", kept.walkthroughDiagram());
+    assertEquals(List.of("a gap"), kept.descriptionGaps());
+    assertEquals(2, kept.medium());
+    // On a moved head nothing is taken.
+    assertSame(
+        current, PriorOverviewCarryover.fill(current, context(List.of(round(earlier)), false)));
+  }
+
+  @Test
+  void onlyTheDiagramIsTakenWhenEveryFileIsCovered() {
+    var current =
+        new ReviewResponse.Summary(
+            0, 0, 0, 0, 0, null, "Its own purpose.", List.of(), List.of(), FILES, null, List.of());
+
+    var kept = PriorOverviewCarryover.fill(current, context(List.of(round(PRIOR)), true));
+
+    assertEquals(FILES, kept.fileSummaries());
+    assertEquals(PRIOR.walkthroughDiagram(), kept.walkthroughDiagram());
+  }
+
+  @Test
+  void aCarriedOverviewIsToldApartFromTheRoundsOwn() {
+    var ctx = context(List.of(round(PRIOR)), true);
+    var carried = PriorOverviewCarryover.fill(null, ctx);
+    var own = new ReviewResponse.Summary(0, 0, 0, 0, 0, null, "Its own purpose.", List.of());
+
+    assertTrue(PriorOverviewCarryover.carried(carried, ctx));
+    assertFalse(PriorOverviewCarryover.carried(own, ctx));
+    assertFalse(PriorOverviewCarryover.carried(null, ctx));
+    assertFalse(PriorOverviewCarryover.carried(carried, context(List.of(round(PRIOR)), false)));
+    assertFalse(PriorOverviewCarryover.carried(carried, context(List.of(), true)));
   }
 
   @Test

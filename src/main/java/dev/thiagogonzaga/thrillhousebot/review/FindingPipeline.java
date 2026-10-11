@@ -331,7 +331,7 @@ public class FindingPipeline {
             ctx,
             lineResolver);
     if (budgetPlanner.callCapLeavesNoSummaryCall()) {
-      return summarySkippedAtCallCap(session, refined, plan, carryFor(ctx, promptInputs));
+      return summarySkippedAtCallCap(session, refined, plan, ctx, carryFor(ctx, promptInputs));
     }
     return withSummary(session, refined, promptInputs, ctx, plan);
   }
@@ -346,13 +346,14 @@ public class FindingPipeline {
       ReviewSession session,
       ReviewResponse refined,
       DiffBudgetPlanner.BudgetPlan plan,
+      ReviewContextLoader.ReviewContext ctx,
       DescriptionGapCarryover.Carry carry) {
     plan.recordSummaryDegradation(SummaryDegradation.SKIPPED_AT_CALL_CAP);
     Log.warnf(
         "Review session %d skips its summary call: REVIEW_MAX_AI_CALLS=1 was spent by the review"
             + " call; keeping the %d findings with a counts-only summary",
         ledgerSessionId(session), refined.findings().size());
-    return persistWithSummary(session, refined, null, carry);
+    return persistWithSummary(session, refined, PriorOverviewCarryover.fill(null, ctx), carry);
   }
 
   /**
@@ -568,6 +569,10 @@ public class FindingPipeline {
    * <p>The description gaps the previous round listed ride that guidance too (#923), so the call
    * can say which of them are now resolved; every path, degraded ones included, then carries the
    * rest into the summary it persists ({@link DescriptionGapCarryover}).
+   *
+   * <p>On the head the previous round reviewed, every path also keeps that round's overview where
+   * this one has none ({@link PriorOverviewCarryover}): the degraded paths whole (#965), whose
+   * banner then says the overview is carried, and an answer file by file and for the diagram.
    */
   private ReviewResponse withSummary(
       ReviewSession session,
@@ -577,7 +582,7 @@ public class FindingPipeline {
       DiffBudgetPlanner.BudgetPlan plan) {
     var carry = carryFor(ctx, promptInputs);
     if (tokenLedger.ceilingReached(ledgerSessionId(session))) {
-      return countsOnlySummary(session, refined, plan, "skipping the summary call", carry);
+      return countsOnlySummary(session, refined, plan, ctx, "skipping the summary call", carry);
     }
     // Added before the clamps below, so the overview and findings are sized around it.
     var inputs = withCarriedGaps(promptInputs, carry);
@@ -596,18 +601,18 @@ public class FindingPipeline {
     } catch (TokenSpendCeilingExceededException _) {
       // The gate above passed but a late usage callback (e.g. a timed-out review attempt's
       // response) crossed the ceiling first, or a summary retry was refused mid-loop.
-      return countsOnlySummary(session, refined, plan, "summary call refused", carry);
+      return countsOnlySummary(session, refined, plan, ctx, "summary call refused", carry);
     } catch (AiResponseTruncatedException e) {
       // #500 scope A: every review call succeeded and was billed. Losing the whole review to a
       // truncated summary would discard exactly the paid work #495 preserved on the review lane —
       // salvage the summary object if it closed before the cut, else degrade to the same
       // counts-only shape as the ceiling-tripped path above. Never re-enters the retry lane.
-      return salvagedOrCountsOnlySummary(session, refined, plan, e, carry);
+      return salvagedOrCountsOnlySummary(session, refined, plan, ctx, e, carry);
     } catch (AiReviewException e) {
       // #851: the same reasoning holds for every other way the summary call can fail its retries
       // (a response the parser refused, a timeout, a connection reset): the review calls are paid
       // for, so the review keeps their findings under the counts-only summary instead of failing.
-      return failedSummary(session, refined, plan, e, carry);
+      return failedSummary(session, refined, plan, ctx, e, carry);
     }
     // #944: an answer with no overview on the head the previous round reviewed keeps that round's.
     return persistWithSummary(
@@ -649,6 +654,7 @@ public class FindingPipeline {
       ReviewSession session,
       ReviewResponse refined,
       DiffBudgetPlanner.BudgetPlan plan,
+      ReviewContextLoader.ReviewContext ctx,
       String what,
       DescriptionGapCarryover.Carry carry) {
     plan.recordSummaryDegradation(SummaryDegradation.SKIPPED_AT_CEILING);
@@ -661,7 +667,7 @@ public class FindingPipeline {
         tokenLedger.ceiling(),
         what,
         refined.findings().size());
-    return persistWithSummary(session, refined, null, carry);
+    return persistWithSummary(session, refined, PriorOverviewCarryover.fill(null, ctx), carry);
   }
 
   /**
@@ -679,6 +685,7 @@ public class FindingPipeline {
       ReviewSession session,
       ReviewResponse refined,
       DiffBudgetPlanner.BudgetPlan plan,
+      ReviewContextLoader.ReviewContext ctx,
       AiResponseTruncatedException truncation,
       DescriptionGapCarryover.Carry carry) {
     plan.recordSummaryDegradation(SummaryDegradation.RESPONSE_CUT);
@@ -689,14 +696,15 @@ public class FindingPipeline {
               + " (max-output-tokens / REVIEW_CONCISE_MAX_OUTPUT_TOKENS); the summary object"
               + " closed before the cut and was salvaged — keeping the %d paid findings",
           ledgerSessionId(session), refined.findings().size());
-      return persistWithSummary(session, refined, salvagedSummary, carry);
+      return persistWithSummary(
+          session, refined, PriorOverviewCarryover.fill(salvagedSummary, ctx), carry);
     }
     Log.warnf(
         "Summary response for session %d was cut at the model's response-length cap"
             + " (max-output-tokens / REVIEW_CONCISE_MAX_OUTPUT_TOKENS) and no complete summary"
             + " object could be salvaged; keeping the %d paid findings with a counts-only summary",
         ledgerSessionId(session), refined.findings().size());
-    return persistWithSummary(session, refined, null, carry);
+    return persistWithSummary(session, refined, PriorOverviewCarryover.fill(null, ctx), carry);
   }
 
   /**
@@ -713,6 +721,7 @@ public class FindingPipeline {
       ReviewSession session,
       ReviewResponse refined,
       DiffBudgetPlanner.BudgetPlan plan,
+      ReviewContextLoader.ReviewContext ctx,
       AiReviewException failure,
       DescriptionGapCarryover.Carry carry) {
     if (isInterruption(failure)) {
@@ -723,7 +732,7 @@ public class FindingPipeline {
         "Summary call for session %d failed after %d attempt(s); keeping the %d paid findings"
             + " with a counts-only summary",
         ledgerSessionId(session), failure.attempts(), refined.findings().size());
-    return persistWithSummary(session, refined, null, carry);
+    return persistWithSummary(session, refined, PriorOverviewCarryover.fill(null, ctx), carry);
   }
 
   /**
