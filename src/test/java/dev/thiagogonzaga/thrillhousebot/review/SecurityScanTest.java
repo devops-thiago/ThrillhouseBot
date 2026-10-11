@@ -32,6 +32,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -1359,6 +1360,46 @@ class SecurityScanTest {
         SecurityScan.contentFingerprint(SecurityRule.JWT, "x"),
         SecurityScan.contentFingerprint(SecurityRule.GITHUB_TOKEN, "x"),
         "the rule is part of the fingerprint");
+  }
+
+  // --- #1031: identity matching scales with the matches, not the product of the sets ---
+
+  @Test
+  void identityMatchingComparesEachDetectionOnlyWithItsOwnFile() {
+    int n = 400;
+    var files = new ArrayList<FileDiff>();
+    var models = new ArrayList<ReviewResponse.Finding>();
+    for (int i = 0; i < n; i++) {
+      // The hard case for a file-name index: every file is a Dockerfile, every finding has the
+      // same title and anchor, and only the directory tells them apart.
+      var path = "svc" + i + "/Dockerfile";
+      files.add(added(path, "FROM node:20", "USER root"));
+      models.add(modelFinding(path, 2, "Container runs as root with privilege", "d"));
+    }
+    var s = scan(false, true);
+    var result = s.scan(files);
+    var firstRound = s.merge(response(), result, List.of(), Set.of()).findings();
+    assertEquals(n, firstRound.size());
+
+    long before = SecurityScan.IDENTITY_COMPARISONS.get();
+    var merged =
+        s.merge(
+            new ReviewResponse(models, List.of(), null),
+            result,
+            firstRound,
+            Set.of(),
+            firstRound,
+            new SecurityScan.Declines(firstRound, false));
+    long comparisons = SecurityScan.IDENTITY_COMPARISONS.get() - before;
+
+    // One decline, one prior and one detection per file: 3n, where a walk over every candidate
+    // makes 3n² (480,000 here).
+    assertEquals(3L * n, comparisons);
+    assertTrue(merged.findings().isEmpty(), "every model finding is a duplicate, nothing raised");
+    assertEquals(n, merged.previousFindingsStatus().size());
+    assertTrue(
+        merged.previousFindingsStatus().stream()
+            .allMatch(status -> "justified".equals(status.status())));
   }
 
   private static String stillDetectedNote() {
