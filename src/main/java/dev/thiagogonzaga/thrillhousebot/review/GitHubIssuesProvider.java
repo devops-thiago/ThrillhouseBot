@@ -320,22 +320,32 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
       if (k == i || indent > 4) {
         return false; // a list marker needs a blank, and no more than four, before the fence
       }
-      var marker = k - 1;
-      var m = body.charAt(marker);
-      if (m == '.' || m == ')') {
-        var digits = marker;
-        while (digits > 0 && marker - digits < 9 && isAsciiDigit(body.charAt(digits - 1))) {
-          digits--;
-        }
-        if (digits == marker) {
-          return false;
-        }
-        marker = digits;
-      } else if (m != '-' && m != '*' && m != '+') {
+      var marker = listMarkerStart(k - 1);
+      if (marker < 0) {
         return false;
       }
       var before = skipContainerBack(marker);
       return before == 0 || body.charAt(before - 1) == '\n';
+    }
+
+    /**
+     * Where the list marker whose last character sits at {@code last} starts — a bullet ({@code -},
+     * {@code *}, {@code +}) or an ordered marker of one to nine ASCII digits and {@code .} or
+     * {@code )} — or {@code -1} when no marker ends there.
+     */
+    private int listMarkerStart(int last) {
+      var m = body.charAt(last);
+      if (m == '-' || m == '*' || m == '+') {
+        return last;
+      }
+      if (m != '.' && m != ')') {
+        return -1;
+      }
+      var digits = last;
+      while (digits > 0 && last - digits < 9 && isAsciiDigit(body.charAt(digits - 1))) {
+        digits--;
+      }
+      return digits == last ? -1 : digits;
     }
 
     /** The columns of blanks right before {@code i}, a tab counting four. */
