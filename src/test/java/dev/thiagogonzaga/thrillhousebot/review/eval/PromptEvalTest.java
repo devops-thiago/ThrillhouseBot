@@ -18,6 +18,8 @@ package dev.thiagogonzaga.thrillhousebot.review.eval;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.review.ChangeSymbols;
 import dev.thiagogonzaga.thrillhousebot.review.PromptSections;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
@@ -25,10 +27,12 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewer;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrSummarizer;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponseParser;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
@@ -78,6 +82,7 @@ class PromptEvalTest {
 
   @Inject FindingVerificationService findingVerificationService;
   @Inject PrReviewer prReviewer;
+  @Inject PrSummarizer prSummarizer;
   @Inject ReviewResponseParser reviewResponseParser;
   @Inject ReviewDimensionRouter dimensionRouter;
 
@@ -93,8 +98,7 @@ class PromptEvalTest {
       var passes = 0;
       var outcomes = new StringBuilder();
       for (var sample = 0; sample < SAMPLES; sample++) {
-        String outcome =
-            evalCase.isVerifierCase() ? verifierOutcome(evalCase) : generatorOutcome(evalCase);
+        String outcome = outcomeOf(evalCase);
         outcomes.append(sample == 0 ? "" : ", ").append(outcome);
         if (sampleMatchesExpectation(evalCase, outcome)) {
           passes++;
@@ -118,6 +122,7 @@ class PromptEvalTest {
           .append(")\n");
     }
 
+    System.out.println("EVAL REPORT (failed " + failed + ")\n" + report);
     assertTrue(
         failed <= TOLERATED,
         "Prompt eval regressions: "
@@ -126,6 +131,68 @@ class PromptEvalTest {
             + TOLERATED
             + ")\n"
             + report);
+  }
+
+  private String outcomeOf(EvalCase evalCase) throws Exception {
+    if (evalCase.isVerifierCase()) {
+      return verifierOutcome(evalCase);
+    }
+    return evalCase.isSummaryCase() ? summaryOutcome(evalCase) : generatorOutcome(evalCase);
+  }
+
+  /**
+   * Runs the summary call over the case's PR text, changed-files overview (each row with the names
+   * its diff section declares, as production sends it) and findings, with the diagram requested,
+   * and reports whether the description claim came back as a description gap and nowhere it reads
+   * as implemented: "claim-gapped", else "claim-implemented" when the purpose, a file summary or
+   * the diagram states it, or "claim-dropped" when it is in neither (#920).
+   */
+  private String summaryOutcome(EvalCase evalCase) throws Exception {
+    var spec = evalCase.spec();
+    var patches = new HashMap<String, String>();
+    evalCase.files().forEach(f -> patches.put(f.filename(), f.patch()));
+    var overview = new StringBuilder();
+    for (var row : spec.changedFiles().split("\n")) {
+      var path = row.substring(0, row.indexOf(' ') < 0 ? row.length() : row.indexOf(' '));
+      overview.append(row).append(ChangeSymbols.overviewSuffix(patches.get(path))).append('\n');
+    }
+    var raw = new CompletableFuture<String>();
+    prSummarizer
+        .summarizeStream(
+            PromptTemplateEscaper.fence(
+                PromptSections.prContext(orEmpty(spec.prTitle()), orEmpty(spec.prDescription()))),
+            PromptTemplateEscaper.escape(new ObjectMapper().writeValueAsString(spec.findings())),
+            PromptTemplateEscaper.escape(overview.toString()),
+            "",
+            PrReviewPrompts.DIAGRAM_REQUEST)
+        .onPartialResponse(token -> {})
+        .onCompleteResponse(response -> raw.complete(response.aiMessage().text()))
+        .onError(raw::completeExceptionally)
+        .start();
+    ReviewResponse.Summary summary;
+    try {
+      summary =
+          reviewResponseParser.parse(raw.get(SAMPLE_TIMEOUT_MINUTES, TimeUnit.MINUTES)).summary();
+    } catch (IllegalArgumentException e) {
+      return "unparseable";
+    }
+    if (summary == null) {
+      return "no-summary";
+    }
+    var implemented = new StringBuilder(orEmpty(summary.prPurpose()));
+    summary.fileSummaries().forEach(f -> implemented.append('\n').append(orEmpty(f.summary())));
+    implemented.append('\n').append(orEmpty(summary.walkthroughDiagram()));
+    if (mentionsAny(spec.keywords(), implemented.toString())) {
+      return "claim-implemented";
+    }
+    return mentionsAny(spec.keywords(), String.join("\n", summary.descriptionGaps()))
+        ? EvalCase.CLAIM_GAPPED
+        : "claim-dropped";
+  }
+
+  private static boolean mentionsAny(List<String> keywords, String text) {
+    var lower = text.toLowerCase(Locale.ROOT);
+    return keywords.stream().anyMatch(k -> lower.contains(k.toLowerCase(Locale.ROOT)));
   }
 
   private static boolean sampleMatchesExpectation(EvalCase evalCase, String outcome) {
@@ -216,7 +283,12 @@ class PromptEvalTest {
         .onCompleteResponse(response -> raw.complete(response.aiMessage().text()))
         .onError(raw::completeExceptionally)
         .start();
-    var parsed = reviewResponseParser.parse(raw.get(SAMPLE_TIMEOUT_MINUTES, TimeUnit.MINUTES));
+    ReviewResponse parsed;
+    try {
+      parsed = reviewResponseParser.parse(raw.get(SAMPLE_TIMEOUT_MINUTES, TimeUnit.MINUTES));
+    } catch (IllegalArgumentException e) {
+      return "unparseable";
+    }
     var found =
         parsed.findings().stream()
             .anyMatch(

@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewDimension;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
@@ -47,8 +48,8 @@ class EvalCorpusTest {
   void everyCaseDeclaresKindProvenanceAndDiff() {
     for (EvalCase c : corpus) {
       assertTrue(
-          c.isVerifierCase() || c.isGeneratorCase(),
-          c.name() + ": kind must be 'verifier' or 'generator'");
+          c.isVerifierCase() || c.isGeneratorCase() || c.isSummaryCase(),
+          c.name() + ": kind must be 'verifier', 'generator' or 'summary'");
       assertTrue(c.spec().sourcePr() > 0, c.name() + ": sourcePr must reference the dogfood PR");
       assertNotNull(c.spec().why(), c.name() + ": why must document the resolved outcome");
       assertFalse(c.spec().why().isBlank(), c.name() + ": why must document the resolved outcome");
@@ -97,6 +98,30 @@ class EvalCorpusTest {
       assertNotNull(c.spec().targetFile(), c.name() + ": targetFile");
       assertNotNull(c.spec().keywords(), c.name() + ": keywords");
       assertFalse(c.spec().keywords().isEmpty(), c.name() + ": keywords must not be empty");
+    }
+  }
+
+  @Test
+  void summaryCasesCarryTheClaimTheChangedFilesAndTheFindings() {
+    for (EvalCase c : corpus) {
+      if (!c.isSummaryCase()) {
+        continue;
+      }
+      assertEquals(EvalCase.CLAIM_GAPPED, c.spec().expectation(), c.name() + ": expectation");
+      assertNotNull(c.spec().prDescription(), c.name() + ": the description holding the claim");
+      assertNotNull(c.spec().keywords(), c.name() + ": keywords naming the claim");
+      assertFalse(c.spec().keywords().isEmpty(), c.name() + ": keywords must not be empty");
+      assertTrue(
+          c.spec().keywords().stream()
+              .anyMatch(k -> c.spec().prDescription().toLowerCase(Locale.ROOT).contains(k)),
+          c.name() + ": the description must make the claim the keywords name");
+      assertNotNull(c.spec().changedFiles(), c.name() + ": changedFiles overview");
+      assertNotNull(c.spec().findings(), c.name() + ": findings (may be empty)");
+      for (var file : c.files()) {
+        assertTrue(
+            c.spec().changedFiles().contains(file.filename()),
+            c.name() + ": every diff section must be in the changed-files overview");
+      }
     }
   }
 

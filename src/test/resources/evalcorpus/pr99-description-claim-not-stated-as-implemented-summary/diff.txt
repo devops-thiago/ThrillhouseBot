@@ -1,0 +1,100 @@
+### python/roombook/mailer.py (added, +18 -0)
+```diff
+@@ -0,0 +1,18 @@
++"""Outbound e-mail collaborator."""
++
++
++class MailerError(Exception):
++    pass
++
++
++class Mailer:
++    def send(self, to: str, subject: str, body: str) -> bool:
++        """Send a message.
++
++        Raises MailerError when the recipient address is empty or malformed.
++        Returns True once the message has been handed to the relay.
++        """
++        if not to or "@" not in to:
++            raise MailerError("invalid recipient: %r" % (to,))
++        # Relay hand-off omitted in this sample service.
++        return True
+```
+
+### python/roombook/service.py (added, +72 -0)
+```diff
+@@ -0,0 +1,72 @@
++"""Booking rules: conflict detection, confirmation, and reporting."""
++from typing import List
++
++from .calendar_client import CalendarClient
++from .mailer import Mailer, MailerError
++from .models import Booking, Room
++from .store import Store
++
++
++def overlaps(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
++    """True when two half-open [start, end) intervals share time.
++
++    Back-to-back bookings (one ends exactly when the next starts) are fine.
++    """
++    return a_start <= b_end and b_start <= a_end
++
++
++def rooms_by_capacity(rooms: List[Room]) -> List[Room]:
++    """Return rooms sorted by capacity, smallest first."""
++    return sorted(rooms, key=lambda r: r.capacity, reverse=True)
++
++
++def first_organizer(bookings: List[Booking]) -> str:
++    return bookings[0].organizer
++
++
++class BookingService:
++    def __init__(self, store: Store, calendar: CalendarClient, mailer: Mailer,
++                 allowed_domains: List[str]):
++        self._store = store
++        self._calendar = calendar
++        self._mailer = mailer
++        self._allowed = allowed_domains
++
++    def request_booking(self, room_id: int, organizer: str, start: int, end: int) -> int:
++        if end <= start:
++            raise ValueError("end must be after start")
++        domain = organizer.rsplit("@", 1)[-1].lower()
++        if self._allowed and domain not in self._allowed:
++            raise PermissionError("organizer domain not allowed")
++        for existing in self._store.bookings_for_room(room_id):
++            if overlaps(start, end, existing.start, existing.end):
++                raise ValueError("room already booked")
++        for slot in self._calendar.busy_slots(room_id):
++            if overlaps(start, end, slot["start"], slot["end"]):
++                raise ValueError("room busy in external calendar")
++        return self._store.add_booking(room_id, organizer, start, end)
++
++    def confirm_all(self) -> str:
++        confirmed_bookings = []
++        for booking in self._store.all_bookings():
++            self._store.set_status(booking.id, "confirmed")
++            confirmed_bookings.append(booking)
++        if not confirmed_bookings:
++            return "nothing to confirm"
++        return "confirmed %d" % len(confirmed_bookings)
++
++    def notify_organizer(self, booking: Booking) -> bool:
++        try:
++            return self._mailer.send(booking.organizer, "Room booked", "Your room is booked.")
++        except MailerError:
++            return False
++
++    def find_duplicate_ids(self) -> List[int]:
++        # The nightly export can hold up to 200000 bookings, so keep this cheap.
++        bookings = self._store.all_bookings()
++        dupes = []
++        for i, a in enumerate(bookings):
++            for b in bookings[i + 1:]:
++                if (a.room_id, a.organizer, a.start, a.end) == (b.room_id, b.organizer, b.start, b.end):
++                    dupes.append(b.id)
++        return dupes
+```
+

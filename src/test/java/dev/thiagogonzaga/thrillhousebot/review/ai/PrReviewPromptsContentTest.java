@@ -636,8 +636,8 @@ class PrReviewPromptsContentTest {
         "pr_purpose must be scoped to the whole change set, not one file (#335)");
     assertContains(
         sys,
-        "PR title and description (the author's stated intent)",
-        "pr_purpose must be grounded in the PR title/description");
+        "(the author's stated intent) only where that evidence bears them",
+        "pr_purpose reads the PR title/description, but only as far as the evidence goes (#920)");
     assertContains(
         sys,
         "PR scope totals and the changed-file list",
@@ -663,6 +663,31 @@ class PrReviewPromptsContentTest {
         sys,
         "whose scope is narrower than the change itself",
         "description_gaps must cover a description that covers only part of the change (#335)");
+  }
+
+  @Test
+  void summaryPromptTreatsTheDescriptionAsClaimsNotFacts() {
+    String sys = PrReviewPrompts.SUMMARY_SYSTEM;
+    assertContains(
+        sys,
+        "title and description are the author's CLAIMS about it",
+        "the description is a claim to check, not a source of facts (#920)");
+    assertContains(
+        sys,
+        "is not described as implemented in\n  pr_purpose, file_summaries or walkthrough_diagram",
+        "an unsupported claim never reads as implemented (#920)");
+    assertContains(
+        sys,
+        "it goes in description_gaps",
+        "an unsupported claim is reported as a description gap (#920)");
+    assertContains(
+        sys,
+        "only where that evidence bears them",
+        "pr_purpose is grounded in the evidence, not the description (#920)");
+    assertContains(
+        PrReviewPrompts.DIAGRAM_REQUEST,
+        "never draw a step only the PR description claims",
+        "the diagram must not draw an unconfirmed claim (#920, zig #178's retry loop)");
   }
 
   @Test
@@ -1514,8 +1539,8 @@ class PrReviewPromptsContentTest {
         "the diagram request must say the call answering it has no diff");
     assertContains(
         PrReviewPrompts.DIAGRAM_REQUEST,
-        "components and calls that material names",
-        "the diagram must be limited to components its material names");
+        "components and calls that material shows",
+        "the diagram must be limited to components its material shows (#920)");
   }
 
   /**
