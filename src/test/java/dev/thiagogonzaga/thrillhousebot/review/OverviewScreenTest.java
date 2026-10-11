@@ -341,7 +341,11 @@ class OverviewScreenTest {
         "Processes findings in this batch of files",
         // A finding word that names a part of the file.
         "Contains the findings table for the dashboard",
-        "Holds the findings store"
+        "Holds the findings store",
+        // Plural artifact nouns.
+        "Contains the findings tables for the dashboard",
+        "Holds the findings queries and classes",
+        "Defines the findings classes"
       })
   void aClauseAboutWhatTheFileDoesIsNotFindingsTalk(String clause) {
     assertFalse(OverviewScreen.talksAboutFindings(clause));
@@ -366,6 +370,17 @@ class OverviewScreenTest {
     assertEquals(
         "Renders it",
         OverviewScreen.screenedText("Renders it, and hosts the two findings", "+x", ""));
+    // Any coordinating conjunction separates the findings part, with or without a comma.
+    assertEquals(
+        "renders it",
+        OverviewScreen.screenedText("renders it, but hosts the two findings", "+x", ""));
+    assertEquals(
+        "renders it", OverviewScreen.screenedText("renders it yet hosts two findings", "+x", ""));
+    assertEquals(
+        "renders it", OverviewScreen.screenedText("renders it or holds no findings", "+x", ""));
+    assertEquals(
+        "Loads findings for the dashboard",
+        OverviewScreen.screenedText("Loads findings for the dashboard", "+x", ""));
     // Joined by "and" alone, the findings part is cut the same way, and kept parts keep their
     // separators.
     assertEquals(

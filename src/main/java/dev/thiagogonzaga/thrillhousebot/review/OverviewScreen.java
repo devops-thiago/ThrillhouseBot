@@ -30,6 +30,7 @@ import java.util.Set;
 import java.util.regex.MatchResult;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Checks the summary call's overview against the material it describes before it is persisted and
@@ -353,10 +354,14 @@ final class OverviewScreen {
   }
 
   /**
-   * What separates the parts of a clause: a comma before a blank (not the one inside "1,000") or an
-   * "and" between blanks.
+   * What separates the parts of a clause: a comma before a blank (not the one inside "1,000"), with
+   * any coordinating conjunction after it ("renders it, but hosts the two findings"), or a
+   * conjunction between blanks: and, but, or, nor, yet. "For" and "so" separate only after a comma;
+   * alone they are usually a preposition or an adverb ("loads findings for the dashboard").
    */
-  private static final Pattern PART_SEPARATOR = Pattern.compile(",(?=\\s)\\s*+|\\s++and\\s++");
+  private static final Pattern PART_SEPARATOR =
+      Pattern.compile(
+          "(?i),(?=\\s)\\s*+(?:(?:and|but|or|nor|yet|so|for)\\s++)?+|\\s++(?:and|but|or|nor|yet)\\s++");
 
   private static boolean isPlaceholder(String text) {
     return PLACEHOLDERS.contains(
@@ -398,7 +403,26 @@ final class OverviewScreen {
    * findings: "Contains the findings table for the dashboard", "Holds the findings store".
    */
   private static boolean namesAnArtifact(String[] words, int at) {
-    return at + 1 < words.length && FINDINGS_ARTIFACTS.contains(words[at + 1]);
+    return at + 1 < words.length
+        && singularForms(words[at + 1]).anyMatch(FINDINGS_ARTIFACTS::contains);
+  }
+
+  /**
+   * {@code word} and the singulars it may be the plural of: "tables" → "table", "classes" →
+   * "class", "queries" → "query".
+   */
+  private static Stream<String> singularForms(String word) {
+    var forms = Stream.<String>builder().add(word);
+    if (word.endsWith("ies")) {
+      forms.add(word.substring(0, word.length() - 3) + "y");
+    }
+    if (word.endsWith("es")) {
+      forms.add(word.substring(0, word.length() - 2));
+    }
+    if (word.endsWith("s")) {
+      forms.add(word.substring(0, word.length() - 1));
+    }
+    return forms.build();
   }
 
   /** Nouns a finding word qualifies when it names a part of the file: a table, a list, a store… */
