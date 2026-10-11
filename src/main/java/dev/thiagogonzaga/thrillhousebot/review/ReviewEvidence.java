@@ -42,6 +42,7 @@ public record ReviewEvidence(
    * Opens both rounds over one review, on one budget.
    *
    * @param ref the revision files are read at, normally the PR head SHA
+   * @param ciFailures the rendered CI-failure section the review was given, or blank (#952)
    */
   public static ReviewEvidence forReview(
       CitedLocationResolver resolver,
@@ -49,11 +50,13 @@ public record ReviewEvidence(
       String owner,
       String repo,
       String ref,
-      ReviewContextLoader.ReviewContext ctx) {
+      ReviewContextLoader.ReviewContext ctx,
+      String ciFailures) {
     var budget = new EvidenceBudget();
     return new ReviewEvidence(
         resolver.forReview(auth, owner, repo, ref, ctx.reviewableFiles(), budget),
-        ContextEvidenceResolver.forReview(ctx.patchCoverage(), ctx.pathInstructions(), budget));
+        ContextEvidenceResolver.forReview(
+            ctx.patchCoverage(), ctx.pathInstructions(), ciFailures, budget));
   }
 
   /**
@@ -67,6 +70,8 @@ public record ReviewEvidence(
   public FindingVerificationService.FindingEvidence forFindings(
       List<ReviewResponse.Finding> findings) {
     return new FindingVerificationService.FindingEvidence(
-        citedLocations.locate(findings), contextEvidence.locate(findings));
+        citedLocations.locate(findings),
+        contextEvidence.locate(findings),
+        contextEvidence.failingChecks());
   }
 }
