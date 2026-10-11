@@ -779,7 +779,7 @@ IaC rules (high confidence unless noted):
 |---|---|---|---|
 | Admin port open to the internet | `.tf`, `.yaml`/`.yml`, `.json` | an ingress rule admitting `0.0.0.0/0` or `::/0` to port 22, 23, 3389, 5985 or 5986, to a range containing one, or to every protocol | high |
 | S3 bucket made public | `.tf`, `.yaml`/`.yml`, `.json` | a `public-read`/`public-read-write` ACL (`AccessControl: PublicRead…`), or a Block Public Access setting set to `false` | high |
-| IAM wildcard | `.tf`, `.yaml`/`.yml`, `.json` | `Action: "*"` with `Resource: "*"` in the same statement and no `Effect: Deny` | high |
+| IAM wildcard | `.tf`, `.yaml`/`.yml`, `.json` | `Action: "*"` with `Resource: "*"` in the same statement and no `Effect: Deny`; a `"*"` anywhere in a one-line list counts (up to 64 quoted elements before it, each at most 256 characters; a longer or wider list is not reported) | high |
 | Privileged container | `.yaml`/`.yml`, `.json` | `privileged: true` (in YAML also `yes`, `on`, `y`, any case) | high |
 | Host namespace | `.yaml`/`.yml`, `.json` | `hostNetwork`, `hostPID` or `hostIPC` set to `true` (in YAML also `yes`, `on`, `y`) | high |
 | Final stage runs as root | Dockerfiles | `USER root` (or `0`) with no later `FROM` or `USER`, in a new file or in a last hunk that reaches the end of the file | medium, medium confidence |
@@ -796,7 +796,15 @@ repository's `review.ignored-files`), files matching
 lines for the IaC rules, and placeholder values: anything containing `example`,
 `sample`, `dummy`, `placeholder`, `changeme`, `redacted`, `your_`/`your-`,
 `fake`, `xxxx`, `****`, `<`/`>`, `${`, `{{`, `$(`, `%s` or an ellipsis, a run of
-six identical characters, and for assignments any value starting with `$`. To
+six identical characters, and for assignments any value starting with `$`, a
+regular expression (a value holding `(?`, a character-class range such as
+`[A-Z0-9]` or an escape such as `\d`, with at least a quarter of its characters
+regex syntax), and sample text quoted inside another string that sits first on
+its line or after `(`, `[`, `{` or `,` (`"client_secret: 'abc…'",` in a test's
+list of inputs). An assignment in a command string (`sh -c 'API_KEY="…"'`) is
+still reported; one in a command string written as a list element
+(`["sh", "-c", "API_KEY='…'"]`) is not, since it reads exactly like sample
+text. To
 accept a line, put `thrillhousebot:allow-secret` (or `thrillhousebot:allow-iac`)
 in a comment on that line or the line above; above is the only place a
 Dockerfile instruction can take one. JSON cannot hold a comment, so put such a
