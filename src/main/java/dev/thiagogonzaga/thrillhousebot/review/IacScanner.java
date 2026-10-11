@@ -88,13 +88,18 @@ final class IacScanner {
               "\"?(?:BlockPublicAcls|BlockPublicPolicy|IgnorePublicAcls|RestrictPublicBuckets)"
                   + "\"?\\s*:\\s*[\"']?false\\b"));
 
-  private static final Pattern WILDCARD_ACTION =
-      Pattern.compile(
-          "(?i)(?<![a-z])\"?actions?\"?\\s*+[=:]\\s*+\\[?\\s*+[\"']\\*[\"']\\s*+]?\\s*+(?:[,}\\]]|$)");
+  /**
+   * One quoted element of a one-line list that is not the bare wildcard, so the run of elements
+   * before a wildcard can be taken possessively without swallowing it.
+   */
+  private static final String LIST_ELEMENT = "[\"'](?!\\*[\"'])[^\"'\\n]{0,256}+[\"']";
 
-  private static final Pattern WILDCARD_RESOURCE =
-      Pattern.compile(
-          "(?i)(?<![a-z])\"?resources?\"?\\s*+[=:]\\s*+\\[?\\s*+[\"']\\*[\"']\\s*+]?\\s*+(?:[,}\\]]|$)");
+  /** At most this many elements before the wildcard in a one-line list are read. */
+  private static final int MAX_LIST_ELEMENTS = 64;
+
+  private static final Pattern WILDCARD_ACTION = wildcardSetting("actions?");
+
+  private static final Pattern WILDCARD_RESOURCE = wildcardSetting("resources?");
 
   private static final Pattern DENY_EFFECT =
       Pattern.compile("(?i)\"?effect\"?\\s*[=:]\\s*[\"']?deny");
@@ -137,6 +142,22 @@ final class IacScanner {
       Set.of("md", "markdown", "txt", "rst", "adoc", "html");
 
   private IacScanner() {}
+
+  /**
+   * A {@code key} set to the bare wildcard {@code "*"}, alone or as any element of a one-line list
+   * ({@code ["s3:GetObject", "*"]}, #983). Every run is bounded and possessive, and the elements
+   * before the wildcard exclude it, so a failed match gives nothing back and the scan stays linear.
+   */
+  private static Pattern wildcardSetting(String key) {
+    return Pattern.compile(
+        "(?i)(?<![a-z])\"?"
+            + key
+            + "\"?\\s*+[=:]\\s*+(?:\\[\\s*+(?:"
+            + LIST_ELEMENT
+            + "\\s*+,\\s*+){0,"
+            + MAX_LIST_ELEMENTS
+            + "}+)?[\"']\\*[\"']\\s*+(?:[,}\\]]|$)");
+  }
 
   /**
    * The risky lines a file's patch adds. {@code newFile} says the patch is the whole file (a file

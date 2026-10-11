@@ -439,6 +439,53 @@ class SecretScannerTest {
     assertTrue(SecretScanner.looksLikeSecret("Zx9!-q8#Lm2-vRt", 3.5));
   }
 
+  // --- #981: regular expressions and sample text quoted inside a string ---
+
+  @Test
+  void aRegexConstantNamedLikeATokenIsNotACredential() {
+    // The two lines of SecretScanner itself that the 0.7.0 release review flagged.
+    assertTrue(scan("  private static final String TOKEN_END = \"(?![A-Za-z0-9_-])\";").isEmpty());
+    assertTrue(
+        scan("  private static final String TOKEN_START = \"(?<![A-Za-z0-9_-])\";").isEmpty());
+    assertTrue(scan("TOKEN_PATTERN = '^[a-z0-9]{8,}$'").isEmpty());
+    assertTrue(scan("secret_regex: \"\\\\d{4}-\\\\d{4}+\"").isEmpty());
+  }
+
+  @Test
+  void aPasswordWithTheOddRegexCharacterIsStillACredential() {
+    // A bracket or question mark, but no regex construct.
+    assertGenericHit("password", "aB3(x]9!kqZ7w%", "password = \"aB3(x]9!kqZ7w%\"");
+    // A construct by chance, but too little regex structure around it to be a pattern.
+    var value = "Zx9(?" + fake.alnum(20);
+    assertGenericHit("api_token", value, "api_token = \"" + value + "\"");
+  }
+
+  @Test
+  void anAssignmentQuotedInsideAStringLiteralIsSampleText() {
+    // The fixture line of LearningTextTest that the 0.7.0 release review flagged.
+    assertTrue(scan("        \"client_secret: 'abcdefgh12345'\",").isEmpty());
+    assertTrue(scan("    'password = \"q8#Lm2!vRt9Z\"',").isEmpty());
+    assertTrue(scan("  `api_key: \"q8#Lm2!vRt9Z\"`,").isEmpty());
+    assertTrue(scan("List.of(\"token: 'q8#Lm2!vRt9Z'\", \"secret: 'q8#Lm2!vRt9Z'\")").isEmpty());
+  }
+
+  @Test
+  void anAssignmentInACommandStringIsStillACredential() {
+    assertGenericHit(
+        "DB_PASSWORD", "q8#Lm2!vRt9Z", "ExecStart=/bin/sh -c 'DB_PASSWORD=\"q8#Lm2!vRt9Z\" run'");
+    assertGenericHit(
+        "API_KEY", "q8#Lm2!vRt9Z", "  command: sh -c 'export API_KEY=\"q8#Lm2!vRt9Z\"'");
+  }
+
+  @Test
+  void aQuotedKeyThatClosesBeforeTheOperatorIsStillAnAssignment() {
+    assertGenericHit("client_secret", "q8#Lm2!vRt9Z", "  \"client_secret\": \"q8#Lm2!vRt9Z\",");
+    assertGenericHit("token", "q8#Lm2!vRt9Z", "creds = {\"token\": 'q8#Lm2!vRt9Z'}");
+    assertGenericHit("password", "q8#Lm2!vRt9Z", "  'password': \"q8#Lm2!vRt9Z\"");
+    // The value's quote is the opener's character, so it cannot be nested inside that string.
+    assertGenericHit("password", "q8#Lm2!vRt9Z", "\"password = \"q8#Lm2!vRt9Z\"");
+  }
+
   @Test
   void aKnownFormatAssignedToACredentialNameIsReportedOnceByTheSpecificRule() {
     var token = fake.githubToken();
