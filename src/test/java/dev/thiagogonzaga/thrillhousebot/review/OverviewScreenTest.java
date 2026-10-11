@@ -329,6 +329,7 @@ class OverviewScreenTest {
         // The leading empty word the split yields is no finding count.
         "(findings tracker)",
         "(the findings tracker)",
+        "(the findings from the parser)",
         "Findings",
         "Findings model with a severity and a title",
         // What the file does, before the finding word, is its role.
