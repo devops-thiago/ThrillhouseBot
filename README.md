@@ -671,7 +671,13 @@ diff contradicts keeps the finding open, and so does a lone "this cannot run
 concurrently" reply to a concurrency finding, because what makes a path
 concurrent (a server that handles each request on its own thread, an executor
 in another file) is rarely in the diff. Any other reply, or a second one,
-stands, and the finding is counted justified.
+stands: the finding is counted justified, its thread is resolved, and with
+review learnings on the reply is offered to the store under the same rules as
+any other decline. An older round's finding whose code left the diff is counted
+superseded, and one cleared or declined from the PR conversation is counted
+resolved or justified, so the summary's counts add up to the findings carried
+in. These are recomputed every round, so they never post a delta comment or
+re-post the summary by themselves.
 
 Set it to `false` to make a maintainer's reply final.
 
@@ -777,7 +783,7 @@ Secret rules (high confidence):
 | JSON Web Token | three base64url segments whose first two start `eyJ` | high |
 | Credential assignment | a quoted literal assigned to a key named like `password`, `secret`, `token`, `api_key`, `access_key`, `private_key` or `client_secret`, with `=`, `:`, `:=` or `=>`, including typed and array declarations (C `char API_TOKEN[] =`, Rust `const API_TOKEN: &str =`, Zig `const api_token: []const u8 =`, TypeScript, Kotlin, Scala, Swift and Python `apiToken: String =`, Go `var apiToken string =`). The literal must have at least 8 characters, a non-letter, two character classes and entropy at or above `REVIEW_SECRET_SCAN_ENTROPY_THRESHOLD`, and must not be a URL, a path or an identifier such as `DB_PASSWORD` | high |
 
-IaC rules (high confidence unless noted):
+IaC rules (high confidence):
 
 | Rule | Files | Matches | Risk |
 |---|---|---|---|
@@ -786,7 +792,7 @@ IaC rules (high confidence unless noted):
 | IAM wildcard | `.tf`, `.yaml`/`.yml`, `.json` | `Action: "*"` with `Resource: "*"` in the same statement and no `Effect: Deny`; a `"*"` anywhere in a one-line list counts (up to 64 quoted elements before it, each at most 256 characters; a longer or wider list is not reported) | high |
 | Privileged container | `.yaml`/`.yml`, `.json` | `privileged: true` (in YAML also `yes`, `on`, `y`, any case) | high |
 | Host namespace | `.yaml`/`.yml`, `.json` | `hostNetwork`, `hostPID` or `hostIPC` set to `true` (in YAML also `yes`, `on`, `y`) | high |
-| Final stage runs as root | Dockerfiles | `USER root` (or `0`) with no later `FROM` or `USER`, in a new file or in a last hunk that reaches the end of the file | medium, medium confidence |
+| Final stage runs as root | Dockerfiles | `USER root` (or `0`) with no later `FROM` or `USER`, in a new file or in a last hunk that reaches the end of the file | medium |
 | Storage encryption off | `.tf` | `encrypted = false` or `storage_encrypted = false` | medium |
 
 A rule that needs context (a firewall rule's direction and port, an IAM
@@ -800,7 +806,8 @@ repository's `review.ignored-files`), files matching
 lines for the IaC rules, and placeholder values: anything containing `example`,
 `sample`, `dummy`, `placeholder`, `changeme`, `redacted`, `your_`/`your-`,
 `fake`, `xxxx`, `****`, `<`/`>`, `${`, `{{`, `$(`, `%s` or an ellipsis, a run of
-six identical characters, and for assignments any value starting with `$`, a
+six identical characters, and for assignments any value starting with `$` or
+written as a Windows `%VAR%` reference, a
 regular expression (a value holding `(?`, a character-class range such as
 `[A-Z0-9]` or an escape such as `\d`, with at least a quarter of its characters
 regex syntax), and sample text quoted inside another string that sits first on
@@ -836,8 +843,29 @@ unverified. A model finding in the same file is dropped as a duplicate when it
 is within three lines and reports the same defect (same title by the
 deduplicator's measure, or a title using two of the rule's words), or, for a
 secret, when it sits on the matched line and its title uses one of the rule's
-words. A title that only names a key (`PAYMENT_API_KEY is never read`) is a
-different defect and is kept. Under `balanced` strictness a critical or high
+words, or, for an IaC rule, when it is within three lines and its title uses a
+word that names that rule's defect (`root`, `privileged`,
+`hostNetwork`/`hostPID`/`hostIPC`, `SSH`/`RDP`/`WinRM`/`Telnet`, `public`,
+`wildcard`/`administrator`, `encryption`/`encrypted`/`unencrypted`) and no word
+naming a neighbouring defect (`filesystem`, `read-only`, `writable`,
+`root-owned`, `subnet`). A title
+that only names a key (`PAYMENT_API_KEY is never read`) is a different defect
+and is kept.
+
+**Grades.** Every scan finding is high confidence, so none carries the "verify
+before acting" note: a match settles whether the pattern is on the line. The
+risk is the rule's, from the tables above. A final stage running as root is
+medium, the grade the review gives the same defect when the model raises it: a
+container that starts as root breaks nothing by itself, but a compromise of it
+starts with root. Medium never requests changes under any strictness, so it
+informs the verdict without deciding it.
+
+**Model secret findings on a stand-in.** Whether or not the scan is on, a model
+finding whose title reports a secret is dropped when its own line assigns every
+credential-named key an interpolation (`${VAR}`, `$VAR`, `%VAR%`, `$(…)`,
+`{{ … }}`) or a placeholder (the list under "What is skipped"), and no scan rule
+matches the line: `ENV API_TOKEN=${API_TOKEN}` names where a credential comes
+from, and `API_TOKEN=changeme` in a sample stands in for one. Under `balanced` strictness a critical or high
 scan finding requests changes on its own.
 
 **Later rounds.** A scan finding an earlier round raised is not posted again. It
@@ -847,9 +875,14 @@ finding stays declined: once a round has recorded the decline `justified`, the
 finding is not raised again while the rule matches the same content (same file,
 title and anchor, and for a secret the same line). A secret finding ends with a
 hidden `thrillhousebot:scan-content` marker holding the first eight hex digits
-of a SHA-256 of the flagged line (for a private key, its block), which is how a
-later round tells a new value with the same prefix and length from the declined
-one. A new value, or any other change to the line apart from leading and
+of an HMAC-SHA-256 of the flagged line (for a private key, its block), keyed
+from `GITHUB_WEBHOOK_SECRET`, which is how a later round tells a new value with
+the same prefix and length from the declined one. The key means a reader of the
+pull request cannot test a guessed value against the marker. The same secret
+gives the same marker across rounds and restarts; changing the webhook secret
+makes each declined secret finding come back once, and the next decline stores
+the new marker. A decline recorded under the unkeyed marker of 0.7.0 keeps
+matching its line. A new value, or any other change to the line apart from leading and
 trailing whitespace, is raised again. A secret finding declined before 0.7.0 has
 no fingerprint, so its decline holds only until the head moves; it is then
 raised once more, with the marker.

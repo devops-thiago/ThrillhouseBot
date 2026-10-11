@@ -221,6 +221,9 @@ class SummaryAcrossRoundsTest {
 
   private final ObjectMapper mapper = new ObjectMapper();
 
+  /** The diff every round's context reads; a test that moves the head replaces it. */
+  private Map<String, String> patches = PATCHES;
+
   private final GitHubCommentClient commentClient = mock(GitHubCommentClient.class);
 
   private final VerdictBuilder builder =
@@ -732,6 +735,101 @@ class SummaryAcrossRoundsTest {
     assertTrue(result.openPreviousFindings().isEmpty());
     assertEquals(ReviewState.APPROVE, result.reviewState());
   }
+
+  // #957: an earlier round's finding whose code left the diff, or that a maintainer cleared from
+  // the conversation, is counted, and recomputing it on a later round moves nothing.
+
+  /** Round three over round two and round one, raising nothing new. */
+  private static final ReviewResponse QUIET_ROUND_THREE =
+      new ReviewResponse(
+          List.of(),
+          List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+          null);
+
+  private static long tableCount(String body, String row) {
+    var at = body.indexOf("| " + row + " | ");
+    assertTrue(at >= 0, "missing row " + row + " in:\n" + body);
+    var from = at + row.length() + 5;
+    return Long.parseLong(body.substring(from, body.indexOf(" |", from)));
+  }
+
+  /** The summary's status table adds up to every finding carried into the round. */
+  private static void assertTableAddsUpTo(String body, int carriedIn) {
+    var counted =
+        tableCount(body, "✅ Resolved")
+            + tableCount(body, "⚠️ Still present")
+            + tableCount(body, "💬 Justified")
+            + (body.contains("| 🗂️ Superseded")
+                ? tableCount(body, "🗂️ Superseded (targeted code left the diff)")
+                : 0);
+    assertEquals(carriedIn, counted, body);
+  }
+
+  @Test
+  void anEarlierRoundFindingWhoseCodeLeftTheDiffIsCountedAndMovesNothingWhenRecomputed() {
+    var first = publishFirstRound(ROUND_ONE_WITH_RACE);
+    // The head moved: the SQL line CRITICAL pointed at is gone, everything else is still there.
+    patches =
+        Map.of(
+            FILE,
+            """
+            @@ -10,0 +10,3 @@
+            +int total = count * price;
+            +log(user.name());
+            +String unused = "";\
+            """);
+    var priors = List.of(ROUND_TWO_RAISED_ONE, ROUND_ONE_WITH_RACE);
+
+    var result = builder.build(followUp(priors, List.of()), QUIET_ROUND_THREE, CI_CLEAR, plan);
+    var edited = publishFollowUp(result, first);
+
+    // Carried in: round one's four and round two's one.
+    assertTableAddsUpTo(edited, 5);
+    assertEquals(1, tableCount(edited, "🗂️ Superseded (targeted code left the diff)"));
+    assertEquals(4, result.unresolvedPreviousCount());
+    assertTrue(
+        result.openPreviousFindings().stream().noneMatch(f -> CRITICAL.title().equals(f.title())));
+    // Not this round's movement: no summary re-post, no delta comment, no "closed" review body.
+    assertFalse(result.hasSupersededPrevious());
+    assertEquals(0, result.resolvedPreviousCount());
+    assertTrue(FollowUpDeltaSummary.render(result, NEW_ROUND_TWO_ONLY).isEmpty());
+    assertFalse(publisher.publishSummary("auth", "o", "r", 1, result, false));
+
+    var recomputed = builder.build(followUp(priors, List.of()), QUIET_ROUND_THREE, CI_CLEAR, plan);
+    assertEquals(result.summaryMarkdown(), recomputed.summaryMarkdown());
+    assertEquals(result.previousStatuses(), recomputed.previousStatuses());
+  }
+
+  @Test
+  void anEarlierRoundFindingClearedFromTheConversationIsCountedAndMovesNothingWhenRecomputed() {
+    var first = publishFirstRound(ROUND_ONE_WITH_RACE);
+    var clear =
+        new GitHubCommentClient.IssueComment(
+            900L,
+            "@thrillhousebot resolved `" + FILE + ":20` — " + HIGH.title(),
+            new GitHubReviewClient.ReviewResponse.User("maintainer"),
+            "MEMBER");
+    var priors = List.of(ROUND_TWO_RAISED_ONE, ROUND_ONE_WITH_RACE);
+
+    var result = builder.build(followUp(priors, List.of(clear)), QUIET_ROUND_THREE, CI_CLEAR, plan);
+    var edited = publishFollowUp(result, first);
+
+    assertTableAddsUpTo(edited, 5);
+    assertEquals(1, tableCount(edited, "✅ Resolved"));
+    assertEquals(4, result.unresolvedPreviousCount());
+    assertTrue(
+        result.openPreviousFindings().stream().noneMatch(f -> HIGH.title().equals(f.title())));
+    assertEquals(0, result.resolvedPreviousCount());
+    assertTrue(FollowUpDeltaSummary.render(result, NEW_ROUND_TWO_ONLY).isEmpty());
+    assertTrue(ClosedFindingNames.reviewBodySection(result, NEW_ROUND_TWO_ONLY).isEmpty());
+
+    var recomputed =
+        builder.build(followUp(priors, List.of(clear)), QUIET_ROUND_THREE, CI_CLEAR, plan);
+    assertEquals(result.summaryMarkdown(), recomputed.summaryMarkdown());
+  }
+
+  /** The effective previous round's findings: round two raised one. */
+  private static final List<ReviewResponse.Finding> NEW_ROUND_TWO_ONLY = List.of(NEW_IN_ROUND_TWO);
 
   /**
    * #948: a follow-up whose new findings are all below the blocking bar, while an earlier round's
@@ -1316,7 +1414,9 @@ class SummaryAcrossRoundsTest {
       jsons.add(mapper.valueToTree(round).toString());
     }
     var files = new ArrayList<FileDiff>();
-    PATCHES.forEach((path, patch) -> files.add(new FileDiff(path, "modified", 4, 0, 4, patch)));
+    var roundPatches = patches;
+    roundPatches.forEach(
+        (path, patch) -> files.add(new FileDiff(path, "modified", 4, 0, 4, patch)));
     return new ReviewContextLoader.ReviewContext(
         files,
         reviewedDiff,
@@ -1338,7 +1438,7 @@ class SummaryAcrossRoundsTest {
         "",
         "",
         files,
-        () -> new DiffLineResolver(PATCHES),
+        () -> new DiffLineResolver(roundPatches),
         null,
         conversation,
         List.of());

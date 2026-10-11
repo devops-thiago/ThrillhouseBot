@@ -102,6 +102,12 @@ public class HeadMovedGuard implements PrePublishGuard {
    * the ids after the persisted round's own in {@link
    * ReviewContextLoader.ReviewContext#previousFindingsList}, which is how they are told apart from
    * findings a posted round already tracks.
+   *
+   * <p>A status the approval backstop gave an earlier round's finding is identified by the finding
+   * it carries, not by its id, which is relative to the round that raised it and can equal a
+   * carried finding's position (#959). Such a finding was raised by a posted round, never by a
+   * superseded run, so it is not carried: the replacement replays the posted rounds and holds it
+   * again itself.
    */
   static List<ReviewResponse.Finding> findingsToCarry(
       ReviewContextLoader.ReviewContext ctx, ReviewResponse aiResponse, ReviewResult result) {
@@ -111,7 +117,8 @@ public class HeadMovedGuard implements PrePublishGuard {
         result.previousStatuses().stream()
             .filter(
                 status ->
-                    status.id() >= firstCarriedId
+                    !status.fromEarlierRound()
+                        && status.id() >= firstCarriedId
                         && status.id() <= previous.size()
                         && "unresolved".equalsIgnoreCase(status.status()))
             .map(ReviewResult.PreviousFindingStatus::id)
