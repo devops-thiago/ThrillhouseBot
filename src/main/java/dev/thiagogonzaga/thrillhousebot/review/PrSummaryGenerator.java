@@ -970,8 +970,9 @@ public class PrSummaryGenerator {
 
   /**
    * A one-dash arrow: {@code ->} not preceded by another dash or a dot, which covers the sequence
-   * diagram's {@code ->>} as well. Flowchart arrows are {@code -->}, {@code -.->}, {@code ==>} and
-   * the like, so a lone {@code ->} is a parse error that drops the whole diagram.
+   * diagram's {@code ->>} as well; a doubled arrowhead ({@code A-->>B}) is refused beside it.
+   * Flowchart arrows are {@code -->}, {@code -.->}, {@code ==>} and the like, so a lone {@code ->}
+   * is a parse error that drops the whole diagram.
    */
   private static final Pattern ONE_DASH_ARROW = Pattern.compile("(?<![-.])->");
 
@@ -1004,6 +1005,7 @@ public class PrSummaryGenerator {
       }
       var bare = MERMAID_LABEL.matcher(line).replaceAll("L");
       if (ONE_DASH_ARROW.matcher(bare).find()
+          || bare.contains(">>")
           || (!COMMA_STATEMENT.matcher(bare).find() && hasStrayComma(bare))
           || bare.indexOf('|') >= 0
           || !shapesParse(bare)) {

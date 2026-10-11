@@ -2045,8 +2045,9 @@ class PrSummaryGeneratorTest {
         "flowchart TD\n  A -->|x B",
         // Two edge labels left open on one line do not pair across the arrow between them.
         "flowchart TD\n  A -->|x B -->|y C",
-        // A directive or comment before the diagram type is not recognised, so the diagram goes.
-        "%%{init: {'theme': 'dark'}}%%\nflowchart TD\n  A -> B",
+        // A doubled arrowhead, a sequence diagram's arrow under a flowchart header.
+        "flowchart TD\n  A-->>B",
+        "flowchart TD\n  A -->> B",
         // A single-dash two-way edge is not a Mermaid link; the two-dash one is kept below.
         "flowchart TD\n  A <-> B",
         // Statements on the header line, separated by semicolons, are checked too.
@@ -2073,6 +2074,24 @@ class PrSummaryGeneratorTest {
             new ReviewResponse.Summary(
                 0, 0, 0, 0, 0, "ok", "p", List.of(), List.of(), List.of(), diagram, List.of()),
             roundWith(List.of(), List.of()));
+    assertFalse(summary.contains("Control-Flow Diagram"), summary);
+  }
+
+  @Test
+  void aDiagramWhoseFirstLineIsADirectiveIsOmittedUnrecognised() {
+    // The type keyword must open the first line; a directive or comment there leaves the diagram
+    // unrecognised, so it is omitted even though its body would parse.
+    var directive = "%%{init: {'theme': 'dark'}}%%\nflowchart TD\n  A --> B";
+    var summary =
+        generator.generate(
+            1,
+            10,
+            0,
+            List.of(),
+            new ReviewResponse.Summary(
+                0, 0, 0, 0, 0, "ok", "p", List.of(), List.of(), List.of(), directive, List.of()),
+            roundWith(List.of(), List.of()));
+
     assertFalse(summary.contains("Control-Flow Diagram"), summary);
   }
 
