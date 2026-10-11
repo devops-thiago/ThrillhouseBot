@@ -2051,6 +2051,8 @@ class PrSummaryGeneratorTest {
         "flowchart TD\n  A <-> B",
         // Statements on the header line, separated by semicolons, are checked too.
         "flowchart TD; A -> B; B --> C",
+        // A comma between two bare node ids.
+        "flowchart TD\n  A --> B, C --> D",
         "graph LR;A(f(x))-->B",
         "flowchart TD\n  A] --> B",
         // A flag shape that never closes, or one whose label breaks it.
@@ -2085,6 +2087,7 @@ class PrSummaryGeneratorTest {
         "flowchart TD\n  A --> B & C\n  C{{\"hex\"}} --> D",
         "flowchart TD\n\n  A --> B",
         "flowchart TD; A --> B; B --> C",
+        "flowchart TD\n  A[a, b] --> B(c, d)",
         "graph",
         // The asymmetric (flag) shape, quoted and bare, beside arrows whose '>' follows a dash.
         "flowchart TD\n  Deploy>\"release\"] --> Prod",

@@ -975,15 +975,9 @@ public class PrSummaryGenerator {
    */
   private static final Pattern ONE_DASH_ARROW = Pattern.compile("(?<![-.])->");
 
-  /** A comma straight after a node's closing bracket. */
-  private static final Pattern COMMA_AFTER_NODE = Pattern.compile("[\\])}]\\s*+,");
-
   /** A flowchart's type and direction opening its first line, with a statement-ending semicolon. */
   private static final Pattern FLOWCHART_HEADER =
       Pattern.compile("(?i)^(?:flowchart|graph)(?:\\s++(?:TB|TD|BT|RL|LR))?+\\s*+;?+");
-
-  /** A comma ending a line. */
-  private static final Pattern TRAILING_COMMA = Pattern.compile(",\\s*+$");
 
   /** Flowchart statements whose syntax allows commas: class lists, styles, link styles, clicks. */
   private static final Pattern COMMA_STATEMENT =
@@ -1063,9 +1057,24 @@ public class PrSummaryGenerator {
     return open.isEmpty() || LABEL_BREAKERS.indexOf(c) < 0;
   }
 
-  /** Whether {@code line} has a comma after a node or at its end. */
+  /**
+   * Whether {@code line} has a comma outside every node shape: after a node ({@code
+   * PE["pending"],}), between two bare node ids ({@code A --> B, C --> D}) or at its end. Only the
+   * statements of {@code COMMA_STATEMENT} take one there; a comma inside an unquoted label is the
+   * label's.
+   */
   private static boolean hasStrayComma(String line) {
-    return COMMA_AFTER_NODE.matcher(line).find() || TRAILING_COMMA.matcher(line).find();
+    var depth = 0;
+    for (var c : line.toCharArray()) {
+      if (OPENING_BRACKETS.indexOf(c) >= 0) {
+        depth++;
+      } else if (CLOSING_BRACKETS.indexOf(c) >= 0) {
+        depth--;
+      } else if (c == ',' && depth == 0) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Characters GitHub's parser rejects inside an unquoted label. */
