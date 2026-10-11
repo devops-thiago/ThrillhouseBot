@@ -346,8 +346,9 @@ final class RebuttalContradiction {
   /**
    * What turns the {@link #STATED_CONCURRENCY} statement right after it into a denial: a negator at
    * most two words and no clause punctuation away ("not shared by every goroutine", "is never
-   * called from multiple threads"), or a verb that refuses the statement's own subject directly
-   * before it ("rejects concurrent requests", "prevents concurrent access"). A verb that only
+   * called from multiple threads", any n't contraction: "doesn't support concurrent use"), or a
+   * verb that refuses the statement's own subject directly before it ("rejects concurrent
+   * requests", "prevents concurrent access", "prohibits concurrent access"). A verb that only
    * protects shared state ("the lock guards every field shared by every request goroutine",
    * "serializes concurrent requests") still says the path is reached concurrently, so it denies
    * nothing. A gap is any horizontal space, a non-breaking one included, and a word counts as one
@@ -355,9 +356,10 @@ final class RebuttalContradiction {
    */
   private static final Pattern DENIES =
       ci(
-          "(?:\\b(?:not|never|no|without|cannot|can['’]?t|won['’]?t|isn['’]?t)\\b"
+          "(?:\\b(?:not|never|no|nor|without|cannot|cant|wont|isnt|\\w{1,8}n['’]t)\\b"
               + "(?:[\\h-]{1,16}+[\\w'’]++(?:-[\\w'’]++)*+){0,2}"
-              + "|\\b(?:rejects?|prevents?|avoids?|forbids?|disallows?|blocks?)\\b)"
+              + "|\\b(?:rejects?|prevents?|avoids?|forbids?|disallows?|blocks?|prohibits?"
+              + "|excludes?|precludes?|refuses?|disables?)\\b)"
               + "[\\h-]{0,16}+$");
 
   /**

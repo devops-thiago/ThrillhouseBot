@@ -4864,8 +4864,17 @@ class FollowUpAnalyzerTest {
       assertTrue(note.contains("says this path runs concurrently"), note);
     }
     // A verb refusing the statement's subject right before it denies it.
-    var refused = heldNote("+// The handler rejects concurrent requests with 409.");
-    assertTrue(refused.contains("no review has weighed"), refused);
+    for (var refusing :
+        List.of(
+            "+// The handler rejects concurrent requests with 409.",
+            "+// The config prohibits concurrent access.",
+            "+// The scheduler excludes concurrent callers.",
+            "+// The cache doesn't support concurrent use.",
+            "+// The workers aren’t shared by every request goroutine.",
+            "+// The pool shouldn't be shared across goroutines.")) {
+      var note = heldNote(refusing);
+      assertTrue(note.contains("no review has weighed"), refusing + " -> " + note);
+    }
   }
 
   /** A diff section is the declined file's only when its a/ or b/ path is that file exactly. */
