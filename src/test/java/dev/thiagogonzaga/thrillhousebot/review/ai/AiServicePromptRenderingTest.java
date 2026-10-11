@@ -368,10 +368,11 @@ class AiServicePromptRenderingTest {
   void reviewPromptsRenderByteForByteAsTheEightVariableSignatureDid() throws InterruptedException {
     // #993: the review call takes one record where it took eight @V strings. The model must
     // receive exactly what it received before: the system message is the record's system prompt
-    // verbatim, and the user message is the same template with each {{inputs.x}} spelled {{x}}
-    // (the eight-variable form) and the double braces turned into the engine's single ones, as the
-    // AI service does, rendered by the same engine over the same values. Covers every optional
-    // section present, every one blank, and null slots, which rendered like blank ones.
+    // verbatim, and the user message is the same template with the "inputs." prefix dropped from
+    // each placeholder (the eight-variable form) and the double braces turned into the engine's
+    // single ones, as the AI service does, rendered by the same engine over the same values.
+    // Covers every optional section present, every one blank, and null slots, which rendered like
+    // blank ones.
     var eightVariableUser =
         engine.parse(
             PrReviewPrompts.USER

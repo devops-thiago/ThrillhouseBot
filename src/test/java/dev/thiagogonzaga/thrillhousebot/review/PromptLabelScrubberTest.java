@@ -522,6 +522,19 @@ class PromptLabelScrubberTest {
           but nothing in the provided material reads that variable. | but nothing in the reviewed code reads that variable.
           The provided material shows no producer. | The reviewed code shows no producer.
           nothing in provided materials builds it | nothing in reviewed code builds it
+          # #986: the placements that left "(as," or "Note:," behind.
+          the quote above (as provided with this review, the parser must reject it) says so | the quote above (the parser must reject it) says so
+          the quote above (provided with this review, the parser must reject it) says so | the quote above (the parser must reject it) says so
+          the quote above (as provided with this review the parser must reject it) says so | the quote above (the parser must reject it) says so
+          the quote above (as provided with this reviewer in mind) says so | the quote above (as provided with this reviewer in mind) says so
+          Note: as provided with this review, the parser must reject it. | Note: the parser must reject it.
+          Note: As provided with this review, the parser must reject it. | Note: The parser must reject it.
+          X — as provided with this review, Y | X — Y
+          X – as provided with this review, Y | X – Y
+          X - as provided with this review, Y | X - Y
+          X — provided with this review, Y | X — Y
+          as provided with this review, the parser must reject it. | the parser must reject it.
+          as provided with this review the parser must reject it. | the parser must reject it.
           """)
   void learningIdsAndContextBlockNamesAreRewritten(String leaked, String clean) {
     assertEquals(clean, PromptLabelScrubber.scrub(leaked));
@@ -713,31 +726,6 @@ class PromptLabelScrubberTest {
     assertEquals(
         "README.md is renamed.",
         PromptLabelScrubber.scrub("As provided with this review, README.md is renamed."));
-  }
-
-  // #986: the placements that left "(as," or "Note:," behind.
-  @ParameterizedTest
-  @CsvSource(
-      delimiter = '|',
-      textBlock =
-          """
-          the quote above (as provided with this review, the parser must reject it) says so | the quote above (the parser must reject it) says so
-          the quote above (provided with this review, the parser must reject it) says so | the quote above (the parser must reject it) says so
-          the quote above (as provided with this review the parser must reject it) says so | the quote above (the parser must reject it) says so
-          the quote above (as provided with this reviewer in mind) says so | the quote above (as provided with this reviewer in mind) says so
-          Note: as provided with this review, the parser must reject it. | Note: the parser must reject it.
-          Note: As provided with this review, the parser must reject it. | Note: The parser must reject it.
-          X — as provided with this review, Y | X — Y
-          X – as provided with this review, Y | X – Y
-          X - as provided with this review, Y | X - Y
-          X — provided with this review, Y | X — Y
-          as provided with this review, the parser must reject it. | the parser must reject it.
-          as provided with this review the parser must reject it. | the parser must reject it.
-          """)
-  void providedWithThisReviewAfterAColonDashParenthesisOrAtTheStartGoesCleanly(
-      String leaked, String clean) {
-    assertEquals(clean, PromptLabelScrubber.scrub(leaked));
-    assertEquals(clean, PromptLabelScrubber.scrub(clean));
   }
 
   @Test
