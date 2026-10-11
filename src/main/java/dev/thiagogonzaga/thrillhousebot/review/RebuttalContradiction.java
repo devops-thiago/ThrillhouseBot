@@ -322,8 +322,8 @@ final class RebuttalContradiction {
     var statements = new ArrayList<String>();
     StringBuilder comment = null;
     for (var line : lines) {
-      var marker = COMMENT_LINE.matcher(line);
-      if (!marker.lookingAt()) {
+      var markerEnd = commentMarkerEnd(line);
+      if (markerEnd < 0) {
         if (comment != null) {
           statements.add(comment.toString());
           comment = null;
@@ -332,7 +332,7 @@ final class RebuttalContradiction {
       } else if (comment == null) {
         comment = new StringBuilder(line.strip());
       } else {
-        comment.append(' ').append(line.substring(marker.end()).strip());
+        comment.append(' ').append(line.substring(markerEnd).strip());
       }
     }
     if (comment != null) {
@@ -341,14 +341,54 @@ final class RebuttalContradiction {
     return statements;
   }
 
+  /** The most horizontal space read before a whole-line comment's marker. */
+  private static final int MAX_COMMENT_INDENT = 40;
+
   /**
-   * The marker that opens a whole-line comment: {@code //}, a block comment's opening, {@code ;},
-   * and {@code #}, {@code *}, a block comment's close or {@code --} followed by a space or the end
-   * of the line, so a code line such as {@code *p = q;}, {@code #include} or a {@code ---} rule is
-   * not read as a comment.
+   * Where the marker that opens a whole-line comment ends in {@code line}, or {@code -1} when the
+   * line is not one. The marker sits after at most {@value #MAX_COMMENT_INDENT} characters of
+   * horizontal space: {@code //}, a block comment's opening or {@code ;}, each with the rest of its
+   * run; or {@code #}, {@code *}, a block comment's close or {@code --} followed by a space or the
+   * end of the line, so a code line such as {@code *p = q;}, {@code #include} or a {@code ---} rule
+   * is not read as a comment. A scan rather than one expression keeps it linear and readable.
    */
-  private static final Pattern COMMENT_LINE =
-      Pattern.compile("\\h{0,40}+(?://+|/\\*+|;+|(?:#+|\\*+/?|--)(?=\\h|$))");
+  static int commentMarkerEnd(String line) {
+    var at = 0;
+    while (at < line.length() && at < MAX_COMMENT_INDENT && isHorizontalSpace(line.charAt(at))) {
+      at++;
+    }
+    if (line.startsWith("//", at) || line.startsWith("/*", at)) {
+      return runEnd(line, at + 1, line.charAt(at + 1));
+    }
+    if (line.startsWith(";", at)) {
+      return runEnd(line, at, ';');
+    }
+    int end;
+    if (line.startsWith("#", at)) {
+      end = runEnd(line, at, '#');
+    } else if (line.startsWith("*", at)) {
+      end = runEnd(line, at, '*');
+      end = line.startsWith("/", end) ? end + 1 : end;
+    } else if (line.startsWith("--", at)) {
+      end = at + 2;
+    } else {
+      return -1;
+    }
+    return end == line.length() || isHorizontalSpace(line.charAt(end)) ? end : -1;
+  }
+
+  /** The end of the run of {@code c} that starts at {@code from}. */
+  private static int runEnd(String line, int from, char c) {
+    var end = from;
+    while (end < line.length() && line.charAt(end) == c) {
+      end++;
+    }
+    return end;
+  }
+
+  private static boolean isHorizontalSpace(char c) {
+    return c == '\t' || Character.isSpaceChar(c);
+  }
 
   /** How many words a negator may sit before the statement it denies, within one clause. */
   private static final int DENIAL_WORDS = 6;

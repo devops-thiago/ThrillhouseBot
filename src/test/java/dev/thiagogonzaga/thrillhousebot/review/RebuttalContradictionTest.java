@@ -1667,4 +1667,44 @@ class RebuttalContradictionTest {
         RebuttalContradiction.unconfirmedPremise(RACE_FINDING, "> it cannot run concurrently")
             .isEmpty());
   }
+
+  static Stream<Arguments> commentMarkers() {
+    return Stream.of(
+        arguments("// shared by every goroutine", 2),
+        arguments("   /// doc", 6),
+        arguments("\t// tab", 3),
+        arguments("\u00a0# no-break space", 2),
+        arguments("/* block", 2),
+        arguments("/** doc", 3),
+        arguments(";; lisp", 2),
+        arguments("# python", 1),
+        arguments("## heading", 2),
+        arguments("#", 1),
+        arguments(" * continued", 2),
+        arguments("*/", 2),
+        arguments("**/ closed", 3),
+        arguments("-- sql", 2),
+        arguments("--", 2),
+        arguments(" ".repeat(40) + "// x", 42),
+        arguments(" ".repeat(41) + "// x", -1),
+        arguments("#include <x>", -1),
+        arguments("*p = q;", -1),
+        arguments("*/x", -1),
+        arguments("--- rule", -1),
+        arguments("/x", -1),
+        arguments("-x", -1),
+        arguments("code();", -1),
+        arguments("", -1));
+  }
+
+  /**
+   * The whole-line comment marker is read by a scan (Sonar's regex-complexity rule): the marker and
+   * the rest of its run for {@code //}, {@code /*} and {@code ;}; a space or the line's end after
+   * {@code #}, {@code *}, a block close or {@code --}; at most forty characters of indent.
+   */
+  @ParameterizedTest
+  @MethodSource("commentMarkers")
+  void aWholeLineCommentMarkerEndsAfterItsRun(String line, int end) {
+    assertEquals(end, RebuttalContradiction.commentMarkerEnd(line));
+  }
 }
