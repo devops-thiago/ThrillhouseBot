@@ -3574,23 +3574,17 @@ public class FollowUpAnalyzer {
     }
     if (facts.clearedNote() != null) {
       var cleared = target != null ? target : facts.mostSevere();
-      return settled(
-          cleared, STATUS_RESOLVED, facts.clearedNote(), clusterThreadRoot(cluster, cleared, in));
+      return closed(cluster, cleared, STATUS_RESOLVED, facts.clearedNote(), in);
     }
     if (target == null) {
-      return settled(
-          facts.mostSevere(),
-          STATUS_SUPERSEDED,
-          SUPERSEDED_NOTE,
-          clusterThreadRoot(cluster, facts.mostSevere(), in));
+      return closed(cluster, facts.mostSevere(), STATUS_SUPERSEDED, SUPERSEDED_NOTE, in);
     }
     if (!facts.declines().isEmpty()) {
       return conversationDeclineEntry(target, facts, in, code);
     }
     if (facts.answered() == null) {
       return suggestedFixLandedEverywhere(cluster, in)
-          ? settled(
-              target, STATUS_RESOLVED, FIX_LANDED_NOTE, clusterThreadRoot(cluster, target, in))
+          ? closed(cluster, target, STATUS_RESOLVED, FIX_LANDED_NOTE, in)
           : hold(target, HELD_NOTE);
     }
     return threadReplyEntry(target, facts, in, code);
@@ -3809,6 +3803,28 @@ public class FollowUpAnalyzer {
             STATUS_UNRESOLVED,
             note,
             new ReviewResult.EarlierRound(target.finding(), null)),
+        target.finding());
+  }
+
+  /**
+   * An entry that closes a cluster (#1066): {@code target}'s status, carrying its own thread's root
+   * ({@link #clusterThreadRoot}) and every member, so the close is recorded for each round's copy.
+   */
+  private static HeldPrevious closed(
+      List<OpenFinding> cluster,
+      OpenFinding target,
+      String status,
+      String note,
+      BackstopInputs in) {
+    return new HeldPrevious(
+        new ReviewResult.PreviousFindingStatus(
+            EARLIER_ROUND_ID,
+            status,
+            note,
+            new ReviewResult.EarlierRound(
+                target.finding(),
+                clusterThreadRoot(cluster, target, in),
+                cluster.stream().map(OpenFinding::finding).toList())),
         target.finding());
   }
 

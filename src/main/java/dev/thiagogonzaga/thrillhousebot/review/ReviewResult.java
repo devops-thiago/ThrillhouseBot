@@ -488,15 +488,26 @@ public record ReviewResult(
 
   /**
    * The earlier rounds' findings this round closed (#1066): each {@code resolved} (a maintainer's
-   * clear) or {@code superseded} (its code left the diff) status the backstop gave a finding raised
-   * before the effective previous round, in status order. Their threads are resolved, they are
-   * named under the round's closures, and the round persists them ({@code
-   * ReviewResponse.closedEarlierRound}) so no later round closes them again.
+   * clear, or its suggested fix landed) or {@code superseded} (its code left the diff) status the
+   * backstop gave a finding raised before the effective previous round, one per defect, in status
+   * order. Their threads are resolved and they are named under the round's closures.
    */
   public List<ReviewResponse.Finding> earlierRoundCloses() {
     return previousStatuses.stream()
         .filter(PreviousFindingStatus::closesEarlierRound)
         .map(s -> s.earlierRound().finding())
+        .toList();
+  }
+
+  /**
+   * Every stored copy of the defects {@link #earlierRoundCloses} names: what the round persists
+   * ({@code ReviewResponse.closedEarlierRound}) so that no later round carries any copy of a closed
+   * defect and closes or names it again (#1066).
+   */
+  public List<ReviewResponse.Finding> earlierRoundClosedMembers() {
+    return previousStatuses.stream()
+        .filter(PreviousFindingStatus::closesEarlierRound)
+        .flatMap(s -> s.earlierRound().members().stream())
         .toList();
   }
 
@@ -1139,9 +1150,23 @@ public record ReviewResult(
    * @param threadRootId the root comment of the finding's own thread, located by marker and
    *     content: the thread a standing decline was written on, or the thread of a finding the round
    *     closed (cleared or superseded, #1066); {@code null} when there is no such thread
+   * @param members every round's copy of the defect the status accounts for (one defect raised in
+   *     several rounds is several stored findings), so a close is recorded for all of them and no
+   *     later round carries a copy it left behind (#1066)
    */
   @RegisterForReflection
-  public record EarlierRound(ReviewResponse.Finding finding, Long threadRootId) {}
+  public record EarlierRound(
+      ReviewResponse.Finding finding, Long threadRootId, List<ReviewResponse.Finding> members) {
+
+    public EarlierRound {
+      members = List.copyOf(members);
+    }
+
+    /** The status of a defect raised in one round only. */
+    public EarlierRound(ReviewResponse.Finding finding, Long threadRootId) {
+      this(finding, threadRootId, List.of(finding));
+    }
+  }
 
   @RegisterForReflection
   public record CiCheck(String name, String type, String status, String conclusion) {

@@ -462,7 +462,7 @@ public class ReviewOrchestrator {
             // #1066: the earlier rounds' findings this round closed are recorded with the round,
             // so the next round's replay no longer carries them and does not close or name them
             // again.
-            var closedEarlier = result.earlierRoundCloses();
+            var closedEarlier = result.earlierRoundClosedMembers();
             if (!closedEarlier.isEmpty()) {
               findingPipeline.persistAiResponse(
                   session, aiResponse.withClosedEarlierRound(closedEarlier));

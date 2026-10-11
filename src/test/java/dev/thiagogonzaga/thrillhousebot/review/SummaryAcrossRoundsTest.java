@@ -1643,4 +1643,52 @@ class SummaryAcrossRoundsTest {
     var end = next < 0 ? body.indexOf("\n---\n", from) : next;
     return body.substring(from, end < 0 ? body.length() : end);
   }
+
+  /**
+   * #1066: one defect raised in two older rounds is two stored findings. The round that closes it
+   * records both, so a later round carries neither copy and does not close or name it again.
+   */
+  @Test
+  void aDefectRaisedInTwoOlderRoundsIsClosedOnceForBothCopies() {
+    var drifted =
+        new ReviewResponse.Finding(
+            CRITICAL.risk(),
+            CRITICAL.confidence(),
+            FILE,
+            11,
+            CRITICAL.title(),
+            CRITICAL.description(),
+            CRITICAL.suggestionOld(),
+            CRITICAL.suggestionNew());
+    var roundOne = new ReviewResponse(List.of(CRITICAL, HIGH), List.of(), null);
+    var roundTwo =
+        new ReviewResponse(
+            List.of(drifted),
+            List.of(new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there")),
+            null);
+    var roundThree = new ReviewResponse(List.of(NEW_IN_ROUND_TWO), List.of(), null);
+    patches = CRITICAL_FIXED;
+    var priors = List.of(roundThree, roundTwo, roundOne);
+    var quiet =
+        new ReviewResponse(
+            List.of(),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+            null);
+
+    var fourth = builder.build(followUp(priors, List.of()), quiet, CI_CLEAR, plan);
+
+    assertEquals(1, fourth.earlierRoundCloses().size());
+    assertEquals(2, fourth.earlierRoundClosedMembers().size());
+    var stored = quiet.withClosedEarlierRound(fourth.earlierRoundClosedMembers());
+    var fifth =
+        builder.build(
+            followUp(List.of(stored, roundThree, roundTwo, roundOne), List.of()),
+            quiet,
+            CI_CLEAR,
+            plan);
+
+    assertTrue(fifth.earlierRoundCloses().isEmpty());
+    assertEquals(0, fifth.resolvedPreviousCount());
+    assertTrue(ClosedFindingNames.reviewBodySection(fifth, List.of(NEW_IN_ROUND_TWO)).isEmpty());
+  }
 }
