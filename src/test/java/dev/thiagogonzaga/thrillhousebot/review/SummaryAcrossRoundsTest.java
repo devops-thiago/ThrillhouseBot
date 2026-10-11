@@ -765,43 +765,150 @@ class SummaryAcrossRoundsTest {
     assertEquals(carriedIn, counted, body);
   }
 
+  /** The head after a push that removed the SQL line CRITICAL pointed at; the rest is there. */
+  private static final Map<String, String> CRITICAL_FIXED =
+      Map.of(
+          FILE,
+          """
+          @@ -10,0 +10,3 @@
+          +int total = count * price;
+          +log(user.name());
+          +String unused = "";\
+          """);
+
+  private final ReviewThreadService threadService = mock(ReviewThreadService.class);
+
+  /** A publisher whose thread service is {@link #threadService}, to see which threads resolve. */
+  private final ReviewPublisher resolvingPublisher =
+      new ReviewPublisher(
+          reviewClient,
+          commentClient,
+          threadService,
+          mock(SuggestionFormatter.class),
+          mock(FollowUpAnalyzer.class),
+          mock(PrLabeler.class),
+          configWithWriteBudget(),
+          BOT);
+
+  private static final ReviewOrchestrator.ReviewRequest REQUEST =
+      new ReviewOrchestrator.ReviewRequest("o", "r", 1, "sha", "t", "", "base", "main", 9L, false);
+
+  /** Runs the post-review thread resolution for {@code result} over {@code threads}. */
+  private void resolveThreads(
+      ReviewResult result, List<GitHubReviewClient.PullRequestComment> threads) {
+    resolvingPublisher.resolveAddressedThreads(
+        "auth", REQUEST, NEW_ROUND_TWO_ONLY, threads, result.previousStatuses());
+  }
+
+  /**
+   * #1066's four rounds. Round one raises CRITICAL on its own thread, round two raises something
+   * new, a push removes CRITICAL's anchor, and round three runs: its thread is resolved and it is
+   * named once under the round's closures. Round four, over round three's stored response, neither
+   * resolves nor names it again, and nothing re-posts the summary.
+   */
   @Test
-  void anEarlierRoundFindingWhoseCodeLeftTheDiffIsCountedAndMovesNothingWhenRecomputed() {
+  void anEarlierRoundFindingWhoseCodeLeftTheDiffIsResolvedOnItsThreadAndNamedOnce() {
     var first = publishFirstRound(ROUND_ONE_WITH_RACE);
-    // The head moved: the SQL line CRITICAL pointed at is gone, everything else is still there.
-    patches =
-        Map.of(
-            FILE,
-            """
-            @@ -10,0 +10,3 @@
-            +int total = count * price;
-            +log(user.name());
-            +String unused = "";\
-            """);
+    var threads = List.of(rootComment(101L, CRITICAL, 1));
+    when(threadService.threadsByRootComment("auth", "o", "r", 1))
+        .thenReturn(Map.of(101L, new ReviewThreadService.ThreadRef("T101", false)));
+    when(threadService.resolve("auth", "T101")).thenReturn(true);
+    patches = CRITICAL_FIXED;
     var priors = List.of(ROUND_TWO_RAISED_ONE, ROUND_ONE_WITH_RACE);
 
-    var result = builder.build(followUp(priors, List.of()), QUIET_ROUND_THREE, CI_CLEAR, plan);
-    var edited = publishFollowUp(result, first);
+    var third = builder.build(followUp(priors, threads, PATCH), QUIET_ROUND_THREE, CI_CLEAR, plan);
+    var edited = publishFollowUp(third, first);
+    resolveThreads(third, threads);
 
     // Carried in: round one's four and round two's one.
     assertTableAddsUpTo(edited, 5);
     assertEquals(1, tableCount(edited, "🗂️ Superseded (targeted code left the diff)"));
-    assertEquals(4, result.unresolvedPreviousCount());
+    var superseded =
+        third.previousStatuses().stream()
+            .filter(ReviewResult.PreviousFindingStatus::closesEarlierRound)
+            .toList();
+    assertEquals(1, superseded.size());
+    assertEquals("superseded", superseded.get(0).status());
+    assertEquals(101L, superseded.get(0).earlierRound().threadRootId());
+    verify(threadService).resolve("auth", "T101");
+    assertEquals(List.of(CRITICAL), third.earlierRoundCloses());
+    assertEquals(1, third.resolvedPreviousCount());
+    var named = ClosedFindingNames.reviewBodySection(third, NEW_ROUND_TWO_ONLY);
+    assertTrue(named.startsWith("ThrillhouseBot closed 1 previous finding(s)"), named);
+    assertTrue(named.contains("`" + FILE + ":10` — " + CRITICAL.title()), named);
     assertTrue(
-        result.openPreviousFindings().stream().noneMatch(f -> CRITICAL.title().equals(f.title())));
-    // Not this round's movement: no summary re-post, no delta comment, no "closed" review body.
-    assertFalse(result.hasSupersededPrevious());
-    assertEquals(0, result.resolvedPreviousCount());
-    assertTrue(FollowUpDeltaSummary.render(result, NEW_ROUND_TWO_ONLY).isEmpty());
-    assertFalse(publisher.publishSummary("auth", "o", "r", 1, result, false));
+        FollowUpDeltaSummary.render(third, NEW_ROUND_TWO_ONLY)
+            .orElseThrow()
+            .contains(CRITICAL.title()));
+    // An older round's close is not a reason to re-post the summary (#470).
+    assertFalse(third.hasSupersededPrevious());
+    assertFalse(publisher.publishSummary("auth", "o", "r", 1, third, false));
 
-    var recomputed = builder.build(followUp(priors, List.of()), QUIET_ROUND_THREE, CI_CLEAR, plan);
-    assertEquals(result.summaryMarkdown(), recomputed.summaryMarkdown());
-    assertEquals(result.previousStatuses(), recomputed.previousStatuses());
+    // Round four reads round three as stored, with the close it recorded.
+    var storedThird = QUIET_ROUND_THREE.withClosedEarlierRound(third.earlierRoundCloses());
+    var fourth =
+        builder.build(
+            followUp(
+                List.of(storedThird, ROUND_TWO_RAISED_ONE, ROUND_ONE_WITH_RACE), threads, PATCH),
+            QUIET_ROUND_THREE,
+            CI_CLEAR,
+            plan);
+    resolveThreads(fourth, threads);
+
+    assertTrue(fourth.earlierRoundCloses().isEmpty());
+    assertEquals(0, fourth.resolvedPreviousCount());
+    assertTrue(ClosedFindingNames.reviewBodySection(fourth, NEW_ROUND_TWO_ONLY).isEmpty());
+    assertTrue(FollowUpDeltaSummary.render(fourth, NEW_ROUND_TWO_ONLY).isEmpty());
+    assertFalse(fourth.hasSupersededPrevious());
+    assertEquals(4, fourth.unresolvedPreviousCount());
+    verify(threadService, times(1)).resolve(anyString(), anyString());
+  }
+
+  /**
+   * A maintainer cleared an earlier round's finding from the conversation, and its code also left
+   * the diff: the clear is not swallowed by the supersede, so the thread gets the reply that
+   * records the clear and is resolved.
+   */
+  @Test
+  void aConversationClearOnAnEarlierRoundFindingWhoseCodeLeftTheDiffResolvesItsThread() {
+    var clear =
+        new GitHubCommentClient.IssueComment(
+            900L,
+            "@thrillhousebot resolved `" + FILE + ":10` — " + CRITICAL.title(),
+            new GitHubReviewClient.ReviewResponse.User("maintainer"),
+            "MEMBER");
+    var threads = List.of(rootComment(101L, CRITICAL, 1));
+    when(threadService.threadsByRootComment("auth", "o", "r", 1))
+        .thenReturn(Map.of(101L, new ReviewThreadService.ThreadRef("T101", false)));
+    when(threadService.resolve("auth", "T101")).thenReturn(true);
+    patches = CRITICAL_FIXED;
+    var ctx =
+        context(
+            List.of(ROUND_TWO_RAISED_ONE, ROUND_ONE_WITH_RACE),
+            List.of(clear),
+            false,
+            true,
+            threads,
+            PATCH);
+
+    var result = builder.build(ctx, QUIET_ROUND_THREE, CI_CLEAR, plan);
+    resolveThreads(result, threads);
+
+    var cleared =
+        result.previousStatuses().stream()
+            .filter(ReviewResult.PreviousFindingStatus::closesEarlierRound)
+            .findFirst()
+            .orElseThrow();
+    assertEquals("resolved", cleared.status());
+    assertEquals(FollowUpAnalyzer.conversationClearedNote(BOT), cleared.note());
+    assertEquals(101L, cleared.earlierRound().threadRootId());
+    verify(reviewClient)
+        .replyToReviewComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), eq(101L), any());
+    verify(threadService).resolve("auth", "T101");
   }
 
   @Test
-  void anEarlierRoundFindingClearedFromTheConversationIsCountedAndMovesNothingWhenRecomputed() {
+  void anEarlierRoundFindingClearedFromTheConversationIsNamedOnceAndNotAgain() {
     var first = publishFirstRound(ROUND_ONE_WITH_RACE);
     var clear =
         new GitHubCommentClient.IssueComment(
@@ -819,13 +926,22 @@ class SummaryAcrossRoundsTest {
     assertEquals(4, result.unresolvedPreviousCount());
     assertTrue(
         result.openPreviousFindings().stream().noneMatch(f -> HIGH.title().equals(f.title())));
-    assertEquals(0, result.resolvedPreviousCount());
-    assertTrue(FollowUpDeltaSummary.render(result, NEW_ROUND_TWO_ONLY).isEmpty());
-    assertTrue(ClosedFindingNames.reviewBodySection(result, NEW_ROUND_TWO_ONLY).isEmpty());
+    assertEquals(1, result.resolvedPreviousCount());
+    assertTrue(
+        ClosedFindingNames.reviewBodySection(result, NEW_ROUND_TWO_ONLY).contains(HIGH.title()));
 
-    var recomputed =
-        builder.build(followUp(priors, List.of(clear)), QUIET_ROUND_THREE, CI_CLEAR, plan);
-    assertEquals(result.summaryMarkdown(), recomputed.summaryMarkdown());
+    var storedThird = QUIET_ROUND_THREE.withClosedEarlierRound(result.earlierRoundCloses());
+    var fourth =
+        builder.build(
+            followUp(
+                List.of(storedThird, ROUND_TWO_RAISED_ONE, ROUND_ONE_WITH_RACE), List.of(clear)),
+            QUIET_ROUND_THREE,
+            CI_CLEAR,
+            plan);
+    assertEquals(0, fourth.resolvedPreviousCount());
+    assertTrue(ClosedFindingNames.reviewBodySection(fourth, NEW_ROUND_TWO_ONLY).isEmpty());
+    assertTrue(
+        fourth.openPreviousFindings().stream().noneMatch(f -> HIGH.title().equals(f.title())));
   }
 
   /** The effective previous round's findings: round two raised one. */
@@ -1536,5 +1652,90 @@ class SummaryAcrossRoundsTest {
     var next = body.indexOf("\n### ", from);
     var end = next < 0 ? body.indexOf("\n---\n", from) : next;
     return body.substring(from, end < 0 ? body.length() : end);
+  }
+
+  /**
+   * #1066: one defect raised in two older rounds is two stored findings. The round that closes it
+   * records both, so a later round carries neither copy and does not close or name it again.
+   */
+  @Test
+  void aDefectRaisedInTwoOlderRoundsIsClosedOnceForBothCopies() {
+    var drifted =
+        new ReviewResponse.Finding(
+            CRITICAL.risk(),
+            CRITICAL.confidence(),
+            FILE,
+            11,
+            CRITICAL.title(),
+            CRITICAL.description(),
+            CRITICAL.suggestionOld(),
+            CRITICAL.suggestionNew());
+    var roundOne = new ReviewResponse(List.of(CRITICAL, HIGH), List.of(), null);
+    var roundTwo =
+        new ReviewResponse(
+            List.of(drifted),
+            List.of(new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there")),
+            null);
+    var roundThree = new ReviewResponse(List.of(NEW_IN_ROUND_TWO), List.of(), null);
+    patches = CRITICAL_FIXED;
+    var priors = List.of(roundThree, roundTwo, roundOne);
+    var quiet =
+        new ReviewResponse(
+            List.of(),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+            null);
+
+    var fourth = builder.build(followUp(priors, List.of()), quiet, CI_CLEAR, plan);
+
+    assertEquals(1, fourth.earlierRoundCloses().size());
+    assertEquals(2, fourth.earlierRoundClosedMembers().size());
+    var stored = quiet.withClosedEarlierRound(fourth.earlierRoundClosedMembers());
+    var fifth =
+        builder.build(
+            followUp(List.of(stored, roundThree, roundTwo, roundOne), List.of()),
+            quiet,
+            CI_CLEAR,
+            plan);
+
+    assertTrue(fifth.earlierRoundCloses().isEmpty());
+    assertEquals(0, fifth.resolvedPreviousCount());
+    assertTrue(ClosedFindingNames.reviewBodySection(fifth, List.of(NEW_IN_ROUND_TWO)).isEmpty());
+  }
+
+  /**
+   * #1066: the round reports the newer copy of a defect resolved and the backstop closes the older
+   * copy: the older thread is resolved and recorded, but the closure is counted and named once.
+   */
+  @Test
+  void aDefectTheRoundResolvesIsNotNamedAgainForItsOlderCopy() {
+    var drifted =
+        new ReviewResponse.Finding(
+            CRITICAL.risk(),
+            CRITICAL.confidence(),
+            FILE,
+            11,
+            CRITICAL.title(),
+            CRITICAL.description(),
+            CRITICAL.suggestionOld(),
+            CRITICAL.suggestionNew());
+    var roundOne = new ReviewResponse(List.of(CRITICAL), List.of(), null);
+    var roundTwo = new ReviewResponse(List.of(drifted, HIGH), List.of(), null);
+    patches = CRITICAL_FIXED;
+    var round =
+        new ReviewResponse(
+            List.of(),
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed"),
+                new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there")),
+            null);
+
+    var result =
+        builder.build(followUp(List.of(roundTwo, roundOne), List.of()), round, CI_CLEAR, plan);
+
+    assertEquals(1, result.resolvedPreviousCount());
+    assertTrue(result.earlierRoundCloses().isEmpty());
+    assertEquals(List.of(CRITICAL), result.earlierRoundClosedMembers());
+    var named = ClosedFindingNames.reviewBodySection(result, List.of(drifted, HIGH));
+    assertEquals(1, named.split(CRITICAL.title(), -1).length - 1, named);
   }
 }
