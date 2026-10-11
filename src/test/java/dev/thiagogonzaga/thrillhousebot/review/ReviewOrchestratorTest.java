@@ -590,6 +590,40 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void unresolvedBodyCarriesTheModelsReasonForAReplyItDidNotAccept() {
+      // #963: the model's reason for keeping a replied-on finding open reaches the body under its
+      // own lead-in, which does not claim the reply was a decline; a plain model note does not.
+      var weighed = RebuttalContradiction.unsettledReplyNote("The executor still runs it.", true);
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.COMMENT,
+              false,
+              "",
+              List.of(
+                  new ReviewResult.PreviousFindingStatus(1, "unresolved", weighed),
+                  new ReviewResult.PreviousFindingStatus(2, "unresolved", "model-only note")),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview("auth", "owner", "repo", 5, "sha", result, resolverFor());
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      var body = captor.getValue().body();
+      assertTrue(body.contains(RebuttalContradiction.REPLY_LEAD_IN), body);
+      assertTrue(body.contains("The executor still runs it."), body);
+      assertFalse(body.contains(RebuttalContradiction.NOTE_LEAD_IN), body);
+      assertFalse(body.contains("model-only note"), body);
+    }
+
+    @Test
     void reopenedDeclineNoteAlsoReachesTheBodyOfARoundThatPostsFindings() {
       // #713: the note used to render only on the no-new-findings body, so any round that also
       // raised a finding took the with-findings path and dropped it — the maintainer was told the

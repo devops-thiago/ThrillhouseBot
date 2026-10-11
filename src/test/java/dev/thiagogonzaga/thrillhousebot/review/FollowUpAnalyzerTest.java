@@ -2614,7 +2614,7 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
-  void recheckShouldLeaveNonJustifiedStatusesAndUnmatchableInputsAlone() {
+  void recheckShouldKeepTheVerdictOfNonJustifiedStatusesAndLeaveUnmatchableInputsAlone() {
     var unresolved =
         List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there"));
     var comments =
@@ -2623,7 +2623,7 @@ class FollowUpAnalyzerTest {
                 + " asynchronously on the review executor after the webhook has returned 200.");
 
     // The re-check leaves the model's unresolved verdict as it is; only its note is put under the
-    // lead-in, so the review body explains the decline it did not accept (#963).
+    // reply lead-in, so the review body explains why the reply did not settle it (#963).
     var kept =
         analyzer.recheckDeclines(
             RACE_PREVIOUS, unresolved, comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
@@ -5052,26 +5052,43 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
-  void aDeclineTheModelDidNotAcceptCarriesTheModelsReasonUnderTheLeadIn() {
+  void aReplyTheModelDidNotAcceptCarriesTheModelsReasonUnderTheReplyLeadIn() {
     var statuses = modelUnresolved(analyzer, MODEL_REASON, RACE_WRONG_DECLINE);
 
     var note = statuses.get(0).note();
     assertEquals("unresolved", statuses.get(0).status());
-    assertTrue(note.startsWith(RebuttalContradiction.NOTE_LEAD_IN), note);
+    assertTrue(note.startsWith(RebuttalContradiction.REPLY_LEAD_IN), note);
     assertTrue(note.contains(MODEL_REASON), note);
-    assertTrue(note.endsWith("Reply again to keep the decline."), note);
+    assertTrue(
+        note.endsWith("If the reply declines the finding, reply again to keep the decline."), note);
     assertEquals("still there", statuses.get(1).note(), "a finding nobody answered is untouched");
   }
 
   @Test
-  void aDeclineTheModelDidNotAcceptAfterTwoRepliesIsExplainedWithoutAskingAgain() {
+  void aReplyTheModelDidNotAcceptAfterTwoRepliesIsExplainedWithoutAskingAgain() {
     var note =
         modelUnresolved(analyzer, MODEL_REASON, RACE_WRONG_DECLINE, "Still declining.")
             .get(0)
             .note();
 
-    assertTrue(note.startsWith(RebuttalContradiction.NOTE_LEAD_IN), note);
-    assertFalse(note.contains("Reply again"), note);
+    assertTrue(note.startsWith(RebuttalContradiction.REPLY_LEAD_IN), note);
+    assertFalse(note.contains("reply again"), note);
+  }
+
+  /**
+   * A reply that acknowledges the finding is not called a decline: the note says the reply was
+   * weighed, never that a decline was re-checked.
+   */
+  @Test
+  void anAcknowledgingReplyTheModelKeptOpenIsNotCalledADecline() {
+    var note =
+        modelUnresolved(analyzer, "The fix is not pushed yet.", "Good catch, will fix.")
+            .get(0)
+            .note();
+
+    assertTrue(note.startsWith(RebuttalContradiction.REPLY_LEAD_IN), note);
+    assertFalse(note.contains(RebuttalContradiction.NOTE_LEAD_IN), note);
+    assertFalse(note.contains("Decline re-checked"), note);
   }
 
   @Test
@@ -5098,6 +5115,8 @@ class FollowUpAnalyzerTest {
     assertEquals("still there", modelUnresolved(analyzer, "still there").get(0).note());
     var already = RebuttalContradiction.NOTE_LEAD_IN + " already explained.";
     assertEquals(already, modelUnresolved(analyzer, already, RACE_WRONG_DECLINE).get(0).note());
+    var weighed = RebuttalContradiction.REPLY_LEAD_IN + " already explained.";
+    assertEquals(weighed, modelUnresolved(analyzer, weighed, RACE_WRONG_DECLINE).get(0).note());
     assertEquals(" ", modelUnresolved(analyzer, " ", RACE_WRONG_DECLINE).get(0).note());
     assertEquals(null, modelUnresolved(analyzer, null, RACE_WRONG_DECLINE).get(0).note());
     assertEquals(

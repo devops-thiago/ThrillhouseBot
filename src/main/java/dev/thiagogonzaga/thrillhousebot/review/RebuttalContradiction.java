@@ -364,16 +364,33 @@ final class RebuttalContradiction {
 
   /**
    * The note of a finding the review still reports open after a maintainer answered it on its
-   * thread (#963), the model's own reason under {@link #NOTE_LEAD_IN}, so the review body explains
-   * the decline it did not accept as the deterministic re-check's notes do.
+   * thread (#963), the model's own reason under {@link #REPLY_LEAD_IN}, so the review body explains
+   * why the reply did not settle it as the deterministic re-check's notes do. Nothing here reads
+   * whether the reply declined the finding or acknowledged it, so the note does not say it was a
+   * decline: the hint to reply again is conditional on the reply having declined it.
    *
    * @param lone whether the thread carries a single maintainer reply, which the second one ends
    */
   static String unsettledReplyNote(String reason, boolean lone) {
-    return NOTE_LEAD_IN
-        + " the reply on this finding's thread did not settle it — "
+    return REPLY_LEAD_IN
+        + " "
         + reason.strip()
-        + (lone ? " Reply again to keep the decline." : "");
+        + (lone ? " If the reply declines the finding, reply again to keep the decline." : "");
+  }
+
+  /**
+   * Lead-in of {@link #unsettledReplyNote}: a reply on the finding's thread was weighed and the
+   * finding stays open. The review body surfaces it beside {@link #NOTE_LEAD_IN} ({@link
+   * #explainsKeptFinding}).
+   */
+  static final String REPLY_LEAD_IN = "Reply on this finding's thread weighed, finding kept open:";
+
+  /**
+   * Whether {@code note} is one the review body shows as the reason a replied-on finding stays
+   * open: a re-checked decline ({@link #NOTE_LEAD_IN}) or a weighed reply ({@link #REPLY_LEAD_IN}).
+   */
+  static boolean explainsKeptFinding(String note) {
+    return note != null && (note.startsWith(NOTE_LEAD_IN) || note.startsWith(REPLY_LEAD_IN));
   }
 
   /**

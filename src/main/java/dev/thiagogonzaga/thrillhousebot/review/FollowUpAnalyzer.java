@@ -2205,15 +2205,16 @@ public class FollowUpAnalyzer {
 
   /**
    * The model's {@code unresolved} statuses on findings a maintainer answered on their own thread,
-   * with the model's reason put under {@link RebuttalContradiction#NOTE_LEAD_IN} (#963). The model
+   * with the model's reason put under {@link RebuttalContradiction#REPLY_LEAD_IN} (#963). The model
    * weighs the reply against the finding on this path and gives its reason in the status note, but
-   * the review body shows only notes that open with the lead-in, which only the deterministic
-   * re-checks wrote: a maintainer who declined got no answer on why the finding still blocks. Now
-   * the body carries the same "Decline re-checked … not accepted" note on both paths. A lone reply
-   * is told how to keep the decline; after a second one the model's verdict stands as it is.
+   * the review body showed only the deterministic re-checks' notes: a maintainer who declined got
+   * no answer on why the finding still blocks. Now the body carries the model's reason too ({@link
+   * RebuttalContradiction#unsettledReplyNote}). The reply may decline or acknowledge the finding,
+   * and nothing here reads which, so the note does not call it a decline. A lone reply is told how
+   * to keep a decline; after a second one the model's verdict stands as it is.
    *
    * <p>Only while the re-check is enabled, as every decline note is, and only for a status with a
-   * reason to show that does not already carry the lead-in.
+   * reason to show that does not already carry either lead-in.
    */
   private List<ReviewResponse.PreviousFindingStatus> explainUnsettledReplies(
       List<ReviewResponse.Finding> previous,
@@ -2240,7 +2241,7 @@ public class FollowUpAnalyzer {
         || id > previous.size()
         || note == null
         || note.isBlank()
-        || note.startsWith(RebuttalContradiction.NOTE_LEAD_IN)) {
+        || RebuttalContradiction.explainsKeptFinding(note)) {
       return status;
     }
     Long rootId = rootCommentId(previous.get(id - 1), id, inlineComments, botIdentity);

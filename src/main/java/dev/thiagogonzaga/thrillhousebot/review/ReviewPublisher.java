@@ -780,8 +780,9 @@ public class ReviewPublisher {
    * ({@link RebuttalContradiction}) — the reply's premise, the contradicting line, and the "reply
    * again to keep the decline" escape hatch. Without them the maintainer sees only the generic "N
    * previous finding(s) remain unresolved" line and no reason their decline was not honored (F6).
-   * Only the reopened-decline note is surfaced; the backstop's generic carry-over note and the
-   * model's own unresolved notes stay out of the review body.
+   * Only the reopened-decline note and the model's reason for keeping a replied-on finding open
+   * ({@link RebuttalContradiction#explainsKeptFinding}) are surfaced; the backstop's generic
+   * carry-over note and the model's other unresolved notes stay out of the review body.
    *
    * <p>Every review body must carry these, not just the no-new-findings one (#713). The note used
    * to render from {@link #noIssuesBody} alone, so a round that happened to raise a finding took
@@ -798,8 +799,7 @@ public class ReviewPublisher {
         .filter(
             status ->
                 "unresolved".equalsIgnoreCase(status.status())
-                    && status.note() != null
-                    && status.note().startsWith(RebuttalContradiction.NOTE_LEAD_IN))
+                    && RebuttalContradiction.explainsKeptFinding(status.note()))
         .map(status -> status.note().strip())
         .toList();
   }
