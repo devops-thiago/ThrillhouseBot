@@ -119,7 +119,7 @@ public class CiFailureContextResolver {
       List.of(
           // Maven Surefire / Failsafe: the class line, and the summary's "Class.method:line" rows.
           line -> line.contains("<<< FAILURE!") || line.contains("<<< ERROR!"),
-          Pattern.compile("^\\[ERROR] {2,}+[^\\s:]++:\\d").asPredicate(),
+          CiFailureContextResolver::isSurefireRow,
           // Gradle "FooTest > bar() FAILED", Karma "Chrome Headless (Linux) Suite name FAILED".
           line -> line.endsWith(" FAILED") && (line.contains(" > ") || isKarmaLine(line)),
           // TAP (node --test, prove): "not ok 3 - name".
@@ -144,8 +144,8 @@ public class CiFailureContextResolver {
           // go test "--- FAIL: TestY", cargo test "test y ... FAILED".
           line -> line.startsWith("--- FAIL: "),
           Pattern.compile("^test \\S++ \\.\\.\\. FAILED").asPredicate(),
-          // dotnet test "Failed Ns.Class.Method [12 ms]", ScalaTest "*** FAILED ***", munit "==>
-          // X".
+          // dotnet test "Failed Ns.Class.Method [12 ms]", ScalaTest "*** FAILED ***", munit
+          // "==> X".
           Pattern.compile("^Failed \\S++ \\[").asPredicate(),
           line -> line.contains("*** FAILED ***"),
           line -> line.startsWith("==> X "),
@@ -153,6 +153,10 @@ public class CiFailureContextResolver {
           line -> line.endsWith("(Failed)"),
           line -> line.contains("...FAIL ("),
           Pattern.compile("^rspec \\./[^\\s:]++:\\d").asPredicate());
+
+  /** An indented {@code [ERROR]} row that opens with a token and a line number, not a column. */
+  private static final Pattern SUREFIRE_ROW =
+      Pattern.compile("^\\[ERROR] {2,}+([^\\s:]++):\\d++(?!:)");
 
   /**
    * The path GitHub Actions gives the runner's own annotations, which never name a test: the
@@ -346,7 +350,22 @@ public class CiFailureContextResolver {
     }
     var prefix = line.substring(0, open);
     var version = prefix.substring(prefix.lastIndexOf(' ') + 1);
-    return Character.isDigit(version.charAt(0)) && version.contains(".");
+    return !version.isEmpty() && Character.isDigit(version.charAt(0)) && version.contains(".");
+  }
+
+  /**
+   * Surefire's summary row {@code [ERROR] BedTest.wardIsEscaped:42 expected …}: an indented {@code
+   * Class.method} token and the test's line number. A tool's output that Maven re-emits indented is
+   * not a test: a path ({@code src/app.ts:12}), a {@code file:line:column} position, or a bare
+   * {@code 12:5} position.
+   */
+  private static boolean isSurefireRow(String line) {
+    var row = SUREFIRE_ROW.matcher(line);
+    if (!row.find()) {
+      return false;
+    }
+    var test = row.group(1);
+    return test.indexOf('.') > 0 && test.indexOf('/') < 0 && test.indexOf('\\') < 0;
   }
 
   private static int levelRank(GitHubCheckRunClient.Annotation annotation) {

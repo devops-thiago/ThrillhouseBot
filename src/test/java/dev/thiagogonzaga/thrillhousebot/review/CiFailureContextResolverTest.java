@@ -584,6 +584,7 @@ class CiFailureContextResolverTest {
         strings = {
           "[ERROR] Tests run: 3, Failures: 1, Errors: 0, Skipped: 0 <<< FAILURE! - in com.acme.BedTest",
           "[ERROR]   BedRepositoryTest.wardIsEscaped:42 expected: <1> but was: <0>",
+          "[ERROR]   BedRepositoryTest$WardTest.isEscaped:7 \u00BB IllegalState boom",
           "BookingTest > backToBackBookingsDoNotConflict() FAILED",
           "Chrome Headless 120.0 (Linux x86_64) ShiftBoard a full shift rejects further sign-ups FAILED",
           "not ok 3 - back-to-back bookings do not conflict",
@@ -628,6 +629,12 @@ class CiFailureContextResolverTest {
           "Run tests FAILED",
           "(setup) step FAILED",
           "Deploy 3 (staging) FAILED",
+          "Deploy  (staging) FAILED",
+          "Build   (linux-x64) FAILED",
+          "[ERROR]   src/app/shift-board.ts:12:5 - error TS2322: Type 'string' is not assignable",
+          "[ERROR]   12:5  error  'shift' is assigned a value but never used  no-unused-vars",
+          "[ERROR]   web/src/app.ts:12 unexpected token",
+          "[ERROR]   web\\src\\app.ts:12 unexpected token",
           "\u25CF Running coverage on untested files"
         })
     void otherFailureWordsAreNotATest(String line) {
