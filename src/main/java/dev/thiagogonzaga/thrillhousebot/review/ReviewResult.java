@@ -662,10 +662,12 @@ public record ReviewResult(
           case SUMMARY_FAILED -> "The summary call failed after its retries";
           case NONE -> "The summary was not regenerated";
         };
-    return "> ⚠️ **Summary carried over.** "
-        + cause
-        + ", so the overview below is carried from the previous review of this same commit and"
-        + " only the finding counts are new.\n\n";
+    return """
+        > ⚠️ **Summary carried over.** {cause}, so the overview below is carried from the previous \
+        review of this same commit and only the finding counts are new.
+
+        """
+        .replace("{cause}", cause);
   }
 
   /**
@@ -674,8 +676,11 @@ public record ReviewResult(
    * as one of its clauses, and this says what the overview below it is.
    */
   static final String OVERVIEW_CARRIED_LINE =
-      "> The overview below is carried from the previous review of this same commit; only the"
-          + " finding counts are new.\n\n";
+      """
+      > The overview below is carried from the previous review of this same commit; only the \
+      finding counts are new.
+
+      """;
 
   /**
    * True when at least one outstanding finding was severe enough to block but its confidence, not

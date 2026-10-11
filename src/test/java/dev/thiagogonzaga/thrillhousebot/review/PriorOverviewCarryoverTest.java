@@ -175,7 +175,8 @@ class PriorOverviewCarryoverTest {
             List.of(
                 new ReviewResponse.FileSummary("src/lib.rs", "adds the cache layer"),
                 new ReviewResponse.FileSummary("src/http.rs", "routes cache reads"),
-                new ReviewResponse.FileSummary("src/blank.rs", " ")),
+                new ReviewResponse.FileSummary("src/blank.rs", " "),
+                new ReviewResponse.FileSummary(" ", "a line with no path")),
             "flowchart TD\n  A --> B",
             List.of());
     var current =
@@ -201,7 +202,6 @@ class PriorOverviewCarryoverTest {
     assertEquals(
         List.of(
             new ReviewResponse.FileSummary("src/lib.rs", "its own line"),
-            new ReviewResponse.FileSummary("src/http.rs", ""),
             new ReviewResponse.FileSummary("src/http.rs", "routes cache reads")),
         kept.fileSummaries());
     assertEquals("flowchart TD\n  A --> B", kept.walkthroughDiagram());
@@ -222,6 +222,56 @@ class PriorOverviewCarryoverTest {
 
     assertEquals(FILES, kept.fileSummaries());
     assertEquals(PRIOR.walkthroughDiagram(), kept.walkthroughDiagram());
+  }
+
+  @Test
+  void withNoEarlierDiagramOnlyTheMissingFileIsTaken() {
+    var earlier =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            null,
+            "Adds a cache layer.",
+            List.of(),
+            List.of(),
+            List.of(new ReviewResponse.FileSummary("src/http.rs", "routes cache reads")),
+            null,
+            List.of());
+    var current =
+        new ReviewResponse.Summary(
+            0, 0, 0, 0, 0, null, "Its own purpose.", List.of(), List.of(), FILES, null, List.of());
+
+    var kept = PriorOverviewCarryover.fill(current, context(List.of(round(earlier)), true));
+
+    assertEquals(
+        List.of(
+            FILES.getFirst(), new ReviewResponse.FileSummary("src/http.rs", "routes cache reads")),
+        kept.fileSummaries());
+    assertNull(kept.walkthroughDiagram());
+  }
+
+  @Test
+  void anOverviewWithTheEarlierPurposeButOtherFilesIsNotCarried() {
+    var ctx = context(List.of(round(PRIOR)), true);
+    var samePurpose =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            null,
+            PRIOR.prPurpose(),
+            List.of(),
+            List.of(),
+            List.of(new ReviewResponse.FileSummary("src/other.rs", "x")),
+            null,
+            List.of());
+
+    assertFalse(PriorOverviewCarryover.carried(samePurpose, ctx));
   }
 
   @Test

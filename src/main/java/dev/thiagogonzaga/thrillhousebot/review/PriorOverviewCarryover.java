@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 
@@ -104,20 +105,22 @@ final class PriorOverviewCarryover {
    */
   private static ReviewResponse.Summary supplemented(
       ReviewResponse.Summary current, ReviewResponse.Summary prior) {
-    var files = new ArrayList<>(current.fileSummaries());
-    var added = 0;
-    for (var earlier : prior.fileSummaries()) {
-      if (isBlank(earlier.path()) || isBlank(earlier.summary())) {
-        continue;
-      }
-      var covered =
-          current.fileSummaries().stream()
-              .anyMatch(f -> FilePaths.same(f.path(), earlier.path()) && !isBlank(f.summary()));
-      if (!covered) {
-        files.add(earlier);
-        added++;
+    // Only the current answer's real summaries stay; a blank one gives way to the earlier entry.
+    var files = new ArrayList<ReviewResponse.FileSummary>();
+    var covered = new HashSet<String>();
+    for (var own : current.fileSummaries()) {
+      if (!isBlank(own.summary())) {
+        files.add(own);
+        covered.add(own.path());
       }
     }
+    var kept = files.size();
+    for (var earlier : prior.fileSummaries()) {
+      if (isUsable(earlier) && covered.add(earlier.path())) {
+        files.add(earlier);
+      }
+    }
+    var added = files.size() - kept;
     var keepDiagram = isBlank(current.walkthroughDiagram()) && !isBlank(prior.walkthroughDiagram());
     if (added == 0 && !keepDiagram) {
       return current;
@@ -131,6 +134,11 @@ final class PriorOverviewCarryover {
         current.prPurpose(),
         files,
         keepDiagram ? prior.walkthroughDiagram() : current.walkthroughDiagram());
+  }
+
+  /** Whether an earlier file summary names a path and says something. */
+  private static boolean isUsable(ReviewResponse.FileSummary summary) {
+    return !isBlank(summary.path()) && !isBlank(summary.summary());
   }
 
   private static ReviewResponse.Summary withOverview(

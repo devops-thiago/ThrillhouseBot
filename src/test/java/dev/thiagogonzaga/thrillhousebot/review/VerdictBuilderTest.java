@@ -578,11 +578,29 @@ class VerdictBuilderTest {
     var markdown = result.summaryMarkdown();
     assertTrue(
         markdown.startsWith(
-            "> ⚠️ **Summary carried over.** The summary call failed after its retries, so the"
-                + " overview below is carried from the previous review of this same commit and"
-                + " only the finding counts are new.\n\n"),
+            """
+            > ⚠️ **Summary carried over.** The summary call failed after its retries, so the \
+            overview below is carried from the previous review of this same commit and only the \
+            finding counts are new.
+
+            """),
         markdown);
     assertFalse(markdown.contains("**Summary unavailable.**"), markdown);
+  }
+
+  @Test
+  void aCarriedOverviewWithNoDegradationGetsNoBanner() {
+    // The call answered with no overview and the previous one was filled in (#944): nothing was
+    // degraded, so nothing is disclosed.
+    var ctx = contextAfterAnOverviewOnTheSameHead(true);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+
+    var result = builder.build(ctx, carriedOverviewResponse(ctx), CI_CLEAR, plan);
+
+    assertFalse(
+        result.summaryMarkdown().contains("Summary carried over"), result.summaryMarkdown());
   }
 
   @Test

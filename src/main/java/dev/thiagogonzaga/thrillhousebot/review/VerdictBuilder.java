@@ -452,6 +452,24 @@ public class VerdictBuilder {
     return suffix;
   }
 
+  /**
+   * The banner of a summary-only degradation: the carried-overview banner when the overview shown
+   * is the previous review's (#965), else the one naming the cut, the ceiling, the call cap or the
+   * failure; {@code ""} with no degradation.
+   */
+  private static String summaryOnlyBanner(SummaryDegradation degradation, boolean carried) {
+    if (carried) {
+      return ReviewResult.overviewCarriedNotice(degradation);
+    }
+    return switch (degradation) {
+      case RESPONSE_CUT -> ReviewResult.SUMMARY_CUT_NOTICE;
+      case SKIPPED_AT_CEILING -> ReviewResult.SUMMARY_SKIPPED_NOTICE;
+      case SKIPPED_AT_CALL_CAP -> ReviewResult.SUMMARY_CALL_CAP_NOTICE;
+      case SUMMARY_FAILED -> ReviewResult.SUMMARY_FAILED_NOTICE;
+      case NONE -> "";
+    };
+  }
+
   record DiffStats(
       int filesChanged,
       int additions,
@@ -750,9 +768,8 @@ public class VerdictBuilder {
     }
     // #965: a degraded summary on the head the previous round reviewed shows that round's overview,
     // so its banner says the overview is carried rather than that only the counts are shown.
-    var carriedOverview =
-        summaryInputs.overviewCarried()
-            && diffStats.truncation().summaryDegradation() != SummaryDegradation.NONE;
+    var degradation = diffStats.truncation().summaryDegradation();
+    var carriedOverview = summaryInputs.overviewCarried() && degradation != SummaryDegradation.NONE;
     if (diffStats.truncated()) {
       summaryMarkdown =
           ReviewResult.truncationNotice(diffStats.omittedFiles(), diffStats.truncation())
@@ -763,17 +780,7 @@ public class VerdictBuilder {
       // banner (and the approval hold that goes with file gaps) would overstate it — a dedicated
       // banner names the cut, the token spend ceiling (#518) or the failed summary call (#851),
       // without holding the verdict.
-      summaryMarkdown =
-          carriedOverview
-              ? ReviewResult.overviewCarriedNotice(diffStats.truncation().summaryDegradation())
-                  + summaryMarkdown
-              : switch (diffStats.truncation().summaryDegradation()) {
-                case RESPONSE_CUT -> ReviewResult.SUMMARY_CUT_NOTICE + summaryMarkdown;
-                case SKIPPED_AT_CEILING -> ReviewResult.SUMMARY_SKIPPED_NOTICE + summaryMarkdown;
-                case SKIPPED_AT_CALL_CAP -> ReviewResult.SUMMARY_CALL_CAP_NOTICE + summaryMarkdown;
-                case SUMMARY_FAILED -> ReviewResult.SUMMARY_FAILED_NOTICE + summaryMarkdown;
-                case NONE -> summaryMarkdown;
-              };
+      summaryMarkdown = summaryOnlyBanner(degradation, carriedOverview) + summaryMarkdown;
       // Verification-only degradation (#623): the findings post either way — the verifier fails
       // open by design — but a finding set no second stage screened must say so. When a
       // file-coverage gap exists the truncation banner above already folds this clause in.
