@@ -245,68 +245,103 @@ final class RebuttalContradiction {
 
   /**
    * Text in the reviewed code that states the code runs concurrently, comments included: the
-   * instance "shared by every net/http goroutine", a handler "called from multiple threads",
-   * "concurrent requests". Not proof the way a dispatch construct is, so it never overrules a
-   * decline on its own; it is what the note of a held decline cites instead of claiming the diff
-   * shows nothing (#963). Every quantifier is bounded.
+   * instance "shared by every net/http goroutine" or "shared across goroutines", a handler "called
+   * from multiple threads" or "used by all goroutines", "concurrent requests", "safe for concurrent
+   * use". Not proof the way a dispatch construct is, so it never overrules a decline on its own; it
+   * is what the note of a held decline cites instead of claiming the diff shows nothing (#963).
+   * Every quantifier is bounded.
    */
   private static final List<Pattern> STATED_CONCURRENCY =
       List.of(
           ci(
-              "shared (?:by|across|between) (?:every|all|each|multiple|many|concurrent)\\b.{0,40}?"
-                  + "\\b(?:goroutines?|threads?|requests?|handlers?|workers?|callers?)\\b"),
+              "shared (?:by|across|between|among) (?:(?:every|all|each|multiple|many|several"
+                  + "|concurrent)\\b.{0,40}?\\b(?:goroutines?|threads?|requests?|handlers?"
+                  + "|workers?|callers?)|goroutines|threads|requests|handlers|workers|callers)\\b"),
           ci(
-              "\\b(?:called|invoked|accessed|used|runs?) (?:concurrently|in parallel|from"
+              "\\b(?:called|invoked|accessed|used|runs?) (?:concurrently|in parallel|(?:from|by)"
                   + " (?:multiple|many|several|every|each|all|concurrent)"
                   + " (?:goroutines?|threads?|requests?|handlers?|workers?))"),
-          ci("\\bconcurrent (?:requests?|goroutines?|threads?|handlers?|callers?|access)\\b"));
+          ci(
+              "\\bconcurrent"
+                  + " (?:requests?|goroutines?|threads?|handlers?|callers?|access|use)\\b"));
 
   /**
    * The note of a decline held by {@link #unconfirmedPremise} (#963): when the reviewed code of the
    * finding's own file states that the path runs concurrently ({@link #STATED_CONCURRENCY}), the
-   * note quotes that line, since claiming the diff cannot confirm it would be wrong; otherwise
-   * {@link #unconfirmedPremiseNote}. A statement in another file says nothing about this path, and
-   * one the line denies ({@link #DENIES} before it) is not quoted as the opposite of what it says.
+   * note quotes the sentence that says so, since claiming the diff cannot confirm it would be
+   * wrong; otherwise {@link #unconfirmedPremiseNote}. A statement in another file says nothing
+   * about this path, and one the text denies ({@link #DENIES} before it) is not quoted as the
+   * opposite of what it says. A comment wrapped across lines is read whole ({@link #statements}).
    */
   static String heldPremiseNote(String claim, String reviewedCode, String file) {
-    return rightSideLines(reviewedCode, file).stream()
-        .filter(RebuttalContradiction::statesConcurrency)
-        .findFirst()
-        .map(
-            line ->
-                NOTE_LEAD_IN
-                    + REPLY_ARGUES
-                    + claim
-                    + "\", but the reviewed code says this path runs concurrently — \""
-                    + clip(line)
-                    + "\". Reply again to keep the decline.")
-        .orElseGet(() -> unconfirmedPremiseNote(claim));
+    for (var statement : statements(rightSideLines(reviewedCode, file))) {
+      var at = concurrencyStatedAt(statement);
+      if (at >= 0) {
+        return NOTE_LEAD_IN
+            + REPLY_ARGUES
+            + claim
+            + "\", but the reviewed code says this path runs concurrently — \""
+            + sentenceAround(statement, at)
+            + "\". Reply again to keep the decline.";
+      }
+    }
+    return unconfirmedPremiseNote(claim);
   }
 
   /** The start of every held decline's note: the claim the reply makes is quoted after it. */
   private static final String REPLY_ARGUES = " the reply argues \"";
 
   /**
-   * Whether {@code line} states concurrency: a {@link #STATED_CONCURRENCY} match that a denial word
-   * does not govern ({@link #DENIES}: one at most two words before it, in the same clause). A guard
-   * word earlier in the sentence ("the lock guards every field, which is shared by every request
-   * goroutine") governs something else.
+   * Where {@code text} states concurrency, or {@code -1}: a {@link #STATED_CONCURRENCY} match that
+   * a denial word does not govern ({@link #DENIES}: one at most two words before it, in the same
+   * clause). Everything before the match is read, so the two-word rule alone decides how far back a
+   * denial reaches. A guard word earlier in the sentence ("the lock guards every field, which is
+   * shared by every request goroutine") governs something else.
    */
-  private static boolean statesConcurrency(String line) {
+  private static int concurrencyStatedAt(String text) {
     for (var pattern : STATED_CONCURRENCY) {
-      var matcher = pattern.matcher(line);
+      var matcher = pattern.matcher(text);
       while (matcher.find()) {
-        var before = line.substring(Math.max(0, matcher.start() - DENIAL_WINDOW), matcher.start());
-        if (!DENIES.matcher(before).find()) {
-          return true;
+        if (!DENIES.matcher(text.substring(0, matcher.start())).find()) {
+          return matcher.start();
         }
       }
     }
-    return false;
+    return -1;
   }
 
-  /** How much text before a concurrency statement is read for a denial governing it. */
-  private static final int DENIAL_WINDOW = 48;
+  /**
+   * The text {@link #heldPremiseNote} reads for a statement: a run of whole-line comments joined
+   * into one, each continuation's comment marker dropped, so a sentence wrapped across comment
+   * lines ("shared by every request" / "goroutine in the server") is read whole, a denial on the
+   * line before included; every other line on its own.
+   */
+  private static List<String> statements(List<String> lines) {
+    var statements = new ArrayList<String>();
+    StringBuilder comment = null;
+    for (var line : lines) {
+      var marker = COMMENT_LINE.matcher(line);
+      if (!marker.lookingAt()) {
+        if (comment != null) {
+          statements.add(comment.toString());
+          comment = null;
+        }
+        statements.add(line);
+      } else if (comment == null) {
+        comment = new StringBuilder(line.strip());
+      } else {
+        comment.append(' ').append(line.substring(marker.end()).strip());
+      }
+    }
+    if (comment != null) {
+      statements.add(comment.toString());
+    }
+    return statements;
+  }
+
+  /** The marker that opens a whole-line comment: {@code //}, {@code #}, {@code *}, {@code --}. */
+  private static final Pattern COMMENT_LINE =
+      Pattern.compile("[ \\t]{0,40}(?://+|#+|/?\\*+/?|--|;+)");
 
   /**
    * What turns the {@link #STATED_CONCURRENCY} statement right after it into a denial: a negator at

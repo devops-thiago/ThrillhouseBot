@@ -4928,6 +4928,86 @@ class FollowUpAnalyzerTest {
     assertTrue(ownFile.contains("says this path runs concurrently"), ownFile);
   }
 
+  /** The common sibling phrasings of a concurrency statement are quoted too. */
+  @Test
+  void siblingPhrasingsOfAConcurrencyStatementAreQuoted() {
+    for (var line :
+        List.of(
+            "+// The pool is shared across goroutines.",
+            "+// The pool is shared among all threads.",
+            "+// The pool is shared between requests.",
+            "+// The cache is used by all goroutines.",
+            "+// Tracker is safe for concurrent use.")) {
+      var note = heldNote(line);
+      assertTrue(note.contains("says this path runs concurrently"), line + " -> " + note);
+    }
+    for (var line :
+        List.of(
+            "+// The pool is shared by the request.", "+// The pool is shared across goroutine.")) {
+      var note = heldNote(line);
+      assertTrue(note.contains("no review has weighed"), line + " -> " + note);
+    }
+  }
+
+  /**
+   * A negator two long words before the statement denies it, however many characters those words
+   * take; a guard word in an earlier clause does not.
+   */
+  @Test
+  void aDenialReachesExactlyTwoWordsBackWhateverTheirLength() {
+    var longWords =
+        heldNote(
+            "+// The counter is not aVeryLongCamelCaseIdentifierOfFortyChar thereby shared by every"
+                + " request goroutine.");
+    assertTrue(longWords.contains("no review has weighed"), longWords);
+
+    var otherClause =
+        heldNote("+// The counter is not reset, it is shared by every request goroutine.");
+    assertTrue(otherClause.contains("says this path runs concurrently"), otherClause);
+
+    var guardClause = heldNote("+// The mutex guards it: shared by every thread.");
+    assertTrue(guardClause.contains("says this path runs concurrently"), guardClause);
+  }
+
+  /** A statement wrapped across comment lines is read whole, a wrapped denial included. */
+  @Test
+  void aConcurrencyStatementWrappedAcrossCommentLinesIsQuotedWhole() {
+    var wrapped =
+        heldNote(
+            """
+            +// The tracker is shared by every
+            +// request goroutine in the server.
+            +tracker.bump();""");
+    assertTrue(wrapped.contains("says this path runs concurrently"), wrapped);
+    assertTrue(
+        wrapped.contains("shared by every request goroutine in the server."), "joined: " + wrapped);
+
+    var javadoc =
+        heldNote(
+            """
+            +/**
+            + * The tracker is called from multiple
+            + * threads at once.
+            + */""");
+    assertTrue(javadoc.contains("called from multiple threads at once"), javadoc);
+
+    var wrappedDenial =
+        heldNote(
+            """
+            +// The tracker is not
+            +// shared by every request goroutine.
+            +tracker.bump();""");
+    assertTrue(wrappedDenial.contains("no review has weighed"), wrappedDenial);
+
+    var codeBetween =
+        heldNote(
+            """
+            +// The tracker is shared by every
+            +tracker.bump();
+            +// request goroutine in the server.""");
+    assertTrue(codeBetween.contains("no review has weighed"), codeBetween);
+  }
+
   // #963: a decline the model did not accept on the effective previous round is explained too.
 
   private static final String MODEL_REASON =

@@ -667,11 +667,12 @@ the claim and the contradicting line. The check is conservative:
   maintainer reply; a second reply always ends it.
 - A re-opened finding is not posted again. It stays in **Previous Findings
   Status** and counts toward the verdict at its own severity.
-- A decline the review does not accept is answered whenever there is a reason
-  to give. When the review keeps a finding open after a maintainer replied on
-  its thread, the review body says why ("Decline re-checked against the code
-  and not accepted: …"), with the model's reason or the line of code that
-  refutes the reply. A model status that gives no reason has nothing to show.
+- A decline the review does not accept is answered whenever the review has a
+  note for it. When the review keeps a finding open after a maintainer replied
+  on its thread, the review body says why ("Decline re-checked against the
+  code and not accepted: …"): the model's status note, quoted as it is, or the
+  code (a line, or a comment that says the path runs concurrently) that refutes
+  the reply. Only a model status with an empty note has nothing to show.
 
 A follow-up round's model reports on the findings of the newest round that
 raised any. A decline on a finding from an older round is weighed by the
