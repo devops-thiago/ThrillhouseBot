@@ -208,6 +208,14 @@ class OverviewScreenTest {
   }
 
   @Test
+  void sentencesSplitAtEveryEndButAMidSentenceAbbreviation() {
+    assertEquals(
+        List.of("One, e.g.\nthis.", "Two vs. three, etc. and so on.", "Four etc.", "Five!"),
+        OverviewScreen.sentences(
+            "  One, e.g.\nthis. Two vs. three, etc. and so on. Four etc. Five!  "));
+  }
+
+  @Test
   void aSentenceEndingInEtcIsSplitBeforeACapital() {
     assertEquals(
         "Lists the parsers, codecs, etc.",

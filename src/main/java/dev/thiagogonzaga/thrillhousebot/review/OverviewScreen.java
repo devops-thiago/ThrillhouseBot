@@ -177,15 +177,11 @@ final class OverviewScreen {
           "LDAP", "IMAP", "MQTT", "AMQP", "SNMP", "SASL", "XMPP", "HTML", "WCAG", "OPENAPI",
           "JSONRPC");
 
-  /**
-   * A sentence end: terminal punctuation followed by a blank, except after "e.g.", "i.e." and
-   * "vs.", which end an abbreviation mid-sentence, and after "etc." unless a capital letter
-   * follows: "etc." often ends a sentence too ("…, codecs, etc. Adds the rotator.").
-   */
-  private static final Pattern SENTENCE_END =
-      Pattern.compile(
-          "(?<=[.!?])(?<!\\b[eE]\\.[gG]\\.)(?<!\\b[iI]\\.[eE]\\.)(?<!\\b[vV][sS]\\.)"
-              + "(?:(?<!\\b[eE][tT][cC]\\.)|(?=\\s++\\p{Lu}))\\s++");
+  /** A candidate sentence end: terminal punctuation followed by a blank ({@link #sentences}). */
+  private static final Pattern SENTENCE_END = Pattern.compile("(?<=[.!?])\\s++");
+
+  /** Abbreviations whose period ends them mid-sentence. */
+  private static final Set<String> MID_SENTENCE_ABBREVIATIONS = Set.of("e.g.", "i.e.", "vs.");
 
   /**
    * {@code summary} with its file summaries mapped, screened and deduplicated, and its purpose
@@ -405,13 +401,41 @@ final class OverviewScreen {
     return STANDARD_PREFIXES.contains(key.substring(0, key.indexOf('-')));
   }
 
+  /**
+   * {@code text} split at each {@link #SENTENCE_END}, except after "e.g.", "i.e." and "vs.", which
+   * end an abbreviation mid-sentence, and after "etc." unless a capital letter follows: "etc."
+   * often ends a sentence too ("…, codecs, etc. Adds the rotator.").
+   */
+  static List<String> sentences(String paragraph) {
+    // Stripped, so a sentence end is always followed by the next sentence's first character.
+    var text = paragraph.strip();
+    var result = new ArrayList<String>();
+    var start = 0;
+    var ends = SENTENCE_END.matcher(text);
+    while (ends.find()) {
+      var before = text.substring(start, ends.start());
+      var words = before.split("\\s");
+      var lastWord = words[words.length - 1].toLowerCase(Locale.ROOT);
+      var next = text.charAt(ends.end());
+      var midSentence =
+          MID_SENTENCE_ABBREVIATIONS.contains(lastWord)
+              || (lastWord.equals("etc.") && !Character.isUpperCase(next));
+      if (!midSentence) {
+        result.add(before);
+        start = ends.end();
+      }
+    }
+    result.add(text.substring(start));
+    return result;
+  }
+
   /** {@code purpose} without the sentences naming a ticket key {@code known} does not hold. */
   static String withoutInventedTickets(String purpose, String known) {
     if (purpose == null || !TICKET_KEY.matcher(purpose).find()) {
       return purpose;
     }
     var source = known.toUpperCase(Locale.ROOT);
-    return Arrays.stream(SENTENCE_END.split(purpose.strip()))
+    return sentences(purpose).stream()
         .filter(
             sentence ->
                 TICKET_KEY
