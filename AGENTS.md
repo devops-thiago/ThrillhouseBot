@@ -187,19 +187,23 @@ is the `finding=N` marker on the inline comment. `SummaryAcrossRoundsTest` and
 - **A "Things to double-check" item is counted once and replaced only by the same defect** (#951,
   #961). A listed-only repeat at no higher severity is dropped by the open-thread guard
   (`restatesListed`); a finding at the same or higher severity replaces the item
-  (`replacedPriors`, `withoutReplaced`). A new listed item restating an open threaded finding is
-  dropped the same way. The summary's "Same issue as" note (`SummarySurfaceDeduplicator.restatedBy`)
-  uses the same predicate, so the note and the counts never disagree (#972). All of them go through
-  `DefectIdentity.sameDefect`, which is symmetric: in one file, the same title, a similar title or
-  a title-vs-description phrase within three lines, the same line with two shared title words or a
-  common identifier, or titles that restate each other (shared phrase and 0.75 overlap); in any
-  file, a key or symbol named by both titles plus another shared title word or defect class
-  (#956); a subject that is only the class a file is named after (common prose) pairs only when
-  one description also names a symbol of the other's title; or a description citing the other's
-  `file:line` and naming a symbol of its title. Two vetoes come first: titles naming different
-  identifiers (`namesDifferentIdentifiers`), and titles naming disjoint defect classes
-  (`classesConflict`: a race is not an off-by-one, #964). A key named only in a description, or
-  common title words, are not identity (`DefectIdentityTest`).
+  (`replacedPriors`, `withoutReplaced`). An item this round's own finding replaces
+  (`replacedThisRound`) keeps an `unresolved` status under `REPLACED_NOTE` and is listed as its
+  replacement in the still-open set, so "Still present" adds up to the findings carried in and the
+  summary folds it into the round's entry as open since an earlier review; the delta comment does
+  not count it as new (`FollowUpDeltaSummary.newFindingCount`, #969). The guard also drops a new
+  listed item restating an open threaded finding. The summary's "Same issue as" note
+  (`SummarySurfaceDeduplicator.restatedBy`) uses the same predicate, so the note and the counts
+  never disagree (#972). All of them go through `DefectIdentity.sameDefect`, which is symmetric: in
+  one file, the same title, a similar title or a title-vs-description phrase within three lines,
+  the same line with two shared title words or a common identifier, or titles that restate each
+  other (shared phrase and 0.75 overlap); in any file, a key or symbol named by both titles plus
+  another shared title word or defect class (#956); a subject that is only the class a file is
+  named after (common prose) pairs only when one description also names a symbol of the other's
+  title; or a description citing the other's `file:line` and naming a symbol of its title. Two
+  vetoes come first: titles naming different identifiers (`namesDifferentIdentifiers`), and titles
+  naming disjoint defect classes (`classesConflict`: a race is not an off-by-one, #964). A key
+  named only in a description, or common title words, are not identity (`DefectIdentityTest`).
 - **A declined scan finding stays settled while its content is unchanged** (#982). The scan reads
   no learning and is not model output, so it needs its own memory:
   `FollowUpAnalyzer.justifiedPriorFindings` hands every persisted `justified` scan finding to

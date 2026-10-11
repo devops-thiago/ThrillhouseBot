@@ -736,6 +736,11 @@ class DefectIdentityTest {
     assertEquals(
         Set.of("complexity"), DefectIdentity.defectClasses("dedupe is O(n^2) over 2M samples"));
     assertFalse(DefectIdentity.classesConflict("Possible null user", "Unrelated wording"));
+    assertEquals(
+        Set.of("nullness"),
+        DefectIdentity.defectClasses("Logger throws NullPointerException on anonymous requests"));
+    assertEquals(
+        Set.of("nullness"), DefectIdentity.defectClasses("Nullable user reaches the logger"));
     assertEquals(Set.of(), DefectIdentity.symbols(null));
     assertEquals(Set.of(), DefectIdentity.symbols("go() fails"), "two-character names say nothing");
   }

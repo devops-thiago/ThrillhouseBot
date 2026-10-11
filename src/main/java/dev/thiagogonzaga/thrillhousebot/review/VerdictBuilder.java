@@ -27,6 +27,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -243,11 +244,18 @@ public class VerdictBuilder {
     effectiveStatuses =
         FollowUpAnalyzer.withoutPhantomUnresolved(ctx.previousFindingsList(), effectiveStatuses);
     // A double-check item that a later round, or this one, raised again at no lower severity is
-    // one defect with its later copy, which is the one counted (#951): the earlier copy leaves
-    // the statuses here and the backstop's holds below.
+    // one defect with its later copy, which is the one counted (#951). An earlier round's
+    // replacement already carries it, so its status and hold leave; this round's own replacement
+    // carries it below.
+    // An item this round's own finding replaced was still open coming in, so it keeps a "still
+    // present" status, carried by that finding, and the finding is listed as open since an
+    // earlier review rather than as new (#969).
     var replaced = FollowUpAnalyzer.replacedPriors(ctx.priorAiResponses(), aiResponse.findings());
+    var replacedNow =
+        FollowUpAnalyzer.replacedThisRound(ctx.priorAiResponses(), aiResponse.findings());
     effectiveStatuses =
-        FollowUpAnalyzer.withoutReplaced(ctx.previousFindingsList(), effectiveStatuses, replaced);
+        FollowUpAnalyzer.withoutReplaced(
+            ctx.previousFindingsList(), effectiveStatuses, replaced, replacedNow);
     var effectiveResponse =
         new ReviewResponse(aiResponse.findings(), effectiveStatuses, aiResponse.summary());
     // Lazily resolve the shared DiffLineResolver only when the backstop runs — first reviews and
@@ -266,7 +274,8 @@ public class VerdictBuilder {
                     currentRenameTargets,
                     reviewedCode)
                 .stream()
-                .filter(hold -> !replaced.contains(hold.finding()))
+                .map(hold -> FollowUpAnalyzer.carriedByReplacement(hold, replaced, replacedNow))
+                .filter(Objects::nonNull)
                 .toList()
             : List.<FollowUpAnalyzer.HeldPrevious>of();
     var backstopStatuses = held.stream().map(FollowUpAnalyzer.HeldPrevious::status).toList();
@@ -278,7 +287,8 @@ public class VerdictBuilder {
     // missed every finding only the backstop holds — all of an older round's, once a later round
     // raised anything — so a round could list an open CRITICAL and still end as COMMENT.
     var openPrevious =
-        FollowUpAnalyzer.stillOpenFindings(ctx.previousFindingsList(), effectiveStatuses, held);
+        FollowUpAnalyzer.stillOpenFindings(
+            ctx.previousFindingsList(), effectiveStatuses, held, replacedNow);
     return buildResult(
         effectiveResponse,
         ctx.isFirstVisibleReview(),
@@ -287,6 +297,7 @@ public class VerdictBuilder {
             changedFiles,
             ReviewDiffFormatter.formatPureRenameRollup(
                 ReviewDiffFormatter.pureRenameFiles(ctx.files())),
+            ReviewDiffFormatter.formatIgnoredFiles(ctx.files(), ctx.reviewableFiles()),
             ReviewDiffFormatter.formatUnmatchedIgnoreGlobs(ctx.unmatchedIgnoreGlobs()),
             PatchCoverageResolver.formatScopeNote(ctx.coverageArtifactRefusal()),
             SupersededFindingsCarryover.formatScopeNote(ctx.carried()),
@@ -636,6 +647,7 @@ public class VerdictBuilder {
   private record SummaryInputs(
       List<PrSummaryGenerator.ChangedFile> changedFiles,
       String pureRenameRollup,
+      String ignoredFiles,
       String unmatchedIgnoreGlobs,
       String coverageArtifactNotRead,
       String carriedFromSupersededRun,
@@ -654,7 +666,7 @@ public class VerdictBuilder {
         aiResponse,
         isFirstReview,
         diffStats,
-        new SummaryInputs(changedFiles, "", "", "", "", "", unresolvedPrevious),
+        new SummaryInputs(changedFiles, "", "", "", "", "", "", unresolvedPrevious),
         ciEvaluation,
         backstopStatuses);
   }
@@ -673,8 +685,12 @@ public class VerdictBuilder {
     var tally = tallyFindings(aiResponse);
 
     // This round's findings and every earlier one still open — the set the summary lists (#948).
+    // An open entry equal to one of the round's findings is that finding (a replaced item listed as
+    // its replacement, #969), so it is weighed once.
     var outstanding = new ArrayList<Finding>(tally.findings());
-    outstanding.addAll(summaryInputs.openPrevious());
+    summaryInputs.openPrevious().stream()
+        .filter(open -> !tally.findings().contains(open))
+        .forEach(outstanding::add);
     ReviewState state = ReviewState.fromFindings(outstanding, blockingStrictness);
     // #645: count the outstanding findings whose severity cleared the mode's bar but whose
     // confidence did not, and only when the review is not requesting changes anyway — that is
@@ -803,6 +819,7 @@ public class VerdictBuilder {
   private static String reviewScopeNote(SummaryInputs summaryInputs) {
     var notes = new ArrayList<String>(4);
     addScopeNote(notes, summaryInputs.pureRenameRollup());
+    addScopeNote(notes, summaryInputs.ignoredFiles());
     addScopeNote(notes, summaryInputs.unmatchedIgnoreGlobs());
     addScopeNote(notes, summaryInputs.coverageArtifactNotRead());
     addScopeNote(notes, summaryInputs.carriedFromSupersededRun());

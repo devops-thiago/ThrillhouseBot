@@ -130,7 +130,7 @@ final class DefectIdentity {
           "unbounded",
           classPattern("unbounded|without bound|leaks?|leaking"),
           "nullness",
-          classPattern("null|nil|npe|dereferenc\\w{0,4}"));
+          classPattern("null|nil|npe|nullpointer\\w{0,9}|nullable|dereferenc\\w{0,4}"));
 
   private static Pattern classPattern(String words) {
     return Pattern.compile("(?<![a-z0-9_])(?:" + words + ")(?![a-z0-9_])");
