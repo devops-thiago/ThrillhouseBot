@@ -725,7 +725,9 @@ public final class PromptLabelScrubber {
    */
   private static int lineStartTailEnd(String text, int from, int to) {
     if (from > 0 && text.charAt(from - 1) != '\n') {
-      return to;
+      // After a sentence end the aside was a sentence of its own, so its full stop goes too.
+      boolean ownSentence = ".!?".indexOf(text.charAt(from - 1)) >= 0;
+      return ownSentence && to < text.length() && text.charAt(to) == '.' ? to + 1 : to;
     }
     int end = to < text.length() && ".,;".indexOf(text.charAt(to)) >= 0 ? to + 1 : to;
     return skipBlanks(text, end);
