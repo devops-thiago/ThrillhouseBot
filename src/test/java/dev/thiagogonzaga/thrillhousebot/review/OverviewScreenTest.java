@@ -114,6 +114,11 @@ class OverviewScreenTest {
         OverviewScreen.screenedText(
             "Entry point that renders the dashboard; hosts the two confirmed findings", "+x", ""));
     assertEquals("", OverviewScreen.screenedText("No findings in this batch", "+x", ""));
+    // A leading separator leaves an empty token before "findings": it is not a count.
+    assertEquals(
+        "(findings) parser for the dashboard",
+        OverviewScreen.screenedText("(findings) parser for the dashboard", "+x", ""));
+    assertEquals("", OverviewScreen.screenedText("Holds 3 findings", "+x", ""));
     // A file about findings is still described.
     assertEquals(
         "Refines findings before they are posted",
@@ -241,7 +246,8 @@ class OverviewScreenTest {
     assertEquals(1, dropped.size(), dropped.toString());
     assertTrue(dropped.getFirst().contains("Dropped all 1 file summary"), dropped.toString());
     assertEquals(1, stray.size(), stray.toString());
-    assertTrue(stray.getFirst().contains("none names a changed file"), stray.toString());
+    assertTrue(
+        stray.getFirst().contains("none is left on a changed file (0 failed"), stray.toString());
     assertEquals(List.of(), none);
   }
 

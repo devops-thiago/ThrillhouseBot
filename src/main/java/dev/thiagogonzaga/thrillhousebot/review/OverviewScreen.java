@@ -175,9 +175,10 @@ final class OverviewScreen {
           entries.size());
     } else if (!kept.isEmpty() && kept.stream().noneMatch(e -> patches.containsKey(e.path()))) {
       Log.warnf(
-          "Summary call returned %d file summary(ies) and none names a changed file; the Changed"
-              + " Files rows will read \"Not summarized\"",
-          entries.size());
+          "Summary call returned %d file summary(ies) and none is left on a changed file (%d"
+              + " failed the overview screen, the rest name no changed file); the Changed Files"
+              + " rows will read \"Not summarized\"",
+          entries.size(), dropped);
     } else if (dropped > 0) {
       Log.infof("Dropped %d file summary(ies) that failed the overview screen", dropped);
     }
