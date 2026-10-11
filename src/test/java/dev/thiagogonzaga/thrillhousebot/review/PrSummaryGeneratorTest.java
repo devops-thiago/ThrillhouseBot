@@ -2047,6 +2047,8 @@ class PrSummaryGeneratorTest {
         // A flag shape that never closes, or one whose label breaks it.
         "flowchart TD\n  A>flag --> B",
         "flowchart TD\n  A>t: 3] --> B",
+        // A slash inside an unquoted label, which the diagram prompt says GitHub rejects.
+        "flowchart TD\n  A[src/main.java] --> B",
         "flowchart TD\n  A --> B,"
       })
   void aFlowchartThatWouldNotParseIsOmitted(String diagram) {
@@ -2075,7 +2077,10 @@ class PrSummaryGeneratorTest {
         // The asymmetric (flag) shape, quoted and bare, beside arrows whose '>' follows a dash.
         "flowchart TD\n  Deploy>\"release\"] --> Prod",
         "flowchart TD\n  Deploy>release] -->Prod\n  Prod ==>Done",
-        "flowchart TD\n  deploy_>release] --> B[a>b]"
+        "flowchart TD\n  deploy_>release] --> B[a>b]",
+        // Slanted shapes, and a slash inside a quoted label.
+        "flowchart TD\n  A[/input/] --> B[\\base/] --> C[/top\\]",
+        "flowchart TD\n  A[\"src/main.java\"] --> B"
       })
   void aFlowchartThatParsesIsKept(String diagram) {
     assertTrue(PrSummaryGenerator.flowchartParses(diagram), diagram);
@@ -2090,12 +2095,24 @@ class PrSummaryGeneratorTest {
       own.add(finding(RiskLevel.HIGH, "src/A.java", 10 + i, "Model high " + i));
     }
     var secret =
-        finding(
+        new Finding(
             RiskLevel.HIGH,
+            Confidence.HIGH,
             "src/Config.java",
             3,
-            SecurityRule.GITHUB_TOKEN.secretTitleHead() + " (ghp_…, 40 chars)");
+            SecurityRule.GITHUB_TOKEN.secretTitleHead() + " (ghp_…, 40 chars)",
+            "d\n\n" + SecurityScan.PROVENANCE,
+            null,
+            null);
     own.add(secret);
+    // A model finding whose title only starts like a scan title gets no such place.
+    var lookalike =
+        finding(
+            RiskLevel.HIGH,
+            "src/B.java",
+            7,
+            SecurityRule.GITHUB_TOKEN.secretTitleHead() + " (from the model)");
+    own.add(lookalike);
     own.add(finding(RiskLevel.MEDIUM, "src/A.java", 40, "Model medium"));
 
     var summary = generator.generate(1, 10, 0, List.of(), null, roundWith(own, List.of()));
@@ -2104,7 +2121,8 @@ class PrSummaryGeneratorTest {
     assertTrue(keyFindings.indexOf(secret.title()) > 0, summary);
     assertTrue(keyFindings.indexOf(secret.title()) < keyFindings.indexOf("Model high 0"), summary);
     assertFalse(keyFindings.contains("Model high 4"), summary);
-    assertTrue(keyFindings.contains(PrSummaryGenerator.keyFindingsMoreLine(2)), summary);
+    assertFalse(keyFindings.contains(lookalike.title()), summary);
+    assertTrue(keyFindings.contains(PrSummaryGenerator.keyFindingsMoreLine(3)), summary);
   }
 
   @Test

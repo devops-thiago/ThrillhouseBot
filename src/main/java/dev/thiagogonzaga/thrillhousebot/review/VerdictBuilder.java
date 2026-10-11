@@ -477,7 +477,10 @@ public class VerdictBuilder {
     if (!screened.disclosed()) {
       return screened;
     }
-    var model = posted.stream().filter(f -> SecurityRule.fromTitle(f.title()) == null).toList();
+    var model =
+        posted.stream()
+            .filter(f -> !SecurityScan.raisedByScan(f.title(), f.description()))
+            .toList();
     var unverified =
         model.stream()
             .filter(

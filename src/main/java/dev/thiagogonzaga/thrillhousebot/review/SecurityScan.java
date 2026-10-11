@@ -151,9 +151,20 @@ public class SecurityScan {
 
   static final String PEM_MATERIAL_REDACTION = "[redacted private key material]";
 
-  private static final String PROVENANCE =
+  static final String PROVENANCE =
       "_Raised by the deterministic security scan: a pattern match on the added lines, not model"
           + " output, so it is not put to the second-pass verifier._";
+
+  /**
+   * Whether a finding was raised by this scan: a rule's title shape ({@link
+   * SecurityRule#fromTitle}) and the scan's own provenance line in its description. A model finding
+   * whose title merely starts like a scan title carries no such line, so it is not taken for one.
+   */
+  static boolean raisedByScan(String title, String description) {
+    return SecurityRule.fromTitle(title) != null
+        && description != null
+        && description.contains(PROVENANCE);
+  }
 
   private static final String STILL_DETECTED_NOTE =
       "Still detected by the deterministic security scan on an added line.";

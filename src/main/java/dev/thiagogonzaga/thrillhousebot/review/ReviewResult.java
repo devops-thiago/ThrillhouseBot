@@ -417,7 +417,7 @@ public record ReviewResult(
         .filter(Finding::postsInline)
         .sorted(
             Comparator.comparing(Finding::risk)
-                .thenComparing(f -> SecurityRule.fromTitle(f.title()) != null ? 0 : 1)
+                .thenComparing(f -> SecurityScan.raisedByScan(f.title(), f.description()) ? 0 : 1)
                 .thenComparing(f -> preferred.test(f) ? 0 : 1)
                 .thenComparing(Finding::confidence))
         .limit(KEY_FINDINGS_COUNT)

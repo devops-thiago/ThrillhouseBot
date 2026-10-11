@@ -2537,7 +2537,7 @@ class VerdictBuilderTest {
             "Config.java",
             3,
             SecurityRule.GITHUB_TOKEN.secretTitleHead() + " (ghp_…, 40 chars)",
-            "d",
+            "d\n\n" + SecurityScan.PROVENANCE,
             null,
             null);
     var posted = new ArrayList<>(postedFindings(1, 1).findings());
@@ -2568,5 +2568,26 @@ class VerdictBuilderTest {
             List.of(bare, FindingVerificationService.markUnscreened(bare)));
 
     assertEquals(new VerificationCoverage(2, 1), coverage);
+  }
+
+  @Test
+  void aModelFindingWithAScanLikeTitleIsCountedAsTheModels() {
+    // Only the scan's provenance line makes a finding the scan's; a model title that starts like
+    // one is still a model finding the verifier screened.
+    var lookalike =
+        FindingVerificationService.markUnscreened(
+            new ReviewResponse.Finding(
+                "high",
+                "high",
+                "Config.java",
+                3,
+                SecurityRule.GITHUB_TOKEN.secretTitleHead() + " (from the model)",
+                "The model's own words.",
+                null,
+                null));
+
+    assertEquals(
+        new VerificationCoverage(1, 0),
+        VerdictBuilder.postedCoverage(new VerificationCoverage(2, 1), List.of(lookalike)));
   }
 }

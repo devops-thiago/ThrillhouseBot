@@ -1010,15 +1010,17 @@ public class PrSummaryGenerator {
   /**
    * Whether every node shape on {@code line} parses once labels are removed: its brackets close in
    * order, a bracket opens inside another only straight after it (the {@code [(db)]}, {@code
-   * ([stadium])} and {@code {{hex}}} shapes), and no unquoted label holds a colon, an ampersand or
-   * a semicolon. GitHub's parser rejects {@code A(f(x))} and {@code A(t: 3)}, which balance. The
-   * asymmetric shape {@code A>flag]} opens with a {@code >} straight after the node id and closes
-   * with {@code ]}; an arrow's {@code >} follows a dash, an equals sign or a dot instead.
+   * ([stadium])} and {@code {{hex}}} shapes), and no unquoted label holds a colon, an ampersand, a
+   * semicolon or a slash. GitHub's parser rejects {@code A(f(x))} and {@code A(t: 3)}, which
+   * balance. A slash or backslash straight inside a square bracket is the parallelogram and
+   * trapezoid shapes' edge ({@code [/in/]}, {@code [/base\]}), not label text. The asymmetric shape
+   * {@code A>flag]} opens with a {@code >} straight after the node id and closes with {@code ]}; an
+   * arrow's {@code >} follows a dash, an equals sign or a dot instead.
    */
   private static boolean shapesParse(String line) {
     var open = new ArrayDeque<Character>();
     var previous = ' ';
-    for (var c : line.toCharArray()) {
+    for (var c : SLANTED_EDGE.matcher(line).replaceAll("$1$2").toCharArray()) {
       if (!acceptsNext(open, previous, c)) {
         return false;
       }
@@ -1055,7 +1057,13 @@ public class PrSummaryGenerator {
   }
 
   /** Characters GitHub's parser rejects inside an unquoted label. */
-  private static final String LABEL_BREAKERS = ":&;";
+  private static final String LABEL_BREAKERS = ":&;/";
+
+  /**
+   * A slanted shape's edge: a slash or backslash right after an opening square bracket or right
+   * before a closing one (the bracket is group 1 or 2), dropped before the label check.
+   */
+  private static final Pattern SLANTED_EDGE = Pattern.compile("(\\[)[/\\\\]|[/\\\\](])");
 
   private static final String OPENING_BRACKETS = "([{";
 
