@@ -19,7 +19,6 @@ import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import java.util.List;
-import java.util.regex.Pattern;
 
 /**
  * Puts a finding on the code its {@code suggestion_old} quotes, so a suggestion replaces the lines
@@ -46,9 +45,6 @@ import java.util.regex.Pattern;
  * by.
  */
 final class SuggestionAnchor {
-
-  /** A cell separator: a pipe no backslash escapes. */
-  private static final Pattern UNESCAPED_PIPE = Pattern.compile("(?<!\\\\)\\|");
 
   private SuggestionAnchor() {}
 
@@ -102,15 +98,23 @@ final class SuggestionAnchor {
   }
 
   /**
-   * Cells of a markdown table row: the unescaped pipes between its leading and trailing pipe, plus
-   * one. A row written without a trailing pipe counts the same.
+   * Cells of a markdown table row: the separator pipes after its leading pipe, plus one unless the
+   * row ends on one, so a row written without a trailing pipe counts the same. As in GFM, a
+   * backslash escapes the character after it, so {@code \|} is cell text and {@code \\|} is an
+   * escaped backslash followed by a separator.
    */
   static int cellCount(String row) {
-    var body = row.substring(1);
-    if (body.endsWith("|") && !body.endsWith("\\|")) {
-      body = body.substring(0, body.length() - 1);
+    int separators = 0;
+    boolean endsOnSeparator = false;
+    int i = 1;
+    while (i < row.length()) {
+      char c = row.charAt(i);
+      // An escape pair is cell text: step over the escaped character too.
+      endsOnSeparator = c == '|';
+      separators += endsOnSeparator ? 1 : 0;
+      i += c == '\\' ? 2 : 1;
     }
-    return UNESCAPED_PIPE.split(body, -1).length;
+    return endsOnSeparator ? separators : separators + 1;
   }
 
   private static List<String> nonBlankLines(String text) {

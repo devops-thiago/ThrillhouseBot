@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -473,7 +474,8 @@ public record ReviewResult(
    * summary re-post on follow-up reviews, since the earlier summary may describe removed code.
    */
   public boolean hasSupersededPrevious() {
-    return previousStatuses.stream().anyMatch(s -> "superseded".equalsIgnoreCase(s.status()));
+    return previousStatuses.stream()
+        .anyMatch(s -> !s.fromEarlierRound() && "superseded".equalsIgnoreCase(s.status()));
   }
 
   /** How many previous findings the model (or the backstop) still reports as unresolved. */
@@ -486,9 +488,19 @@ public record ReviewResult(
    * {@code justified} is a maintainer's decline, not a fix, and {@code superseded} is an auto-close
    * because the targeted code left the diff — counting either as "resolved" would overstate what
    * the round actually fixed.
+   *
+   * <p>A status the backstop gave an earlier round's finding ({@link
+   * PreviousFindingStatus#fromEarlierRound}) is left out here and in {@link
+   * #hasSupersededPrevious}: those two say what this round moved, and an earlier round's status is
+   * recomputed every round because it is never persisted (#957). Counted as movement, a finding
+   * whose code left the diff rounds ago would post the delta comment and a "closed" review body on
+   * every push (#470). The summary's status table counts every status, so its counts still add up
+   * to the findings carried in.
    */
   public long resolvedPreviousCount() {
-    return previousStatuses.stream().filter(s -> "resolved".equalsIgnoreCase(s.status())).count();
+    return previousStatuses.stream()
+        .filter(s -> !s.fromEarlierRound() && "resolved".equalsIgnoreCase(s.status()))
+        .count();
   }
 
   /**
@@ -1042,11 +1054,47 @@ public record ReviewResult(
     return findings.size();
   }
 
+  /**
+   * One previous finding's status this round.
+   *
+   * @param earlierRound set on every status the approval backstop gave: its {@code id} is relative
+   *     to the round that raised the finding (or {@link FollowUpAnalyzer#EARLIER_ROUND_ID}), which
+   *     is usually older than the effective previous round, so consumers read the finding from here
+   *     rather than map the id (#959); {@code null} on the model's statuses and the passes that
+   *     rewrite them, whose ids name the effective previous round's findings
+   */
   @RegisterForReflection
   public record PreviousFindingStatus(
       int id,
       String status, // resolved, unresolved, justified, superseded
-      String note) {}
+      String note,
+      EarlierRound earlierRound) {
+
+    public PreviousFindingStatus(int id, String status, String note) {
+      this(id, status, note, null);
+    }
+
+    /** Whether the approval backstop gave this status (#957, #959). */
+    public boolean fromEarlierRound() {
+      return earlierRound != null;
+    }
+
+    /** The same status under another note. */
+    public PreviousFindingStatus withNote(String newNote) {
+      return new PreviousFindingStatus(id, status, newNote, earlierRound);
+    }
+  }
+
+  /**
+   * What identifies an earlier round's finding where its id cannot: the finding itself and, when a
+   * maintainer's decline on its own review thread settled it, that thread's root comment, located
+   * by the finding's {@code finding=N} marker and its own content, never by the id alone (#958).
+   *
+   * @param threadRootId the root comment of the thread the standing decline was written on, or
+   *     {@code null} when no thread of the finding's own settled it
+   */
+  @RegisterForReflection
+  public record EarlierRound(ReviewResponse.Finding finding, Long threadRootId) {}
 
   @RegisterForReflection
   public record CiCheck(String name, String type, String status, String conclusion) {
