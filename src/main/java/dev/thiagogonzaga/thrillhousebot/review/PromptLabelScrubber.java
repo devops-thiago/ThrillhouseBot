@@ -340,7 +340,7 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern RESTARTED_SENTENCE =
       Pattern.compile(
-          "(?<![^.!?\\n])([ \\t]*(?:[-*+>][ \\t]+)?)[^\\s.!?…](?:[^\\s.!?…]|\\.(?=\\w)){0,59}"
+          "([ \\t]*)[^\\s.!?…](?:[^\\s.!?…]|\\.(?=\\w)){0,59}"
               + "(?:\\.\\.\\.|…)[ \\t]+(\\p{L}{4,8}),[ \\t]+(\\p{L})");
 
   /**
@@ -659,7 +659,11 @@ public final class PromptLabelScrubber {
   private static String removeScratchText(String text) {
     var s = PARENTHETICAL_SELF_CORRECTION.matcher(text).replaceAll("(");
     s = DASH_SELF_CORRECTION.matcher(s).replaceAll(" $1 ");
-    s = RESTARTED_SENTENCE.matcher(s).replaceAll(m -> Matcher.quoteReplacement(restarted(m)));
+    var corrected = s;
+    s =
+        RESTARTED_SENTENCE
+            .matcher(corrected)
+            .replaceAll(m -> Matcher.quoteReplacement(restartedSentence(corrected, m)));
     s = CONFIRMED_FINDINGS.matcher(s).replaceAll(m -> capitalizeLike(m.group(1), m.group(2)));
     s = removeNoFindingsAsides(s);
     return FINDINGS_IN_BATCH.matcher(s).replaceAll("$1");
@@ -675,6 +679,29 @@ public final class PromptLabelScrubber {
       return m.group();
     }
     return m.group(1) + capitalize(m.group(3));
+  }
+
+  /**
+   * {@link #restarted} for a {@link #RESTARTED_SENTENCE} match in {@code text} when its broken-off
+   * start opens the text, a line or a sentence, after blanks and at most one list or quote marker
+   * ({@code -}, {@code *}, {@code +}, {@code >}) followed by a blank, which stays; anywhere else
+   * the start is part of a clause and the match stays. Decided here rather than by a lookbehind,
+   * which kept the pattern over the regex complexity budget.
+   */
+  private static String restartedSentence(String text, MatchResult m) {
+    return opensRestart(text, m.end(1)) ? restarted(m) : m.group();
+  }
+
+  /**
+   * Whether only blanks and at most one marker followed by a blank stand between {@code token} and
+   * the start of the text or a {@code .}, {@code !}, {@code ?} or line break before it.
+   */
+  private static boolean opensRestart(String text, int token) {
+    int at = skipBlanksBack(text, token, 0);
+    if (at > 0 && at < token && "-*+>".indexOf(text.charAt(at - 1)) >= 0) {
+      at = skipBlanksBack(text, at - 1, 0);
+    }
+    return at == 0 || ".!?\n".indexOf(text.charAt(at - 1)) >= 0;
   }
 
   /** Drops each {@link #RESTARTED_AFTER_CODE_SPAN} outside a fenced block. */
