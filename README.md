@@ -337,7 +337,7 @@ bounds at boot while it is on.
 | `REVIEW_LARGE_PR_NUDGE_MIN_CHANGED_LINES` | Added plus deleted lines at which a PR counts as large; either test is enough. `0` turns this test off | `1000` |
 | `THRILLHOUSEBOT_REVIEW_MAX_REVIEW_COMMENTS` | Most inline comments per review; the rest are listed in the summary | `50` |
 | `THRILLHOUSEBOT_REVIEW_INSTRUCTIONS_FILE` | Repository path of the instructions file | `.github/thrillhousebot.md` |
-| `THRILLHOUSEBOT_REVIEW_IGNORED_FILES` | Comma-separated gitignore-style globs never reviewed. A pattern without `/` matches at any depth (`*.lock`, `vendor`); one with `/` is anchored at the root (`docs/generated/**`); a trailing `/` means the directory's tree; `*` does not cross `/`. Write a `{a,b}` alternation as separate patterns. Setting it replaces the default list | `pom.xml`, lockfiles, generated and minified code, sourcemaps, and build and vendor trees (the shipped value of `thrillhousebot.review.ignored-files` in `application.properties`) |
+| `THRILLHOUSEBOT_REVIEW_IGNORED_FILES` | Comma-separated gitignore-style globs never reviewed. A pattern without `/` matches at any depth (`*.lock`, `vendor`); one with `/` is anchored at the root (`docs/generated/**`); a trailing `/` means the directory's tree; `*` does not cross `/`. Write a `{a,b}` alternation as separate patterns. Setting it replaces the default list | Lockfiles, generated and minified code, sourcemaps, and build and vendor trees (the shipped value of `thrillhousebot.review.ignored-files` in `application.properties`). Build manifests such as `pom.xml`, `build.gradle`, `Cargo.toml`, `package.json` and `build.zig` are reviewed; every file the list excludes is named in the summary's scope note |
 | `THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED` | Read `.github/thrillhousebot.yml` from each repository (extra ignore globs, path-scoped rules, coverage artifact). See [Repository configuration](#repository-configuration) | `true` |
 | `REVIEW_LABELS_ENABLED` | Suggest PR labels. See [PR labels](#pr-labels) | `false` |
 | `REVIEW_LABELS_APPLY` | Add the labels to the PR instead of suggesting them in a comment | `false` |
@@ -633,9 +633,14 @@ unresolved".
 The **Description vs. Implementation** section appears only when the PR
 description and the change disagree. A summary with model prose ("What this PR
 does", per-file summaries) and no such section means the check ran and found
-nothing; a counts-only summary means it did not run, and says why. A gap stays
-listed on later rounds until the summary call says what resolved it, the same
-gap is reported again, or the PR stops linking the issue the gap names. A
+nothing; a counts-only summary means it did not run, and says why. Each gap
+names what the description or a linked issue says; a gap that quotes the
+description is dropped when the quoted words are not in it, and a finding that
+reports a mismatch with the description is named in the section by title and
+location. A gap stays listed on later rounds until the summary call says what
+resolved it (never on the head the previous round reviewed, where nothing the
+call reads has changed), the same gap is reported again, the quoted claim leaves
+the description, or the PR stops linking the issue the gap names. A
 follow-up on the head the previous round reviewed keeps that round's overview
 where its own summary has none: the whole overview when the summary call returns
 none or is skipped, cut or failed (the banner then says the overview is carried
@@ -1379,12 +1384,14 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 - **OpenAI-compatible APIs only.** The endpoint must implement the
   chat-completions API that LangChain4j expects.
 - **Review output.** At most `THRILLHOUSEBOT_REVIEW_MAX_REVIEW_COMMENTS` (50)
-  inline comments per review. Build descriptors (`pom.xml`), lockfiles
-  (`*.lock`, `package-lock.json`, `pnpm-lock.yaml`, `go.sum`), minified bundles
-  and sourcemaps, generated code (`*.generated.*`, protobuf output) and build or
-  vendor directories (`target/`, `node_modules/`, `dist/`, `build/`, `out/`,
-  `.next/`, `vendor/`, `__pycache__/`, `.venv/`, `bin/`, `obj/`) are skipped by
-  default. See `THRILLHOUSEBOT_REVIEW_IGNORED_FILES` and
+  inline comments per review. Lockfiles (`*.lock`, `package-lock.json`,
+  `pnpm-lock.yaml`, `go.sum`), minified bundles and sourcemaps, generated code
+  (`*.generated.*`, protobuf output) and build or vendor directories (`target/`,
+  `node_modules/`, `dist/`, `build/`, `out/`, `.next/`, `vendor/`,
+  `__pycache__/`, `.venv/`, `bin/`, `obj/`) are skipped by default and named in
+  the summary's scope note; build manifests (`pom.xml`, `build.gradle`,
+  `Cargo.toml`, `package.json`, `build.zig`) are reviewed. See
+  `THRILLHOUSEBOT_REVIEW_IGNORED_FILES` and
   [Repository configuration](#repository-configuration).
 - **Security scan.** The [security scan](#security-scan) matches a short list of
   patterns on added lines. It does not replace GitHub secret scanning or push
