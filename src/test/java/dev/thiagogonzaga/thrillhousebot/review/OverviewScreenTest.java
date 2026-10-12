@@ -508,6 +508,13 @@ class OverviewScreenTest {
     assertEquals(
         "renders the dashboard",
         OverviewScreen.screenedText("TBD, renders the dashboard", "+x", ""));
+    // A first part of findings talk takes its clause with it, and the summary with that.
+    assertEquals(
+        "", OverviewScreen.screenedText("hosts the two findings, renders the dashboard", "+x", ""));
+    assertEquals(
+        "renders the table",
+        OverviewScreen.screenedText(
+            "renders the table; hosts the two findings, renders the dashboard", "+x", ""));
     // A relative tail goes with the findings part it qualifies.
     assertEquals(
         "",

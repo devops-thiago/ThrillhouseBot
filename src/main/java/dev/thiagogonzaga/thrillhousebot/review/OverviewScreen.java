@@ -296,22 +296,27 @@ final class OverviewScreen {
             .map(String::strip)
             .filter(c -> !c.isEmpty() && !isPlaceholder(c))
             .map(c -> withoutUntrueParts(c, patch, known))
-            // A part the cut leaves may be a placeholder ("TBD, hosts the two findings").
-            .filter(c -> !isPlaceholder(c))
             .toList();
-    if (clauses.isEmpty() || !trueToTheFile(clauses.getFirst(), patch, known)) {
+    // A clause the cut emptied, or left a placeholder ("TBD, hosts the two findings"), says
+    // nothing true; the first one is the file's role, so the summary goes with it.
+    if (clauses.isEmpty()
+        || isPlaceholder(clauses.getFirst())
+        || !trueToTheFile(clauses.getFirst(), patch, known)) {
       return "";
     }
-    return String.join("; ", clauses.stream().filter(c -> trueToTheFile(c, patch, known)).toList());
+    return String.join(
+        "; ",
+        clauses.stream().filter(c -> !isPlaceholder(c) && trueToTheFile(c, patch, known)).toList());
   }
 
   /**
    * {@code clause} less the parts, separated by a comma or a conjunction, that talk about findings
    * or name a setting nothing shows (#964), when some part does neither ("renders the dashboard,
    * hosts the two findings" and "renders the dashboard and hosts the two findings" keep "renders
-   * the dashboard"); as it is when none of its parts does, or when the first does, since the first
-   * part carries the clause's verb and the rest would be a fragment: the clause is then judged
-   * whole. Each kept part keeps the separator it had.
+   * the dashboard"); as it is when none of its parts does; and {@code ""} when the first does,
+   * since the first part carries the clause's verb and the rest would be a fragment, so the whole
+   * clause goes ("hosts the two findings, renders the dashboard"). Each kept part keeps the
+   * separator it had.
    */
   private static String withoutUntrueParts(String clause, String patch, String known) {
     var parts = new ArrayList<String>();
@@ -347,8 +352,11 @@ final class OverviewScreen {
       }
     }
     // The first part carries the clause's verb: without it the rest is a fragment ("currency"),
-    // so the clause is judged whole instead.
-    return dropped == 0 || firstDropped ? clause : kept.toString();
+    // so the clause goes whole on the part's own verdict.
+    if (firstDropped) {
+      return "";
+    }
+    return dropped == 0 ? clause : kept.toString();
   }
 
   /**
