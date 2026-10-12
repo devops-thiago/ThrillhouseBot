@@ -277,4 +277,42 @@ class ChangeSymbolsTest {
     assertEquals("ClickListener", ChangeSymbols.declaredName("fun interface ClickListener {"));
     assertEquals("", ChangeSymbols.declaredName("enum class"));
   }
+
+  @Test
+  void aQuotedDelimiterOfAnyCaseOpensAHeredocWhereAShellCommandGoesOn() {
+    // After the closing quote a shell line ends, redirects, pipes, chains or comments; code that
+    // inserts a quoted string into a stream goes on with ';', another '<<' or anything else.
+    var patch =
+        """
+        @@ -0,0 +1,30 @@
+        +cat << 'eof'
+        +def in_spaced_lower():
+        +eof
+        +cat << "end" > out.py
+        +def in_redirected():
+        +end
+        +ruby <<~'eos' | sh
+        +def in_piped():
+        +eos
+        +cat << 'x' 2> err.log
+        +def in_stderr():
+        +x
+        +cat << 'z' && echo done
+        +def in_chained():
+        +z
+        +cat << 'w' # generated
+        +def in_commented():
+        +w
+        +out << "end";
+        +def after_insertion():
+        +out << 'x' << y;
+        +def after_chained_insertion():
+        +out << "n" 0;
+        +def after_digit():
+        """;
+
+    assertEquals(
+        List.of("after_insertion", "after_chained_insertion", "after_digit"),
+        ChangeSymbols.declaredNames(patch));
+  }
 }

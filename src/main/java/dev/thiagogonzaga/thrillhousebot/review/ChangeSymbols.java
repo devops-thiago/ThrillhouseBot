@@ -297,13 +297,14 @@ public final class ChangeSymbols {
   static final class LiteralTracker {
 
     /**
-     * A quoted heredoc opener ({@code <<-'END'}, {@code <<'py'}): group 1 is the space before the
-     * quote, group 3 the word. A word of any case opens one straight after the operator; after a
-     * space only an upper-case one does, so a stream insertion of a string or character ({@code out
-     * << "x"}) opens nothing.
+     * A quoted heredoc opener ({@code <<-'END'}, {@code <<'py'}, {@code << 'eof'}): a word of any
+     * case in quotes after the operator and any horizontal space; group 2 is the word. It opens a
+     * heredoc only where a shell command goes on ({@link #continuesShellCommand}), so a stream
+     * insertion of a string or character ({@code out << "end";}, {@code out << 'x' << y}) opens
+     * nothing.
      */
     private static final Pattern QUOTED_HEREDOC =
-        Pattern.compile("<<[-~]?(\\s*)(['\"])([A-Za-z_]\\w*)\\2");
+        Pattern.compile("<<[-~]?\\h*(['\"])([A-Za-z_]\\w*)\\1");
 
     /**
      * An unquoted heredoc opener ({@code <<EOF}, {@code <<-EOF}, {@code << EOF}): an upper-case
@@ -382,8 +383,8 @@ public final class ChangeSymbols {
         return i + 1;
       }
       var quoted = QUOTED_HEREDOC.matcher(text).region(i, text.length());
-      if (quoted.lookingAt() && (quoted.group(1).isEmpty() || isUpperCase(quoted.group(3)))) {
-        openedHeredoc = quoted.group(3);
+      if (quoted.lookingAt() && continuesShellCommand(text, quoted.end())) {
+        openedHeredoc = quoted.group(2);
         return quoted.end();
       }
       var bare = BARE_HEREDOC.matcher(text).region(i, text.length());
@@ -394,8 +395,18 @@ public final class ChangeSymbols {
       return i + 2;
     }
 
-    private static boolean isUpperCase(String word) {
-      return word.equals(word.toUpperCase(Locale.ROOT));
+    /**
+     * Whether the text after a quoted heredoc delimiter, from {@code end}, is what a shell command
+     * line has there: nothing, a redirection ({@code > out}, {@code 2> err}), a pipe or a list
+     * operator ({@code |}, {@code &&}), or a comment. Code that inserts a quoted string into a
+     * stream goes on with something else: {@code ;}, {@code )}, {@code ,} or another {@code <<}.
+     */
+    private static boolean continuesShellCommand(String text, int end) {
+      var rest = text.substring(end).stripLeading();
+      if (rest.isEmpty() || "|&>#".indexOf(rest.charAt(0)) >= 0) {
+        return true;
+      }
+      return rest.length() > 1 && Character.isDigit(rest.charAt(0)) && rest.charAt(1) == '>';
     }
 
     /** The index past the single-line string opening at {@code start}, or the line's end. */
