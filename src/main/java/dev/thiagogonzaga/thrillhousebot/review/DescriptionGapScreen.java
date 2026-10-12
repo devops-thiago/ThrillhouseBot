@@ -200,17 +200,17 @@ final class DescriptionGapScreen {
   private static final Pattern TRAILING_DOTS = Pattern.compile("\\.++$");
 
   /**
-   * A file or component an omission bullet names, one pattern per shape: a path of two slashes or
-   * more (one slash is as often "and/or" or "on/off"), a directory ending in a slash, a file name
-   * with an extension, a CI job name ("python-ci"), or a file conventionally named without one
-   * ("Dockerfile", "README", written as the file is). A backticked span alone is not one (it is as
-   * often a setting or an identifier), nor is a word such as "license" that prose uses for other
-   * things.
+   * A file or component an omission bullet names, one pattern or more per shape: a path of two
+   * slashes or more (one slash is as often "and/or" or "on/off"), a directory ending in a slash (a
+   * sentence's full stop may follow it), a file name with an extension, a CI job name
+   * ("python-ci"), or a file conventionally named without one ("Dockerfile", "README", written as
+   * the file is). A backticked span alone is not one (it is as often a setting or an identifier),
+   * nor is a word such as "license" that prose uses for other things.
    */
   private static final List<Pattern> NAMED_FILES =
       List.of(
           Pattern.compile("(?<![\\w/.-])[\\w.-]*+(?:/[\\w.-]++){2,}+"),
-          Pattern.compile("\\b[\\w.-]++/(?![\\w.-])"),
+          Pattern.compile("\\b[\\w.-]++/(?![\\w-]|\\.\\w)"),
           Pattern.compile("\\b[\\w-]++\\.(?:md|ya?ml|json|toml|xml|txt|sh|env|cfg|ini|lock)\\b"),
           Pattern.compile("\\b[\\w-]++\\.(?:java|kts?|scala|py|go|rs|zig|c|h|rb|php|cs)\\b"),
           Pattern.compile("\\b[\\w-]++\\.(?:[jt]sx?|mjs|vue|html|css|sql|gradle|properties)\\b"),

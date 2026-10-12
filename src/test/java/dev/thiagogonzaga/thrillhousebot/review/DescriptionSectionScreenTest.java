@@ -229,6 +229,13 @@ class DescriptionSectionScreenTest {
     assertTrue(
         DescriptionGapScreen.falseOmission(
             "The description never mentions src/app/config.ts.", "Adds a typed config.ts."));
+    // A directory ending its sentence is named; a dotted file inside it is not the directory.
+    assertTrue(
+        DescriptionGapScreen.falseOmission(
+            "The description never mentions the new docs/.", "Adds settings under docs."));
+    assertFalse(
+        DescriptionGapScreen.falseOmission(
+            "The description never mentions the new docs/.env file.", "Adds settings under docs."));
     // A README and a code file are files too.
     assertTrue(
         DescriptionGapScreen.falseOmission(
