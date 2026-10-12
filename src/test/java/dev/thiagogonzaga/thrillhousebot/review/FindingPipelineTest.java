@@ -448,6 +448,46 @@ class FindingPipelineTest {
     verify(tokenLedger).clear(42L);
   }
 
+  /**
+   * #1073 — every lane holds its findings to the linked issue before they are summarized: c #253's
+   * unmet criterion, a low-confidence medium the summary listed only under "Things to
+   * double-check", is raised onto a thread and names its issue, and a finding resting on a
+   * criterion the issue does not hold is dropped.
+   */
+  @Test
+  void theFindingsAreHeldToTheLinkedIssueBeforeTheSummary() {
+    var session = persistedSession();
+    var ctx = litigatedContext(List.of(), List.of());
+    var plan = singleBatchPlan(batch("a.java"), List.of());
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(
+            new ReviewResponse(
+                List.of(
+                    doubleCheckFinding(
+                        "src/A.java",
+                        12,
+                        "Acceptance criterion 'at most 8 open listings per seller' is not enforced"
+                            + " by the linked issue's store"),
+                    doubleCheckFinding(
+                        "src/B.java", 3, "Acceptance criterion 'refunds are instant' is missing")),
+                List.of(),
+                null));
+
+    var result =
+        pipeline.run(
+            session,
+            promptLinking(LINKED_113),
+            ctx,
+            plan,
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    var held = result.findings().getFirst();
+    assertEquals(1, result.findings().size());
+    assertEquals("medium", held.confidence());
+    assertTrue(held.title().endsWith("by the linked issue #113's store"), held.title());
+  }
+
   @Test
   void aHighConfidenceFindingOnATwiceDispositionedAnchorStillPosts() {
     // Control for the convergence rule: it passes before and after, and pins the boundary the rule
@@ -488,6 +528,75 @@ class FindingPipelineTest {
     assertEquals(
         List.of("Reworded message drops the 30s floor"),
         result.findings().stream().map(ReviewResponse.Finding::title).toList());
+  }
+
+  /**
+   * #1077: the placement table reads the grade a finding publishes with, so both lanes must hand it
+   * the same grade. A missing privilege drop the model hedged at "low" is anchored at medium by
+   * {@link SeverityCalibrator}; before the batch lane ran the calibrator it was listed under
+   * "Things to double-check" there and posted inline on the single-call lane.
+   */
+  @Test
+  void anAnchoredClassIsPlacedTheSameOnBothLanes() {
+    var hedged =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            "Dockerfile",
+            7,
+            "container image finding",
+            "The Dockerfile never adds a USER directive, so the published service runs as root.",
+            null,
+            null);
+    // An unpinned base image, the class whose anchored line the calibrator reads (#926).
+    var unpinned =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            "Dockerfile",
+            1,
+            "Base image is not pinned",
+            "FROM node:20-alpine is an unpinned base image: the tag moves, so two builds of this"
+                + " commit can resolve to different images. Pin it by digest.",
+            null,
+            null);
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+
+    var single = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    when(aiReviewService.review(eq(single), any()))
+        .thenReturn(new ReviewResponse(List.of(hedged, unpinned), List.of(), null));
+    var singleResult =
+        pipeline.run(
+            single,
+            template,
+            reviewContext(),
+            singleBatchPlan(batch("a.java"), List.of()),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    var multi = ReviewSession.create("owner/repo", 2, "Big PR", "sha");
+    when(aiReviewService.reviewBatch(eq(multi), any(), eq(1), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(hedged, unpinned), List.of(), null));
+    when(aiReviewService.reviewBatch(eq(multi), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var multiResult =
+        pipeline.run(
+            multi,
+            template,
+            reviewContext(),
+            multiBatchPlan(),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    for (var result : List.of(singleResult, multiResult)) {
+      assertEquals(2, result.findings().size());
+      for (var finding : result.findings()) {
+        var placed = Finding.fromAiResponse(finding);
+        assertEquals(Confidence.MEDIUM, placed.confidence(), finding.title());
+        assertTrue(placed.postsInline(), "anchored at medium, so inline on either lane");
+      }
+      assertEquals("low", result.findings().get(1).risk(), "an unpinned reference is low");
+    }
   }
 
   @Test
@@ -2642,7 +2751,7 @@ class FindingPipelineTest {
    */
   private VerdictBuilder verdictSeam() {
     var summaryGenerator = mock(PrSummaryGenerator.class);
-    when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+    when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
         .thenReturn("");
     return new VerdictBuilder(
         summaryGenerator,
@@ -3624,6 +3733,7 @@ class FindingPipelineTest {
       ### Issue #113: Resale marketplace
       Acceptance criteria (from the issue):
       - [ ] at most 8 open listings per seller
+      - [ ] listings expire past a TTL
       """;
 
   private static final String CARRIED_GAP =

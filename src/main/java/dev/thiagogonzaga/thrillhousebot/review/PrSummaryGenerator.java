@@ -182,6 +182,33 @@ public class PrSummaryGenerator {
   }
 
   /**
+   * What the Description vs. Implementation section is held to (#1074).
+   *
+   * @param claimText the PR title and description and the linked-issue section, unfenced; a finding
+   *     is named under the section only when it quotes or paraphrases this text. Blank when not
+   *     known, which names every description finding as before
+   * @param previouslyNamed the "Reported as a finding" bullets the previous round's summary listed,
+   *     as rendered, when this round reviews the head that round reviewed; empty otherwise. A
+   *     finding still open that one of them names is named again, so a re-review of the same commit
+   *     does not drop it
+   */
+  record DescriptionSources(String claimText, Set<String> previouslyNamed) {
+
+    static final DescriptionSources NONE = new DescriptionSources("", Set.of());
+
+    DescriptionSources {
+      claimText = claimText == null ? "" : claimText;
+      previouslyNamed = Set.copyOf(previouslyNamed);
+    }
+
+    /** Whether {@code finding} quotes or paraphrases the claim text; always with none known. */
+    boolean echoedBy(Finding finding) {
+      return claimText.isBlank()
+          || findingTexts(finding).anyMatch(text -> DescriptionGapScreen.echoes(text, claimText));
+    }
+  }
+
+  /**
    * Upper bound on the rendered Mermaid source. A diagram larger than this is dropped rather than
    * posted: it is likely runaway or truncated output, and GitHub silently fails to render oversized
    * Mermaid blocks anyway. Comfortably fits the ~12-node diagrams the prompt asks for.
@@ -219,6 +246,28 @@ public class PrSummaryGenerator {
       List<ChangedFile> changedFiles,
       ReviewResponse.Summary aiSummary,
       ReviewResult round) {
+    return generate(
+        filesChanged,
+        additions,
+        deletions,
+        changedFiles,
+        aiSummary,
+        round,
+        DescriptionSources.NONE);
+  }
+
+  /**
+   * {@link #generate(int, int, int, List, ReviewResponse.Summary, ReviewResult)}, with the
+   * Description vs. Implementation section held to {@code sources} (#1074).
+   */
+  public String generate(
+      int filesChanged,
+      int additions,
+      int deletions,
+      List<ChangedFile> changedFiles,
+      ReviewResponse.Summary aiSummary,
+      ReviewResult round,
+      DescriptionSources sources) {
     // The nudge keys off this round (see LargePrNudge) and stays off while an earlier finding is
     // open (#933); every other section describes the pull request as it stands, earlier rounds'
     // open findings included (#917).
@@ -239,7 +288,7 @@ public class PrSummaryGenerator {
     appendDescriptionGaps(
         sb,
         surfaces.descriptionGaps(),
-        descriptionFindings(surfaces.gapFindings(), result.findings()));
+        descriptionFindings(surfaces.gapFindings(), result.findings(), sources));
     appendWalkthroughDiagram(sb, aiSummary);
 
     sb.append("### Changes Overview\n");
@@ -723,28 +772,43 @@ public class PrSummaryGenerator {
       sb.append("- ").append(MarkdownSafe.oneLine(gap)).append("\n");
     }
     for (Finding f : findings) {
-      sb.append("- ")
-          .append(GAP_FINDING_PREFIX)
-          .append(MarkdownSafe.inline(f.title()))
-          .append(" (`")
-          .append(MarkdownSafe.inlineCode(f.file()))
-          .append(":")
-          .append(f.line())
-          .append("`)\n");
+      sb.append("- ").append(findingBullet(f)).append("\n");
     }
     sb.append("\n");
   }
 
   /**
-   * The findings the Description vs. Implementation section names, once each: the ones a gap
-   * collapsed onto, in the gaps' order, then every other finding whose title or description says it
-   * reports a mismatch with the PR description or a linked issue ({@link #DESCRIPTION_CLAIMS}), in
-   * the order the summary lists findings.
+   * The bullet naming {@code finding} under Description vs. Implementation, without the list
+   * marker: what {@link DescriptionSources#previouslyNamed} holds for the previous round.
    */
-  static List<Finding> descriptionFindings(List<Finding> collapsedOnto, List<Finding> findings) {
+  static String findingBullet(Finding finding) {
+    return GAP_FINDING_PREFIX
+        + MarkdownSafe.inline(finding.title())
+        + " (`"
+        + MarkdownSafe.inlineCode(finding.file())
+        + ":"
+        + finding.line()
+        + "`)";
+  }
+
+  /**
+   * The findings the Description vs. Implementation section names, once each: the ones a gap
+   * collapsed onto, in the gaps' order, then those the previous round named on the same head
+   * ({@link DescriptionSources#previouslyNamed}, #1074), then every other finding whose title or
+   * description says it reports a mismatch with the PR description or a linked issue ({@link
+   * #DESCRIPTION_CLAIMS}), in the order the summary lists findings. Of those, only the findings
+   * that quote or paraphrase the PR text or the linked issue are named (#1074): a finding about an
+   * SQL injection or a Dockerfile path is not a description gap however the section came to list
+   * it.
+   */
+  static List<Finding> descriptionFindings(
+      List<Finding> collapsedOnto, List<Finding> findings, DescriptionSources sources) {
     var named = new LinkedHashSet<Finding>(collapsedOnto);
+    findings.stream()
+        .filter(f -> sources.previouslyNamed().contains(findingBullet(f)))
+        .forEach(named::add);
     findings.stream().filter(PrSummaryGenerator::reportsDescriptionMismatch).forEach(named::add);
-    return List.copyOf(named);
+    return named.stream().filter(sources::echoedBy).toList();
   }
 
   /** Whether the finding's title or its description, on its own, holds a description claim. */
