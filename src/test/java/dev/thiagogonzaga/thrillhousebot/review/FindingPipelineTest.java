@@ -508,11 +508,23 @@ class FindingPipelineTest {
             "The Dockerfile never adds a USER directive, so the published service runs as root.",
             null,
             null);
+    // An unpinned base image, the class whose anchored line the calibrator reads (#926).
+    var unpinned =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            "Dockerfile",
+            1,
+            "Base image is not pinned",
+            "FROM node:20-alpine is an unpinned base image: the tag moves, so two builds of this"
+                + " commit can resolve to different images. Pin it by digest.",
+            null,
+            null);
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
 
     var single = ReviewSession.create("owner/repo", 1, "PR", "sha");
     when(aiReviewService.review(eq(single), any()))
-        .thenReturn(new ReviewResponse(List.of(hedged), List.of(), null));
+        .thenReturn(new ReviewResponse(List.of(hedged, unpinned), List.of(), null));
     var singleResult =
         pipeline.run(
             single,
@@ -524,7 +536,7 @@ class FindingPipelineTest {
 
     var multi = ReviewSession.create("owner/repo", 2, "Big PR", "sha");
     when(aiReviewService.reviewBatch(eq(multi), any(), eq(1), anyInt()))
-        .thenReturn(new ReviewResponse(List.of(hedged), List.of(), null));
+        .thenReturn(new ReviewResponse(List.of(hedged, unpinned), List.of(), null));
     when(aiReviewService.reviewBatch(eq(multi), any(), eq(2), anyInt()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
     var multiResult =
@@ -537,10 +549,13 @@ class FindingPipelineTest {
             ReviewEvidence.NONE);
 
     for (var result : List.of(singleResult, multiResult)) {
-      assertEquals(1, result.findings().size());
-      var placed = Finding.fromAiResponse(result.findings().get(0));
-      assertEquals(Confidence.MEDIUM, placed.confidence());
-      assertTrue(placed.postsInline(), "anchored at medium, so inline on either lane");
+      assertEquals(2, result.findings().size());
+      for (var finding : result.findings()) {
+        var placed = Finding.fromAiResponse(finding);
+        assertEquals(Confidence.MEDIUM, placed.confidence(), finding.title());
+        assertTrue(placed.postsInline(), "anchored at medium, so inline on either lane");
+      }
+      assertEquals("low", result.findings().get(1).risk(), "an unpinned reference is low");
     }
   }
 
