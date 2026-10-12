@@ -414,6 +414,21 @@ class OverviewScreenTest {
         "Contains open findings",
         // Any spelled count, and any -ly adverb before it.
         "hosts one finding",
+        // Any quantifier or possessive between the holding verb and the findings.
+        // The clause is the findings' phrase alone.
+        "Two confirmed findings here",
+        "Confirmed findings in this batch",
+        "3 findings left",
+        "Lists numerous findings",
+        "Has some findings",
+        "Holds all findings",
+        "Contains various findings",
+        "Carries a handful of findings",
+        "Has a couple of findings",
+        "Hosts its findings",
+        "Holds this PR's findings",
+        "Contains the review's findings",
+        "Reports open findings",
         "hosts thirteen findings",
         "holds twenty-three findings",
         "hosts roughly two hundred findings",
@@ -453,6 +468,9 @@ class OverviewScreenTest {
         "Holds the findings HTTP2 client",
         "Contains FindingStore",
         "Contains the findings Open panel",
+        // A holding verb that heads another phrase.
+        "Holds the code that parses findings",
+        "Keeps settings and refines findings",
         "Holds the findingsTable",
         // Plural artifact nouns.
         "Contains the findings tables for the dashboard",

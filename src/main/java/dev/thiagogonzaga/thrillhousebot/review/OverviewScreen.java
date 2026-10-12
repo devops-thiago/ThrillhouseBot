@@ -127,67 +127,6 @@ final class OverviewScreen {
           "dozens");
 
   /**
-   * Words that may stand before "finding(s)" in a clause about what the file holds rather than what
-   * it does: articles, the file itself, and the verbs of holding.
-   */
-  private static final Set<String> BOOKKEEPING_LEAD =
-      Set.of(
-          "the",
-          "a",
-          "an",
-          "this",
-          "file",
-          "here",
-          "it",
-          "there",
-          "is",
-          "are",
-          "has",
-          "have",
-          "hosts",
-          "host",
-          "holds",
-          "contains",
-          "carries",
-          "with",
-          "any",
-          "all",
-          "only",
-          "just",
-          "exactly",
-          "about",
-          "around",
-          "over",
-          "under",
-          "at",
-          "least",
-          "most",
-          "currently",
-          "still",
-          // The review or the change as the subject: "This PR hosts the two findings".
-          "pr",
-          "pull",
-          "request",
-          "review",
-          "change",
-          "diff",
-          "commit",
-          "round",
-          // A kind or grade of finding: "Holds no security findings".
-          "security",
-          "critical",
-          "high",
-          "medium",
-          "low",
-          "new",
-          "lint",
-          "style",
-          // Plain connectives inside a holding clause: "hosts all of the findings", "renders it,
-          // and hosts the two findings".
-          "and",
-          "of");
-
-  /**
    * Words that, a word or two after a clause-opening "Findings", place the review's findings
    * ("Findings are reported inline"). A file's role opens with what the file does, not with
    * "Findings", so after it these read as bookkeeping; the {@link #FINDING_QUALIFIERS} do too.
@@ -443,12 +382,22 @@ final class OverviewScreen {
   }
 
   /**
-   * Whether {@code clause} is about the review's findings: "finding(s)" whose preceding words only
-   * place or count findings ({@link #bookkeepingLead}), with a count or a review word one or two
-   * words before it ("the two confirmed findings", "no findings"), a verb of holding anywhere
-   * before it ("Hosts all the findings from the review"), or in a clause that names "this batch"
-   * ("no findings in this batch", the batch planner's split). "Refines findings before they are
-   * posted" and "Processes findings in this batch" describe a file and are not.
+   * Whether {@code clause} is about the review's findings rather than the file. The finding word
+   * must be "finding(s)" itself (not a name built on it, "FindingStore") ending its noun phrase
+   * ({@link #endsItsPhrase}), and the clause must say the file holds or places it:
+   *
+   * <ul>
+   *   <li>a holding or placement verb heads the phrase ({@link #heldByVerb}: "hosts the two
+   *       findings", "has numerous findings", "lists this PR's findings"), whatever determiners,
+   *       quantifiers or possessives come between;
+   *   <li>or the clause is that phrase alone, opening with a determiner or count ({@link
+   *       #opensWithThePhrase}: "no findings in this batch", "two confirmed findings");
+   *   <li>or "Findings" opens the clause and a count, verdict or placement word follows it ({@link
+   *       #qualified}: "Findings are reported inline").
+   * </ul>
+   *
+   * <p>"Refines findings before they are posted", "Returns no findings for an empty diff" and
+   * "Processes findings in this batch" name what the file does, and are not.
    */
   static boolean talksAboutFindings(String clause) {
     var lower = clause.toLowerCase(Locale.ROOT);
@@ -458,17 +407,47 @@ final class OverviewScreen {
         Arrays.stream(asWritten).map(w -> w.toLowerCase(Locale.ROOT)).toArray(String[]::new);
     var aboutTheBatch = lower.contains("this batch");
     for (var i = 0; i < words.length; i++) {
-      // The word itself, not a name built on it ("FindingStore", "findingsTable").
-      if ((words[i].equals("finding") || words[i].equals("findings"))
-          && (opensClause(words, i) || endsItsPhrase(words, asWritten, i))
-          && bookkeepingLead(words, i)
-          && (aboutTheBatch
-              || qualified(words, i)
-              || Arrays.stream(words, 0, i).anyMatch(HOLDING_VERBS::contains))) {
+      if (!words[i].equals("finding") && !words[i].equals("findings")) {
+        continue;
+      }
+      if (opensClause(words, i)) {
+        if (aboutTheBatch || qualified(words, i)) {
+          return true;
+        }
+      } else if (endsItsPhrase(words, asWritten, i)
+          && (heldByVerb(words, i) || opensWithThePhrase(words, i, aboutTheBatch))) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Whether a holding or placement verb ({@link #HOLDING_VERBS}) comes before the finding word at
+   * {@code at} with only its noun phrase between them: no word that starts another clause or verb
+   * phrase ({@link #PHRASE_BREAKERS}: "Holds the code that parses findings" is about the code).
+   */
+  private static boolean heldByVerb(String[] words, int at) {
+    for (var j = at - 1; j >= 0; j--) {
+      if (HOLDING_VERBS.contains(words[j])) {
+        return true;
+      }
+      if (PHRASE_BREAKERS.contains(words[j])) {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether the clause is the finding word's noun phrase alone: it opens with a determiner, a
+   * quantifier or a count ({@link #DETERMINERS}), and the phrase counts or qualifies the findings
+   * ({@link #qualified}) or the clause names "this batch".
+   */
+  private static boolean opensWithThePhrase(String[] words, int at, boolean aboutTheBatch) {
+    var first = Arrays.stream(words, 0, at).filter(w -> !w.isEmpty()).findFirst().orElse("");
+    return (DETERMINERS.contains(first) || FINDING_QUALIFIERS.contains(first) || isCount(first))
+        && (aboutTheBatch || qualified(words, at));
   }
 
   /**
@@ -549,30 +528,86 @@ final class OverviewScreen {
           "listed",
           "noted");
 
-  /** The verbs of holding: a file that hosts or holds findings is talked about, not described. */
+  /**
+   * The verbs that hold or place findings: a file that hosts, lists or reports findings is talked
+   * about, not described.
+   */
   private static final Set<String> HOLDING_VERBS =
-      Set.of("hosts", "host", "holds", "has", "have", "contains", "carries");
+      Set.of(
+          "hosts",
+          "host",
+          "holds",
+          "hold",
+          "has",
+          "have",
+          "had",
+          "contains",
+          "contain",
+          "carries",
+          "carry",
+          "lists",
+          "list",
+          "includes",
+          "include",
+          "keeps",
+          "keep",
+          "reports",
+          "report",
+          "raises",
+          "raise",
+          "tracks",
+          "track",
+          "shows",
+          "show");
 
   /**
-   * Whether every word before position {@code at} only places or counts findings ("hosts the two
-   * confirmed", "no", "holds 3"), so the clause says what the file holds rather than what it does.
-   * A clause whose finding word follows what the file does ("Returns no findings for an empty
-   * diff", "Re-checks confirmed findings") describes a file that handles findings.
+   * Words between a verb and "findings" that start another clause or verb phrase, so the verb does
+   * not head the findings' phrase.
    */
-  private static boolean bookkeepingLead(String[] words, int at) {
-    return Arrays.stream(words, 0, at)
-        .allMatch(
-            word ->
-                word.isEmpty()
-                    || BOOKKEEPING_LEAD.contains(word)
-                    || FINDING_QUALIFIERS.contains(word)
-                    // "Contains open findings": with every other word a holding one, a placement
-                    // word places the review's findings too.
-                    || FINDING_PLACEMENTS.contains(word)
-                    // An adverb ("only", "exactly", "roughly") qualifies the count, not the file.
-                    || word.endsWith("ly")
-                    || isCount(word));
-  }
+  private static final Set<String> PHRASE_BREAKERS =
+      Set.of("that", "which", "who", "to", "and", "or", "but", "while", "when", "where", "if");
+
+  /**
+   * Determiners, quantifiers and possessives that open a noun phrase: a closed class of words, so a
+   * clause opening with one is that phrase, not a verb phrase.
+   */
+  private static final Set<String> DETERMINERS =
+      Set.of(
+          "the",
+          "a",
+          "an",
+          "this",
+          "these",
+          "that",
+          "those",
+          "its",
+          "their",
+          "our",
+          "his",
+          "her",
+          "my",
+          "your",
+          "no",
+          "some",
+          "any",
+          "all",
+          "each",
+          "every",
+          "both",
+          "either",
+          "neither",
+          "most",
+          "more",
+          "fewer",
+          "less",
+          "numerous",
+          "various",
+          "several",
+          "many",
+          "few",
+          "multiple",
+          "only",
+          "just");
 
   /**
    * Whether one of the two words before position {@code at} counts or qualifies findings; when the
