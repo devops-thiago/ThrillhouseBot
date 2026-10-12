@@ -24,6 +24,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Holding findings and description gaps to the linked issue the review read (#1073), on the round
@@ -351,6 +353,37 @@ class LinkedIssueCitationsTest {
             "The code reads 40000 grams, which the linked issue #225's 'at most 40 kg per cart'"
                 + " requires, but the comment does not say so.");
     assertSame(commented, only(LinkedIssueCitations.apply(responseOf(commented), GO_225)));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The cap is 40000 grams, satisfying the linked issue #225's 'at most 40 kg per cart'.",
+        "The cap is 40000 grams, meeting the linked issue #225's 'at most 40 kg per cart'.",
+        "The cap is 40000 grams, consistent with the linked issue #225's 'at most 40 kg per cart'.",
+        "The linked issue #225's 'at most 40 kg per cart' is met by the 40000 gram cap."
+      })
+  void anAffirmationInAnyFormIsNotRaised(String description) {
+    var finding = finding("low", "low", "Comment states a 25 kg cart cap", description);
+
+    assertSame(finding, only(LinkedIssueCitations.apply(responseOf(finding), GO_225)));
+  }
+
+  @Test
+  void aNegatedAffirmationIsRaised() {
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "low",
+                        "low",
+                        "Carts are filled to 60 kg",
+                        "The 60000 gram cap does not match the linked issue #225's 'at most 40 kg"
+                            + " per cart'.")),
+                GO_225));
+
+    assertEquals("medium", held.risk());
   }
 
   @Test

@@ -108,11 +108,15 @@ final class LinkedIssueCitations {
   /** What separates clauses before a cue, for {@link #AFFIRMS}. */
   private static final Pattern CLAUSE_BREAK = Pattern.compile("[,;:\u2014\u2013]");
 
-  /** The clause before a cue saying the change agrees with the criterion. */
-  private static final Pattern AFFIRMS =
-      Pattern.compile(
-          "(?i)\\b(?:match(?:es|ing)?|consistent\\s++with|agrees?\\s++with|in\\s++line\\s++with"
-              + "|satisf(?:y|ies)|meets|implements)\\b");
+  /**
+   * A clause around a cue saying the change agrees with the criterion, one pattern per shape: the
+   * verbs in any form ("matches", "satisfying", "met"), then the phrases ("consistent with").
+   */
+  private static final List<Pattern> AFFIRMS =
+      List.of(
+          Pattern.compile("(?i)\\b(?:match|implement)(?:e?s|ed|ing)?\\b"),
+          Pattern.compile("(?i)\\b(?:satisf(?:y|ies|ied|ying)|meets?|meeting|met)\\b"),
+          Pattern.compile("(?i)\\b(?:consistent|agrees?|agreeing|in\\s++line)\\s++with\\b"));
 
   /**
    * Words of a named criterion that say it is a criterion, not what it is about, as {@link
@@ -471,7 +475,11 @@ final class LinkedIssueCitations {
     return false;
   }
 
-  /** Whether the clause holding {@code citation} says the code meets the criterion. */
+  /**
+   * Whether the clause holding {@code citation} says the code meets the criterion: an affirming
+   * verb in any form, or a relative clause about the code, and no word saying the code goes against
+   * it ("does not match", "fails to meet").
+   */
   private static boolean affirmed(String text, Citation citation) {
     var lead = text.substring(sentenceStart(text, citation.start()), citation.start());
     var breaks = CLAUSE_BREAK.matcher(lead);
@@ -483,10 +491,8 @@ final class LinkedIssueCitations {
     var rest = text.substring(citation.end(), sentenceEnd(text, citation.end()));
     var tailEnd = CLAUSE_BREAK.matcher(rest);
     var clause = lead + " " + (tailEnd.find() ? rest.substring(0, tailEnd.start()) : rest);
-    if (AFFIRMS.matcher(clause).find()) {
-      return true;
-    }
-    return RELATIVE.matcher(lead).find() && !anyFinds(VIOLATIONS, clause);
+    return (anyFinds(AFFIRMS, clause) || RELATIVE.matcher(lead).find())
+        && !anyFinds(VIOLATIONS, clause);
   }
 
   private static boolean anyFinds(List<Pattern> patterns, String text) {
