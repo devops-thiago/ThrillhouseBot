@@ -413,4 +413,50 @@ class PathMentionsTest {
     assertEquals(List.of(), mentions.screen(gapOnly).descriptionGaps());
     assertEquals("", mentions.screen(fileOnly).fileSummaries().getFirst().summary());
   }
+
+  /**
+   * A one-slash directory under a changed file's top-level directory is judged ("react/src" stays,
+   * "react/nope" goes); one-slash prose is not ("and/or" stays).
+   */
+  @Test
+  void aOneSlashDirectoryUnderAChangedDirectoryIsJudged() {
+    var mentions = mentions(REACT, "", REACT_TREE);
+
+    assertEquals(
+        "It edits react/src. It handles and/or.",
+        mentions.withoutUnresolvedSentences(
+            "It edits react/src. It moves react/nope. It handles and/or."));
+  }
+
+  /**
+   * The walkthrough diagram loses an invented path and gets a near miss mapped, with its syntax
+   * otherwise as written; a blank or clean diagram is returned as it was.
+   */
+  @Test
+  void theDiagramLosesAnInventedPathAndKeepsItsSyntax() {
+    var mentions = mentions(REACT, "", REACT_TREE);
+    var diagram =
+        "flowchart TD\n  A[\"README to docs/REACT-VIV.md\"] --> B[\"react/paging.ts rows\"]";
+    var input =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            "ok",
+            "Adds paging.",
+            List.of(),
+            List.of(),
+            List.of(),
+            diagram,
+            List.of());
+
+    assertEquals(
+        "flowchart TD\n  A[\"README to \"] --> B[\"react/src/loans/paging.ts rows\"]",
+        mentions.screen(input).walkthroughDiagram());
+    assertEquals("  ", mentions.withoutUnresolvedPaths("  "));
+    var clean = "flowchart TD\n  A --> B";
+    assertSame(clean, mentions.withoutUnresolvedPaths(clean));
+  }
 }

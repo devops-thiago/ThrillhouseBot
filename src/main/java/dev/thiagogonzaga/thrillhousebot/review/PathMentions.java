@@ -27,6 +27,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Checks the file paths the model names in its prose against the files that exist (#1076).
@@ -189,6 +190,7 @@ final class PathMentions {
           "socket");
 
   private final Set<String> changed;
+  private final Set<String> topDirectories;
   private final DiffLineResolver resolver;
   private final String verbatim;
   private final Supplier<Optional<CitedLocationResolver.RepositoryPaths>> repository;
@@ -211,6 +213,11 @@ final class PathMentions {
       }
     }
     this.changed = Set.copyOf(paths);
+    this.topDirectories =
+        paths.stream()
+            .filter(path -> path.indexOf('/') > 0)
+            .map(path -> path.substring(0, path.indexOf('/')))
+            .collect(Collectors.toUnmodifiableSet());
     this.resolver = new DiffLineResolver(Map.of(), current);
     this.verbatim = text.toString();
     this.repository = ReviewContextLoader.memoize(repository);
@@ -277,6 +284,7 @@ final class PathMentions {
             .map(this::withoutUnresolvedSentences)
             .filter(gap -> !gap.isBlank())
             .toList();
+    var diagram = withoutUnresolvedPaths(summary.walkthroughDiagram());
     var fileSummaries =
         summary.fileSummaries().stream()
             .map(
@@ -290,7 +298,8 @@ final class PathMentions {
     if (Objects.equals(assessment, summary.overallAssessment())
         && Objects.equals(purpose, summary.prPurpose())
         && gaps.equals(summary.descriptionGaps())
-        && fileSummaries.equals(summary.fileSummaries())) {
+        && fileSummaries.equals(summary.fileSummaries())
+        && Objects.equals(diagram, summary.walkthroughDiagram())) {
       return summary;
     }
     return new ReviewResponse.Summary(
@@ -304,8 +313,35 @@ final class PathMentions {
         gaps,
         summary.suggestedLabels(),
         fileSummaries,
-        summary.walkthroughDiagram(),
+        diagram,
         summary.addressedGaps());
+  }
+
+  /**
+   * {@code text} with its mapped paths replaced and the paths nothing resolves removed, and nothing
+   * else touched: the walkthrough diagram, whose syntax a sentence cut or a tidy would break.
+   */
+  String withoutUnresolvedPaths(String text) {
+    if (text == null || text.isBlank()) {
+      return text;
+    }
+    var rewritten = rewrite(text);
+    var sb = new StringBuilder(rewritten.text());
+    var spans = rewritten.unresolved();
+    for (int i = spans.size() - 1; i >= 0; i--) {
+      sb.delete(spans.get(i)[0], spans.get(i)[1]);
+    }
+    String result = sb.toString();
+    return result.equals(text) ? text : result;
+  }
+
+  /**
+   * Whether a one-slash token without an extension ({@code react/src}) opens with a top-level
+   * directory of a changed file, which makes it a directory rather than prose such as "and/or".
+   */
+  private boolean underAChangedDirectory(String token) {
+    int slash = token.indexOf('/');
+    return slash > 0 && topDirectories.contains(token.substring(0, slash));
   }
 
   /** {@code text} without its sentences naming a path nothing resolves, mapped paths replaced. */
@@ -401,7 +437,7 @@ final class PathMentions {
       int fullEnd = matcher.group(2) == null ? end : matcher.end(2);
       if (inside(urls, start)
           || inside(fences, start)
-          || !pathShaped(token)
+          || !(pathShaped(token) || underAChangedDirectory(token))
           || continuesAsSomethingElse(text, fullEnd)) {
         continue;
       }
