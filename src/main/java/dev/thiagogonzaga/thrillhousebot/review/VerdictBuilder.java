@@ -119,20 +119,36 @@ public class VerdictBuilder {
       ReviewResponse aiResponse,
       CiStatusEvaluator.CiEvaluation ciEvaluation,
       DiffBudgetPlanner.BudgetPlan plan) {
-    return build(ctx, aiResponse, ciEvaluation, plan, CiFailureCitations.NONE);
+    return build(ctx, aiResponse, ciEvaluation, plan, "");
   }
 
   /**
    * {@link #build(ReviewContextLoader.ReviewContext, ReviewResponse,
-   * CiStatusEvaluator.CiEvaluation, DiffBudgetPlanner.BudgetPlan)} for a review given a CI-failure
-   * section: {@code ciCitations} reads it back, and the summary's sentence on each failing check is
-   * computed from it (#1075).
+   * CiStatusEvaluator.CiEvaluation, DiffBudgetPlanner.BudgetPlan)}, with the Description vs.
+   * Implementation section held to {@code claimText}, the PR title and description and the
+   * linked-issue section the review read (#1074); blank for none known.
    */
   ReviewResult build(
       ReviewContextLoader.ReviewContext ctx,
       ReviewResponse aiResponse,
       CiStatusEvaluator.CiEvaluation ciEvaluation,
       DiffBudgetPlanner.BudgetPlan plan,
+      String claimText) {
+    return build(ctx, aiResponse, ciEvaluation, plan, claimText, CiFailureCitations.NONE);
+  }
+
+  /**
+   * {@link #build(ReviewContextLoader.ReviewContext, ReviewResponse,
+   * CiStatusEvaluator.CiEvaluation, DiffBudgetPlanner.BudgetPlan, String)} for a review given a
+   * CI-failure section: {@code ciCitations} reads it back, and the summary's sentence on each
+   * failing check is computed from it (#1075).
+   */
+  ReviewResult build(
+      ReviewContextLoader.ReviewContext ctx,
+      ReviewResponse aiResponse,
+      CiStatusEvaluator.CiEvaluation ciEvaluation,
+      DiffBudgetPlanner.BudgetPlan plan,
+      String claimText,
       CiFailureCitations ciCitations) {
     // Budgeted: plan omitted + clipped files, with any file a failed batch left uncovered folded
     // into the omitted set (effective*); legacy: line-cap count — never sum both. Patchless files
@@ -325,7 +341,15 @@ public class VerdictBuilder {
             reasoningStepDownNote(plan.reasoningStepDown()),
             openPrevious,
             PriorOverviewCarryover.carried(effectiveResponse.summary(), ctx),
-            ciCitations),
+            ciCitations,
+            new PrSummaryGenerator.DescriptionSources(
+                claimText,
+                // On the head the previous round reviewed, the findings it named stay named while
+                // open (#1074): nothing the section is about has changed there.
+                ctx.previousRoundHeadUnchanged()
+                    ? DescriptionGapCarryover.previousFindingBullets(
+                        ctx.conversationComments(), botIdentity)
+                    : Set.of())),
         ciEvaluation,
         backstopStatuses);
   }
@@ -757,7 +781,8 @@ public class VerdictBuilder {
       String reasoningStepDown,
       List<Finding> openPrevious,
       boolean overviewCarried,
-      CiFailureCitations ciCitations) {}
+      CiFailureCitations ciCitations,
+      PrSummaryGenerator.DescriptionSources descriptionSources) {}
 
   ReviewResult buildResult(
       ReviewResponse aiResponse,
@@ -781,7 +806,8 @@ public class VerdictBuilder {
             "",
             unresolvedPrevious,
             false,
-            CiFailureCitations.NONE),
+            CiFailureCitations.NONE,
+            PrSummaryGenerator.DescriptionSources.NONE),
         ciEvaluation,
         backstopStatuses);
   }
@@ -863,7 +889,8 @@ public class VerdictBuilder {
                 requiredContextsKnown,
                 diffStats.truncation(),
                 withheldByConfidence,
-                summaryInputs.openPrevious()));
+                summaryInputs.openPrevious()),
+            summaryInputs.descriptionSources());
     var scopeNote = reviewScopeNote(summaryInputs);
     if (!scopeNote.isEmpty()) {
       summaryMarkdown =

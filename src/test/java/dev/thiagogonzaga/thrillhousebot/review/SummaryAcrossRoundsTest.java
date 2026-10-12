@@ -340,6 +340,7 @@ class SummaryAcrossRoundsTest {
             round,
             CI_CLEAR,
             plan,
+            "",
             CiFailureCitations.parse(
                 """
                 ### test (conclusion: failure)

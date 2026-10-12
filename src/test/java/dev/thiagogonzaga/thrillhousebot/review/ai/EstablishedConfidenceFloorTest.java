@@ -16,9 +16,12 @@
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.thiagogonzaga.thrillhousebot.review.Finding;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService.CitedLocations;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService.ContextEvidence;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService.FindingEvidence;
@@ -250,6 +253,32 @@ class EstablishedConfidenceFloorTest {
             .findings()
             .get(0)
             .confidence());
+  }
+
+  /**
+   * #1077: placement reads the floored grade. A medium finding the review hedged at "low" is listed
+   * under "Things to double-check"; once a failing check it cites lifts it to "medium", it opens a
+   * thread, on whichever lane verified it.
+   */
+  @Test
+  void aFlooredFindingIsPlacedByItsFlooredConfidence() {
+    var raw =
+        finding(
+            "medium",
+            "low",
+            "Pagination stops after the first page",
+            "fetchOpenSlots reads only page 1; the failing check 'test' asserts the second page.");
+    var evidence =
+        new FindingEvidence(CitedLocations.NONE, ContextEvidence.NONE, finding -> finding == raw);
+
+    var floored =
+        FindingVerificationService.floorEstablishedConfidence(
+                response(raw), response(raw), "", evidence)
+            .findings()
+            .get(0);
+
+    assertFalse(Finding.fromAiResponse(raw).postsInline());
+    assertTrue(Finding.fromAiResponse(floored).postsInline());
   }
 
   @Test

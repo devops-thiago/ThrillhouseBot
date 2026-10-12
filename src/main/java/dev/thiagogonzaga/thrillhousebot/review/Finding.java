@@ -66,11 +66,13 @@ public record Finding(
   }
 
   /**
-   * Whether this finding should open an inline review thread. Low-confidence findings at medium/low
-   * risk are routed to the PR summary instead; critical/high risk stays inline even when confidence
-   * is low so severe-but-uncertain items remain visible on the diff.
+   * Whether this finding should open an inline review thread rather than be listed under "Things to
+   * double-check", by the one severity-by-confidence table in {@link FindingPlacement} (#1077). A
+   * finding with no risk is placed as a low-risk one, the level {@link RiskLevel#fromString} gives
+   * a missing label.
    */
   public boolean postsInline() {
-    return confidence != Confidence.LOW || risk == RiskLevel.CRITICAL || risk == RiskLevel.HIGH;
+    return FindingPlacement.of(risk == null ? RiskLevel.LOW : risk, confidence)
+        == FindingPlacement.INLINE;
   }
 }

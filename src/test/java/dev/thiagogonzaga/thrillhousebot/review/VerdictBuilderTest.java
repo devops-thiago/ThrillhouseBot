@@ -25,6 +25,7 @@ import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -102,7 +103,7 @@ class VerdictBuilderTest {
               return statuses == null ? List.of() : statuses;
             });
     lenient()
-        .when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+        .when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
         .thenReturn("");
   }
 
@@ -575,6 +576,75 @@ class VerdictBuilderTest {
         headUnchanged);
   }
 
+  /**
+   * #1074: the previous round's summary named {@code bullet} under Description vs. Implementation;
+   * this round's head is or is not the one it reviewed.
+   */
+  private static ReviewContextLoader.ReviewContext contextAfterNaming(
+      String bullet, boolean headUnchanged) {
+    var file = new FileDiff("a.java", "modified", 1, 0, 1, "");
+    var summary =
+        new dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient.IssueComment(
+            PrSummaryGenerator.SUMMARY_MARKER
+                + "\n"
+                + PrSummaryGenerator.SUMMARY_HEADING
+                + "\n\n"
+                + PrSummaryGenerator.GAPS_HEADING
+                + "\nThe PR description does not fully match the change:\n- "
+                + bullet
+                + "\n\n### Changes Overview\n",
+            new dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse.User(
+                "thrillhousebot[bot]"));
+    return new ReviewContextLoader.ReviewContext(
+        List.of(file),
+        "diff",
+        "",
+        0,
+        List.of(),
+        List.of(),
+        List.of(),
+        false,
+        true,
+        null,
+        List.of(),
+        "",
+        new InstructionsResolver.ResolvedInstructions("", ""),
+        PathScopedInstructions.NONE,
+        List.of(),
+        "",
+        "",
+        "",
+        "",
+        List.of(file),
+        () -> new DiffLineResolver(Map.of()),
+        null,
+        List.of(summary),
+        List.of(),
+        SupersededFindingsCarryover.Carried.NONE,
+        "",
+        headUnchanged);
+  }
+
+  @Test
+  void theFindingsThePreviousRoundNamedAreHandedOnOnlyOnTheSameHead() {
+    var bullet = PrSummaryGenerator.GAP_FINDING_PREFIX + "Board never refreshes (`a.java:3`)";
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    var sources = ArgumentCaptor.forClass(PrSummaryGenerator.DescriptionSources.class);
+
+    builder.build(contextAfterNaming(bullet, true), CLEAN_RESPONSE, CI_CLEAR, plan, "PR text");
+    builder.build(contextAfterNaming(bullet, false), CLEAN_RESPONSE, CI_CLEAR, plan, "PR text");
+
+    verify(summaryGenerator, times(2))
+        .generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), sources.capture());
+    var unchanged = sources.getAllValues().get(0);
+    var moved = sources.getAllValues().get(1);
+    assertEquals("PR text", unchanged.claimText());
+    assertEquals(java.util.Set.of(bullet), unchanged.previouslyNamed());
+    assertEquals(java.util.Set.of(), moved.previouslyNamed());
+  }
+
   /** The degraded round's response: the previous round's overview, carried whole. */
   private static ReviewResponse carriedOverviewResponse(ReviewContextLoader.ReviewContext ctx) {
     return new ReviewResponse(List.of(), List.of(), PriorOverviewCarryover.fill(null, ctx));
@@ -1041,7 +1111,7 @@ class VerdictBuilderTest {
     builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
     verify(summaryGenerator)
-        .generate(anyInt(), anyInt(), anyInt(), rowsCaptor.capture(), any(), any());
+        .generate(anyInt(), anyInt(), anyInt(), rowsCaptor.capture(), any(), any(), any());
     assertTrue(rowsCaptor.getValue().isEmpty(), rowsCaptor.getValue().toString());
   }
 
@@ -1066,7 +1136,7 @@ class VerdictBuilderTest {
     builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
     verify(summaryGenerator)
-        .generate(anyInt(), anyInt(), anyInt(), rowsCaptor.capture(), any(), any());
+        .generate(anyInt(), anyInt(), anyInt(), rowsCaptor.capture(), any(), any(), any());
     assertEquals(
         List.of(new PrSummaryGenerator.ChangedFile("reviewed.java", "modified")),
         rowsCaptor.getValue(),
@@ -1095,7 +1165,7 @@ class VerdictBuilderTest {
     builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
 
     verify(summaryGenerator)
-        .generate(anyInt(), anyInt(), anyInt(), rowsCaptor.capture(), any(), any());
+        .generate(anyInt(), anyInt(), anyInt(), rowsCaptor.capture(), any(), any(), any());
     assertEquals(
         List.of(new PrSummaryGenerator.ChangedFile(null, "modified")),
         rowsCaptor.getValue(),
