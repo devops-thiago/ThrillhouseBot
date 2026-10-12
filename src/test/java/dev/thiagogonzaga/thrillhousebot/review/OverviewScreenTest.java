@@ -216,6 +216,19 @@ class OverviewScreenTest {
   }
 
   @Test
+  void anAbbreviationBeforeALowerCaseWordOrANameDoesNotEndTheSentence() {
+    assertEquals(
+        List.of(
+            "Adds approx. ten retries, as Dr. Smith and Mr. Jones asked in No. 5 of Fig. 2.",
+            "Ships Acme Inc. tooling.",
+            "Fixes the API.",
+            "Done."),
+        OverviewScreen.sentences(
+            "Adds approx. ten retries, as Dr. Smith and Mr. Jones asked in No. 5 of Fig. 2. Ships"
+                + " Acme Inc. tooling. Fixes the API. Done."));
+  }
+
+  @Test
   void aSentenceEndingInEtcIsSplitBeforeACapital() {
     assertEquals(
         "Lists the parsers, codecs, etc.",

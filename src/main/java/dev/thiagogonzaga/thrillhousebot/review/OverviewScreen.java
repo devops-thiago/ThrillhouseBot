@@ -204,8 +204,18 @@ final class OverviewScreen {
   /** A candidate sentence end: terminal punctuation followed by a blank ({@link #sentences}). */
   private static final Pattern SENTENCE_END = Pattern.compile("(?<=[.!?])\\s++");
 
-  /** Abbreviations whose period ends them mid-sentence. */
+  /**
+   * Abbreviations that introduce what follows, whatever its case: "e.g. THRILLHOUSEBOT-100" does
+   * not start a sentence.
+   */
   private static final Set<String> MID_SENTENCE_ABBREVIATIONS = Set.of("e.g.", "i.e.", "vs.");
+
+  /**
+   * A title or reference abbreviation: a capital and one to three lower-case letters, then the
+   * period ("Dr.", "Mr.", "No.", "Fig.", "Inc."). It precedes a name or a number, so a capital or a
+   * digit after it does not start a sentence.
+   */
+  private static final Pattern SHORT_ABBREVIATION = Pattern.compile("\\p{Lu}\\p{Ll}{1,3}\\.");
 
   /**
    * {@code summary} with its file summaries mapped, screened and deduplicated, and its purpose
@@ -538,9 +548,11 @@ final class OverviewScreen {
   }
 
   /**
-   * {@code text} split at each {@link #SENTENCE_END}, except after "e.g.", "i.e." and "vs.", which
-   * end an abbreviation mid-sentence, and after "etc." unless a capital letter follows: "etc."
-   * often ends a sentence too ("…, codecs, etc. Adds the rotator.").
+   * {@code text} split at each {@link #SENTENCE_END} that starts a new sentence. A lower-case
+   * letter after it never does: whatever abbreviation ended in the period ("approx.", "etc.",
+   * "Inc.") ended mid-sentence. Nor does anything after "e.g.", "i.e." and "vs.", or after a short
+   * title or reference abbreviation ({@link #SHORT_ABBREVIATION}: "Dr. Smith", "No. 5"). Otherwise
+   * a period ends the sentence, "etc." included ("…, codecs, etc. Adds the rotator.").
    */
   static List<String> sentences(String paragraph) {
     // Stripped, so a sentence end is always followed by the next sentence's first character.
@@ -551,11 +563,11 @@ final class OverviewScreen {
     while (ends.find()) {
       var before = text.substring(start, ends.start());
       var words = before.split("\\s");
-      var lastWord = words[words.length - 1].toLowerCase(Locale.ROOT);
-      var next = text.charAt(ends.end());
+      var lastWord = words[words.length - 1];
       var midSentence =
-          MID_SENTENCE_ABBREVIATIONS.contains(lastWord)
-              || (lastWord.equals("etc.") && !Character.isUpperCase(next));
+          Character.isLowerCase(text.charAt(ends.end()))
+              || MID_SENTENCE_ABBREVIATIONS.contains(lastWord.toLowerCase(Locale.ROOT))
+              || SHORT_ABBREVIATION.matcher(lastWord).matches();
       if (!midSentence) {
         result.add(before);
         start = ends.end();
