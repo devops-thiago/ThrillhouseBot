@@ -235,14 +235,16 @@ final class DescriptionGapCarryover {
     }
 
     /**
-     * {@code list} through the {@link DescriptionGapScreen}, less the omission gaps an edited PR
-     * text now covers; as it is with no PR text known.
+     * {@code list} held to the linked issue ({@link LinkedIssueCitations#screenGaps}), then through
+     * the {@link DescriptionGapScreen}, less the omission gaps an edited PR text now covers; only
+     * held to the issue with no PR text known.
      */
     private List<String> screened(List<String> list) {
+      var held = LinkedIssueCitations.screenGaps(list, linkedIssues);
       if (prText == null) {
-        return list;
+        return held;
       }
-      var kept = DescriptionGapScreen.screen(list, prText, linkedIssues);
+      var kept = DescriptionGapScreen.screen(held, prText, linkedIssues);
       if (!prTextChanged()) {
         return kept;
       }
@@ -514,13 +516,13 @@ final class DescriptionGapCarryover {
   }
 
   /** The criterion half of a linked-issue gap's text after the colon: up to the dash, if any. */
-  private static String criterionOf(String rest) {
+  static String criterionOf(String rest) {
     var end = CRITERION_END.matcher(rest);
     return end.find() ? rest.substring(0, end.start()) : rest;
   }
 
   /** The issue keys ({@code "#114"}) a linked-issue gap's number group names, in order. */
-  private static Set<String> issuesNamed(String numberGroup) {
+  static Set<String> issuesNamed(String numberGroup) {
     var issues = new TreeSet<String>();
     if (numberGroup != null) {
       var numbers = ISSUE_NUMBER.matcher(numberGroup);
@@ -637,7 +639,7 @@ final class DescriptionGapCarryover {
   }
 
   /** The part of the linked-issue section under {@code key}'s own heading; "" when absent. */
-  private static String issueSection(String key, String linkedIssues) {
+  static String issueSection(String key, String linkedIssues) {
     // The key must end the heading's key: a titled heading goes on with ':', an untitled one ends
     // the line. A bare prefix search would take "#12" to "#123: …".
     var heading =
