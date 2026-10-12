@@ -459,12 +459,14 @@ public class SecurityScan {
     var kept = new ArrayList<ReviewResponse.Finding>();
     int duplicates = 0;
     var detectionsByFile = PathIndex.of(result.detections(), d -> d.finding().file(), d -> "");
-    var byIdentifier =
-        result.detections().stream()
-            .filter(d -> d.identifier() != null)
-            .collect(Collectors.groupingBy(Detection::identifier));
+    var byAlias = new HashMap<String, List<Detection>>();
+    for (var detection : result.detections()) {
+      detection
+          .aliases()
+          .forEach(alias -> byAlias.computeIfAbsent(alias, a -> new ArrayList<>()).add(detection));
+    }
     for (var finding : response.findings()) {
-      if (duplicatesDetection(finding, detectionsByFile, byIdentifier)) {
+      if (duplicatesDetection(finding, detectionsByFile, byAlias)) {
         duplicates++;
       } else {
         kept.add(scrub(finding, scrubber));
@@ -1067,7 +1069,7 @@ public class SecurityScan {
   private static boolean duplicatesDetection(
       ReviewResponse.Finding finding,
       PathIndex<Detection> detectionsByFile,
-      Map<String, List<Detection>> byIdentifier) {
+      Map<String, List<Detection>> byAlias) {
     if (finding.file() == null) {
       return false;
     }
@@ -1082,7 +1084,7 @@ public class SecurityScan {
         return true;
       }
     }
-    return documentsIdentifiedSecret(finding, byIdentifier);
+    return documentsIdentifiedSecret(finding, byAlias);
   }
 
   private static boolean nearbySameDefect(
@@ -1129,20 +1131,22 @@ public class SecurityScan {
    * Whether a model finding in a documentation or configuration file of the pull request ({@link
    * ReviewDimensionRouter#kindOf}) reports a secret the scan raised in another file (#1072): its
    * text names the detection's {@linkplain Detection#identifier identifier}, the constant that
-   * holds the literal, and uses one of the rule's words other than {@link #DECLARATION_WORDS}, and
-   * its title names no credential key outside the detection's {@linkplain Detection#aliases
-   * aliases}. A doc row that contradicts the hard-coded fallback ("Documented default of 'none' for
-   * HOLDS_CATALOG_TOKEN contradicts the code", naming {@code CatalogApiToken}, with {@code
-   * HOLDS_CATALOG_TOKEN} in the comment above the constant) is the same leak seen from the docs,
-   * and is fixed by removing the literal; a row about {@code DB_PASSWORD} that mentions the
-   * constant in passing is not. The claim is read from the description too, because a doc file has
-   * no use-site line on which another defect could sit. The finding's text is split into words once
-   * and each looked up among the identifiers, so the cost is the text's length, not its length
-   * times the number of secrets.
+   * holds the literal, and uses one of the rule's words other than {@link #DECLARATION_WORDS}, or
+   * names only its environment key (another of its {@linkplain Detection#aliases aliases}) with one
+   * of the rule's words in its own title; and its title names no credential key outside the
+   * aliases. A doc row is where the environment key is documented, so a finding there that names
+   * only the key is about the hard-coded value only when its title says so. A doc row that
+   * contradicts the hard-coded fallback ("Documented default of 'none' for HOLDS_CATALOG_TOKEN
+   * contradicts the code", naming {@code CatalogApiToken}, with {@code HOLDS_CATALOG_TOKEN} in the
+   * comment above the constant) is the same leak seen from the docs, and is fixed by removing the
+   * literal; a row about {@code DB_PASSWORD} that mentions the constant in passing is not. The
+   * claim is read from the description too, because a doc file has no use-site line on which
+   * another defect could sit. The finding's text is split into words once and each looked up among
+   * the aliases, so the cost is the text's length, not its length times the number of secrets.
    */
   private static boolean documentsIdentifiedSecret(
-      ReviewResponse.Finding finding, Map<String, List<Detection>> byIdentifier) {
-    if (byIdentifier.isEmpty()) {
+      ReviewResponse.Finding finding, Map<String, List<Detection>> byAlias) {
+    if (byAlias.isEmpty()) {
       return false;
     }
     var kind = ReviewDimensionRouter.kindOf(finding.file());
@@ -1156,10 +1160,12 @@ public class SecurityScan {
     if (topicWords(claim, SecurityRule.GENERIC_SECRET) == 0) {
       return false;
     }
+    boolean titleClaim = topicWords(words(finding.title()), SecurityRule.GENERIC_SECRET) >= 1;
     for (var token : Set.copyOf(Arrays.asList(NON_IDENTIFIER.split(text)))) {
-      for (var detection : byIdentifier.getOrDefault(token, List.of())) {
+      for (var detection : byAlias.getOrDefault(token, List.of())) {
         IDENTITY_COMPARISONS.incrementAndGet();
-        if (!FilePaths.same(finding.file(), detection.finding().file())
+        if ((titleClaim || token.equals(detection.identifier()))
+            && !FilePaths.same(finding.file(), detection.finding().file())
             && !namesOtherCredentialKey(finding.title(), detection.aliases())) {
           return true;
         }

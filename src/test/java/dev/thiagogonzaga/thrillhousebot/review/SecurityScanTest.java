@@ -873,6 +873,37 @@ class SecurityScanTest {
   }
 
   @Test
+  void aDocFindingNamingOnlyTheEnvironmentKeyCollapsesWhenItsTitleMakesTheClaim() {
+    // #1072: "names the same identifier or its env key". A doc row is where the key is
+    // documented, so naming it alone is the scanned secret only when the title says so.
+    var value = fake.genericSecret(40);
+    var claimed =
+        modelFinding(
+            "csharp/docs/CONFIG-CSHARP.md",
+            11,
+            "HOLDS_CATALOG_TOKEN silently falls back to a hardcoded token",
+            "The row says the default is none for `HOLDS_CATALOG_TOKEN`.");
+    assertEquals(
+        1,
+        merge(scan(true, false), response(claimed), List.of(csharpCatalog(value)))
+            .findings()
+            .size());
+
+    var docOnly =
+        modelFinding(
+            "csharp/docs/CONFIG-CSHARP.md",
+            11,
+            "HOLDS_CATALOG_TOKEN is documented as optional",
+            "The service needs the token in production, but the row marks `HOLDS_CATALOG_TOKEN`"
+                + " optional.");
+    assertEquals(
+        2,
+        merge(scan(true, false), response(docOnly), List.of(csharpCatalog(value)))
+            .findings()
+            .size());
+  }
+
+  @Test
   void aTitleNamingTheEnvironmentKeyTheConstantStandsInForIsTheSameSecret() {
     var value = fake.genericSecret(40);
     var file = "kotlin/src/main/kotlin/newsletter/billing/Config.kt";
