@@ -1,0 +1,485 @@
+/*
+ * Copyright 2026 Thiago Gonzaga
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package dev.thiagogonzaga.thrillhousebot.review;
+
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+/**
+ * The names a file's added lines declare — functions, methods, classes, types — for the summary
+ * call's changed-files overview (#920).
+ *
+ * <p>The summary call does not see the diff. With only file names, counts and findings to go on, it
+ * filled the gaps from the PR description and stated the description's claims as delivered
+ * behaviour: "reminder e-mails 15 minutes before start" on a pull request whose mailer sends one
+ * confirmation, a diagram node for an audit log nobody wrote. The names a file declares are cheap,
+ * deterministic evidence of what it does — {@code notify_organizer} and no {@code send_reminder} —
+ * so each overview row carries them, and the prompt asks for a behaviour to be described as
+ * implemented only when this material shows it.
+ *
+ * <p>Recognised declarations, on added lines only: a name after {@code def}, {@code class}, {@code
+ * function}, {@code fn}, {@code fun}, {@code func} (past a Go receiver), {@code interface}, {@code
+ * struct}, {@code enum}, {@code trait}, {@code object}, {@code type} or {@code record}, past any
+ * modifiers; and a C-family method signature (a visibility modifier, a return type, a name and an
+ * opening parenthesis). A name this misses only leaves the row with less evidence; nothing reads
+ * the list as complete. A name that is not the file's own is worse, so a line inside a multi-line
+ * string or comment, or in a documentation or data file, declares nothing. A row also names the
+ * existing functions its added lines sit inside ({@link #changedNames}), so behaviour added to a
+ * function that already existed is not mistaken for behaviour nobody wrote.
+ */
+public final class ChangeSymbols {
+
+  private ChangeSymbols() {}
+
+  /**
+   * Extensions of documentation and data files, whose code-shaped lines (a {@code def} in a README
+   * example, a {@code class} in prose) are not the file's own declarations.
+   */
+  private static final Set<String> PROSE_EXTENSIONS =
+      Set.of(
+          "md",
+          "markdown",
+          "rst",
+          "adoc",
+          "txt",
+          "html",
+          "htm",
+          "json",
+          "yml",
+          "yaml",
+          "toml",
+          "xml",
+          "properties",
+          "ini",
+          "cfg",
+          "conf",
+          "csv",
+          "lock",
+          "svg");
+
+  /** Whether {@code path} is documentation or data, whose lines declare nothing. */
+  static boolean isProse(String path) {
+    if (path == null) {
+      return false;
+    }
+    var name = path.substring(path.lastIndexOf('/') + 1);
+    var dot = name.lastIndexOf('.');
+    return dot >= 0 && PROSE_EXTENSIONS.contains(name.substring(dot + 1).toLowerCase(Locale.ROOT));
+  }
+
+  /** Names one row lists, at most; a longer list ends with an ellipsis. */
+  static final int MAX_NAMES = 10;
+
+  /** Words that may precede a declaration and are skipped. */
+  private static final Set<String> MODIFIERS =
+      Set.of(
+          "export",
+          "pub",
+          "public",
+          "private",
+          "protected",
+          "internal",
+          "abstract",
+          "final",
+          "static",
+          "async",
+          "data",
+          "sealed",
+          "open",
+          "override",
+          "suspend",
+          "default");
+
+  /** Keywords that declare the name after them. */
+  private static final Set<String> DECLARING_KEYWORDS =
+      Set.of(
+          "def",
+          "class",
+          "function",
+          "fn",
+          "fun",
+          "func",
+          "interface",
+          "struct",
+          "enum",
+          "trait",
+          "object",
+          "type",
+          "record");
+
+  /** Modifiers a C-family method signature opens with. */
+  private static final Set<String> VISIBILITY =
+      Set.of("public", "private", "protected", "internal");
+
+  /**
+   * The names {@code patch}'s added lines declare, in order and without repeats; empty for a null
+   * or blank patch. A line inside a multi-line string or comment (a docstring's usage example, a
+   * text block, a heredoc) declares nothing: {@link LiteralTracker} follows them across the hunk's
+   * added and context lines.
+   */
+  public static List<String> declaredNames(String patch) {
+    if (patch == null || patch.isBlank()) {
+      return List.of();
+    }
+    var names = new LinkedHashSet<String>();
+    var literals = new LiteralTracker();
+    for (var line : patch.lines().toList()) {
+      var added = isAddedLine(line);
+      if (line.startsWith("@@")) {
+        // Hunks are disjoint: what lies between them is unknown, so each starts in code.
+        literals = new LiteralTracker();
+      } else if (added || line.startsWith(" ")) {
+        var code = line.substring(1);
+        var inCode = literals.inCode();
+        literals.advance(code);
+        var name = added && inCode ? declaredName(code) : "";
+        if (!name.isEmpty()) {
+          names.add(name);
+        }
+      }
+    }
+    return List.copyOf(names);
+  }
+
+  /**
+   * The names of the existing functions and types {@code patch} adds lines inside, in order and
+   * without repeats, and leaving out a name the patch itself declares. An added line sits inside
+   * the nearest declaration above it in its hunk: one on a context or added line of code, else the
+   * one the hunk header names ({@code @@ -10,6 +10,9 @@ def send(self, to):}). A hunk whose context
+   * crosses into another function ({@code def cleanup():} after the end of {@code send}) names that
+   * function, not the header's. Added lines inside a function that already existed declare nothing,
+   * so without these a retry added to an existing {@code send} would leave its row with no evidence
+   * of where the change sits.
+   */
+  public static List<String> changedNames(String patch) {
+    if (patch == null || patch.isBlank()) {
+      return List.of();
+    }
+    var names = new LinkedHashSet<String>();
+    var enclosing = "";
+    var literals = new LiteralTracker();
+    for (var line : patch.lines().toList()) {
+      if (line.startsWith("@@")) {
+        enclosing = headerName(line);
+        literals = new LiteralTracker();
+      } else if (isAddedLine(line) || line.startsWith(" ")) {
+        var declared = codeDeclaration(literals, line.substring(1));
+        if (!declared.isEmpty()) {
+          enclosing = declared;
+        } else if (isAddedLine(line) && !enclosing.isEmpty()) {
+          names.add(enclosing);
+        }
+      }
+    }
+    declaredNames(patch).forEach(names::remove);
+    return List.copyOf(names);
+  }
+
+  /** The name the function context of a hunk header declares, or {@code ""}. */
+  private static String headerName(String header) {
+    var close = header.indexOf("@@", 2);
+    return close < 0 ? "" : declaredName(header.substring(close + 2));
+  }
+
+  /**
+   * The name {@code code}, the next line of a hunk, declares when it is code ({@code literals}
+   * places it), or {@code ""}; {@code literals} moves past the line either way.
+   */
+  private static String codeDeclaration(LiteralTracker literals, String code) {
+    var inCode = literals.inCode();
+    literals.advance(code);
+    return inCode ? declaredName(code) : "";
+  }
+
+  private static boolean isAddedLine(String line) {
+    return line.startsWith("+") && !line.startsWith("+++");
+  }
+
+  /** The name one added line declares, or {@code ""}. */
+  static String declaredName(String line) {
+    var rest = line.strip();
+    var word = leadingWord(rest);
+    var visible = false;
+    while (MODIFIERS.contains(word)) {
+      visible |= VISIBILITY.contains(word);
+      rest = rest.substring(word.length()).strip();
+      word = leadingWord(rest);
+    }
+    if (DECLARING_KEYWORDS.contains(word)) {
+      // A keyword pair declares one name after both: enum class Mode, fun interface Listener.
+      while (DECLARING_KEYWORDS.contains(word)) {
+        rest = rest.substring(word.length()).strip();
+        word = leadingWord(rest);
+      }
+      // A Go method's receiver sits between the keyword and the name: func (s *Store) Add(…).
+      if (rest.startsWith("(")) {
+        rest = rest.substring(rest.indexOf(')') + 1).strip();
+      }
+      return leadingWord(rest);
+    }
+    return visible ? methodName(rest) : "";
+  }
+
+  /** The name of a C-family method signature after its modifiers: {@code void notify(…)}. */
+  private static String methodName(String signature) {
+    var paren = signature.indexOf('(');
+    if (paren < 0) {
+      return "";
+    }
+    var head = signature.substring(0, paren).strip();
+    if (head.indexOf(' ') < 0 || head.indexOf('=') >= 0) {
+      return "";
+    }
+    var name = head.substring(head.lastIndexOf(' ') + 1);
+    return name.chars().allMatch(c -> isWordChar((char) c)) ? name : "";
+  }
+
+  /** The identifier {@code text} opens with, or {@code ""}. */
+  private static String leadingWord(String text) {
+    var end = 0;
+    while (end < text.length() && isWordChar(text.charAt(end))) {
+      end++;
+    }
+    return text.substring(0, end);
+  }
+
+  private static boolean isWordChar(char c) {
+    return Character.isLetterOrDigit(c) || c == '_';
+  }
+
+  /**
+   * The suffix an overview row carries for the file at {@code path} with {@code patch}: {@code " —
+   * declares: a, b"} for the names its added lines declare and {@code " — changes: c"} for the
+   * existing ones its added lines sit inside ({@link #changedNames}), each cut at {@value
+   * #MAX_NAMES} names, or {@code ""} when there are none or the file is documentation or data
+   * ({@link #isProse}).
+   */
+  public static String overviewSuffix(String path, String patch) {
+    if (isProse(path)) {
+      return "";
+    }
+    return namesPart(" — declares: ", declaredNames(patch))
+        + namesPart(" — changes: ", changedNames(patch));
+  }
+
+  private static String namesPart(String label, List<String> names) {
+    if (names.isEmpty()) {
+      return "";
+    }
+    var shown = names.subList(0, Math.min(MAX_NAMES, names.size()));
+    return label + String.join(", ", shown) + (names.size() > MAX_NAMES ? ", …" : "");
+  }
+
+  /**
+   * Follows multi-line strings and comments line by line, so a code-shaped line inside one is not
+   * read as a declaration: a triple-quoted string (a Python docstring, a Kotlin raw string, a Java
+   * text block), a backtick string, a block comment and a shell heredoc. Single-line strings are
+   * skipped so a delimiter inside one opens nothing, and a line comment ends the line. What it
+   * cannot place, like an unclosed quote, it leans to reading as not code: a name it misses only
+   * leaves the row with less evidence, while a name read from a string invents one.
+   */
+  static final class LiteralTracker {
+
+    /**
+     * A quoted heredoc opener ({@code <<-'END'}, {@code <<'py'}, {@code << 'eof'}): a word of any
+     * case in quotes after the operator and any horizontal space; group 2 is the word. It opens a
+     * heredoc unless code goes on after it ({@link #continuesAsCode}), so a stream insertion of a
+     * string or character ({@code out << "end";}, {@code out << 'x' << y}) opens nothing.
+     */
+    private static final Pattern QUOTED_HEREDOC =
+        Pattern.compile("<<[-~]?\\h*(['\"])([A-Za-z_]\\w*)\\1");
+
+    /**
+     * An unquoted heredoc opener ({@code <<EOF}, {@code <<-EOF}, {@code << EOF}): an upper-case
+     * word after the operator and any horizontal space, so a shift ({@code x << y}) opens nothing.
+     * A shift by an upper-case constant ({@code x << MASK}) is read as one: the lines after it then
+     * declare nothing, which only leaves the row with less evidence.
+     */
+    private static final Pattern BARE_HEREDOC =
+        Pattern.compile("<<[-~]?\\h*([A-Z_][A-Z0-9_]*)(?!\\w)");
+
+    /** A heredoc opener of any case straight after the operator: {@code <<eof}, {@code <<-end}. */
+    private static final Pattern WORD_HEREDOC = Pattern.compile("<<[-~]?([A-Za-z_]\\w*)(?!\\w)");
+
+    /** What closes the string or comment the text so far ends inside; {@code null} in code. */
+    private String closer;
+
+    /** The word that ends the heredoc being read; {@code null} outside one. */
+    private String heredocEnd;
+
+    /** The word that ends a heredoc the current line opens; it starts on the next line. */
+    private String openedHeredoc;
+
+    boolean inCode() {
+      return closer == null && heredocEnd == null;
+    }
+
+    /** Moves past one line of the new file's text. */
+    void advance(String text) {
+      if (heredocEnd != null) {
+        if (text.strip().equals(heredocEnd)) {
+          heredocEnd = null;
+        }
+        return;
+      }
+      openedHeredoc = null;
+      var i = 0;
+      while (i < text.length()) {
+        i = closer == null ? pastCode(text, i) : pastCloser(text, i);
+      }
+      heredocEnd = openedHeredoc;
+    }
+
+    /** The index past the {@link #closer} at or after {@code i}, or the line's end. */
+    private int pastCloser(String text, int i) {
+      var end = text.indexOf(closer, i);
+      if (end < 0) {
+        return text.length();
+      }
+      var next = end + closer.length();
+      closer = null;
+      return next;
+    }
+
+    /**
+     * The index past the code at {@code i}: an opened string or comment sets {@link #closer}, a
+     * single-line string is skipped, a line comment ends the line, a heredoc is noted.
+     */
+    private int pastCode(String text, int i) {
+      var c = text.charAt(i);
+      if (text.startsWith("\"\"\"", i) || text.startsWith("'''", i)) {
+        closer = text.substring(i, i + 3);
+        return i + 3;
+      }
+      if (text.startsWith("/*", i)) {
+        closer = "*/";
+        return i + 2;
+      }
+      if (text.startsWith("//", i) || c == '#') {
+        return text.length();
+      }
+      if (c == '`') {
+        closer = "`";
+        return i + 1;
+      }
+      if (c == '"' || c == '\'') {
+        return endOfQuoted(text, i);
+      }
+      if (!text.startsWith("<<", i)) {
+        return i + 1;
+      }
+      return pastHeredoc(text, i);
+    }
+
+    /**
+     * The index past the {@code <<} at {@code i}: past a heredoc opener, noting its delimiter in
+     * {@link #openedHeredoc}, or past the operator alone. A quoted delimiter opens one unless code
+     * follows ({@link #continuesAsCode}); an upper-case one always does; a word of any case
+     * straight after the operator ({@code cat <<eof}, {@code <<-end}) does where the line reads as
+     * a shell command: no code follows, and the word is the last on the line or a command word
+     * comes before the operator ({@link #followsCommandWord}). So {@code x<<y + 1} and {@code a = x
+     * <<y;} open nothing.
+     */
+    private int pastHeredoc(String text, int i) {
+      var quoted = QUOTED_HEREDOC.matcher(text).region(i, text.length());
+      if (quoted.lookingAt() && !continuesAsCode(text, quoted.end())) {
+        return opens(quoted.group(2), quoted.end());
+      }
+      var bare = BARE_HEREDOC.matcher(text).region(i, text.length());
+      if (bare.lookingAt()) {
+        return opens(bare.group(1), bare.end());
+      }
+      var word = WORD_HEREDOC.matcher(text).region(i, text.length());
+      if (word.lookingAt()
+          && !continuesAsCode(text, word.end())
+          && (text.substring(word.end()).isBlank() || followsCommandWord(text, i))) {
+        return opens(word.group(1), word.end());
+      }
+      return i + 2;
+    }
+
+    /** Notes {@code delimiter} as the heredoc the line opens and returns {@code end}. */
+    private int opens(String delimiter, int end) {
+      openedHeredoc = delimiter;
+      return end;
+    }
+
+    /**
+     * Whether a command word and a space come before the {@code <<} at {@code i}, as on a shell
+     * command line: {@code cat <<eof}, {@code python3 - <<py}.
+     */
+    private static boolean followsCommandWord(String text, int i) {
+      var before = text.substring(0, i);
+      var word = before.stripTrailing();
+      if (word.isEmpty() || word.length() == before.length()) {
+        return false;
+      }
+      var last = word.charAt(word.length() - 1);
+      return isWordChar(last) || last == '-';
+    }
+
+    /**
+     * Whether the text after a quoted delimiter, from {@code end}, is code rather than the rest of
+     * a shell command line: it opens with an operator or punctuation that only code puts after a
+     * string ({@link #CODE_AFTER_STRING}: {@code ;}, {@code )}, another {@code <<} …), with a
+     * method call ({@link #isMethodCall}), or the line ends with {@code ;} as a C-family statement
+     * does ({@code out << "n" << 0;}). Anything else — nothing, a redirection, a pipe, arguments, a
+     * comment, a path such as {@code ./script.sh} or {@code .env} — is read as shell, since a shell
+     * command may follow the delimiter with any words ({@code kubectl apply -f - <<"END"
+     * --dry-run}, {@code ssh host bash -s <<'EOF' arg}). Leaning to the heredoc only costs a
+     * declaration it hides, while reading a heredoc's body as code invents one.
+     */
+    private static boolean continuesAsCode(String text, int end) {
+      var rest = text.substring(end).strip();
+      return !rest.isEmpty()
+          && (CODE_AFTER_STRING.indexOf(rest.charAt(0)) >= 0
+              || isMethodCall(text, end)
+              || rest.endsWith(";"));
+    }
+
+    /** The characters that, right after a quoted string, show the line is code. */
+    private static final String CODE_AFTER_STRING = ";),<+]}?:";
+
+    /**
+     * Whether a method call on the string follows its closing quote at {@code end}: a {@code .}
+     * straight after the quote ({@code "x".freeze}), or after a space a {@code .}, a name and an
+     * opening parenthesis ({@code "x" .format(y)}). A shell argument that starts with a dot is a
+     * path ({@code ./script.sh}, {@code .env}) and is not one.
+     */
+    private static boolean isMethodCall(String text, int end) {
+      if (text.startsWith(".", end)) {
+        return true;
+      }
+      return METHOD_CALL.matcher(text).region(end, text.length()).lookingAt();
+    }
+
+    /** A spaced method call after a string: {@code .}, a name, {@code (}. */
+    private static final Pattern METHOD_CALL = Pattern.compile("\\h*\\.[A-Za-z_]\\w*\\(");
+
+    /** The index past the single-line string opening at {@code start}, or the line's end. */
+    private static int endOfQuoted(String text, int start) {
+      var quote = text.charAt(start);
+      var i = start + 1;
+      while (i < text.length() && text.charAt(i) != quote) {
+        i += text.charAt(i) == '\\' ? 2 : 1;
+      }
+      return Math.min(i + 1, text.length());
+    }
+  }
+}

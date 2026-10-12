@@ -652,8 +652,8 @@ class PrReviewPromptsContentTest {
         "pr_purpose must be scoped to the whole change set, not one file (#335)");
     assertContains(
         sys,
-        "PR title and description (the author's stated intent)",
-        "pr_purpose must be grounded in the PR title/description");
+        "(the author's stated intent) only where that evidence bears them",
+        "pr_purpose reads the PR title/description, but only as far as the evidence goes (#920)");
     assertContains(
         sys,
         "PR scope totals and the changed-file list",
@@ -679,6 +679,58 @@ class PrReviewPromptsContentTest {
         sys,
         "whose scope is narrower than the change itself",
         "description_gaps must cover a description that covers only part of the change (#335)");
+  }
+
+  @Test
+  void summaryPromptTreatsTheDescriptionAsClaimsNotFacts() {
+    String sys = PrReviewPrompts.SUMMARY_SYSTEM;
+    assertContains(
+        sys,
+        "title and description are the author's CLAIMS about it",
+        "the description is a claim to check, not a source of facts (#920)");
+    assertContains(
+        sys,
+        "overall_assessment, pr_purpose, file_summaries or walkthrough_diagram",
+        "an unsupported claim never reads as implemented (#920)");
+    assertContains(
+        sys,
+        "it goes in\n  description_gaps",
+        "an unsupported claim is reported as a description gap (#920)");
+    assertContains(
+        sys,
+        "only where that evidence bears them",
+        "pr_purpose is grounded in the evidence, not the description (#920)");
+    assertContains(
+        PrReviewPrompts.DIAGRAM_REQUEST,
+        "never draw a step only the PR description claims",
+        "the diagram must not draw an unconfirmed claim (#920, zig #178's retry loop)");
+  }
+
+  @Test
+  void summaryPromptDoesNotGapAClaimAboutAChangedExistingFunction() {
+    // Lines added inside an existing function declare nothing, so the declared names alone would
+    // turn behaviour implemented there into a false description gap (#1063 review).
+    String sys = PrReviewPrompts.SUMMARY_SYSTEM;
+    assertContains(
+        sys,
+        "the existing functions\n  its added lines change",
+        "the changed functions are evidence like the declared names");
+    assertContains(
+        sys,
+        "the row names that function instead (\"changes: send\")",
+        "the prompt names the row's changes suffix");
+    assertContains(
+        sys,
+        "there, so it is not a description gap",
+        "a claim about a changed function is not a gap");
+    assertContains(
+        sys,
+        "report it in pr_purpose or that file's\n  file_summaries line as the description's claim",
+        "a claim about a changed function is reported as the description's claim, outside the gaps");
+    assertContains(
+        sys,
+        "never as fact and never as missing, and leave it out of\n  description_gaps",
+        "the attributed claim never lands in description_gaps, which the eval grades as a gap");
   }
 
   @Test
@@ -1626,8 +1678,8 @@ class PrReviewPromptsContentTest {
         "the diagram request must say the call answering it has no diff");
     assertContains(
         PrReviewPrompts.DIAGRAM_REQUEST,
-        "components and calls that material names",
-        "the diagram must be limited to components its material names");
+        "components and calls that material shows",
+        "the diagram must be limited to components its material shows (#920)");
   }
 
   /**

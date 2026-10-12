@@ -343,7 +343,11 @@ live `fence(...)` (#604).
   `PrImproveAssistantPromptsContentTest`, `UnitTestAssistantPromptsContentTest`,
   `TicketContextPromptsContentTest`. Update a pin
   deliberately when you reword it. Never delete one to make a build pass.
-- **The eval corpus is the recall gate.** `src/test/resources/evalcorpus/` holds labeled cases.
+- **The eval corpus is the recall gate.** `src/test/resources/evalcorpus/` holds labeled cases:
+  `verifier` and `generator` cases for the review prompts, and `summary` cases (#920) that run
+  `PrSummarizer` and expect a description claim back as a gap and nowhere it reads as implemented
+  (`claim-gapped`), or, for a claim the changed-files evidence can carry, not as a gap
+  (`claim-not-gapped`).
   `EvalCorpusTest` validates the schema and routing coverage in every build. The live
   `PromptEvalTest` is tagged `eval`, runs only with `-Peval`, and skips itself without
   `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY`:

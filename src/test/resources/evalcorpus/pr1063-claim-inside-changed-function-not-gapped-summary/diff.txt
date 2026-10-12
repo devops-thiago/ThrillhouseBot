@@ -1,0 +1,17 @@
+### python/roombook/mailer.py (modified, +9 -2)
+```diff
+@@ -19,4 +19,11 @@     def send(self, to: str, subject: str, body: str) -> bool:
+         if not to or "@" not in to:
+             raise MailerError("invalid recipient: %r" % (to,))
+-        # Relay hand-off omitted in this sample service.
+-        return True
++        for attempt in range(self.max_attempts):
++            try:
++                self._relay.hand_off(to, subject, body)
++                return True
++            except RelayError:
++                if attempt + 1 == self.max_attempts:
++                    raise
++                time.sleep(2 ** attempt)
++        return False
+```

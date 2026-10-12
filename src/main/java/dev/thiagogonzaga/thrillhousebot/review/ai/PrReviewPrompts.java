@@ -1016,15 +1016,35 @@ public final class PrReviewPrompts {
               scope totals, and with the changed-files list; do not contradict them. A summary whose
               scope is narrower than the stated PR scope is wrong: few or no findings means the
               reviewed code looked fine, never that the change was small or touched one file.
+            - Evidence and claims: what the change DOES comes from the changed-file list (each
+              row's path, counts, the names its added lines declare and the existing functions
+              its added lines change) and the findings. The PR
+              title and description are the author's CLAIMS about it, to be checked against that
+              evidence, never a source of facts. A behaviour the description claims that no file, declared or changed name or
+              finding shows (a reminder, a retry with backoff, an audit trail, a per-day limit, a
+              document that is not in the list) is not described as implemented in
+              overall_assessment, pr_purpose, file_summaries or walkthrough_diagram; it goes in
+              description_gaps,
+              stated as unconfirmed ("The description says reminder e-mails are sent 15 minutes
+              before a booking; no changed file declares anything that sends them"). A file's name
+              alone shows its area, not a specific behaviour: mailer.py shows mail is sent, not
+              which mail or when. Lines added inside a function that already existed declare
+              nothing new; the row names that function instead ("changes: send"). A claim about
+              what such a changed function now does (a retry added to send) may be implemented
+              there, so it is not a description gap: report it in pr_purpose or that file's
+              file_summaries line as the description's claim ("the description says send now
+              retries"), never as fact and never as missing, and leave it out of
+              description_gaps.
 
             The "summary" object must include:
             - total_findings, critical, high, medium, low: counts of the findings provided below
             - overall_assessment: one-sentence verdict on the change
             - pr_purpose: 1-3 sentences on what the WHOLE change set does. You do not see the diff,
-              so ground it in the PR title and description (the author's stated intent) together
-              with the PR scope totals and the changed-file list below, which are computed from the
-              diff and are authoritative. Cover the change set as a whole: when it spans many files
-              or several directories, say so and name the main areas it touches. Never present one
+              so ground it in the PR scope totals and the changed-file list below, which are
+              computed from the diff and are authoritative, and in the findings; use the PR title
+              and description (the author's stated intent) only where that evidence bears them
+              out. Cover the change set as a whole: when it spans many files or several
+              directories, say so and name the main areas it touches. Never present one
               extracted class, one file, or the one component that happens to carry findings as if
               it were the whole pull request. Describe behavior, not a file listing.
             - description_gaps: when a PR description is provided, an array of concrete mismatches
@@ -1051,9 +1071,10 @@ public final class PrReviewPrompts {
               table; omitting it, or emitting [], leaves every row of that table blank, which is
               worse than a rough line. You do not see the diff — and you are not being asked to
               describe it hunk by hunk. Write each line from the material you DO have: the
-              changed-file list below (its path, change status, +added/-deleted counts and the
-              directory breakdown), the findings already computed for that path, and the PR title
-              and description. A one-line statement of that file's role in this change, at that
+              changed-file list below (its path, change status, +added/-deleted counts, the names
+              its added lines declare or change and the directory breakdown), the findings already computed
+              for that path, and the PR title and description where that evidence bears them out.
+              A one-line statement of that file's role in this change, at that
               level of detail, is what is wanted and is NOT invention. What would be invention is
               naming methods, values or behavior the material does not show — so stay at the
               granularity the file list and findings justify, and prefer a rougher true line over
@@ -1165,8 +1186,10 @@ public final class PrReviewPrompts {
             populate summary.walkthrough_diagram with a single Mermaid diagram of the AFFECTED
             control flow:
             - You do not see the diff. Build the diagram from the material you do have — the
-              changed-file list, the findings, and the PR title and description — and name only
-              components and calls that material names; never invent a step to complete the picture.
+              changed-file list with the names each file declares or changes, and the findings — and name only
+              components and calls that material shows; never invent a step to complete the
+              picture, and never draw a step only the PR description claims (a reminder, a retry
+              loop, an audit log): an unconfirmed claim is a description gap, not a node.
             - Prefer a `flowchart TD`; use a `sequenceDiagram` only when the change is fundamentally
               about the ORDER of calls between components. Nothing else. Prefer simple rectangle and
               rhombus nodes; avoid exotic shapes.
