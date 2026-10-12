@@ -212,6 +212,27 @@ class OverviewScreenTest {
   }
 
   @Test
+  void findingsTalkAfterASentenceEndIsCutLikeAfterASemicolon() {
+    assertEquals(
+        "Renders the table.",
+        OverviewScreen.screenedText("Renders the table. Hosts two findings.", "+x", ""));
+    assertEquals(
+        "Renders the table. Parses rows.",
+        OverviewScreen.screenedText(
+            "Renders the table; hosts two findings. Parses rows.", "+x", ""));
+    // A first sentence of findings talk is the row's role: the summary goes.
+    assertEquals(
+        "", OverviewScreen.screenedText("Hosts two findings. Renders the table.", "+x", ""));
+    // A later sentence the cut empties goes without a trace.
+    assertEquals(
+        "Renders it.",
+        OverviewScreen.screenedText("Renders it. TBD, hosts two findings.", "+x", ""));
+    // A placeholder sentence is skipped, not taken for the role.
+    assertEquals(
+        "Renders the table.", OverviewScreen.screenedText("TBD. Renders the table.", "+x", ""));
+  }
+
+  @Test
   void aPlaceholderClauseIsDroppedFromARow() {
     assertEquals(
         "renders the dashboard",

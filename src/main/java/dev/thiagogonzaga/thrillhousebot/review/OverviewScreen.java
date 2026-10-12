@@ -361,20 +361,43 @@ final class OverviewScreen {
     if (isPlaceholder(text)) {
       return "";
     }
-    // A placeholder clause ("TBD; renders the dashboard") is dropped like a placeholder summary.
-    var clauses =
-        Arrays.stream(text.split(";"))
-            .map(String::strip)
-            .filter(c -> !c.isEmpty() && !isPlaceholder(c))
-            .map(c -> withoutUntrueParts(c, patch, known))
-            .toList();
-    // Every part was judged by the cut. A clause it emptied, or left a placeholder ("TBD, hosts
-    // the two findings"), says nothing true; the first one is the file's role, so the summary goes
-    // with it.
-    if (clauses.isEmpty() || isPlaceholder(clauses.getFirst())) {
-      return "";
+    // Clauses end at a semicolon or at a sentence end ("Renders the table. Hosts two findings.").
+    var kept = new ArrayList<String>();
+    var roleSeen = false;
+    for (var sentence : sentences(text)) {
+      // A placeholder clause ("TBD; renders the dashboard") is dropped like a placeholder summary.
+      var clauses =
+          Arrays.stream(sentence.split(";"))
+              .map(String::strip)
+              .filter(c -> !c.isEmpty() && !isPlaceholder(c))
+              .map(c -> withoutUntrueParts(c, patch, known))
+              .toList();
+      if (clauses.isEmpty()) {
+        continue;
+      }
+      // Every part was judged by the cut. A clause it emptied, or left a placeholder ("TBD, hosts
+      // the two findings"), says nothing true; the first one is the file's role, so the summary
+      // goes with it.
+      if (!roleSeen && isPlaceholder(clauses.getFirst())) {
+        return "";
+      }
+      roleSeen = true;
+      var rest = String.join("; ", clauses.stream().filter(c -> !isPlaceholder(c)).toList());
+      if (!rest.isEmpty()) {
+        kept.add(withSentenceEnd(rest, sentence));
+      }
     }
-    return String.join("; ", clauses.stream().filter(c -> !isPlaceholder(c)).toList());
+    return String.join(" ", kept);
+  }
+
+  /**
+   * {@code kept} ending as {@code sentence} did, when its cut took the last clause and with it the
+   * terminal punctuation ("Renders the table; hosts two findings." keeps "Renders the table.").
+   */
+  private static String withSentenceEnd(String kept, String sentence) {
+    var end = sentence.charAt(sentence.length() - 1);
+    var ended = ".!?".indexOf(end) >= 0;
+    return ended && kept.charAt(kept.length() - 1) != end ? kept + end : kept;
   }
 
   /**
