@@ -423,13 +423,16 @@ final class OverviewScreen {
   }
 
   /**
-   * Whether a holding or placement verb ({@link #HOLDING_VERBS}) comes before the finding word at
-   * {@code at} with only its noun phrase between them: no word that starts another clause or verb
-   * phrase ({@link #PHRASE_BREAKERS}: "Holds the code that parses findings" is about the code).
+   * Whether a holding or placement verb ({@link #HOLDING_VERBS}), or an existential "there is/are/
+   * was/were" ("There are no findings in this file"), comes before the finding word at {@code at}
+   * with only its noun phrase between them: no word that starts another clause or verb phrase
+   * ({@link #PHRASE_BREAKERS}: "Holds the code that parses findings" and "There are helpers that
+   * format findings" are about the code).
    */
   private static boolean heldByVerb(String[] words, int at) {
     for (var j = at - 1; j >= 0; j--) {
-      if (HOLDING_VERBS.contains(words[j])) {
+      if (HOLDING_VERBS.contains(words[j])
+          || (EXISTENTIAL_VERBS.contains(words[j]) && j > 0 && words[j - 1].equals("there"))) {
         return true;
       }
       if (PHRASE_BREAKERS.contains(words[j])) {
@@ -559,6 +562,9 @@ final class OverviewScreen {
           "track",
           "shows",
           "show");
+
+  /** The forms of "be" that, after "there", say the findings exist: "There are two findings". */
+  private static final Set<String> EXISTENTIAL_VERBS = Set.of("is", "are", "was", "were");
 
   /**
    * Words between a verb and "findings" that start another clause or verb phrase, so the verb does

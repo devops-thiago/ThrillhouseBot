@@ -430,6 +430,11 @@ class OverviewScreenTest {
         "Confirmed findings in this batch",
         "3 findings left",
         "No findings yet",
+        // An existential "there is/are" holds the findings as a holding verb does.
+        "There are no findings in this file",
+        "There are two findings here",
+        "There is one finding",
+        "There were not any findings",
         "Lists numerous findings",
         "Has some findings",
         "Holds all findings",
@@ -481,6 +486,10 @@ class OverviewScreenTest {
         "Contains the findings Open panel",
         // A holding verb that heads another phrase.
         "Holds the code that parses findings",
+        "There are helpers that format findings",
+        // A form of "be" without "there" before it is no existential.
+        "Here are findings",
+        "Are two findings",
         "Keeps settings and refines findings",
         "Holds the findingsTable",
         // Plural artifact nouns.
