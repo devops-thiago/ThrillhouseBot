@@ -376,7 +376,8 @@ public class ReviewOrchestrator {
               aiResponse,
               ciEvaluation,
               plan,
-              PromptSections.prContext(req.prTitle(), req.prDescription()) + "\n" + linkedIssues);
+              PromptSections.prContext(req.prTitle(), req.prDescription()) + "\n" + linkedIssues,
+              CiFailureCitations.parse(ciFailures));
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);
