@@ -286,7 +286,7 @@ public class FindingPipeline {
     if (plan.budgeted()
         && plan.batches().isEmpty()
         && (!plan.omittedFiles().isEmpty() || !plan.patchlessFiles().isEmpty())) {
-      return summarizeWithoutReview(session, promptInputs, ctx, plan);
+      return summarizeWithoutReview(session, promptInputs, ctx, plan, evidence);
     }
     var singleInputs = promptInputs;
     var quoteSource = ctx.diff();
@@ -324,17 +324,19 @@ public class FindingPipeline {
       aiResponse = new ReviewResponse(aiResponse.findings(), scoped, aiResponse.summary());
     }
     // #60: the deterministic scan's findings join after verification, so no model grades them.
+    var mentions = pathMentions(ctx, promptInputs, evidence);
     var refined =
         finish(
             refine(
                 session, aiResponse, quoteSource, singleInputs, ctx, lineResolver, plan, evidence),
             ctx,
             lineResolver,
-            promptInputs.linkedIssues());
+            promptInputs.linkedIssues(),
+            mentions);
     if (budgetPlanner.callCapLeavesNoSummaryCall()) {
       return summarySkippedAtCallCap(session, refined, plan, ctx, carryFor(ctx, promptInputs));
     }
-    return withSummary(session, refined, promptInputs, ctx, plan);
+    return withSummary(session, refined, promptInputs, ctx, plan, mentions);
   }
 
   /**
@@ -539,8 +541,9 @@ public class FindingPipeline {
             botIdentity);
     refined = populateMissingAnchors(refined, lineResolver);
     // #60: as in the single-call lane, after every model stage and before the summary call.
-    refined = finish(refined, ctx, lineResolver, promptInputs.linkedIssues());
-    return withSummary(session, refined, promptInputs, ctx, plan);
+    var mentions = pathMentions(ctx, promptInputs, evidence);
+    refined = finish(refined, ctx, lineResolver, promptInputs.linkedIssues(), mentions);
+    return withSummary(session, refined, promptInputs, ctx, plan, mentions);
   }
 
   /**
@@ -559,18 +562,37 @@ public class FindingPipeline {
       ReviewResponse refined,
       ReviewContextLoader.ReviewContext ctx,
       DiffLineResolver lineResolver,
-      String linkedIssues) {
-    return FollowUpAnalyzer.withoutOpenThreadDuplicates(
-        securityScan.merge(
-            securityScan.withoutStandInSecrets(
-                LinkedIssueCitations.apply(refined, linkedIssues), lineResolver),
-            ctx,
-            botIdentity),
-        ctx.priorAiResponses(),
-        ctx.inlineComments(),
-        lineResolver,
-        VerdictBuilder.renameTargets(ctx.files()),
-        botIdentity);
+      String linkedIssues,
+      PathMentions mentions) {
+    // #1076: a path no file resolves leaves the description; the finding stays.
+    return mentions.screen(
+        FollowUpAnalyzer.withoutOpenThreadDuplicates(
+            securityScan.merge(
+                securityScan.withoutStandInSecrets(
+                    LinkedIssueCitations.apply(refined, linkedIssues), lineResolver),
+                ctx,
+                botIdentity),
+            ctx.priorAiResponses(),
+            ctx.inlineComments(),
+            lineResolver,
+            VerdictBuilder.renameTargets(ctx.files()),
+            botIdentity));
+  }
+
+  /**
+   * The path mentions of one review (#1076), resolved against its changed files, the PR text and
+   * linked issues it was given, and the repository listing its evidence round reads on first use.
+   */
+  private static PathMentions pathMentions(
+      ReviewContextLoader.ReviewContext ctx,
+      AiReviewService.PromptInputs promptInputs,
+      ReviewEvidence evidence) {
+    return PathMentions.of(
+        ctx.files(),
+        Objects.requireNonNullElse(promptInputs.prContext(), "")
+            + "\n"
+            + Objects.requireNonNullElse(promptInputs.linkedIssues(), ""),
+        evidence.citedLocations()::repositoryPaths);
   }
 
   /**
@@ -597,7 +619,8 @@ public class FindingPipeline {
       ReviewResponse refined,
       AiReviewService.PromptInputs promptInputs,
       ReviewContextLoader.ReviewContext ctx,
-      DiffBudgetPlanner.BudgetPlan plan) {
+      DiffBudgetPlanner.BudgetPlan plan,
+      PathMentions mentions) {
     var carry = carryFor(ctx, promptInputs);
     if (tokenLedger.ceilingReached(ledgerSessionId(session))) {
       return countsOnlySummary(session, refined, plan, ctx, "skipping the summary call", carry);
@@ -634,15 +657,17 @@ public class FindingPipeline {
     }
     // #964: file summaries mapped onto the changed files and checked against them first, so an
     // answer the screen empties still takes the previous round's overview below.
+    // #1076: then every sentence naming a path no file resolves is cut.
     var screened =
-        OverviewScreen.screen(
-            summaryResponse.summary(),
-            ctx.files(),
-            Objects.requireNonNullElse(inputs.prContext(), "")
-                + "\n"
-                + Objects.requireNonNullElse(inputs.linkedIssues(), "")
-                + "\n"
-                + findingsText(refined));
+        mentions.screen(
+            OverviewScreen.screen(
+                summaryResponse.summary(),
+                ctx.files(),
+                Objects.requireNonNullElse(inputs.prContext(), "")
+                    + "\n"
+                    + Objects.requireNonNullElse(inputs.linkedIssues(), "")
+                    + "\n"
+                    + findingsText(refined)));
     // #944: an answer with no overview on the head the previous round reviewed keeps that round's.
     return persistWithSummary(session, refined, PriorOverviewCarryover.fill(screened, ctx), carry);
   }
@@ -1039,7 +1064,8 @@ public class FindingPipeline {
       ReviewSession session,
       AiReviewService.PromptInputs promptInputs,
       ReviewContextLoader.ReviewContext ctx,
-      DiffBudgetPlanner.BudgetPlan plan) {
+      DiffBudgetPlanner.BudgetPlan plan,
+      ReviewEvidence evidence) {
     Log.warnf(
         "No reviewable file could be sent (%d over the per-call token budget, %d with no patch"
             + " text); skipping the review call",
@@ -1049,16 +1075,19 @@ public class FindingPipeline {
     // its omission disclosures. It is the one call made here, so max-ai-calls=1 still affords it.
     // #60: the deterministic scan reads patches, not the budgeted batches, so it still runs, and
     // #939: its findings face the same open-thread guard as the other lanes.
+    var mentions = pathMentions(ctx, promptInputs, evidence);
     return withSummary(
         session,
         finish(
             new ReviewResponse(List.of(), List.of(), null),
             ctx,
             ctx.lineResolver(),
-            promptInputs.linkedIssues()),
+            promptInputs.linkedIssues(),
+            mentions),
         promptInputs,
         ctx,
-        plan);
+        plan,
+        mentions);
   }
 
   /**
