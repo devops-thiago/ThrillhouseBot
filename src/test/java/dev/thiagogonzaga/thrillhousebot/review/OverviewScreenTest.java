@@ -286,6 +286,12 @@ class OverviewScreenTest {
         OverviewScreen.withoutInventedTickets(
             "Hashes with BLAKE3-256 for the cache. Uses WHIRL-512. Fixes ABCD-9.",
             "Title: cache\nWHIRL512 digests"));
+    // Material that repeats its words, as every real PR text does, is read as well.
+    assertEquals(
+        "Uses WHIRL-512.",
+        OverviewScreen.withoutInventedTickets(
+            "Uses WHIRL-512.",
+            "Title: the cache\nThe cache keeps the WHIRL512 digests of the cache"));
     // Pieced together across two words of the material, it is not held.
     assertEquals(
         "",
@@ -371,6 +377,8 @@ class OverviewScreenTest {
         "Holds no security findings",
         "Hosts all the findings from the review",
         "Hosts all of the findings",
+        "Contains open findings",
+        "Has reported findings",
         "and hosts the two findings",
         "hosts two high findings"
       })

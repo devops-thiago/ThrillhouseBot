@@ -521,6 +521,9 @@ final class OverviewScreen {
                 word.isEmpty()
                     || BOOKKEEPING_LEAD.contains(word)
                     || FINDING_QUALIFIERS.contains(word)
+                    // "Contains open findings": with every other word a holding one, a placement
+                    // word places the review's findings too.
+                    || FINDING_PLACEMENTS.contains(word)
                     || isCount(word));
   }
 
@@ -623,7 +626,8 @@ final class OverviewScreen {
     var source = known.toUpperCase(Locale.ROOT);
     // The material may write the key as one token without its hyphen ("SHAKE256"); a key pieced
     // together across two of its words ("ABCD" and "9") is not one it holds.
-    var tokens = Set.of(NON_WORD.split(source));
+    // A set built from text holds its repeated words once; Set.of would refuse them.
+    var tokens = Arrays.stream(NON_WORD.split(source)).collect(Collectors.toSet());
     return sentences(purpose).stream()
         .filter(
             sentence ->
