@@ -79,6 +79,9 @@ public class CitedLocationResolver {
 
   private static final String ACCEPT = "application/vnd.github+json";
 
+  /** The {@code recursive} query value that makes a tree listing walk every directory. */
+  private static final String RECURSIVE = "1";
+
   /** Distinct files read per review round; findings citing further files resolve to nothing. */
   static final int MAX_FILES_FETCHED = 8;
 
@@ -222,7 +225,7 @@ public class CitedLocationResolver {
         return Optional.empty();
       }
       try {
-        var tree = prClient.getTree(auth, ACCEPT, owner, repo, ref, "1");
+        var tree = prClient.getTree(auth, ACCEPT, owner, repo, ref, RECURSIVE);
         if (tree == null) {
           return Optional.empty();
         }
