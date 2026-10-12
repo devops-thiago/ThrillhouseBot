@@ -609,6 +609,42 @@ class LinkedIssueCitationsTest {
         held.description());
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "Nothing implements the linked issues' 'Annual-plan subscribers are charged only in their"
+            + " renewal month'.",
+        "Implementing the linked issues' 'Annual-plan subscribers are charged only in their renewal"
+            + " month' is left undone."
+      })
+  void anUnmetCriterionWordedAroundAnAffirmingVerbIsRaised(String description) {
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(finding("low", "low", "Annual plans charged monthly", description)),
+                TWO_ISSUES));
+
+    assertEquals("medium", held.risk());
+    assertEquals("medium", held.confidence());
+  }
+
+  @Test
+  void aQuoteAttributedToNumberedIssuesInThePluralIsJudged() {
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "high",
+                        "high",
+                        "Charges run twice",
+                        "Invoices are not checked, and issues #228 and #231 say 'refunds are"
+                            + " instant'.")),
+                TWO_ISSUES));
+
+    assertEquals("Invoices are not checked.", held.description());
+  }
+
   @Test
   void aMentionAlreadyNamingTheNumberIsLeftAlone() {
     assertEquals(

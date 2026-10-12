@@ -80,8 +80,8 @@ final class LinkedIssueCitations {
   private static final Pattern ISSUE_CRITERION =
       Pattern.compile("(?i)\\bissue(?:['’]s)?\\s++criteri(?:on|a)\\b");
 
-  /** An issue named by number: "issue #227". */
-  private static final Pattern ISSUE_NUMBER = Pattern.compile("(?i)\\bissue\\s*+(#\\d++)\\b");
+  /** An issue named by number: "issue #227", "issues #228 and #231" (the first number). */
+  private static final Pattern ISSUE_NUMBER = Pattern.compile("(?i)\\bissues?+\\s*+(#\\d++)\\b");
 
   /** The cues that name a criterion by its noun, after which unquoted words name its subject. */
   private static final List<Pattern> CRITERION_NOUNS =
@@ -157,6 +157,7 @@ final class LinkedIssueCitations {
       List.of(
           Pattern.compile("(?i)\\b(?:violat|contradict|break|invert|ignor|omit|fail)\\w*"),
           Pattern.compile("(?i)\\b(?:not|never|missing|opposite|instead|without|lacks?)\\b"),
+          Pattern.compile("(?i)\\b(?:nothing|nowhere|unimplemented|unmet|undone)\\b"),
           Pattern.compile("(?i)n['’]t\\b"));
 
   /** One citation found in a text: where it runs and what the issue makes of it. */
