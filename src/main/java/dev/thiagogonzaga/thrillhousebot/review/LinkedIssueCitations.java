@@ -133,6 +133,16 @@ final class LinkedIssueCitations {
           "ask",
           "expect");
 
+  /** A clause opening as a relative one about the code: "which the linked issue's '…' requires". */
+  private static final Pattern RELATIVE = Pattern.compile("(?i)^\\s*+(?:which|as)\\b");
+
+  /** What says the code goes against a criterion: violating, contradicting, breaking it… */
+  private static final List<Pattern> VIOLATIONS =
+      List.of(
+          Pattern.compile("(?i)\\b(?:violat|contradict|break|invert|ignor|omit|fail)\\w*"),
+          Pattern.compile("(?i)\\b(?:not|never|missing|opposite|instead|without|lacks?)\\b"),
+          Pattern.compile("(?i)n['’]t\\b"));
+
   /** One citation found in a text: where it runs and what the issue makes of it. */
   record Citation(int start, int end, Verdict verdict) {}
 
@@ -179,8 +189,8 @@ final class LinkedIssueCitations {
     var description = nullToEmpty(finding.description());
     var titleCitations = citations(title, keys, source, issueWords);
     var descriptionCitations = citations(description, keys, source, issueWords);
-    var newTitle = withoutUnmatched(title, titleCitations);
-    var newDescription = withoutUnmatched(description, descriptionCitations);
+    var newTitle = withoutUnmatched(title, keys, source, issueWords);
+    var newDescription = withoutUnmatched(description, keys, source, issueWords);
     if (emptied(title, newTitle) || emptied(description, newDescription)) {
       Log.infof(
           "Dropped finding '%s': the acceptance criterion it rests on is not in the linked issue",
@@ -260,7 +270,7 @@ final class LinkedIssueCitations {
     if (linked != null) {
       return criterionHeld(linked, keys, linkedIssues) ? gap : null;
     }
-    var held = withoutUnmatched(gap, citations(gap, keys, source, issueWords));
+    var held = withoutUnmatched(gap, keys, source, issueWords);
     return held.isBlank() ? null : named(held, keys);
   }
 
@@ -373,18 +383,28 @@ final class LinkedIssueCitations {
 
   /**
    * {@code text} without its unmatched citations: the clause from the joiner before a citation to
-   * its end when the sentence says something before it, otherwise the whole sentence.
+   * its end when the sentence says something before it, otherwise the whole sentence. One cut at a
+   * time, each on the citations of the text as the previous cut left it: a sentence cut moves or
+   * removes the citations before it, so offsets taken on the original text would not hold. Every
+   * cut shortens the text, so the loop ends.
    */
-  static String withoutUnmatched(String text, List<Citation> citations) {
+  static String withoutUnmatched(
+      String text, List<String> keys, String source, Set<String> issueWords) {
     var out = text;
-    // Right to left, so the offsets of the citations still to cut hold.
-    for (var i = citations.size() - 1; i >= 0; i--) {
-      var citation = citations.get(i);
-      if (citation.verdict() == Verdict.UNMATCHED) {
-        out = cut(out, citation);
-      }
+    var unmatched = firstUnmatched(out, keys, source, issueWords);
+    while (unmatched != null) {
+      out = cut(out, unmatched);
+      unmatched = firstUnmatched(out, keys, source, issueWords);
     }
     return out;
+  }
+
+  private static Citation firstUnmatched(
+      String text, List<String> keys, String source, Set<String> issueWords) {
+    return citations(text, keys, source, issueWords).stream()
+        .filter(citation -> citation.verdict() == Verdict.UNMATCHED)
+        .findFirst()
+        .orElse(null);
   }
 
   private static String cut(String text, Citation citation) {
@@ -438,24 +458,39 @@ final class LinkedIssueCitations {
 
   /**
    * Whether {@code text} reports an unmet criterion: it cites one the issue holds, other than to
-   * say the code matches it ("which matches the linked issue's '…'").
+   * say the code meets it. The citation's clause is read on both sides of it, so "which matches the
+   * linked issue's '…'" and "which the linked issue's '…' requires" are both the code meeting the
+   * criterion, while "which violates the linked issue's '…'" is not.
    */
   private static boolean reportsUnmetCriterion(String text, List<Citation> citations) {
     for (var citation : citations) {
-      if (citation.verdict() != Verdict.MATCHED) {
-        continue;
-      }
-      var lead = text.substring(sentenceStart(text, citation.start()), citation.start());
-      var breaks = CLAUSE_BREAK.matcher(lead);
-      var clauseStart = 0;
-      while (breaks.find()) {
-        clauseStart = breaks.end();
-      }
-      if (!AFFIRMS.matcher(lead.substring(clauseStart)).find()) {
+      if (citation.verdict() == Verdict.MATCHED && !affirmed(text, citation)) {
         return true;
       }
     }
     return false;
+  }
+
+  /** Whether the clause holding {@code citation} says the code meets the criterion. */
+  private static boolean affirmed(String text, Citation citation) {
+    var lead = text.substring(sentenceStart(text, citation.start()), citation.start());
+    var breaks = CLAUSE_BREAK.matcher(lead);
+    var clauseStart = 0;
+    while (breaks.find()) {
+      clauseStart = breaks.end();
+    }
+    lead = lead.substring(clauseStart);
+    var rest = text.substring(citation.end(), sentenceEnd(text, citation.end()));
+    var tailEnd = CLAUSE_BREAK.matcher(rest);
+    var clause = lead + " " + (tailEnd.find() ? rest.substring(0, tailEnd.start()) : rest);
+    if (AFFIRMS.matcher(clause).find()) {
+      return true;
+    }
+    return RELATIVE.matcher(lead).find() && !anyFinds(VIOLATIONS, clause);
+  }
+
+  private static boolean anyFinds(List<Pattern> patterns, String text) {
+    return patterns.stream().anyMatch(pattern -> pattern.matcher(text).find());
   }
 
   /** {@code text} with "the linked issue" naming its number, when exactly one issue is linked. */

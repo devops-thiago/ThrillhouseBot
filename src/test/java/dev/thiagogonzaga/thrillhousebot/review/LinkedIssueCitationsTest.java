@@ -333,6 +333,74 @@ class LinkedIssueCitationsTest {
   }
 
   @Test
+  void aFindingSayingTheCriterionRequiresWhatTheCodeDoesIsNotRaised() {
+    // The affirmation follows the quote instead of preceding it.
+    var description =
+        "The comment asserts 25 kg while the code reads 40000 grams, which the linked issue #225's"
+            + " 'at most 40 kg per cart' requires.";
+    var finding = finding("low", "low", "Comment states a 25 kg cart cap", description);
+
+    assertSame(finding, only(LinkedIssueCitations.apply(responseOf(finding), GO_225)));
+
+    // The clause ends at its comma: "not" in the next clause is about the comment, not the code.
+    var commented =
+        finding(
+            "low",
+            "low",
+            "Comment states a 25 kg cart cap",
+            "The code reads 40000 grams, which the linked issue #225's 'at most 40 kg per cart'"
+                + " requires, but the comment does not say so.");
+    assertSame(commented, only(LinkedIssueCitations.apply(responseOf(commented), GO_225)));
+  }
+
+  @Test
+  void aRelativeClauseSayingTheCodeViolatesACriterionIsRaised() {
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "low",
+                        "low",
+                        "Carts are filled to 60 kg",
+                        "The cap is 60000 grams, which violates the linked issue #225's 'at most"
+                            + " 40 kg per cart'.")),
+                GO_225));
+
+    assertEquals("medium", held.risk());
+    assertEquals("medium", held.confidence());
+  }
+
+  @Test
+  void twoUnmatchedCitationsInOneSentenceAreCutWithoutStaleOffsets() {
+    // The later citation's cut takes the whole sentence, which also holds the earlier one.
+    var response =
+        responseOf(
+            finding(
+                "high",
+                "high",
+                "Refund path throws",
+                "The linked issue's 'refunds are instant' is broken per the acceptance criterion"
+                    + " for declined handling."));
+
+    assertTrue(LinkedIssueCitations.apply(response, KOTLIN_228).findings().isEmpty());
+
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "high",
+                        "high",
+                        "Refund path throws",
+                        "The charge loop aborts. The linked issue's 'refunds are instant' is"
+                            + " broken per the acceptance criterion for declined handling. Nothing"
+                            + " is retried.")),
+                KOTLIN_228));
+    assertEquals("The charge loop aborts. Nothing is retried.", held.description());
+  }
+
+  @Test
   void aFindingWithNoConfidenceIsRaisedOnRiskOnly() {
     var held =
         only(
@@ -348,6 +416,8 @@ class LinkedIssueCitationsTest {
 
     assertEquals("medium", held.risk());
     assertNull(held.confidence());
+    // A finding with no confidence reads as high confidence, which always posts on a thread.
+    assertTrue(Finding.fromAiResponse(held).postsInline());
   }
 
   // Rule 1: the issue is named.
