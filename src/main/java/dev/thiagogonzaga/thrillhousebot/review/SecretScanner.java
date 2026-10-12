@@ -425,6 +425,11 @@ final class SecretScanner {
     return isInterpolation(value) || isPlaceholder(value);
   }
 
+  /** Whether a key or identifier names a credential, by the generic rule's credential words. */
+  static boolean namesCredential(String key) {
+    return CREDENTIAL_KEY.matcher(key).find();
+  }
+
   /**
    * Whether every credential-named key the line assigns gets a {@link #isStandIn stand-in}, with a
    * shell default only when the default is one too, at least one key is assigned, and no rule of

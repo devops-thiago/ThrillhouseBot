@@ -102,10 +102,15 @@ import javax.crypto.spec.SecretKeySpec;
  * SecurityRule#topic}), so the reviewer does not post the same secret twice; the scan's finding is
  * the one kept, because it is the redacted one. On the very line a secret was matched, one rule
  * word in the model's title is enough (#932): a model's own "API token committed in source" finding
- * is the same leak in other words, and keeping it posted a second thread at a second severity. Near
- * an IaC detection, one of the rule's {@linkplain SecurityRule#defectWords defect words} is enough
- * (#921, #952): "Container reverts to root just before the entrypoint", anchored on the {@code
- * ENTRYPOINT} line below a final-stage {@code USER root}, is the scan's finding in other words.
+ * is the same leak in other words, and keeping it posted a second thread at a second severity. A
+ * generic secret assigned to a distinctive name ({@code apiToken}, {@code SCHEDULER_API_TOKEN}) is
+ * matched by that name at any distance (#1072): a model secret finding in the same file that names
+ * it, typically on the line that uses the hard-coded fallback, collapses into the scan's, and so
+ * does a finding in a documentation or configuration file that names it with a credential word.
+ * Near an IaC detection, one of the rule's {@linkplain SecurityRule#defectWords defect words} is
+ * enough (#921, #952): "Container reverts to root just before the entrypoint", anchored on the
+ * {@code ENTRYPOINT} line below a final-stage {@code USER root}, is the scan's finding in other
+ * words.
  */
 @ApplicationScoped
 public class SecurityScan {
@@ -142,6 +147,16 @@ public class SecurityScan {
           "chown",
           "subnet",
           "subnets");
+
+  /**
+   * Rule words a quoted declaration brings into a finding's text whatever the finding is about
+   * ({@code private const string CatalogApiToken}), so they are no secret claim in a description.
+   */
+  private static final Set<String> DECLARATION_WORDS = Set.of("private");
+
+  private static final Pattern SNAKE_CASE = Pattern.compile("[A-Za-z0-9]_[A-Za-z]");
+
+  private static final Pattern CAMEL_CASE = Pattern.compile("[a-z0-9][A-Z]");
 
   /** Longest credential key name a title repeats. */
   private static final int MAX_KEY_NAME = 40;
@@ -265,10 +280,18 @@ public class SecurityScan {
    * @param legacyFingerprint for a secret finding, the unkeyed fingerprint a marker posted before
    *     #985 would carry for the same content ({@link #legacyContentFingerprint}), kept in memory
    *     only to match a decline recorded under it; {@code null} for an IaC finding
+   * @param identifier for a generic secret, the name its literal is assigned to when that name is
+   *     distinctive enough to stand for the secret in a model's text ({@link #identifierOf}), so a
+   *     model finding about it away from its line collapses into this one (#1072); otherwise {@code
+   *     null}
    */
-  record Detection(SecurityRule rule, ReviewResponse.Finding finding, String legacyFingerprint) {
+  record Detection(
+      SecurityRule rule,
+      ReviewResponse.Finding finding,
+      String legacyFingerprint,
+      String identifier) {
     Detection(SecurityRule rule, ReviewResponse.Finding finding) {
-      this(rule, finding, null);
+      this(rule, finding, null, null);
     }
   }
 
@@ -416,8 +439,10 @@ public class SecurityScan {
     var kept = new ArrayList<ReviewResponse.Finding>();
     int duplicates = 0;
     var detectionsByFile = PathIndex.of(result.detections(), d -> d.finding().file(), d -> "");
+    var identified = result.detections().stream().filter(d -> d.identifier() != null).toList();
     for (var finding : response.findings()) {
-      if (duplicatesDetection(finding, detectionsByFile)) {
+      if (duplicatesDetection(finding, detectionsByFile)
+          || documentsIdentifiedSecret(finding, identified)) {
         duplicates++;
       } else {
         kept.add(scrub(finding, scrubber));
@@ -539,7 +564,8 @@ public class SecurityScan {
                 hit.rule(),
                 secretFinding(
                     filename, line.number(), hit, contentFingerprint(hit.rule(), flagged)),
-                legacyContentFingerprint(hit.rule(), flagged)));
+                legacyContentFingerprint(hit.rule(), flagged),
+                identifierOf(hit)));
         if (hit.rule() == SecurityRule.PRIVATE_KEY) {
           addPemMaterial(lines, i, redactions);
         } else {
@@ -1023,6 +1049,7 @@ public class SecurityScan {
       IDENTITY_COMPARISONS.incrementAndGet();
       if (nearbySameDefect(finding, scanned, titleWords, detection.rule())
           || sameLineSecret(finding, scanned, titleWords, detection.rule())
+          || namesSameSecret(finding, detection, titleWords)
           || nearbyIacDefect(finding, scanned, titleWords, detection.rule())) {
         return true;
       }
@@ -1048,6 +1075,128 @@ public class SecurityScan {
     return rule.category() == SecurityRule.Category.SECRET
         && finding.line() == scanned.line()
         && topicWords(titleWords, rule) >= 1;
+  }
+
+  /**
+   * Whether a model finding in the detection's file reports the same leaked secret by the name it
+   * is assigned to, at any distance (#1072): the model raises the hard-coded fallback on the line
+   * that uses it ({@code env.getOrDefault("SCHEDULER_API_TOKEN", SCHEDULER_API_TOKEN)}), well
+   * beyond the line tolerance, and the same credential was counted twice. The finding must make a
+   * secret claim in its title (one of the rule's words, as on the matched line), name the
+   * detection's {@linkplain Detection#identifier identifier} in its title, description or quoted
+   * line, and have a title that names no other credential key, so a finding about another key (even
+   * one that names both), or about something else on the use-site line ("No timeout on the catalog
+   * request"), is kept.
+   */
+  private static boolean namesSameSecret(
+      ReviewResponse.Finding finding, Detection detection, Set<String> titleWords) {
+    var identifier = detection.identifier();
+    return identifier != null
+        && topicWords(titleWords, detection.rule()) >= 1
+        && names(findingText(finding), identifier)
+        && !namesOtherCredentialKey(finding.title(), identifier);
+  }
+
+  /**
+   * Whether a model finding in a documentation or configuration file of the pull request ({@link
+   * ReviewDimensionRouter#kindOf}) reports a secret the scan raised in another file (#1072): its
+   * text names the detection's {@linkplain Detection#identifier identifier}, the constant that
+   * holds the literal, and uses one of the rule's words other than {@link #DECLARATION_WORDS}. A
+   * doc row that contradicts the hard-coded fallback ("Documented default of 'none' for
+   * HOLDS_CATALOG_TOKEN contradicts the code", naming {@code CatalogApiToken}) is the same leak
+   * seen from the docs, and is fixed by removing the literal. The claim is read from the
+   * description too, because a doc file has no use-site line on which another defect could sit.
+   * Only the detections that carry an identifier are read, so the cost is nil when there are none.
+   */
+  private static boolean documentsIdentifiedSecret(
+      ReviewResponse.Finding finding, List<Detection> identified) {
+    if (identified.isEmpty() || finding.file() == null) {
+      return false;
+    }
+    var kind = ReviewDimensionRouter.kindOf(finding.file());
+    if (kind != ReviewDimensionRouter.FileKind.DOCUMENTATION
+        && kind != ReviewDimensionRouter.FileKind.CONFIGURATION) {
+      return false;
+    }
+    var text = findingText(finding);
+    var claim = words(text);
+    claim.removeAll(DECLARATION_WORDS);
+    for (var detection : identified) {
+      IDENTITY_COMPARISONS.incrementAndGet();
+      if (!FilePaths.same(finding.file(), detection.finding().file())
+          && topicWords(claim, detection.rule()) >= 1
+          && names(text, detection.identifier())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** A finding's title, description and quoted line, the text that can name an identifier. */
+  private static String findingText(ReviewResponse.Finding finding) {
+    return Stream.of(finding.title(), finding.description(), finding.suggestionOld())
+        .filter(Objects::nonNull)
+        .collect(Collectors.joining("\n"));
+  }
+
+  /**
+   * Whether {@code text} names {@code identifier} as a whole identifier, case and all: {@code
+   * apiToken} is not named by {@code paymentApiToken} or {@code apiTokens}.
+   */
+  static boolean names(String text, String identifier) {
+    if (text == null) {
+      return false;
+    }
+    for (int at = text.indexOf(identifier); at >= 0; at = text.indexOf(identifier, at + 1)) {
+      int end = at + identifier.length();
+      if ((at == 0 || !isIdentifierChar(text.charAt(at - 1)))
+          && (end == text.length() || !isIdentifierChar(text.charAt(end)))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean isIdentifierChar(char c) {
+    return Character.isLetterOrDigit(c) || c == '_';
+  }
+
+  /**
+   * Whether a title names a distinctive credential-named key ({@link #distinctive}, {@link
+   * SecretScanner#namesCredential}) other than {@code identifier}: such a finding is about that
+   * key, not the scanned one. The title is never null here: it made the secret claim.
+   */
+  private static boolean namesOtherCredentialKey(String title, String identifier) {
+    return Arrays.stream(title.split("[^A-Za-z0-9_]+"))
+        .anyMatch(
+            token ->
+                !token.equals(identifier)
+                    && distinctive(token)
+                    && SecretScanner.namesCredential(token));
+  }
+
+  /**
+   * The name a generic secret's literal is assigned to, as a model's text would name it: the last
+   * segment of a dotted key ({@code config.apiToken} is named {@code apiToken}), and only when it
+   * is {@linkplain #distinctive distinctive}. A bare {@code password} or {@code key} is ordinary
+   * prose, so naming it says nothing about which secret a finding means; the line tolerance still
+   * applies to those. {@code null} for every other rule: a known format has no name of its own.
+   */
+  static String identifierOf(SecretScanner.Hit hit) {
+    if (hit.rule() != SecurityRule.GENERIC_SECRET || hit.keyName() == null) {
+      return null;
+    }
+    var name = hit.keyName().substring(hit.keyName().lastIndexOf('.') + 1);
+    return distinctive(name) ? name : null;
+  }
+
+  /**
+   * Whether a name reads as a program identifier rather than a word: snake case with a letter on
+   * each side of an underscore ({@code SCHEDULER_API_TOKEN}, {@code api_key}), or camel case
+   * ({@code apiToken}, {@code CatalogApiToken}).
+   */
+  static boolean distinctive(String name) {
+    return SNAKE_CASE.matcher(name).find() || CAMEL_CASE.matcher(name).find();
   }
 
   /**

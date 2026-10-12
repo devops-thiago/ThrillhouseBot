@@ -132,7 +132,10 @@ same diff.
   confidence (a match settles whether the pattern is on the line, so no scan finding carries the
   hedge, #921), at the risk the README's rule tables state. A model finding near a detection that
   names the same defect collapses into the scan's (`SecurityScan.duplicatesDetection`; for IaC,
-  `SecurityRule.defectWords`). Keep new deterministic findings on that side of the verifier.
+  `SecurityRule.defectWords`). A generic secret assigned to a distinctive name is also matched by
+  that name at any distance, in its own file and from a doc or config file
+  (`SecurityScan.namesSameSecret`, `documentsIdentifiedSecret`, #1072). Keep new deterministic
+  findings on that side of the verifier.
 - **`finish` is the one place every lane converges.** The single call, a salvaged cut, the
   batches and the summary-only lane all pass through `FindingPipeline.finish` before the summary
   call and persistence. A filter that must hold for every published finding (the scan merge, the
