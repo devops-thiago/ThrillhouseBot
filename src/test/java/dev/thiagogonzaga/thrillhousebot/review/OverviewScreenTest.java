@@ -321,6 +321,9 @@ class OverviewScreenTest {
         "Adds python-3 support. Runs phase-2 of the migration. Speeds the stage-1 build."
             + " level-3 headings render too.";
     assertEquals(plain, OverviewScreen.withoutInventedTickets(plain, "Title: build"));
+    assertEquals(
+        "abcd-12 builds first.",
+        OverviewScreen.withoutInventedTickets("abcd-12 builds first.", ""));
     // A tracker word, a leading #, or the prefix in capitals elsewhere makes one a key.
     assertEquals(
         "Ships it.",

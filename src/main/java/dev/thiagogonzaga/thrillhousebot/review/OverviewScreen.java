@@ -634,15 +634,17 @@ final class OverviewScreen {
       return true;
     }
     var prefix = text.substring(0, text.indexOf('-')).toUpperCase(Locale.ROOT);
-    return TRACKER_CUE.matcher(sentence).find()
+    return Arrays.stream(NON_WORD.split(sentence.toLowerCase(Locale.ROOT)))
+            .anyMatch(TRACKER_CUES::contains)
         || (key.start() > 0 && sentence.charAt(key.start() - 1) == '#')
         || paragraph.contains(prefix + "-");
   }
 
-  /** A word that names a tracker, so a lower-case key beside it is a ticket key. */
-  private static final Pattern TRACKER_CUE =
-      Pattern.compile(
-          "(?i)\\b(?:tickets?|issues?|stor(?:y|ies)|bugs?|jira|cards?|tasks?|epics?)\\b");
+  /** Words that name a tracker, so a lower-case key beside them is a ticket key. */
+  private static final Set<String> TRACKER_CUES =
+      Set.of(
+          "ticket", "tickets", "issue", "issues", "story", "stories", "bug", "bugs", "jira", "card",
+          "cards", "task", "tasks", "epic", "epics");
 
   /** Whether a tracker-shaped {@code key} is a standard's name and number ("HTTP-404"). */
   private static boolean isStandardCode(String key) {
@@ -692,7 +694,7 @@ final class OverviewScreen {
   /**
    * {@code purpose} without the sentences naming a ticket key {@code known} does not hold. A key in
    * capitals or capitalised ({@code ABCD-12}, {@code Proj-7}) is always one; a lower-case one
-   * ({@code abcd-12}) only when the sentence names a tracker ({@link #TRACKER_CUE}), a {@code #}
+   * ({@code abcd-12}) only when the sentence names a tracker ({@link #TRACKER_CUES}), a {@code #}
    * leads it, or the paragraph writes its prefix in capitals elsewhere, since "python-3", "phase-2"
    * and "stage-1" are ordinary words.
    */
