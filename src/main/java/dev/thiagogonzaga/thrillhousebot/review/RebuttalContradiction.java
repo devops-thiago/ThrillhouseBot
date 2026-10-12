@@ -19,7 +19,9 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -68,6 +70,9 @@ final class RebuttalContradiction {
 
   /** Max characters of the reply sentence / code line quoted back in the status note. */
   private static final int QUOTE_LIMIT = 120;
+
+  /** The header line that opens a file's section of a unified diff. */
+  private static final String DIFF_GIT = "diff --git ";
 
   /** The prior finding must itself be about concurrency for this family to apply. */
   private static final Pattern CONCURRENCY_FINDING =
@@ -241,18 +246,392 @@ final class RebuttalContradiction {
   }
 
   /**
+   * Text in the reviewed code that states the code runs concurrently, comments included: the
+   * instance "shared by every net/http goroutine" or "shared across goroutines", a handler "called
+   * from multiple threads" or "used by all goroutines", "concurrent requests", "safe for concurrent
+   * use". Not proof the way a dispatch construct is, so it never overrules a decline on its own; it
+   * is what the note of a held decline cites instead of claiming the diff shows nothing (#963).
+   * Every quantifier is bounded.
+   */
+  private static final List<Pattern> STATED_CONCURRENCY =
+      List.of(
+          ci(
+              "shared (?:by|across|between|among) (?:(?:every|all|each|multiple|many|several"
+                  + "|concurrent)\\b.{0,40}?\\b(?:goroutines?|threads?|requests?|handlers?"
+                  + "|workers?|callers?)|goroutines|threads|requests|handlers|workers|callers)\\b"),
+          ci(
+              "\\b(?:called|invoked|accessed|used|runs?) (?:concurrently|in parallel|(?:from|by)"
+                  + " (?:multiple|many|several|every|each|all|concurrent)"
+                  + " (?:goroutines?|threads?|requests?|handlers?|workers?))"),
+          ci(
+              "\\bconcurrent"
+                  + " (?:requests?|goroutines?|threads?|handlers?|callers?|access|use)\\b"));
+
+  /**
+   * The note of a decline held by {@link #unconfirmedPremise} (#963): when the reviewed code of the
+   * finding's own file states that the path runs concurrently ({@link #STATED_CONCURRENCY}), the
+   * note quotes the sentence that says so, since claiming the diff cannot confirm it would be
+   * wrong; otherwise {@link #unconfirmedPremiseNote}. A statement in another file says nothing
+   * about this path, and one the text denies ({@link #denies} before it) is not quoted as the
+   * opposite of what it says. A comment wrapped across lines is read whole ({@link #statements}).
+   */
+  static String heldPremiseNote(String claim, String reviewedCode, String file) {
+    for (var statement : statements(rightSideLines(reviewedCode, file))) {
+      var at = concurrencyStatedAt(statement);
+      if (at >= 0) {
+        return NOTE_LEAD_IN
+            + REPLY_ARGUES
+            + claim
+            + "\", but the reviewed code says this path runs concurrently — \""
+            + sentenceAround(statement, at)
+            + "\". Reply again to keep the decline.";
+      }
+    }
+    return unconfirmedPremiseNote(claim);
+  }
+
+  /** The start of every held decline's note: the claim the reply makes is quoted after it. */
+  private static final String REPLY_ARGUES = " the reply argues \"";
+
+  /**
+   * Where {@code text} states concurrency, or {@code -1}: a {@link #STATED_CONCURRENCY} match that
+   * a denial word does not govern ({@link #denies}: one in the same clause, at most {@value
+   * #DENIAL_WORDS} words before it). Everything before the match is read, so the clause alone
+   * decides how far back a denial reaches. A guard word earlier in the sentence ("the lock guards
+   * every field, which is shared by every request goroutine") governs something else.
+   */
+  private static int concurrencyStatedAt(String text) {
+    for (var pattern : STATED_CONCURRENCY) {
+      var matcher = pattern.matcher(text);
+      while (matcher.find()) {
+        if (!denies(text.substring(0, matcher.start()))) {
+          return matcher.start();
+        }
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * The text {@link #heldPremiseNote} reads for a statement: a run of whole-line comments joined
+   * into one, each continuation's comment marker dropped, so a sentence wrapped across comment
+   * lines ("shared by every request" / "goroutine in the server") is read whole, a denial on the
+   * line before included; every other line on its own.
+   */
+  private static List<String> statements(List<String> lines) {
+    var statements = new ArrayList<String>();
+    StringBuilder comment = null;
+    for (var line : lines) {
+      var markerEnd = commentMarkerEnd(line);
+      if (markerEnd < 0) {
+        if (comment != null) {
+          statements.add(comment.toString());
+          comment = null;
+        }
+        statements.add(line);
+      } else if (comment == null) {
+        comment = new StringBuilder(line.strip());
+      } else {
+        comment.append(' ').append(line.substring(markerEnd).strip());
+      }
+    }
+    if (comment != null) {
+      statements.add(comment.toString());
+    }
+    return statements;
+  }
+
+  /** The most horizontal space read before a whole-line comment's marker. */
+  private static final int MAX_COMMENT_INDENT = 40;
+
+  /**
+   * Where the marker that opens a whole-line comment ends in {@code line}, or {@code -1} when the
+   * line is not one. The marker sits after at most {@value #MAX_COMMENT_INDENT} characters of
+   * horizontal space: {@code //}, a block comment's opening or {@code ;}, each with the rest of its
+   * run; or {@code #}, {@code *}, a block comment's close or {@code --} followed by a space or the
+   * end of the line, so a code line such as {@code *p = q;}, {@code #include} or a {@code ---} rule
+   * is not read as a comment. A scan rather than one expression keeps it linear and readable.
+   */
+  static int commentMarkerEnd(String line) {
+    var at = 0;
+    while (at < line.length() && at < MAX_COMMENT_INDENT && isHorizontalSpace(line.charAt(at))) {
+      at++;
+    }
+    if (line.startsWith("//", at) || line.startsWith("/*", at)) {
+      return runEnd(line, at + 1, line.charAt(at + 1));
+    }
+    if (line.startsWith(";", at)) {
+      return runEnd(line, at, ';');
+    }
+    int end;
+    if (line.startsWith("#", at)) {
+      end = runEnd(line, at, '#');
+    } else if (line.startsWith("*", at)) {
+      end = runEnd(line, at, '*');
+      end = line.startsWith("/", end) ? end + 1 : end;
+    } else if (line.startsWith("--", at)) {
+      end = at + 2;
+    } else {
+      return -1;
+    }
+    return end == line.length() || isHorizontalSpace(line.charAt(end)) ? end : -1;
+  }
+
+  /** The end of the run of {@code c} that starts at {@code from}. */
+  private static int runEnd(String line, int from, char c) {
+    var end = from;
+    while (end < line.length() && line.charAt(end) == c) {
+      end++;
+    }
+    return end;
+  }
+
+  private static boolean isHorizontalSpace(char c) {
+    return c == '\t' || Character.isSpaceChar(c);
+  }
+
+  /** How many words a negator may sit before the statement it denies, within one clause. */
+  private static final int DENIAL_WORDS = 6;
+
+  /** The widest gap, in characters, read between two words of one clause. */
+  private static final int MAX_GAP = 16;
+
+  /** Words that deny what follows them in their clause ({@link #denies}). */
+  private static final Set<String> NEGATORS =
+      Set.of(
+          "not", "never", "no", "nor", "none", "nothing", "nobody", "neither", "without", "cannot",
+          "cant", "wont", "isnt");
+
+  /** Verbs that refuse the statement's subject in its own clause ({@link #denies}). */
+  private static final Set<String> REFUSALS =
+      Set.of(
+          "reject",
+          "rejects",
+          "prevent",
+          "prevents",
+          "avoid",
+          "avoids",
+          "forbid",
+          "forbids",
+          "disallow",
+          "disallows",
+          "block",
+          "blocks",
+          "prohibit",
+          "prohibits",
+          "exclude",
+          "excludes",
+          "preclude",
+          "precludes",
+          "refuse",
+          "refuses",
+          "disable",
+          "disables");
+
+  /** Words that open a new clause, so a negator before them governs another statement. */
+  private static final Set<String> CLAUSE_OPENERS =
+      Set.of(
+          "and",
+          "but",
+          "or",
+          "which",
+          "that",
+          "while",
+          "whereas",
+          "because",
+          "since",
+          "so",
+          "though",
+          "although",
+          "yet",
+          "unless",
+          "except");
+
+  /**
+   * Words that open a subordinate clause: a refusing verb before one has an object of its own
+   * ("prevents a deadlock when called from multiple threads", "blocks until concurrent requests
+   * drain"), so it refuses that object, not the statement after them.
+   */
+  private static final Set<String> SUBORDINATORS =
+      Set.of("when", "whenever", "if", "where", "until", "after", "before", "during", "as", "once");
+
+  /** Words that turn a negator right before them into an affirmation: "not only shared …". */
+  private static final Set<String> AFFIRMING = Set.of("only", "just", "merely");
+
+  /**
+   * Whether the text before a {@link #STATED_CONCURRENCY} statement turns it into a denial: a
+   * negator in the same clause, at most {@value #DENIAL_WORDS} words before it with no clause
+   * punctuation (a comma sets off an aside and does not count) or clause opener ("and", "but",
+   * "which", "because" …) between ("not shared by every goroutine", "is not ever really called from
+   * multiple threads", "nothing in it is shared across goroutines", any n't contraction: "doesn't
+   * support concurrent use"), but not "not only" or "not just", which affirm; or a verb that
+   * refuses the statement's subject anywhere in the same clause, whatever words sit between
+   * ("rejects concurrent requests", "rejects all incoming concurrent requests", "prevents any
+   * concurrent access"), unless a subordinating word ({@link #SUBORDINATORS}) opens a clause of its
+   * own between them: "prevents a deadlock when called from multiple threads" refuses the deadlock,
+   * not the statement. Lean to denying: a statement not quoted leaves the note saying the code does
+   * not confirm concurrency, while a denial quoted as concurrency tells the maintainer the opposite
+   * of what the code says. A verb that only protects shared state ("the lock guards every field
+   * shared by every request goroutine", "serializes concurrent requests") still says the path is
+   * reached concurrently, so it denies nothing. A gap is any horizontal space or hyphen, a
+   * non-breaking space included, and a word counts as one whatever its length (a long identifier).
+   * The words are read back from the statement, so the scan is linear in the clause.
+   */
+  private static boolean denies(String before) {
+    var words = wordsBefore(before);
+    var subordinate = false;
+    for (var i = 0; i < words.size(); i++) {
+      var word = words.get(i);
+      if (i <= DENIAL_WORDS && isNegator(word)) {
+        return i == 0 || !AFFIRMING.contains(words.get(i - 1));
+      }
+      if (CLAUSE_OPENERS.contains(word)) {
+        return false;
+      }
+      if (!subordinate && REFUSALS.contains(word)) {
+        return true;
+      }
+      subordinate = subordinate || SUBORDINATORS.contains(word);
+    }
+    return false;
+  }
+
+  /**
+   * The words of the statement's clause before it, lowercased, nearest first: read back until a gap
+   * wider than {@value #MAX_GAP} characters, or anything that is neither a gap nor a word character
+   * (clause punctuation other than a comma, the start of the text), ends the clause. The whole
+   * clause is read, so a refusing verb anywhere in it is seen; {@link #denies} bounds the negator's
+   * reach itself.
+   */
+  private static List<String> wordsBefore(String before) {
+    var words = new ArrayList<String>();
+    var end = before.length();
+    while (true) {
+      var wordEnd = end;
+      while (wordEnd > 0 && isGap(before.charAt(wordEnd - 1))) {
+        wordEnd--;
+      }
+      var start = wordEnd;
+      while (start > 0 && isWordChar(before.charAt(start - 1))) {
+        start--;
+      }
+      if (end - wordEnd > MAX_GAP || start == wordEnd) {
+        return words;
+      }
+      words.add(before.substring(start, wordEnd).toLowerCase(Locale.ROOT));
+      end = start;
+    }
+  }
+
+  private static boolean isNegator(String word) {
+    return NEGATORS.contains(word)
+        || (word.length() <= 11 && (word.endsWith("n't") || word.endsWith("n’t")));
+  }
+
+  /**
+   * Whether {@code c} separates two words of one clause: horizontal space, a hyphen, or a comma,
+   * which sets off an aside ("not, in practice, called from multiple threads") rather than ending
+   * the clause, so a negator before it still governs the statement.
+   */
+  private static boolean isGap(char c) {
+    return c == '-' || c == ',' || c == ' ' || c == '\t' || Character.isSpaceChar(c);
+  }
+
+  private static boolean isWordChar(char c) {
+    return Character.isLetterOrDigit(c) || c == '_' || c == '\'' || c == '’';
+  }
+
+  /**
+   * The note of a finding the review still reports open after a maintainer answered it on its
+   * thread (#963), the model's own reason under {@link #REPLY_LEAD_IN}, so the review body explains
+   * why the reply did not settle it as the deterministic re-check's notes do. Nothing here reads
+   * whether the reply declined the finding or acknowledged it, so the note does not say it was a
+   * decline: the hint to reply again is conditional on the reply having declined it.
+   *
+   * @param lone whether the thread carries a single maintainer reply, which the second one ends
+   */
+  static String unsettledReplyNote(String reason, boolean lone) {
+    return REPLY_LEAD_IN
+        + " "
+        + reason.strip()
+        + (lone ? " If the reply declines the finding, reply again to keep the decline." : "");
+  }
+
+  /**
+   * Lead-in of {@link #unsettledReplyNote}: a reply on the finding's thread was weighed and the
+   * finding stays open. The review body surfaces it beside {@link #NOTE_LEAD_IN} ({@link
+   * #explainsKeptFinding}).
+   */
+  static final String REPLY_LEAD_IN = "Reply on this finding's thread weighed, finding kept open:";
+
+  /**
+   * Whether {@code note} is one the review body shows as the reason a replied-on finding stays
+   * open: a re-checked decline ({@link #NOTE_LEAD_IN}) or a weighed reply ({@link #REPLY_LEAD_IN}).
+   */
+  static boolean explainsKeptFinding(String note) {
+    return note != null && (note.startsWith(NOTE_LEAD_IN) || note.startsWith(REPLY_LEAD_IN));
+  }
+
+  /**
+   * The added and context lines of the reviewed diff's section for {@code file}, removed lines left
+   * out, comments kept: the text a note may quote as what the code says. A section starts at a
+   * {@code diff --git} line or a {@code ### path} heading; lines before any section (a bare patch)
+   * count as the file's own.
+   */
+  private static List<String> rightSideLines(String reviewedCode, String file) {
+    var kept = new ArrayList<String>();
+    var inFile = true;
+    for (var line : reviewedCode.split("\n", -1)) {
+      if (isHeading(line)) {
+        inFile = headingPaths(line).contains(file);
+      } else if (inFile && (line.startsWith("+") || line.startsWith(" "))) {
+        kept.add(line.substring(1));
+      }
+    }
+    return kept;
+  }
+
+  /** Whether {@code line} opens a file's section: a {@code diff --git} line or a heading. */
+  private static boolean isHeading(String line) {
+    return line.startsWith(DIFF_GIT) || line.startsWith("### ");
+  }
+
+  /**
+   * The paths a section {@linkplain #isHeading heading} names, the one reading both {@link
+   * #rightSideLines} (which section is the finding's file) and {@link #rightSideCode} (which file's
+   * lexical profile applies) take: a {@code ### path (…)} heading's {@link #sectionPath}, or a
+   * {@code diff --git a/<old> b/<new>} line's old and new path, none when it is not that shape. A
+   * finding's file is its section's only by an exact path: {@code b/other/src/A.java} is another
+   * file than {@code src/A.java}, and the finding's path is the diff's own spelling (#1022).
+   */
+  private static List<String> headingPaths(String heading) {
+    if (heading.startsWith("### ")) {
+      return List.of(sectionPath(heading));
+    }
+    var paths = heading.substring(DIFF_GIT.length());
+    var split = paths.indexOf(" b/");
+    if (!paths.startsWith("a/") || split < 0) {
+      return List.of();
+    }
+    return List.of(paths.substring(2, split), paths.substring(split + 3));
+  }
+
+  /**
    * The status note of a decline held by {@link #unconfirmedPremise}: the claim, why it is not
-   * taken on faith, and how to keep the decline. Opens with {@link #NOTE_LEAD_IN}, so the review
-   * body carries it as it carries a contradiction's note.
+   * taken on faith, and how to keep the decline. It says nothing about what the reviewed code
+   * states: {@link #STATED_CONCURRENCY} recognizes common phrasings only, so a diff may state the
+   * concurrency in words it does not match, and the note must not then claim the code cannot
+   * confirm it. Opens with {@link #NOTE_LEAD_IN}, so the review body carries it as it carries a
+   * contradiction's note.
    */
   static String unconfirmedPremiseNote(String claim) {
     return NOTE_LEAD_IN
-        + " the reply argues \""
+        + REPLY_ARGUES
         + claim
         + "\", but no review has weighed that against this finding, which an earlier review"
-        + " raised, and the reviewed code cannot confirm it: what runs a path concurrently (a server"
-        + " that handles each request on its own thread or goroutine, an executor in a file outside"
-        + " the diff) is often not in the diff. Reply again to keep the decline.";
+        + " raised, so it is not taken on faith: what runs a path concurrently (a server that"
+        + " handles each request on its own thread or goroutine, an executor in a file outside the"
+        + " diff) is often not in the diff. Reply again to keep the decline.";
   }
 
   /**
@@ -332,10 +711,10 @@ final class RebuttalContradiction {
       if (!body) {
         scanner.reset();
       }
-      if (line.startsWith("diff --git ")) {
-        scanner.fileNamed(line);
-      } else if (line.startsWith("### ")) {
-        scanner.fileNamed(sectionPath(line));
+      if (isHeading(line)) {
+        // The new path names the file whose profile applies; a malformed line is read whole.
+        var paths = headingPaths(line);
+        scanner.fileNamed(paths.isEmpty() ? line : paths.getLast());
       }
       kept.add(scanner.scanLine(added ? line.substring(1) : line));
       if (!body) {
@@ -387,7 +766,7 @@ final class RebuttalContradiction {
     /** One-line status note naming the contradiction, for {@code previous_findings_status}. */
     String note() {
       return NOTE_LEAD_IN
-          + " the reply argues \""
+          + REPLY_ARGUES
           + claim
           + "\", but the reviewed code dispatches this path concurrently — \""
           + evidence

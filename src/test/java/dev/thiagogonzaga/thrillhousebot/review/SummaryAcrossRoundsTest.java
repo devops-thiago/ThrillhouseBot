@@ -640,6 +640,16 @@ class SummaryAcrossRoundsTest {
     assertOpenCount(edited, 4);
     assertTrue(section(edited, "### Key Findings").contains(RACE.title()), edited);
     assertEquals(ReviewState.REQUEST_CHANGES, result.reviewState());
+    // #963: the status the review body renders under the reply lead-in carries the model's reason,
+    // as the backstop's does (ReviewPublisher shows every unresolved note that opens with either).
+    assertTrue(
+        result.previousStatuses().stream()
+            .anyMatch(
+                s ->
+                    "unresolved".equals(s.status())
+                        && s.note().startsWith(RebuttalContradiction.REPLY_LEAD_IN)
+                        && s.note().contains("the decline is wrong")),
+        result.previousStatuses().toString());
   }
 
   /**
