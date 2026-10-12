@@ -589,6 +589,27 @@ class LinkedIssueCitationsTest {
   }
 
   @Test
+  void aQuoteAttributedToTheLinkedIssuesIsHeldToThemButNotRenamed() {
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "high",
+                        "high",
+                        "Annual plans charged monthly",
+                        "Plans are billed every month, and the linked issues state 'refunds are"
+                            + " instant'. The linked issues ask for 'Annual-plan subscribers are"
+                            + " charged only in their renewal month'.")),
+                TWO_ISSUES));
+
+    assertEquals(
+        "Plans are billed every month. The linked issues ask for 'Annual-plan subscribers are"
+            + " charged only in their renewal month'.",
+        held.description());
+  }
+
+  @Test
   void aMentionAlreadyNamingTheNumberIsLeftAlone() {
     assertEquals(
         "the linked issue #228 and the linked issue (#228)",

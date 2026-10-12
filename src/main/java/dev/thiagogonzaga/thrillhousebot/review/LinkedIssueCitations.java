@@ -66,8 +66,11 @@ final class LinkedIssueCitations {
   private static final Pattern THE_LINKED_ISSUE =
       Pattern.compile("(?i)\\blinked\\s++issue\\b(?!\\s*+\\(?#\\d)");
 
-  /** The linked issue named as a source: what a quote after it is attributed to. */
-  private static final Pattern LINKED_ISSUE = Pattern.compile("(?i)\\blinked\\s++issue\\b(?!s)");
+  /**
+   * The linked issue or issues named as a source: what a quote after it is attributed to. The
+   * plural is a citation too ("the linked issues state '…'"); it is only never renamed.
+   */
+  private static final Pattern LINKED_ISSUE = Pattern.compile("(?i)\\blinked\\s++issues?+\\b");
 
   /** An acceptance criterion or an issue's criterion named: "acceptance criterion", … */
   private static final Pattern ACCEPTANCE_CRITERION =
