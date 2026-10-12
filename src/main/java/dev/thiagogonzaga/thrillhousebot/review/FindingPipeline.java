@@ -617,9 +617,30 @@ public class FindingPipeline {
       // for, so the review keeps their findings under the counts-only summary instead of failing.
       return failedSummary(session, refined, plan, ctx, e, carry);
     }
+    // #964: file summaries mapped onto the changed files and checked against them first, so an
+    // answer the screen empties still takes the previous round's overview below.
+    var screened =
+        OverviewScreen.screen(
+            summaryResponse.summary(),
+            ctx.files(),
+            Objects.requireNonNullElse(inputs.prContext(), "")
+                + "\n"
+                + Objects.requireNonNullElse(inputs.linkedIssues(), "")
+                + "\n"
+                + findingsText(refined));
     // #944: an answer with no overview on the head the previous round reviewed keeps that round's.
-    return persistWithSummary(
-        session, refined, PriorOverviewCarryover.fill(summaryResponse.summary(), ctx), carry);
+    return persistWithSummary(session, refined, PriorOverviewCarryover.fill(screened, ctx), carry);
+  }
+
+  /** The titles and descriptions of {@code response}'s findings, one per line. */
+  private static String findingsText(ReviewResponse response) {
+    return response.findings().stream()
+        .map(
+            f ->
+                Objects.requireNonNullElse(f.title(), "")
+                    + " "
+                    + Objects.requireNonNullElse(f.description(), ""))
+        .collect(Collectors.joining("\n"));
   }
 
   /** The inputs with the carried gaps' request appended to the summary call's guidance. */

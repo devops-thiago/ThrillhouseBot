@@ -101,8 +101,9 @@ final class PriorOverviewCarryover {
 
   /**
    * {@code current} plus the previous round's summary for each file {@code current} has no
-   * non-blank summary for, and the previous diagram when {@code current} has none; {@code current}
-   * itself when it lacks neither.
+   * non-blank summary for, the previous purpose paragraph when {@code current}'s is blank (the
+   * {@link OverviewScreen} may have taken every sentence out), and the previous diagram when {@code
+   * current} has none; {@code current} itself when it lacks none of them.
    */
   private static ReviewResponse.Summary supplemented(
       ReviewResponse.Summary current, ReviewResponse.Summary prior) {
@@ -117,16 +118,17 @@ final class PriorOverviewCarryover {
     files.addAll(earlier);
     var added = earlier.size();
     var keepDiagram = isBlank(current.walkthroughDiagram()) && !isBlank(prior.walkthroughDiagram());
-    if (added == 0 && !keepDiagram) {
+    var keepPurpose = isBlank(current.prPurpose()) && !isBlank(prior.prPurpose());
+    if (added == 0 && !keepDiagram && !keepPurpose) {
       return current;
     }
     Log.infof(
-        "Summary on the head the previous round reviewed kept %d earlier file summary(ies) and %d"
-            + " earlier diagram(s)",
-        added, keepDiagram ? 1 : 0);
+        "Summary on the head the previous round reviewed kept %d earlier file summary(ies), %d"
+            + " earlier diagram(s) and %d earlier purpose paragraph(s)",
+        added, keepDiagram ? 1 : 0, keepPurpose ? 1 : 0);
     return withOverview(
         current,
-        current.prPurpose(),
+        keepPurpose ? prior.prPurpose() : current.prPurpose(),
         files,
         keepDiagram ? prior.walkthroughDiagram() : current.walkthroughDiagram());
   }

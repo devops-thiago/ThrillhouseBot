@@ -682,6 +682,23 @@ class PrReviewPromptsContentTest {
   }
 
   @Test
+  void summaryPromptKeepsFileSummariesToWhatTheMaterialShows() {
+    String sys = PrReviewPrompts.SUMMARY_SYSTEM;
+    assertContains(
+        sys,
+        "Never name a setting, check, command or count for a file unless a",
+        "file summaries must not invent settings, checks or counts (#964)");
+    assertContains(
+        sys,
+        "never write about the review itself",
+        "file summaries must describe the file, not the findings (#964)");
+    assertContains(
+        sys,
+        "or ticket only as the PR title, description or a linked issue writes it",
+        "pr_purpose must not invent a ticket key (#964)");
+  }
+
+  @Test
   void summaryPromptTreatsTheDescriptionAsClaimsNotFacts() {
     String sys = PrReviewPrompts.SUMMARY_SYSTEM;
     assertContains(
