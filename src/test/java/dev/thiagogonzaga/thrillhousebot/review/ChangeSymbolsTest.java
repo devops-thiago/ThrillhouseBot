@@ -280,8 +280,9 @@ class ChangeSymbolsTest {
 
   @Test
   void aQuotedDelimiterOfAnyCaseOpensAHeredocWhereAShellCommandGoesOn() {
-    // After the closing quote a shell line ends, redirects, pipes, chains or comments; code that
-    // inserts a quoted string into a stream goes on with ';', another '<<' or anything else.
+    // After the closing quote a shell line may go on with anything: nothing, a redirection, a pipe,
+    // arguments, a comment. Code that inserts a quoted string goes on with ';', ')', ',', another
+    // '<<', a '.' call, or ends its line with ';'.
     var patch =
         """
         @@ -0,0 +1,30 @@
@@ -303,16 +304,31 @@ class ChangeSymbolsTest {
         +cat << 'w' # generated
         +def in_commented():
         +w
+        +kubectl apply -f - <<"END" --dry-run
+        +def in_arguments():
+        +END
+        +ssh host bash -s <<'eof' arg
+        +def in_trailing_argument():
+        +eof
         +out << "end";
         +def after_insertion():
         +out << 'x' << y;
         +def after_chained_insertion():
         +out << "n" 0;
         +def after_digit():
+        +log(out << "s")
+        +def after_call():
+        +list << "x".freeze
+        +def after_method_call():
         """;
 
     assertEquals(
-        List.of("after_insertion", "after_chained_insertion", "after_digit"),
+        List.of(
+            "after_insertion",
+            "after_chained_insertion",
+            "after_digit",
+            "after_call",
+            "after_method_call"),
         ChangeSymbols.declaredNames(patch));
   }
 }
