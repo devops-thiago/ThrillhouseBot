@@ -188,8 +188,37 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   /** A {@code file:line} or {@code Class.method:line} position ending a test's token. */
   private static final Pattern LINE_POSITION = Pattern.compile(":\\d");
 
-  /** A failing test the job log names: its name as read, and as the padded words matched on. */
-  private record FailingTest(String name, String words) {}
+  /**
+   * A failing test the job log names: its name as read, and as the padded words a phrase-shaped
+   * name is matched on. A name written as one identifier ({@code test_validates_the_input}, {@code
+   * topCandidatesReturnsAtMostLimit}) is matched only as that identifier, a whole token of the
+   * finding's lower-cased text: its words are ordinary prose ("validates the input"), which a
+   * finding about something else can say.
+   */
+  private record FailingTest(String name, String words) {
+
+    boolean namedIn(String raw, String text) {
+      if (name.indexOf(' ') >= 0) {
+        return text.contains(words);
+      }
+      String identifier = name.toLowerCase(Locale.ROOT);
+      for (int at = raw.indexOf(identifier); at >= 0; at = raw.indexOf(identifier, at + 1)) {
+        int end = at + identifier.length();
+        if (!identifierChar(raw, at - 1) && !identifierChar(raw, end)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    private static boolean identifierChar(String text, int at) {
+      if (at < 0 || at >= text.length()) {
+        return false;
+      }
+      char c = text.charAt(at);
+      return Character.isLetterOrDigit(c) || c == '_';
+    }
+  }
 
   /**
    * Each failing check: its name as rendered, as the padded words a finding is matched on, and the
@@ -551,7 +580,7 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
         cited.add(new Citation(check, null));
       }
       check.tests().stream()
-          .filter(test -> text.contains(test.words()))
+          .filter(test -> test.namedIn(raw, text))
           .forEach(test -> cited.add(new Citation(check, test)));
     }
     return cited;

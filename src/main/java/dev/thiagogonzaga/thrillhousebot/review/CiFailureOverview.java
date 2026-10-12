@@ -69,8 +69,10 @@ final class CiFailureOverview {
     var assessment = withoutCiVerdicts(summary.overallAssessment());
     var purpose = withoutCiVerdicts(summary.prPurpose());
     var sentences = citations.overviewSentences(open);
-    if (purpose != null && !purpose.isBlank() && !sentences.isEmpty()) {
-      purpose = purpose.strip() + " " + sentences;
+    // A purpose the call wrote gets the sentences, even one that held only its own CI verdict.
+    var wrote = summary.prPurpose() != null && !summary.prPurpose().isBlank();
+    if (wrote && !sentences.isEmpty()) {
+      purpose = (purpose.strip() + " " + sentences).strip();
     }
     if (Objects.equals(assessment, summary.overallAssessment())
         && Objects.equals(purpose, summary.prPurpose())) {

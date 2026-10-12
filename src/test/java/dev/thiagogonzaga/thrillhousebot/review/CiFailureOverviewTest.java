@@ -116,6 +116,26 @@ class CiFailureOverviewTest {
     assertNull(CiFailureOverview.apply(null, CiFailureCitations.parse(SECTION), List.of()));
   }
 
+  /** A purpose that held only the call's CI verdict is replaced by the computed sentence. */
+  @Test
+  void aPurposeOfOnlyTheCallsVerdictBecomesTheComputedSentence() {
+    var onlyVerdict =
+        "CI on this commit fails the check 'test', which no finding among the three verified above"
+            + " explains.";
+
+    var applied =
+        CiFailureOverview.apply(
+            summary("Request changes.", onlyVerdict),
+            CiFailureCitations.parse(SECTION),
+            List.of(SHORTLIST));
+
+    assertEquals(
+        "CI on this commit fails the check \"test\" (failing test \"returns exactly `slots`"
+            + " applications when enough are eligible\"), which the finding \"Shortlist returns"
+            + " slots-1 items, violating the 25-slot contract\" explains.",
+        applied.prPurpose());
+  }
+
   /** A summary with no purpose paragraph gets no lone CI sentence. */
   @Test
   void aBlankPurposeGetsNoSentence() {

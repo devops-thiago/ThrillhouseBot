@@ -334,6 +334,36 @@ class CiFailureCitationsTest {
         citations.overviewSentences(List.of()));
   }
 
+  /**
+   * A test named as one identifier is cited by that identifier, not by its words in prose: a
+   * finding that says "validates the input" names no pytest test_validates_the_input.
+   */
+  @Test
+  void anIdentifierTestIsCitedOnlyAsTheIdentifier() {
+    var citations =
+        CiFailureCitations.parse(
+            """
+            ### test (conclusion: failure)
+            Failing tests named in the job log:
+            - FAILED tests/test_config.py::test_validates_the_input - AssertionError: x
+            """);
+
+    assertFalse(
+        citations.cites(
+            described(
+                "The shared helper validates the input before parsing; the new path then fails on"
+                    + " blank rows.")));
+    assertFalse(citations.cites(described("my_test_validates_the_input_v2 fails on blank rows.")));
+    assertTrue(citations.cites(described("`test_validates_the_input` fails on blank rows.")));
+    assertFalse(citations.cites(described("xtest_validates_the_input fails on blank rows.")));
+    assertFalse(citations.cites(described("test_validates_the_input2 fails on blank rows.")));
+    assertTrue(citations.cites(described("Blank rows fail: test_validates_the_input")));
+    var titled =
+        new ReviewResponse.Finding(
+            "high", "low", "a.py", 3, "test_validates_the_input fails", null, null, null);
+    assertTrue(citations.cites(titled));
+  }
+
   /** Failing-test lines before any check heading belong to no check and are not read. */
   @Test
   void failingTestsOutsideACheckAreNotRead() {
