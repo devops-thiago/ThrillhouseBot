@@ -1089,6 +1089,8 @@ class PromptLabelScrubberTest {
           Among the accounts verified above, two are locked. | Among the accounts verified above, two are locked.
           CI fails the check 'test', which no finding among the many verified above explains. | CI fails the check 'test', which no finding explains.
           CI fails the check, which no finding among the fifteen verified above explains. | CI fails the check, which no finding explains.
+          CI fails the check, which no finding among the three\\nverified above explains. | CI fails the check, which no finding explains.
+          The bug is confirmed rather\\nthan counted. | The bug is confirmed.
           CI fails the check, which no finding\\namong the three verified above explains. | CI fails the check, which no finding explains.
           It fails,\\namong the three verified above the second explains it. | It fails, the second explains it.
           \\nAmong the three verified above, the second explains it. | \\nThe second explains it.

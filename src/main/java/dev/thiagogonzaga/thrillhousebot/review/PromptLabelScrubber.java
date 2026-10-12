@@ -390,7 +390,8 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern AMONG_THE_VERIFIED =
       Pattern.compile(
-          "\\s+among the (?:(\\w{1,9}) )?(?:verified|confirmed) (?:findings? )?(?:above|below)\\b",
+          "\\s+among\\s+the\\s+(?:(\\w{1,9})\\s+)?(?:verified|confirmed)\\s+(?:findings?\\s+)?"
+              + "(?:above|below)\\b",
           Pattern.CASE_INSENSITIVE);
 
   /**
@@ -451,7 +452,7 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern NOT_COUNTED =
       Pattern.compile(
-          "\\b(confirmed|measured),? (?:rather than|instead of|not) (?:counted|predicted)\\b",
+          "\\b(confirmed|measured),?\\s+(?:rather\\s+than|instead\\s+of|not)\\s+(?:counted|predicted)\\b",
           Pattern.CASE_INSENSITIVE);
 
   private PromptLabelScrubber() {}
