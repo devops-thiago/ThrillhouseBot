@@ -424,6 +424,9 @@ class CiFailureCitationsTest {
           \u2716 returns [missing] rows (5 ms) | returns [missing] rows
           \u2716 handles empty case - weekend schedule (2ms) | handles empty case - weekend schedule
           FAIL: test_parse_config (tests.test_config.ConfigTest) | test_parse_config
+          \u2716 debounce(0) keeps rows busy after idle (3ms) | debounce(0) keeps rows busy after idle
+          UserTest > rejects(blank FAILED | rejects(blank
+          Failed Calc.Tests.MathTest.Nested(f(1)) [1 ms] | Nested
           1 - queue_rejects_overflow (Failed) | queue_rejects_overflow
           2/4 Test #3: booking_test ....***Failed  0.01 sec | booking_test
           1/4 Test #1: queue_test ....***Exception: SegFault  0.02 sec | queue_test

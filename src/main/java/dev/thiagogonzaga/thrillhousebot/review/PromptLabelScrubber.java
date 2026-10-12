@@ -390,13 +390,13 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern AMONG_THE_VERIFIED =
       Pattern.compile(
-          "[ \\t]+among the (?:(\\w{1,8}) )?(?:verified|confirmed) (?:findings? )?(?:above|below)\\b",
+          "\\s+among the (?:(\\w{1,8}) )?(?:verified|confirmed) (?:findings? )?(?:above|below)\\b",
           Pattern.CASE_INSENSITIVE);
 
   /**
    * The same count opening the text, a line or a sentence: "Among the three verified above, the
-   * second explains it.", also after a list marker ({@link #opensRestart} decides). The count and
-   * its comma go, and the rest opens the sentence.
+   * second explains it.", also after a list marker ({@link #opensCountSentence} decides). The count
+   * and its comma go, and the rest opens the sentence.
    */
   private static final Pattern AMONG_THE_VERIFIED_OPENING =
       Pattern.compile(
@@ -731,7 +731,7 @@ public final class PromptLabelScrubber {
             .replaceAll(
                 m ->
                     Matcher.quoteReplacement(
-                        countsFindings(m.group(2)) && opensRestart(counted, m.end(1))
+                        countsFindings(m.group(2)) && opensCountSentence(counted, m.end(1))
                             ? openingWithoutCount(m)
                             : m.group()));
     s =
@@ -753,6 +753,24 @@ public final class PromptLabelScrubber {
     return count != null
         && (COUNT_WORDS.contains(count.toLowerCase(Locale.ROOT))
             || (count.length() <= 3 && count.chars().allMatch(Character::isDigit)));
+  }
+
+  /**
+   * Whether the count at {@code token} opens a sentence: {@link #opensRestart}, except that a line
+   * break after a word or a comma is the model wrapping its sentence ("which no finding\namong the
+   * three verified above explains"), not a new one; after a list marker it always opens one.
+   */
+  private static boolean opensCountSentence(String text, int token) {
+    if (!opensRestart(text, token)) {
+      return false;
+    }
+    int at = skipBlanksBack(text, token, 0);
+    if (at == 0 || text.charAt(at - 1) != '\n') {
+      return true;
+    }
+    int before = skipBlanksBack(text, at - 1, 0);
+    char last = before == 0 ? '\n' : text.charAt(before - 1);
+    return !Character.isLetterOrDigit(last) && last != ',';
   }
 
   /** An {@link #AMONG_THE_VERIFIED_OPENING} match without the count: what follows opens it. */

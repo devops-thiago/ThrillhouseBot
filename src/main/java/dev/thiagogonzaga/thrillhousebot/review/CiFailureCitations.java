@@ -406,7 +406,7 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       s = s.substring(0, position.start());
     }
     int arguments = s.indexOf('(');
-    if (arguments > 0 && !hasSpaceBefore(s, arguments)) {
+    if (arguments > 0 && !hasSpaceBefore(s, arguments) && closesTheName(s, arguments)) {
       s = s.substring(0, arguments);
     }
     if (s.indexOf(' ') < 0) {
@@ -428,6 +428,24 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
 
   private static boolean hasSpaceBefore(String s, int at) {
     return s.lastIndexOf(' ', at) >= 0;
+  }
+
+  /**
+   * Whether the group opened at {@code open} closes {@code s}: an argument list ending a method
+   * ({@code Addition(x: 0, y: 1)}), not a call a test's prose opens with ("debounce(0) keeps rows
+   * busy").
+   */
+  private static boolean closesTheName(String s, int open) {
+    int depth = 0;
+    for (int i = open; i < s.length(); i++) {
+      char c = s.charAt(i);
+      if (c == '(') {
+        depth++;
+      } else if (c == ')' && --depth == 0) {
+        return i == s.length() - 1;
+      }
+    }
+    return false;
   }
 
   /**
