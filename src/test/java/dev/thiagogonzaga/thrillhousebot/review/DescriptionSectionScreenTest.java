@@ -229,6 +229,11 @@ class DescriptionSectionScreenTest {
     assertTrue(
         DescriptionGapScreen.falseOmission(
             "The description never mentions src/app/config.ts.", "Adds a typed config.ts."));
+    // A README and a code file are files too.
+    assertTrue(
+        DescriptionGapScreen.falseOmission(
+            "The description never mentions the new README and the App.tsx retry helper.",
+            "Adds a README and a retry helper in App.tsx."));
     // One file matched as a path and as a file name is one name, and the PR text holds it.
     assertTrue(
         DescriptionGapScreen.falseOmission(
