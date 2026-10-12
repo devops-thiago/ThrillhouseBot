@@ -161,7 +161,7 @@ public class SecurityScan {
 
   /** An environment key's shape: upper snake case, at least two words. */
   private static final Pattern ENV_KEY =
-      Pattern.compile("(?<![A-Za-z0-9_])([A-Z][A-Z0-9]*+(?:_[A-Z0-9]++)++)(?![A-Za-z0-9_])");
+      Pattern.compile("(?<!\\w)([A-Z][A-Z0-9]*+(?:_[A-Z0-9]++)++)(?!\\w)");
 
   /** An environment key in quotes, as a use site reads it from the environment. */
   private static final Pattern QUOTED_ENV_KEY =
@@ -1229,50 +1229,69 @@ public class SecurityScan {
    */
   static void withAliases(List<PatchLines.Line> lines, List<Detection> fileDetections) {
     var keysByIdentifier = new HashMap<String, Set<String>>();
-    for (var detection : fileDetections) {
-      if (detection.identifier() != null) {
-        keysByIdentifier.computeIfAbsent(detection.identifier(), identifier -> new HashSet<>());
-      }
-    }
+    fileDetections.stream()
+        .map(Detection::identifier)
+        .filter(Objects::nonNull)
+        .forEach(identifier -> keysByIdentifier.put(identifier, new HashSet<>()));
     if (keysByIdentifier.isEmpty()) {
       return;
     }
     var indexByNumber = new HashMap<Integer, Integer>();
     for (int i = 0; i < lines.size(); i++) {
       indexByNumber.put(lines.get(i).number(), i);
-      var key = envKeyOf(lines.get(i).text(), QUOTED_ENV_KEY);
-      if (key != null) {
-        for (var word : NON_IDENTIFIER.split(lines.get(i).text())) {
-          var keys = keysByIdentifier.get(word);
-          if (keys != null) {
-            keys.add(key);
-          }
-        }
+      addUseSiteKey(lines.get(i).text(), keysByIdentifier);
+    }
+    fileDetections.replaceAll(
+        detection ->
+            detection.identifier() == null
+                ? detection
+                : new Detection(
+                    detection.rule(),
+                    detection.finding(),
+                    detection.legacyFingerprint(),
+                    detection.identifier(),
+                    aliases(
+                        detection,
+                        keysByIdentifier,
+                        lines,
+                        indexByNumber.get(detection.finding().line()))));
+  }
+
+  /**
+   * Adds the quoted environment key a line holds ({@link #envKeyOf}) to the keys of every
+   * identifier among the line's words.
+   */
+  private static void addUseSiteKey(String text, Map<String, Set<String>> keysByIdentifier) {
+    var key = envKeyOf(text, QUOTED_ENV_KEY);
+    if (key == null) {
+      return;
+    }
+    for (var word : NON_IDENTIFIER.split(text)) {
+      var keys = keysByIdentifier.get(word);
+      if (keys != null) {
+        keys.add(key);
       }
     }
-    for (int d = 0; d < fileDetections.size(); d++) {
-      var detection = fileDetections.get(d);
-      if (detection.identifier() == null) {
-        continue;
+  }
+
+  /**
+   * An identified detection's aliases: its identifier, the keys its use sites hold, and the key the
+   * line above it in the same hunk names, the secret being on line {@code index} of {@code lines}.
+   */
+  private static Set<String> aliases(
+      Detection detection,
+      Map<String, Set<String>> keysByIdentifier,
+      List<PatchLines.Line> lines,
+      int index) {
+    var aliases = new HashSet<>(keysByIdentifier.get(detection.identifier()));
+    aliases.add(detection.identifier());
+    if (index > 0 && lines.get(index - 1).hunk() == lines.get(index).hunk()) {
+      var above = envKeyOf(lines.get(index - 1).text(), ENV_KEY);
+      if (above != null) {
+        aliases.add(above);
       }
-      var aliases = new HashSet<>(keysByIdentifier.get(detection.identifier()));
-      aliases.add(detection.identifier());
-      int index = indexByNumber.get(detection.finding().line());
-      if (index > 0 && lines.get(index - 1).hunk() == lines.get(index).hunk()) {
-        var above = envKeyOf(lines.get(index - 1).text(), ENV_KEY);
-        if (above != null) {
-          aliases.add(above);
-        }
-      }
-      fileDetections.set(
-          d,
-          new Detection(
-              detection.rule(),
-              detection.finding(),
-              detection.legacyFingerprint(),
-              detection.identifier(),
-              aliases));
     }
+    return aliases;
   }
 
   /**
