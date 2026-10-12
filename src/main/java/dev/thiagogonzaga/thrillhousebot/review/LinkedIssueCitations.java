@@ -293,9 +293,11 @@ final class LinkedIssueCitations {
 
   /**
    * Whether the criterion of a {@code Linked issue #N: <criterion> — <evidence>} bullet is in the
-   * issue it names: a quoted passage in it must appear there, and otherwise at least half of its
-   * content words must, since the summary call is told to shorten the criterion. A criterion of too
-   * few words to judge is kept.
+   * issue it names, or in the whole linked-issue section when it names no issue the pull request
+   * links (a number the model echoed, which {@link DescriptionGapCarryover#withLinkedIssueNumbers}
+   * rewrites only on fresh bullets): a quoted passage in it must appear there, and otherwise at
+   * least half of its content words must, since the summary call is told to shorten the criterion.
+   * A criterion of too few words to judge is kept.
    */
   private static boolean criterionHeld(Matcher linked, List<String> keys, String linkedIssues) {
     var named = DescriptionGapCarryover.issuesNamed(linked.group(1));
