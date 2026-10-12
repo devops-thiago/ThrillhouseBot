@@ -2642,7 +2642,7 @@ class FindingPipelineTest {
    */
   private VerdictBuilder verdictSeam() {
     var summaryGenerator = mock(PrSummaryGenerator.class);
-    when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+    when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
         .thenReturn("");
     return new VerdictBuilder(
         summaryGenerator,

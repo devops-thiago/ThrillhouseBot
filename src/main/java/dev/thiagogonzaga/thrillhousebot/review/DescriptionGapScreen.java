@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
@@ -42,6 +43,9 @@ import java.util.regex.Pattern;
  *       what the author or the linked issue says and what the change does; one that names neither —
  *       a configuration document's example disagreeing with the code, say — is a finding about the
  *       change, not a gap in its description, and reads as one only by sitting under the heading.
+ *   <li><b>An omission must be one.</b> A bullet saying the description leaves out files or
+ *       components it then names ("the description … not … the python-ci workflow, Dockerfile,
+ *       config docs") is dropped when most of what it names is in the PR text (#1074).
  * </ul>
  *
  * <p>The screen runs on the summary call's own gaps and on the gaps carried from the previous round
@@ -193,6 +197,46 @@ final class DescriptionGapScreen {
   private static final Pattern NON_ALPHANUMERIC = Pattern.compile("[^\\p{L}\\p{N}]+");
 
   /**
+   * A file or component an omission bullet names, one pattern per shape: a backticked span, a path,
+   * a file name with an extension, a CI job name ("python-ci"), or a file conventionally named
+   * without one ("Dockerfile").
+   */
+  private static final List<Pattern> NAMED_FILES =
+      List.of(
+          Pattern.compile("`([^`\n]++)`"),
+          Pattern.compile("(?<![\\w/.-])[\\w.-]*+(?:/[\\w.-]++)++"),
+          Pattern.compile("\\b[\\w.-]++/(?![\\w.-])"),
+          Pattern.compile("\\b[\\w-]++\\.(?:md|ya?ml|json|toml|xml|txt|sh|env|cfg|ini|lock)\\b"),
+          Pattern.compile("(?i)\\b[\\w]++-ci\\b"),
+          Pattern.compile(
+              "(?i)\\b(?:dockerfile|containerfile|makefile|jenkinsfile|readme|changelog|license)\\b"));
+
+  /**
+   * The description said to leave something out, in one clause: "the description never mentions",
+   * "the description's summary covers X but not". A comma ends the clause, so "what the description
+   * says, and it does not" is not an omission.
+   */
+  private static final Pattern DESCRIPTION_OMITS =
+      Pattern.compile(
+          "(?i)\\b(?:description|pr\\s++body)\\b[^.;,\n]{0,80}?"
+              + "\\b(?:not|never|omit\\w*|lacks?|nothing|without|doesn['’]t)\\b");
+
+  /** What an omission bullet says the description lacks besides: "beyond", "also adds". */
+  private static final List<Pattern> OMISSION_CUES =
+      List.of(
+          Pattern.compile("(?i)\\b(?:beyond|besides)\\b"),
+          Pattern.compile("(?i)\\balso\\s++adds\\b"));
+
+  /** Content words a PR-text sentence needs before a finding can paraphrase it. */
+  static final int MIN_PARAPHRASED_WORDS = 5;
+
+  /** The share of a PR-text sentence's content words a paraphrase repeats, at least. */
+  static final double PARAPHRASE_SHARE = 0.75;
+
+  /** Where the PR text splits into clauses: sentence marks, semicolons, colons, list items. */
+  private static final Pattern SENTENCE_BREAK = Pattern.compile("[.!?;:](?=\\s)|\n");
+
+  /**
    * {@code gaps} less every bullet that misquotes {@code prText} or cites neither the description
    * nor a linked issue. With {@code prText} blank nothing is judged as a misquote, since there is
    * no text to judge against; the citation check still applies.
@@ -208,8 +252,77 @@ final class DescriptionGapScreen {
     var kept =
         gaps.stream()
             .filter(gap -> cites(gap) && (source.isEmpty() || !misquotes(gap, withIssues)))
+            .filter(gap -> !falseOmission(gap, text))
             .toList();
     return kept.size() == gaps.size() ? gaps : kept;
+  }
+
+  /**
+   * Whether {@code gap} says the description leaves out files or components that, most of them,
+   * {@code prText} names after all (#1074: python #244 listed "the python-ci workflow, Dockerfile,
+   * config docs" as missing from a description naming all three). Only an omission bullet is
+   * judged: one saying in a clause that the description does not hold something, or naming it with
+   * "beyond"/"also adds", and naming at least one file. A name counts as in the text when the text
+   * holds it, or its last path segment, ignoring case.
+   */
+  static boolean falseOmission(String gap, String prText) {
+    if (prText.isBlank()
+        || !(DESCRIPTION_OMITS.matcher(gap).find()
+            || (anyFinds(PR_TEXT_NAMED, gap) && anyFinds(OMISSION_CUES, gap)))) {
+      return false;
+    }
+    var names = new LinkedHashSet<String>();
+    for (var pattern : NAMED_FILES) {
+      var m = pattern.matcher(gap);
+      while (m.find()) {
+        names.add((m.groupCount() > 0 ? m.group(1) : m.group()).toLowerCase(Locale.ROOT));
+      }
+    }
+    // One file matched by two shapes ("README" in "README.md") is one name.
+    var distinct =
+        names.stream()
+            .filter(name -> names.stream().noneMatch(other -> isPartOf(name, other)))
+            .toList();
+    if (distinct.isEmpty()) {
+      return false;
+    }
+    var text = prText.toLowerCase(Locale.ROOT);
+    var named = distinct.stream().filter(name -> text.contains(lastSegment(name))).count();
+    return named * 2 > distinct.size();
+  }
+
+  private static boolean isPartOf(String name, String other) {
+    return !other.equals(name) && other.contains(name);
+  }
+
+  private static String lastSegment(String name) {
+    var trimmed = name.endsWith("/") ? name.substring(0, name.length() - 1) : name;
+    return trimmed.substring(trimmed.lastIndexOf('/') + 1);
+  }
+
+  /**
+   * Whether {@code findingText} quotes or paraphrases {@code claimText}, the PR text and linked
+   * issue (#1074): a quoted passage {@link #misquotes} would judge appears in it, or the finding
+   * repeats at least {@value #PARAPHRASE_SHARE} of the content words of one of its sentences of
+   * {@value #MIN_PARAPHRASED_WORDS} or more.
+   */
+  static boolean echoes(String findingText, String claimText) {
+    var source = normalize(claimText);
+    var quotes = QUOTED.matcher(foldQuotes(findingText));
+    while (quotes.find()) {
+      var quote = quotes.group(quotes.group(1) != null ? 1 : 2);
+      if (judged(quote, source) && present(quote, source)) {
+        return true;
+      }
+    }
+    var words = SummarySurfaceDeduplicator.claim(findingText).wordSet();
+    return Arrays.stream(SENTENCE_BREAK.split(claimText))
+        .map(sentence -> SummarySurfaceDeduplicator.claim(sentence).wordSet())
+        .filter(sentence -> sentence.size() >= MIN_PARAPHRASED_WORDS)
+        .anyMatch(
+            sentence ->
+                sentence.stream().filter(words::contains).count()
+                    >= PARAPHRASE_SHARE * sentence.size());
   }
 
   /** Whether {@code gap} names the description, its title, the author or a linked issue. */
