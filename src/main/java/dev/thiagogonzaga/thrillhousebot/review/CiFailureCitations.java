@@ -142,20 +142,23 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
           "==> X ",
           "test ");
 
-  /** The counters CTest and Zig print before a test's name. */
+  /** The counters CTest and Zig print before a test's name, CTest's "Test #N: " included. */
   private static final Pattern COUNTER_LEAD =
-      Pattern.compile("^(?:\\d++/\\d++ |Test \\[\\d++/\\d++] |\\d++ - )");
+      Pattern.compile("^(?:\\d++/\\d++ (?:Test #\\d++: )?+|Test \\[\\d++/\\d++] |\\d++ - )");
 
   /** A bare elapsed time ending the line, as munit prints it after the test: " 0.012s". */
   private static final Pattern TRAILING_DURATION =
       Pattern.compile("\\s{2,}+\\d++(?:\\.\\d++)?+m?s$");
 
+  /** The dot leader CTest prints between a test's name and its status: "booking_test ....". */
+  private static final Pattern TRAILING_DOTS = Pattern.compile("\\s++\\.{2,}+$");
+
   /**
    * What a runner prints after a failed test's name, cut at its first occurrence. Each is the
    * marker together with the status or timing that follows it (Surefire's " <<< FAILURE!" and " --
-   * Time elapsed", Zig's and cargo's "...FAIL", ScalaTest's " *** FAILED"), so a name's own " -- ",
-   * "..." or "***" stays. A duration or status in a group is cut only where it closes the line
-   * ({@link #withoutTail}), so a name's own parenthetical stays too.
+   * Time elapsed", Zig's and cargo's "...FAIL", ScalaTest's " *** FAILED", CTest's "***Failed"), so
+   * a name's own " -- ", "..." or "***" stays. A duration or status in a group is cut only where it
+   * closes the line ({@link #withoutTail}), so a name's own parenthetical stays too.
    */
   private static final List<String> TEST_LINE_TAILS =
       List.of(
@@ -165,7 +168,10 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
           "  Time elapsed",
           "...FAIL",
           "... FAIL",
-          " *** FAILED");
+          " *** FAILED",
+          "***Failed",
+          "***Exception",
+          "***Timeout");
 
   /** The status Gradle and Karma end a failed test's line with. */
   private static final String FAILED_STATUS = " FAILED";
@@ -329,7 +335,8 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
    * payload (3ms)".
    */
   private static String withoutTail(String line) {
-    String s = TRAILING_DURATION.matcher(line).replaceFirst("");
+    String s =
+        TRAILING_DOTS.matcher(TRAILING_DURATION.matcher(line).replaceFirst("")).replaceFirst("");
     int dash = s.indexOf(" - ");
     if (dash > 0 && s.lastIndexOf(' ', dash - 1) < 0) {
       s = s.substring(0, dash);
