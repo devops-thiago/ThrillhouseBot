@@ -307,12 +307,18 @@ class OverviewScreenTest {
 
   @Test
   void aKeyWrittenInAnyCaseIsJudged() {
+    // The material names JIRA-7 and nothing else, so the sentence holding another key goes.
+    var material = "Title: ship\nCloses JIRA-7";
+    var keptSentences =
+        "Ships it. Fixes jira-7. Speaks Http-2 and soap-1.2. Runs on Java-17. Ships Phase-2.";
+
+    // A key beside a tracker cue ("Fixes ticket", "Closes") is judged; it is not in the material.
     assertEquals(
-        "Ships it. Fixes jira-7. Speaks Http-2 and soap-1.2. Runs on Java-17. Ships Phase-2.",
+        "Ships it.",
         OverviewScreen.withoutInventedTickets(
-            "Ships it. Fixes ticket abcd-12. Closes Proj-7. Fixes jira-7. Speaks Http-2 and soap-1.2."
-                + " Runs on Java-17. Ships Phase-2.",
-            "Title: ship\nCloses JIRA-7"));
+            "Ships it. Fixes ticket abcd-12. Closes Proj-7.", material));
+    // A key the material holds in another case is kept, as are words without a tracker cue.
+    assertEquals(keptSentences, OverviewScreen.withoutInventedTickets(keptSentences, material));
   }
 
   @Test
