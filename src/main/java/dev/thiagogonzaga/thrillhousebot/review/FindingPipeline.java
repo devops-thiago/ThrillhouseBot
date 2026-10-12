@@ -1438,7 +1438,10 @@ public class FindingPipeline {
           .append(" -")
           .append(file.deletions())
           .append(fileCoverageMarker(file.filename(), responseCut, clipped))
-          .append(")\n");
+          .append(")")
+          // #920: what the file's added lines declare, the summary's evidence of what it does.
+          .append(ChangeSymbols.overviewSuffix(file.filename(), file.patch()))
+          .append("\n");
     }
     for (var name : plan.omittedFiles()) {
       sb.append(name).append(" (omitted — exceeded the review call budget; not analyzed)\n");

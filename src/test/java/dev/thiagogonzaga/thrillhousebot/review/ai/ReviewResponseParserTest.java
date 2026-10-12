@@ -429,6 +429,24 @@ class ReviewResponseParserTest {
   }
 
   @Test
+  void aSummaryWithoutItsListFieldsReadsThemAsEmpty() {
+    // The summary eval walks file_summaries and description_gaps without a null check; an answer
+    // that omits them or writes null must still leave empty lists (the Summary constructor).
+    var omitted =
+        parser.parseSummary("{\"summary\": {\"total_findings\": 0, \"pr_purpose\": \"p\"}}");
+    var nulls =
+        parser.parseSummary(
+            """
+            {"summary": {"total_findings": 0, "file_summaries": null, "description_gaps": null}}
+            """);
+
+    for (var summary : java.util.List.of(omitted.summary(), nulls.summary())) {
+      assertEquals(java.util.List.of(), summary.fileSummaries());
+      assertEquals(java.util.List.of(), summary.descriptionGaps());
+    }
+  }
+
+  @Test
   void shouldStripEchoedCarriedGapLabelsFromDescriptionGapsButNotFromAddressedGaps() {
     // #970: the carried gaps are shown to the call as "G1: …"; an echo of the label in
     // description_gaps reached the posted summary, while addressed_gaps is where it belongs.

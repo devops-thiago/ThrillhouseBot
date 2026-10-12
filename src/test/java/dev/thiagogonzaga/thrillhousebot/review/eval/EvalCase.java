@@ -24,15 +24,19 @@ import java.util.regex.Pattern;
 
 /**
  * One labeled regression case from the prompt eval corpus: a real dogfood outcome pinned as {@code
- * (diff, candidate finding, expected verdict)} for verifier cases, or {@code (diff, expected
- * finding presence)} for generator cases. Loaded from {@code src/test/resources/evalcorpus/<name>/}
- * by {@link EvalCorpus}: {@code case.json} carries the spec, {@code diff.txt} the diff exactly as
- * the review pipeline formats it ("### path (status, +A -D)" sections with fenced patches).
+ * (diff, candidate finding, expected verdict)} for verifier cases, {@code (diff, expected finding
+ * presence)} for generator cases, or {@code (PR text, changed files, findings, a description
+ * claim)} for summary cases. Loaded from {@code src/test/resources/evalcorpus/<name>/} by {@link
+ * EvalCorpus}: {@code case.json} carries the spec, {@code diff.txt} the diff exactly as the review
+ * pipeline formats it ("### path (status, +A -D)" sections with fenced patches).
  */
 public record EvalCase(String name, String diff, Spec spec) {
 
   static final String KIND_VERIFIER = "verifier";
   static final String KIND_GENERATOR = "generator";
+  static final String KIND_SUMMARY = "summary";
+  static final String CLAIM_GAPPED = "claim-gapped";
+  static final String CLAIM_NOT_GAPPED = "claim-not-gapped";
   static final String MUST_FIND = "must-find";
   static final String MUST_NOT_FIND = "must-not-find";
 
@@ -52,7 +56,9 @@ public record EvalCase(String name, String diff, Spec spec) {
       String prTitle,
       String prDescription,
       List<String> dimensions,
-      String learnings) {}
+      String learnings,
+      String changedFiles,
+      List<CandidateFinding> findings) {}
 
   /** The candidate finding a verifier case feeds to the second-pass audit. */
   public record CandidateFinding(
@@ -110,5 +116,15 @@ public record EvalCase(String name, String diff, Spec spec) {
 
   boolean isGeneratorCase() {
     return KIND_GENERATOR.equals(spec.kind());
+  }
+
+  /**
+   * A summary-call case (#920): the PR text, the changed-files overview and the verified findings
+   * go to the summary prompt, and the description claim the {@code keywords} name must come back as
+   * a description gap and nowhere it would read as implemented ({@code claim-gapped}), or, for a
+   * claim the evidence can carry, must not come back as a gap ({@code claim-not-gapped}).
+   */
+  boolean isSummaryCase() {
+    return KIND_SUMMARY.equals(spec.kind());
   }
 }

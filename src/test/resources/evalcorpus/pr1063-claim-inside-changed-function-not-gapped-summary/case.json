@@ -1,0 +1,14 @@
+{
+  "kind": "summary",
+  "sourcePr": 1063,
+  "why": "ThrillhouseBot#1063 review: the #920 evidence-and-claims rule took the names a file's added lines declare as the only evidence of behaviour, so a retry added inside the existing Mailer.send, which declares no new name, read as a behaviour no file shows and became a false description gap. The row now names the changed function ('changes: send'), and a claim about what a changed function does is reported as the description's claim, never as missing.",
+  "expectation": "claim-not-gapped",
+  "keywords": [
+    "retr",
+    "backoff"
+  ],
+  "prTitle": "fix(mailer): retry a failed relay hand-off",
+  "prDescription": "Mailer.send now retries a failed relay hand-off up to three times with exponential backoff before giving up, so a transient relay outage no longer drops the organizer's confirmation.",
+  "changedFiles": "python/roombook/mailer.py (modified, +9 -2)",
+  "findings": []
+}

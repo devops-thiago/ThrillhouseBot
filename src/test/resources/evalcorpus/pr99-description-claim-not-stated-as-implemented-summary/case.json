@@ -1,0 +1,36 @@
+{
+  "kind": "summary",
+  "sourcePr": 99,
+  "why": "ThrillhouseBot-test#99 (round 9, #920): the description claims reminder e-mails are sent to organizers 15 minutes before a booking starts, but the change only adds a Mailer.send that BookingService.notify_organizer calls once, for the confirmation. The summary stated 'a mailer for organizer confirmation and reminders' and drew a 'Reminders 15 min before start' diagram node, and its Description vs. Implementation section missed the gap. The summary call must not describe the claim as implemented (purpose, file summaries, diagram) and must report it as a description gap.",
+  "expectation": "claim-gapped",
+  "keywords": [
+    "reminder",
+    "15 minutes",
+    "15 min"
+  ],
+  "prTitle": "feat(python): add meeting room booking service",
+  "prDescription": "Adds a small meeting room booking service under `python/`.\n\n- Conflict detection between a requested slot and existing bookings for the room, plus busy slots from the external calendar.\n- Organizer e-mail domain allow-list (`ROOMBOOK_ALLOWED_DOMAINS`).\n- SQLite-backed room search and booking storage.\n- Confirmation of pending bookings and an e-mail notification to the organizer. Reminder e-mails are also sent to organizers 15 minutes before a booking starts.\n- Dockerfile, `docs/CONFIG-PYTHON.md`, and a `python-ci` workflow running the unit tests on pull requests.\n- The README moved to `docs/PYTHON-V9.md`.\n\nCloses #88",
+  "changedFiles": ".github/workflows/python-ci.yml (added, +21 -0)\ndocs/CONFIG-PYTHON.md (added, +13 -0)\npython/.gitignore (added, +2 -0)\npython/Dockerfile (added, +15 -0)\npython/roombook/__init__.py (added, +1 -0)\npython/roombook/calendar_client.py (added, +24 -0)\npython/roombook/config.py (added, +27 -0)\npython/roombook/mailer.py (added, +18 -0)\npython/roombook/models.py (added, +20 -0)\npython/roombook/service.py (added, +72 -0)\npython/roombook/store.py (added, +78 -0)\npython/tests/__init__.py (added, +0 -0)\npython/tests/test_roombook.py (added, +77 -0)",
+  "findings": [
+    {
+      "risk": "high",
+      "confidence": "high",
+      "file": "python/roombook/service.py",
+      "line": 15,
+      "title": "overlaps() treats back-to-back bookings as conflicting",
+      "description": "The docstring says half-open [start, end) intervals and that back-to-back bookings are fine, but `a_start <= b_end and b_start <= a_end` is true when one booking ends exactly when the next starts, so request_booking rejects a valid adjacent slot with 'room already booked'.",
+      "suggestion_old": "    return a_start <= b_end and b_start <= a_end",
+      "suggestion_new": "    return a_start < b_end and b_start < a_end"
+    },
+    {
+      "risk": "medium",
+      "confidence": "high",
+      "file": "python/roombook/service.py",
+      "line": 20,
+      "title": "rooms_by_capacity sorts largest first despite its docstring",
+      "description": "The docstring says smallest first, but `reverse=True` returns the largest room first.",
+      "suggestion_old": "    return sorted(rooms, key=lambda r: r.capacity, reverse=True)",
+      "suggestion_new": "    return sorted(rooms, key=lambda r: r.capacity)"
+    }
+  ]
+}

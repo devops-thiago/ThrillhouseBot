@@ -18,7 +18,9 @@ package dev.thiagogonzaga.thrillhousebot.review.eval;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.review.ChangeSymbols;
 import dev.thiagogonzaga.thrillhousebot.review.Confidence;
 import dev.thiagogonzaga.thrillhousebot.review.EvalTrailingGuidance;
 import dev.thiagogonzaga.thrillhousebot.review.PromptSections;
@@ -27,17 +29,23 @@ import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
 import dev.thiagogonzaga.thrillhousebot.review.RiskLevel;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewer;
+import dev.thiagogonzaga.thrillhousebot.review.ai.PrSummarizer;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponseParser;
 import io.quarkus.logging.Log;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -87,6 +95,7 @@ class PromptEvalTest {
 
   @Inject FindingVerificationService findingVerificationService;
   @Inject PrReviewer prReviewer;
+  @Inject PrSummarizer prSummarizer;
   @Inject ReviewResponseParser reviewResponseParser;
   @Inject ReviewDimensionRouter dimensionRouter;
 
@@ -102,8 +111,7 @@ class PromptEvalTest {
       var passes = 0;
       var outcomes = new StringBuilder();
       for (var sample = 0; sample < SAMPLES; sample++) {
-        String outcome =
-            evalCase.isVerifierCase() ? verifierOutcome(evalCase) : generatorOutcome(evalCase);
+        String outcome = outcomeOf(evalCase);
         outcomes.append(sample == 0 ? "" : ", ").append(outcome);
         if (sampleMatchesExpectation(evalCase, outcome)) {
           passes++;
@@ -138,11 +146,132 @@ class PromptEvalTest {
             + report);
   }
 
+  private String outcomeOf(EvalCase evalCase) throws Exception {
+    if (evalCase.isVerifierCase()) {
+      return verifierOutcome(evalCase);
+    }
+    return evalCase.isSummaryCase() ? summaryOutcome(evalCase) : generatorOutcome(evalCase);
+  }
+
+  /**
+   * Runs the summary call over the case's PR text, changed-files overview (each row with the names
+   * its diff section declares, as production sends it) and findings, with the diagram requested,
+   * and reports whether the description claim came back as a description gap and nowhere it reads
+   * as implemented: "claim-gapped", else "claim-implemented" when the purpose, a file summary or
+   * the diagram states it, or "claim-dropped" when it is in neither (#920).
+   */
+  private String summaryOutcome(EvalCase evalCase) throws Exception {
+    var spec = evalCase.spec();
+    var patches = new HashMap<String, String>();
+    evalCase.files().forEach(f -> patches.put(f.filename(), f.patch()));
+    var overview = new StringBuilder();
+    for (var row : spec.changedFiles().split("\n")) {
+      var path = row.substring(0, row.indexOf(' ') < 0 ? row.length() : row.indexOf(' '));
+      overview
+          .append(row)
+          .append(ChangeSymbols.overviewSuffix(path, patches.get(path)))
+          .append('\n');
+    }
+    var raw = new CompletableFuture<String>();
+    prSummarizer
+        .summarizeStream(
+            PromptTemplateEscaper.fence(
+                PromptSections.prContext(orEmpty(spec.prTitle()), orEmpty(spec.prDescription()))),
+            PromptTemplateEscaper.escape(new ObjectMapper().writeValueAsString(spec.findings())),
+            PromptTemplateEscaper.escape(overview.toString()),
+            "",
+            PrReviewPrompts.DIAGRAM_REQUEST)
+        .onPartialResponse(token -> {})
+        .onCompleteResponse(response -> raw.complete(response.aiMessage().text()))
+        .onError(raw::completeExceptionally)
+        .start();
+    ReviewResponse.Summary summary;
+    try {
+      summary =
+          reviewResponseParser
+              .parseSummary(raw.get(SAMPLE_TIMEOUT_MINUTES, TimeUnit.MINUTES))
+              .summary();
+    } catch (IllegalArgumentException _) {
+      return "unparseable";
+    } catch (ExecutionException | TimeoutException _) {
+      return CALL_FAILED;
+    }
+    if (summary == null) {
+      return "no-summary";
+    }
+    var implemented = new StringBuilder(orEmpty(summary.prPurpose()));
+    implemented.append('\n').append(orEmpty(summary.overallAssessment()));
+    summary.fileSummaries().forEach(f -> implemented.append('\n').append(orEmpty(f.summary())));
+    implemented.append('\n').append(orEmpty(summary.walkthroughDiagram()));
+    if (statesAsImplemented(spec.keywords(), implemented.toString())) {
+      return "claim-implemented";
+    }
+    return mentionsAny(spec.keywords(), String.join("\n", summary.descriptionGaps()))
+        ? EvalCase.CLAIM_GAPPED
+        : "claim-dropped";
+  }
+
+  /**
+   * Whether a sentence of {@code text} mentions a keyword without refuting it: "the description's
+   * reminder claim is not backed by any changed file" names the claim to say it is unconfirmed,
+   * which is what the prompt asks for, so only a sentence with no refutation cue counts.
+   */
+  static boolean statesAsImplemented(List<String> keywords, String text) {
+    return Arrays.stream(text.split("(?<=[.!?\n])"))
+        .anyMatch(
+            sentence ->
+                mentionsAny(keywords, sentence)
+                    && REFUTATION.stream().noneMatch(cue -> cue.matcher(sentence).find()));
+  }
+
+  /**
+   * What marks a sentence as reporting a claim rather than stating it: it names the claim as the
+   * description's or the PR text's, or says nothing in the change shows it. A bare negation does
+   * not ("sends reminders without a scheduler" still states them), so the cues are claim words and
+   * evidence-absence phrases, not "no" or "without" alone.
+   */
+  private static final List<Pattern> REFUTATION =
+      List.of(
+          Pattern.compile(
+              "(?i)\\b(?:claims?|claimed|description|unconfirmed|unsupported|unverified)\\b"),
+          Pattern.compile(
+              "(?i)(?:\\bnot|n't) (?:implemented|backed|shown|present|found|evident)\\b"),
+          Pattern.compile("(?i)\\b(?:missing|lacks?|absent)\\b"),
+          Pattern.compile("(?i)\\bno (?:changed )?(?:files?|code|evidence)\\b"),
+          Pattern.compile("(?i)\\b(?:pr|pull request) (?:text|body|title)\\b"),
+          Pattern.compile("(?i)\\b(?:stated|according to|only (?:from|in) the)\\b"));
+
+  /**
+   * The outcome of a sample whose model call failed or timed out: a failing sample, not a crash.
+   */
+  static final String CALL_FAILED = "call-failed";
+
+  private static boolean mentionsAny(List<String> keywords, String text) {
+    var lower = text.toLowerCase(Locale.ROOT);
+    return keywords.stream().anyMatch(k -> lower.contains(k.toLowerCase(Locale.ROOT)));
+  }
+
   private static boolean sampleMatchesExpectation(EvalCase evalCase, String outcome) {
     if (evalCase.isVerifierCase()) {
       return evalCase.spec().expectedVerdicts().contains(outcome);
     }
-    return outcome.equals(evalCase.spec().expectation());
+    return evalCase.isSummaryCase()
+        ? summaryOutcomeMatches(evalCase.spec().expectation(), outcome)
+        : outcome.equals(evalCase.spec().expectation());
+  }
+
+  /**
+   * Whether a summary sample's outcome meets the case's expectation: "claim-not-gapped" is met by
+   * any answer that did not report the claim as a gap, stated or not, and a failed or unparseable
+   * call meets nothing. Any mention in description_gaps counts as a gap: the summary prompt reports
+   * a claim a changed function can carry in pr_purpose or the file's summary and keeps it out of
+   * description_gaps.
+   */
+  static boolean summaryOutcomeMatches(String expectation, String outcome) {
+    if (EvalCase.CLAIM_NOT_GAPPED.equals(expectation)) {
+      return "claim-implemented".equals(outcome) || "claim-dropped".equals(outcome);
+    }
+    return outcome.equals(expectation);
   }
 
   private static String expectationOf(EvalCase evalCase) {
