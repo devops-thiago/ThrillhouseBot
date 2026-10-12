@@ -306,6 +306,15 @@ class OverviewScreenTest {
   }
 
   @Test
+  void aKeyWrittenInAnyCaseIsJudged() {
+    assertEquals(
+        "Ships it. Fixes jira-7. Speaks Http-2 and soap-1.2.",
+        OverviewScreen.withoutInventedTickets(
+            "Ships it. Fixes abcd-12. Closes Proj-7. Fixes jira-7. Speaks Http-2 and soap-1.2.",
+            "Title: ship\nCloses JIRA-7"));
+  }
+
+  @Test
   void aStandardsCodeIsNotTakenForAnInventedTicket() {
     var purpose =
         "Returns HTTP-404 for unknown routes. Adds FIPS-140 validation. Speaks HTTP-2 and"

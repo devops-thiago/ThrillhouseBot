@@ -202,11 +202,12 @@ final class OverviewScreen {
       Pattern.compile("(?<![\\w$])[A-Z][A-Z0-9]*+(?:_[A-Z0-9]++)++(?![\\w$])");
 
   /**
-   * A tracker key such as {@code PROJ-123}. Four or more letters, so "SHA-256", "UTF-8" and "CVE-…"
-   * are not taken for one.
+   * A tracker key such as {@code PROJ-123}, in any case ("abcd-12", "Proj-7" are the same keys
+   * written loosely). Four or more letters, so "SHA-256", "UTF-8" and "CVE-…" are not taken for
+   * one.
    */
   private static final Pattern TICKET_KEY =
-      Pattern.compile("(?<![\\w-])[A-Z]{4,15}-\\d{1,7}(?![\\w-]|\\.\\d)");
+      Pattern.compile("(?i)(?<![\\w-])[a-z]{4,15}-\\d{1,7}(?![\\w-]|\\.\\d)");
 
   /**
    * Standards and protocol names that take the tracker-key shape with a number: "HTTP-404",
@@ -684,6 +685,8 @@ final class OverviewScreen {
                     .matcher(sentence)
                     .results()
                     .map(MatchResult::group)
+                    // Compared in upper case, as the material is, whatever case the key was in.
+                    .map(key -> key.toUpperCase(Locale.ROOT))
                     .allMatch(
                         key ->
                             source.contains(key)
