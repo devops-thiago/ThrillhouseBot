@@ -317,6 +317,9 @@ class OverviewScreenTest {
         "Ships it.",
         OverviewScreen.withoutInventedTickets(
             "Ships it. Fixes ticket abcd-12. Closes Proj-7.", material));
+    // A closing verb elsewhere in the sentence does not make a compound a key.
+    var compounds = "Fixes the phase-2 layout bug. Closes the stage-1 gap.";
+    assertEquals(compounds, OverviewScreen.withoutInventedTickets(compounds, material));
     // A key the material holds in another case is kept, as are words without a tracker cue.
     assertEquals(keptSentences, OverviewScreen.withoutInventedTickets(keptSentences, material));
   }

@@ -661,7 +661,7 @@ final class OverviewScreen {
   /**
    * Whether the tracker-shaped {@code key} found in {@code sentence} is a ticket key: its prefix in
    * capitals ({@code ABCD-12}), or, written any other way ({@code Proj-7}, {@code abcd-12}), with a
-   * tracker named in its sentence, a {@code #} before it, or its prefix in capitals elsewhere in
+   * tracker word right before it, a {@code #} before it, or its prefix in capitals elsewhere in
    * {@code paragraph}. "Java-17", "Phase-2" and "python-3" are ordinary words.
    */
   private static boolean isTicketKey(MatchResult key, String sentence, String paragraph) {
@@ -671,8 +671,11 @@ final class OverviewScreen {
     if (written.equals(prefix)) {
       return true;
     }
-    return Arrays.stream(NON_WORD.split(sentence.toLowerCase(Locale.ROOT)))
-            .anyMatch(TRACKER_CUES::contains)
+    // The cue sits right before the key ("Closes Proj-7", "fixes ticket abcd-12"); a closing verb
+    // elsewhere in the sentence ("Fixes the phase-2 layout") is about something else.
+    var before =
+        NON_WORD.split(sentence.substring(0, key.start()).toLowerCase(Locale.ROOT).strip());
+    return TRACKER_CUES.contains(before[before.length - 1])
         || (key.start() > 0 && sentence.charAt(key.start() - 1) == '#')
         || paragraph.contains(prefix + "-");
   }
@@ -758,9 +761,9 @@ final class OverviewScreen {
   /**
    * {@code purpose} without the sentences naming a ticket key {@code known} does not hold. A key
    * whose prefix is in capitals ({@code ABCD-12}) is always one; one written any other way ({@code
-   * Proj-7}, {@code abcd-12}) only when the sentence names a tracker ({@link #TRACKER_CUES}), a
-   * {@code #} leads it, or the paragraph writes its prefix in capitals elsewhere, since "python-3",
-   * "phase-2" and "stage-1" are ordinary words.
+   * Proj-7}, {@code abcd-12}) only when a tracker word sits right before it ({@link
+   * #TRACKER_CUES}), a {@code #} leads it, or the paragraph writes its prefix in capitals
+   * elsewhere, since "python-3", "phase-2" and "stage-1" are ordinary words.
    */
   static String withoutInventedTickets(String purpose, String known) {
     if (purpose == null || !TICKET_KEY.matcher(purpose).find()) {
