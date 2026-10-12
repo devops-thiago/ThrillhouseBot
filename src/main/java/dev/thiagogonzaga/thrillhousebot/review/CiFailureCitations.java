@@ -374,6 +374,9 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       s = s.substring(0, arguments);
     }
     if (s.indexOf(' ') < 0) {
+      // Go names a subtest "TestParent/case": the parent is the function a finding names.
+      int subtest = s.indexOf('/');
+      s = subtest > 0 ? s.substring(0, subtest) : s;
       int parameters = s.indexOf('[');
       s = parameters > 0 ? s.substring(0, parameters) : s;
       s = s.substring(s.lastIndexOf('.') + 1);

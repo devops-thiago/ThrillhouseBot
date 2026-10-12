@@ -395,6 +395,7 @@ class CiFailureCitationsTest {
           \u2716 handles empty case - weekend schedule (2ms) | handles empty case - weekend schedule
           FAIL: test_parse_config (tests.test_config.ConfigTest) | test_parse_config
           1 - queue_rejects_overflow (Failed) | queue_rejects_overflow
+          --- FAIL: TestParseConfig/empty_input (0.00s) | TestParseConfig
           ERROR tests/test_store.py::test_search_escapes_event_name - fixture 'db' not found | test_search_escapes_event_name
           ERROR: test_hold_expiry (tests.test_holds.HoldTest.test_hold_expiry) | test_hold_expiry
           ==> X port.EventRepositorySuite.findByContainer  0.012s | findByContainer

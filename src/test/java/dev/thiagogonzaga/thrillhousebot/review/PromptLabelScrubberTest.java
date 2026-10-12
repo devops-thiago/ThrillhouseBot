@@ -1084,6 +1084,7 @@ class PromptLabelScrubberTest {
           It fails.\\nAmong the three verified above, the second is the one. | It fails.\\nThe second is the one.
           It fails. Among the 3 confirmed findings above the second explains it. | It fails. The second explains it.
           Among the three verified above. | .
+          - Among the three verified above, the second is the one. | - The second is the one.
           Among the verified findings below, two are false. | Among the verified findings below, two are false.
           Among the accounts verified above, two are locked. | Among the accounts verified above, two are locked.
           CI fails the check 'test', which no finding among the many verified above explains. | CI fails the check 'test', which no finding explains.

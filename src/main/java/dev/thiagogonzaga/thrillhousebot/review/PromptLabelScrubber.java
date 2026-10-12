@@ -395,11 +395,12 @@ public final class PromptLabelScrubber {
 
   /**
    * The same count opening the text, a line or a sentence: "Among the three verified above, the
-   * second explains it." The count and its comma go, and the rest opens the sentence.
+   * second explains it.", also after a list marker. The count and its comma go, and the rest opens
+   * the sentence.
    */
   private static final Pattern AMONG_THE_VERIFIED_OPENING =
       Pattern.compile(
-          "(?<![^.!?\\n])([ \\t]*)among the (?:(\\w{1,8}) )?(?:verified|confirmed) (?:findings? )?"
+          "(?<![^.!?\\n])([ \\t]*+(?:[-*+>][ \\t]++)?)among the (?:(\\w{1,8}) )?(?:verified|confirmed) (?:findings? )?"
               + "(?:above|below)\\b,?[ \\t]*(\\p{L})?",
           Pattern.CASE_INSENSITIVE);
 
