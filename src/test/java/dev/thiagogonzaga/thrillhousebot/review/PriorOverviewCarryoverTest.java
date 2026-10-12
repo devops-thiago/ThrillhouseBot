@@ -383,4 +383,31 @@ class PriorOverviewCarryoverTest {
             new ReviewResponse.Summary(0, 0, 0, 0, 0, null, null, List.of())));
     assertTrue(PriorOverviewCarryover.hasOverview(PRIOR));
   }
+
+  private static ReviewResponse.Summary overview(String purpose, String diagram) {
+    return new ReviewResponse.Summary(
+        1, 0, 1, 0, 0, "ok", purpose, List.of(), List.of(), FILES, diagram, List.of());
+  }
+
+  @Test
+  void aBlankPurposeAloneTakesThePreviousPurpose() {
+    // The overview screen took every sentence out of the purpose; files and diagram are there.
+    var current = overview("", "flowchart TD\n  X --> Y");
+
+    var kept = PriorOverviewCarryover.fill(current, context(List.of(round(PRIOR)), true));
+
+    assertEquals(PRIOR.prPurpose(), kept.prPurpose());
+    assertEquals(FILES, kept.fileSummaries());
+    assertEquals(current.walkthroughDiagram(), kept.walkthroughDiagram());
+  }
+
+  @Test
+  void aBlankPurposeStaysBlankWhenThePreviousRoundHadNone() {
+    var current = overview("", "flowchart TD\n  X --> Y");
+    var priorWithoutPurpose = overview(" ", "flowchart TD\n  A --> B");
+
+    assertSame(
+        current,
+        PriorOverviewCarryover.fill(current, context(List.of(round(priorWithoutPurpose)), true)));
+  }
 }
