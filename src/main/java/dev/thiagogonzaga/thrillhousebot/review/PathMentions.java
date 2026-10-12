@@ -542,7 +542,7 @@ final class PathMentions {
     if (verbatim.contains(token) || changed.names(token)) {
       return token;
     }
-    if (token.indexOf('/') > 0 && !token.endsWith("/")) {
+    if (token.contains("/") && !token.endsWith("/")) {
       String mapped = resolver.diffPathFor(token);
       // diffPathFor returns the token itself or the one changed file it is a near miss of.
       if (!mapped.equals(token)) {
@@ -571,8 +571,9 @@ final class PathMentions {
           && !("js".equals(extension(token)) && TECHNOLOGY_NAMES.contains(stem));
     }
     String first = token.substring(0, slash);
-    if (first.indexOf('.') > 0) {
-      // A dotted first segment is a domain or a version, not a directory: github.com/org.
+    if (first.substring(1).contains(".")) {
+      // A first segment dotted after its first character is a domain or a version (github.com/org),
+      // not a directory; .github is one.
       return false;
     }
     if (token.endsWith("/")) {
