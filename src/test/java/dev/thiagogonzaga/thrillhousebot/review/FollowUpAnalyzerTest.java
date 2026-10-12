@@ -2614,7 +2614,7 @@ class FollowUpAnalyzerTest {
   }
 
   @Test
-  void recheckShouldLeaveNonJustifiedStatusesAndUnmatchableInputsAlone() {
+  void recheckShouldKeepTheVerdictOfNonJustifiedStatusesAndLeaveUnmatchableInputsAlone() {
     var unresolved =
         List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there"));
     var comments =
@@ -2622,10 +2622,14 @@ class FollowUpAnalyzerTest {
             "Not changed — pause() is only ever called from the /pause command path, which runs"
                 + " asynchronously on the review executor after the webhook has returned 200.");
 
-    assertEquals(
-        unresolved,
+    // The re-check leaves the model's unresolved verdict as it is; only its note is put under the
+    // reply lead-in, so the review body explains why the reply did not settle it (#963).
+    var kept =
         analyzer.recheckDeclines(
-            RACE_PREVIOUS, unresolved, comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF));
+            RACE_PREVIOUS, unresolved, comments, List.of(), BOT_ID, () -> DISPATCHING_DIFF);
+    assertEquals(1, kept.size());
+    assertEquals("unresolved", kept.get(0).status());
+    assertEquals(RebuttalContradiction.unsettledReplyNote("still there", true), kept.get(0).note());
     // No thread to read the rebuttal from.
     assertEquals(
         "justified",
@@ -4775,6 +4779,458 @@ class FollowUpAnalyzerTest {
     assertEquals(1, entry.status().id());
     assertTrue(entry.status().note().startsWith(RebuttalContradiction.NOTE_LEAD_IN));
     assertTrue(entry.status().note().contains("no review has weighed"), entry.status().note());
+  }
+
+  /**
+   * #963 (round 14, go #187): the diff's own comment says the instance is shared by every request
+   * goroutine, so the held decline's note quotes it instead of claiming the diff cannot confirm it.
+   */
+  @Test
+  void earlierRoundDeclineHeldOnAStatedConcurrencyQuotesWhatTheCodeSays() {
+    var entry =
+        race(
+            raceBackstop(
+                analyzer,
+                earlierRaceThread(RACE_WRONG_DECLINE),
+                () ->
+                    """
+                     type Counter struct {
+                    +// Counter is shared by every net/http goroutine serving /reconcile.
+                    +counter.bump();
+                    -// removed: called from multiple threads"""));
+
+    assertTrue(entry.holdsOpen());
+    var note = entry.status().note();
+    assertTrue(note.startsWith(RebuttalContradiction.NOTE_LEAD_IN), note);
+    assertTrue(note.contains("the reviewed code says this path runs concurrently"), note);
+    assertTrue(note.contains("shared by every net/http goroutine"), note);
+    assertFalse(note.contains("cannot confirm"), note);
+    assertTrue(note.endsWith("Reply again to keep the decline."), note);
+  }
+
+  private String heldNote(String reviewedCode) {
+    return race(raceBackstop(analyzer, earlierRaceThread(RACE_WRONG_DECLINE), () -> reviewedCode))
+        .status()
+        .note();
+  }
+
+  /** A statement the line denies is never quoted as stating concurrency. */
+  @Test
+  void earlierRoundDeclineHeldOnADeniedConcurrencyKeepsTheUnconfirmedReason() {
+    var note =
+        heldNote(
+            """
+            +// rejects concurrent requests — one worker per shard
+            +// not shared by every goroutine, guarded by the mutex
+            +counter.bump();""");
+
+    assertTrue(note.contains("no review has weighed"), note);
+    assertFalse(note.contains("says this path runs concurrently"), note);
+  }
+
+  /**
+   * A denial word well before an affirmative statement on the same line does not deny it; the same
+   * word right before the statement does.
+   */
+  @Test
+  void onlyADenialJustBeforeTheStatementDeniesIt() {
+    var far =
+        heldNote(
+            "+// Not a cache: it is reset on every deploy, and it is shared by every request"
+                + " goroutine.");
+    assertTrue(far.contains("says this path runs concurrently"), far);
+
+    var near = heldNote("+// Not shared by every request goroutine.");
+    assertTrue(near.contains("no review has weighed"), near);
+
+    // A guard word governing another clause does not deny the statement.
+    for (var line :
+        List.of(
+            "+// The lock guards every field, which is shared by every request goroutine.",
+            "+// The lock guards every field. The counter itself is shared by every request"
+                + " goroutine.")) {
+      var note = heldNote(line);
+      assertTrue(note.contains("says this path runs concurrently"), note);
+    }
+    var governed = heldNote("+// Counter is never called from multiple threads.");
+    assertTrue(governed.contains("no review has weighed"), governed);
+
+    // A guard right before the statement protects shared state; it still says the path is shared.
+    for (var protecting :
+        List.of(
+            "+// The lock guards each field shared by every request goroutine.",
+            "+// The mutex serializes concurrent requests to the counter.")) {
+      var note = heldNote(protecting);
+      assertTrue(note.contains("says this path runs concurrently"), note);
+    }
+    // A verb refusing the statement's subject right before it denies it.
+    for (var refusing :
+        List.of(
+            "+// The handler rejects concurrent requests with 409.",
+            "+// The config prohibits concurrent access.",
+            "+// The scheduler excludes concurrent callers.",
+            "+// The cache doesn't support concurrent use.",
+            "+// The workers aren’t shared by every request goroutine.",
+            "+// The pool shouldn't be shared across goroutines.",
+            // Any words between the verb and the statement in one clause change nothing.
+            "+// The handler rejects all concurrent requests with 409.",
+            "+// The config prevents any simultaneous concurrent access.",
+            "+// The scheduler explicitly refuses the concurrent callers.",
+            "+// The handler rejects incoming duplicated concurrent requests with 409.",
+            "+// The gate blocks every write accessed from multiple threads.")) {
+      var note = heldNote(refusing);
+      assertTrue(note.contains("no review has weighed"), refusing + " -> " + note);
+    }
+    // A refusing verb before a subordinate clause refuses its own object, not the statement.
+    for (var otherObject :
+        List.of(
+            "+// This prevents a deadlock when called from multiple threads.",
+            "+// The gate blocks the caller until concurrent requests drain.")) {
+      var note = heldNote(otherObject);
+      assertTrue(note.contains("says this path runs concurrently"), otherObject + " -> " + note);
+    }
+    // A refusing verb is read back through the whole clause, however far from the statement.
+    var farRefusal =
+        heldNote(
+            "+// The limiter rejects by returning 429 on each attempt for every one of the"
+                + " concurrent requests.");
+    assertTrue(farRefusal.contains("no review has weighed"), farRefusal);
+  }
+
+  /**
+   * A diff can state concurrency in words {@code STATED_CONCURRENCY} does not match, so the note
+   * held without a quote never claims the reviewed code cannot confirm it.
+   */
+  @Test
+  void aHeldNoteWithoutAQuoteNeverSaysTheCodeCannotConfirmConcurrency() {
+    for (var unmatched :
+        List.of(
+            "+// Multiple threads call tracker.bump() on every request.",
+            "+// Requests arrive at this handler in parallel.")) {
+      var note = heldNote(unmatched);
+      assertTrue(note.contains("no review has weighed"), unmatched + " -> " + note);
+      assertTrue(note.contains("not taken on faith"), note);
+      assertFalse(note.contains("cannot confirm"), note);
+    }
+  }
+
+  /** A diff section is the declined file's only when its a/ or b/ path is that file exactly. */
+  @Test
+  void aDiffSectionIsTheFilesOnlyByAnExactPath() {
+    var suffix =
+        heldNote(
+            """
+            diff --git a/other/src/A.java b/other/src/A.java
+            +// Pool is shared by every request goroutine.""");
+    assertTrue(suffix.contains("no review has weighed"), suffix);
+
+    var malformed =
+        heldNote(
+            """
+            diff --git src/A.java src/A.java
+            +// Pool is shared by every request goroutine.""");
+    assertTrue(malformed.contains("no review has weighed"), malformed);
+    var noNewPath =
+        heldNote(
+            """
+            diff --git a/src/A.java
+            +// Pool is shared by every request goroutine.""");
+    assertTrue(noNewPath.contains("no review has weighed"), noNewPath);
+
+    var renamedTo =
+        heldNote(
+            """
+            diff --git a/src/Old.java b/src/A.java
+            +// Counter is shared by every request goroutine.""");
+    assertTrue(renamedTo.contains("says this path runs concurrently"), renamedTo);
+
+    var renamedFrom =
+        heldNote(
+            """
+            diff --git a/src/A.java b/src/Counter.java
+            +// Counter is shared by every request goroutine.""");
+    assertTrue(renamedFrom.contains("says this path runs concurrently"), renamedFrom);
+  }
+
+  /** Only the declined finding's own file is read for the statement. */
+  @Test
+  void aConcurrencyStatementInAnotherFileIsNotQuoted() {
+    var otherFile =
+        heldNote(
+            """
+            ### src/Other.java (modified, +1 -0)
+            +// Pool is shared by every request goroutine.
+            diff --git a/src/A.java b/src/A.java
+            +counter.bump();""");
+    assertTrue(otherFile.contains("no review has weighed"), otherFile);
+
+    var ownFile =
+        heldNote(
+            """
+            diff --git a/src/Other.java b/src/Other.java
+            +counter.reset();
+            ### src/A.java (modified, +1 -0)
+            +// Counter is shared by every request goroutine.""");
+    assertTrue(ownFile.contains("says this path runs concurrently"), ownFile);
+  }
+
+  /** The common sibling phrasings of a concurrency statement are quoted too. */
+  @Test
+  void siblingPhrasingsOfAConcurrencyStatementAreQuoted() {
+    for (var line :
+        List.of(
+            "+// The pool is shared across goroutines.",
+            "+// The pool is shared among all threads.",
+            "+// The pool is shared between requests.",
+            "+// The cache is used by all goroutines.",
+            "+// Tracker is safe for concurrent use.")) {
+      var note = heldNote(line);
+      assertTrue(note.contains("says this path runs concurrently"), line + " -> " + note);
+    }
+    for (var line :
+        List.of(
+            "+// The pool is shared by the request.", "+// The pool is shared across goroutine.")) {
+      var note = heldNote(line);
+      assertTrue(note.contains("no review has weighed"), line + " -> " + note);
+    }
+  }
+
+  /**
+   * A negator in the statement's clause denies it, however many characters its words take and up to
+   * six words back; a negator or guard word in an earlier clause does not, nor does "not only".
+   */
+  @Test
+  void aDenialReachesBackThroughItsClauseWhateverTheWordLength() {
+    for (var denied :
+        List.of(
+            "+// The counter is not ever really shared by every request goroutine.",
+            "+// Nothing in this struct is shared across goroutines.",
+            "+// None of these fields are shared by every request goroutine.",
+            "+// Neither field is used by all goroutines.",
+            "+// Never is the pool really shared by every request goroutine.",
+            // A comma sets off an aside; the negator before it still governs the statement.
+            "+// It is not, in practice, a thing called from multiple threads.",
+            "+// The endpoint is not, under load, shared by every request goroutine.",
+            "+// The counter is not reset, it is shared by every request goroutine.")) {
+      var note = heldNote(denied);
+      assertTrue(note.contains("no review has weighed"), denied + " -> " + note);
+    }
+    for (var affirmed :
+        List.of(
+            "+// It is not a cache and it is shared by every request goroutine.",
+            "+// There is no cache because the pool is shared by every request goroutine.",
+            "+// The pool is not only shared by every request goroutine but by the workers too.",
+            // A negator reaches seven words back at most, and a gap over sixteen spaces ends the
+            // clause.
+            "+// The pool held by the small old worker type here is shared by every request"
+                + " goroutine.",
+            "+// The pool is not" + " ".repeat(17) + "shared by every request goroutine.")) {
+      var note = heldNote(affirmed);
+      assertTrue(note.contains("says this path runs concurrently"), affirmed + " -> " + note);
+    }
+
+    var longWords =
+        heldNote(
+            "+// The counter is not aVeryLongCamelCaseIdentifierOfFortyChar thereby shared by every"
+                + " request goroutine.");
+    assertTrue(longWords.contains("no review has weighed"), longWords);
+
+    // Neither a word over forty characters, a non-breaking or wide gap, nor a typographic
+    // apostrophe hides the negator.
+    for (var denied :
+        List.of(
+            "+// The counter is not aVeryLongCamelCaseIdentifierLongerThanFortyCharacters thereby"
+                + " shared by every request goroutine.",
+            "+// The counter is not shared by every request goroutine.",
+            "+// The counter is not      shared by every request goroutine.",
+            "+// The counter isn’t shared by every request goroutine.",
+            "+// The counter is not thread-local-only shared by every request goroutine.")) {
+      var note = heldNote(denied);
+      assertTrue(note.contains("no review has weighed"), denied + " -> " + note);
+    }
+
+    var otherClause =
+        heldNote("+// The counter is not reset; it is shared by every request goroutine.");
+    assertTrue(otherClause.contains("says this path runs concurrently"), otherClause);
+
+    var guardClause = heldNote("+// The mutex guards it: shared by every thread.");
+    assertTrue(guardClause.contains("says this path runs concurrently"), guardClause);
+
+    // The scan stops at the start of the line, and a tab is a gap like a space.
+    for (var denied :
+        List.of(
+            "+Never shared by every request goroutine.",
+            "+// The counter is not\tshared by every request goroutine.")) {
+      var note = heldNote(denied);
+      assertTrue(note.contains("no review has weighed"), denied + " -> " + note);
+    }
+    // Nothing before the statement, or an n't word longer than a contraction (an identifier),
+    // denies nothing.
+    for (var affirmed :
+        List.of(
+            "+shared by every request goroutine.",
+            "+// See flag_wouldn't shared by every request goroutine.")) {
+      var note = heldNote(affirmed);
+      assertTrue(note.contains("says this path runs concurrently"), affirmed + " -> " + note);
+    }
+  }
+
+  /** A statement wrapped across comment lines is read whole, a wrapped denial included. */
+  @Test
+  void aConcurrencyStatementWrappedAcrossCommentLinesIsQuotedWhole() {
+    var wrapped =
+        heldNote(
+            """
+            +// The tracker is shared by every
+            +// request goroutine in the server.
+            +tracker.bump();""");
+    assertTrue(wrapped.contains("says this path runs concurrently"), wrapped);
+    assertTrue(
+        wrapped.contains("shared by every request goroutine in the server."), "joined: " + wrapped);
+
+    var javadoc =
+        heldNote(
+            """
+            +/**
+            + * The tracker is called from multiple
+            + * threads at once.
+            + */""");
+    assertTrue(javadoc.contains("called from multiple threads at once"), javadoc);
+
+    var wrappedDenial =
+        heldNote(
+            """
+            +// The tracker is not
+            +// shared by every request goroutine.
+            +tracker.bump();""");
+    assertTrue(wrappedDenial.contains("no review has weighed"), wrappedDenial);
+
+    var codeBetween =
+        heldNote(
+            """
+            +// The tracker is shared by every
+            +tracker.bump();
+            +// request goroutine in the server.""");
+    assertTrue(codeBetween.contains("no review has weighed"), codeBetween);
+
+    // A code line that only starts like a comment marker splits the run as any code line does.
+    for (var code : List.of("*p = q;", "#include <stdio.h>", "---", "**bold**")) {
+      var note =
+          heldNote(
+              "+// The tracker is shared by every\n+"
+                  + code
+                  + "\n+// request goroutine in the server.");
+      assertTrue(note.contains("no review has weighed"), code + " -> " + note);
+    }
+    // Only // and /* open a comment with no space after them; #, * and -- need one.
+    for (var marker : List.of("//", "#", "*", "--", "/*")) {
+      var note =
+          heldNote(
+              "+// The tracker is shared by every\n+"
+                  + marker
+                  + "request goroutine in the server.");
+      var expected =
+          marker.equals("//") || marker.equals("/*")
+              ? "says this path runs concurrently"
+              : "no review has weighed";
+      assertTrue(note.contains(expected), marker + " -> " + note);
+    }
+  }
+
+  // #963: a decline the model did not accept on the effective previous round is explained too.
+
+  private static final String MODEL_REASON =
+      "Decline reply says requests are handled one at a time, but Main.scala sets"
+          + " server.setExecutor(Executors.newFixedThreadPool(8)).";
+
+  private List<ReviewResponse.PreviousFindingStatus> modelUnresolved(
+      FollowUpAnalyzer backstop, String note, String... replies) {
+    var previous = analyzer.parsePreviousResponses(List.of(RACE_ROUND_JSON)).get(0).findings();
+    return backstop.recheckDeclines(
+        previous,
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "unresolved", note),
+            new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still there")),
+        earlierRaceThread(replies),
+        List.of(),
+        BOT_ID,
+        () -> "+counter.bump();");
+  }
+
+  @Test
+  void aReplyTheModelDidNotAcceptCarriesTheModelsReasonUnderTheReplyLeadIn() {
+    var statuses = modelUnresolved(analyzer, MODEL_REASON, RACE_WRONG_DECLINE);
+
+    var note = statuses.get(0).note();
+    assertEquals("unresolved", statuses.get(0).status());
+    assertTrue(note.startsWith(RebuttalContradiction.REPLY_LEAD_IN), note);
+    assertTrue(note.contains(MODEL_REASON), note);
+    assertTrue(
+        note.endsWith("If the reply declines the finding, reply again to keep the decline."), note);
+    assertEquals("still there", statuses.get(1).note(), "a finding nobody answered is untouched");
+  }
+
+  @Test
+  void aReplyTheModelDidNotAcceptAfterTwoRepliesIsExplainedWithoutAskingAgain() {
+    var note =
+        modelUnresolved(analyzer, MODEL_REASON, RACE_WRONG_DECLINE, "Still declining.")
+            .get(0)
+            .note();
+
+    assertTrue(note.startsWith(RebuttalContradiction.REPLY_LEAD_IN), note);
+    assertFalse(note.contains("reply again"), note);
+  }
+
+  /**
+   * A reply that acknowledges the finding is not called a decline: the note says the reply was
+   * weighed, never that a decline was re-checked.
+   */
+  @Test
+  void anAcknowledgingReplyTheModelKeptOpenIsNotCalledADecline() {
+    var note =
+        modelUnresolved(analyzer, "The fix is not pushed yet.", "Good catch, will fix.")
+            .get(0)
+            .note();
+
+    assertTrue(note.startsWith(RebuttalContradiction.REPLY_LEAD_IN), note);
+    assertFalse(note.contains(RebuttalContradiction.NOTE_LEAD_IN), note);
+    assertFalse(note.contains("Decline re-checked"), note);
+  }
+
+  @Test
+  void aStatusNamingNoFindingIsNotExplained() {
+    var previous = analyzer.parsePreviousResponses(List.of(RACE_ROUND_JSON)).get(0).findings();
+    var statuses =
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(0, "unresolved", MODEL_REASON),
+            new ReviewResponse.PreviousFindingStatus(9, "unresolved", MODEL_REASON));
+
+    assertEquals(
+        statuses,
+        analyzer.recheckDeclines(
+            previous,
+            statuses,
+            earlierRaceThread(RACE_WRONG_DECLINE),
+            List.of(),
+            BOT_ID,
+            () -> "+counter.bump();"));
+  }
+
+  @Test
+  void aModelNoteIsLeftAsItIsWhenThereIsNothingToExplain() {
+    assertEquals("still there", modelUnresolved(analyzer, "still there").get(0).note());
+    var already = RebuttalContradiction.NOTE_LEAD_IN + " already explained.";
+    assertEquals(already, modelUnresolved(analyzer, already, RACE_WRONG_DECLINE).get(0).note());
+    var weighed = RebuttalContradiction.REPLY_LEAD_IN + " already explained.";
+    assertEquals(weighed, modelUnresolved(analyzer, weighed, RACE_WRONG_DECLINE).get(0).note());
+    assertEquals(" ", modelUnresolved(analyzer, " ", RACE_WRONG_DECLINE).get(0).note());
+    assertEquals(null, modelUnresolved(analyzer, null, RACE_WRONG_DECLINE).get(0).note());
+    assertEquals(
+        MODEL_REASON,
+        modelUnresolved(
+                new FollowUpAnalyzer(new ObjectMapper(), false), MODEL_REASON, RACE_WRONG_DECLINE)
+            .get(0)
+            .note());
   }
 
   @Test
