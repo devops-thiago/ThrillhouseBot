@@ -946,9 +946,11 @@ description: ANSI codes and control and bidi characters are stripped, each field
 is clipped, and the list sits inside the untrusted-data fence. The model is told
 to use a failure to find the changed line that causes it, to name the failing
 test in the finding that explains it, to quote the failure it relied on, and not
-to report a failure the diff does not explain. The summary call gets the same
-list and says, for each failing check, which finding explains it or that none
-does.
+to report a failure the diff does not explain. The summary's overview then
+says, for each failing check, which open finding explains it or that none does.
+That sentence is computed rather than written by the model: a finding explains
+a check when it names the check or one of the failing tests listed for it, and
+findings still open from earlier reviews count.
 
 Checks still running add only a count next to a failure. An automatic review
 usually starts before CI finishes, so in practice the section shows up on a
