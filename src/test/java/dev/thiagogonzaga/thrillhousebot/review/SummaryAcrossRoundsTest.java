@@ -1397,7 +1397,9 @@ class SummaryAcrossRoundsTest {
     assertRisk(edited, 1, 7, 2, 0);
     assertOpenCount(edited, 3);
     var keyFindings = section(edited, "### Key Findings");
-    assertEquals(ReviewResult.KEY_FINDINGS_COUNT, keyFindings.split("\n- ").length - 1, edited);
+    // Five bullets, then the line counting the inline findings the cap left out (#964).
+    assertEquals(ReviewResult.KEY_FINDINGS_COUNT + 1, keyFindings.split("\n- ").length - 1, edited);
+    assertTrue(keyFindings.contains(PrSummaryGenerator.keyFindingsMoreLine(4)), edited);
     assertTrue(
         keyFindings.contains(
             CRITICAL.title() + " (`" + FILE + ":10`) " + PrSummaryGenerator.CARRIED_NOTE),

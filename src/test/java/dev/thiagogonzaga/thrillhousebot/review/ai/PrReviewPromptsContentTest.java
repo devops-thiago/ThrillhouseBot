@@ -616,6 +616,17 @@ class PrReviewPromptsContentTest {
   }
 
   @Test
+  void diagramRequestNamesTheFlowchartEdgeSyntax() {
+    String req = PrReviewPrompts.DIAGRAM_REQUEST;
+    assertContains(
+        req, "never `->` or the", "the diagram prompt must rule out the one-dash arrow (#952)");
+    assertContains(
+        req,
+        "sequence diagram's `->>`, and never a comma after a node",
+        "the diagram prompt must rule out the edge syntax posted diagrams failed on (#952)");
+  }
+
+  @Test
   void diagramRequestGivesSequenceDiagramItsOwnSyntaxRules() {
     String req = PrReviewPrompts.DIAGRAM_REQUEST;
     assertContains(

@@ -21,6 +21,7 @@ import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -2021,6 +2022,174 @@ class PrSummaryGeneratorTest {
         PrSummaryGenerator.reRaises(
             finding(RiskLevel.HIGH, "src/A.java", 5, "Title"),
             finding(RiskLevel.HIGH, "src/A.java", 5, null)));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // react #154 round 1: one-dash arrows.
+        "flowchart TD\n  A[\"Poller\"] -> B[\"Tracker\"]",
+        // #152 round 2: a sequence-diagram arrow in a flowchart.
+        "flowchart TD\n  A[\"Client\"] ->> B[\"Server\"]",
+        // #154 round 2: a stray comma after a node.
+        "flowchart TD\n  PE[\"pending\"],\n  PE --> DONE[\"done\"]",
+        "flowchart TD\n  A[\"x\"] --> B[\"y\"],",
+        "graph LR\n  A[\"open --> B",
+        "flowchart TD\n  A[\"x\"] --> B[\"y\"",
+        "flowchart TD\n  A(\"x\"] --> B",
+        // Unquoted labels GitHub rejects though their brackets balance.
+        "flowchart TD\n  A(f(x)) --> B",
+        "flowchart TD\n  A(t: 3) --> B",
+        "flowchart TD\n  A[x & y] --> B",
+        // An edge label left open.
+        "flowchart TD\n  A -->|x B",
+        // Two edge labels left open on one line do not pair across the arrow between them.
+        "flowchart TD\n  A -->|x B -->|y C",
+        "flowchart TD\n  A -->|x B ==> |y C",
+        // A doubled arrowhead, a sequence diagram's arrow under a flowchart header.
+        "flowchart TD\n  A-->>B",
+        "flowchart TD\n  A -->> B",
+        // A single-dash two-way edge is not a Mermaid link; the two-dash one is kept below.
+        "flowchart TD\n  A <-> B",
+        // A stray dot before an arrowhead, and a direction Mermaid does not have.
+        "flowchart TD\n  A .-> B",
+        "flowchart XY\n  A --> B",
+        "flowchart TD XY\n  A --> B",
+        "graph LR LR\n  A --> B",
+        // Statements on the header line, separated by semicolons, are checked too.
+        "flowchart TD; A -> B; B --> C",
+        // A comma between two bare node ids.
+        "flowchart TD\n  A --> B, C --> D",
+        "graph LR;A(f(x))-->B",
+        "flowchart TD\n  A] --> B",
+        // A flag shape that never closes, or one whose label breaks it.
+        "flowchart TD\n  A>flag --> B",
+        "flowchart TD\n  A>t: 3] --> B",
+        // A slash inside an unquoted label, which the diagram prompt says GitHub rejects.
+        "flowchart TD\n  A[src/main.java] --> B",
+        "flowchart TD\n  A --> B,"
+      })
+  void aFlowchartThatWouldNotParseIsOmitted(String diagram) {
+    assertFalse(PrSummaryGenerator.flowchartParses(diagram), diagram);
+    var summary =
+        generator.generate(
+            1,
+            10,
+            0,
+            List.of(),
+            new ReviewResponse.Summary(
+                0, 0, 0, 0, 0, "ok", "p", List.of(), List.of(), List.of(), diagram, List.of()),
+            roundWith(List.of(), List.of()));
+    assertFalse(summary.contains("Control-Flow Diagram"), summary);
+  }
+
+  @Test
+  void aDiagramWhoseFirstLineIsADirectiveIsOmittedUnrecognised() {
+    // The type keyword must open the first line; a directive or comment there leaves the diagram
+    // unrecognised, so it is omitted even though its body would parse.
+    var directive = "%%{init: {'theme': 'dark'}}%%\nflowchart TD\n  A --> B";
+    var summary =
+        generator.generate(
+            1,
+            10,
+            0,
+            List.of(),
+            new ReviewResponse.Summary(
+                0, 0, 0, 0, 0, "ok", "p", List.of(), List.of(), List.of(), directive, List.of()),
+            roundWith(List.of(), List.of()));
+
+    assertFalse(summary.contains("Control-Flow Diagram"), summary);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "flowchart TD\n  A[\"call foo() -> bar\"] --> B{\"ready?\"}\n  B -->|yes -> go| C",
+        "flowchart LR\n  A -.-> B\n  B ==> C\n  C --- D\n  D -- text --> E\n  E <--> F",
+        "flowchart LR\n  A -->|x-y| B -->|re-try| C ==>|go| D",
+        // Interior link characters in a label, and comma statements after a semicolon.
+        "flowchart LR\n  A -->|retry--fallback| B ==>|a==b| C",
+        "flowchart LR\n  A -->|calls a --> b| B -->|then c ==> d| C",
+        // A closed label whose text ends in a link, before one node.
+        "flowchart LR\n  A -->|goes -->| B",
+        "flowchart LR\n  A -->|goes -->| B[\"end\"] --> C",
+        "flowchart TD; A --> B; class A,B hot",
+        "flowchart TD\n  A --> B; style A fill:#f9f,stroke:#333",
+        "graph TD\n  subgraph S [\"Store\"]\n    A([\"Fetch, merge\"]) --> B[(\"db\")]\n  end",
+        "flowchart TD\n  %% a comment, with commas,\n  A --> B\n  class A,B hot\n  linkStyle 0,1 x",
+        "flowchart TD\n  A --> B & C\n  C{{\"hex\"}} --> D",
+        "flowchart TD\n\n  A --> B",
+        "flowchart TD; A --> B; B --> C",
+        "flowchart BT\n  A -.-> B",
+        "graph RL\n  A --> B",
+        "flowchart TD\n  A[a, b] --> B(c, d)",
+        "graph",
+        // The asymmetric (flag) shape, quoted and bare, beside arrows whose '>' follows a dash.
+        "flowchart TD\n  Deploy>\"release\"] --> Prod",
+        "flowchart TD\n  Deploy>release] -->Prod\n  Prod ==>Done",
+        "flowchart TD\n  deploy_>release] --> B[a>b]",
+        // Slanted shapes, and a slash inside a quoted label.
+        "flowchart TD\n  A[/input/] --> B[\\base/] --> C[/top\\]",
+        "flowchart TD\n  A[\"src/main.java\"] --> B"
+      })
+  void aFlowchartThatParsesIsKept(String diagram) {
+    assertTrue(PrSummaryGenerator.flowchartParses(diagram), diagram);
+  }
+
+  @Test
+  void theScanSecretKeepsItsKeyFindingsPlaceAgainstFiveModelHighs() {
+    // zig #190, rust #195: five model HIGHs filled the list and the deterministic HIGH secret,
+    // listed last, was cut.
+    var own = new ArrayList<Finding>();
+    for (var i = 0; i < 5; i++) {
+      own.add(finding(RiskLevel.HIGH, "src/A.java", 10 + i, "Model high " + i));
+    }
+    var secret =
+        new Finding(
+            RiskLevel.HIGH,
+            Confidence.HIGH,
+            "src/Config.java",
+            3,
+            SecurityRule.GITHUB_TOKEN.secretTitleHead() + " (ghp_…, 40 chars)",
+            "d\n\n" + SecurityScan.PROVENANCE,
+            null,
+            null);
+    own.add(secret);
+    // A model finding whose title only starts like a scan title gets no such place.
+    var lookalike =
+        finding(
+            RiskLevel.HIGH,
+            "src/B.java",
+            7,
+            SecurityRule.GITHUB_TOKEN.secretTitleHead() + " (from the model)");
+    own.add(lookalike);
+    own.add(finding(RiskLevel.MEDIUM, "src/A.java", 40, "Model medium"));
+
+    var summary = generator.generate(1, 10, 0, List.of(), null, roundWith(own, List.of()));
+
+    var keyFindings = summary.substring(summary.indexOf("### Key Findings"));
+    assertTrue(keyFindings.indexOf(secret.title()) > 0, summary);
+    assertTrue(keyFindings.indexOf(secret.title()) < keyFindings.indexOf("Model high 0"), summary);
+    assertFalse(keyFindings.contains("Model high 4"), summary);
+    assertFalse(keyFindings.contains(lookalike.title()), summary);
+    assertTrue(keyFindings.contains(PrSummaryGenerator.keyFindingsMoreLine(3)), summary);
+  }
+
+  @Test
+  void keyFindingsWithinTheCapCarryNoMoreLine() {
+    var summary =
+        generator.generate(
+            1,
+            10,
+            0,
+            List.of(),
+            null,
+            roundWith(List.of(finding(RiskLevel.HIGH, "src/A.java", 1, "Only one")), List.of()));
+
+    assertFalse(summary.contains("more finding"), summary);
+    assertEquals(
+        "- _…and 1 more finding, each on its own review thread._\n",
+        PrSummaryGenerator.keyFindingsMoreLine(1));
   }
 
   /** A finding reporting that the change contradicts the PR description (#964). */
