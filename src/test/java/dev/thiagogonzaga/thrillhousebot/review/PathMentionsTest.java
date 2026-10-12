@@ -99,6 +99,18 @@ class PathMentionsTest {
         screened.prPurpose());
   }
 
+  /** A path in markdown emphasis is judged like a bare one. */
+  @Test
+  void anEmphasizedInventedPathIsCut() {
+    var mentions = mentions(REACT, "", REACT_TREE);
+
+    assertEquals(
+        "Adds a dashboard.",
+        mentions.withoutUnresolvedSentences(
+            "Adds a dashboard. It moves the README to *docs/REACT-VIV.md*. It renames"
+                + " **docs/REACT-VIV.md** for clarity."));
+  }
+
   /** The real path, and the rename's source, are kept. */
   @Test
   void theRenamedPathAndItsSourceAreKept() {
@@ -161,6 +173,9 @@ class PathMentionsTest {
         "It pulls ghcr.io/org/app:1.2 at build time.",
         "It clones github.com/org/tools/scripts on start.",
         "Every src/**/*.ts file is linted.",
+        "It reads every *config.yml and src/*.ts and *.md file.",
+        "It keeps the *docs/NOPE.md*s list and x*docs/NOPE.md* too.",
+        "It globs src/*docs/NOPE.md* paths.",
         "It globs docs/{a,b}/index.md.",
         "It imports @angular/core/testing helpers.",
         "POST /triage/run starts a run, GET /applications/:id/attachments serves files.",
@@ -380,6 +395,10 @@ class PathMentionsTest {
           The source is docs/NOPE.md: | The source is:
           The source (docs/NOPE.md | The source (
           The source (docs/NOPE.md; see the issue) is cited. | The source (; see the issue) is cited.
+          See *docs/NOPE.md* now. | See now.
+          See **docs/NOPE.md** now. | See now.
+          *docs/NOPE.md* is cited. | is cited.
+          It is cited: *docs/NOPE.md* | It is cited:
           """)
   void aMentionIsStrippedWhereverItStands(String text, String stripped) {
     assertEquals(stripped, mentions(REACT, null, REACT_TREE).withoutUnresolvedMentions(text));

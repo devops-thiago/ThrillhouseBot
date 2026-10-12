@@ -70,11 +70,12 @@ final class PathMentions {
    * A path-shaped candidate: segments of word characters, dots, plus and minus signs joined by
    * slashes, an optional trailing slash, and an optional {@code :line} or {@code :start-end}. Never
    * right after a character that would make it the tail of something longer: a slash (a route or a
-   * URL), an {@code @} (a scoped package), a glob star.
+   * URL), an {@code @} (a scoped package). A star before or after it makes it part of a glob unless
+   * it is markdown emphasis ({@link #partOfSomethingElse}).
    */
   private static final Pattern TOKEN =
       Pattern.compile(
-          "(?<![\\w./@*~:\\\\+-])([\\w+-][\\w.+-]*+(?:/[\\w.+-]++)*+/?)(:\\d++(?:-\\d++)?+)?");
+          "(?<![\\w./@~:\\\\+-])([\\w+-][\\w.+-]*+(?:/[\\w.+-]++)*+/?)(:\\d++(?:-\\d++)?+)?");
 
   /** A URL, which holds path-shaped segments that are not repository paths. */
   private static final Pattern URL =
@@ -392,13 +393,17 @@ final class PathMentions {
   }
 
   /**
-   * What goes with the mention at {@code start}..{@code end}: the code span or parenthetical it
-   * fills, and the blank before it; or, when it opens a span or parenthetical that goes on, the
-   * blank after it.
+   * What goes with the mention at {@code start}..{@code end}: its emphasis, the code span or
+   * parenthetical it fills, and the blank before it; or, when it opens a span or parenthetical that
+   * goes on, the blank after it.
    */
   private static int[] mentionBounds(CharSequence s, int start, int end) {
     int from = start;
     int to = end;
+    while (wraps(s, from, to, '*', '*')) {
+      from--;
+      to++;
+    }
     if (wraps(s, from, to, '`', '`')) {
       from--;
       to++;
@@ -438,7 +443,7 @@ final class PathMentions {
       if (inside(urls, start)
           || inside(fences, start)
           || !(pathShaped(token) || underAChangedDirectory(token))
-          || continuesAsSomethingElse(text, fullEnd)) {
+          || partOfSomethingElse(text, start, fullEnd)) {
         continue;
       }
       var resolution = resolve(token);
@@ -541,6 +546,45 @@ final class PathMentions {
       end--;
     }
     return token.substring(0, end);
+  }
+
+  /**
+   * Whether what surrounds a candidate makes it part of something else: a glob star before or after
+   * it, unless the stars are markdown emphasis, or what {@link #continuesAsSomethingElse} reads.
+   */
+  private static boolean partOfSomethingElse(String text, int start, int end) {
+    if (emphasized(text, start, end)) {
+      return false;
+    }
+    return (start > 0 && text.charAt(start - 1) == '*') || continuesAsSomethingElse(text, end);
+  }
+
+  /**
+   * Whether the candidate at {@code start}..{@code end} is wrapped in markdown emphasis ({@code
+   * *docs/x.md*}, {@code **docs/x.md**}): the same run of stars on each side, with no word or slash
+   * beyond either, which a glob ({@code src/*.ts}, {@code *config.yml}) never has.
+   */
+  private static boolean emphasized(String text, int start, int end) {
+    int before = 0;
+    while (start - before > 0 && text.charAt(start - before - 1) == '*') {
+      before++;
+    }
+    int after = 0;
+    while (end + after < text.length() && text.charAt(end + after) == '*') {
+      after++;
+    }
+    return before > 0
+        && before == after
+        && !globNeighbour(text, start - before - 1)
+        && !globNeighbour(text, end + after);
+  }
+
+  private static boolean globNeighbour(String text, int at) {
+    if (at < 0 || at >= text.length()) {
+      return false;
+    }
+    char c = text.charAt(at);
+    return Character.isLetterOrDigit(c) || c == '/';
   }
 
   /**
