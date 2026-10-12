@@ -30,7 +30,6 @@ import java.util.Set;
 import java.util.regex.MatchResult;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * Checks the summary call's overview against the material it describes before it is persisted and
@@ -211,11 +210,18 @@ final class OverviewScreen {
   private static final Set<String> MID_SENTENCE_ABBREVIATIONS = Set.of("e.g.", "i.e.", "vs.");
 
   /**
-   * A title or reference abbreviation: a capital and one to three lower-case letters, then the
-   * period ("Dr.", "Mr.", "No.", "Fig.", "Inc."). It precedes a name or a number, so a capital or a
-   * digit after it does not start a sentence.
+   * Title abbreviations, which precede a name: "Dr. Smith" does not start a sentence at "Smith". A
+   * word of the same shape that is not one ("Vite.", "Java.") ends its sentence.
    */
-  private static final Pattern SHORT_ABBREVIATION = Pattern.compile("\\p{Lu}\\p{Ll}{1,3}\\.");
+  private static final Set<String> TITLE_ABBREVIATIONS =
+      Set.of("dr.", "mr.", "mrs.", "ms.", "prof.", "st.", "jr.", "sr.", "gen.", "sen.", "rep.");
+
+  /**
+   * Reference abbreviations, which precede a number: "No. 5", "Fig. 2". Before anything else their
+   * period may end the sentence.
+   */
+  private static final Set<String> REFERENCE_ABBREVIATIONS =
+      Set.of("no.", "nos.", "fig.", "figs.", "vol.", "ch.", "sec.", "eq.", "ref.", "p.", "pp.");
 
   /**
    * {@code summary} with its file summaries mapped, screened and deduplicated, and its purpose
@@ -353,8 +359,14 @@ final class OverviewScreen {
     parts.add(clause.substring(from).strip());
     var kept = new StringBuilder();
     var dropped = 0;
+    var previousDropped = false;
     for (var i = 0; i < parts.size(); i++) {
-      if (talksAboutFindings(LEADING_CONJUNCTION.matcher(parts.get(i)).replaceFirst(""))) {
+      var part = parts.get(i);
+      // A relative tail ("…, which are security-related") belongs to the part before it.
+      previousDropped =
+          talksAboutFindings(LEADING_CONJUNCTION.matcher(part).replaceFirst(""))
+              || (previousDropped && RELATIVE_TAIL.matcher(part).find());
+      if (previousDropped) {
         dropped++;
       } else {
         kept.append(kept.isEmpty() ? "" : separators.get(i - 1)).append(parts.get(i));
@@ -371,6 +383,10 @@ final class OverviewScreen {
    */
   private static final Pattern PART_SEPARATOR =
       Pattern.compile("(?i),(?=\\s)\\s*+|\\s++(?:and|but|or|nor|yet)\\s++");
+
+  /** A part that only qualifies the one before it: "which are…", "that the review tracks". */
+  private static final Pattern RELATIVE_TAIL =
+      Pattern.compile("(?i)^(?:which|that|who|whose|where)\\b");
 
   /**
    * A coordinating conjunction opening a part after a comma ("renders it, but hosts the two
@@ -403,7 +419,7 @@ final class OverviewScreen {
     var aboutTheBatch = lower.contains("this batch");
     for (var i = 0; i < words.length; i++) {
       if (words[i].startsWith("finding")
-          && !namesAnArtifact(words, i)
+          && (opensClause(words, i) || endsItsPhrase(words, i))
           && bookkeepingLead(words, i)
           && (aboutTheBatch
               || qualified(words, i)
@@ -415,71 +431,69 @@ final class OverviewScreen {
   }
 
   /**
-   * Whether the finding word at {@code at} names a part of the file rather than the review's
-   * findings: "Contains the findings table for the dashboard", "Holds the findings store".
+   * Whether the finding word at {@code at} ends its noun phrase, as the review's findings do
+   * ("hosts the two findings", "no findings in this batch", "the findings from the review"):
+   * nothing follows it, or a word that cannot continue the phrase does. Followed by any other word
+   * it qualifies that word and names a part of the file ("Contains the findings table", "the
+   * findings handler"). A clause the finding word opens is judged by {@link #qualified} instead.
    */
-  private static boolean namesAnArtifact(String[] words, int at) {
-    return at + 1 < words.length
-        && singularForms(words[at + 1]).anyMatch(FINDINGS_ARTIFACTS::contains);
+  private static boolean endsItsPhrase(String[] words, int at) {
+    return at + 1 >= words.length || PHRASE_ENDERS.contains(words[at + 1]);
   }
 
   /**
-   * {@code word} and the singulars it may be the plural of: "tables" → "table", "classes" →
-   * "class", "queries" → "query".
+   * Words that cannot continue a noun phrase after "findings": prepositions, relative words,
+   * conjunctions, forms of "be" and the review's placement and verdict words.
    */
-  private static Stream<String> singularForms(String word) {
-    var forms = Stream.<String>builder().add(word);
-    if (word.endsWith("ies")) {
-      forms.add(word.substring(0, word.length() - 3) + "y");
-    }
-    if (word.endsWith("es")) {
-      forms.add(word.substring(0, word.length() - 2));
-    }
-    if (word.endsWith("s")) {
-      forms.add(word.substring(0, word.length() - 1));
-    }
-    return forms.build();
-  }
-
-  /** Nouns a finding word qualifies when it names a part of the file: a table, a list, a store… */
-  private static final Set<String> FINDINGS_ARTIFACTS =
+  private static final Set<String> PHRASE_ENDERS =
       Set.of(
-          "table",
-          "list",
-          "panel",
-          "page",
-          "view",
-          "model",
-          "component",
-          "store",
-          "schema",
-          "query",
-          "endpoint",
-          "api",
-          "tracker",
-          "card",
-          "widget",
-          "type",
-          "class",
-          "record",
-          "service",
-          "repository",
-          "filter",
-          "parser",
-          "renderer",
-          "formatter",
-          "section",
-          "tab",
-          "grid",
-          "chart",
-          "map",
-          "cache",
-          "queue",
-          "dto",
-          "entity",
-          "column",
-          "field",
-          "route");
+          "from",
+          "in",
+          "for",
+          "on",
+          "at",
+          "of",
+          "to",
+          "with",
+          "by",
+          "about",
+          "across",
+          "that",
+          "which",
+          "who",
+          "here",
+          "there",
+          "this",
+          "these",
+          "and",
+          "or",
+          "but",
+          "yet",
+          "nor",
+          "so",
+          "is",
+          "are",
+          "was",
+          "were",
+          "remain",
+          "remains",
+          "still",
+          "far",
+          "total",
+          "left",
+          "found",
+          "open",
+          "posted",
+          "reported",
+          "raised",
+          "tracked",
+          "inline",
+          "confirmed",
+          "verified",
+          "above",
+          "below",
+          "listed",
+          "noted");
 
   /** The verbs of holding: a file that hosts or holds findings is talked about, not described. */
   private static final Set<String> HOLDING_VERBS =
@@ -506,7 +520,7 @@ final class OverviewScreen {
    * finding word opens the clause ("Findings are reported inline"), one of the two words after it.
    */
   private static boolean qualified(String[] words, int at) {
-    var opensClause = Arrays.stream(words, 0, at).allMatch(String::isEmpty);
+    var opensClause = opensClause(words, at);
     var from = opensClause ? at + 1 : Math.max(0, at - 2);
     var to = opensClause ? Math.min(words.length, at + 3) : at;
     for (var j = from; j < to; j++) {
@@ -517,6 +531,13 @@ final class OverviewScreen {
       }
     }
     return false;
+  }
+
+  /**
+   * Whether only empty words come before position {@code at}: the finding word opens the clause.
+   */
+  private static boolean opensClause(String[] words, int at) {
+    return Arrays.stream(words, 0, at).allMatch(String::isEmpty);
   }
 
   /**
@@ -550,9 +571,10 @@ final class OverviewScreen {
   /**
    * {@code text} split at each {@link #SENTENCE_END} that starts a new sentence. A lower-case
    * letter after it never does: whatever abbreviation ended in the period ("approx.", "etc.",
-   * "Inc.") ended mid-sentence. Nor does anything after "e.g.", "i.e." and "vs.", or after a short
-   * title or reference abbreviation ({@link #SHORT_ABBREVIATION}: "Dr. Smith", "No. 5"). Otherwise
-   * a period ends the sentence, "etc." included ("…, codecs, etc. Adds the rotator.").
+   * "Inc.") ended mid-sentence. Nor does anything after "e.g.", "i.e." and "vs.", a name after a
+   * title ({@link #TITLE_ABBREVIATIONS}: "Dr. Smith"), or a number after a reference ({@link
+   * #REFERENCE_ABBREVIATIONS}: "No. 5"). Otherwise a period ends the sentence, "etc." and a
+   * capitalised word such as "Vite." included ("…, codecs, etc. Adds the rotator.").
    */
   static List<String> sentences(String paragraph) {
     // Stripped, so a sentence end is always followed by the next sentence's first character.
@@ -563,11 +585,13 @@ final class OverviewScreen {
     while (ends.find()) {
       var before = text.substring(start, ends.start());
       var words = before.split("\\s");
-      var lastWord = words[words.length - 1];
+      var lastWord = words[words.length - 1].toLowerCase(Locale.ROOT);
+      var next = text.charAt(ends.end());
       var midSentence =
-          Character.isLowerCase(text.charAt(ends.end()))
-              || MID_SENTENCE_ABBREVIATIONS.contains(lastWord.toLowerCase(Locale.ROOT))
-              || SHORT_ABBREVIATION.matcher(lastWord).matches();
+          Character.isLowerCase(next)
+              || MID_SENTENCE_ABBREVIATIONS.contains(lastWord)
+              || TITLE_ABBREVIATIONS.contains(lastWord)
+              || (REFERENCE_ABBREVIATIONS.contains(lastWord) && Character.isDigit(next));
       if (!midSentence) {
         result.add(before);
         start = ends.end();

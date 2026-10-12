@@ -229,6 +229,23 @@ class OverviewScreenTest {
   }
 
   @Test
+  void aCapitalisedWordEndingASentenceIsNotTakenForATitle() {
+    assertEquals(
+        List.of(
+            "Runs the dev server via Vite.",
+            "Tracks ABCD-1.",
+            "Uses Java.",
+            "No.",
+            "Then it ships."),
+        OverviewScreen.sentences(
+            "Runs the dev server via Vite. Tracks ABCD-1. Uses Java. No. Then it ships."));
+    assertEquals(
+        "Runs the dev server via Vite.",
+        OverviewScreen.withoutInventedTickets(
+            "Runs the dev server via Vite. Tracks ABCD-1.", "Title: dev server"));
+  }
+
+  @Test
   void aSentenceEndingInEtcIsSplitBeforeACapital() {
     assertEquals(
         "Lists the parsers, codecs, etc.",
@@ -355,6 +372,9 @@ class OverviewScreenTest {
         // A finding word that names a part of the file.
         "Contains the findings table for the dashboard",
         "Holds the findings store",
+        // Any noun after the finding word, not only a listed one.
+        "Contains the findings handler for the dashboard",
+        "Wires the findings exporter",
         // Plural artifact nouns.
         "Contains the findings tables for the dashboard",
         "Holds the findings queries and classes",
@@ -373,6 +393,19 @@ class OverviewScreenTest {
         "Returns no findings for an empty diff",
         OverviewScreen.screenedText("Returns no findings for an empty diff", "+x", ""));
     assertEquals("", OverviewScreen.screenedText("TBD, hosts the two findings", "+x", ""));
+    // A relative tail goes with the findings part it qualifies.
+    assertEquals(
+        "",
+        OverviewScreen.screenedText(
+            "hosts the two findings, which are security-related", "+x", ""));
+    assertEquals(
+        "renders the dashboard",
+        OverviewScreen.screenedText(
+            "renders the dashboard; hosts the two findings, which are security-related", "+x", ""));
+    assertEquals(
+        "renders the dashboard, which the parser feeds",
+        OverviewScreen.screenedText(
+            "renders the dashboard, which the parser feeds, and hosts two findings", "+x", ""));
     // A comma inside a number does not split the clause.
     assertEquals(
         "Pages through 1,000 findings per request",
