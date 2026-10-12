@@ -345,6 +345,26 @@ class CiFailureCitationsTest {
   }
 
   /**
+   * Only a detailed check's job log names failing tests: a failing-test list after a check that is
+   * only named is read as no check's, and the parse does not fail on it.
+   */
+  @Test
+  void failingTestsAfterACheckNamedOnlyAreNotRead() {
+    var citations =
+        CiFailureCitations.parse(
+            """
+            ### unit (conclusion: failure)
+            Also failing, not detailed:
+            - lint
+            Failing tests named in the job log:
+            - --- FAIL: TestParseConfig (0.00s)
+            """);
+
+    assertTrue(citations.cites(described("The lint check fails in CI.")));
+    assertFalse(citations.cites(described("TestParseConfig fails on this line.")));
+  }
+
+  /**
    * Each runner's line yields the name a finding would write. Decoration is cut only where it
    * decorates a token: a position, an argument list or Zig's prefix after a word of the name is
    * part of the name.
@@ -371,6 +391,10 @@ class CiFailureCitationsTest {
           \u2716 checks that test.name stays | checks that test.name stays
           rspec ./spec/booking_spec.rb:12 | rspec ./spec/booking_spec.rb:12
           \u2716 keeps # comments (1ms) | keeps # comments
+          \u2716 renders empty (when no rows are eligible) (1.5ms) | renders empty (when no rows are eligible)
+          \u2716 returns [missing] rows (5 ms) | returns [missing] rows
+          \u2716 handles empty case - weekend schedule (2ms) | handles empty case - weekend schedule
+          FAIL: test_parse_config (tests.test_config.ConfigTest) | test_parse_config
           """)
   void eachRunnersLineYieldsTheTestsOwnName(String line, String name) {
     assertEquals(name, CiFailureCitations.testName(line));

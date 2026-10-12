@@ -146,9 +146,13 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   private static final Pattern COUNTER_LEAD =
       Pattern.compile("^(?:\\d++/\\d++ |Test \\[\\d++/\\d++] |\\d++ - )");
 
-  /** What a runner prints after a failed test's name: a duration, a status, an assertion. */
+  /**
+   * What a runner prints after a failed test's name, cut at its first occurrence: a status, the
+   * elapsed time, the column a summary starts. A duration or status in a group is cut only where it
+   * closes the line ({@link #withoutTail}), so a name's own parenthetical stays.
+   */
   private static final List<String> TEST_LINE_TAILS =
-      List.of(" (", " [", "...", " <<<", " -- ", " - ", " FAILED", " *** ", "  ");
+      List.of("...", " <<<", " -- ", " FAILED", " *** ", "  ");
 
   /** The separators between a test's suites and its own name: Jest, Gradle, pytest and cargo. */
   private static final Pattern TEST_PATH_SEPARATOR = Pattern.compile(" \u203A | > |::");
@@ -206,15 +210,22 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     private final List<List<String>> testLines = new ArrayList<>();
     private Listing listing = Listing.NONE;
 
+    /**
+     * Whether the last check read was detailed: only a detailed check's job log names failing
+     * tests, so a failing-test list after a check named only is read as no check's.
+     */
+    private boolean lastIsDetailed;
+
     void read(String line) {
       int conclusion = line.lastIndexOf(CONCLUSION);
       if (line.startsWith(CHECK_HEADING) && conclusion > CHECK_HEADING.length()) {
         names.add(line.substring(CHECK_HEADING.length(), conclusion));
         testLines.add(new ArrayList<>());
+        lastIsDetailed = true;
         listing = Listing.NONE;
       } else if (line.equals(NOT_DETAILED)) {
         listing = Listing.NAMED_ONLY;
-      } else if (line.equals(FAILING_TESTS) && !testLines.isEmpty()) {
+      } else if (line.equals(FAILING_TESTS) && lastIsDetailed) {
         listing = Listing.FAILING_TESTS;
       } else if (listing != Listing.NONE && line.startsWith(NAMED_ONLY)) {
         listItem(line.substring(NAMED_ONLY.length()));
@@ -227,6 +238,7 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       if (listing == Listing.NAMED_ONLY) {
         names.add(item);
         testLines.add(List.of());
+        lastIsDetailed = false;
       } else {
         testLines.getLast().add(item);
       }
@@ -263,16 +275,37 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     if (s.startsWith("FAIL ") || s.contains("Tests run:")) {
       return null;
     }
-    s = withoutLead(s);
+    s = withoutTail(withoutLead(s));
+    var segments = TEST_PATH_SEPARATOR.split(s);
+    s = segments[segments.length - 1].strip();
+    return ownName(s);
+  }
+
+  /**
+   * {@code line} without what the runner printed after the test's name: the {@link
+   * #TEST_LINE_TAILS}, pytest's " - AssertionError…" after a node id (a token with no space), and a
+   * group that closes the line ("(1.5ms)", "[12 ms]", "(module.Case)"). A name's own parenthetical
+   * or dash before those stays: "renders empty (when no rows are eligible) (2ms)" keeps it.
+   */
+  private static String withoutTail(String line) {
+    String s = line;
     for (String tail : TEST_LINE_TAILS) {
       int at = s.indexOf(tail);
       if (at > 0) {
         s = s.substring(0, at);
       }
     }
-    var segments = TEST_PATH_SEPARATOR.split(s);
-    s = segments[segments.length - 1].strip();
-    return ownName(s);
+    int dash = s.indexOf(" - ");
+    if (dash > 0 && s.lastIndexOf(' ', dash - 1) < 0) {
+      s = s.substring(0, dash);
+    }
+    return withoutClosingGroup(withoutClosingGroup(s, " (", ')'), " [", ']');
+  }
+
+  /** {@code s} without the group opened by the last {@code open} when that group ends it. */
+  private static String withoutClosingGroup(String s, String open, char close) {
+    int at = s.lastIndexOf(open);
+    return at > 0 && s.charAt(s.length() - 1) == close ? s.substring(0, at) : s;
   }
 
   /** {@code line} without what the runner printed before the test's name. */
