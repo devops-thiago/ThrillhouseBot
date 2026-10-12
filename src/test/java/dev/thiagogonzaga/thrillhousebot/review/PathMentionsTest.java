@@ -166,6 +166,7 @@ class PathMentionsTest {
         "POST /triage/run starts a run, GET /applications/:id/attachments serves files.",
         "It handles read/write and and/or paths in CI/CD.",
         "It runs on Node.js and Vue.js.",
+        "It renders with React.js.",
         "Version 1.2 ships in v3.4.",
       })
   void nonPathsAreLeftAlone(String text) {
@@ -304,6 +305,11 @@ class PathMentionsTest {
         mentions.withoutUnresolvedMentions(text));
     var unclosed = "Run:\n```\ncat build/missing.conf";
     assertEquals(unclosed, mentions.withoutUnresolvedMentions(unclosed));
+    var summary = "It fails. See:\n```\nls. cat build/missing.conf\n```\nAlso build/x.conf. Done.";
+    assertEquals(
+        "It fails. See:\n```\nls. cat build/missing.conf\n```\nAlso. Done.",
+        mentions.withoutUnresolvedSentences(summary),
+        "a summary text holding a fence loses mentions, not sentences that split the fence");
   }
 
   /**

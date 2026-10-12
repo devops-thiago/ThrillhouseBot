@@ -158,10 +158,17 @@ final class PathMentions {
           "cmake",
           "dockerfile");
 
+  /** The marker a fenced code block opens and closes with. */
+  private static final String FENCE = "```";
+
   /** Names that end in ".js" without being files: the frameworks and runtimes called that way. */
   private static final Set<String> TECHNOLOGY_NAMES =
       Set.of(
           "node",
+          "react",
+          "preact",
+          "angular",
+          "svelte",
           "vue",
           "next",
           "nuxt",
@@ -309,6 +316,11 @@ final class PathMentions {
     var whole = rewrite(text);
     if (whole.unresolved().isEmpty()) {
       return whole.text();
+    }
+    if (text.contains(FENCE)) {
+      // Sentences would split a fenced block and lose which side of a fence a path is on, so a
+      // text holding one loses the mentions instead, which are read over the whole text.
+      return withoutUnresolvedMentions(text);
     }
     var kept = new ArrayList<String>();
     for (String sentence : OverviewScreen.sentences(text)) {
@@ -521,12 +533,12 @@ final class PathMentions {
   /** The fenced code blocks of {@code text}, an unclosed one running to the end. */
   private static List<int[]> fences(String text) {
     var spans = new ArrayList<int[]>();
-    int open = text.indexOf("```");
+    int open = text.indexOf(FENCE);
     while (open >= 0) {
-      int close = text.indexOf("```", open + 3);
-      int end = close < 0 ? text.length() : close + 3;
+      int close = text.indexOf(FENCE, open + FENCE.length());
+      int end = close < 0 ? text.length() : close + FENCE.length();
       spans.add(new int[] {open, end});
-      open = close < 0 ? -1 : text.indexOf("```", end);
+      open = close < 0 ? -1 : text.indexOf(FENCE, end);
     }
     return spans;
   }
