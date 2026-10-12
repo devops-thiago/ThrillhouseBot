@@ -369,7 +369,9 @@ public class ReviewOrchestrator {
 
       CiStatusEvaluator.CiEvaluation ciEvaluation = rereadCiIfHeld(auth, ciReq, ciFuture.join());
 
-      var result = verdictBuilder.build(ctx, aiResponse, ciEvaluation, plan);
+      var result =
+          verdictBuilder.build(
+              ctx, aiResponse, ciEvaluation, plan, CiFailureCitations.parse(ciFailures));
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);

@@ -293,6 +293,67 @@ class SummaryAcrossRoundsTest {
     assertFalse(edited.contains(PrSummaryGenerator.ZERO_ISSUES_MESSAGE), edited);
   }
 
+  /**
+   * #1075 (ThrillhouseBot-test#254): round two raised nothing new, the finding that explains the
+   * failing test is open since round one, and the summary call wrote that no finding explains the
+   * failure. The overview's sentence is computed over every finding the summary lists, so it names
+   * the carried finding instead.
+   */
+  @Test
+  void theCiSentenceNamesTheFindingStillOpenFromAnEarlierRound() {
+    var cited =
+        new ReviewResponse.Finding(
+            "high",
+            "high",
+            FILE,
+            20,
+            "Integer overflow on order total",
+            "Multiplying two ints wraps, and the test 'order total survives a large cart' fails on"
+                + " this commit.",
+            "int total = count * price;",
+            "long total = (long) count * price;");
+    var summary =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            "Request changes.",
+            "Adds order totals. CI on this commit fails the check 'test' (failing test 'order"
+                + " total survives a large cart'), which no finding among the three verified above"
+                + " explains.",
+            List.of(),
+            List.of(),
+            List.of(),
+            null,
+            List.of());
+    var round =
+        new ReviewResponse(
+            List.of(),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+            summary);
+
+    var result =
+        builder.build(
+            followUp(List.of(new ReviewResponse(List.of(cited), List.of(), null)), List.of()),
+            round,
+            CI_CLEAR,
+            plan,
+            CiFailureCitations.parse(
+                "### test (conclusion: failure)\nFailing tests named in the job log:\n"
+                    + "- \u2716 order total survives a large cart (2.1ms)\n"));
+
+    var purpose = section(result.summaryMarkdown(), "### What this PR does");
+    assertTrue(
+        purpose.contains(
+            "Adds order totals. CI on this commit fails the check \"test\" (failing test \"order"
+                + " total survives a large cart\"), which the finding \"Integer overflow on order"
+                + " total\" explains."),
+        purpose);
+    assertFalse(purpose.contains("no finding"), purpose);
+  }
+
   @Test
   void aFindingResolvedInRoundTwoLeavesTheSummaryAndANewOneJoinsIt() {
     var first = publishFirstRound();

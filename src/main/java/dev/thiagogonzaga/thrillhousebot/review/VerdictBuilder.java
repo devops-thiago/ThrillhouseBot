@@ -119,6 +119,21 @@ public class VerdictBuilder {
       ReviewResponse aiResponse,
       CiStatusEvaluator.CiEvaluation ciEvaluation,
       DiffBudgetPlanner.BudgetPlan plan) {
+    return build(ctx, aiResponse, ciEvaluation, plan, CiFailureCitations.NONE);
+  }
+
+  /**
+   * {@link #build(ReviewContextLoader.ReviewContext, ReviewResponse,
+   * CiStatusEvaluator.CiEvaluation, DiffBudgetPlanner.BudgetPlan)} for a review given a CI-failure
+   * section: {@code ciCitations} reads it back, and the summary's sentence on each failing check is
+   * computed from it (#1075).
+   */
+  ReviewResult build(
+      ReviewContextLoader.ReviewContext ctx,
+      ReviewResponse aiResponse,
+      CiStatusEvaluator.CiEvaluation ciEvaluation,
+      DiffBudgetPlanner.BudgetPlan plan,
+      CiFailureCitations ciCitations) {
     // Budgeted: plan omitted + clipped files, with any file a failed batch left uncovered folded
     // into the omitted set (effective*); legacy: line-cap count — never sum both. Patchless files
     // are the one class both lanes carry (#785): the line cap counts sections it dropped, and a
@@ -309,7 +324,8 @@ public class VerdictBuilder {
             SupersededFindingsCarryover.formatScopeNote(ctx.carried()),
             reasoningStepDownNote(plan.reasoningStepDown()),
             openPrevious,
-            PriorOverviewCarryover.carried(effectiveResponse.summary(), ctx)),
+            PriorOverviewCarryover.carried(effectiveResponse.summary(), ctx),
+            ciCitations),
         ciEvaluation,
         backstopStatuses);
   }
@@ -740,7 +756,8 @@ public class VerdictBuilder {
       String carriedFromSupersededRun,
       String reasoningStepDown,
       List<Finding> openPrevious,
-      boolean overviewCarried) {}
+      boolean overviewCarried,
+      CiFailureCitations ciCitations) {}
 
   ReviewResult buildResult(
       ReviewResponse aiResponse,
@@ -754,7 +771,17 @@ public class VerdictBuilder {
         aiResponse,
         isFirstReview,
         diffStats,
-        new SummaryInputs(changedFiles, "", "", "", "", "", "", unresolvedPrevious, false),
+        new SummaryInputs(
+            changedFiles,
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            unresolvedPrevious,
+            false,
+            CiFailureCitations.NONE),
         ciEvaluation,
         backstopStatuses);
   }
@@ -816,7 +843,9 @@ public class VerdictBuilder {
             diffStats.additions(),
             diffStats.deletions(),
             changedFiles,
-            aiResponse.summary(),
+            // The overview's sentence on each failing check is computed over every finding the
+            // summary lists, the earlier rounds' still open included (#1075).
+            CiFailureOverview.apply(aiResponse.summary(), summaryInputs.ciCitations(), outstanding),
             new ReviewResult(
                 tally.findings(),
                 tally.critical(),

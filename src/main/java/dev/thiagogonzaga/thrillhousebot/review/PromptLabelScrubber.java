@@ -63,7 +63,9 @@ import java.util.regex.Pattern;
  * <p>The model's working notes go as well (#964): a self-correction ("(line 24 — wait, the binding
  * is …)", "BedReporter... rather, grep confirms …") keeps the correction and loses what it
  * corrected, and the names other stages use — the verifier's "confirmed findings", the batch
- * planner's "no findings in this batch" — are dropped, because a reader sees neither stage.
+ * planner's "no findings in this batch" — are dropped, because a reader sees neither stage. So are
+ * the summary call's count of the findings it was shown ("among the three verified above") and the
+ * verifier's CI note restated ("confirmed rather than counted"), #1075.
  */
 public final class PromptLabelScrubber {
 
@@ -381,6 +383,27 @@ public final class PromptLabelScrubber {
               + " this batch\\b(?! of\\b)",
           Pattern.CASE_INSENSITIVE);
 
+  /**
+   * "which no finding among the three verified above explains": the summary call counting the
+   * findings its prompt listed as verified (#1075). A reader sees no such list, so the count goes;
+   * "verified by the added test" and the like say nothing about the prompt and stay.
+   */
+  private static final Pattern AMONG_THE_VERIFIED =
+      Pattern.compile(
+          "[ \\t]+among the (?:(?:\\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten"
+              + "|eleven|twelve|several) )?(?:verified|confirmed) (?:findings? )?(?:above|below)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * "the bug is confirmed rather than counted", "the failure is measured, not predicted": the
+   * verifier's note on a failing CI check ("CI's own measurement, not a count anyone made"),
+   * restated (#1075). The verdict word stays; the contrast with the rule goes.
+   */
+  private static final Pattern NOT_COUNTED =
+      Pattern.compile(
+          "\\b(confirmed|measured),? (?:rather than|instead of|not) (?:counted|predicted)\\b",
+          Pattern.CASE_INSENSITIVE);
+
   private PromptLabelScrubber() {}
 
   /** {@link #scrub(String, Collection)} for text that names no file of the pull request. */
@@ -653,8 +676,8 @@ public final class PromptLabelScrubber {
   /**
    * Drops the model's working notes (#964): a self-correction ("— wait,", "… rather,") keeps the
    * correction and loses what it corrected, and the verifier's and the batch planner's vocabulary
-   * ("confirmed findings", "no findings in this batch") goes, since neither stage is visible to a
-   * reader.
+   * ("confirmed findings", "no findings in this batch", "among the three verified above",
+   * "confirmed rather than counted") goes, since neither stage is visible to a reader.
    */
   private static String removeScratchText(String text) {
     var s = PARENTHETICAL_SELF_CORRECTION.matcher(text).replaceAll("(");
@@ -664,8 +687,10 @@ public final class PromptLabelScrubber {
         RESTARTED_SENTENCE
             .matcher(corrected)
             .replaceAll(m -> Matcher.quoteReplacement(restartedSentence(corrected, m)));
+    s = AMONG_THE_VERIFIED.matcher(s).replaceAll("");
     s = CONFIRMED_FINDINGS.matcher(s).replaceAll(m -> capitalizeLike(m.group(1), m.group(2)));
     s = removeNoFindingsAsides(s);
+    s = NOT_COUNTED.matcher(s).replaceAll("$1");
     return FINDINGS_IN_BATCH.matcher(s).replaceAll("$1");
   }
 

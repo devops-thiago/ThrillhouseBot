@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /** {@link CiFailureCitations}: which findings cite a check the CI-failure section records. */
@@ -208,5 +209,283 @@ class CiFailureCitationsTest {
     assertEquals(
         CiFailureCitations.MAX_NAME_CHARS,
         note.substring(note.indexOf('"') + 1, note.indexOf('"', note.indexOf('"') + 1)).length());
+  }
+
+  /**
+   * The section round 17 carried on ThrillhouseBot-test#254 (node) and #245 (java): each check's
+   * failing tests as its job log names them (#1075).
+   */
+  private static final String ROUND_17_SECTION =
+      """
+      Checks on this commit that had completed without passing when this review started: 2
+
+      ### test (conclusion: failure)
+      Annotations (1 of 1):
+      - .github:23 [failure] Process completed with exit code 1.
+      Failing tests named in the job log:
+      - \u2716 returns exactly `slots` applications when enough are eligible (1.549323ms)
+
+      ### unit (conclusion: failure)
+      Failing tests named in the job log:
+      - [ERROR] com.clinic.waitlist.WaitlistServiceTest.topCandidatesReturnsAtMostLimit -- Time \
+      elapsed: 0.015 s <<< FAILURE!
+      - [ERROR]   WaitlistServiceTest.topCandidatesReturnsAtMostLimit:67 expected: <2> but was: <3>
+      Job log tail:
+      - some list line the tail happens to print
+      """;
+
+  /** The #254 finding (4248942723) as it would read naming only the test, not the check. */
+  private static final ReviewResponse.Finding NODE_SHORTLIST =
+      new ReviewResponse.Finding(
+          "high",
+          "low",
+          "node/src/scoring.ts",
+          36,
+          "Shortlist returns slots-1 items, violating the 25-slot contract",
+          "'return ranked.slice(0, slots - 1);' drops one item. The in-diff test 'returns exactly"
+              + " `slots` applications when enough are eligible' asserts this directly and fails"
+              + " on this commit.",
+          null,
+          null);
+
+  /** A finding that names a failing test the job log lists, and not its check, cites it. */
+  @Test
+  void aFindingThatNamesAFailingTestCitesItsCheck() {
+    var citations = CiFailureCitations.parse(ROUND_17_SECTION);
+
+    assertTrue(citations.cites(NODE_SHORTLIST));
+    var note = citations.noteFor(NODE_SHORTLIST);
+    assertTrue(
+        note.contains(
+            "names the failing test \"returns exactly `slots` applications when enough are"
+                + " eligible\" (check \"test\")"),
+        note);
+    assertFalse(note.contains("records"), note);
+    assertTrue(note.contains("judged on the code"), note);
+  }
+
+  /** The java runner's qualified method, as a finding names it, cites the check it failed in. */
+  @Test
+  void aQualifiedTestIsCitedByItsMethodName() {
+    var citations = CiFailureCitations.parse(ROUND_17_SECTION);
+    var java =
+        described(
+            "The inclusive bound returns limit+1 entries; topCandidatesReturnsAtMostLimit fails"
+                + " with expected 2 but was 3.");
+
+    assertTrue(citations.cites(java));
+    var note = citations.noteFor(java);
+    assertTrue(note.contains("\"topCandidatesReturnsAtMostLimit\" (check \"unit\")"), note);
+  }
+
+  /** Naming the check and its test cites both, in one note. */
+  @Test
+  void aFindingNamingTheCheckAndTheTestCitesBoth() {
+    var both =
+        described(
+            "The CI check 'test' fails on it: the test 'returns exactly `slots` applications when"
+                + " enough are eligible' fails.");
+
+    var note = CiFailureCitations.parse(ROUND_17_SECTION).noteFor(both);
+
+    assertTrue(note.contains("records \"test\" as completed without passing, and names"), note);
+  }
+
+  /**
+   * A test name is no citation without a failure, or with the failure set aside, and a line the
+   * section lists outside a check's failing tests names no test.
+   */
+  @Test
+  void aTestNameAloneOrDisclaimedIsNotACitation() {
+    var citations = CiFailureCitations.parse(ROUND_17_SECTION);
+
+    assertFalse(
+        citations.cites(
+            described("The test returns exactly `slots` applications when enough are eligible.")));
+    assertFalse(
+        citations.cites(
+            described(
+                "topCandidatesReturnsAtMostLimit fails, but that is unrelated to this line.")));
+    assertFalse(
+        citations.cites(described("The some list line the tail happens to print fails here.")));
+  }
+
+  /** One plain word, or a short name, is any finding's vocabulary: it cites no test. */
+  @Test
+  void aCommonTestNameCitesNothing() {
+    var citations =
+        CiFailureCitations.parse(
+            "### ci (conclusion: failure)\nFailing tests named in the job log:\n"
+                + "- --- FAIL: overflow (0.00s)\n- \u2716 parses (1ms)\n- FAILED t.py::test_y\n");
+
+    assertFalse(citations.cites(described("The overflow fails when the queue is full.")));
+    assertFalse(citations.cites(described("It parses and fails on the empty case.")));
+    assertFalse(citations.cites(described("test_y fails on the empty case.")));
+    assertEquals(
+        "CI on this commit fails the check \"ci\", which no open finding explains.",
+        citations.overviewSentences(List.of()));
+  }
+
+  /** Failing-test lines before any check heading belong to no check and are not read. */
+  @Test
+  void failingTestsOutsideACheckAreNotRead() {
+    var citations =
+        CiFailureCitations.parse(
+            "Failing tests named in the job log:\n- --- FAIL: TestParseConfig (0.00s)\n");
+
+    assertSame(CiFailureCitations.NONE, citations);
+  }
+
+  /** Each runner's line yields the name a finding would write. */
+  @Test
+  void eachRunnersLineYieldsTheTestsOwnName() {
+    assertEquals(
+        "returns exactly `slots` applications when enough are eligible",
+        CiFailureCitations.testName(
+            "\u2716 returns exactly `slots` applications when enough are eligible (1.5ms)"));
+    assertEquals(
+        "topCandidatesReturnsAtMostLimit",
+        CiFailureCitations.testName(
+            "[ERROR]   WaitlistServiceTest.topCandidatesReturnsAtMostLimit:67 expected: <2>"));
+    assertEquals(
+        "topCandidatesReturnsAtMostLimit",
+        CiFailureCitations.testName(
+            "[ERROR] com.x.WaitlistServiceTest.topCandidatesReturnsAtMostLimit -- Time elapsed:"
+                + " 0.01 s <<< FAILURE!"));
+    assertEquals(
+        "rejects an overlapping booking",
+        CiFailureCitations.testName("\u25CF BookingService \u203A rejects an overlapping booking"));
+    assertEquals(
+        "test_parse_config",
+        CiFailureCitations.testName(
+            "FAILED tests/test_config.py::test_parse_config[empty] - AssertionError: x"));
+    assertEquals(
+        "TestParseConfig", CiFailureCitations.testName("--- FAIL: TestParseConfig (0.00s)"));
+    assertEquals(
+        "parses_empty_input",
+        CiFailureCitations.testName("test config::tests::parses_empty_input ... FAILED"));
+    assertEquals(
+        "AddsTwoNumbers",
+        CiFailureCitations.testName("Failed Calc.Tests.MathTest.AddsTwoNumbers(x: 0) [12 ms]"));
+    assertEquals(
+        "rejectsBlankName", CiFailureCitations.testName("UserTest > rejectsBlankName() FAILED"));
+    assertEquals(
+        "isValid accepts a barcode whose last payload digit is non-zero",
+        CiFailureCitations.testName(
+            "1/5 barcode.test.isValid accepts a barcode whose last payload digit is"
+                + " non-zero...FAIL (TestUnexpectedResult)"));
+    assertEquals(
+        "Booking rejects an overlap",
+        CiFailureCitations.testName(
+            "rspec ./spec/booking_spec.rb:12 # Booking rejects an overlap"));
+    assertEquals(
+        "back-to-back bookings conflict",
+        CiFailureCitations.testName("not ok 3 - back-to-back bookings conflict"));
+    assertNull(CiFailureCitations.testName("FAIL src/app.test.ts"));
+    assertNull(
+        CiFailureCitations.testName(
+            "[ERROR] Tests run: 6, Failures: 1, Errors: 0, Skipped: 0 <<< FAILURE!"));
+    assertNull(CiFailureCitations.testName("[ERROR]   Suite.:12 expected"));
+  }
+
+  /**
+   * Decoration is cut only where it decorates a token: a position, an argument list or Zig's prefix
+   * after a word of the name is part of the name.
+   */
+  @Test
+  void decorationInsideANameOfSeveralWordsStays() {
+    assertEquals(
+        "keeps the 3:1 ratio for big carts",
+        CiFailureCitations.testName("\u2716 keeps the 3:1 ratio for big carts"));
+    assertEquals(
+        "returns list(empty) unchanged",
+        CiFailureCitations.testName("\u2716 returns list(empty) unchanged"));
+    assertEquals(
+        "checks that test.name stays",
+        CiFailureCitations.testName("\u2716 checks that test.name stays"));
+    assertEquals(
+        "rspec ./spec/booking_spec.rb:12",
+        CiFailureCitations.testName("rspec ./spec/booking_spec.rb:12"));
+    assertEquals("keeps # comments", CiFailureCitations.testName("\u2716 keeps # comments (1ms)"));
+  }
+
+  /**
+   * A file line or an all-capital word lists no test a finding can cite, and a finding without a
+   * title is named by where it is.
+   */
+  @Test
+  void aSectionsFileLinesAndCapitalWordsNameNoTest() {
+    var citations =
+        CiFailureCitations.parse(
+            "### test (conclusion: failure)\nFailing tests named in the job log:\n"
+                + "- FAIL src/app.test.ts\n- --- FAIL: ABCDEFGHIJ (0.00s)\n");
+    var untitled =
+        new Finding(
+            RiskLevel.HIGH,
+            "src/app.ts",
+            7,
+            null,
+            "The test check fails on this line.",
+            null,
+            null);
+
+    assertFalse(citations.cites(described("ABCDEFGHIJ fails on this line.")));
+    assertEquals(
+        "CI on this commit fails the check \"test\", which the finding at src/app.ts:7 explains.",
+        citations.overviewSentences(List.of(untitled)));
+    var blankTitle =
+        new Finding(
+            RiskLevel.HIGH, "src/app.ts", 9, " ", "The test check fails on this line.", null, null);
+    assertEquals(
+        "CI on this commit fails the check \"test\", which the finding at src/app.ts:9 explains.",
+        citations.overviewSentences(List.of(blankTitle)));
+  }
+
+  /**
+   * The summary's sentence on a failing check names the open finding that cites it, by the check or
+   * by its failing test (#1075, ThrillhouseBot-test#254).
+   */
+  @Test
+  void theOverviewSentenceNamesTheOpenFindingThatExplainsTheFailure() {
+    var citations = CiFailureCitations.parse(ROUND_17_SECTION);
+    var unrelated =
+        new Finding(RiskLevel.MEDIUM, "node/src/triage.ts", 18, "O(n^2) scan", "Slow.", null, null);
+
+    var sentences =
+        citations.overviewSentences(List.of(unrelated, Finding.fromAiResponse(NODE_SHORTLIST)));
+
+    assertEquals(
+        "CI on this commit fails the check \"test\" (failing test \"returns exactly `slots`"
+            + " applications when enough are eligible\"), which the finding \"Shortlist returns"
+            + " slots-1 items, violating the 25-slot contract\" explains. CI on this commit fails"
+            + " the check \"unit\" (failing test \"topCandidatesReturnsAtMostLimit\"), which no"
+            + " open finding explains.",
+        sentences);
+  }
+
+  /** With no open finding citing a check, its sentence says none explains it. */
+  @Test
+  void theOverviewSentenceSaysNoFindingExplainsAnUncitedFailure() {
+    var citations = CiFailureCitations.parse(ROUND_12_SECTION);
+
+    assertEquals(
+        "CI on this commit fails the check \"test\", which no open finding explains.",
+        citations.overviewSentences(List.of()));
+    assertEquals("", CiFailureCitations.NONE.overviewSentences(List.of()));
+  }
+
+  /** A check with many failing tests names the first few, each once, and counts the rest. */
+  @Test
+  void theOverviewSentenceCountsTheTestsItDoesNotName() {
+    var citations =
+        CiFailureCitations.parse(
+            "### test (conclusion: failure)\nFailing tests named in the job log:\n"
+                + "- --- FAIL: TestParseConfig (0.00s)\n- --- FAIL: TestParseConfig (0.01s)\n"
+                + "- --- FAIL: TestRejectsBlank (0.00s)\n- --- FAIL: TestKeepsOrder (0.00s)\n");
+
+    assertEquals(
+        "CI on this commit fails the check \"test\" (failing tests \"TestParseConfig\","
+            + " \"TestRejectsBlank\" and 1 more), which no open finding explains.",
+        citations.overviewSentences(List.of()));
   }
 }

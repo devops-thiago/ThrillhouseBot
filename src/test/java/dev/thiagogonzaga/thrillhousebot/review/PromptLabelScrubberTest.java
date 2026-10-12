@@ -1065,6 +1065,42 @@ class PromptLabelScrubberTest {
     assertEquals(out, PromptLabelScrubber.scrub(out));
   }
 
+  /**
+   * #1075: the summary call's count of the findings its prompt listed (ThrillhouseBot-test#254,
+   * 6125936933) and the verifier's CI note restated in a finding (#245, 4248908866).
+   */
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          CI fails the check 'test', which no finding among the three verified above explains. | CI fails the check 'test', which no finding explains.
+          No finding among the 3 confirmed findings above explains it. | No finding explains it.
+          None among the verified below names it. | None names it.
+          Because the failing job is already measured on this commit, the bug is confirmed rather than counted. | Because the failing job is already measured on this commit, the bug is confirmed.
+          The failure is measured, not predicted. | The failure is measured.
+          It is Confirmed instead of counted. | It is Confirmed.
+          """)
+  void theCountOfVerifiedFindingsAndTheCiNoteAreRemoved(String leaked, String clean) {
+    assertEquals(clean, PromptLabelScrubber.scrub(leaked));
+    assertEquals(clean, PromptLabelScrubber.scrub(clean));
+  }
+
+  /** Ordinary sentences using "verified" or "confirmed" are left alone (#1075). */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The fix is verified by the added test above.",
+        "The race is confirmed by the failing test.",
+        "Each verified signature is counted once.",
+        "Among the verified accounts above, two are locked.",
+        "The value is computed, not counted twice.",
+        "`among the three verified above` is the literal the parser expects."
+      })
+  void ordinaryVerifiedAndConfirmedSentencesStay(String text) {
+    assertEquals(text, PromptLabelScrubber.scrub(text));
+  }
+
   @ParameterizedTest
   @ValueSource(
       strings = {

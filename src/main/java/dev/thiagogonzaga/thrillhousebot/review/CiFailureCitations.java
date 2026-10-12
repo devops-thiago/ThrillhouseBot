@@ -19,6 +19,8 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
@@ -41,6 +43,15 @@ import java.util.regex.Pattern;
  * unit-tests job}). A bare co-occurrence is not a citation: a check named {@code test} would
  * otherwise be cited by any finding that says a test would fail in CI. Naming a check the section
  * does not record cites nothing, so a finding cannot buy the floor by saying "CI fails".
+ *
+ * <p>A finding also cites a check through a failing test its job log names (#1075): the section
+ * lists the runner's line for each one ("✖ returns exactly `slots` applications (1.5ms)", "[ERROR]
+ * WaitlistServiceTest.topCandidatesReturnsAtMostLimit:67 expected: &lt;2&gt;"), and a finding that
+ * names the test without the check is tied to the same measured failure. Only a name distinctive
+ * enough to be that test counts: a phrase of several words or a compound identifier, never one
+ * plain word. The same reading decides the summary's sentence on each failing check ({@link
+ * #overviewSentences}), so that sentence and the floor cannot disagree about which finding explains
+ * a failure.
  */
 final class CiFailureCitations implements FindingVerificationService.FailingChecks {
 
@@ -56,11 +67,20 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   /** The line naming the failing checks the section did not detail. */
   private static final String NOT_DETAILED = CiFailureContextResolver.NOT_DETAILED;
 
-  /** The prefix of each check named under {@link #NOT_DETAILED}. */
+  /** The prefix of each check named under {@link #NOT_DETAILED}, and of each failing test. */
   private static final String NAMED_ONLY = CiFailureContextResolver.NAMED_ONLY;
+
+  /** The line a detailed check's failing tests are listed under. */
+  private static final String FAILING_TESTS = CiFailureContextResolver.FAILING_TESTS;
 
   /** Characters of a check name repeated in a note; names are output the pull request controls. */
   static final int MAX_NAME_CHARS = 120;
+
+  /** Characters of a test name's words below which the name is too common to cite a test by. */
+  static final int MIN_TEST_NAME_CHARS = 8;
+
+  /** Failing tests named per check in the summary's sentence; the rest are counted. */
+  static final int MAX_TESTS_NAMED = 2;
 
   /** A finding that cites a check says it failed. */
   private static final List<String> FAILURE_WORDS =
@@ -92,15 +112,45 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       List.of("check", "checks", "conclusion", "job", "workflow");
 
   /** The quote pairs a finding names a check between, opening mark first. */
-  private static final List<String> QUOTES = List.of("\"\"", "``", "''", "\u201C\u201D");
+  private static final List<String> QUOTES = List.of("\"\"", "``", "''", "“”");
 
   private static final Pattern NOT_A_WORD = Pattern.compile("[^a-z0-9]+");
 
   /** The apostrophes a contraction is written with, dropped so "doesn't" reads as "doesnt". */
-  private static final Pattern APOSTROPHE = Pattern.compile("['\u2019]");
+  private static final Pattern APOSTROPHE = Pattern.compile("['’]");
 
-  /** Each failing check: its name as rendered, and as the padded words a finding is matched on. */
-  private record Check(String name, String words) {}
+  /**
+   * What a runner prints before a failed test's name: a status mark or word, a counter, a logger's
+   * level. Anchored and possessive, so no line the pull request's code prints can make it
+   * backtrack.
+   */
+  private static final Pattern TEST_LINE_LEAD =
+      Pattern.compile(
+          "^(?:\\[ERROR]\\s++|[\u2716\u2715\u00D7\u25CF] |--- FAIL: |not ok \\d++(?: - )?+"
+              + "|(?:FAILED|ERROR|Failed) |(?:FAIL|ERROR): |==> X |- |test |\\d++/\\d++ "
+              + "|Test \\[\\d++/\\d++] |\\d++ - )");
+
+  /** What a runner prints after a failed test's name: a duration, a status, an assertion. */
+  private static final List<String> TEST_LINE_TAILS =
+      List.of(" (", " [", "...", " <<<", " -- ", " - ", " FAILED", " *** ", "  ");
+
+  /** The separators between a test's suites and its own name: Jest, Gradle, pytest and cargo. */
+  private static final Pattern TEST_PATH_SEPARATOR = Pattern.compile(" \u203A | > |::");
+
+  /** A {@code file:line} or {@code Class.method:line} position ending a test's token. */
+  private static final Pattern LINE_POSITION = Pattern.compile(":\\d");
+
+  /** A failing test the job log names: its name as read, and as the padded words matched on. */
+  private record FailingTest(String name, String words) {}
+
+  /**
+   * Each failing check: its name as rendered, as the padded words a finding is matched on, and the
+   * failing tests its job log names.
+   */
+  private record Check(String name, String words, List<FailingTest> tests) {}
+
+  /** What a finding cites: a check by its name ({@code test} null), or by one of its tests. */
+  private record Citation(Check check, FailingTest test) {}
 
   private final List<Check> checks;
 
@@ -114,74 +164,257 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       return NONE;
     }
     var names = new ArrayList<String>();
+    var testLines = new ArrayList<List<String>>();
     var namedOnly = false;
+    var underTests = false;
     for (String line : section.split("\n")) {
       int conclusion = line.lastIndexOf(CONCLUSION);
       if (line.startsWith(CHECK_HEADING) && conclusion > CHECK_HEADING.length()) {
         names.add(line.substring(CHECK_HEADING.length(), conclusion));
+        testLines.add(new ArrayList<>());
+        namedOnly = false;
+        underTests = false;
       } else if (line.equals(NOT_DETAILED)) {
         namedOnly = true;
+        underTests = false;
+      } else if (line.equals(FAILING_TESTS) && !testLines.isEmpty()) {
+        underTests = true;
+        namedOnly = false;
       } else if (namedOnly && line.startsWith(NAMED_ONLY)) {
         names.add(line.substring(NAMED_ONLY.length()));
+        testLines.add(List.of());
+      } else if (underTests && line.startsWith(NAMED_ONLY)) {
+        testLines.getLast().add(line.substring(NAMED_ONLY.length()));
       } else {
         namedOnly = false;
+        underTests = false;
       }
     }
-    var checks =
-        names.stream()
-            .map(String::strip)
-            .filter(name -> !normalized(name).isBlank())
-            .map(name -> new Check(name, normalized(name)))
-            .toList();
-    return checks.isEmpty() ? NONE : new CiFailureCitations(checks);
+    var checks = new ArrayList<Check>();
+    for (int i = 0; i < names.size(); i++) {
+      String name = names.get(i).strip();
+      if (!normalized(name).isBlank()) {
+        checks.add(new Check(name, normalized(name), failingTests(testLines.get(i))));
+      }
+    }
+    return checks.isEmpty() ? NONE : new CiFailureCitations(List.copyOf(checks));
+  }
+
+  /** The distinctive test names among one check's failing-test lines, each once. */
+  private static List<FailingTest> failingTests(List<String> lines) {
+    var tests = new ArrayList<FailingTest>();
+    var seen = new HashSet<String>();
+    for (String line : lines) {
+      String name = testName(line);
+      if (name != null && distinctive(name) && seen.add(normalized(name))) {
+        tests.add(new FailingTest(name, normalized(name)));
+      }
+    }
+    return List.copyOf(tests);
+  }
+
+  /**
+   * The test a runner's failed-test line names, without the runner's decoration around it, or
+   * {@code null} for a line that names a file or a tally rather than a test. A suite path keeps
+   * only the test's own name ("Pool › returns exactly `slots`" is "returns exactly `slots`"), and a
+   * qualified method only the method ({@code WaitlistServiceTest.topCandidatesReturnsAtMostLimit}
+   * is {@code topCandidatesReturnsAtMostLimit}), which is how a finding names it.
+   */
+  static String testName(String line) {
+    String s = line.strip();
+    int comment = s.indexOf(" # ");
+    if (s.startsWith("rspec ") && comment > 0) {
+      return s.substring(comment + 3).strip();
+    }
+    // Jest's and Vitest's "FAIL src/app.test.ts" names a file; Surefire's tally names no test.
+    if (s.startsWith("FAIL ") || s.contains("Tests run:")) {
+      return null;
+    }
+    s = TEST_LINE_LEAD.matcher(s).replaceFirst("");
+    for (String tail : TEST_LINE_TAILS) {
+      int at = s.indexOf(tail);
+      if (at > 0) {
+        s = s.substring(0, at);
+      }
+    }
+    var segments = TEST_PATH_SEPARATOR.split(s);
+    s = segments[segments.length - 1].strip();
+    return ownName(s);
+  }
+
+  /**
+   * A test's own name from its last path segment: a qualified token loses its position, its
+   * arguments, its parameters and its qualifier; a name of several words loses Zig's {@code test.}
+   * prefix.
+   */
+  private static String ownName(String segment) {
+    String s = segment;
+    var position = LINE_POSITION.matcher(s);
+    if (position.find() && !hasSpaceBefore(s, position.start())) {
+      s = s.substring(0, position.start());
+    }
+    int arguments = s.indexOf('(');
+    if (arguments > 0 && !hasSpaceBefore(s, arguments)) {
+      s = s.substring(0, arguments);
+    }
+    if (s.indexOf(' ') < 0) {
+      int parameters = s.indexOf('[');
+      s = parameters > 0 ? s.substring(0, parameters) : s;
+      s = s.substring(s.lastIndexOf('.') + 1);
+    } else {
+      int zig = s.indexOf("test.");
+      if (zig >= 0 && !hasSpaceBefore(s, zig)) {
+        s = s.substring(zig + "test.".length());
+      }
+    }
+    s = s.strip();
+    return s.isEmpty() ? null : s;
+  }
+
+  private static boolean hasSpaceBefore(String s, int at) {
+    return s.lastIndexOf(' ', at) >= 0;
+  }
+
+  /**
+   * Whether a test name is specific enough that a finding naming it names that test: words of
+   * {@link #MIN_TEST_NAME_CHARS} characters or more, and several words or a compound identifier
+   * ({@code wardIsEscaped}). One plain word ("overflow") is any finding's vocabulary.
+   */
+  private static boolean distinctive(String name) {
+    String words = normalized(name).strip();
+    if (words.length() < MIN_TEST_NAME_CHARS) {
+      return false;
+    }
+    if (words.indexOf(' ') > 0) {
+      return true;
+    }
+    for (int i = 1; i < name.length(); i++) {
+      if (Character.isUpperCase(name.charAt(i)) && Character.isLowerCase(name.charAt(i - 1))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   @Override
   public boolean cites(ReviewResponse.Finding finding) {
-    return !citedChecks(finding).isEmpty();
+    return !citations(finding.title(), finding.description()).isEmpty();
   }
 
   /**
    * The note attached to a finding that cites a failing check, or {@code null} when it cites none.
-   * It states what the section records and nothing more: the check failed on this commit, which is
-   * CI's own measurement, while whether the flagged line is what fails it stays the verifier's
-   * call.
+   * It states what the section records and nothing more: the check failed on this commit, and its
+   * job log names the test, which is CI's own measurement, while whether the flagged line is what
+   * makes it fail stays the verifier's call.
    */
   String noteFor(ReviewResponse.Finding finding) {
-    var cited = citedChecks(finding);
+    var cited = citations(finding.title(), finding.description());
     if (cited.isEmpty()) {
       return null;
     }
-    var names =
-        String.join(
-            ", ",
-            cited.stream()
-                .map(name -> "\"" + CiFailureContextResolver.clip(name, MAX_NAME_CHARS) + "\"")
-                .toList());
-    return "This review's CI context records "
-        + names
-        + " as completed without passing on this commit, and the finding cites it. That outcome"
-        + " is CI's own measurement, not a count anyone made: it settles that the check fails."
-        + " Whether the flagged line is what makes it fail is judged on the code.";
+    var checkNames = new LinkedHashSet<String>();
+    var testNames = new LinkedHashSet<String>();
+    for (var citation : cited) {
+      if (citation.test() == null) {
+        checkNames.add(quoted(citation.check().name()));
+      } else {
+        testNames.add(
+            quoted(citation.test().name()) + " (check " + quoted(citation.check().name()) + ")");
+      }
+    }
+    var records = new ArrayList<String>();
+    if (!checkNames.isEmpty()) {
+      records.add("records " + String.join(", ", checkNames) + " as completed without passing");
+    }
+    if (!testNames.isEmpty()) {
+      records.add(
+          "names the failing test "
+              + String.join(", ", testNames)
+              + " in the job log of a check that completed without passing");
+    }
+    return "This review's CI context "
+        + String.join(", and ", records)
+        + " on this commit, and the finding cites it. That outcome is CI's own measurement, not a"
+        + " count anyone made: it settles that the check fails. Whether the flagged line is what"
+        + " makes it fail is judged on the code.";
   }
 
-  private List<String> citedChecks(ReviewResponse.Finding finding) {
+  /**
+   * One sentence for every failing check the section records, in its order: the check, the failing
+   * tests its job log names, and the first of {@code open} that cites the check or one of those
+   * tests — or, when none does, that no open finding explains it (#1075). Empty when the section
+   * recorded no check. The summary call, asked for this sentence, wrote "no finding explains it"
+   * beside the finding that did; it is decided here instead, by the reading that floors that
+   * finding's confidence, so the two cannot disagree.
+   *
+   * @param open the findings the summary lists: this round's, then the earlier rounds' still open
+   */
+  String overviewSentences(List<Finding> open) {
+    var sentences = new ArrayList<String>();
+    for (Check check : checks) {
+      var sb = new StringBuilder("CI on this commit fails the check ").append(quoted(check.name()));
+      var tests = check.tests();
+      if (!tests.isEmpty()) {
+        var named = tests.stream().limit(MAX_TESTS_NAMED).map(t -> quoted(t.name())).toList();
+        sb.append(tests.size() == 1 ? " (failing test " : " (failing tests ")
+            .append(String.join(", ", named));
+        if (tests.size() > named.size()) {
+          sb.append(" and ").append(tests.size() - named.size()).append(" more");
+        }
+        sb.append(')');
+      }
+      var explaining =
+          open.stream()
+              .filter(
+                  finding ->
+                      citations(finding.title(), finding.description()).stream()
+                          .anyMatch(citation -> citation.check() == check))
+              .findFirst();
+      if (explaining.isPresent()) {
+        sb.append(", which the finding ").append(label(explaining.get())).append(" explains.");
+      } else {
+        sb.append(", which no open finding explains.");
+      }
+      sentences.add(sb.toString());
+    }
+    return String.join(" ", sentences);
+  }
+
+  /** A finding as the sentence names it: its title, or where it is when it has none. */
+  private static String label(Finding finding) {
+    String title = finding.title();
+    return title == null || title.isBlank()
+        ? "at " + finding.file() + ":" + finding.line()
+        : quoted(title);
+  }
+
+  /** A name the pull request or the model controls, quoted and clipped to a bounded length. */
+  private static String quoted(String name) {
+    return "\"" + CiFailureContextResolver.clip(name, MAX_NAME_CHARS) + "\"";
+  }
+
+  /** The failing checks a finding's own words cite, by name or by one of their failing tests. */
+  private List<Citation> citations(String title, String description) {
     if (checks.isEmpty()) {
       return List.of();
     }
     String raw =
-        ((finding.title() == null ? "" : finding.title())
-                + "\n"
-                + (finding.description() == null ? "" : finding.description()))
+        ((title == null ? "" : title) + "\n" + (description == null ? "" : description))
             .toLowerCase(Locale.ROOT);
     String text = normalized(raw);
     if (!states(text, FAILURE_WORDS) || states(text, DISCLAIMERS)) {
       return List.of();
     }
-    return checks.stream()
-        .filter(check -> namesAsACheck(check, raw, text))
-        .map(Check::name)
-        .toList();
+    var cited = new ArrayList<Citation>();
+    for (Check check : checks) {
+      if (namesAsACheck(check, raw, text)) {
+        cited.add(new Citation(check, null));
+      }
+      check.tests().stream()
+          .filter(test -> text.contains(test.words()))
+          .forEach(test -> cited.add(new Citation(check, test)));
+    }
+    return cited;
   }
 
   /** Whether the finding names this check quoted, or beside a word that makes it a check. */
