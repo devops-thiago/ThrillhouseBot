@@ -397,21 +397,40 @@ public final class ChangeSymbols {
     /**
      * Whether the text after a quoted delimiter, from {@code end}, is code rather than the rest of
      * a shell command line: it opens with an operator or punctuation that only code puts after a
-     * string ({@link #CODE_AFTER_STRING}: {@code ;}, {@code )}, another {@code <<}, a {@code .}
-     * method call …), or the line ends with {@code ;} as a C-family statement does ({@code out <<
-     * "n" << 0;}). Anything else — nothing, a redirection, a pipe, arguments, a comment — is read
-     * as shell, since a shell command may follow the delimiter with any words ({@code kubectl apply
-     * -f - <<"END" --dry-run}, {@code ssh host bash -s <<'EOF' arg}). Leaning to the heredoc only
-     * costs a declaration it hides, while reading a heredoc's body as code invents one.
+     * string ({@link #CODE_AFTER_STRING}: {@code ;}, {@code )}, another {@code <<} …), with a
+     * method call ({@link #isMethodCall}), or the line ends with {@code ;} as a C-family statement
+     * does ({@code out << "n" << 0;}). Anything else — nothing, a redirection, a pipe, arguments, a
+     * comment, a path such as {@code ./script.sh} or {@code .env} — is read as shell, since a shell
+     * command may follow the delimiter with any words ({@code kubectl apply -f - <<"END"
+     * --dry-run}, {@code ssh host bash -s <<'EOF' arg}). Leaning to the heredoc only costs a
+     * declaration it hides, while reading a heredoc's body as code invents one.
      */
     private static boolean continuesAsCode(String text, int end) {
       var rest = text.substring(end).strip();
       return !rest.isEmpty()
-          && (CODE_AFTER_STRING.indexOf(rest.charAt(0)) >= 0 || rest.endsWith(";"));
+          && (CODE_AFTER_STRING.indexOf(rest.charAt(0)) >= 0
+              || isMethodCall(text, end)
+              || rest.endsWith(";"));
     }
 
     /** The characters that, right after a quoted string, show the line is code. */
-    private static final String CODE_AFTER_STRING = ";),<.+]}?:";
+    private static final String CODE_AFTER_STRING = ";),<+]}?:";
+
+    /**
+     * Whether a method call on the string follows its closing quote at {@code end}: a {@code .}
+     * straight after the quote ({@code "x".freeze}), or after a space a {@code .}, a name and an
+     * opening parenthesis ({@code "x" .format(y)}). A shell argument that starts with a dot is a
+     * path ({@code ./script.sh}, {@code .env}) and is not one.
+     */
+    private static boolean isMethodCall(String text, int end) {
+      if (text.startsWith(".", end)) {
+        return true;
+      }
+      return METHOD_CALL.matcher(text).region(end, text.length()).lookingAt();
+    }
+
+    /** A spaced method call after a string: {@code .}, a name, {@code (}. */
+    private static final Pattern METHOD_CALL = Pattern.compile("\\h*\\.[A-Za-z_]\\w*\\(");
 
     /** The index past the single-line string opening at {@code start}, or the line's end. */
     private static int endOfQuoted(String text, int start) {

@@ -281,8 +281,8 @@ class ChangeSymbolsTest {
   @Test
   void aQuotedDelimiterOfAnyCaseOpensAHeredocWhereAShellCommandGoesOn() {
     // After the closing quote a shell line may go on with anything: nothing, a redirection, a pipe,
-    // arguments, a comment. Code that inserts a quoted string goes on with ';', ')', ',', another
-    // '<<', a '.' call, or ends its line with ';'.
+    // arguments, a dot path, a comment. Code that inserts a quoted string goes on with ';', ')',
+    // ',', another '<<', a method call, or ends its line with ';'.
     var patch =
         """
         @@ -0,0 +1,30 @@
@@ -310,6 +310,12 @@ class ChangeSymbolsTest {
         +ssh host bash -s <<'eof' arg
         +def in_trailing_argument():
         +eof
+        +bash <<'eof' ./script.sh
+        +def in_dot_path():
+        +eof
+        +env <<"X" .env
+        +def in_dot_file():
+        +X
         +out << "end";
         +def after_insertion():
         +out << 'x' << y;
@@ -320,6 +326,8 @@ class ChangeSymbolsTest {
         +def after_call():
         +list << "x".freeze
         +def after_method_call():
+        +fmt << "x" .format(y)
+        +def after_spaced_method_call():
         """;
 
     assertEquals(
@@ -328,7 +336,8 @@ class ChangeSymbolsTest {
             "after_chained_insertion",
             "after_digit",
             "after_call",
-            "after_method_call"),
+            "after_method_call",
+            "after_spaced_method_call"),
         ChangeSymbols.declaredNames(patch));
   }
 }
