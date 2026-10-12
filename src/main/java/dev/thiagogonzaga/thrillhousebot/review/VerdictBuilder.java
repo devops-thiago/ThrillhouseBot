@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningStepDown;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -139,7 +140,7 @@ public class VerdictBuilder {
     // Verification coverage rides on the detail whichever lane built it (#623): unlike the file
     // classes it does not depend on the plan being budgeted — the legacy uncapped single call
     // verifies its findings too, and an unverified set must disclose on that lane as well.
-    var verificationCoverage = plan.verificationCoverage();
+    var verificationCoverage = postedCoverage(plan.verificationCoverage(), aiResponse.findings());
     var truncation =
         plan.budgeted()
             ? new ReviewResult.TruncationDetail(
@@ -466,6 +467,33 @@ public class VerdictBuilder {
       suffix += " " + ReviewResult.verificationBrief(result.truncation().verification());
     }
     return suffix;
+  }
+
+  /**
+   * The verification coverage restated over the findings this round posts (#964): the verifier
+   * counts every candidate it was handed, rejected ones included, so "covered 15 of the 16
+   * finding(s)" was disclosed over 15 posted findings. The candidates become the model findings
+   * that remain (deterministic scan findings never reach the verifier), and the uncovered ones the
+   * findings among them still marked unverified. A disclosure whose unverified findings were all
+   * dropped later in the chain discloses nothing.
+   */
+  static VerificationCoverage postedCoverage(
+      VerificationCoverage screened, List<ReviewResponse.Finding> posted) {
+    if (!screened.disclosed()) {
+      return screened;
+    }
+    var model =
+        posted.stream()
+            .filter(f -> !SecurityScan.raisedByScan(f.title(), f.description()))
+            .toList();
+    var unverified =
+        model.stream()
+            .filter(
+                f ->
+                    f.description() != null
+                        && f.description().contains(FindingVerificationService.UNVERIFIED_NOTE))
+            .count();
+    return new VerificationCoverage(model.size(), model.size() - (int) unverified);
   }
 
   /**

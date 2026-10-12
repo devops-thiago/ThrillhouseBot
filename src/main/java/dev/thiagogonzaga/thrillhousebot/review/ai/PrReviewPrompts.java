@@ -1174,6 +1174,9 @@ public final class PrReviewPrompts {
               `A["call foo()"]`, `B{"ready?"}`, `C(["Fetch & merge"])`. GitHub's Mermaid parser
               rejects unquoted parentheses, ampersands, colons, slashes and the like inside a label
               and then fails to render the whole diagram; write a literal double quote as `#quot;`.
+              Edges are `-->`, `-.->` or `==>` (label one as `A -->|label| B`); never `->` or the
+              sequence diagram's `->>`, and never a comma after a node. A flowchart that does not
+              parse is dropped from the summary.
             - sequenceDiagram ONLY: declare each participant as `participant Alias as Display Name`.
               Do NOT bracket- or quote-wrap the name (`participant O["ReviewOrchestrator"]` is
               flowchart syntax and is a parse error here that drops the whole diagram), and write

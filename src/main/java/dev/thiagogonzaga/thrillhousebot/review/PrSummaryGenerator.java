@@ -20,6 +20,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -388,6 +389,18 @@ public class PrSummaryGenerator {
         finding.suggestionNew());
   }
 
+  /**
+   * The line closing Key Findings when the cap left findings out (#964), so the list does not read
+   * as every finding there is.
+   */
+  static String keyFindingsMoreLine(int leftOut) {
+    return "- _…and "
+        + leftOut
+        + " more finding"
+        + (leftOut == 1 ? "" : "s")
+        + ", each on its own review thread._\n";
+  }
+
   /** Suffix on a Key Findings or double-check bullet for a finding raised by an earlier review. */
   static final String CARRIED_NOTE = "_(open since an earlier review)_";
 
@@ -437,29 +450,7 @@ public class PrSummaryGenerator {
   private static void appendFindingsOrCelebration(
       StringBuilder sb, ReviewResult result, Set<Finding> carried) {
     if (result.hasIssues()) {
-      var keyFindings = result.keyFindings(carried::contains);
-      if (!keyFindings.isEmpty()) {
-        sb.append("### Key Findings\n");
-        for (Finding f : keyFindings) {
-          // Model-supplied title/path: flatten and neutralize break-outs (a newline, a "```", or a
-          // "</details>" in the title must not escape the bullet or the summary's <details>
-          // blocks).
-          sb.append("- **")
-              .append(f.risk().name())
-              .append(":** ")
-              .append(MarkdownSafe.inline(f.title()))
-              .append(" (`")
-              .append(MarkdownSafe.inlineCode(f.file()))
-              .append(":")
-              .append(f.line())
-              .append("`)");
-          if (carried.contains(f)) {
-            sb.append(" ").append(CARRIED_NOTE);
-          }
-          sb.append("\n");
-        }
-        sb.append("\n");
-      }
+      appendKeyFindings(sb, result, carried);
     } else if (hasNoUnresolvedPrevious(result)) {
       if (result.ciHoldsApproval()) {
         appendCiHold(sb, result);
@@ -470,6 +461,41 @@ public class PrSummaryGenerator {
         sb.append(ZERO_ISSUES_MESSAGE).append("\n\n");
       }
     }
+  }
+
+  /**
+   * The Key Findings list: the highest-ranked findings that post inline, then a line counting what
+   * the cap left out (#964). Nothing when no finding posts inline.
+   */
+  private static void appendKeyFindings(
+      StringBuilder sb, ReviewResult result, Set<Finding> carried) {
+    var keyFindings = result.keyFindings(carried::contains);
+    if (keyFindings.isEmpty()) {
+      return;
+    }
+    sb.append("### Key Findings\n");
+    for (Finding f : keyFindings) {
+      // Model-supplied title/path: flatten and neutralize break-outs (a newline, a "```", or a
+      // "</details>" in the title must not escape the bullet or the summary's <details> blocks).
+      sb.append("- **")
+          .append(f.risk().name())
+          .append(":** ")
+          .append(MarkdownSafe.inline(f.title()))
+          .append(" (`")
+          .append(MarkdownSafe.inlineCode(f.file()))
+          .append(":")
+          .append(f.line())
+          .append("`)");
+      if (carried.contains(f)) {
+        sb.append(" ").append(CARRIED_NOTE);
+      }
+      sb.append("\n");
+    }
+    var leftOut = result.keyFindingsLeftOut();
+    if (leftOut > 0) {
+      sb.append(keyFindingsMoreLine(leftOut));
+    }
+    sb.append("\n");
   }
 
   /**
@@ -926,8 +952,205 @@ public class PrSummaryGenerator {
     if (firstLine.startsWith("sequencediagram") && hasBracketLabeledParticipant(cleaned)) {
       return null;
     }
+    if ((firstLine.startsWith("flowchart") || firstLine.startsWith("graph"))
+        && !flowchartParses(cleaned)) {
+      return null;
+    }
     return cleaned;
   }
+
+  /** A double-quoted label, removed before the syntax checks. */
+  private static final Pattern QUOTED_LABEL = Pattern.compile("\"[^\"\\n]*+\"");
+
+  /** A link ending its text: {@code -->}, {@code ==>} or {@code -.->}, then only blanks. */
+  private static final Pattern LINK_AT_END = Pattern.compile("(?:--|==|\\.-)>\\s*+$");
+
+  /**
+   * What a closed edge label is followed by: one node id, then the end, a link, an {@code &}, a
+   * statement end or the node's shape. Two words ({@code y C}) are not a node.
+   */
+  private static final Pattern NODE_AFTER_LABEL =
+      Pattern.compile("^\\s*+\\w++(?:\\s*+$|\\s*+[-=.<&;]|[\\[({>])");
+
+  /**
+   * {@code line} with its double-quoted labels and its edge labels between pipes each replaced by
+   * {@code L}, for the syntax checks. A pipe whose text up to the next pipe ends in a link ({@code
+   * A -->|x B -->|y C}) opens the next label rather than closing this one, so it is left in place
+   * and fails the check: two labels left open do not pair across the arrow between them. Label text
+   * may still hold a link ({@code |calls a --> b|}, {@code |goes -->|} before a node), {@code --}
+   * or {@code ->}.
+   */
+  private static String withoutLabels(String line) {
+    var text = QUOTED_LABEL.matcher(line).replaceAll("L");
+    var bare = new StringBuilder();
+    var from = 0;
+    var open = text.indexOf('|');
+    while (open >= 0) {
+      var close = text.indexOf('|', open + 1);
+      if (close < 0 || opensTheNextLabel(text, open, close)) {
+        break;
+      }
+      bare.append(text, from, open).append('L');
+      from = close + 1;
+      open = text.indexOf('|', from);
+    }
+    return bare.append(text, from, text.length()).toString();
+  }
+
+  /**
+   * Whether the pipe at {@code close} opens the next label instead of closing the one at {@code
+   * open}: the text between them ends in a link ({@code A -->|x B -->|y C}) and no single node
+   * follows. A closed label may end in a link itself ({@code A -->|goes -->| B}).
+   */
+  private static boolean opensTheNextLabel(String text, int open, int close) {
+    return LINK_AT_END.matcher(text.substring(open + 1, close)).find()
+        && !NODE_AFTER_LABEL.matcher(text.substring(close + 1)).find();
+  }
+
+  /**
+   * An arrowhead that ends no link: {@code ->} not preceded by a dash or by the {@code -.} of a
+   * dotted link, which covers the sequence diagram's {@code ->>} and a stray-dot {@code .->} as
+   * well; a doubled arrowhead ({@code A-->>B}) is refused beside it. Flowchart arrows are {@code
+   * -->}, {@code -.->}, {@code ==>} and the like, so any other {@code ->} is a parse error that
+   * drops the whole diagram.
+   */
+  private static final Pattern ONE_DASH_ARROW = Pattern.compile("(?<!-|-\\.)->");
+
+  /**
+   * A flowchart's header: its type, then one of Mermaid's fixed directions or none, then the end of
+   * the line or a semicolon before its first statement. A first line that does not open this way
+   * ({@code flowchart XY}) does not parse.
+   */
+  private static final Pattern FLOWCHART_HEADER =
+      Pattern.compile("^(?:flowchart|graph)(?:\\s++(?:TB|TD|BT|RL|LR))?+\\s*+(?:;|$)");
+
+  /** Flowchart statements whose syntax allows commas: class lists, styles, link styles, clicks. */
+  private static final Pattern COMMA_STATEMENT =
+      Pattern.compile("(?i)^(?:class|classdef|style|linkstyle|click)\\b");
+
+  /**
+   * Whether a flowchart's body passes the checks GitHub's Mermaid parser has failed on in posted
+   * summaries (#952): a one-dash arrow ({@code A -> B}, or {@code ->>} borrowed from a sequence
+   * diagram), a stray comma after a node ({@code PE["pending"],}), an odd number of double quotes
+   * on a line, an edge label left open ({@code A -->|x B}), or a node shape that does not parse
+   * once quoted labels are removed ({@link #shapesParse}). A diagram that would fail to render is
+   * omitted rather than posted as a broken block.
+   */
+  static boolean flowchartParses(String diagram) {
+    // The header line's own statements count too: "flowchart TD; A -> B" is one line.
+    var lines = new ArrayList<>(diagram.lines().map(String::strip).toList());
+    var header = FLOWCHART_HEADER.matcher(lines.getFirst());
+    if (!header.find()) {
+      return false;
+    }
+    lines.set(0, lines.getFirst().substring(header.end()));
+    for (var line : lines) {
+      if (line.isEmpty() || line.startsWith("%%")) {
+        continue;
+      }
+      if (line.chars().filter(c -> c == '"').count() % 2 != 0) {
+        return false;
+      }
+      var bare = withoutLabels(line);
+      // Statements joined by semicolons are judged one by one ("A --> B; class A,B hot").
+      for (var statement : bare.split(";")) {
+        if (!statementParses(statement.strip())) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Whether one flowchart statement, its labels removed, passes the checks of {@link
+   * #flowchartParses}.
+   */
+  private static boolean statementParses(String statement) {
+    return !ONE_DASH_ARROW.matcher(statement).find()
+        && !statement.contains(">>")
+        && (COMMA_STATEMENT.matcher(statement).find() || !hasStrayComma(statement))
+        && statement.indexOf('|') < 0
+        && shapesParse(statement);
+  }
+
+  /**
+   * Whether every node shape on {@code line} parses once labels are removed: its brackets close in
+   * order, a bracket opens inside another only straight after it (the {@code [(db)]}, {@code
+   * ([stadium])} and {@code {{hex}}} shapes), and no unquoted label holds a colon, an ampersand, a
+   * semicolon or a slash. GitHub's parser rejects {@code A(f(x))} and {@code A(t: 3)}, which
+   * balance. A slash or backslash straight inside a square bracket is the parallelogram and
+   * trapezoid shapes' edge ({@code [/in/]}, {@code [/base\]}), not label text. The asymmetric shape
+   * {@code A>flag]} opens with a {@code >} straight after the node id and closes with {@code ]}; an
+   * arrow's {@code >} follows a dash, an equals sign or a dot instead.
+   */
+  private static boolean shapesParse(String line) {
+    var open = new ArrayDeque<Character>();
+    var previous = ' ';
+    for (var c : SLANTED_EDGE.matcher(line).replaceAll("$1$2").toCharArray()) {
+      if (!acceptsNext(open, previous, c)) {
+        return false;
+      }
+      previous = c;
+    }
+    return open.isEmpty();
+  }
+
+  /**
+   * Whether {@code c}, after {@code previous}, keeps the shapes on its line parsing; pushes or pops
+   * {@code open} for a bracket.
+   */
+  private static boolean acceptsNext(ArrayDeque<Character> open, char previous, char c) {
+    if (c == '>' && open.isEmpty() && (Character.isLetterOrDigit(previous) || previous == '_')) {
+      // The asymmetric shape's opener: it closes like a square bracket.
+      open.push('[');
+      return true;
+    }
+    if (OPENING_BRACKETS.indexOf(c) >= 0) {
+      var nestedMidLabel = !open.isEmpty() && OPENING_BRACKETS.indexOf(previous) < 0;
+      open.push(c);
+      return !nestedMidLabel;
+    }
+    var closing = CLOSING_BRACKETS.indexOf(c);
+    if (closing >= 0) {
+      return !open.isEmpty() && open.pop() == OPENING_BRACKETS.charAt(closing);
+    }
+    return open.isEmpty() || LABEL_BREAKERS.indexOf(c) < 0;
+  }
+
+  /**
+   * Whether {@code line} has a comma outside every node shape: after a node ({@code
+   * PE["pending"],}), between two bare node ids ({@code A --> B, C --> D}) or at its end. Only the
+   * statements of {@code COMMA_STATEMENT} take one there; a comma inside an unquoted label is the
+   * label's.
+   */
+  private static boolean hasStrayComma(String line) {
+    var depth = 0;
+    for (var c : line.toCharArray()) {
+      if (OPENING_BRACKETS.indexOf(c) >= 0) {
+        depth++;
+      } else if (CLOSING_BRACKETS.indexOf(c) >= 0) {
+        depth--;
+      } else if (c == ',' && depth == 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Characters GitHub's parser rejects inside an unquoted label. */
+  private static final String LABEL_BREAKERS = ":&;/";
+
+  /**
+   * A slanted shape's edge: a slash or backslash right after an opening square bracket or right
+   * before a closing one (the bracket is group 1 or 2), dropped before the label check.
+   */
+  private static final Pattern SLANTED_EDGE = Pattern.compile("(\\[)[/\\\\]|[/\\\\](])");
+
+  private static final String OPENING_BRACKETS = "([{";
+
+  /** The closing brackets, each at the position of its opening one in {@link #OPENING_BRACKETS}. */
+  private static final String CLOSING_BRACKETS = ")]}";
 
   /**
    * True when any {@code participant}/{@code actor} declaration in the source carries a flowchart
