@@ -390,7 +390,7 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern AMONG_THE_VERIFIED =
       Pattern.compile(
-          "\\s+among the (?:(\\w{1,8}) )?(?:verified|confirmed) (?:findings? )?(?:above|below)\\b",
+          "\\s+among the (?:(\\w{1,9}) )?(?:verified|confirmed) (?:findings? )?(?:above|below)\\b",
           Pattern.CASE_INSENSITIVE);
 
   /**
@@ -400,7 +400,7 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern AMONG_THE_VERIFIED_OPENING =
       Pattern.compile(
-          "([ \\t]*+)among the (?:(\\w{1,8}) )?(?:verified|confirmed) (?:findings? )?"
+          "([ \\t]*+)among the (?:(\\w{1,9}) )?(?:verified|confirmed) (?:findings? )?"
               + "(?:above|below)\\b,?[ \\t]*(\\p{L})?",
           Pattern.CASE_INSENSITIVE);
 
@@ -422,6 +422,19 @@ public final class PromptLabelScrubber {
           "ten",
           "eleven",
           "twelve",
+          "thirteen",
+          "fourteen",
+          "fifteen",
+          "sixteen",
+          "seventeen",
+          "eighteen",
+          "nineteen",
+          "twenty",
+          "thirty",
+          "forty",
+          "fifty",
+          "dozen",
+          "hundred",
           "several",
           "many",
           "few",

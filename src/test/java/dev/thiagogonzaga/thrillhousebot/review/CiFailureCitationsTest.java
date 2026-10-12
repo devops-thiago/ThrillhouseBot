@@ -434,6 +434,7 @@ class CiFailureCitationsTest {
           ERROR tests/test_store.py::test_search_escapes_event_name - fixture 'db' not found | test_search_escapes_event_name
           ERROR: test_hold_expiry (tests.test_holds.HoldTest.test_hold_expiry) | test_hold_expiry
           ==> X port.EventRepositorySuite.findByContainer  0.012s | findByContainer
+          \u2716 waits 30s | waits 30s
           Test [1/5] queue.test.submit accepts copies... FAIL (TestUnexpectedResult) | submit accepts copies
           Failed RoomBooking.Tests.MathTests.Addition(x: 0, y: 1) [< 1 ms] | Addition
           \u2716 returns 404 -- empty payload (3ms) | returns 404 -- empty payload

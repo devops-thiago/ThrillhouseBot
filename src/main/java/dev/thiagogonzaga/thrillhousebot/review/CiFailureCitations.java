@@ -146,7 +146,10 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   private static final Pattern COUNTER_LEAD =
       Pattern.compile("^(?:\\d++/\\d++ (?:Test #\\d++: )?+|Test \\[\\d++/\\d++] |\\d++ - )");
 
-  /** A bare elapsed time ending the line, as munit prints it after the test: " 0.012s". */
+  /**
+   * A bare elapsed time ending the line after two or more blanks, as munit prints it after the test
+   * ("findByContainer", two blanks, "0.012s"); one blank is a name's own words ("waits 30s").
+   */
   private static final Pattern TRAILING_DURATION =
       Pattern.compile("\\s{2,}+\\d++(?:\\.\\d++)?+m?s$");
 
