@@ -517,6 +517,13 @@ public class FindingPipeline {
 
     var aggregated = new ReviewResponse(allFindings, mergeBatchStatuses(batchStatuses), null);
     var refined = deduplicator.dedupe(aggregated);
+    // #1077: the same last word on the graded fields as the single-call lane, so an anchored
+    // infrastructure class is placed inline or under "Things to double-check" by the same grade
+    // whichever lane reviewed it (FindingPlacement).
+    refined =
+        SeverityCalibrator.calibrate(
+            refined,
+            (file, line) -> lineResolver.getLineText(lineResolver.diffPathFor(file), line));
     refined =
         followUpAnalyzer.dropRepliedDuplicates(
             refined, ctx.priorAiResponseJsons(), ctx.inlineComments(), botIdentity);

@@ -490,6 +490,60 @@ class FindingPipelineTest {
         result.findings().stream().map(ReviewResponse.Finding::title).toList());
   }
 
+  /**
+   * #1077: the placement table reads the grade a finding publishes with, so both lanes must hand it
+   * the same grade. A missing privilege drop the model hedged at "low" is anchored at medium by
+   * {@link SeverityCalibrator}; before the batch lane ran the calibrator it was listed under
+   * "Things to double-check" there and posted inline on the single-call lane.
+   */
+  @Test
+  void anAnchoredClassIsPlacedTheSameOnBothLanes() {
+    var hedged =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            "Dockerfile",
+            7,
+            "container image finding",
+            "The Dockerfile never adds a USER directive, so the published service runs as root.",
+            null,
+            null);
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+
+    var single = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    when(aiReviewService.review(eq(single), any()))
+        .thenReturn(new ReviewResponse(List.of(hedged), List.of(), null));
+    var singleResult =
+        pipeline.run(
+            single,
+            template,
+            reviewContext(),
+            singleBatchPlan(batch("a.java"), List.of()),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    var multi = ReviewSession.create("owner/repo", 2, "Big PR", "sha");
+    when(aiReviewService.reviewBatch(eq(multi), any(), eq(1), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(hedged), List.of(), null));
+    when(aiReviewService.reviewBatch(eq(multi), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var multiResult =
+        pipeline.run(
+            multi,
+            template,
+            reviewContext(),
+            multiBatchPlan(),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    for (var result : List.of(singleResult, multiResult)) {
+      assertEquals(1, result.findings().size());
+      var placed = Finding.fromAiResponse(result.findings().get(0));
+      assertEquals(Confidence.MEDIUM, placed.confidence());
+      assertTrue(placed.postsInline(), "anchored at medium, so inline on either lane");
+    }
+  }
+
   @Test
   void multiCallDoesNotRetryABatchTruncatedAtTheModelsLengthCap() {
     // #492: a length stop is deterministic — re-sending the identical prompt against the identical

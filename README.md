@@ -581,7 +581,9 @@ non-blocking.
 Strictness affects only the verdict. Where a finding is posted is separate: a
 LOW-confidence finding at MEDIUM or LOW risk goes to the summary's
 **Things to double-check** list instead of an inline thread, while CRITICAL and
-HIGH findings stay inline at any confidence.
+HIGH findings stay inline at any confidence. Placement reads the finding's final
+grade, after the verifier and the deterministic confidence floors, the same way
+on every review lane.
 
 ### CI gating
 
