@@ -471,6 +471,12 @@ class OverviewScreenTest {
         // "and" inside a spelled count.
         "hosts a hundred and one findings",
         // Any connector between two counts is part of the count or range.
+        // A partitive subject stating the findings' state.
+        "None of the findings are open",
+        "All of the findings were confirmed",
+        "Some of its findings remain",
+        "Two of these findings are posted inline",
+        "Each of the findings is tracked",
         "hosts two or three findings",
         "holds five to ten findings",
         "lists two through four findings",
@@ -538,6 +544,12 @@ class OverviewScreenTest {
         "Holds tests and findings",
         "Holds two and the findings",
         "Holds two or the findings",
+        // A partitive whose findings name a part, or that states nothing about them.
+        "One of the findings handlers",
+        "None of the findings",
+        "Most of the findings render here",
+        "None of the code formats findings",
+        "The new findings here",
         "Keeps settings and refines findings",
         "Holds the findingsTable",
         // Plural artifact nouns.

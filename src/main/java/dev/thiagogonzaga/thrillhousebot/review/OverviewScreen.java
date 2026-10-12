@@ -509,13 +509,47 @@ final class OverviewScreen {
   /**
    * Whether the clause is the finding word's noun phrase alone: it opens with a determiner, a
    * quantifier or a count ({@link #DETERMINERS}), and the phrase counts or qualifies the findings
-   * ({@link #qualified}) or the clause names "this batch".
+   * ({@link #qualified}) or the clause names "this batch"; or it opens with a partitive ("none of
+   * the findings", "two of its findings") that a form of "be" or a placement or verdict word
+   * follows ("None of the findings are open", "Some of the findings were confirmed").
    */
   private static boolean opensWithThePhrase(String[] words, int at, boolean aboutTheBatch) {
-    var first = Arrays.stream(words, 0, at).filter(w -> !w.isEmpty()).findFirst().orElse("");
-    return (DETERMINERS.contains(first) || FINDING_QUALIFIERS.contains(first) || isCount(first))
-        && (aboutTheBatch || qualified(words, at));
+    var lead = Arrays.stream(words, 0, at).filter(w -> !w.isEmpty()).toList();
+    var first = lead.getFirst();
+    var quantified =
+        DETERMINERS.contains(first) || FINDING_QUALIFIERS.contains(first) || isCount(first);
+    if (quantified && (aboutTheBatch || qualified(words, at))) {
+      return true;
+    }
+    // A partitive: a quantifier, "of", then only determiners before the finding word.
+    return (quantified || first.equals("none"))
+        && lead.size() >= 2
+        && lead.get(1).equals("of")
+        && lead.subList(2, lead.size()).stream().allMatch(DETERMINERS::contains)
+        && at + 1 < words.length
+        && PARTITIVE_PREDICATES.contains(words[at + 1]);
   }
+
+  /**
+   * What follows a partitive subject when the clause states the findings' state: a form of "be" or
+   * a placement or verdict word ("are open", "were confirmed", "remain").
+   */
+  private static final Set<String> PARTITIVE_PREDICATES =
+      Set.of(
+          "is",
+          "are",
+          "was",
+          "were",
+          "remain",
+          "remains",
+          "open",
+          "posted",
+          "reported",
+          "raised",
+          "tracked",
+          "inline",
+          "confirmed",
+          "verified");
 
   /**
    * Whether the finding word at {@code at} ends its noun phrase, as the review's findings do
