@@ -147,15 +147,33 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       Pattern.compile("^(?:\\d++/\\d++ |Test \\[\\d++/\\d++] |\\d++ - )");
 
   /**
-   * What a runner prints after a failed test's name, cut at its first occurrence: a status, the
-   * elapsed time, the column a summary starts. A duration or status in a group is cut only where it
-   * closes the line ({@link #withoutTail}), so a name's own parenthetical stays.
+   * What a runner prints after a failed test's name, cut at its first occurrence. Each is the
+   * marker together with the status or timing that follows it (Surefire's " <<< FAILURE!" and " --
+   * Time elapsed", Zig's and cargo's "...FAIL", ScalaTest's " *** FAILED"), so a name's own " -- ",
+   * "..." or "***" stays. A duration or status in a group is cut only where it closes the line
+   * ({@link #withoutTail}), so a name's own parenthetical stays too.
    */
   private static final List<String> TEST_LINE_TAILS =
-      List.of("...", " <<<", " -- ", " FAILED", " *** ", "  ");
+      List.of(
+          " <<< FAILURE!",
+          " <<< ERROR!",
+          " -- Time elapsed",
+          "  Time elapsed",
+          "...FAIL",
+          "... FAIL",
+          " *** FAILED");
 
-  /** The separators between a test's suites and its own name: Jest, Gradle, pytest and cargo. */
-  private static final Pattern TEST_PATH_SEPARATOR = Pattern.compile(" \u203A | > |::");
+  /** The status Gradle and Karma end a failed test's line with. */
+  private static final String FAILED_STATUS = " FAILED";
+
+  /** The separators between a test's suites and its own name: Jest, pytest and cargo. */
+  private static final Pattern TEST_PATH_SEPARATOR = Pattern.compile(" \u203A |::");
+
+  /**
+   * Gradle's separator between a test class and its method, read only on a line Gradle's status
+   * ends: elsewhere " > " is a test name's own comparison ("expects 1 > 0").
+   */
+  private static final String GRADLE_SEPARATOR = " > ";
 
   /** A {@code file:line} or {@code Class.method:line} position ending a test's token. */
   private static final Pattern LINE_POSITION = Pattern.compile(":\\d");
@@ -275,19 +293,19 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     if (s.startsWith("FAIL ") || s.contains("Tests run:")) {
       return null;
     }
-    s = withoutTail(withoutLead(s));
+    s = cutAtTails(withoutLead(s));
+    boolean gradle = s.endsWith(FAILED_STATUS);
+    s = withoutTail(gradle ? s.substring(0, s.length() - FAILED_STATUS.length()) : s);
+    if (gradle && s.contains(GRADLE_SEPARATOR)) {
+      s = s.substring(s.lastIndexOf(GRADLE_SEPARATOR) + GRADLE_SEPARATOR.length());
+    }
     var segments = TEST_PATH_SEPARATOR.split(s);
     s = segments[segments.length - 1].strip();
     return ownName(s);
   }
 
-  /**
-   * {@code line} without what the runner printed after the test's name: the {@link
-   * #TEST_LINE_TAILS}, pytest's " - AssertionError…" after a node id (a token with no space), and a
-   * group that closes the line ("(1.5ms)", "[12 ms]", "(module.Case)"). A name's own parenthetical
-   * or dash before those stays: "renders empty (when no rows are eligible) (2ms)" keeps it.
-   */
-  private static String withoutTail(String line) {
+  /** {@code line} cut at the first of the {@link #TEST_LINE_TAILS} it holds. */
+  private static String cutAtTails(String line) {
     String s = line;
     for (String tail : TEST_LINE_TAILS) {
       int at = s.indexOf(tail);
@@ -295,6 +313,18 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
         s = s.substring(0, at);
       }
     }
+    return s;
+  }
+
+  /**
+   * {@code line} without the rest of what the runner printed after the test's name: pytest's " -
+   * AssertionError…" after a node id (a token with no space), and a group that closes the line
+   * ("(1.5ms)", "[12 ms]", "(module.Case)"). A name's own parenthetical, dash or ellipsis stays:
+   * "renders empty (when no rows are eligible) (2ms)" keeps it, and so does "returns 404 -- empty
+   * payload (3ms)".
+   */
+  private static String withoutTail(String line) {
+    String s = line;
     int dash = s.indexOf(" - ");
     if (dash > 0 && s.lastIndexOf(' ', dash - 1) < 0) {
       s = s.substring(0, dash);
@@ -432,6 +462,12 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
    */
   String overviewSentences(List<Finding> open) {
     var sentences = new ArrayList<String>();
+    if (checks.isEmpty()) {
+      return "";
+    }
+    // Each finding's citations once, in the summary's order; a check takes the first citing it.
+    var citedBy = new ArrayList<List<Citation>>(open.size());
+    open.forEach(finding -> citedBy.add(citations(finding.title(), finding.description())));
     for (Check check : checks) {
       var sb = new StringBuilder("CI on this commit fails the check ").append(quoted(check.name()));
       var tests = check.tests();
@@ -444,15 +480,14 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
         }
         sb.append(')');
       }
-      var explaining =
-          open.stream()
-              .filter(
-                  finding ->
-                      citations(finding.title(), finding.description()).stream()
-                          .anyMatch(citation -> citation.check() == check))
-              .findFirst();
-      if (explaining.isPresent()) {
-        sb.append(", which the finding ").append(label(explaining.get())).append(" explains.");
+      Finding explaining = null;
+      for (int i = 0; i < open.size() && explaining == null; i++) {
+        if (citedBy.get(i).stream().anyMatch(citation -> citation.check() == check)) {
+          explaining = open.get(i);
+        }
+      }
+      if (explaining != null) {
+        sb.append(", which the finding ").append(label(explaining)).append(" explains.");
       } else {
         sb.append(", which no open finding explains.");
       }

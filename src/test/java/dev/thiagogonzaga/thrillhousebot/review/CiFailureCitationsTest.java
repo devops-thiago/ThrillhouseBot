@@ -395,6 +395,12 @@ class CiFailureCitationsTest {
           \u2716 returns [missing] rows (5 ms) | returns [missing] rows
           \u2716 handles empty case - weekend schedule (2ms) | handles empty case - weekend schedule
           FAIL: test_parse_config (tests.test_config.ConfigTest) | test_parse_config
+          \u2716 returns 404 -- empty payload (3ms) | returns 404 -- empty payload
+          \u2716 waits for retry... then fails | waits for retry... then fails
+          \u2716 expects 1 > 0 for an empty cart | expects 1 > 0 for an empty cart
+          - rejects a blank name *** FAILED *** | rejects a blank name
+          Chrome Headless 120.0 (Linux) Suite rejects blank names FAILED | Chrome Headless 120.0 (Linux) Suite rejects blank names
+          [ERROR] testRejectsBlank(com.x.FooTest)  Time elapsed: 0.01 s  <<< FAILURE! | testRejectsBlank
           """)
   void eachRunnersLineYieldsTheTestsOwnName(String line, String name) {
     assertEquals(name, CiFailureCitations.testName(line));
@@ -468,6 +474,10 @@ class CiFailureCitationsTest {
             + " the check \"unit\" (failing test \"topCandidatesReturnsAtMostLimit\"), which no"
             + " open finding explains.",
         sentences);
+    assertEquals(
+        sentences,
+        citations.overviewSentences(List.of(Finding.fromAiResponse(NODE_SHORTLIST), unrelated)),
+        "the first citing finding is named wherever it stands");
   }
 
   /** With no open finding citing a check, its sentence says none explains it. */

@@ -132,7 +132,8 @@ class CiFailureOverviewTest {
     var purpose =
         "Adds a health check and explains the retry policy in the docs. The findings page lists"
             + " each check. It explains why the CI job runs nightly. This finding explains the"
-            + " cache policy.";
+            + " cache policy. Adds a bounds check on totals and explains the finding that flagged"
+            + " the wrap. The finding explains why parsing fails on empty input.";
 
     assertSame(purpose, CiFailureOverview.withoutCiVerdicts(purpose));
     assertNull(CiFailureOverview.withoutCiVerdicts(null));

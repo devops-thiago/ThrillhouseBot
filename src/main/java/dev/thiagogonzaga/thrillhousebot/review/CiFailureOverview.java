@@ -36,8 +36,9 @@ import java.util.regex.Pattern;
 final class CiFailureOverview {
 
   /**
-   * A sentence tying a CI failure to the findings: it speaks of a finding explaining something, and
-   * of CI, a check or a failing test. A sentence on what the change does names neither pair.
+   * A sentence tying a CI failure to the findings: it speaks of a finding explaining something, of
+   * CI, a check, a job or a test, and of a failure. A sentence on what the change does lacks one of
+   * them: "Adds a bounds check and explains the finding that flagged the wrap" names no failure.
    */
   private static final Pattern EXPLAINS =
       Pattern.compile("\\bexplain(?:s|ed|ing)?\\b", Pattern.CASE_INSENSITIVE);
@@ -45,8 +46,11 @@ final class CiFailureOverview {
   private static final Pattern FINDING =
       Pattern.compile("\\bfindings?\\b", Pattern.CASE_INSENSITIVE);
 
-  private static final Pattern CI_FAILURE =
-      Pattern.compile("\\b(?:CI|checks?|failing tests?)\\b", Pattern.CASE_INSENSITIVE);
+  private static final Pattern CI_RUN =
+      Pattern.compile("\\b(?:CI|checks?|jobs?|tests?)\\b", Pattern.CASE_INSENSITIVE);
+
+  private static final Pattern FAILURE =
+      Pattern.compile("\\bfail(?:s|ed|ing|ures?)?\\b", Pattern.CASE_INSENSITIVE);
 
   private CiFailureOverview() {}
 
@@ -100,6 +104,7 @@ final class CiFailureOverview {
   private static boolean isCiVerdict(String sentence) {
     return EXPLAINS.matcher(sentence).find()
         && FINDING.matcher(sentence).find()
-        && CI_FAILURE.matcher(sentence).find();
+        && CI_RUN.matcher(sentence).find()
+        && FAILURE.matcher(sentence).find();
   }
 }

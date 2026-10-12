@@ -1085,6 +1085,9 @@ class PromptLabelScrubberTest {
           It fails. Among the 3 confirmed findings above the second explains it. | It fails. The second explains it.
           Among the verified above. | .
           Among the accounts verified above, two are locked. | Among the accounts verified above, two are locked.
+          CI fails the check 'test', which no finding among the many verified above explains. | CI fails the check 'test', which no finding explains.
+          The row is among the 1234 verified above. | The row is among the 1234 verified above.
+          The row is among the old verified above. | The row is among the old verified above.
           """)
   void theCountOfVerifiedFindingsAndTheCiNoteAreRemoved(String leaked, String clean) {
     var expected = clean.replace("\\n", "\n");

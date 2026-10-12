@@ -404,12 +404,31 @@ public final class PromptLabelScrubber {
           Pattern.CASE_INSENSITIVE);
 
   /**
-   * The counts {@link #AMONG_THE_VERIFIED} reads as the summary call's: "three", "3", "several".
+   * The count words {@link #AMONG_THE_VERIFIED} reads as the summary call's ("three", "several",
+   * "many"); a number in digits is one too.
    */
-  private static final Pattern COUNTS =
-      Pattern.compile(
-          "\\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|several",
-          Pattern.CASE_INSENSITIVE);
+  private static final Set<String> COUNT_WORDS =
+      Set.of(
+          "one",
+          "two",
+          "three",
+          "four",
+          "five",
+          "six",
+          "seven",
+          "eight",
+          "nine",
+          "ten",
+          "eleven",
+          "twelve",
+          "several",
+          "many",
+          "few",
+          "numerous",
+          "dozens",
+          "multiple",
+          "both",
+          "various");
 
   /**
    * "the bug is confirmed rather than counted", "the failure is measured, not predicted": the
@@ -710,9 +729,7 @@ public final class PromptLabelScrubber {
             .replaceAll(
                 m ->
                     Matcher.quoteReplacement(
-                        countsFindings(m.group(2))
-                            ? m.group(1) + (m.group(3) == null ? "" : capitalize(m.group(3)))
-                            : m.group()));
+                        countsFindings(m.group(2)) ? openingWithoutCount(m) : m.group()));
     s =
         AMONG_THE_VERIFIED
             .matcher(s)
@@ -723,9 +740,17 @@ public final class PromptLabelScrubber {
     return FINDINGS_IN_BATCH.matcher(s).replaceAll("$1");
   }
 
-  /** Whether "among the [count] verified above" names no count, or one of {@link #COUNTS}. */
+  /** Whether "among the [count] verified above" names no count, or a count. */
   private static boolean countsFindings(String count) {
-    return count == null || COUNTS.matcher(count).matches();
+    return count == null
+        || COUNT_WORDS.contains(count.toLowerCase(Locale.ROOT))
+        || (count.length() <= 3 && count.chars().allMatch(Character::isDigit));
+  }
+
+  /** An {@link #AMONG_THE_VERIFIED_OPENING} match without the count: what follows opens it. */
+  private static String openingWithoutCount(MatchResult m) {
+    String next = m.group(3);
+    return next == null ? m.group(1) : m.group(1) + capitalize(next);
   }
 
   /**
