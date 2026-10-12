@@ -267,6 +267,13 @@ class OverviewScreenTest {
   }
 
   @Test
+  void anInitialismDoesNotEndTheSentence() {
+    assertEquals(
+        List.of("Bills U.S. Customers at 9 A.M. Eastern time.", "Done."),
+        OverviewScreen.sentences("Bills U.S. Customers at 9 A.M. Eastern time. Done."));
+  }
+
+  @Test
   void aSentenceEndingInEtcIsSplitBeforeACapital() {
     assertEquals(
         "Lists the parsers, codecs, etc.",

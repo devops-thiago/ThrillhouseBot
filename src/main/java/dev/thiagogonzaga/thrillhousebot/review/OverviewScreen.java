@@ -200,6 +200,9 @@ final class OverviewScreen {
           "JSONRPC", "SHAKE", "BLAKE", "BASE", "ECDSA", "EDDSA", "ARGON", "CHACHA", "POLY", "LZMA",
           "XXHASH", "MURMUR", "KECCAK", "PBKDF", "SCRYPT", "UUID", "ULID");
 
+  /** An initialism: single letters each followed by a period ("u.s.", "a.m."). */
+  private static final Pattern INITIALISM = Pattern.compile("(?:\\p{L}\\.){2,}+");
+
   /** What opens a word before its first letter: brackets, quotes, dashes. */
   private static final Pattern LEADING_PUNCTUATION = Pattern.compile("^\\P{L}++");
 
@@ -585,8 +588,9 @@ final class OverviewScreen {
    * letter after it never does: whatever abbreviation ended in the period ("approx.", "etc.",
    * "Inc.") ended mid-sentence. Nor does anything after "e.g.", "i.e." and "vs.", a name after a
    * title ({@link #TITLE_ABBREVIATIONS}: "Dr. Smith"), or a number after a reference ({@link
-   * #REFERENCE_ABBREVIATIONS}: "No. 5"). Otherwise a period ends the sentence, "etc." and a
-   * capitalised word such as "Vite." included ("…, codecs, etc. Adds the rotator.").
+   * #REFERENCE_ABBREVIATIONS}: "No. 5"), or after an initialism ("U.S. Bank"). Otherwise a period
+   * ends the sentence, "etc." and a capitalised word such as "Vite." included ("…, codecs, etc.
+   * Adds the rotator.").
    */
   static List<String> sentences(String paragraph) {
     // Stripped, so a sentence end is always followed by the next sentence's first character.
@@ -608,6 +612,7 @@ final class OverviewScreen {
           Character.isLowerCase(next)
               || MID_SENTENCE_ABBREVIATIONS.contains(lastWord)
               || TITLE_ABBREVIATIONS.contains(lastWord)
+              || INITIALISM.matcher(lastWord).matches()
               || (REFERENCE_ABBREVIATIONS.contains(lastWord) && Character.isDigit(next));
       if (!midSentence) {
         result.add(before);
