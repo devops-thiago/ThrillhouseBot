@@ -224,6 +224,24 @@ class LinkedIssueCitationsTest {
     assertEquals(title, held.title());
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The code never compares the meter serial, breaking the acceptance criterion for"
+            + " duplicates (same meter serial and timestamp).",
+        "This breaks the acceptance criterion for the future reason: readings timestamped more"
+            + " than 15 minutes ahead are kept."
+      })
+  void aCriterionWhoseSubjectRunsOnPastAParenthesisOrColonIsJudgedWhole(String description) {
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(finding("low", "low", "Readings are accepted", description)), C_231));
+
+    assertEquals("medium", held.risk());
+    assertEquals("medium", held.confidence());
+  }
+
   @Test
   void aCriterionNamedInTooFewWordsIsNotJudged() {
     var description = "This breaks the acceptance criterion for refunds.";

@@ -98,9 +98,13 @@ final class LinkedIssueCitations {
   /** What ends a sentence: a full stop, semicolon or mark before a blank or the end, or a break. */
   private static final Pattern SENTENCE_END = Pattern.compile("[.;!?](?=\\s|$)|\n");
 
-  /** What ends the clause naming a criterion's subject. */
+  /**
+   * What ends the clause naming a criterion's subject. A parenthesis or a colon does not: "the
+   * criterion for duplicates (same meter serial and timestamp)" and "the criterion for the future
+   * reason: readings …" go on naming it.
+   */
   private static final Pattern CLAUSE_END =
-      Pattern.compile("(?i)[,;:!?\u2014\u2013(]|\\.(?=\\s|$)|\\b(?:but|while|whereas|so)\\b|\n");
+      Pattern.compile("(?i)[,;!?\u2014\u2013]|\\.(?=\\s|$)|\\b(?:but|while|whereas|so)\\b|\n");
 
   /** A conjunction or comma that joins a citation to an earlier claim in its sentence. */
   private static final Pattern JOINER = Pattern.compile("(?i),\\s|\\s(?:and|or)\\s");
