@@ -857,6 +857,88 @@ class SecurityScanTest {
   }
 
   @Test
+  void aDocFindingAboutAnotherKeyThatMentionsTheIdentifierIsKept() {
+    // Review of #1072: a doc row about DB_PASSWORD that names the scanned constant in passing is
+    // its own defect, not the scan's.
+    var value = fake.genericSecret(40);
+    var otherKey =
+        modelFinding(
+            "csharp/docs/CONFIG-CSHARP.md",
+            12,
+            "Documented default of 'none' for DB_PASSWORD contradicts the code",
+            "The code falls back to a hardcoded password; the token fallback CatalogApiToken is"
+                + " already covered.");
+    var merged = merge(scan(true, false), response(otherKey), List.of(csharpCatalog(value)));
+    assertEquals(2, merged.findings().size());
+  }
+
+  @Test
+  void aTitleNamingTheEnvironmentKeyTheConstantStandsInForIsTheSameSecret() {
+    var value = fake.genericSecret(40);
+    var file = "kotlin/src/main/kotlin/newsletter/billing/Config.kt";
+    var use = "                paymentToken = env[\"PAYMENT_API_TOKEN\"] ?: apiToken,";
+    var model =
+        modelFinding(
+            file,
+            28,
+            "PAYMENT_API_TOKEN falls back to a hardcoded token",
+            "When the variable is unset, `apiToken` is used.");
+    var merged =
+        merge(
+            scan(true, false),
+            response(model),
+            List.of(addedWith(file, 39, Map.of(28, use, 39, "val apiToken = \"" + value + "\""))));
+    assertEquals(1, merged.findings().size(), () -> merged.findings().toString());
+  }
+
+  @Test
+  void theAliasesAreTheKeysOnTheSecretsLineTheLineAboveAndItsUseSites() {
+    var value = fake.genericSecret(40);
+    var lines = PatchLines.parse(csharpCatalog(value)[0].patch()).lines();
+    int index = 14; // line 15, the constant
+    assertEquals(
+        Set.of("CatalogApiToken", "HOLDS_CATALOG_TOKEN", "CatalogToken"),
+        SecurityScan.aliasesOf("CatalogApiToken", lines, index));
+
+    // The last line of an earlier hunk is not the line above it in the file.
+    var twoHunks =
+        PatchLines.parse(
+                "@@ -1,1 +1,1 @@\n // Used when OTHER_API_TOKEN is not set\n"
+                    + "@@ -9,0 +9,1 @@\n+val apiToken = \""
+                    + value
+                    + "\"\n")
+            .lines();
+    assertEquals(Set.of("apiToken"), SecurityScan.aliasesOf("apiToken", twoHunks, 1));
+  }
+
+  @Test
+  void aDocFindingIsLookedUpByItsWordsNotComparedWithEverySecret() {
+    // Review of #1072: the doc lane must not walk every identified secret for every doc finding.
+    var files = new ArrayList<FileDiff>();
+    var models = new ArrayList<ReviewResponse.Finding>();
+    for (int i = 0; i < 50; i++) {
+      files.add(
+          added(
+              "svc" + i + "/Config.kt",
+              "val apiToken" + i + " = \"" + fake.genericSecret(40) + "\""));
+      models.add(
+          modelFinding(
+              "docs/svc" + i + ".md",
+              1,
+              "Token documented without rotation",
+              "The hardcoded token is documented as permanent."));
+    }
+    var s = scan(true, false);
+    var result = s.scan(files);
+    long before = SecurityScan.IDENTITY_COMPARISONS.get();
+    var merged = s.merge(new ReviewResponse(models, List.of(), null), result, List.of(), Set.of());
+    // One earlier-round lookup per detection and none for the doc findings, which name no
+    // identifier, where a walk over every secret for every finding makes 2,500.
+    assertEquals(50L, SecurityScan.IDENTITY_COMPARISONS.get() - before);
+    assertEquals(100, merged.findings().size());
+  }
+
+  @Test
   void aBareCredentialWordKeyIsMatchedOnlyWithinTheLineTolerance() {
     var value = fake.genericSecret(40);
     var far =
