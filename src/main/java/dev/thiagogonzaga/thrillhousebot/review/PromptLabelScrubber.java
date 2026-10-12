@@ -740,11 +740,15 @@ public final class PromptLabelScrubber {
     return FINDINGS_IN_BATCH.matcher(s).replaceAll("$1");
   }
 
-  /** Whether "among the [count] verified above" names no count, or a count. */
+  /**
+   * Whether "among the [count] verified above" names a count: the summary call counting the list
+   * its prompt gave it. Without one the phrase may point at the findings the summary itself lists,
+   * and stays.
+   */
   private static boolean countsFindings(String count) {
-    return count == null
-        || COUNT_WORDS.contains(count.toLowerCase(Locale.ROOT))
-        || (count.length() <= 3 && count.chars().allMatch(Character::isDigit));
+    return count != null
+        && (COUNT_WORDS.contains(count.toLowerCase(Locale.ROOT))
+            || (count.length() <= 3 && count.chars().allMatch(Character::isDigit)));
   }
 
   /** An {@link #AMONG_THE_VERIFIED_OPENING} match without the count: what follows opens it. */

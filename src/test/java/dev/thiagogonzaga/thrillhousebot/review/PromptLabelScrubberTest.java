@@ -1076,14 +1076,15 @@ class PromptLabelScrubberTest {
           """
           CI fails the check 'test', which no finding among the three verified above explains. | CI fails the check 'test', which no finding explains.
           No finding among the 3 confirmed findings above explains it. | No finding explains it.
-          None among the verified below names it. | None names it.
+          None among the verified below names it. | None among the verified below names it.
           Because the failing job is already measured on this commit, the bug is confirmed rather than counted. | Because the failing job is already measured on this commit, the bug is confirmed.
           The failure is measured, not predicted. | The failure is measured.
           It is Confirmed instead of counted. | It is Confirmed.
           Among the three verified above, the shortlist finding explains it. | The shortlist finding explains it.
           It fails.\\nAmong the three verified above, the second is the one. | It fails.\\nThe second is the one.
           It fails. Among the 3 confirmed findings above the second explains it. | It fails. The second explains it.
-          Among the verified above. | .
+          Among the three verified above. | .
+          Among the verified findings below, two are false. | Among the verified findings below, two are false.
           Among the accounts verified above, two are locked. | Among the accounts verified above, two are locked.
           CI fails the check 'test', which no finding among the many verified above explains. | CI fails the check 'test', which no finding explains.
           The row is among the 1234 verified above. | The row is among the 1234 verified above.
