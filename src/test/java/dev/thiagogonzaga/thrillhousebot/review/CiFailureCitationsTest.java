@@ -394,6 +394,12 @@ class CiFailureCitationsTest {
           \u2716 returns [missing] rows (5 ms) | returns [missing] rows
           \u2716 handles empty case - weekend schedule (2ms) | handles empty case - weekend schedule
           FAIL: test_parse_config (tests.test_config.ConfigTest) | test_parse_config
+          1 - queue_rejects_overflow (Failed) | queue_rejects_overflow
+          ERROR tests/test_store.py::test_search_escapes_event_name - fixture 'db' not found | test_search_escapes_event_name
+          ERROR: test_hold_expiry (tests.test_holds.HoldTest.test_hold_expiry) | test_hold_expiry
+          ==> X port.EventRepositorySuite.findByContainer  0.012s | findByContainer
+          Test [1/5] queue.test.submit accepts copies... FAIL (TestUnexpectedResult) | submit accepts copies
+          Failed RoomBooking.Tests.MathTests.Addition(x: 0, y: 1) [< 1 ms] | Addition
           \u2716 returns 404 -- empty payload (3ms) | returns 404 -- empty payload
           \u2716 waits for retry... then fails | waits for retry... then fails
           \u2716 expects 1 > 0 for an empty cart | expects 1 > 0 for an empty cart

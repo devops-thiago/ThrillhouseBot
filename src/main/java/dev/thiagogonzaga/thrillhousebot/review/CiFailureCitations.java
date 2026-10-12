@@ -146,6 +146,10 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   private static final Pattern COUNTER_LEAD =
       Pattern.compile("^(?:\\d++/\\d++ |Test \\[\\d++/\\d++] |\\d++ - )");
 
+  /** A bare elapsed time ending the line, as munit prints it after the test: " 0.012s". */
+  private static final Pattern TRAILING_DURATION =
+      Pattern.compile("\\s{2,}+\\d++(?:\\.\\d++)?+m?s$");
+
   /**
    * What a runner prints after a failed test's name, cut at its first occurrence. Each is the
    * marker together with the status or timing that follows it (Surefire's " <<< FAILURE!" and " --
@@ -325,7 +329,7 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
    * payload (3ms)".
    */
   private static String withoutTail(String line) {
-    String s = line;
+    String s = TRAILING_DURATION.matcher(line).replaceFirst("");
     int dash = s.indexOf(" - ");
     if (dash > 0 && s.lastIndexOf(' ', dash - 1) < 0) {
       s = s.substring(0, dash);
