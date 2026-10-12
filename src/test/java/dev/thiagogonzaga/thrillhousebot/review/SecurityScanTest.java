@@ -574,6 +574,509 @@ class SecurityScanTest {
     assertFalse(everySurface(merged).contains(value));
   }
 
+  // --- #1072: the scanned secret raised again by name, away from its line ---
+
+  /** A file the pull request adds, {@code length} lines long, blank except the ones given. */
+  private static FileDiff addedWith(String name, int length, Map<Integer, String> lines) {
+    var all = new String[length];
+    for (int i = 0; i < length; i++) {
+      all[i] = lines.getOrDefault(i + 1, "");
+    }
+    return added(name, all);
+  }
+
+  private static void assertOnlyTheScansFinding(ReviewResponse merged, String value)
+      throws Exception {
+    assertEquals(1, merged.findings().size(), () -> merged.findings().toString());
+    assertTrue(merged.findings().get(0).title().startsWith(SecurityRule.TITLE_PREFIX));
+    assertEquals("high", merged.findings().get(0).risk(), "the scan's grade, not the model's");
+    assertFalse(everySurface(merged).contains(value));
+  }
+
+  @Test
+  void theJavaFallbackUseSiteFindingCollapsesIntoTheScans() throws Exception {
+    // ThrillhouseBot-test#245: the scan at WaitlistConfig.java:12, the model CRITICAL at :20.
+    var value = fake.genericSecret(40);
+    var file = "java/src/main/java/com/clinic/waitlist/WaitlistConfig.java";
+    var declaration = "  private static final String SCHEDULER_API_TOKEN = \"" + value + "\";";
+    var use = "        env.getOrDefault(\"SCHEDULER_API_TOKEN\", SCHEDULER_API_TOKEN),";
+    var model =
+        new ReviewResponse.Finding(
+            "critical",
+            "high",
+            file,
+            20,
+            "Scheduler API token committed as a source constant and used as default",
+            "Line 12 reads '"
+                + declaration.strip()
+                + "' and line 20 installs it as the fallback: '"
+                + use.strip()
+                + "'. The token must be rotated and removed from source.",
+            use,
+            "        Objects.requireNonNull(env.get(\"SCHEDULER_API_TOKEN\")),");
+    var merged =
+        merge(
+            scan(true, false),
+            response(model),
+            List.of(addedWith(file, 24, Map.of(12, declaration, 20, use))));
+    assertOnlyTheScansFinding(merged, value);
+  }
+
+  @Test
+  void theKotlinFallbackUseSiteFindingCollapsesIntoTheScans() throws Exception {
+    // ThrillhouseBot-test#252: the scan at Config.kt:39, the model CRITICAL at :28, above it.
+    var value = fake.genericSecret(40);
+    var file = "kotlin/src/main/kotlin/newsletter/billing/Config.kt";
+    var declaration = "val apiToken: String = \"" + value + "\"";
+    var use = "                paymentToken = env[\"PAYMENT_API_TOKEN\"] ?: apiToken,";
+    var model =
+        new ReviewResponse.Finding(
+            "critical",
+            "high",
+            file,
+            28,
+            "Payment gateway API token committed in source as a hardcoded fallback",
+            "The file commits the literal bearer token used to charge subscribers: '"
+                + declaration
+                + "', used by 'paymentToken = env[\"PAYMENT_API_TOKEN\"] ?: apiToken'.",
+            use,
+            "                paymentToken = env[\"PAYMENT_API_TOKEN\"] ?: error(\"unset\"),");
+    var merged =
+        merge(
+            scan(true, false),
+            response(model),
+            List.of(
+                addedWith(
+                    file,
+                    39,
+                    Map.of(
+                        28,
+                        use,
+                        38,
+                        "// Fallback used by deployments that do not inject PAYMENT_API_TOKEN.",
+                        39,
+                        declaration))));
+    assertOnlyTheScansFinding(merged, value);
+  }
+
+  /** ThrillhouseBot-test#246: the C# client and the doc row that contradicts its fallback. */
+  private FileDiff[] csharpCatalog(String value) {
+    return new FileDiff[] {
+      addedWith(
+          "csharp/HoldsService/CatalogClient.cs",
+          53,
+          Map.of(
+              14,
+              "    // Used when HOLDS_CATALOG_TOKEN is not set, so local runs can reach the catalog.",
+              15,
+              "    private const string CatalogApiToken = \"" + value + "\";",
+              25,
+              "            new AuthenticationHeaderValue(\"Bearer\", options.CatalogToken ??"
+                  + " CatalogApiToken);")),
+      addedWith(
+          "csharp/docs/CONFIG-CSHARP.md",
+          20,
+          Map.of(
+              11,
+              "| `HOLDS_CATALOG_TOKEN` | none | Bearer token sent to the branch catalog API. |"))
+    };
+  }
+
+  @Test
+  void theCsharpUseSiteAndDocFindingsCollapseIntoTheScans() throws Exception {
+    // ThrillhouseBot-test#246: the scan at CatalogClient.cs:15, the model CRITICAL at :25 and a
+    // MEDIUM on the doc row, all three about the one fallback token.
+    var value = fake.genericSecret(40);
+    var useSite =
+        new ReviewResponse.Finding(
+            "critical",
+            "high",
+            "csharp/HoldsService/CatalogClient.cs",
+            25,
+            "Hardcoded catalog API token committed to the repository",
+            "A live-looking bearer credential is committed in source: private const string"
+                + " CatalogApiToken = \""
+                + value
+                + "\"; and it is used at line 25 (options.CatalogToken ?? CatalogApiToken).",
+            null,
+            null);
+    var docRow =
+        new ReviewResponse.Finding(
+            "medium",
+            "medium",
+            "csharp/docs/CONFIG-CSHARP.md",
+            11,
+            "Documented default of 'none' for HOLDS_CATALOG_TOKEN contradicts the code",
+            "The configuration table states the default is none, but CatalogClient.cs line 25"
+                + " falls back to a constant when the variable is unset: 'options.CatalogToken ??"
+                + " CatalogApiToken'. An operator who leaves the key unset is silently sending a"
+                + " hardcoded token to the catalog.",
+            null,
+            null);
+    var merged = merge(scan(true, false), response(useSite, docRow), List.of(csharpCatalog(value)));
+    assertOnlyTheScansFinding(merged, value);
+  }
+
+  @Test
+  void aNonSecretFindingOnTheUseSiteLineIsKept() {
+    var value = fake.genericSecret(40);
+    var timeout =
+        modelFinding(
+            "csharp/HoldsService/CatalogClient.cs",
+            25,
+            "No timeout on the catalog HTTP client",
+            "The client built around `options.CatalogToken ?? CatalogApiToken` never sets a"
+                + " timeout, so a stalled catalog hangs the expiry worker.");
+    var merged = merge(scan(true, false), response(timeout), List.of(csharpCatalog(value)));
+    assertEquals(2, merged.findings().size());
+    assertEquals(timeout.title(), merged.findings().get(0).title());
+  }
+
+  @Test
+  void aSecretFindingAboutADifferentIdentifierInTheSameFileIsKept() {
+    var value = fake.genericSecret(40);
+    var file = "kotlin/src/main/kotlin/newsletter/billing/Config.kt";
+    var files =
+        List.of(
+            addedWith(
+                file,
+                39,
+                Map.of(
+                    20,
+                    "    val dbPassword = \"changeme\"",
+                    39,
+                    "val apiToken: String = \"" + value + "\"")));
+    var otherKey =
+        modelFinding(
+            file,
+            20,
+            "Database password hardcoded in dbPassword",
+            "The `dbPassword` default is committed in source.");
+    var otherKeyNamingBoth =
+        modelFinding(
+            file,
+            20,
+            "Hardcoded dbPassword default ships to production",
+            "Like apiToken further down, `dbPassword` is a committed credential.");
+    var merged = merge(scan(true, false), response(otherKey, otherKeyNamingBoth), files);
+    assertEquals(3, merged.findings().size(), () -> merged.findings().toString());
+
+    var namesBoth =
+        modelFinding(
+            file,
+            20,
+            "Hardcoded credentials: apiToken and dbPassword are committed",
+            "Both defaults are committed in source.");
+    assertEquals(
+        2,
+        merge(scan(true, false), response(namesBoth), files).findings().size(),
+        "a title that also names another key carries a defect the scan did not raise");
+  }
+
+  @Test
+  void aDocFindingNamingTheIdentifierWithoutACredentialClaimIsKept() {
+    var value = fake.genericSecret(40);
+    var naming =
+        modelFinding(
+            "csharp/docs/CONFIG-CSHARP.md",
+            11,
+            "Configuration table names the wrong property",
+            "The row describes `HOLDS_CATALOG_TOKEN`, but the code reads `private const string"
+                + " CatalogApiToken` only through `options.CatalogToken`.");
+    var merged = merge(scan(true, false), response(naming), List.of(csharpCatalog(value)));
+    assertEquals(2, merged.findings().size(), "a declaration's 'private' is no secret claim");
+  }
+
+  @Test
+  void aSourceFileElsewhereOrADocNotNamingTheIdentifierIsKept() {
+    var value = fake.genericSecret(40);
+    var files = new ArrayList<>(List.of(csharpCatalog(value)));
+    files.add(
+        addedWith(
+            "csharp/HoldsService/HoldsOptions.cs",
+            21,
+            Map.of(19, "        CatalogToken = env(\"HOLDS_CATALOG_TOKEN\"),")));
+    var otherSource =
+        modelFinding(
+            "csharp/HoldsService/HoldsOptions.cs",
+            19,
+            "Catalog token is optional and silently replaced by a hardcoded value",
+            "When unset, CatalogClient falls back to CatalogApiToken.");
+    var docWithoutIdentifier =
+        modelFinding(
+            "csharp/docs/CONFIG-CSHARP.md",
+            11,
+            "Token default documented as none",
+            "The documented default token is wrong.");
+    var merged = merge(scan(true, false), response(otherSource, docWithoutIdentifier), files);
+    assertEquals(3, merged.findings().size());
+  }
+
+  @Test
+  void aConfigFileFindingNamingTheIdentifierCollapsesButTheSecretsOwnFileNeedsATitleClaim() {
+    var value = fake.genericSecret(40);
+    var source =
+        addedWith("src/Client.kt", 30, Map.of(3, "val apiToken: String = \"" + value + "\""));
+    var chartValues =
+        modelFinding(
+            "deploy/values.yaml",
+            4,
+            "Chart values do not override the client's fallback",
+            "Nothing here sets the token, so the pod runs with the hardcoded apiToken.");
+    assertEquals(
+        1,
+        merge(scan(true, false), response(chartValues), List.of(source)).findings().size(),
+        "a configuration file is read like a doc file");
+
+    var config = addedWith("config/app.yml", 30, Map.of(2, "  api_token: \"" + value + "\""));
+    var ownFile =
+        modelFinding(
+            "config/app.yml",
+            30,
+            "Settings block is read before the profile",
+            "The hardcoded token in api_token is read before the profile overrides it.");
+    assertEquals(
+        2,
+        merge(scan(true, false), response(ownFile), List.of(config)).findings().size(),
+        "in the secret's own file the claim must be in the title");
+
+    var otherName =
+        modelFinding(
+            "src/Client.kt",
+            30,
+            "Hardcoded token flows into fromEnv",
+            "The apiToken literal is the default fromEnv returns.");
+    assertEquals(
+        1,
+        merge(scan(true, false), response(otherName), List.of(source)).findings().size(),
+        "a non-credential identifier in the title is no other key");
+
+    var noFile =
+        new ReviewResponse.Finding("high", "high", null, 0, "Hardcoded apiToken", "d", null, null);
+    assertEquals(2, merge(scan(true, false), response(noFile), List.of(source)).findings().size());
+  }
+
+  @Test
+  void aDocFindingAboutAnotherKeyThatMentionsTheIdentifierIsKept() {
+    // Review of #1072: a doc row about DB_PASSWORD that names the scanned constant in passing is
+    // its own defect, not the scan's.
+    var value = fake.genericSecret(40);
+    var otherKey =
+        modelFinding(
+            "csharp/docs/CONFIG-CSHARP.md",
+            12,
+            "Documented default of 'none' for DB_PASSWORD contradicts the code",
+            "The code falls back to a hardcoded password; the token fallback CatalogApiToken is"
+                + " already covered.");
+    var merged = merge(scan(true, false), response(otherKey), List.of(csharpCatalog(value)));
+    assertEquals(2, merged.findings().size());
+  }
+
+  @Test
+  void aDocFindingNamingOnlyTheEnvironmentKeyCollapsesWhenItsTitleMakesTheClaim() {
+    // #1072: "names the same identifier or its env key". A doc row is where the key is
+    // documented, so naming it alone is the scanned secret only when the title says so.
+    var value = fake.genericSecret(40);
+    var claimed =
+        modelFinding(
+            "csharp/docs/CONFIG-CSHARP.md",
+            11,
+            "HOLDS_CATALOG_TOKEN silently falls back to a hardcoded token",
+            "The row says the default is none for `HOLDS_CATALOG_TOKEN`.");
+    assertEquals(
+        1,
+        merge(scan(true, false), response(claimed), List.of(csharpCatalog(value)))
+            .findings()
+            .size());
+
+    var docOnly =
+        modelFinding(
+            "csharp/docs/CONFIG-CSHARP.md",
+            11,
+            "HOLDS_CATALOG_TOKEN is documented as optional",
+            "The service needs the token in production, but the row marks `HOLDS_CATALOG_TOKEN`"
+                + " optional.");
+    assertEquals(
+        2,
+        merge(scan(true, false), response(docOnly), List.of(csharpCatalog(value)))
+            .findings()
+            .size());
+  }
+
+  @Test
+  void aTitleNamingTheEnvironmentKeyTheConstantStandsInForIsTheSameSecret() {
+    var value = fake.genericSecret(40);
+    var file = "kotlin/src/main/kotlin/newsletter/billing/Config.kt";
+    var use = "                paymentToken = env[\"PAYMENT_API_TOKEN\"] ?: apiToken,";
+    var model =
+        modelFinding(
+            file,
+            28,
+            "PAYMENT_API_TOKEN falls back to a hardcoded token",
+            "When the variable is unset, `apiToken` is used.");
+    var merged =
+        merge(
+            scan(true, false),
+            response(model),
+            List.of(addedWith(file, 39, Map.of(28, use, 39, "val apiToken = \"" + value + "\""))));
+    assertEquals(1, merged.findings().size(), () -> merged.findings().toString());
+  }
+
+  /** The aliases of the one identified secret a scan of {@code files} finds. */
+  private static Set<String> aliasesOf(FileDiff... files) {
+    return scan(true, false).scan(List.of(files)).detections().stream()
+        .filter(detection -> detection.identifier() != null)
+        .findFirst()
+        .orElseThrow()
+        .aliases();
+  }
+
+  @Test
+  void theAliasesAreTheEnvironmentKeyAboveTheSecretAndOnItsUseSites() {
+    var value = fake.genericSecret(40);
+    assertEquals(
+        Set.of("CatalogApiToken", "HOLDS_CATALOG_TOKEN"), aliasesOf(csharpCatalog(value)[0]));
+    assertEquals(
+        Set.of("apiToken", "PAYMENT_API_TOKEN"),
+        aliasesOf(
+            added(
+                "Config.kt",
+                "paymentToken = env[\"PAYMENT_API_TOKEN\"] ?: apiToken,",
+                "region = env[\"BILLING_REGION\"] ?: apiToken.take(2),",
+                "val apiToken = \"" + value + "\"")));
+
+    // The last line of an earlier hunk is not the line above it in the file.
+    var twoHunks =
+        new FileDiff(
+            "Config.kt",
+            "modified",
+            1,
+            0,
+            2,
+            "@@ -1,1 +1,1 @@\n // Used when OTHER_API_TOKEN is not set\n"
+                + "@@ -9,0 +9,1 @@\n+val apiToken = \""
+                + value
+                + "\"\n");
+    assertEquals(Set.of("apiToken"), aliasesOf(twoHunks));
+
+    // A removed line is not in the new file (PatchLines leaves it out), so neither as a use site
+    // nor as the line above does it tie its key to the secret.
+    var replaced =
+        new FileDiff(
+            "Config.kt",
+            "modified",
+            1,
+            1,
+            2,
+            "@@ -1,1 +1,1 @@\n-legacy = env[\"LEGACY_PAYMENTS_KEY\"] ?: apiToken\n"
+                + "+val apiToken = \""
+                + value
+                + "\"\n");
+    assertEquals(Set.of("apiToken"), aliasesOf(replaced));
+  }
+
+  @Test
+  void aLinePassingAnotherCredentialTiesNothingToTheSecret() {
+    // Review of #1072: a use site that also passes another credential, or two environment keys,
+    // does not make the other key an alias, so a finding about it is kept.
+    var value = fake.genericSecret(40);
+    var file = "kotlin/src/main/kotlin/newsletter/billing/Config.kt";
+    var files =
+        List.of(
+            addedWith(
+                file,
+                39,
+                Map.of(
+                    20,
+                    "    val dbPassword = \"changeme\"",
+                    24,
+                    "    val client = connect(dbPassword, apiToken)",
+                    25,
+                    "    val both = env[\"DB_PASSWORD\"] ?: env[\"PAYMENT_API_TOKEN\"] ?: apiToken",
+                    39,
+                    "val apiToken: String = \"" + value + "\"")));
+    assertEquals(Set.of("apiToken"), aliasesOf(files.get(0)));
+    var namesBoth =
+        modelFinding(
+            file,
+            20,
+            "Hardcoded credentials: apiToken and dbPassword are committed",
+            "Both defaults are committed in source.");
+    assertEquals(2, merge(scan(true, false), response(namesBoth), files).findings().size());
+  }
+
+  @Test
+  void aDocFindingIsLookedUpByItsWordsNotComparedWithEverySecret() {
+    // Review of #1072: the doc lane must not walk every identified secret for every doc finding.
+    var files = new ArrayList<FileDiff>();
+    var models = new ArrayList<ReviewResponse.Finding>();
+    for (int i = 0; i < 50; i++) {
+      files.add(
+          added(
+              "svc" + i + "/Config.kt",
+              "val apiToken" + i + " = \"" + fake.genericSecret(40) + "\""));
+      models.add(
+          modelFinding(
+              "docs/svc" + i + ".md",
+              1,
+              "Token documented without rotation",
+              "The hardcoded token is documented as permanent."));
+    }
+    var s = scan(true, false);
+    var result = s.scan(files);
+    long before = SecurityScan.IDENTITY_COMPARISONS.get();
+    var merged = s.merge(new ReviewResponse(models, List.of(), null), result, List.of(), Set.of());
+    // One earlier-round lookup per detection and none for the doc findings, which name no
+    // identifier, where a walk over every secret for every finding makes 2,500.
+    assertEquals(50L, SecurityScan.IDENTITY_COMPARISONS.get() - before);
+    assertEquals(100, merged.findings().size());
+  }
+
+  @Test
+  void aBareCredentialWordKeyIsMatchedOnlyWithinTheLineTolerance() {
+    var value = fake.genericSecret(40);
+    var far =
+        modelFinding(
+            "app.py",
+            20,
+            "Password compared with == is not constant-time",
+            "`if supplied == password:` leaks timing.");
+    var merged =
+        merge(
+            scan(true, false),
+            response(far),
+            List.of(addedWith("app.py", 20, Map.of(1, "password = \"" + value + "\""))));
+    assertEquals(2, merged.findings().size(), "'password' is a word, not a name for the secret");
+  }
+
+  @Test
+  void anIdentifierIsTheLastSegmentOfADistinctiveKey() {
+    var value = fake.genericSecret(40);
+    assertEquals(
+        "apiToken",
+        SecurityScan.identifierOf(
+            new SecretScanner.Hit(SecurityRule.GENERIC_SECRET, value, "config.apiToken")));
+    assertEquals(
+        "SCHEDULER_API_TOKEN",
+        SecurityScan.identifierOf(
+            new SecretScanner.Hit(SecurityRule.GENERIC_SECRET, value, "SCHEDULER_API_TOKEN")));
+    assertNull(
+        SecurityScan.identifierOf(
+            new SecretScanner.Hit(SecurityRule.GENERIC_SECRET, value, "password")));
+    assertNull(
+        SecurityScan.identifierOf(new SecretScanner.Hit(SecurityRule.GENERIC_SECRET, value, null)));
+    assertNull(
+        SecurityScan.identifierOf(
+            new SecretScanner.Hit(SecurityRule.AWS_ACCESS_KEY, value, "AWS_KEY")));
+    assertTrue(SecurityScan.names("uses apiToken.", "apiToken"));
+    assertTrue(SecurityScan.names("apiToken", "apiToken"));
+    assertFalse(SecurityScan.names("uses paymentApiToken", "apiToken"));
+    assertFalse(SecurityScan.names("uses x_apiToken", "apiToken"));
+    assertTrue(SecurityScan.names("x_apiToken and apiToken", "apiToken"));
+    assertFalse(SecurityScan.names("uses apiTokens", "apiToken"));
+    assertFalse(SecurityScan.names(null, "apiToken"));
+  }
+
   // --- #926: a model secret finding on an interpolation or a placeholder ---
 
   private static DiffLineResolver resolver(FileDiff... files) {
