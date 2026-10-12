@@ -145,6 +145,29 @@ class ReviewResultTest {
   }
 
   @Test
+  void atEqualSeverityTheMoreConfidentFindingRanksFirst() {
+    // Confidence orders HIGH, MEDIUM, LOW, so the ascending tie-break puts HIGH first.
+    var medium = new Finding(RiskLevel.MEDIUM, Confidence.MEDIUM, "a", 1, "Medium", "", null, null);
+    var high = new Finding(RiskLevel.MEDIUM, Confidence.HIGH, "b", 2, "High", "", null, null);
+    var result =
+        new ReviewResult(
+            List.of(medium, high),
+            0,
+            0,
+            2,
+            0,
+            RiskLevel.MEDIUM,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
+
+    assertEquals(List.of(high, medium), result.keyFindings());
+  }
+
+  @Test
   void keyFindingsShouldExcludeLowConfidenceFindingsRoutedToDoubleCheck() {
     var inline = new Finding(RiskLevel.HIGH, Confidence.HIGH, "a", 1, "Inline", "", null, null);
     var summaryOnly =

@@ -34,9 +34,11 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
+import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningStepDown;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -140,6 +142,21 @@ class VerdictBuilderTest {
 
   private static final ReviewResponse CLEAN_RESPONSE =
       new ReviewResponse(List.of(), List.of(), null);
+
+  /**
+   * A response posting {@code posted} low-risk model findings of which {@code verified} carry a
+   * verdict: the rest are marked unverified, as the verifier's fail-open path marks them (#885).
+   */
+  private static ReviewResponse postedFindings(int posted, int verified) {
+    var findings = new ArrayList<ReviewResponse.Finding>();
+    for (var i = 0; i < posted; i++) {
+      var finding =
+          new ReviewResponse.Finding(
+              "low", "medium", "a.java", i + 1, "Finding " + i, "d", null, null);
+      findings.add(i < verified ? finding : FindingVerificationService.markUnscreened(finding));
+    }
+    return new ReviewResponse(findings, List.of(), null);
+  }
 
   private static final CiStatusEvaluator.CiEvaluation CI_CLEAR =
       new CiStatusEvaluator.CiEvaluation(List.of(), false);
@@ -741,10 +758,11 @@ class VerdictBuilderTest {
             List.of(), List.of(), List.of(), true, null, null, null, null);
     plan.recordVerificationCoverage(new VerificationCoverage(3, 0));
 
-    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+    var result = builder.build(ctx, postedFindings(3, 0), CI_CLEAR, plan);
 
     assertFalse(result.truncated());
-    assertEquals(ReviewState.APPROVE, result.reviewState());
+    // Low findings comment, verified or not: the disclosure moves nothing (#623).
+    assertEquals(ReviewState.COMMENT, result.reviewState());
     assertEquals(new VerificationCoverage(3, 0), result.truncation().verification());
     assertTrue(
         result.summaryMarkdown().contains("**Findings not fully verified.**"),
@@ -768,9 +786,10 @@ class VerdictBuilderTest {
             List.of(), List.of(), List.of(), true, null, null, null, null);
     plan.recordVerificationCoverage(new VerificationCoverage(4, 3));
 
-    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+    var result = builder.build(ctx, postedFindings(4, 3), CI_CLEAR, plan);
 
-    assertEquals(ReviewState.APPROVE, result.reviewState());
+    // Low findings comment, verified or not: the disclosure moves nothing (#623).
+    assertEquals(ReviewState.COMMENT, result.reviewState());
     assertTrue(
         result.summaryMarkdown().contains("only covered 3 of the 4 finding(s)"),
         result.summaryMarkdown());
@@ -812,7 +831,7 @@ class VerdictBuilderTest {
             List.of(), List.of("big.java"), List.of(), true, null, null, null, null);
     plan.recordVerificationCoverage(new VerificationCoverage(2, 0));
 
-    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+    var result = builder.build(ctx, postedFindings(2, 0), CI_CLEAR, plan);
 
     assertTrue(result.truncated());
     assertTrue(
@@ -838,7 +857,7 @@ class VerdictBuilderTest {
             List.of(), List.of(), List.of(), false, null, null, null, null);
     plan.recordVerificationCoverage(new VerificationCoverage(1, 0));
 
-    var result = builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan);
+    var result = builder.build(ctx, postedFindings(1, 0), CI_CLEAR, plan);
 
     assertTrue(
         result.summaryMarkdown().contains("**Findings not fully verified.**"),
@@ -2489,5 +2508,86 @@ class VerdictBuilderTest {
 
     assertFalse(warn.ciHoldsApproval(CI_PENDING));
     assertFalse(warn.ciHoldsApproval(CI_UNREADABLE));
+  }
+
+  @Test
+  void theVerificationDisclosureCountsThePostedFindings() {
+    // angular #191, react #201: "covered 15 of the 16 finding(s)" over 15 posted findings; the
+    // verifier had counted a candidate it rejected.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    plan.recordVerificationCoverage(new VerificationCoverage(16, 15));
+
+    var result = builder.build(ctx, postedFindings(15, 14), CI_CLEAR, plan);
+
+    assertEquals(new VerificationCoverage(15, 14), result.truncation().verification());
+    assertTrue(
+        result.summaryMarkdown().contains("only covered 14 of the 15 finding(s)"),
+        result.summaryMarkdown());
+  }
+
+  @Test
+  void aDisclosureWhoseUnverifiedFindingsAllLeftDisclosesNothing() {
+    var secret =
+        new ReviewResponse.Finding(
+            "high",
+            "high",
+            "Config.java",
+            3,
+            SecurityRule.GITHUB_TOKEN.secretTitleHead() + " (ghp_…, 40 chars)",
+            "d\n\n" + SecurityScan.PROVENANCE,
+            null,
+            null);
+    var posted = new ArrayList<>(postedFindings(1, 1).findings());
+    posted.add(
+        new ReviewResponse.Finding(
+            "low", "medium", "a.java", 9, "No description", null, null, null));
+    posted.add(secret);
+
+    var coverage =
+        VerdictBuilder.postedCoverage(new VerificationCoverage(3, 2), List.copyOf(posted));
+
+    assertEquals(new VerificationCoverage(2, 2), coverage);
+    assertFalse(coverage.disclosed());
+    assertEquals(
+        new VerificationCoverage(4, 4),
+        VerdictBuilder.postedCoverage(new VerificationCoverage(4, 4), List.of()));
+  }
+
+  @Test
+  void aFindingTheVerifierLeftUnscreenedCountsAsUncoveredThoughItHadNoDescription() {
+    // The fail-open path gives a finding with no description the note itself, so a null
+    // description on a posted finding never hides an unverified one.
+    var bare = new ReviewResponse.Finding("low", "high", "a.java", 4, "Bare", null, null, null);
+
+    var coverage =
+        VerdictBuilder.postedCoverage(
+            new VerificationCoverage(2, 1),
+            List.of(bare, FindingVerificationService.markUnscreened(bare)));
+
+    assertEquals(new VerificationCoverage(2, 1), coverage);
+  }
+
+  @Test
+  void aModelFindingWithAScanLikeTitleIsCountedAsTheModels() {
+    // Only the scan's provenance line makes a finding the scan's; a model title that starts like
+    // one is still a model finding the verifier screened.
+    var lookalike =
+        FindingVerificationService.markUnscreened(
+            new ReviewResponse.Finding(
+                "high",
+                "high",
+                "Config.java",
+                3,
+                SecurityRule.GITHUB_TOKEN.secretTitleHead() + " (from the model)",
+                "The model's own words.",
+                null,
+                null));
+
+    assertEquals(
+        new VerificationCoverage(1, 0),
+        VerdictBuilder.postedCoverage(new VerificationCoverage(2, 1), List.of(lookalike)));
   }
 }
