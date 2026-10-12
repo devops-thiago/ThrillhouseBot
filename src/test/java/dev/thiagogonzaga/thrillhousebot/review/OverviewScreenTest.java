@@ -310,8 +310,23 @@ class OverviewScreenTest {
     assertEquals(
         "Ships it. Fixes jira-7. Speaks Http-2 and soap-1.2.",
         OverviewScreen.withoutInventedTickets(
-            "Ships it. Fixes abcd-12. Closes Proj-7. Fixes jira-7. Speaks Http-2 and soap-1.2.",
+            "Ships it. Fixes ticket abcd-12. Closes Proj-7. Fixes jira-7. Speaks Http-2 and soap-1.2.",
             "Title: ship\nCloses JIRA-7"));
+  }
+
+  @Test
+  void aLowerCaseKeyNeedsATrackerCue() {
+    // Ordinary hyphenated words stay.
+    var plain =
+        "Adds python-3 support. Runs phase-2 of the migration. Speeds the stage-1 build."
+            + " level-3 headings render too.";
+    assertEquals(plain, OverviewScreen.withoutInventedTickets(plain, "Title: build"));
+    // A tracker word, a leading #, or the prefix in capitals elsewhere makes one a key.
+    assertEquals(
+        "Ships it.",
+        OverviewScreen.withoutInventedTickets(
+            "Ships it. Fixes ticket abcd-12. Closes #wxyz-3. Also proj-9, as in PROJ-1.",
+            "Title: ship\nPROJ-1"));
   }
 
   @Test

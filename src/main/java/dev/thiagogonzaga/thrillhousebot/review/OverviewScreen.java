@@ -623,6 +623,27 @@ final class OverviewScreen {
         .anyMatch(name -> !patch.contains(name) && !known.contains(name));
   }
 
+  /**
+   * Whether the tracker-shaped {@code key} found in {@code sentence} is a ticket key: written with
+   * a capital first, or lower-case with a tracker named in its sentence, a {@code #} before it, or
+   * its prefix in capitals elsewhere in {@code paragraph}.
+   */
+  private static boolean isTicketKey(MatchResult key, String sentence, String paragraph) {
+    var text = key.group();
+    if (Character.isUpperCase(text.charAt(0))) {
+      return true;
+    }
+    var prefix = text.substring(0, text.indexOf('-')).toUpperCase(Locale.ROOT);
+    return TRACKER_CUE.matcher(sentence).find()
+        || (key.start() > 0 && sentence.charAt(key.start() - 1) == '#')
+        || paragraph.contains(prefix + "-");
+  }
+
+  /** A word that names a tracker, so a lower-case key beside it is a ticket key. */
+  private static final Pattern TRACKER_CUE =
+      Pattern.compile(
+          "(?i)\\b(?:tickets?|issues?|stor(?:y|ies)|bugs?|jira|cards?|tasks?|epics?)\\b");
+
   /** Whether a tracker-shaped {@code key} is a standard's name and number ("HTTP-404"). */
   private static boolean isStandardCode(String key) {
     return STANDARD_PREFIXES.contains(key.substring(0, key.indexOf('-')));
@@ -668,7 +689,13 @@ final class OverviewScreen {
     return result;
   }
 
-  /** {@code purpose} without the sentences naming a ticket key {@code known} does not hold. */
+  /**
+   * {@code purpose} without the sentences naming a ticket key {@code known} does not hold. A key in
+   * capitals or capitalised ({@code ABCD-12}, {@code Proj-7}) is always one; a lower-case one
+   * ({@code abcd-12}) only when the sentence names a tracker ({@link #TRACKER_CUE}), a {@code #}
+   * leads it, or the paragraph writes its prefix in capitals elsewhere, since "python-3", "phase-2"
+   * and "stage-1" are ordinary words.
+   */
   static String withoutInventedTickets(String purpose, String known) {
     if (purpose == null || !TICKET_KEY.matcher(purpose).find()) {
       return purpose;
@@ -684,6 +711,7 @@ final class OverviewScreen {
                 TICKET_KEY
                     .matcher(sentence)
                     .results()
+                    .filter(key -> isTicketKey(key, sentence, purpose))
                     .map(MatchResult::group)
                     // Compared in upper case, as the material is, whatever case the key was in.
                     .map(key -> key.toUpperCase(Locale.ROOT))
