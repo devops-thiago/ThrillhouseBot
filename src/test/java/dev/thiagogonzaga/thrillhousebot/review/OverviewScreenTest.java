@@ -419,6 +419,7 @@ class OverviewScreenTest {
         "Two confirmed findings here",
         "Confirmed findings in this batch",
         "3 findings left",
+        "No findings yet",
         "Lists numerous findings",
         "Has some findings",
         "Holds all findings",
