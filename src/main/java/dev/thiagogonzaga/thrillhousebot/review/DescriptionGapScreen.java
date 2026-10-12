@@ -212,12 +212,14 @@ final class DescriptionGapScreen {
 
   /**
    * The description said to claim something, before the clause's negation: "the description says
-   * the Dockerfile does not pin its base image" reports a misclaim, not an omission.
+   * the Dockerfile does not pin its base image" reports a misclaim, not an omission. "Says nothing
+   * about" and "says no word of" are omissions still.
    */
   private static final Pattern DESCRIPTION_CLAIMS_FIRST =
       Pattern.compile(
           "(?i)\\b(?:description|pr\\s++body)(?:['’]s)?\\s++(?:\\w++\\s++)?"
-              + "(?:says|said|states?|stated|claim(?:s|ed)?|promise[sd]?|asserts|reads)\\b");
+              + "(?:says|said|states?|stated|claim(?:s|ed)?|promise[sd]?|asserts|reads)\\b"
+              + "(?!\\s++(?:nothing|no)\\b)");
 
   /**
    * The description said to leave something out, in one clause: "the description never mentions",
@@ -281,8 +283,7 @@ final class DescriptionGapScreen {
    */
   static boolean falseOmission(String gap, String prText) {
     if (prText.isBlank()
-        || DESCRIPTION_CLAIMS_FIRST.matcher(gap).find()
-        || !(anyFinds(DESCRIPTION_OMITS, gap)
+        || !((anyFinds(DESCRIPTION_OMITS, gap) && !DESCRIPTION_CLAIMS_FIRST.matcher(gap).find())
             || (anyFinds(PR_TEXT_NAMED, gap) && anyFinds(OMISSION_CUES, gap)))) {
       return false;
     }

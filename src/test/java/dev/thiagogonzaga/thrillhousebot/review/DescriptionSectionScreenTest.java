@@ -198,7 +198,9 @@ class DescriptionSectionScreenTest {
         "The description fails to mention the `python-ci` workflow.",
         "The description leaves out the `python-ci` workflow.",
         "The description is missing the `python-ci` workflow.",
-        "The PR body skips the `python-ci` workflow."
+        "The PR body skips the `python-ci` workflow.",
+        "The description says nothing about the `python-ci` workflow.",
+        "The description claims a build cache; beyond it the change adds a Dockerfile."
       })
   void otherWordingsOfAnOmissionAreJudged(String gap) {
     assertTrue(DescriptionGapScreen.falseOmission(gap, PYTHON_244));
