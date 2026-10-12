@@ -205,6 +205,22 @@ class DescriptionSectionScreenTest {
   }
 
   @Test
+  void aMisclaimOrAMentionOfANonFileIsNotAnOmission() {
+    // What the description says, then a negation: a misclaim the section exists to list.
+    var misclaim = "The description says the Dockerfile does not pin its base image.";
+    assertFalse(DescriptionGapScreen.falseOmission(misclaim, PYTHON_244));
+    assertEquals(List.of(misclaim), DescriptionGapScreen.screen(List.of(misclaim), PYTHON_244, ""));
+    // A backticked setting or the word "license" is not a file the description omits.
+    assertFalse(
+        DescriptionGapScreen.falseOmission(
+            "The description never mentions that the `RATE_LIMIT` env var is clamped to 5.",
+            "Reads `RATE_LIMIT` from the environment."));
+    assertFalse(
+        DescriptionGapScreen.falseOmission(
+            "The description never mentions the license change.", "The project is MIT license."));
+  }
+
+  @Test
   void onlyAnOmissionNamingFilesIsJudged() {
     // Not an omission of the description, no file named, or no PR text to judge against.
     assertFalse(DescriptionGapScreen.falseOmission("The Dockerfile is missing.", PYTHON_244));

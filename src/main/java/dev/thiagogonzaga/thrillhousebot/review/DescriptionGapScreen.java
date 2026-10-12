@@ -197,19 +197,27 @@ final class DescriptionGapScreen {
   private static final Pattern NON_ALPHANUMERIC = Pattern.compile("[^\\p{L}\\p{N}]+");
 
   /**
-   * A file or component an omission bullet names, one pattern per shape: a backticked span, a path,
-   * a file name with an extension, a CI job name ("python-ci"), or a file conventionally named
-   * without one ("Dockerfile").
+   * A file or component an omission bullet names, one pattern per shape: a path, a file name with
+   * an extension, a CI job name ("python-ci"), or a file conventionally named without one
+   * ("Dockerfile"). A backticked span alone is not one (it is as often a setting or an identifier),
+   * nor is a word such as "license" that prose uses for other things.
    */
   private static final List<Pattern> NAMED_FILES =
       List.of(
-          Pattern.compile("`([^`\n]++)`"),
           Pattern.compile("(?<![\\w/.-])[\\w.-]*+(?:/[\\w.-]++)++"),
           Pattern.compile("\\b[\\w.-]++/(?![\\w.-])"),
           Pattern.compile("\\b[\\w-]++\\.(?:md|ya?ml|json|toml|xml|txt|sh|env|cfg|ini|lock)\\b"),
           Pattern.compile("(?i)\\b[\\w]++-ci\\b"),
-          Pattern.compile(
-              "(?i)\\b(?:dockerfile|containerfile|makefile|jenkinsfile|readme|changelog|license)\\b"));
+          Pattern.compile("(?i)\\b(?:dockerfile|containerfile|makefile|jenkinsfile)\\b"));
+
+  /**
+   * The description said to claim something, before the clause's negation: "the description says
+   * the Dockerfile does not pin its base image" reports a misclaim, not an omission.
+   */
+  private static final Pattern DESCRIPTION_CLAIMS_FIRST =
+      Pattern.compile(
+          "(?i)\\b(?:description|pr\\s++body)(?:['’]s)?\\s++(?:\\w++\\s++)?"
+              + "(?:says|said|states?|stated|claim(?:s|ed)?|promise[sd]?|asserts|reads)\\b");
 
   /**
    * The description said to leave something out, in one clause: "the description never mentions",
@@ -266,11 +274,14 @@ final class DescriptionGapScreen {
    * {@code prText} names after all (#1074: python #244 listed "the python-ci workflow, Dockerfile,
    * config docs" as missing from a description naming all three). Only an omission bullet is
    * judged: one saying in a clause that the description does not hold something, or naming it with
-   * "beyond"/"also adds", and naming at least one file. A name counts as in the text when the text
-   * holds its last path segment as a whole word, ignoring case.
+   * "beyond"/"also adds", and naming at least one file; a bullet reporting what the description
+   * says ("the description states the Dockerfile does not…") is a misclaim and is never judged
+   * here. A name counts as in the text when the text holds its last path segment as a whole word,
+   * ignoring case.
    */
   static boolean falseOmission(String gap, String prText) {
     if (prText.isBlank()
+        || DESCRIPTION_CLAIMS_FIRST.matcher(gap).find()
         || !(anyFinds(DESCRIPTION_OMITS, gap)
             || (anyFinds(PR_TEXT_NAMED, gap) && anyFinds(OMISSION_CUES, gap)))) {
       return false;
@@ -279,7 +290,7 @@ final class DescriptionGapScreen {
     for (var pattern : NAMED_FILES) {
       var m = pattern.matcher(gap);
       while (m.find()) {
-        names.add((m.groupCount() > 0 ? m.group(1) : m.group()).toLowerCase(Locale.ROOT));
+        names.add(m.group().toLowerCase(Locale.ROOT));
       }
     }
     // One file matched by two shapes ("README" in "README.md") is one name.
