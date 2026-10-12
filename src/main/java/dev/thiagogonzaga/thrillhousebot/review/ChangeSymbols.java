@@ -314,6 +314,9 @@ public final class ChangeSymbols {
     private static final Pattern BARE_HEREDOC =
         Pattern.compile("<<[-~]?\\h*([A-Z_][A-Z0-9_]*)(?!\\w)");
 
+    /** A heredoc opener of any case straight after the operator: {@code <<eof}, {@code <<-end}. */
+    private static final Pattern WORD_HEREDOC = Pattern.compile("<<[-~]?([A-Za-z_]\\w*)(?!\\w)");
+
     /** What closes the string or comment the text so far ends inside; {@code null} in code. */
     private String closer;
 
@@ -381,17 +384,54 @@ public final class ChangeSymbols {
       if (!text.startsWith("<<", i)) {
         return i + 1;
       }
+      return pastHeredoc(text, i);
+    }
+
+    /**
+     * The index past the {@code <<} at {@code i}: past a heredoc opener, noting its delimiter in
+     * {@link #openedHeredoc}, or past the operator alone. A quoted delimiter opens one unless code
+     * follows ({@link #continuesAsCode}); an upper-case one always does; a word of any case
+     * straight after the operator ({@code cat <<eof}, {@code <<-end}) does where the line reads as
+     * a shell command: no code follows, and the word is the last on the line or a command word
+     * comes before the operator ({@link #followsCommandWord}). So {@code x<<y + 1} and {@code a = x
+     * <<y;} open nothing.
+     */
+    private int pastHeredoc(String text, int i) {
       var quoted = QUOTED_HEREDOC.matcher(text).region(i, text.length());
       if (quoted.lookingAt() && !continuesAsCode(text, quoted.end())) {
-        openedHeredoc = quoted.group(2);
-        return quoted.end();
+        return opens(quoted.group(2), quoted.end());
       }
       var bare = BARE_HEREDOC.matcher(text).region(i, text.length());
       if (bare.lookingAt()) {
-        openedHeredoc = bare.group(1);
-        return bare.end();
+        return opens(bare.group(1), bare.end());
+      }
+      var word = WORD_HEREDOC.matcher(text).region(i, text.length());
+      if (word.lookingAt()
+          && !continuesAsCode(text, word.end())
+          && (text.substring(word.end()).isBlank() || followsCommandWord(text, i))) {
+        return opens(word.group(1), word.end());
       }
       return i + 2;
+    }
+
+    /** Notes {@code delimiter} as the heredoc the line opens and returns {@code end}. */
+    private int opens(String delimiter, int end) {
+      openedHeredoc = delimiter;
+      return end;
+    }
+
+    /**
+     * Whether a command word and a space come before the {@code <<} at {@code i}, as on a shell
+     * command line: {@code cat <<eof}, {@code python3 - <<py}.
+     */
+    private static boolean followsCommandWord(String text, int i) {
+      var before = text.substring(0, i);
+      var word = before.stripTrailing();
+      if (word.isEmpty() || word.length() == before.length()) {
+        return false;
+      }
+      var last = word.charAt(word.length() - 1);
+      return isWordChar(last) || last == '-';
     }
 
     /**

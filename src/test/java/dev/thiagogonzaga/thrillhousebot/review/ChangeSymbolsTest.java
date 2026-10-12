@@ -340,4 +340,45 @@ class ChangeSymbolsTest {
             "after_spaced_method_call"),
         ChangeSymbols.declaredNames(patch));
   }
+
+  @Test
+  void aWordOfAnyCaseStraightAfterTheOperatorOpensAHeredocOnAShellCommandLine() {
+    // A shell line: the word is the last token, or a command word and a space come before the
+    // operator. A shift in code has neither, or code follows it.
+    var patch =
+        """
+        @@ -0,0 +1,30 @@
+        +cat <<eof
+        +def in_lower():
+        +eof
+        +cat <<-end > out.txt
+        +def in_dashed_redirected():
+        +end
+        +python3 - <<py --verbose
+        +def in_stdin_script():
+        +py
+        +cat<<eof
+        +def in_unspaced():
+        +eof
+        +z = x<<y + 1
+        +def after_shift_expression():
+        +a = x <<y;
+        +def after_spaced_shift():
+        +<<eof x
+        +def after_operator_first():
+        +call( <<y z
+        +def after_parenthesis():
+        +n = x<<y or z
+        +def after_unspaced_shift():
+        """;
+
+    assertEquals(
+        List.of(
+            "after_shift_expression",
+            "after_spaced_shift",
+            "after_operator_first",
+            "after_parenthesis",
+            "after_unspaced_shift"),
+        ChangeSymbols.declaredNames(patch));
+  }
 }
