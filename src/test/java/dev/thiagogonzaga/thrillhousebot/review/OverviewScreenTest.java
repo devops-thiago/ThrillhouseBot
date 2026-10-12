@@ -379,6 +379,10 @@ class OverviewScreenTest {
     assertEquals(
         "renders it", OverviewScreen.screenedText("renders it or holds no findings", "+x", ""));
     assertEquals(
+        "renders it, so pages stay fast",
+        OverviewScreen.screenedText(
+            "renders it, so pages stay fast, for it hosts two findings", "+x", ""));
+    assertEquals(
         "Loads findings for the dashboard",
         OverviewScreen.screenedText("Loads findings for the dashboard", "+x", ""));
     // Joined by "and" alone, the findings part is cut the same way, and kept parts keep their

@@ -344,7 +344,7 @@ final class OverviewScreen {
     var kept = new StringBuilder();
     var dropped = 0;
     for (var i = 0; i < parts.size(); i++) {
-      if (talksAboutFindings(parts.get(i))) {
+      if (talksAboutFindings(LEADING_CONJUNCTION.matcher(parts.get(i)).replaceFirst(""))) {
         dropped++;
       } else {
         kept.append(kept.isEmpty() ? "" : separators.get(i - 1)).append(parts.get(i));
@@ -354,14 +354,20 @@ final class OverviewScreen {
   }
 
   /**
-   * What separates the parts of a clause: a comma before a blank (not the one inside "1,000"), with
-   * any coordinating conjunction after it ("renders it, but hosts the two findings"), or a
-   * conjunction between blanks: and, but, or, nor, yet. "For" and "so" separate only after a comma;
-   * alone they are usually a preposition or an adverb ("loads findings for the dashboard").
+   * What separates the parts of a clause: a comma before a blank (not the one inside "1,000"), or a
+   * coordinating conjunction between blanks: and, but, or, nor, yet. "For" and "so" separate only
+   * after a comma ({@link #LEADING_CONJUNCTION}); alone they are usually a preposition or an adverb
+   * ("loads findings for the dashboard").
    */
   private static final Pattern PART_SEPARATOR =
-      Pattern.compile(
-          "(?i),(?=\\s)\\s*+(?:(?:and|but|or|nor|yet|so|for)\\s++)?+|\\s++(?:and|but|or|nor|yet)\\s++");
+      Pattern.compile("(?i),(?=\\s)\\s*+|\\s++(?:and|but|or|nor|yet)\\s++");
+
+  /**
+   * A coordinating conjunction opening a part after a comma ("renders it, but hosts the two
+   * findings"), set aside before the part is judged.
+   */
+  private static final Pattern LEADING_CONJUNCTION =
+      Pattern.compile("(?i)^(?:and|but|or|nor|yet|so|for)\\s++");
 
   private static boolean isPlaceholder(String text) {
     return PLACEHOLDERS.contains(
