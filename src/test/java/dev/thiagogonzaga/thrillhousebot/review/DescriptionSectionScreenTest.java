@@ -25,6 +25,8 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * The Description vs. Implementation section on the round 17 cases (#1074): a finding is named
@@ -176,6 +178,30 @@ class DescriptionSectionScreenTest {
         DescriptionGapScreen.falseOmission(
             "The description omits docs/CONFIG-PYTHON.md and the classifieds/ package.",
             "Docs live in CONFIG-PYTHON.md; the code is in classifieds."));
+  }
+
+  @Test
+  void aNameInsideAnotherWordIsNotTheFileNamed() {
+    assertFalse(
+        DescriptionGapScreen.falseOmission(
+            "The description never mentions the new `build/` output directory.",
+            "Run `mvn verify` to rebuild and test."));
+    assertFalse(
+        DescriptionGapScreen.falseOmission(
+            "The description never mentions the new `rate/` retry directory.",
+            "Prices are accurate to the cent."));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The description fails to mention the `python-ci` workflow.",
+        "The description leaves out the `python-ci` workflow.",
+        "The description is missing the `python-ci` workflow.",
+        "The PR body skips the `python-ci` workflow."
+      })
+  void otherWordingsOfAnOmissionAreJudged(String gap) {
+    assertTrue(DescriptionGapScreen.falseOmission(gap, PYTHON_244));
   }
 
   @Test

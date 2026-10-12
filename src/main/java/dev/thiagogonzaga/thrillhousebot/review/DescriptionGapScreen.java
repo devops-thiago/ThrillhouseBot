@@ -216,10 +216,14 @@ final class DescriptionGapScreen {
    * "the description's summary covers X but not". A comma ends the clause, so "what the description
    * says, and it does not" is not an omission.
    */
-  private static final Pattern DESCRIPTION_OMITS =
-      Pattern.compile(
-          "(?i)\\b(?:description|pr\\s++body)\\b[^.;,\n]{0,80}?"
-              + "\\b(?:not|never|omit\\w*|lacks?|nothing|without|doesn['’]t)\\b");
+  private static final List<Pattern> DESCRIPTION_OMITS =
+      List.of(
+          Pattern.compile(
+              "(?i)\\b(?:description|pr\\s++body)\\b[^.;,\n]{0,80}?"
+                  + "\\b(?:not|never|omit\\w*|lacks?|nothing|without|doesn['’]t)\\b"),
+          Pattern.compile(
+              "(?i)\\b(?:description|pr\\s++body)\\b[^.;,\n]{0,80}?"
+                  + "\\b(?:fails?\\s++to|leaves?\\s++out|is\\s++missing|misses|skips)\\b"));
 
   /** What an omission bullet says the description lacks besides: "beyond", "also adds". */
   private static final List<Pattern> OMISSION_CUES =
@@ -263,11 +267,11 @@ final class DescriptionGapScreen {
    * config docs" as missing from a description naming all three). Only an omission bullet is
    * judged: one saying in a clause that the description does not hold something, or naming it with
    * "beyond"/"also adds", and naming at least one file. A name counts as in the text when the text
-   * holds it, or its last path segment, ignoring case.
+   * holds its last path segment as a whole word, ignoring case.
    */
   static boolean falseOmission(String gap, String prText) {
     if (prText.isBlank()
-        || !(DESCRIPTION_OMITS.matcher(gap).find()
+        || !(anyFinds(DESCRIPTION_OMITS, gap)
             || (anyFinds(PR_TEXT_NAMED, gap) && anyFinds(OMISSION_CUES, gap)))) {
       return false;
     }
@@ -287,8 +291,18 @@ final class DescriptionGapScreen {
       return false;
     }
     var text = prText.toLowerCase(Locale.ROOT);
-    var named = distinct.stream().filter(name -> text.contains(lastSegment(name))).count();
+    var named = distinct.stream().filter(name -> holdsToken(text, lastSegment(name))).count();
     return named * 2 > distinct.size();
+  }
+
+  /**
+   * Whether {@code text} holds {@code token} as a whole word: "build" is not in "rebuilds", nor
+   * "rate" in "accurate".
+   */
+  private static boolean holdsToken(String text, String token) {
+    return Pattern.compile("(?<![\\w-])" + Pattern.quote(token) + "(?![\\w-])")
+        .matcher(text)
+        .find();
   }
 
   private static boolean isPartOf(String name, String other) {
