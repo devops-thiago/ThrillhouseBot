@@ -405,6 +405,25 @@ class LinkedIssueCitationsTest {
   }
 
   @Test
+  void aRelativeClauseAfterANegatedMainClauseIsRaised() {
+    // The "not" is about the code the relative clause hangs off.
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "low",
+                        "low",
+                        "Carts are never capped",
+                        "The code does not cap carts, which the linked issue #225's 'at most 40 kg"
+                            + " per cart' requires.")),
+                GO_225));
+
+    assertEquals("medium", held.risk());
+    assertEquals("medium", held.confidence());
+  }
+
+  @Test
   void aRelativeClauseSayingTheCodeViolatesACriterionIsRaised() {
     var held =
         only(

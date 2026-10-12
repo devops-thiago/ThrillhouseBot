@@ -485,18 +485,21 @@ final class LinkedIssueCitations {
    * it ("does not match", "fails to meet").
    */
   private static boolean affirmed(String text, Citation citation) {
-    var lead = text.substring(sentenceStart(text, citation.start()), citation.start());
-    var breaks = CLAUSE_BREAK.matcher(lead);
+    var sentenceLead = text.substring(sentenceStart(text, citation.start()), citation.start());
+    var breaks = CLAUSE_BREAK.matcher(sentenceLead);
     var clauseStart = 0;
     while (breaks.find()) {
       clauseStart = breaks.end();
     }
-    lead = lead.substring(clauseStart);
+    var lead = sentenceLead.substring(clauseStart);
     var rest = text.substring(citation.end(), sentenceEnd(text, citation.end()));
     var tailEnd = CLAUSE_BREAK.matcher(rest);
-    var clause = lead + " " + (tailEnd.find() ? rest.substring(0, tailEnd.start()) : rest);
-    return (anyFinds(AFFIRMS, clause) || RELATIVE.matcher(lead).find())
-        && !anyFinds(VIOLATIONS, clause);
+    var tail = tailEnd.find() ? rest.substring(0, tailEnd.start()) : rest;
+    var relative = RELATIVE.matcher(lead).find();
+    // A relative clause hangs off the clause before it, so a negation there is about the same code:
+    // "the code does not expire listings, which the linked issue's '…' requires".
+    var judged = (relative ? sentenceLead : lead) + " " + tail;
+    return (relative || anyFinds(AFFIRMS, judged)) && !anyFinds(VIOLATIONS, judged);
   }
 
   private static boolean anyFinds(List<Pattern> patterns, String text) {
