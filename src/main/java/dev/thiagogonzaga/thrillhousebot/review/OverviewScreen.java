@@ -565,16 +565,20 @@ final class OverviewScreen {
           "show");
 
   /**
-   * Whether the "and" at {@code j}, before the finding word at {@code at}, joins two number words
-   * into one count ("a hundred and one findings") rather than starting another phrase.
+   * Whether the word at {@code j}, before the finding word at {@code at}, joins two number words
+   * into one count or range ("a hundred and one", "two or three", "five to ten") rather than
+   * starting another phrase. A dash between numbers ("10–20") is no word, so it never breaks.
    */
   private static boolean joinsACount(String[] words, int j, int at) {
-    return words[j].equals("and")
+    return COUNT_CONNECTORS.contains(words[j])
         && j > 0
         && j + 1 < at
         && isCount(words[j - 1])
         && isCount(words[j + 1]);
   }
+
+  /** Words that join two numbers into one count or range. */
+  private static final Set<String> COUNT_CONNECTORS = Set.of("and", "or", "to", "through", "thru");
 
   /**
    * {@code clause} with a contracted existential written out: "there's" and "theres" as "there is",

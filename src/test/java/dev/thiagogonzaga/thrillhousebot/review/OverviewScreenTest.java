@@ -442,6 +442,12 @@ class OverviewScreenTest {
         "Theres no findings",
         // "and" inside a spelled count.
         "hosts a hundred and one findings",
+        // Any connector between two counts is part of the count or range.
+        "hosts two or three findings",
+        "holds five to ten findings",
+        "lists two through four findings",
+        "has 10–20 findings",
+        "hosts 3-5 findings",
         "Lists numerous findings",
         "Has some findings",
         "Holds all findings",
@@ -503,6 +509,7 @@ class OverviewScreenTest {
         "And the findings",
         "Holds tests and findings",
         "Holds two and the findings",
+        "Holds two or the findings",
         "Keeps settings and refines findings",
         "Holds the findingsTable",
         // Plural artifact nouns.
