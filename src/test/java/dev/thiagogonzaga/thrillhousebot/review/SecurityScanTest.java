@@ -1794,4 +1794,14 @@ class SecurityScanTest {
         () -> new DiffLineResolver(Map.of()),
         null);
   }
+
+  @Test
+  void onlyAScanTitleWithTheScansProvenanceIsRaisedByTheScan() {
+    var title = SecurityRule.GITHUB_TOKEN.secretTitleHead() + " (ghp_…, 40 chars)";
+
+    assertTrue(SecurityScan.raisedByScan(title, "d\n\n" + SecurityScan.PROVENANCE));
+    assertFalse(SecurityScan.raisedByScan(title, "The model's own words."));
+    assertFalse(SecurityScan.raisedByScan(title, null));
+    assertFalse(SecurityScan.raisedByScan("Hardcoded token", SecurityScan.PROVENANCE));
+  }
 }
