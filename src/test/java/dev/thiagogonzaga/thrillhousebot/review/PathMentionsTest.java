@@ -30,6 +30,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /** {@link PathMentions}: paths the model names must name files that exist (#1076). */
@@ -354,5 +355,56 @@ class PathMentionsTest {
     assertEquals("Kept.", lines.get(0));
     assertEquals("  ", lines.get(1));
     assertNull(lines.get(2));
+  }
+
+  /**
+   * A mention is stripped wherever it stands in a description: first, last, or inside a span or a
+   * parenthetical that it does not close; a path and line keep their line.
+   */
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          docs/NOPE.md is cited as the source. | is cited as the source.
+          The source is cited: docs/NOPE.md | The source is cited:
+          The source is `docs/NOPE.md and more` here. | The source is `and more` here.
+          The source (docs/NOPE.md and more) is cited. | The source (and more) is cited.
+          The source is docs/NOPE.md:12. | The source is.
+          The source is docs/NOPE.md: | The source is:
+          The source (docs/NOPE.md | The source (
+          The source (docs/NOPE.md; see the issue) is cited. | The source (; see the issue) is cited.
+          """)
+  void aMentionIsStrippedWhereverItStands(String text, String stripped) {
+    assertEquals(stripped, mentions(REACT, null, REACT_TREE).withoutUnresolvedMentions(text));
+  }
+
+  /** An image tag after a path-shaped name is not a path, and a blank description stays blank. */
+  @Test
+  void anImageTagAndABlankDescriptionAreLeftAlone() {
+    var mentions = mentions(REACT, "", Set.of());
+
+    assertEquals(
+        "It pulls org/tools/app:latest.",
+        mentions.withoutUnresolvedMentions("It pulls org/tools/app:latest."));
+    assertEquals("  ", mentions.withoutUnresolvedMentions("  "));
+    assertFalse(PathMentions.pathShaped("a/b.xyz"));
+    assertFalse(PathMentions.pathShaped("v1.2/docs/guide.md"));
+  }
+
+  /** Each summary field is judged on its own: one that changes alone is still written back. */
+  @Test
+  void aSummaryFieldThatChangesAloneIsWrittenBack() {
+    var mentions = mentions(REACT, "", REACT_TREE);
+    var gapOnly = summary("Adds paging.", List.of("It names docs/NOPE.md."), List.of());
+    var fileOnly =
+        summary(
+            "Adds paging.",
+            List.of(),
+            List.of(
+                new ReviewResponse.FileSummary("react/src/loans/paging.ts", "See docs/NOPE.md.")));
+
+    assertEquals(List.of(), mentions.screen(gapOnly).descriptionGaps());
+    assertEquals("", mentions.screen(fileOnly).fileSummaries().getFirst().summary());
   }
 }

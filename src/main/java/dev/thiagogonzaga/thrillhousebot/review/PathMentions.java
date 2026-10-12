@@ -194,9 +194,6 @@ final class PathMentions {
     var current = new HashSet<String>();
     var text = new StringBuilder(known == null ? "" : known);
     for (var file : files) {
-      if (file == null || file.filename() == null) {
-        continue;
-      }
       paths.add(file.filename());
       current.add(file.filename());
       if (file.previousFilename() != null) {
@@ -271,7 +268,7 @@ final class PathMentions {
     var gaps =
         summary.descriptionGaps().stream()
             .map(this::withoutUnresolvedSentences)
-            .filter(gap -> gap != null && !gap.isBlank())
+            .filter(gap -> !gap.isBlank())
             .toList();
     var fileSummaries =
         summary.fileSummaries().stream()
@@ -339,23 +336,40 @@ final class PathMentions {
     var sb = new StringBuilder(rewritten.text());
     var spans = rewritten.unresolved();
     for (int i = spans.size() - 1; i >= 0; i--) {
-      int start = spans.get(i)[0];
-      int end = spans.get(i)[1];
-      if (start > 0 && end < sb.length() && sb.charAt(start - 1) == '`' && sb.charAt(end) == '`') {
-        start--;
-        end++;
-      }
-      if (start > 0 && end < sb.length() && sb.charAt(start - 1) == '(' && sb.charAt(end) == ')') {
-        start--;
-        end++;
-      }
-      while (start > 0 && sb.charAt(start - 1) == ' ') {
-        start--;
-      }
-      sb.delete(start, end);
+      int[] cut = mentionBounds(sb, spans.get(i)[0], spans.get(i)[1]);
+      sb.delete(cut[0], cut[1]);
     }
     var tidy = sb.toString().replaceAll(" {2,}", " ").replaceAll(" ([.,;:!?])", "$1").strip();
     return tidy.isBlank() ? text : tidy;
+  }
+
+  /**
+   * What goes with the mention at {@code start}..{@code end}: the code span or parenthetical it
+   * fills, and the blank before it; or, when it opens a span or parenthetical that goes on, the
+   * blank after it.
+   */
+  private static int[] mentionBounds(CharSequence s, int start, int end) {
+    int from = start;
+    int to = end;
+    if (wraps(s, from, to, '`', '`')) {
+      from--;
+      to++;
+    }
+    if (wraps(s, from, to, '(', ')')) {
+      from--;
+      to++;
+    }
+    if (from > 0 && "(`".indexOf(s.charAt(from - 1)) >= 0) {
+      return new int[] {from, to < s.length() && s.charAt(to) == ' ' ? to + 1 : to};
+    }
+    while (from > 0 && s.charAt(from - 1) == ' ') {
+      from--;
+    }
+    return new int[] {from, to};
+  }
+
+  private static boolean wraps(CharSequence s, int start, int end, char open, char close) {
+    return start > 0 && end < s.length() && s.charAt(start - 1) == open && s.charAt(end) == close;
   }
 
   /** A text with its mapped paths replaced, and the spans of the paths nothing resolves in it. */
@@ -372,8 +386,7 @@ final class PathMentions {
       String token = stripTrailingDots(matcher.group(1));
       int start = matcher.start(1);
       int end = start + token.length();
-      boolean lineSuffix = matcher.group(2) != null && token.equals(matcher.group(1));
-      int fullEnd = lineSuffix ? matcher.end(2) : end;
+      int fullEnd = matcher.group(2) == null ? end : matcher.end(2);
       if (inside(urls, start)
           || inside(fences, start)
           || !pathShaped(token)
@@ -406,7 +419,8 @@ final class PathMentions {
     }
     if (token.indexOf('/') > 0 && !token.endsWith("/")) {
       String mapped = resolver.diffPathFor(token);
-      if (!mapped.equals(token) && changed.contains(mapped)) {
+      // diffPathFor returns the token itself or the one changed file it is a near miss of.
+      if (!mapped.equals(token)) {
         return mapped;
       }
     }
@@ -452,7 +466,8 @@ final class PathMentions {
           && !("js".equals(extension(token)) && TECHNOLOGY_NAMES.contains(stem));
     }
     String first = token.substring(0, slash);
-    if (first.indexOf('.') > 0 && !EXTENSIONS.contains(extension(first))) {
+    if (first.indexOf('.') > 0) {
+      // A dotted first segment is a domain or a version, not a directory: github.com/org.
       return false;
     }
     if (token.endsWith("/")) {
@@ -473,7 +488,8 @@ final class PathMentions {
 
   private static String stripTrailingDots(String token) {
     int end = token.length();
-    while (end > 0 && token.charAt(end - 1) == '.') {
+    // The token opens with a word character, so the loop stops before index 0.
+    while (token.charAt(end - 1) == '.') {
       end--;
     }
     return token.substring(0, end);
