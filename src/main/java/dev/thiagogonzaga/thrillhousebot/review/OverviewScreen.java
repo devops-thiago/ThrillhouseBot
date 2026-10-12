@@ -62,6 +62,11 @@ final class OverviewScreen {
 
   private OverviewScreen() {}
 
+  /** The words of every set in {@code sets}, as one unmodifiable set. */
+  private static Set<String> union(List<Set<String>> sets) {
+    return sets.stream().flatMap(Set::stream).collect(Collectors.toUnmodifiableSet());
+  }
+
   /** Text that holds a summary's place without saying anything, once punctuation is removed. */
   private static final Set<String> PLACEHOLDERS =
       Set.of(
@@ -77,13 +82,24 @@ final class OverviewScreen {
           "summary",
           "lorem ipsum");
 
+  /** The verifier's verdict words, which say a finding was screened: "two confirmed findings". */
+  private static final Set<String> VERDICT_WORDS = Set.of("confirmed", "verified");
+
+  /**
+   * Words that, a word or two after a clause-opening "Findings", place the review's findings
+   * ("Findings are reported inline"). A file's role opens with what the file does, not with
+   * "Findings", so after it these read as bookkeeping; the {@link #FINDING_QUALIFIERS} do too.
+   */
+  private static final Set<String> FINDING_PLACEMENTS =
+      Set.of("reported", "open", "posted", "raised", "tracked", "inline");
+
   /**
    * Words that, a word or two before "finding(s)", make a clause about the review: a count, or the
    * verifier's verdict. A word that also names a file's role ("Loads open findings from the store",
    * "Posts reported findings") is not one of them.
    */
   private static final Set<String> FINDING_QUALIFIERS =
-      Set.of("confirmed", "verified", "no", "several", "multiple", "many", "few");
+      union(List.of(VERDICT_WORDS, Set.of("no", "several", "multiple", "many", "few")));
 
   /**
    * The words a spelled number is made of: units, teens and tens join into any count up to the
@@ -125,14 +141,6 @@ final class OverviewScreen {
           "thousands",
           "dozen",
           "dozens");
-
-  /**
-   * Words that, a word or two after a clause-opening "Findings", place the review's findings
-   * ("Findings are reported inline"). A file's role opens with what the file does, not with
-   * "Findings", so after it these read as bookkeeping; the {@link #FINDING_QUALIFIERS} do too.
-   */
-  private static final Set<String> FINDING_PLACEMENTS =
-      Set.of("reported", "open", "posted", "raised", "tracked", "inline");
 
   private static final Pattern NON_WORD = Pattern.compile("[^\\p{L}\\p{N}]+");
 
@@ -535,21 +543,11 @@ final class OverviewScreen {
    * a placement or verdict word ("are open", "were confirmed", "remain").
    */
   private static final Set<String> PARTITIVE_PREDICATES =
-      Set.of(
-          "is",
-          "are",
-          "was",
-          "were",
-          "remain",
-          "remains",
-          "open",
-          "posted",
-          "reported",
-          "raised",
-          "tracked",
-          "inline",
-          "confirmed",
-          "verified");
+      union(
+          List.of(
+              Set.of("is", "are", "was", "were", "remain", "remains"),
+              FINDING_PLACEMENTS,
+              VERDICT_WORDS));
 
   /**
    * Whether the finding word at {@code at} ends its noun phrase, as the review's findings do
@@ -580,54 +578,15 @@ final class OverviewScreen {
    * conjunctions, forms of "be" and the review's placement and verdict words.
    */
   private static final Set<String> PHRASE_ENDERS =
-      Set.of(
-          "from",
-          "in",
-          "for",
-          "on",
-          "at",
-          "of",
-          "to",
-          "with",
-          "by",
-          "about",
-          "across",
-          "that",
-          "which",
-          "who",
-          "here",
-          "there",
-          "this",
-          "these",
-          "and",
-          "or",
-          "but",
-          "yet",
-          "nor",
-          "so",
-          "is",
-          "are",
-          "was",
-          "were",
-          "remain",
-          "remains",
-          "still",
-          "far",
-          "total",
-          "left",
-          "found",
-          "open",
-          "posted",
-          "reported",
-          "raised",
-          "tracked",
-          "inline",
-          "confirmed",
-          "verified",
-          "above",
-          "below",
-          "listed",
-          "noted");
+      union(
+          List.of(
+              Set.of(
+                  "from", "in", "for", "on", "at", "of", "to", "with", "by", "about", "across",
+                  "that", "which", "who", "here", "there", "this", "these", "and", "or", "but",
+                  "yet", "nor", "so", "is", "are", "was", "were", "remain", "remains", "still",
+                  "far", "total", "left", "found", "above", "below", "listed", "noted"),
+              FINDING_PLACEMENTS,
+              VERDICT_WORDS));
 
   /**
    * The verbs that hold or place findings: a file that hosts, lists or reports findings is talked

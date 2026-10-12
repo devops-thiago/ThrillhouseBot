@@ -548,6 +548,7 @@ class OverviewScreenTest {
         "One of the findings handlers",
         "None of the findings",
         "Most of the findings render here",
+        "Most of the findings from the parser",
         "None of the code formats findings",
         "The new findings here",
         "Keeps settings and refines findings",
