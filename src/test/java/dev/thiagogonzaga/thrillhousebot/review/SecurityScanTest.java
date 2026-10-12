@@ -891,24 +891,72 @@ class SecurityScanTest {
     assertEquals(1, merged.findings().size(), () -> merged.findings().toString());
   }
 
+  /** The aliases of the one identified secret a scan of {@code files} finds. */
+  private static Set<String> aliasesOf(FileDiff... files) {
+    return scan(true, false).scan(List.of(files)).detections().stream()
+        .filter(detection -> detection.identifier() != null)
+        .findFirst()
+        .orElseThrow()
+        .aliases();
+  }
+
   @Test
-  void theAliasesAreTheKeysOnTheSecretsLineTheLineAboveAndItsUseSites() {
+  void theAliasesAreTheEnvironmentKeyAboveTheSecretAndOnItsUseSites() {
     var value = fake.genericSecret(40);
-    var lines = PatchLines.parse(csharpCatalog(value)[0].patch()).lines();
-    int index = 14; // line 15, the constant
     assertEquals(
-        Set.of("CatalogApiToken", "HOLDS_CATALOG_TOKEN", "CatalogToken"),
-        SecurityScan.aliasesOf("CatalogApiToken", lines, index));
+        Set.of("CatalogApiToken", "HOLDS_CATALOG_TOKEN"), aliasesOf(csharpCatalog(value)[0]));
+    assertEquals(
+        Set.of("apiToken", "PAYMENT_API_TOKEN"),
+        aliasesOf(
+            added(
+                "Config.kt",
+                "paymentToken = env[\"PAYMENT_API_TOKEN\"] ?: apiToken,",
+                "region = env[\"BILLING_REGION\"] ?: apiToken.take(2),",
+                "val apiToken = \"" + value + "\"")));
 
     // The last line of an earlier hunk is not the line above it in the file.
     var twoHunks =
-        PatchLines.parse(
-                "@@ -1,1 +1,1 @@\n // Used when OTHER_API_TOKEN is not set\n"
-                    + "@@ -9,0 +9,1 @@\n+val apiToken = \""
-                    + value
-                    + "\"\n")
-            .lines();
-    assertEquals(Set.of("apiToken"), SecurityScan.aliasesOf("apiToken", twoHunks, 1));
+        new FileDiff(
+            "Config.kt",
+            "modified",
+            1,
+            0,
+            2,
+            "@@ -1,1 +1,1 @@\n // Used when OTHER_API_TOKEN is not set\n"
+                + "@@ -9,0 +9,1 @@\n+val apiToken = \""
+                + value
+                + "\"\n");
+    assertEquals(Set.of("apiToken"), aliasesOf(twoHunks));
+  }
+
+  @Test
+  void aLinePassingAnotherCredentialTiesNothingToTheSecret() {
+    // Review of #1072: a use site that also passes another credential, or two environment keys,
+    // does not make the other key an alias, so a finding about it is kept.
+    var value = fake.genericSecret(40);
+    var file = "kotlin/src/main/kotlin/newsletter/billing/Config.kt";
+    var files =
+        List.of(
+            addedWith(
+                file,
+                39,
+                Map.of(
+                    20,
+                    "    val dbPassword = \"changeme\"",
+                    24,
+                    "    val client = connect(dbPassword, apiToken)",
+                    25,
+                    "    val both = env[\"DB_PASSWORD\"] ?: env[\"PAYMENT_API_TOKEN\"] ?: apiToken",
+                    39,
+                    "val apiToken: String = \"" + value + "\"")));
+    assertEquals(Set.of("apiToken"), aliasesOf(files.get(0)));
+    var namesBoth =
+        modelFinding(
+            file,
+            20,
+            "Hardcoded credentials: apiToken and dbPassword are committed",
+            "Both defaults are committed in source.");
+    assertEquals(2, merge(scan(true, false), response(namesBoth), files).findings().size());
   }
 
   @Test

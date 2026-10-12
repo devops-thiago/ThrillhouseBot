@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.IdentityHashMap;
@@ -157,6 +158,14 @@ public class SecurityScan {
   private static final Pattern SNAKE_CASE = Pattern.compile("[A-Za-z0-9]_[A-Za-z]");
 
   private static final Pattern CAMEL_CASE = Pattern.compile("[a-z0-9][A-Z]");
+
+  /** An environment key's shape: upper snake case, at least two words. */
+  private static final Pattern ENV_KEY =
+      Pattern.compile("(?<![A-Za-z0-9_])([A-Z][A-Z0-9]*+(?:_[A-Z0-9]++)++)(?![A-Za-z0-9_])");
+
+  /** An environment key in quotes, as a use site reads it from the environment. */
+  private static final Pattern QUOTED_ENV_KEY =
+      Pattern.compile("[\"'`]([A-Z][A-Z0-9]*+(?:_[A-Z0-9]++)++)[\"'`]");
 
   /** What separates identifiers in a text: anything but a letter, digit or underscore. */
   private static final Pattern NON_IDENTIFIER = Pattern.compile("\\W+");
@@ -287,9 +296,9 @@ public class SecurityScan {
    *     distinctive enough to stand for the secret in a model's text ({@link #identifierOf}), so a
    *     model finding about it away from its line collapses into this one (#1072); otherwise {@code
    *     null}
-   * @param aliases with an identifier, it and the other credential-named keys the patch ties to the
-   *     secret ({@link #aliasesOf}): the environment key it falls back from, named on its use-site
-   *     line or in the comment above it; empty without one
+   * @param aliases with an identifier, it and the environment key the patch ties to the secret
+   *     ({@link #withAliases}), named on its use-site line or in the comment above it; empty
+   *     without one
    */
   record Detection(
       SecurityRule rule,
@@ -558,6 +567,7 @@ public class SecurityScan {
   private void scanSecrets(
       String filename, PatchLines patch, List<Detection> detections, List<Redaction> redactions) {
     var lines = patch.lines();
+    int first = detections.size();
     for (int i = 0; i < lines.size(); i++) {
       var line = lines.get(i);
       if (!line.added() || allowed(lines, i, ALLOW_SECRET_MARKER)) {
@@ -572,15 +582,14 @@ public class SecurityScan {
       for (var hit : SecretScanner.scan(line.text(), next, entropyThreshold)) {
         var redacted = SecretScanner.redact(hit);
         var flagged = flaggedContent(lines, i, hit.rule());
-        var identifier = identifierOf(hit);
         detections.add(
             new Detection(
                 hit.rule(),
                 secretFinding(
                     filename, line.number(), hit, contentFingerprint(hit.rule(), flagged)),
                 legacyContentFingerprint(hit.rule(), flagged),
-                identifier,
-                identifier == null ? Set.of() : aliasesOf(identifier, lines, i)));
+                identifierOf(hit),
+                Set.of()));
         if (hit.rule() == SecurityRule.PRIVATE_KEY) {
           addPemMaterial(lines, i, redactions);
         } else {
@@ -588,6 +597,7 @@ public class SecurityScan {
         }
       }
     }
+    withAliases(lines, detections.subList(first, detections.size()));
   }
 
   /**
@@ -1205,25 +1215,80 @@ public class SecurityScan {
   }
 
   /**
-   * The credential-named keys the patch ties to the secret on line {@code index} of {@code lines},
-   * with its identifier: those on its own line, on the line above it in the same hunk (a comment
-   * such as {@code // Used when HOLDS_CATALOG_TOKEN is not set}), and on every line of the file
-   * that names the identifier, its use sites ({@code env["PAYMENT_API_TOKEN"] ?: apiToken}). A
+   * Gives each of one file's detections that carries an identifier its {@linkplain
+   * Detection#aliases aliases}: the identifier and the environment key the patch ties to it. That
+   * key is read from the line above the secret in the same hunk ({@code // Used when
+   * HOLDS_CATALOG_TOKEN is not set}), and from every line of the file that names the identifier,
+   * its use sites, where the key is a quoted string ({@code env["PAYMENT_API_TOKEN"] ?: apiToken},
+   * {@code env.getOrDefault("SCHEDULER_API_TOKEN", SCHEDULER_API_TOKEN)}). A line contributes a key
+   * only when it names exactly one ({@link #envKeyOf}), so a line that passes two credentials, or
+   * names another variable ({@code connect(dbPassword, apiToken)}), ties nothing to the secret. A
    * model naming the environment key the constant stands in for is naming this secret, not another
-   * one. Kept in memory only, like the identifier; nothing here is posted.
+   * one. One pass over the file serves every detection in it: each line's words are looked up among
+   * the identifiers. Kept in memory only, like the identifier; nothing here is posted.
    */
-  static Set<String> aliasesOf(String identifier, List<PatchLines.Line> lines, int index) {
-    var aliases = new HashSet<String>();
-    aliases.add(identifier);
-    for (int i = 0; i < lines.size(); i++) {
-      var text = lines.get(i).text();
-      boolean around =
-          i == index || (i == index - 1 && lines.get(i).hunk() == lines.get(index).hunk());
-      if (around || names(text, identifier)) {
-        credentialKeys(text).forEach(aliases::add);
+  static void withAliases(List<PatchLines.Line> lines, List<Detection> fileDetections) {
+    var keysByIdentifier = new HashMap<String, Set<String>>();
+    for (var detection : fileDetections) {
+      if (detection.identifier() != null) {
+        keysByIdentifier.computeIfAbsent(detection.identifier(), identifier -> new HashSet<>());
       }
     }
-    return aliases;
+    if (keysByIdentifier.isEmpty()) {
+      return;
+    }
+    var indexByNumber = new HashMap<Integer, Integer>();
+    for (int i = 0; i < lines.size(); i++) {
+      indexByNumber.put(lines.get(i).number(), i);
+      var key = envKeyOf(lines.get(i).text(), QUOTED_ENV_KEY);
+      if (key != null) {
+        for (var word : NON_IDENTIFIER.split(lines.get(i).text())) {
+          var keys = keysByIdentifier.get(word);
+          if (keys != null) {
+            keys.add(key);
+          }
+        }
+      }
+    }
+    for (int d = 0; d < fileDetections.size(); d++) {
+      var detection = fileDetections.get(d);
+      if (detection.identifier() == null) {
+        continue;
+      }
+      var aliases = new HashSet<>(keysByIdentifier.get(detection.identifier()));
+      aliases.add(detection.identifier());
+      int index = indexByNumber.get(detection.finding().line());
+      if (index > 0 && lines.get(index - 1).hunk() == lines.get(index).hunk()) {
+        var above = envKeyOf(lines.get(index - 1).text(), ENV_KEY);
+        if (above != null) {
+          aliases.add(above);
+        }
+      }
+      fileDetections.set(
+          d,
+          new Detection(
+              detection.rule(),
+              detection.finding(),
+              detection.legacyFingerprint(),
+              detection.identifier(),
+              aliases));
+    }
+  }
+
+  /**
+   * The one credential-named environment key ({@code UPPER_SNAKE}, {@link
+   * SecretScanner#namesCredential}) that {@code shape} finds on a line, or {@code null} when it
+   * finds none or more than one.
+   */
+  private static String envKeyOf(String text, Pattern shape) {
+    var keys = new HashSet<String>();
+    var matcher = shape.matcher(text);
+    while (matcher.find()) {
+      if (SecretScanner.namesCredential(matcher.group(1))) {
+        keys.add(matcher.group(1));
+      }
+    }
+    return keys.size() == 1 ? keys.iterator().next() : null;
   }
 
   /**
