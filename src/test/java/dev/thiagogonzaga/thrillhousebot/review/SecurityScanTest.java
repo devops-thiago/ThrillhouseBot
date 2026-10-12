@@ -927,6 +927,21 @@ class SecurityScanTest {
                 + value
                 + "\"\n");
     assertEquals(Set.of("apiToken"), aliasesOf(twoHunks));
+
+    // A removed line is not in the new file (PatchLines leaves it out), so neither as a use site
+    // nor as the line above does it tie its key to the secret.
+    var replaced =
+        new FileDiff(
+            "Config.kt",
+            "modified",
+            1,
+            1,
+            2,
+            "@@ -1,1 +1,1 @@\n-legacy = env[\"LEGACY_PAYMENTS_KEY\"] ?: apiToken\n"
+                + "+val apiToken = \""
+                + value
+                + "\"\n");
+    assertEquals(Set.of("apiToken"), aliasesOf(replaced));
   }
 
   @Test
