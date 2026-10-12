@@ -4038,4 +4038,129 @@ class FindingPipelineTest {
 
     assertNull(result.summary());
   }
+
+  /** A context on the head the round carrying {@code prior} reviewed (#944, #964). */
+  private static ReviewContextLoader.ReviewContext sameHeadContext(ReviewResponse.Summary prior) {
+    var files =
+        List.of(
+            new FileDiff("a.java", "modified", 3, 0, 3, "+x"),
+            new FileDiff("b.java", "modified", 2, 0, 2, "+y"));
+    var priorRound = new ReviewResponse(List.of(finding("a.java", "Old")), List.of(), prior);
+    return new ReviewContextLoader.ReviewContext(
+        files,
+        "",
+        "",
+        0,
+        List.of(),
+        List.of(),
+        List.of(priorRound),
+        false,
+        true,
+        null,
+        List.of(),
+        "",
+        new InstructionsResolver.ResolvedInstructions("", ""),
+        PathScopedInstructions.NONE,
+        List.of(),
+        "",
+        "",
+        "",
+        "",
+        files,
+        () -> new DiffLineResolver(Map.of()),
+        null,
+        List.of(),
+        List.of(),
+        SupersededFindingsCarryover.Carried.NONE,
+        "",
+        true);
+  }
+
+  private static final ReviewResponse.Summary PRIOR_OVERVIEW =
+      new ReviewResponse.Summary(
+          1,
+          0,
+          0,
+          1,
+          0,
+          "ok",
+          "Adds a row cache in front of the store.",
+          List.of(),
+          List.of(),
+          List.of(
+              new ReviewResponse.FileSummary("a.java", "caches rows"),
+              new ReviewResponse.FileSummary("b.java", "evicts stale rows")),
+          null,
+          List.of());
+
+  private ReviewResponse.Summary summaryAfterTheScreen(ReviewResponse.Summary answer) {
+    var session = ReviewSession.create("owner/repo", 1, "Same head", "sha");
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), answer));
+
+    return pipeline
+        .run(
+            session,
+            template,
+            sameHeadContext(PRIOR_OVERVIEW),
+            multiBatchPlan(),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE)
+        .summary();
+  }
+
+  @Test
+  void anAnswerTheOverviewScreenEmptiesTakesThePreviousOverviewOnTheSameHead() {
+    // Every file summary is a placeholder and the purpose names only an invented key: the screen
+    // leaves no overview, so the previous round's is carried whole.
+    var emptied =
+        summaryAfterTheScreen(
+            new ReviewResponse.Summary(
+                0,
+                0,
+                0,
+                0,
+                0,
+                "ok",
+                "Closes THRILLHOUSEBOT-9.",
+                List.of(),
+                List.of(),
+                List.of(
+                    new ReviewResponse.FileSummary("a.java", "placeholder"),
+                    new ReviewResponse.FileSummary("b.java", "TBD")),
+                null,
+                List.of()));
+
+    assertEquals(PRIOR_OVERVIEW.prPurpose(), emptied.prPurpose());
+    assertEquals(PRIOR_OVERVIEW.fileSummaries(), emptied.fileSummaries());
+  }
+
+  @Test
+  void anAnswerWhosePurposeTheScreenEmptiesTakesThePreviousPurposeOnTheSameHead() {
+    var partial =
+        summaryAfterTheScreen(
+            new ReviewResponse.Summary(
+                0,
+                0,
+                0,
+                0,
+                0,
+                "ok",
+                "Closes THRILLHOUSEBOT-9.",
+                List.of(),
+                List.of(),
+                List.of(new ReviewResponse.FileSummary("a.java", "renders the row table")),
+                null,
+                List.of()));
+
+    assertEquals(PRIOR_OVERVIEW.prPurpose(), partial.prPurpose());
+    assertEquals(
+        List.of(
+            new ReviewResponse.FileSummary("a.java", "renders the row table"),
+            new ReviewResponse.FileSummary("b.java", "evicts stale rows")),
+        partial.fileSummaries());
+  }
 }
