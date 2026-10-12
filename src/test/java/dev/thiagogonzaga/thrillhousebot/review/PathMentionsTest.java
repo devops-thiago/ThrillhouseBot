@@ -105,6 +105,8 @@ class PathMentionsTest {
     var mentions = mentions(REACT, "", REACT_TREE);
 
     assertSame(purpose, mentions.withoutUnresolvedSentences(purpose));
+    var otherCase = "It moves readme.md to Docs/react-v17.md and edits REACT/SRC/LOANS/.";
+    assertSame(otherCase, mentions.withoutUnresolvedSentences(otherCase));
   }
 
   /**

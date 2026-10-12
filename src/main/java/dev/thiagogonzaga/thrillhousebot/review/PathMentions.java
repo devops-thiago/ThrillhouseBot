@@ -182,7 +182,6 @@ final class PathMentions {
           "socket");
 
   private final Set<String> changed;
-  private final Set<String> changedNames;
   private final DiffLineResolver resolver;
   private final String verbatim;
   private final Supplier<Optional<CitedLocationResolver.RepositoryPaths>> repository;
@@ -208,7 +207,6 @@ final class PathMentions {
       }
     }
     this.changed = Set.copyOf(paths);
-    this.changedNames = names(paths);
     this.resolver = new DiffLineResolver(Map.of(), current);
     this.verbatim = text.toString();
     this.repository = ReviewContextLoader.memoize(repository);
@@ -420,19 +418,23 @@ final class PathMentions {
   }
 
   private boolean namesChanged(String token) {
-    if (token.indexOf('/') < 0) {
-      return changedNames.contains(token);
-    }
     return names(token, changed);
   }
 
-  /** Whether {@code token} is one of {@code paths}, a directory holding one, or a file's name. */
+  /**
+   * Whether {@code token} is one of {@code paths}, a directory holding one, or a file's name, in
+   * any letter case: "readme.md" names {@code README.md}, so it is not invented.
+   */
   private static boolean names(String token, Set<String> paths) {
-    if (token.indexOf('/') < 0) {
-      return paths.stream().anyMatch(path -> fileName(path).equals(token));
+    String wanted = token.toLowerCase(Locale.ROOT);
+    if (wanted.indexOf('/') < 0) {
+      return paths.stream()
+          .anyMatch(path -> fileName(path).toLowerCase(Locale.ROOT).equals(wanted));
     }
-    String directory = token.endsWith("/") ? token : token + "/";
-    return paths.contains(token) || paths.stream().anyMatch(path -> path.startsWith(directory));
+    String directory = wanted.endsWith("/") ? wanted : wanted + "/";
+    return paths.stream()
+        .map(path -> path.toLowerCase(Locale.ROOT))
+        .anyMatch(path -> path.equals(wanted) || path.startsWith(directory));
   }
 
   /**
@@ -467,12 +469,6 @@ final class PathMentions {
 
   private static String fileName(String path) {
     return path.substring(path.lastIndexOf('/') + 1);
-  }
-
-  private static Set<String> names(Set<String> paths) {
-    var names = new HashSet<String>();
-    paths.forEach(path -> names.add(fileName(path)));
-    return Set.copyOf(names);
   }
 
   private static String stripTrailingDots(String token) {
