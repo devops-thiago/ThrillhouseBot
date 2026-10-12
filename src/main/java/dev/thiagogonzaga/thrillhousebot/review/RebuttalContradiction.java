@@ -461,21 +461,21 @@ final class RebuttalContradiction {
   /**
    * Whether the text before a {@link #STATED_CONCURRENCY} statement turns it into a denial: a
    * negator in the same clause, at most {@value #DENIAL_WORDS} words before it with no clause
-   * punctuation or clause opener ("and", "but", "which", "because" …) between ("not shared by every
-   * goroutine", "is not ever really called from multiple threads", "nothing in it is shared across
-   * goroutines", any n't contraction: "doesn't support concurrent use"), but not "not only" or "not
-   * just", which affirm; or a verb that refuses the statement's subject anywhere in the same
-   * clause, whatever words sit between ("rejects concurrent requests", "rejects all incoming
-   * concurrent requests", "prevents any concurrent access"), unless a subordinating word ({@link
-   * #SUBORDINATORS}) opens a clause of its own between them: "prevents a deadlock when called from
-   * multiple threads" refuses the deadlock, not the statement. Lean to denying: a statement not
-   * quoted leaves the note saying the code does not confirm concurrency, while a denial quoted as
-   * concurrency tells the maintainer the opposite of what the code says. A verb that only protects
-   * shared state ("the lock guards every field shared by every request goroutine", "serializes
-   * concurrent requests") still says the path is reached concurrently, so it denies nothing. A gap
-   * is any horizontal space or hyphen, a non-breaking space included, and a word counts as one
-   * whatever its length (a long identifier). The words are read back from the statement, so the
-   * scan is linear in the clause.
+   * punctuation (a comma sets off an aside and does not count) or clause opener ("and", "but",
+   * "which", "because" …) between ("not shared by every goroutine", "is not ever really called from
+   * multiple threads", "nothing in it is shared across goroutines", any n't contraction: "doesn't
+   * support concurrent use"), but not "not only" or "not just", which affirm; or a verb that
+   * refuses the statement's subject anywhere in the same clause, whatever words sit between
+   * ("rejects concurrent requests", "rejects all incoming concurrent requests", "prevents any
+   * concurrent access"), unless a subordinating word ({@link #SUBORDINATORS}) opens a clause of its
+   * own between them: "prevents a deadlock when called from multiple threads" refuses the deadlock,
+   * not the statement. Lean to denying: a statement not quoted leaves the note saying the code does
+   * not confirm concurrency, while a denial quoted as concurrency tells the maintainer the opposite
+   * of what the code says. A verb that only protects shared state ("the lock guards every field
+   * shared by every request goroutine", "serializes concurrent requests") still says the path is
+   * reached concurrently, so it denies nothing. A gap is any horizontal space or hyphen, a
+   * non-breaking space included, and a word counts as one whatever its length (a long identifier).
+   * The words are read back from the statement, so the scan is linear in the clause.
    */
   private static boolean denies(String before) {
     var words = wordsBefore(before);
@@ -499,8 +499,9 @@ final class RebuttalContradiction {
   /**
    * The words of the statement's clause before it, lowercased, nearest first: read back until a gap
    * wider than {@value #MAX_GAP} characters, or anything that is neither a gap nor a word character
-   * (clause punctuation, the start of the text), ends the clause. The whole clause is read, so a
-   * refusing verb anywhere in it is seen; {@link #denies} bounds the negator's reach itself.
+   * (clause punctuation other than a comma, the start of the text), ends the clause. The whole
+   * clause is read, so a refusing verb anywhere in it is seen; {@link #denies} bounds the negator's
+   * reach itself.
    */
   private static List<String> wordsBefore(String before) {
     var words = new ArrayList<String>();
@@ -527,8 +528,13 @@ final class RebuttalContradiction {
         || (word.length() <= 11 && (word.endsWith("n't") || word.endsWith("n’t")));
   }
 
+  /**
+   * Whether {@code c} separates two words of one clause: horizontal space, a hyphen, or a comma,
+   * which sets off an aside ("not, in practice, called from multiple threads") rather than ending
+   * the clause, so a negator before it still governs the statement.
+   */
   private static boolean isGap(char c) {
-    return c == '-' || c == ' ' || c == '\t' || Character.isSpaceChar(c);
+    return c == '-' || c == ',' || c == ' ' || c == '\t' || Character.isSpaceChar(c);
   }
 
   private static boolean isWordChar(char c) {
@@ -576,10 +582,8 @@ final class RebuttalContradiction {
     var kept = new ArrayList<String>();
     var inFile = true;
     for (var line : reviewedCode.split("\n", -1)) {
-      if (line.startsWith(DIFF_GIT)) {
-        inFile = namesFile(line, file);
-      } else if (line.startsWith("### ")) {
-        inFile = sectionPath(line).equals(file);
+      if (isHeading(line)) {
+        inFile = headingPaths(line).contains(file);
       } else if (inFile && (line.startsWith("+") || line.startsWith(" "))) {
         kept.add(line.substring(1));
       }
@@ -587,19 +591,29 @@ final class RebuttalContradiction {
     return kept;
   }
 
+  /** Whether {@code line} opens a file's section: a {@code diff --git} line or a heading. */
+  private static boolean isHeading(String line) {
+    return line.startsWith(DIFF_GIT) || line.startsWith("### ");
+  }
+
   /**
-   * Whether a {@code diff --git a/<old> b/<new>} line names {@code file} exactly as its old or new
-   * path. A suffix is not enough: {@code b/other/src/A.java} is another file than {@code
-   * src/A.java}. The finding's path is the diff's own spelling (#1022), so an exact match is the
-   * file's section.
+   * The paths a section {@linkplain #isHeading heading} names, the one reading both {@link
+   * #rightSideLines} (which section is the finding's file) and {@link #rightSideCode} (which file's
+   * lexical profile applies) take: a {@code ### path (…)} heading's {@link #sectionPath}, or a
+   * {@code diff --git a/<old> b/<new>} line's old and new path, none when it is not that shape. A
+   * finding's file is its section's only by an exact path: {@code b/other/src/A.java} is another
+   * file than {@code src/A.java}, and the finding's path is the diff's own spelling (#1022).
    */
-  private static boolean namesFile(String diffLine, String file) {
-    var paths = diffLine.substring(DIFF_GIT.length());
+  private static List<String> headingPaths(String heading) {
+    if (heading.startsWith("### ")) {
+      return List.of(sectionPath(heading));
+    }
+    var paths = heading.substring(DIFF_GIT.length());
     var split = paths.indexOf(" b/");
     if (!paths.startsWith("a/") || split < 0) {
-      return false;
+      return List.of();
     }
-    return paths.substring(2, split).equals(file) || paths.substring(split + 3).equals(file);
+    return List.of(paths.substring(2, split), paths.substring(split + 3));
   }
 
   /**
@@ -697,10 +711,10 @@ final class RebuttalContradiction {
       if (!body) {
         scanner.reset();
       }
-      if (line.startsWith(DIFF_GIT)) {
-        scanner.fileNamed(line);
-      } else if (line.startsWith("### ")) {
-        scanner.fileNamed(sectionPath(line));
+      if (isHeading(line)) {
+        // The new path names the file whose profile applies; a malformed line is read whole.
+        var paths = headingPaths(line);
+        scanner.fileNamed(paths.isEmpty() ? line : paths.getLast());
       }
       kept.add(scanner.scanLine(added ? line.substring(1) : line));
       if (!body) {

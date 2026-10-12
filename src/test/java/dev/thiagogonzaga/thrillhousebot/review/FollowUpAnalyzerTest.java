@@ -5007,13 +5007,16 @@ class FollowUpAnalyzerTest {
             "+// Nothing in this struct is shared across goroutines.",
             "+// None of these fields are shared by every request goroutine.",
             "+// Neither field is used by all goroutines.",
-            "+// Never is the pool really shared by every request goroutine.")) {
+            "+// Never is the pool really shared by every request goroutine.",
+            // A comma sets off an aside; the negator before it still governs the statement.
+            "+// It is not, in practice, a thing called from multiple threads.",
+            "+// The endpoint is not, under load, shared by every request goroutine.",
+            "+// The counter is not reset, it is shared by every request goroutine.")) {
       var note = heldNote(denied);
       assertTrue(note.contains("no review has weighed"), denied + " -> " + note);
     }
     for (var affirmed :
         List.of(
-            "+// It is not, in practice, a thing called from multiple threads.",
             "+// It is not a cache and it is shared by every request goroutine.",
             "+// There is no cache because the pool is shared by every request goroutine.",
             "+// The pool is not only shared by every request goroutine but by the workers too.",
@@ -5047,7 +5050,7 @@ class FollowUpAnalyzerTest {
     }
 
     var otherClause =
-        heldNote("+// The counter is not reset, it is shared by every request goroutine.");
+        heldNote("+// The counter is not reset; it is shared by every request goroutine.");
     assertTrue(otherClause.contains("says this path runs concurrently"), otherClause);
 
     var guardClause = heldNote("+// The mutex guards it: shared by every thread.");
