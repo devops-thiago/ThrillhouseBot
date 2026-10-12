@@ -155,10 +155,67 @@ final class OverviewScreen {
    */
   private static final Set<String> STANDARD_PREFIXES =
       Set.of(
-          "HTTP", "HTTPS", "FIPS", "IEEE", "ECMA", "ANSI", "MPEG", "SMTP", "OAUTH", "SAML", "SOAP",
-          "LDAP", "IMAP", "MQTT", "AMQP", "SNMP", "SASL", "XMPP", "HTML", "WCAG", "OPENAPI",
-          "JSONRPC", "SHAKE", "BLAKE", "BASE", "ECDSA", "EDDSA", "ARGON", "CHACHA", "POLY", "LZMA",
-          "XXHASH", "MURMUR", "KECCAK", "PBKDF", "SCRYPT", "UUID", "ULID");
+          "HTTP",
+          "HTTPS",
+          "FIPS",
+          "IEEE",
+          "ECMA",
+          "ANSI",
+          "MPEG",
+          "SMTP",
+          "OAUTH",
+          "SAML",
+          "SOAP",
+          "LDAP",
+          "IMAP",
+          "MQTT",
+          "AMQP",
+          "SNMP",
+          "SASL",
+          "XMPP",
+          "HTML",
+          "WCAG",
+          "OPENAPI",
+          "JSONRPC",
+          "SHAKE",
+          "BLAKE",
+          "BASE",
+          "ECDSA",
+          "EDDSA",
+          "ARGON",
+          "CHACHA",
+          "POLY",
+          "LZMA",
+          "XXHASH",
+          "MURMUR",
+          "KECCAK",
+          "PBKDF",
+          "SCRYPT",
+          "HMAC",
+          "ZSTD",
+          "UUID",
+          "ULID",
+          // Standards bodies and regulations. A three-letter one (ISO, RFC, CVE, PEP…) never takes
+          // the key shape, which needs four letters; it is listed so the set stays complete.
+          "ISO",
+          "IEC",
+          "RFC",
+          "PEP",
+          "CVE",
+          "CWE",
+          "CAPEC",
+          "OWASP",
+          "NIST",
+          "W3C",
+          "ETSI",
+          "ITU",
+          "JSR",
+          "JEP",
+          "KEP",
+          "PCI",
+          "SOC",
+          "HIPAA",
+          "GDPR");
 
   /** An initialism: single letters each followed by a period ("u.s.", "a.m."). */
   private static final Pattern INITIALISM = Pattern.compile("(?:\\p{L}\\.){2,}+");
@@ -237,8 +294,9 @@ final class OverviewScreen {
     var placed = new HashSet<String>();
     // Entries naming a changed file exactly go first, so a near miss never displaces one.
     var ordered = new ArrayList<ReviewResponse.FileSummary>(entries.size());
-    entries.stream().filter(e -> resolver.isChangedFile(e.path())).forEach(ordered::add);
-    entries.stream().filter(e -> !resolver.isChangedFile(e.path())).forEach(ordered::add);
+    // Judged on the path as the mapping reads it, so a padded exact path keeps its place.
+    entries.stream().filter(e -> resolver.isChangedFile(strippedPath(e))).forEach(ordered::add);
+    entries.stream().filter(e -> !resolver.isChangedFile(strippedPath(e))).forEach(ordered::add);
     for (var entry : ordered) {
       var screened = screenedEntry(entry, resolver, patches, known);
       if (screened != null && placed.add(screened.path())) {
@@ -265,6 +323,11 @@ final class OverviewScreen {
     return kept.equals(entries) ? entries : List.copyOf(kept);
   }
 
+  /** {@code entry}'s path without surrounding blanks; {@code null} without one. */
+  private static String strippedPath(ReviewResponse.FileSummary entry) {
+    return entry.path() == null ? null : entry.path().strip();
+  }
+
   /** {@code entry} on the changed file it means with its text screened, or {@code null}. */
   private static ReviewResponse.FileSummary screenedEntry(
       ReviewResponse.FileSummary entry,
@@ -274,7 +337,7 @@ final class OverviewScreen {
     if (entry.path() == null || entry.summary() == null) {
       return null;
     }
-    var path = resolver.diffPathFor(entry.path().strip());
+    var path = resolver.diffPathFor(strippedPath(entry));
     var text = screenedText(entry.summary(), patches.get(path), known);
     return text.isEmpty() ? null : new ReviewResponse.FileSummary(path, text);
   }

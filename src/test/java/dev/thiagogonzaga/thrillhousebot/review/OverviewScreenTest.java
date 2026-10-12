@@ -84,6 +84,22 @@ class OverviewScreenTest {
   }
 
   @Test
+  void aPaddedExactPathStillWinsOverANearMiss() {
+    var screened =
+        OverviewScreen.screen(
+            summary(
+                "p",
+                List.of(
+                    row("src/Dashboard.tsx", "a near miss"),
+                    row("  react/src/Dashboard.tsx ", "the exact one"))),
+            FILES,
+            "");
+
+    assertEquals(
+        List.of(row("react/src/Dashboard.tsx", "the exact one")), screened.fileSummaries());
+  }
+
+  @Test
   void anEntryNamingTheFileExactlyWinsOverANearMiss() {
     var screened =
         OverviewScreen.screen(
@@ -340,6 +356,18 @@ class OverviewScreenTest {
         OverviewScreen.withoutInventedTickets(
             "Ships it. Fixes ticket abcd-12. Lands #wxyz-3. Also proj-9, as in PROJ-1.",
             "Title: ship\nPROJ-1"));
+  }
+
+  @Test
+  void aStandardsBodyCodeIsNotTakenForAnInventedTicket() {
+    var purpose =
+        "Follows ISO-8601 dates. Implements RFC-7231. Fixes CVE-2024-1234. Verifies payloads with"
+            + " HMAC-256. Packs with ZSTD-1. Meets NIST-800 and OWASP-10. Fixes ABCD-9.";
+
+    assertEquals(
+        "Follows ISO-8601 dates. Implements RFC-7231. Fixes CVE-2024-1234. Verifies payloads with"
+            + " HMAC-256. Packs with ZSTD-1. Meets NIST-800 and OWASP-10.",
+        OverviewScreen.withoutInventedTickets(purpose, "Title: dates"));
   }
 
   @Test
