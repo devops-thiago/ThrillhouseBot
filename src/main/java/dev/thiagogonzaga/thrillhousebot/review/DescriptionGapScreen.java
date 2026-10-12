@@ -196,15 +196,19 @@ final class DescriptionGapScreen {
 
   private static final Pattern NON_ALPHANUMERIC = Pattern.compile("[^\\p{L}\\p{N}]+");
 
+  /** Full stops ending a name, which end its sentence rather than the name. */
+  private static final Pattern TRAILING_DOTS = Pattern.compile("\\.++$");
+
   /**
-   * A file or component an omission bullet names, one pattern per shape: a path, a file name with
-   * an extension, a CI job name ("python-ci"), or a file conventionally named without one
+   * A file or component an omission bullet names, one pattern per shape: a path of two slashes or
+   * more (one slash is as often "and/or" or "on/off"), a directory ending in a slash, a file name
+   * with an extension, a CI job name ("python-ci"), or a file conventionally named without one
    * ("Dockerfile"). A backticked span alone is not one (it is as often a setting or an identifier),
    * nor is a word such as "license" that prose uses for other things.
    */
   private static final List<Pattern> NAMED_FILES =
       List.of(
-          Pattern.compile("(?<![\\w/.-])[\\w.-]*+(?:/[\\w.-]++)++"),
+          Pattern.compile("(?<![\\w/.-])[\\w.-]*+(?:/[\\w.-]++){2,}+"),
           Pattern.compile("\\b[\\w.-]++/(?![\\w.-])"),
           Pattern.compile("\\b[\\w-]++\\.(?:md|ya?ml|json|toml|xml|txt|sh|env|cfg|ini|lock)\\b"),
           Pattern.compile("(?i)\\b[\\w]++-ci\\b"),
@@ -298,7 +302,8 @@ final class DescriptionGapScreen {
     for (var pattern : NAMED_FILES) {
       var m = pattern.matcher(gap);
       while (m.find()) {
-        names.add(m.group().toLowerCase(Locale.ROOT));
+        // A sentence's full stop is not part of the path it ends on.
+        names.add(TRAILING_DOTS.matcher(m.group()).replaceAll("").toLowerCase(Locale.ROOT));
       }
     }
     // One file matched by two shapes ("README" in "README.md") is one name.

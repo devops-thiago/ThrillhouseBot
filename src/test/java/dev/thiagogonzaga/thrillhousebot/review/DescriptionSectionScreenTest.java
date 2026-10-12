@@ -220,6 +220,19 @@ class DescriptionSectionScreenTest {
     assertFalse(
         DescriptionGapScreen.falseOmission(
             "The description never mentions the license change.", "The project is MIT license."));
+    // A slash pair is prose, not a path.
+    assertFalse(
+        DescriptionGapScreen.falseOmission(
+            "The description never mentions the on/off state of the cache and/or the retry switch.",
+            "Turns the cache off or on."));
+    // A path of two slashes or more is one.
+    assertTrue(
+        DescriptionGapScreen.falseOmission(
+            "The description never mentions src/app/config.ts.", "Adds a typed config.ts."));
+    // One file matched as a path and as a file name is one name, and the PR text holds it.
+    assertTrue(
+        DescriptionGapScreen.falseOmission(
+            "The description never mentions python/docs/CONFIG-PYTHON.md.", PYTHON_244));
   }
 
   @Test
