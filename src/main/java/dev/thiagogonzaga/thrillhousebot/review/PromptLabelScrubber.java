@@ -63,7 +63,9 @@ import java.util.regex.Pattern;
  * <p>The model's working notes go as well (#964): a self-correction ("(line 24 — wait, the binding
  * is …)", "BedReporter... rather, grep confirms …") keeps the correction and loses what it
  * corrected, and the names other stages use — the verifier's "confirmed findings", the batch
- * planner's "no findings in this batch" — are dropped, because a reader sees neither stage.
+ * planner's "no findings in this batch" — are dropped, because a reader sees neither stage. So are
+ * the summary call's count of the findings it was shown ("among the three verified above") and the
+ * verifier's CI note restated ("confirmed rather than counted"), #1075.
  */
 public final class PromptLabelScrubber {
 
@@ -381,6 +383,78 @@ public final class PromptLabelScrubber {
               + " this batch\\b(?! of\\b)",
           Pattern.CASE_INSENSITIVE);
 
+  /**
+   * "which no finding among the three verified above explains": the summary call counting the
+   * findings its prompt listed as verified (#1075). A reader sees no such list, so the count goes;
+   * "verified by the added test" and the like say nothing about the prompt and stay.
+   */
+  private static final Pattern AMONG_THE_VERIFIED =
+      Pattern.compile(
+          "\\s+among\\s+the\\s+(?:(\\w{1,9})\\s+)?(?:verified|confirmed)\\s+(?:findings?\\s+)?"
+              + "(?:above|below)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The same count opening the text, a line or a sentence: "Among the three verified above, the
+   * second explains it.", also after a list marker ({@link #opensCountSentence} decides). The count
+   * and its comma go, and the rest opens the sentence.
+   */
+  private static final Pattern AMONG_THE_VERIFIED_OPENING =
+      Pattern.compile(
+          "([ \\t]*+)among the (?:(\\w{1,9}) )?(?:verified|confirmed) (?:findings? )?"
+              + "(?:above|below)\\b,?[ \\t]*(\\p{L})?",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The count words {@link #AMONG_THE_VERIFIED} reads as the summary call's ("three", "several",
+   * "many"); a number in digits is one too.
+   */
+  private static final Set<String> COUNT_WORDS =
+      Set.of(
+          "one",
+          "two",
+          "three",
+          "four",
+          "five",
+          "six",
+          "seven",
+          "eight",
+          "nine",
+          "ten",
+          "eleven",
+          "twelve",
+          "thirteen",
+          "fourteen",
+          "fifteen",
+          "sixteen",
+          "seventeen",
+          "eighteen",
+          "nineteen",
+          "twenty",
+          "thirty",
+          "forty",
+          "fifty",
+          "dozen",
+          "hundred",
+          "several",
+          "many",
+          "few",
+          "numerous",
+          "dozens",
+          "multiple",
+          "both",
+          "various");
+
+  /**
+   * "the bug is confirmed rather than counted", "the failure is measured, not predicted": the
+   * verifier's note on a failing CI check ("CI's own measurement, not a count anyone made"),
+   * restated (#1075). The verdict word stays; the contrast with the rule goes.
+   */
+  private static final Pattern NOT_COUNTED =
+      Pattern.compile(
+          "\\b(confirmed|measured),?\\s+(?:rather\\s+than|instead\\s+of|not)\\s+(?:counted|predicted)\\b",
+          Pattern.CASE_INSENSITIVE);
+
   private PromptLabelScrubber() {}
 
   /** {@link #scrub(String, Collection)} for text that names no file of the pull request. */
@@ -653,8 +727,8 @@ public final class PromptLabelScrubber {
   /**
    * Drops the model's working notes (#964): a self-correction ("— wait,", "… rather,") keeps the
    * correction and loses what it corrected, and the verifier's and the batch planner's vocabulary
-   * ("confirmed findings", "no findings in this batch") goes, since neither stage is visible to a
-   * reader.
+   * ("confirmed findings", "no findings in this batch", "among the three verified above",
+   * "confirmed rather than counted") goes, since neither stage is visible to a reader.
    */
   private static String removeScratchText(String text) {
     var s = PARENTHETICAL_SELF_CORRECTION.matcher(text).replaceAll("(");
@@ -664,9 +738,59 @@ public final class PromptLabelScrubber {
         RESTARTED_SENTENCE
             .matcher(corrected)
             .replaceAll(m -> Matcher.quoteReplacement(restartedSentence(corrected, m)));
+    var counted = s;
+    s =
+        AMONG_THE_VERIFIED_OPENING
+            .matcher(counted)
+            .replaceAll(
+                m ->
+                    Matcher.quoteReplacement(
+                        countsFindings(m.group(2)) && opensCountSentence(counted, m.end(1))
+                            ? openingWithoutCount(m)
+                            : m.group()));
+    s =
+        AMONG_THE_VERIFIED
+            .matcher(s)
+            .replaceAll(m -> countsFindings(m.group(1)) ? "" : Matcher.quoteReplacement(m.group()));
     s = CONFIRMED_FINDINGS.matcher(s).replaceAll(m -> capitalizeLike(m.group(1), m.group(2)));
     s = removeNoFindingsAsides(s);
+    s = NOT_COUNTED.matcher(s).replaceAll("$1");
     return FINDINGS_IN_BATCH.matcher(s).replaceAll("$1");
+  }
+
+  /**
+   * Whether "among the [count] verified above" names a count: the summary call counting the list
+   * its prompt gave it. Without one the phrase may point at the findings the summary itself lists,
+   * and stays.
+   */
+  private static boolean countsFindings(String count) {
+    return count != null
+        && (COUNT_WORDS.contains(count.toLowerCase(Locale.ROOT))
+            || (count.length() <= 3 && count.chars().allMatch(Character::isDigit)));
+  }
+
+  /**
+   * Whether the count at {@code token} opens a sentence: {@link #opensRestart}, except that a line
+   * break after a word or a comma is the model wrapping its sentence ("which no finding\namong the
+   * three verified above explains"), not a new one; after a list marker it always opens one.
+   */
+  private static boolean opensCountSentence(String text, int token) {
+    if (!opensRestart(text, token)) {
+      return false;
+    }
+    int at = skipBlanksBack(text, token, 0);
+    if (at == 0 || text.charAt(at - 1) != '\n') {
+      return true;
+    }
+    int before = skipBlanksBack(text, at - 1, 0);
+    char last = before == 0 ? '\n' : text.charAt(before - 1);
+    return !Character.isLetterOrDigit(last) && last != ',';
+  }
+
+  /** An {@link #AMONG_THE_VERIFIED_OPENING} match without the count: what follows opens it. */
+  private static String openingWithoutCount(MatchResult m) {
+    String next = m.group(3);
+    return next == null ? m.group(1) : m.group(1) + capitalize(next);
   }
 
   /**

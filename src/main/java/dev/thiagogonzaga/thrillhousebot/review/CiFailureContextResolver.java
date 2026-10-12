@@ -115,6 +115,12 @@ public class CiFailureContextResolver {
   /** The prefix each check named under {@link #NOT_DETAILED} is listed with, one per line. */
   static final String NAMED_ONLY = "- ";
 
+  /**
+   * The line a detailed check's failing tests are listed under, each with the {@link #NAMED_ONLY}
+   * prefix; {@link CiFailureCitations} reads them back by it.
+   */
+  static final String FAILING_TESTS = "Failing tests named in the job log:";
+
   /** Appended when the whole section had to be cut to {@code max-chars}. */
   static final String TRUNCATION_NOTE = "[CI context truncated to its character budget]";
 
@@ -522,8 +528,8 @@ public class CiFailureContextResolver {
     var bytes = logBytes(auth, owner, repo, jobId);
     var failingTests = failingTestLines(bytes);
     if (!failingTests.isEmpty()) {
-      sb.append("Failing tests named in the job log:\n");
-      failingTests.forEach(line -> sb.append("- ").append(line).append('\n'));
+      sb.append(FAILING_TESTS).append('\n');
+      failingTests.forEach(line -> sb.append(NAMED_ONLY).append(line).append('\n'));
     }
     var tail = includeLogs ? renderLogTail(bytes) : "";
     if (!tail.isEmpty()) {

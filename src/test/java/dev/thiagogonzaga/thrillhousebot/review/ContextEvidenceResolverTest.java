@@ -371,6 +371,34 @@ class ContextEvidenceResolverTest {
         "a caller that loaded no context records no failing check");
   }
 
+  /**
+   * #1075: a finding that names a failing test the job log lists, and not its check, reaches the
+   * verifier with that test and is reported to the confidence floor.
+   */
+  @Test
+  void carriesTheFailingTestAFindingNames() {
+    var round =
+        ContextEvidenceResolver.forReview(
+            null,
+            PathScopedInstructions.NONE,
+            """
+            ### unit (conclusion: failure)
+            Failing tests named in the job log:
+            - [ERROR]   WaitlistServiceTest.topCandidatesReturnsAtMostLimit:67 expected
+            """,
+            new EvidenceBudget());
+    var cites =
+        finding(PATH, 42, "topCandidatesReturnsAtMostLimit fails: it returns limit+1 entries.");
+
+    var note = evidence(round, cites);
+
+    assertTrue(
+        note.contains(
+            "names the failing test \"topCandidatesReturnsAtMostLimit\" (check \"unit\")"),
+        note);
+    assertTrue(round.failingChecks().cites(cites));
+  }
+
   @Test
   void attachesNothingWhenTheReviewLoadedNoSectionAndNoScopes() {
     var round = ContextEvidenceResolver.forReview(null, null, new EvidenceBudget());

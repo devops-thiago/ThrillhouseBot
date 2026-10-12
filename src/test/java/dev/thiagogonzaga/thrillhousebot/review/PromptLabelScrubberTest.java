@@ -1065,6 +1065,67 @@ class PromptLabelScrubberTest {
     assertEquals(out, PromptLabelScrubber.scrub(out));
   }
 
+  /**
+   * #1075: the summary call's count of the findings its prompt listed (ThrillhouseBot-test#254,
+   * 6125936933) and the verifier's CI note restated in a finding (#245, 4248908866).
+   */
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          CI fails the check 'test', which no finding among the three verified above explains. | CI fails the check 'test', which no finding explains.
+          No finding among the 3 confirmed findings above explains it. | No finding explains it.
+          None among the verified below names it. | None among the verified below names it.
+          Because the failing job is already measured on this commit, the bug is confirmed rather than counted. | Because the failing job is already measured on this commit, the bug is confirmed.
+          The failure is measured, not predicted. | The failure is measured.
+          It is Confirmed instead of counted. | It is Confirmed.
+          Among the three verified above, the shortlist finding explains it. | The shortlist finding explains it.
+          It fails.\\nAmong the three verified above, the second is the one. | It fails.\\nThe second is the one.
+          It fails. Among the 3 confirmed findings above the second explains it. | It fails. The second explains it.
+          Among the three verified above. | .
+          - Among the three verified above, the second is the one. | - The second is the one.
+          Among the verified findings below, two are false. | Among the verified findings below, two are false.
+          Among the accounts verified above, two are locked. | Among the accounts verified above, two are locked.
+          CI fails the check 'test', which no finding among the many verified above explains. | CI fails the check 'test', which no finding explains.
+          CI fails the check, which no finding among the fifteen verified above explains. | CI fails the check, which no finding explains.
+          CI fails the check, which no finding among the three\\nverified above explains. | CI fails the check, which no finding explains.
+          The bug is confirmed rather\\nthan counted. | The bug is confirmed.
+          CI fails the check, which no finding\\namong the three verified above explains. | CI fails the check, which no finding explains.
+          It fails,\\namong the three verified above the second explains it. | It fails, the second explains it.
+          \\nAmong the three verified above, the second explains it. | \\nThe second explains it.
+          The row is among the 1234 verified above. | The row is among the 1234 verified above.
+          The row is among the old verified above. | The row is among the old verified above.
+          """)
+  void theCountOfVerifiedFindingsAndTheCiNoteAreRemoved(String leaked, String clean) {
+    var expected = clean.replace("\\n", "\n");
+    var scrubbed = PromptLabelScrubber.scrub(leaked.replace("\\n", "\n"));
+    assertEquals(expected, scrubbed);
+    assertFalse(
+        scrubbed.matches("(?is).*(?:three verified|rather than counted|not predicted).*"),
+        scrubbed);
+    assertEquals(expected, PromptLabelScrubber.scrub(expected));
+  }
+
+  /** Ordinary sentences using "verified" or "confirmed" are left alone (#1075). */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The fix is verified by the added test above.",
+        "The race is confirmed by the failing test.",
+        "Each verified signature is counted once.",
+        "Among the verified accounts above, two are locked.",
+        "Two users among the accounts verified above are locked.",
+        "The value is computed, not counted twice.",
+        "`among the three verified above` is the literal the parser expects."
+      })
+  void ordinaryVerifiedAndConfirmedSentencesStay(String text) {
+    assertEquals(
+        text,
+        PromptLabelScrubber.scrub(text),
+        "an ordinary use of verified or confirmed is not the summary call's count (#1075)");
+  }
+
   @ParameterizedTest
   @ValueSource(
       strings = {
