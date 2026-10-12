@@ -158,29 +158,53 @@ public final class ChangeSymbols {
   }
 
   /**
-   * The names of the existing functions and types {@code patch} adds lines inside, read from the
-   * hunk headers ({@code @@ -10,6 +10,9 @@ def send(self, to):}), in order and without repeats, and
-   * leaving out a name the patch itself declares. Added lines inside a function that already
-   * existed declare nothing, so without these a retry added to an existing {@code send} would leave
-   * its row with no evidence of where the change sits.
+   * The names of the existing functions and types {@code patch} adds lines inside, in order and
+   * without repeats, and leaving out a name the patch itself declares. An added line sits inside
+   * the nearest declaration above it in its hunk: one on a context or added line of code, else the
+   * one the hunk header names ({@code @@ -10,6 +10,9 @@ def send(self, to):}). A hunk whose context
+   * crosses into another function ({@code def cleanup():} after the end of {@code send}) names that
+   * function, not the header's. Added lines inside a function that already existed declare nothing,
+   * so without these a retry added to an existing {@code send} would leave its row with no evidence
+   * of where the change sits.
    */
   public static List<String> changedNames(String patch) {
     if (patch == null || patch.isBlank()) {
       return List.of();
     }
     var names = new LinkedHashSet<String>();
-    var header = "";
+    var enclosing = "";
+    var literals = new LiteralTracker();
     for (var line : patch.lines().toList()) {
       if (line.startsWith("@@")) {
-        var close = line.indexOf("@@", 2);
-        header = close < 0 ? "" : declaredName(line.substring(close + 2));
-      } else if (!header.isEmpty() && isAddedLine(line)) {
-        names.add(header);
-        header = "";
+        enclosing = headerName(line);
+        literals = new LiteralTracker();
+      } else if (isAddedLine(line) || line.startsWith(" ")) {
+        var declared = codeDeclaration(literals, line.substring(1));
+        if (!declared.isEmpty()) {
+          enclosing = declared;
+        } else if (isAddedLine(line) && !enclosing.isEmpty()) {
+          names.add(enclosing);
+        }
       }
     }
     declaredNames(patch).forEach(names::remove);
     return List.copyOf(names);
+  }
+
+  /** The name the function context of a hunk header declares, or {@code ""}. */
+  private static String headerName(String header) {
+    var close = header.indexOf("@@", 2);
+    return close < 0 ? "" : declaredName(header.substring(close + 2));
+  }
+
+  /**
+   * The name {@code code}, the next line of a hunk, declares when it is code ({@code literals}
+   * places it), or {@code ""}; {@code literals} moves past the line either way.
+   */
+  private static String codeDeclaration(LiteralTracker literals, String code) {
+    var inCode = literals.inCode();
+    literals.advance(code);
+    return inCode ? declaredName(code) : "";
   }
 
   private static boolean isAddedLine(String line) {
@@ -198,7 +222,11 @@ public final class ChangeSymbols {
       word = leadingWord(rest);
     }
     if (DECLARING_KEYWORDS.contains(word)) {
-      rest = rest.substring(word.length()).strip();
+      // A keyword pair declares one name after both: enum class Mode, fun interface Listener.
+      while (DECLARING_KEYWORDS.contains(word)) {
+        rest = rest.substring(word.length()).strip();
+        word = leadingWord(rest);
+      }
       // A Go method's receiver sits between the keyword and the name: func (s *Store) Add(…).
       if (rest.startsWith("(")) {
         rest = rest.substring(rest.indexOf(')') + 1).strip();
@@ -278,10 +306,13 @@ public final class ChangeSymbols {
         Pattern.compile("<<[-~]?(\\s*)(['\"])([A-Za-z_]\\w*)\\2");
 
     /**
-     * An unquoted heredoc opener ({@code <<EOF}, {@code <<-EOF}): an upper-case word straight after
-     * the operator, so a shift ({@code x << y}) opens nothing.
+     * An unquoted heredoc opener ({@code <<EOF}, {@code <<-EOF}, {@code << EOF}): an upper-case
+     * word after the operator and any horizontal space, so a shift ({@code x << y}) opens nothing.
+     * A shift by an upper-case constant ({@code x << MASK}) is read as one: the lines after it then
+     * declare nothing, which only leaves the row with less evidence.
      */
-    private static final Pattern BARE_HEREDOC = Pattern.compile("<<[-~]?([A-Z_][A-Z0-9_]*)(?!\\w)");
+    private static final Pattern BARE_HEREDOC =
+        Pattern.compile("<<[-~]?\\h*([A-Z_][A-Z0-9_]*)(?!\\w)");
 
     /** What closes the string or comment the text so far ends inside; {@code null} in code. */
     private String closer;

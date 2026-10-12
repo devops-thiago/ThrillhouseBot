@@ -157,7 +157,8 @@ class ChangeSymbolsTest {
 
   @Test
   void everyHeredocDelimiterShapeOpensAHeredoc() {
-    // Quoted delimiters of any case, a quoted one after a space, and a dash before an unquoted one.
+    // Quoted delimiters of any case, a quoted one after a space, a dash before an unquoted one, and
+    // an unquoted upper-case one after a space; a shift by a lower-case name opens nothing.
     var patch =
         """
         @@ -0,0 +1,20 @@
@@ -173,12 +174,21 @@ class ChangeSymbolsTest {
         +cat <<-EOF
         +def in_dashed():
         +\tEOF
+        +cat << EOF
+        +def in_spaced_bare():
+        +EOF
+        +cat <<- END_X
+        +def in_spaced_dashed():
+        +END_X
+        +y = x << y
+        +def after_shift():
         +out << "end";
         +out << 'x';
         +def after_stream_insertion():
         """;
 
-    assertEquals(List.of("after_stream_insertion"), ChangeSymbols.declaredNames(patch));
+    assertEquals(
+        List.of("after_shift", "after_stream_insertion"), ChangeSymbols.declaredNames(patch));
   }
 
   @Test
@@ -238,5 +248,33 @@ class ChangeSymbolsTest {
     assertEquals("", ChangeSymbols.overviewSuffix("docs/CONFIG-PYTHON.md", example));
     assertEquals("", ChangeSymbols.overviewSuffix("ci.YML", "+type: module"));
     assertEquals(" — declares: example", ChangeSymbols.overviewSuffix("src/x.py", code));
+  }
+
+  @Test
+  void anAddedLineBelongsToTheNearestFunctionAboveItInItsHunk() {
+    // The header names send, but the hunk's context crosses into cleanup before the second added
+    // line; a declaration inside a docstring moves nothing.
+    var patch =
+        """
+        @@ -20,6 +20,9 @@ def send(self, to):
+        +        log(to)
+                 return True
+         def cleanup():
+        +    os.remove(tmp_path)
+        @@ -40,4 +43,5 @@ def outer():
+             \"""
+             def in_docstring():
+             \"""
+        +    work()
+        """;
+
+    assertEquals(List.of("send", "cleanup", "outer"), ChangeSymbols.changedNames(patch));
+  }
+
+  @Test
+  void aKeywordPairDeclaresTheNameAfterBoth() {
+    assertEquals("Mode", ChangeSymbols.declaredName("public enum class Mode {"));
+    assertEquals("ClickListener", ChangeSymbols.declaredName("fun interface ClickListener {"));
+    assertEquals("", ChangeSymbols.declaredName("enum class"));
   }
 }
