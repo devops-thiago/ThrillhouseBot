@@ -459,12 +459,7 @@ public class SecurityScan {
     var kept = new ArrayList<ReviewResponse.Finding>();
     int duplicates = 0;
     var detectionsByFile = PathIndex.of(result.detections(), d -> d.finding().file(), d -> "");
-    var byAlias = new HashMap<String, List<Detection>>();
-    for (var detection : result.detections()) {
-      detection
-          .aliases()
-          .forEach(alias -> byAlias.computeIfAbsent(alias, a -> new ArrayList<>()).add(detection));
-    }
+    var byAlias = byAlias(result.detections());
     for (var finding : response.findings()) {
       if (duplicatesDetection(finding, detectionsByFile, byAlias)) {
         duplicates++;
@@ -495,6 +490,17 @@ public class SecurityScan {
         kept,
         statuses,
         scrub(FindingVerificationService.recount(response.summary(), kept), scrubber));
+  }
+
+  /** The identified detections by each of their {@linkplain Detection#aliases aliases}. */
+  private static Map<String, List<Detection>> byAlias(List<Detection> detections) {
+    var byAlias = new HashMap<String, List<Detection>>();
+    for (var detection : detections) {
+      for (var alias : detection.aliases()) {
+        byAlias.computeIfAbsent(alias, a -> new ArrayList<>()).add(detection);
+      }
+    }
+    return byAlias;
   }
 
   /**
