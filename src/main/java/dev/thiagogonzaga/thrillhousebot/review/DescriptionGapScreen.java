@@ -211,15 +211,22 @@ final class DescriptionGapScreen {
           Pattern.compile("(?i)\\b(?:dockerfile|containerfile|makefile|jenkinsfile)\\b"));
 
   /**
-   * The description said to claim something, before the clause's negation: "the description says
-   * the Dockerfile does not pin its base image" reports a misclaim, not an omission. "Says nothing
-   * about" and "says no word of" are omissions still.
+   * The description as a clause's subject. Followed by a claim verb ({@link #claimsFirst}) it
+   * reports a misclaim, not an omission: "the description says the Dockerfile does not pin its base
+   * image". "Says nothing about" and "states no …" are omissions still.
    */
-  private static final Pattern DESCRIPTION_CLAIMS_FIRST =
-      Pattern.compile(
-          "(?i)\\b(?:description|pr\\s++body)(?:['’]s)?\\s++(?:\\w++\\s++)?"
-              + "(?:says|said|states?|stated|claim(?:s|ed)?|promise[sd]?|asserts|reads)\\b"
-              + "(?!\\s++(?:nothing|no)\\b)");
+  private static final Pattern DESCRIPTION_SUBJECT =
+      Pattern.compile("(?i)\\b(?:description|pr\\s++body)(?:['’]s)?\\s++");
+
+  /** The claim verbs after {@link #DESCRIPTION_SUBJECT}, a word between allowed, one per shape. */
+  private static final List<Pattern> CLAIM_VERB_NEXT =
+      List.of(
+          Pattern.compile("(?i)^(?:\\w++\\s++)?(?:says|said|reads|asserts)\\b"),
+          Pattern.compile("(?i)^(?:\\w++\\s++)?(?:states?|stated|claim(?:s|ed)?|promise[sd]?)\\b"));
+
+  /** A claim verb whose object is nothing: "says nothing about", "states no …". */
+  private static final Pattern CLAIMS_NOTHING =
+      Pattern.compile("(?i)^(?:\\w++\\s++)?\\w++\\s++(?:nothing|no)\\b");
 
   /**
    * The description said to leave something out, in one clause: "the description never mentions",
@@ -283,7 +290,7 @@ final class DescriptionGapScreen {
    */
   static boolean falseOmission(String gap, String prText) {
     if (prText.isBlank()
-        || !((anyFinds(DESCRIPTION_OMITS, gap) && !DESCRIPTION_CLAIMS_FIRST.matcher(gap).find())
+        || !((anyFinds(DESCRIPTION_OMITS, gap) && !claimsFirst(gap))
             || (anyFinds(PR_TEXT_NAMED, gap) && anyFinds(OMISSION_CUES, gap)))) {
       return false;
     }
@@ -315,6 +322,18 @@ final class DescriptionGapScreen {
     return Pattern.compile("(?<![\\w-])" + Pattern.quote(token) + "(?![\\w-])")
         .matcher(text)
         .find();
+  }
+
+  /** Whether {@code gap} reports what the description claims ({@link #DESCRIPTION_SUBJECT}). */
+  private static boolean claimsFirst(String gap) {
+    var subject = DESCRIPTION_SUBJECT.matcher(gap);
+    while (subject.find()) {
+      var next = gap.substring(subject.end());
+      if (anyFinds(CLAIM_VERB_NEXT, next) && !CLAIMS_NOTHING.matcher(next).find()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static boolean isPartOf(String name, String other) {

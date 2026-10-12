@@ -25,6 +25,7 @@ import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -635,7 +636,7 @@ class VerdictBuilderTest {
     builder.build(contextAfterNaming(bullet, true), CLEAN_RESPONSE, CI_CLEAR, plan, "PR text");
     builder.build(contextAfterNaming(bullet, false), CLEAN_RESPONSE, CI_CLEAR, plan, "PR text");
 
-    verify(summaryGenerator, org.mockito.Mockito.times(2))
+    verify(summaryGenerator, times(2))
         .generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), sources.capture());
     var unchanged = sources.getAllValues().get(0);
     var moved = sources.getAllValues().get(1);
