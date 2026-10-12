@@ -297,16 +297,13 @@ final class OverviewScreen {
             .filter(c -> !c.isEmpty() && !isPlaceholder(c))
             .map(c -> withoutUntrueParts(c, patch, known))
             .toList();
-    // A clause the cut emptied, or left a placeholder ("TBD, hosts the two findings"), says
-    // nothing true; the first one is the file's role, so the summary goes with it.
-    if (clauses.isEmpty()
-        || isPlaceholder(clauses.getFirst())
-        || !trueToTheFile(clauses.getFirst(), patch, known)) {
+    // Every part was judged by the cut. A clause it emptied, or left a placeholder ("TBD, hosts
+    // the two findings"), says nothing true; the first one is the file's role, so the summary goes
+    // with it.
+    if (clauses.isEmpty() || isPlaceholder(clauses.getFirst())) {
       return "";
     }
-    return String.join(
-        "; ",
-        clauses.stream().filter(c -> !isPlaceholder(c) && trueToTheFile(c, patch, known)).toList());
+    return String.join("; ", clauses.stream().filter(c -> !isPlaceholder(c)).toList());
   }
 
   /**
@@ -382,11 +379,6 @@ final class OverviewScreen {
   private static boolean isPlaceholder(String text) {
     return PLACEHOLDERS.contains(
         NON_WORD.matcher(text.toLowerCase(Locale.ROOT)).replaceAll(" ").strip());
-  }
-
-  /** Whether a clause neither talks about the findings nor names a setting nothing shows. */
-  private static boolean trueToTheFile(String clause, String patch, String known) {
-    return !talksAboutFindings(clause) && !namesAbsentSetting(clause, patch, known);
   }
 
   /**
