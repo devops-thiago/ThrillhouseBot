@@ -386,6 +386,7 @@ class OverviewScreenTest {
         "Hosts all of the findings",
         "Contains open findings",
         // Any spelled count, and any -ly adverb before it.
+        "hosts one finding",
         "hosts thirteen findings",
         "holds twenty-three findings",
         "hosts roughly two hundred findings",
