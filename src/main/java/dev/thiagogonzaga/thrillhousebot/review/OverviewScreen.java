@@ -200,6 +200,9 @@ final class OverviewScreen {
           "JSONRPC", "SHAKE", "BLAKE", "BASE", "ECDSA", "EDDSA", "ARGON", "CHACHA", "POLY", "LZMA",
           "XXHASH", "MURMUR", "KECCAK", "PBKDF", "SCRYPT", "UUID", "ULID");
 
+  /** What opens a word before its first letter: brackets, quotes, dashes. */
+  private static final Pattern LEADING_PUNCTUATION = Pattern.compile("^\\P{L}++");
+
   /** A candidate sentence end: terminal punctuation followed by a blank ({@link #sentences}). */
   private static final Pattern SENTENCE_END = Pattern.compile("(?<=[.!?])\\s++");
 
@@ -329,7 +332,7 @@ final class OverviewScreen {
         Arrays.stream(text.split(";"))
             .map(String::strip)
             .filter(c -> !c.isEmpty() && !isPlaceholder(c))
-            .map(OverviewScreen::withoutFindingsParts)
+            .map(c -> withoutUntrueParts(c, patch, known))
             // A part the cut leaves may be a placeholder ("TBD, hosts the two findings").
             .filter(c -> !isPlaceholder(c))
             .toList();
@@ -340,13 +343,14 @@ final class OverviewScreen {
   }
 
   /**
-   * {@code clause} less the parts, separated by a comma or an "and", that talk about findings when
-   * some part does not ("renders the dashboard, hosts the two findings" and "renders the dashboard
-   * and hosts the two findings" keep "renders the dashboard"); as it is when none or all of its
-   * parts do, so a clause that is only findings talk is still judged whole. Each kept part keeps
-   * the separator it had.
+   * {@code clause} less the parts, separated by a comma or a conjunction, that talk about findings
+   * or name a setting nothing shows (#964), when some part does neither ("renders the dashboard,
+   * hosts the two findings" and "renders the dashboard and hosts the two findings" keep "renders
+   * the dashboard"); as it is when none of its parts does, or when the first does, since the first
+   * part carries the clause's verb and the rest would be a fragment: the clause is then judged
+   * whole. Each kept part keeps the separator it had.
    */
-  private static String withoutFindingsParts(String clause) {
+  private static String withoutUntrueParts(String clause, String patch, String known) {
     var parts = new ArrayList<String>();
     var separators = new ArrayList<String>();
     var from = 0;
@@ -360,19 +364,24 @@ final class OverviewScreen {
     var kept = new StringBuilder();
     var dropped = 0;
     var previousDropped = false;
+    var firstDropped = false;
     for (var i = 0; i < parts.size(); i++) {
       var part = parts.get(i);
       // A relative tail ("…, which are security-related") belongs to the part before it.
       previousDropped =
           talksAboutFindings(LEADING_CONJUNCTION.matcher(part).replaceFirst(""))
+              || namesAbsentSetting(part, patch, known)
               || (previousDropped && RELATIVE_TAIL.matcher(part).find());
       if (previousDropped) {
         dropped++;
+        firstDropped |= i == 0;
       } else {
         kept.append(kept.isEmpty() ? "" : separators.get(i - 1)).append(parts.get(i));
       }
     }
-    return dropped == 0 || dropped == parts.size() ? clause : kept.toString();
+    // The first part carries the clause's verb: without it the rest is a fragment ("currency"),
+    // so the clause is judged whole instead.
+    return dropped == 0 || firstDropped ? clause : kept.toString();
   }
 
   /**
@@ -585,7 +594,12 @@ final class OverviewScreen {
     while (ends.find()) {
       var before = text.substring(start, ends.start());
       var words = before.split("\\s");
-      var lastWord = words[words.length - 1].toLowerCase(Locale.ROOT);
+      // Punctuation opening the word ("(e.g.", "—approx.") is not part of the abbreviation.
+      var lastWord =
+          LEADING_PUNCTUATION
+              .matcher(words[words.length - 1])
+              .replaceFirst("")
+              .toLowerCase(Locale.ROOT);
       var next = text.charAt(ends.end());
       var midSentence =
           Character.isLowerCase(next)
@@ -607,8 +621,9 @@ final class OverviewScreen {
       return purpose;
     }
     var source = known.toUpperCase(Locale.ROOT);
-    // The material may write the key without its hyphen ("SHAKE256", "SHAKE 256").
-    var runTogether = NON_WORD.matcher(source).replaceAll("");
+    // The material may write the key as one token without its hyphen ("SHAKE256"); a key pieced
+    // together across two of its words ("ABCD" and "9") is not one it holds.
+    var tokens = Set.of(NON_WORD.split(source));
     return sentences(purpose).stream()
         .filter(
             sentence ->
@@ -620,7 +635,7 @@ final class OverviewScreen {
                         key ->
                             source.contains(key)
                                 || isStandardCode(key)
-                                || runTogether.contains(key.replace("-", ""))))
+                                || tokens.contains(key.replace("-", ""))))
         .collect(Collectors.joining(" "));
   }
 }

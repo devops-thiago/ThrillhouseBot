@@ -132,6 +132,19 @@ class OverviewScreenTest {
   }
 
   @Test
+  void onlyThePartNamingAnInventedSettingIsCut() {
+    var patch = "+| VITE_API_URL | url |";
+
+    assertEquals(
+        "Documents the API URL",
+        OverviewScreen.screenedText(
+            "Documents the API URL, and caps pages at VITE_PAGE_LIMIT", patch, ""));
+    assertEquals(
+        "Documents VITE_API_URL",
+        OverviewScreen.screenedText("Documents VITE_API_URL and MAX_PER_ZONE", patch, ""));
+  }
+
+  @Test
   void aSettingTheFilesPatchDoesNotHoldIsCut() {
     var patch = "+| VITE_API_URL | url |\n+| VITE_PAGE_SIZE | 50 |";
 
@@ -246,6 +259,14 @@ class OverviewScreenTest {
   }
 
   @Test
+  void anAbbreviationAfterPunctuationIsStillRecognised() {
+    assertEquals(
+        List.of("Adds retries (e.g. Backoff) as (Dr. Smith) asked, —approx. ten of them.", "Done."),
+        OverviewScreen.sentences(
+            "Adds retries (e.g. Backoff) as (Dr. Smith) asked, —approx. ten of them. Done."));
+  }
+
+  @Test
   void aSentenceEndingInEtcIsSplitBeforeACapital() {
     assertEquals(
         "Lists the parsers, codecs, etc.",
@@ -264,7 +285,11 @@ class OverviewScreenTest {
         "Hashes with BLAKE3-256 for the cache. Uses WHIRL-512.",
         OverviewScreen.withoutInventedTickets(
             "Hashes with BLAKE3-256 for the cache. Uses WHIRL-512. Fixes ABCD-9.",
-            "Title: cache\nWHIRL 512 digests"));
+            "Title: cache\nWHIRL512 digests"));
+    // Pieced together across two words of the material, it is not held.
+    assertEquals(
+        "",
+        OverviewScreen.withoutInventedTickets("Fixes ABCD-9.", "Title: steps\nRun ABCD 9 times"));
   }
 
   @Test
