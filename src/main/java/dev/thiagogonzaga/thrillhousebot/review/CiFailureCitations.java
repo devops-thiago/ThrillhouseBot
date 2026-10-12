@@ -461,39 +461,48 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
    * @param open the findings the summary lists: this round's, then the earlier rounds' still open
    */
   String overviewSentences(List<Finding> open) {
-    var sentences = new ArrayList<String>();
     if (checks.isEmpty()) {
       return "";
     }
     // Each finding's citations once, in the summary's order; a check takes the first citing it.
     var citedBy = new ArrayList<List<Citation>>(open.size());
     open.forEach(finding -> citedBy.add(citations(finding.title(), finding.description())));
+    var sentences = new ArrayList<String>();
     for (Check check : checks) {
-      var sb = new StringBuilder("CI on this commit fails the check ").append(quoted(check.name()));
-      var tests = check.tests();
-      if (!tests.isEmpty()) {
-        var named = tests.stream().limit(MAX_TESTS_NAMED).map(t -> quoted(t.name())).toList();
-        sb.append(tests.size() == 1 ? " (failing test " : " (failing tests ")
-            .append(String.join(", ", named));
-        if (tests.size() > named.size()) {
-          sb.append(" and ").append(tests.size() - named.size()).append(" more");
-        }
-        sb.append(')');
-      }
-      Finding explaining = null;
-      for (int i = 0; i < open.size() && explaining == null; i++) {
-        if (citedBy.get(i).stream().anyMatch(citation -> citation.check() == check)) {
-          explaining = open.get(i);
-        }
-      }
-      if (explaining != null) {
-        sb.append(", which the finding ").append(label(explaining)).append(" explains.");
-      } else {
-        sb.append(", which no open finding explains.");
-      }
-      sentences.add(sb.toString());
+      var explaining = firstCiting(check, open, citedBy);
+      sentences.add(
+          "CI on this commit fails the check "
+              + quoted(check.name())
+              + testsNamed(check.tests())
+              + (explaining == null
+                  ? ", which no open finding explains."
+                  : ", which the finding " + label(explaining) + " explains."));
     }
     return String.join(" ", sentences);
+  }
+
+  /** The failing tests a check's sentence names, " (failing test …)", or nothing when none. */
+  private static String testsNamed(List<FailingTest> tests) {
+    if (tests.isEmpty()) {
+      return "";
+    }
+    var named = tests.stream().limit(MAX_TESTS_NAMED).map(t -> quoted(t.name())).toList();
+    var more = tests.size() - named.size();
+    return (tests.size() == 1 ? " (failing test " : " (failing tests ")
+        + String.join(", ", named)
+        + (more > 0 ? " and " + more + " more" : "")
+        + ")";
+  }
+
+  /** The first of {@code open} whose citations ({@code citedBy}, in step) cite {@code check}. */
+  private static Finding firstCiting(
+      Check check, List<Finding> open, List<List<Citation>> citedBy) {
+    for (int i = 0; i < open.size(); i++) {
+      if (citedBy.get(i).stream().anyMatch(citation -> citation.check() == check)) {
+        return open.get(i);
+      }
+    }
+    return null;
   }
 
   /** A finding as the sentence names it: its title, or where it is when it has none. */
