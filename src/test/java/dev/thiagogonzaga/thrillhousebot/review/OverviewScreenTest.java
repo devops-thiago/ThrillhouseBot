@@ -385,6 +385,11 @@ class OverviewScreenTest {
         "Hosts all the findings from the review",
         "Hosts all of the findings",
         "Contains open findings",
+        // Any spelled count, and any -ly adverb before it.
+        "hosts thirteen findings",
+        "holds twenty-three findings",
+        "hosts roughly two hundred findings",
+        "holds merely four findings",
         "Has reported findings",
         "and hosts the two findings",
         "hosts two high findings"
@@ -415,6 +420,12 @@ class OverviewScreenTest {
         // Any noun after the finding word, not only a listed one.
         "Contains the findings handler for the dashboard",
         "Wires the findings exporter",
+        // A name as written after the finding word continues the phrase.
+        "Hosts the findings FindingStore",
+        "Holds the findings HTTP2 client",
+        "Contains FindingStore",
+        "Contains the findings Open panel",
+        "Holds the findingsTable",
         // Plural artifact nouns.
         "Contains the findings tables for the dashboard",
         "Holds the findings queries and classes",
@@ -433,6 +444,13 @@ class OverviewScreenTest {
         "Returns no findings for an empty diff",
         OverviewScreen.screenedText("Returns no findings for an empty diff", "+x", ""));
     assertEquals("", OverviewScreen.screenedText("TBD, hosts the two findings", "+x", ""));
+    // A placeholder part is cut like a findings part; the role around it stays.
+    assertEquals(
+        "renders the dashboard",
+        OverviewScreen.screenedText("renders the dashboard, TBD", "+x", ""));
+    assertEquals(
+        "renders the dashboard",
+        OverviewScreen.screenedText("TBD, renders the dashboard", "+x", ""));
     // A relative tail goes with the findings part it qualifies.
     assertEquals(
         "",

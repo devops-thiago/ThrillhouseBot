@@ -83,10 +83,15 @@ final class OverviewScreen {
    * "Posts reported findings") is not one of them.
    */
   private static final Set<String> FINDING_QUALIFIERS =
+      Set.of("confirmed", "verified", "no", "several", "multiple", "many", "few");
+
+  /**
+   * The words a spelled number is made of: units, teens and tens join into any count up to the
+   * hundreds ("twenty-three", "one hundred"), and the hyphen splits a compound into these words.
+   */
+  private static final Set<String> NUMBER_WORDS =
       Set.of(
-          "confirmed",
-          "verified",
-          "no",
+          "zero",
           "one",
           "two",
           "three",
@@ -99,12 +104,27 @@ final class OverviewScreen {
           "ten",
           "eleven",
           "twelve",
+          "thirteen",
+          "fourteen",
+          "fifteen",
+          "sixteen",
+          "seventeen",
+          "eighteen",
+          "nineteen",
+          "twenty",
+          "thirty",
+          "forty",
+          "fifty",
+          "sixty",
+          "seventy",
+          "eighty",
+          "ninety",
+          "hundred",
+          "hundreds",
+          "thousand",
+          "thousands",
           "dozen",
-          "dozens",
-          "several",
-          "multiple",
-          "many",
-          "few");
+          "dozens");
 
   /**
    * Words that may stand before "finding(s)" in a clause about what the file holds rather than what
@@ -370,14 +390,18 @@ final class OverviewScreen {
     var firstDropped = false;
     for (var i = 0; i < parts.size(); i++) {
       var part = parts.get(i);
+      var bare = LEADING_CONJUNCTION.matcher(part).replaceFirst("");
+      // A placeholder part ("renders the dashboard, TBD") says nothing and carries no verb.
+      var placeholder = isPlaceholder(bare);
       // A relative tail ("…, which are security-related") belongs to the part before it.
       previousDropped =
-          talksAboutFindings(LEADING_CONJUNCTION.matcher(part).replaceFirst(""))
+          placeholder
+              || talksAboutFindings(bare)
               || namesAbsentSetting(part, patch, known)
               || (previousDropped && RELATIVE_TAIL.matcher(part).find());
       if (previousDropped) {
         dropped++;
-        firstDropped |= i == 0;
+        firstDropped |= i == 0 && !placeholder;
       } else {
         kept.append(kept.isEmpty() ? "" : separators.get(i - 1)).append(parts.get(i));
       }
@@ -427,11 +451,15 @@ final class OverviewScreen {
    */
   static boolean talksAboutFindings(String clause) {
     var lower = clause.toLowerCase(Locale.ROOT);
-    var words = NON_WORD.split(lower);
+    var asWritten = NON_WORD.split(clause);
+    // Each word lower-cased on its own, so the two arrays always line up.
+    var words =
+        Arrays.stream(asWritten).map(w -> w.toLowerCase(Locale.ROOT)).toArray(String[]::new);
     var aboutTheBatch = lower.contains("this batch");
     for (var i = 0; i < words.length; i++) {
-      if (words[i].startsWith("finding")
-          && (opensClause(words, i) || endsItsPhrase(words, i))
+      // The word itself, not a name built on it ("FindingStore", "findingsTable").
+      if ((words[i].equals("finding") || words[i].equals("findings"))
+          && (opensClause(words, i) || endsItsPhrase(words, asWritten, i))
           && bookkeepingLead(words, i)
           && (aboutTheBatch
               || qualified(words, i)
@@ -447,10 +475,23 @@ final class OverviewScreen {
    * ("hosts the two findings", "no findings in this batch", "the findings from the review"):
    * nothing follows it, or a word that cannot continue the phrase does. Followed by any other word
    * it qualifies that word and names a part of the file ("Contains the findings table", "the
-   * findings handler"). A clause the finding word opens is judged by {@link #qualified} instead.
+   * findings handler"). A name as written ("the findings Open panel") always continues the phrase,
+   * even when its word could end one. A clause the finding word opens is judged by {@link
+   * #qualified} instead.
    */
-  private static boolean endsItsPhrase(String[] words, int at) {
-    return at + 1 >= words.length || PHRASE_ENDERS.contains(words[at + 1]);
+  private static boolean endsItsPhrase(String[] words, String[] asWritten, int at) {
+    if (at + 1 >= words.length) {
+      return true;
+    }
+    return PHRASE_ENDERS.contains(words[at + 1]) && !isNameAsWritten(asWritten[at + 1]);
+  }
+
+  /**
+   * Whether {@code word} is a name or code as written: a capital anywhere in it ("Open" in "the
+   * findings OpenApi", "FindingStore").
+   */
+  private static boolean isNameAsWritten(String word) {
+    return word.chars().anyMatch(Character::isUpperCase);
   }
 
   /**
@@ -527,6 +568,8 @@ final class OverviewScreen {
                     // "Contains open findings": with every other word a holding one, a placement
                     // word places the review's findings too.
                     || FINDING_PLACEMENTS.contains(word)
+                    // An adverb ("only", "exactly", "roughly") qualifies the count, not the file.
+                    || word.endsWith("ly")
                     || isCount(word));
   }
 
@@ -556,11 +599,12 @@ final class OverviewScreen {
   }
 
   /**
-   * Whether {@code word} is a number. The empty word a clause opening with punctuation splits into
-   * is not one.
+   * Whether {@code word} is a number, in digits or in words ({@link #NUMBER_WORDS}). The empty word
+   * a clause opening with punctuation splits into is not one.
    */
   private static boolean isCount(String word) {
-    return !word.isEmpty() && word.chars().allMatch(Character::isDigit);
+    return NUMBER_WORDS.contains(word)
+        || (!word.isEmpty() && word.chars().allMatch(Character::isDigit));
   }
 
   /**
