@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -27,7 +28,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 /**
  * Checks the file paths the model names in its prose against the files that exist (#1076).
@@ -190,11 +190,63 @@ final class PathMentions {
           "nest",
           "socket");
 
-  private final Set<String> changed;
-  private final Set<String> topDirectories;
+  /** Bare file names that carry no extension. */
+  private static final Set<String> DOTLESS_FILE_NAMES =
+      Set.of(
+          "dockerfile",
+          "containerfile",
+          "makefile",
+          "jenkinsfile",
+          "procfile",
+          "gemfile",
+          "rakefile",
+          "vagrantfile",
+          "brewfile",
+          "justfile");
+
+  private static final Pattern BLANK_RUN = Pattern.compile(" {2,}");
+
+  private static final Pattern BLANK_BEFORE_PUNCTUATION = Pattern.compile(" ([.,;:!?])");
+
+  private final PathIndex changed;
   private final DiffLineResolver resolver;
   private final String verbatim;
-  private final Supplier<Optional<CitedLocationResolver.RepositoryPaths>> repository;
+  private final Supplier<Optional<PathIndex>> repository;
+
+  /**
+   * Paths indexed once, in lower case: whole, by file name, and by every directory holding one, so
+   * a token is judged by lookups rather than a walk over a repository-sized listing.
+   */
+  private record PathIndex(Set<String> paths, Set<String> names, Set<String> directories) {
+
+    static PathIndex of(Collection<String> paths) {
+      var all = new HashSet<String>();
+      var names = new HashSet<String>();
+      var directories = new HashSet<String>();
+      for (String path : paths) {
+        String lower = path.toLowerCase(Locale.ROOT);
+        all.add(lower);
+        names.add(fileName(lower));
+        for (int slash = lower.indexOf('/'); slash > 0; slash = lower.indexOf('/', slash + 1)) {
+          directories.add(lower.substring(0, slash + 1));
+        }
+      }
+      return new PathIndex(Set.copyOf(all), Set.copyOf(names), Set.copyOf(directories));
+    }
+
+    /**
+     * Whether {@code token} is one of the paths, a directory holding one, or a file's name, in any
+     * letter case: "readme.md" names {@code README.md}, so it is not invented.
+     */
+    boolean names(String token) {
+      String wanted = token.toLowerCase(Locale.ROOT);
+      if (wanted.indexOf('/') < 0) {
+        return names.contains(wanted);
+      }
+      return paths.contains(wanted)
+          || directories.contains(wanted.endsWith("/") ? wanted : wanted + "/");
+    }
+  }
 
   private PathMentions(
       List<GitHubPullRequestClient.FileDiff> files,
@@ -213,15 +265,17 @@ final class PathMentions {
         text.append('\n').append(file.patch());
       }
     }
-    this.changed = Set.copyOf(paths);
-    this.topDirectories =
-        paths.stream()
-            .filter(path -> path.indexOf('/') > 0)
-            .map(path -> path.substring(0, path.indexOf('/')))
-            .collect(Collectors.toUnmodifiableSet());
+    this.changed = PathIndex.of(paths);
     this.resolver = new DiffLineResolver(Map.of(), current);
     this.verbatim = text.toString();
-    this.repository = ReviewContextLoader.memoize(repository);
+    // A truncated listing may lack a path that exists, so it judges nothing, like no listing.
+    this.repository =
+        ReviewContextLoader.memoize(
+            () ->
+                repository
+                    .get()
+                    .filter(listing -> !listing.truncated())
+                    .map(listing -> PathIndex.of(listing.paths())));
   }
 
   /**
@@ -342,7 +396,8 @@ final class PathMentions {
    */
   private boolean underAChangedDirectory(String token) {
     int slash = token.indexOf('/');
-    return slash > 0 && topDirectories.contains(token.substring(0, slash));
+    return slash > 0
+        && changed.directories().contains(token.substring(0, slash + 1).toLowerCase(Locale.ROOT));
   }
 
   /** {@code text} without its sentences naming a path nothing resolves, mapped paths replaced. */
@@ -388,8 +443,25 @@ final class PathMentions {
       int[] cut = mentionBounds(sb, spans.get(i)[0], spans.get(i)[1]);
       sb.delete(cut[0], cut[1]);
     }
-    var tidy = sb.toString().replaceAll(" {2,}", " ").replaceAll(" ([.,;:!?])", "$1").strip();
+    var tidy = tidyOutsideFences(sb.toString());
     return tidy.isBlank() ? text : tidy;
+  }
+
+  /** {@code text} with doubled blanks and blanks before punctuation removed outside its fences. */
+  private static String tidyOutsideFences(String text) {
+    var out = new StringBuilder(text.length());
+    int at = 0;
+    for (int[] fence : fences(text)) {
+      out.append(tidy(text.substring(at, fence[0]))).append(text, fence[0], fence[1]);
+      at = fence[1];
+    }
+    return out.append(tidy(text.substring(at))).toString().strip();
+  }
+
+  private static String tidy(String prose) {
+    return BLANK_BEFORE_PUNCTUATION
+        .matcher(BLANK_RUN.matcher(prose).replaceAll(" "))
+        .replaceAll("$1");
   }
 
   /**
@@ -467,7 +539,7 @@ final class PathMentions {
    * {@code null} when nothing resolves it.
    */
   private String resolve(String token) {
-    if (verbatim.contains(token) || namesChanged(token)) {
+    if (verbatim.contains(token) || changed.names(token)) {
       return token;
     }
     if (token.indexOf('/') > 0 && !token.endsWith("/")) {
@@ -477,31 +549,8 @@ final class PathMentions {
         return mapped;
       }
     }
-    var listing = repository.get();
-    if (listing.isEmpty() || listing.get().truncated() || names(token, listing.get().paths())) {
-      return token;
-    }
-    return null;
-  }
-
-  private boolean namesChanged(String token) {
-    return names(token, changed);
-  }
-
-  /**
-   * Whether {@code token} is one of {@code paths}, a directory holding one, or a file's name, in
-   * any letter case: "readme.md" names {@code README.md}, so it is not invented.
-   */
-  private static boolean names(String token, Set<String> paths) {
-    String wanted = token.toLowerCase(Locale.ROOT);
-    if (wanted.indexOf('/') < 0) {
-      return paths.stream()
-          .anyMatch(path -> fileName(path).toLowerCase(Locale.ROOT).equals(wanted));
-    }
-    String directory = wanted.endsWith("/") ? wanted : wanted + "/";
-    return paths.stream()
-        .map(path -> path.toLowerCase(Locale.ROOT))
-        .anyMatch(path -> path.equals(wanted) || path.startsWith(directory));
+    var index = repository.get();
+    return index.isEmpty() || index.get().names(token) ? token : null;
   }
 
   /**
@@ -510,6 +559,9 @@ final class PathMentions {
   static boolean pathShaped(String token) {
     int slash = token.indexOf('/');
     if (slash < 0) {
+      if (DOTLESS_FILE_NAMES.contains(token.toLowerCase(Locale.ROOT))) {
+        return true;
+      }
       int dot = token.lastIndexOf('.');
       if (dot <= 0 || !EXTENSIONS.contains(extension(token))) {
         return false;
@@ -528,6 +580,7 @@ final class PathMentions {
     }
     String last = fileName(token);
     return (last.lastIndexOf('.') > 0 && EXTENSIONS.contains(extension(last)))
+        || DOTLESS_FILE_NAMES.contains(last.toLowerCase(Locale.ROOT))
         || token.chars().filter(c -> c == '/').count() >= 2;
   }
 

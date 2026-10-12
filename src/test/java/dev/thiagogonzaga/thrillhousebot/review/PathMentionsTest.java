@@ -478,4 +478,39 @@ class PathMentionsTest {
     var clean = "flowchart TD\n  A --> B";
     assertSame(clean, mentions.withoutUnresolvedPaths(clean));
   }
+
+  /** A dotless file name such as Dockerfile is judged, bare or under a directory. */
+  @Test
+  void aDotlessFileNameIsJudged() {
+    var files = List.of(new FileDiff("zig/Dockerfile", "added", 3, 0, 3, "+FROM alpine"));
+    var mentions = mentions(files, "", Set.of("zig/Dockerfile"));
+
+    assertTrue(PathMentions.pathShaped("Dockerfile"));
+    assertTrue(PathMentions.pathShaped("src/Makefile"));
+    assertEquals(
+        "It edits the Dockerfile and zig/Dockerfile.",
+        mentions.withoutUnresolvedSentences(
+            "It edits the Dockerfile and zig/Dockerfile. It adds a Makefile."));
+  }
+
+  /** The one-slash directory gate reads any letter case, as every other step does. */
+  @Test
+  void theOneSlashDirectoryGateReadsAnyCase() {
+    var mentions = mentions(REACT, "", REACT_TREE);
+
+    assertEquals(
+        "It edits REACT/src.",
+        mentions.withoutUnresolvedSentences("It edits REACT/src. It moves React/nope."));
+  }
+
+  /** Stripping a mention outside a fence leaves the fence's blanks and punctuation as written. */
+  @Test
+  void theTidyLeavesAFenceAsWritten() {
+    var mentions = mentions(ANGULAR, "", Set.of());
+    var text = "The build fails:\n```\ncat  build/x.conf .\n```\nSee  docs/NOPE.md .";
+
+    assertEquals(
+        "The build fails:\n```\ncat  build/x.conf .\n```\nSee.",
+        mentions.withoutUnresolvedMentions(text));
+  }
 }
