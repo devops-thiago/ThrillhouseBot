@@ -1080,10 +1080,20 @@ class PromptLabelScrubberTest {
           Because the failing job is already measured on this commit, the bug is confirmed rather than counted. | Because the failing job is already measured on this commit, the bug is confirmed.
           The failure is measured, not predicted. | The failure is measured.
           It is Confirmed instead of counted. | It is Confirmed.
+          Among the three verified above, the shortlist finding explains it. | The shortlist finding explains it.
+          It fails.\\nAmong the three verified above, the second is the one. | It fails.\\nThe second is the one.
+          It fails. Among the 3 confirmed findings above the second explains it. | It fails. The second explains it.
+          Among the verified above. | .
+          Among the accounts verified above, two are locked. | Among the accounts verified above, two are locked.
           """)
   void theCountOfVerifiedFindingsAndTheCiNoteAreRemoved(String leaked, String clean) {
-    assertEquals(clean, PromptLabelScrubber.scrub(leaked));
-    assertEquals(clean, PromptLabelScrubber.scrub(clean));
+    var expected = clean.replace("\\n", "\n");
+    var scrubbed = PromptLabelScrubber.scrub(leaked.replace("\\n", "\n"));
+    assertEquals(expected, scrubbed);
+    assertFalse(
+        scrubbed.matches("(?is).*(?:three verified|rather than counted|not predicted).*"),
+        scrubbed);
+    assertEquals(expected, PromptLabelScrubber.scrub(expected));
   }
 
   /** Ordinary sentences using "verified" or "confirmed" are left alone (#1075). */

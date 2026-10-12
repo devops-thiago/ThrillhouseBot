@@ -394,6 +394,16 @@ public final class PromptLabelScrubber {
           Pattern.CASE_INSENSITIVE);
 
   /**
+   * The same count opening the text, a line or a sentence: "Among the three verified above, the
+   * second explains it." The count and its comma go, and the rest opens the sentence.
+   */
+  private static final Pattern AMONG_THE_VERIFIED_OPENING =
+      Pattern.compile(
+          "(?<![^.!?\\n])([ \\t]*)among the (?:(\\w{1,8}) )?(?:verified|confirmed) (?:findings? )?"
+              + "(?:above|below)\\b,?[ \\t]*(\\p{L})?",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
    * The counts {@link #AMONG_THE_VERIFIED} reads as the summary call's: "three", "3", "several".
    */
   private static final Pattern COUNTS =
@@ -695,17 +705,27 @@ public final class PromptLabelScrubber {
             .matcher(corrected)
             .replaceAll(m -> Matcher.quoteReplacement(restartedSentence(corrected, m)));
     s =
-        AMONG_THE_VERIFIED
+        AMONG_THE_VERIFIED_OPENING
             .matcher(s)
             .replaceAll(
                 m ->
-                    m.group(1) == null || COUNTS.matcher(m.group(1)).matches()
-                        ? ""
-                        : Matcher.quoteReplacement(m.group()));
+                    Matcher.quoteReplacement(
+                        countsFindings(m.group(2))
+                            ? m.group(1) + (m.group(3) == null ? "" : capitalize(m.group(3)))
+                            : m.group()));
+    s =
+        AMONG_THE_VERIFIED
+            .matcher(s)
+            .replaceAll(m -> countsFindings(m.group(1)) ? "" : Matcher.quoteReplacement(m.group()));
     s = CONFIRMED_FINDINGS.matcher(s).replaceAll(m -> capitalizeLike(m.group(1), m.group(2)));
     s = removeNoFindingsAsides(s);
     s = NOT_COUNTED.matcher(s).replaceAll("$1");
     return FINDINGS_IN_BATCH.matcher(s).replaceAll("$1");
+  }
+
+  /** Whether "among the [count] verified above" names no count, or one of {@link #COUNTS}. */
+  private static boolean countsFindings(String count) {
+    return count == null || COUNTS.matcher(count).matches();
   }
 
   /**
