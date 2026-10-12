@@ -329,7 +329,7 @@ class OverviewScreenTest {
     assertEquals(
         "Ships it.",
         OverviewScreen.withoutInventedTickets(
-            "Ships it. Fixes ticket abcd-12. Closes #wxyz-3. Also proj-9, as in PROJ-1.",
+            "Ships it. Fixes ticket abcd-12. Lands #wxyz-3. Also proj-9, as in PROJ-1.",
             "Title: ship\nPROJ-1"));
   }
 
