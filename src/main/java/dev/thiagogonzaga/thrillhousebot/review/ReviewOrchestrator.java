@@ -369,7 +369,14 @@ public class ReviewOrchestrator {
 
       CiStatusEvaluator.CiEvaluation ciEvaluation = rereadCiIfHeld(auth, ciReq, ciFuture.join());
 
-      var result = verdictBuilder.build(ctx, aiResponse, ciEvaluation, plan);
+      // #1074: the description findings the summary names must quote or paraphrase this text.
+      var result =
+          verdictBuilder.build(
+              ctx,
+              aiResponse,
+              ciEvaluation,
+              plan,
+              PromptSections.prContext(req.prTitle(), req.prDescription()) + "\n" + linkedIssues);
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);

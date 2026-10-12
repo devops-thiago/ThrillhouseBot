@@ -252,7 +252,7 @@ class ReviewOrchestratorTest {
     when(dashboardConfig.url()).thenReturn("https://bot.example");
     doNothing().when(sessionPersistence).update(anyLong(), any());
     when(projectStackResolver.resolve(any(), any(), any(), anyLong())).thenReturn("");
-    when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+    when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
         .thenReturn("");
     when(findingVerificationService.verify(
             anyLong(), any(), any(), any(), any(), any(), any(), any()))
@@ -1301,7 +1301,7 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldGenerateSummaryForFirstReviewWithFindings() {
-      when(summaryGenerator.generate(eq(4), eq(120), eq(45), any(), any(), any()))
+      when(summaryGenerator.generate(eq(4), eq(120), eq(45), any(), any(), any(), any()))
           .thenReturn("## Summary\n\nTest summary content");
 
       var aiResponse =
@@ -1323,13 +1323,13 @@ class ReviewOrchestratorTest {
               List.of());
 
       assertTrue(result.summaryMarkdown().contains("Test summary content"));
-      verify(summaryGenerator).generate(eq(4), eq(120), eq(45), any(), any(), any());
+      verify(summaryGenerator).generate(eq(4), eq(120), eq(45), any(), any(), any(), any());
     }
 
     @Test
     void shouldGenerateSummaryEvenWhenNoFindings() {
       var aiResponse = new ReviewResponse(List.of(), List.of(), null);
-      when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+      when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
           .thenReturn("Clean summary with celebration");
 
       var result =
@@ -1343,7 +1343,7 @@ class ReviewOrchestratorTest {
               List.of());
 
       assertEquals("Clean summary with celebration", result.summaryMarkdown());
-      verify(summaryGenerator).generate(eq(0), eq(0), eq(0), any(), any(), any());
+      verify(summaryGenerator).generate(eq(0), eq(0), eq(0), any(), any(), any(), any());
     }
 
     @Test
@@ -2207,7 +2207,7 @@ class ReviewOrchestratorTest {
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
             .thenReturn("## PR summary");
         doThrow(new RuntimeException("comment 500"))
             .when(commentClient)
@@ -2509,7 +2509,7 @@ class ReviewOrchestratorTest {
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
             .thenReturn("## Summary\nEverything's coming up Thrillhouse! 🎉");
 
         orchestrator.review(
@@ -2918,7 +2918,7 @@ class ReviewOrchestratorTest {
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        when(summaryGenerator.generate(eq(1), eq(1), eq(1), any(), any(), any()))
+        when(summaryGenerator.generate(eq(1), eq(1), eq(1), any(), any(), any(), any()))
             .thenReturn("## 🤖 ThrillhouseBot PR Summary");
         when(suggestionFormatter.formatReviewComment(any())).thenReturn("**Medium** — fix this");
         when(aiReviewService.review(any(ReviewSession.class), any()))
@@ -3213,7 +3213,7 @@ class ReviewOrchestratorTest {
     private ReviewSession reviewAFollowUpWithASupersededPrevious(
         org.mockito.MockedStatic<ReviewSession> mockedStatic, boolean forceSummary) {
       when(followUpSummaryConfig.enabled()).thenReturn(true);
-      when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+      when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
           .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
       var session = mock(ReviewSession.class);
       session.id = 1L;
@@ -3427,7 +3427,7 @@ class ReviewOrchestratorTest {
                         new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
             .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -3508,7 +3508,7 @@ class ReviewOrchestratorTest {
                         new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
             .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
@@ -3578,7 +3578,7 @@ class ReviewOrchestratorTest {
                         new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        when(summaryGenerator.generate(eq(1), eq(1), eq(1), any(), any(), any()))
+        when(summaryGenerator.generate(eq(1), eq(1), eq(1), any(), any(), any(), any()))
             .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
         when(suggestionFormatter.formatReviewComment(any())).thenReturn("**Medium** — fix this");
         when(aiReviewService.review(any(ReviewSession.class), any()))
@@ -7096,7 +7096,7 @@ class ReviewOrchestratorTest {
             .thenReturn("previous context");
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
-        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
             .thenReturn("ThrillhouseBot PR Summary\n\nAll clear!");
 
         orchestrator.review(followUpRequest());
@@ -7172,7 +7172,7 @@ class ReviewOrchestratorTest {
 
         var resultCaptor = ArgumentCaptor.forClass(ReviewResult.class);
         verify(summaryGenerator)
-            .generate(anyInt(), anyInt(), anyInt(), any(), any(), resultCaptor.capture());
+            .generate(anyInt(), anyInt(), anyInt(), any(), any(), resultCaptor.capture(), any());
         var previousStatuses = resultCaptor.getValue().previousStatuses();
         assertEquals(1, previousStatuses.size());
         assertEquals(1, previousStatuses.get(0).id());
@@ -8176,7 +8176,7 @@ class ReviewOrchestratorTest {
                 List.of(
                     new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
                         1L, "build", "completed", "failure", null))));
-        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
             .thenReturn("## Summary\nNo new issues, but required check **build** failed.");
 
         orchestrator.review(request());
@@ -8338,7 +8338,7 @@ class ReviewOrchestratorTest {
         when(checkRunClient.getBranchRules(
                 anyString(), anyString(), eq("owner"), eq("repo"), eq("main")))
             .thenReturn(requiredStatusCheckRuleset("integration"));
-        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any()))
+        when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
             .thenReturn("## Summary\nRequired check **integration** has not reported yet.");
 
         orchestrator.review(request());

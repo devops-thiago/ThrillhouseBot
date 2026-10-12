@@ -332,6 +332,31 @@ final class DescriptionGapCarryover {
     return body == null ? List.of() : listedGaps(body);
   }
 
+  /**
+   * The "Reported as a finding" bullets the newest bot-authored summary comment's Description vs.
+   * Implementation section lists, as rendered and without the list marker; empty when there is none
+   * (#1074).
+   */
+  static Set<String> previousFindingBullets(
+      List<GitHubCommentClient.IssueComment> conversation, BotIdentity botIdentity) {
+    var body = previousSummary(conversation, botIdentity);
+    if (body == null) {
+      return Set.of();
+    }
+    var lines = body.split("\n", -1);
+    var bullets = new HashSet<String>();
+    for (var i = gapsHeadingLine(lines) + 1; i > 0 && i < lines.length; i++) {
+      var line = lines[i].strip();
+      if (endsGapsSection(line)) {
+        break;
+      }
+      if (line.startsWith("- " + PrSummaryGenerator.GAP_FINDING_PREFIX)) {
+        bullets.add(line.substring(2));
+      }
+    }
+    return bullets;
+  }
+
   /** The body of the newest bot-authored summary comment; {@code null} when there is none. */
   private static String previousSummary(
       List<GitHubCommentClient.IssueComment> conversation, BotIdentity botIdentity) {

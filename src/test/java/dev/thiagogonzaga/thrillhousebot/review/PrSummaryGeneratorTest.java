@@ -29,6 +29,9 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 class PrSummaryGeneratorTest {
 
+  private static final PrSummaryGenerator.DescriptionSources NO_SOURCES =
+      PrSummaryGenerator.DescriptionSources.NONE;
+
   private final PrSummaryGenerator generator = new PrSummaryGenerator(true);
 
   @Test
@@ -2284,7 +2287,8 @@ class PrSummaryGeneratorTest {
     var finding = descriptionFinding("src/A.java", 3, "Retry path missing", description);
 
     assertEquals(
-        List.of(finding), PrSummaryGenerator.descriptionFindings(List.of(), List.of(finding)));
+        List.of(finding),
+        PrSummaryGenerator.descriptionFindings(List.of(), List.of(finding), NO_SOURCES));
   }
 
   @Test
@@ -2292,7 +2296,8 @@ class PrSummaryGeneratorTest {
     var finding = descriptionFinding("src/A.java", 3, "Description claims a bounded cache", null);
 
     assertEquals(
-        List.of(finding), PrSummaryGenerator.descriptionFindings(List.of(), List.of(finding)));
+        List.of(finding),
+        PrSummaryGenerator.descriptionFindings(List.of(), List.of(finding), NO_SOURCES));
   }
 
   @Test
@@ -2304,7 +2309,8 @@ class PrSummaryGeneratorTest {
             "src/A.java", 3, "Queries run against the description", "does not escape HTML");
     var linked = descriptionFinding("src/B.java", 7, "Sync of the linked", "issue list is stale");
 
-    assertEquals(List.of(), PrSummaryGenerator.descriptionFindings(List.of(), List.of(split)));
+    assertEquals(
+        List.of(), PrSummaryGenerator.descriptionFindings(List.of(), List.of(split), NO_SOURCES));
     var summary =
         generator.generate(
             1,
@@ -2323,7 +2329,8 @@ class PrSummaryGeneratorTest {
         descriptionFinding(
             "src/A.java", 3, "Unescaped column", "The description column is rendered unescaped.");
 
-    assertEquals(List.of(), PrSummaryGenerator.descriptionFindings(List.of(), List.of(finding)));
+    assertEquals(
+        List.of(), PrSummaryGenerator.descriptionFindings(List.of(), List.of(finding), NO_SOURCES));
   }
 
   @Test
@@ -2353,7 +2360,7 @@ class PrSummaryGeneratorTest {
             "Description claims five-minute result caching; no cache exists",
             "The PR description states results are cached for five minutes.");
 
-    var named = PrSummaryGenerator.descriptionFindings(List.of(cache), List.of(cache));
+    var named = PrSummaryGenerator.descriptionFindings(List.of(cache), List.of(cache), NO_SOURCES);
 
     assertEquals(List.of(cache), named);
   }
