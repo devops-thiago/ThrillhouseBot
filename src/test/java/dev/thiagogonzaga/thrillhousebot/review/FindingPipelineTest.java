@@ -448,6 +448,46 @@ class FindingPipelineTest {
     verify(tokenLedger).clear(42L);
   }
 
+  /**
+   * #1073 — every lane holds its findings to the linked issue before they are summarized: c #253's
+   * unmet criterion, a low-confidence medium the summary listed only under "Things to
+   * double-check", is raised onto a thread and names its issue, and a finding resting on a
+   * criterion the issue does not hold is dropped.
+   */
+  @Test
+  void theFindingsAreHeldToTheLinkedIssueBeforeTheSummary() {
+    var session = persistedSession();
+    var ctx = litigatedContext(List.of(), List.of());
+    var plan = singleBatchPlan(batch("a.java"), List.of());
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(
+            new ReviewResponse(
+                List.of(
+                    doubleCheckFinding(
+                        "src/A.java",
+                        12,
+                        "Acceptance criterion 'at most 8 open listings per seller' is not enforced"
+                            + " by the linked issue's store"),
+                    doubleCheckFinding(
+                        "src/B.java", 3, "Acceptance criterion 'refunds are instant' is missing")),
+                List.of(),
+                null));
+
+    var result =
+        pipeline.run(
+            session,
+            promptLinking(LINKED_113),
+            ctx,
+            plan,
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    var held = result.findings().getFirst();
+    assertEquals(1, result.findings().size());
+    assertEquals("medium", held.confidence());
+    assertTrue(held.title().endsWith("by the linked issue #113's store"), held.title());
+  }
+
   @Test
   void aHighConfidenceFindingOnATwiceDispositionedAnchorStillPosts() {
     // Control for the convergence rule: it passes before and after, and pins the boundary the rule
@@ -3693,6 +3733,7 @@ class FindingPipelineTest {
       ### Issue #113: Resale marketplace
       Acceptance criteria (from the issue):
       - [ ] at most 8 open listings per seller
+      - [ ] listings expire past a TTL
       """;
 
   private static final String CARRIED_GAP =
