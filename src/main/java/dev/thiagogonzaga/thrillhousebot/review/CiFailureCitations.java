@@ -286,8 +286,9 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   static String testName(String line) {
     String s = line.strip();
     int comment = s.indexOf(" # ");
-    if (s.startsWith("rspec ") && comment > 0) {
-      return s.substring(comment + 3).strip();
+    if (s.startsWith("rspec ")) {
+      // RSpec names the example after " # "; without one the line names only a spec file.
+      return comment > 0 ? s.substring(comment + 3).strip() : null;
     }
     // Jest's and Vitest's "FAIL src/app.test.ts" names a file; Surefire's tally names no test.
     if (s.startsWith("FAIL ") || s.contains("Tests run:")) {

@@ -389,7 +389,6 @@ class CiFailureCitationsTest {
           \u2716 keeps the 3:1 ratio for big carts | keeps the 3:1 ratio for big carts
           \u2716 returns list(empty) unchanged | returns list(empty) unchanged
           \u2716 checks that test.name stays | checks that test.name stays
-          rspec ./spec/booking_spec.rb:12 | rspec ./spec/booking_spec.rb:12
           \u2716 keeps # comments (1ms) | keeps # comments
           \u2716 renders empty (when no rows are eligible) (1.5ms) | renders empty (when no rows are eligible)
           \u2716 returns [missing] rows (5 ms) | returns [missing] rows
@@ -411,6 +410,7 @@ class CiFailureCitationsTest {
   @ValueSource(
       strings = {
         "FAIL src/app.test.ts",
+        "rspec ./spec/booking_spec.rb:12",
         "[ERROR] Tests run: 6, Failures: 1, Errors: 0, Skipped: 0 <<< FAILURE!",
         "[ERROR]   Suite.:12 expected"
       })
