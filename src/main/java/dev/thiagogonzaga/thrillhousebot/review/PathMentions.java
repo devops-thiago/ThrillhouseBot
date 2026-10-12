@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
@@ -212,6 +213,12 @@ final class PathMentions {
   private final DiffLineResolver resolver;
   private final String verbatim;
   private final Supplier<Optional<PathIndex>> repository;
+
+  /**
+   * Each token's resolution, judged once per review: every summary field, gap, file summary and
+   * finding description, and each sentence a cut re-reads, ask about the same tokens.
+   */
+  private final Map<String, Optional<String>> resolutions = new ConcurrentHashMap<>();
 
   /**
    * Paths indexed once, in lower case: whole, by file name, and by every directory holding one, so
@@ -503,8 +510,8 @@ final class PathMentions {
   private Rewrite rewrite(String text) {
     var out = new StringBuilder(text.length());
     var unresolved = new ArrayList<int[]>();
-    var urls = spans(URL, text);
-    var fences = fences(text);
+    var urls = new SpanCursor(spans(URL, text));
+    var fences = new SpanCursor(fences(text));
     var matcher = TOKEN.matcher(text);
     int at = 0;
     while (matcher.find()) {
@@ -512,8 +519,8 @@ final class PathMentions {
       int start = matcher.start(1);
       int end = start + token.length();
       int fullEnd = matcher.group(2) == null ? end : matcher.end(2);
-      if (inside(urls, start)
-          || inside(fences, start)
+      if (urls.covers(start)
+          || fences.covers(start)
           || !(pathShaped(token) || underAChangedDirectory(token))
           || partOfSomethingElse(text, start, fullEnd)) {
         continue;
@@ -539,6 +546,11 @@ final class PathMentions {
    * {@code null} when nothing resolves it.
    */
   private String resolve(String token) {
+    return resolutions.computeIfAbsent(token, t -> Optional.ofNullable(judge(t))).orElse(null);
+  }
+
+  /** {@link #resolve} for a token not judged before in this review. */
+  private String judge(String token) {
     if (verbatim.contains(token) || changed.names(token)) {
       return token;
     }
@@ -677,7 +689,23 @@ final class PathMentions {
     return spans;
   }
 
-  private static boolean inside(List<int[]> spans, int at) {
-    return spans.stream().anyMatch(span -> at >= span[0] && at < span[1]);
+  /**
+   * Whether positions, asked in increasing order, fall inside one of {@code spans} (in text order,
+   * not overlapping): a cursor that only moves forward, so a text's tokens are checked in one pass.
+   */
+  private static final class SpanCursor {
+    private final List<int[]> spans;
+    private int next;
+
+    SpanCursor(List<int[]> spans) {
+      this.spans = spans;
+    }
+
+    boolean covers(int at) {
+      while (next < spans.size() && spans.get(next)[1] <= at) {
+        next++;
+      }
+      return next < spans.size() && spans.get(next)[0] <= at;
+    }
   }
 }
