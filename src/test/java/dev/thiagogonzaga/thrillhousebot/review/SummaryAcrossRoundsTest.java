@@ -341,8 +341,11 @@ class SummaryAcrossRoundsTest {
             CI_CLEAR,
             plan,
             CiFailureCitations.parse(
-                "### test (conclusion: failure)\nFailing tests named in the job log:\n"
-                    + "- \u2716 order total survives a large cart (2.1ms)\n"));
+                """
+                ### test (conclusion: failure)
+                Failing tests named in the job log:
+                - \u2716 order total survives a large cart (2.1ms)
+                """));
 
     var purpose = section(result.summaryMarkdown(), "### What this PR does");
     assertTrue(

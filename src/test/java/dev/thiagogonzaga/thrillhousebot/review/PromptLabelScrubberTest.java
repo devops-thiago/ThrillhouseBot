@@ -1094,11 +1094,15 @@ class PromptLabelScrubberTest {
         "The race is confirmed by the failing test.",
         "Each verified signature is counted once.",
         "Among the verified accounts above, two are locked.",
+        "Two users among the accounts verified above are locked.",
         "The value is computed, not counted twice.",
         "`among the three verified above` is the literal the parser expects."
       })
   void ordinaryVerifiedAndConfirmedSentencesStay(String text) {
-    assertEquals(text, PromptLabelScrubber.scrub(text));
+    assertEquals(
+        text,
+        PromptLabelScrubber.scrub(text),
+        "an ordinary use of verified or confirmed is not the summary call's count (#1075)");
   }
 
   @ParameterizedTest

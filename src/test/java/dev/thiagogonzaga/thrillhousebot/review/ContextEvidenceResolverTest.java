@@ -381,8 +381,11 @@ class ContextEvidenceResolverTest {
         ContextEvidenceResolver.forReview(
             null,
             PathScopedInstructions.NONE,
-            "### unit (conclusion: failure)\nFailing tests named in the job log:\n"
-                + "- [ERROR]   WaitlistServiceTest.topCandidatesReturnsAtMostLimit:67 expected\n",
+            """
+            ### unit (conclusion: failure)
+            Failing tests named in the job log:
+            - [ERROR]   WaitlistServiceTest.topCandidatesReturnsAtMostLimit:67 expected
+            """,
             new EvidenceBudget());
     var cites =
         finding(PATH, 42, "topCandidatesReturnsAtMostLimit fails: it returns limit+1 entries.");

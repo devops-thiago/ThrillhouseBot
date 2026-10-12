@@ -390,8 +390,15 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern AMONG_THE_VERIFIED =
       Pattern.compile(
-          "[ \\t]+among the (?:(?:\\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten"
-              + "|eleven|twelve|several) )?(?:verified|confirmed) (?:findings? )?(?:above|below)\\b",
+          "[ \\t]+among the (?:(\\w{1,8}) )?(?:verified|confirmed) (?:findings? )?(?:above|below)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The counts {@link #AMONG_THE_VERIFIED} reads as the summary call's: "three", "3", "several".
+   */
+  private static final Pattern COUNTS =
+      Pattern.compile(
+          "\\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|several",
           Pattern.CASE_INSENSITIVE);
 
   /**
@@ -687,7 +694,14 @@ public final class PromptLabelScrubber {
         RESTARTED_SENTENCE
             .matcher(corrected)
             .replaceAll(m -> Matcher.quoteReplacement(restartedSentence(corrected, m)));
-    s = AMONG_THE_VERIFIED.matcher(s).replaceAll("");
+    s =
+        AMONG_THE_VERIFIED
+            .matcher(s)
+            .replaceAll(
+                m ->
+                    m.group(1) == null || COUNTS.matcher(m.group(1)).matches()
+                        ? ""
+                        : Matcher.quoteReplacement(m.group()));
     s = CONFIRMED_FINDINGS.matcher(s).replaceAll(m -> capitalizeLike(m.group(1), m.group(2)));
     s = removeNoFindingsAsides(s);
     s = NOT_COUNTED.matcher(s).replaceAll("$1");

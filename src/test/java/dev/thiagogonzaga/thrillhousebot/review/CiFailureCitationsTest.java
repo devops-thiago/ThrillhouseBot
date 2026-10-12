@@ -24,6 +24,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** {@link CiFailureCitations}: which findings cite a check the CI-failure section records. */
 class CiFailureCitationsTest {
@@ -315,8 +318,13 @@ class CiFailureCitationsTest {
   void aCommonTestNameCitesNothing() {
     var citations =
         CiFailureCitations.parse(
-            "### ci (conclusion: failure)\nFailing tests named in the job log:\n"
-                + "- --- FAIL: overflow (0.00s)\n- \u2716 parses (1ms)\n- FAILED t.py::test_y\n");
+            """
+            ### ci (conclusion: failure)
+            Failing tests named in the job log:
+            - --- FAIL: overflow (0.00s)
+            - \u2716 parses (1ms)
+            - FAILED t.py::test_y
+            """);
 
     assertFalse(citations.cites(described("The overflow fails when the queue is full.")));
     assertFalse(citations.cites(described("It parses and fails on the empty case.")));
@@ -336,77 +344,48 @@ class CiFailureCitationsTest {
     assertSame(CiFailureCitations.NONE, citations);
   }
 
-  /** Each runner's line yields the name a finding would write. */
-  @Test
-  void eachRunnersLineYieldsTheTestsOwnName() {
-    assertEquals(
-        "returns exactly `slots` applications when enough are eligible",
-        CiFailureCitations.testName(
-            "\u2716 returns exactly `slots` applications when enough are eligible (1.5ms)"));
-    assertEquals(
-        "topCandidatesReturnsAtMostLimit",
-        CiFailureCitations.testName(
-            "[ERROR]   WaitlistServiceTest.topCandidatesReturnsAtMostLimit:67 expected: <2>"));
-    assertEquals(
-        "topCandidatesReturnsAtMostLimit",
-        CiFailureCitations.testName(
-            "[ERROR] com.x.WaitlistServiceTest.topCandidatesReturnsAtMostLimit -- Time elapsed:"
-                + " 0.01 s <<< FAILURE!"));
-    assertEquals(
-        "rejects an overlapping booking",
-        CiFailureCitations.testName("\u25CF BookingService \u203A rejects an overlapping booking"));
-    assertEquals(
-        "test_parse_config",
-        CiFailureCitations.testName(
-            "FAILED tests/test_config.py::test_parse_config[empty] - AssertionError: x"));
-    assertEquals(
-        "TestParseConfig", CiFailureCitations.testName("--- FAIL: TestParseConfig (0.00s)"));
-    assertEquals(
-        "parses_empty_input",
-        CiFailureCitations.testName("test config::tests::parses_empty_input ... FAILED"));
-    assertEquals(
-        "AddsTwoNumbers",
-        CiFailureCitations.testName("Failed Calc.Tests.MathTest.AddsTwoNumbers(x: 0) [12 ms]"));
-    assertEquals(
-        "rejectsBlankName", CiFailureCitations.testName("UserTest > rejectsBlankName() FAILED"));
-    assertEquals(
-        "isValid accepts a barcode whose last payload digit is non-zero",
-        CiFailureCitations.testName(
-            "1/5 barcode.test.isValid accepts a barcode whose last payload digit is"
-                + " non-zero...FAIL (TestUnexpectedResult)"));
-    assertEquals(
-        "Booking rejects an overlap",
-        CiFailureCitations.testName(
-            "rspec ./spec/booking_spec.rb:12 # Booking rejects an overlap"));
-    assertEquals(
-        "back-to-back bookings conflict",
-        CiFailureCitations.testName("not ok 3 - back-to-back bookings conflict"));
-    assertNull(CiFailureCitations.testName("FAIL src/app.test.ts"));
-    assertNull(
-        CiFailureCitations.testName(
-            "[ERROR] Tests run: 6, Failures: 1, Errors: 0, Skipped: 0 <<< FAILURE!"));
-    assertNull(CiFailureCitations.testName("[ERROR]   Suite.:12 expected"));
+  /**
+   * Each runner's line yields the name a finding would write. Decoration is cut only where it
+   * decorates a token: a position, an argument list or Zig's prefix after a word of the name is
+   * part of the name.
+   */
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          \u2716 returns exactly `slots` applications when enough are eligible (1.5ms) | returns exactly `slots` applications when enough are eligible
+          [ERROR]   WaitlistServiceTest.topCandidatesReturnsAtMostLimit:67 expected: <2> | topCandidatesReturnsAtMostLimit
+          [ERROR] com.x.WaitlistServiceTest.topCandidatesReturnsAtMostLimit -- Time elapsed: 0.01 s <<< FAILURE! | topCandidatesReturnsAtMostLimit
+          \u25CF BookingService \u203A rejects an overlapping booking | rejects an overlapping booking
+          FAILED tests/test_config.py::test_parse_config[empty] - AssertionError: x | test_parse_config
+          --- FAIL: TestParseConfig (0.00s) | TestParseConfig
+          test config::tests::parses_empty_input ... FAILED | parses_empty_input
+          Failed Calc.Tests.MathTest.AddsTwoNumbers(x: 0) [12 ms] | AddsTwoNumbers
+          UserTest > rejectsBlankName() FAILED | rejectsBlankName
+          1/5 barcode.test.isValid accepts a barcode whose last payload digit is non-zero...FAIL (TestUnexpectedResult) | isValid accepts a barcode whose last payload digit is non-zero
+          rspec ./spec/booking_spec.rb:12 # Booking rejects an overlap | Booking rejects an overlap
+          not ok 3 - back-to-back bookings conflict | back-to-back bookings conflict
+          \u2716 keeps the 3:1 ratio for big carts | keeps the 3:1 ratio for big carts
+          \u2716 returns list(empty) unchanged | returns list(empty) unchanged
+          \u2716 checks that test.name stays | checks that test.name stays
+          rspec ./spec/booking_spec.rb:12 | rspec ./spec/booking_spec.rb:12
+          \u2716 keeps # comments (1ms) | keeps # comments
+          """)
+  void eachRunnersLineYieldsTheTestsOwnName(String line, String name) {
+    assertEquals(name, CiFailureCitations.testName(line));
   }
 
-  /**
-   * Decoration is cut only where it decorates a token: a position, an argument list or Zig's prefix
-   * after a word of the name is part of the name.
-   */
-  @Test
-  void decorationInsideANameOfSeveralWordsStays() {
-    assertEquals(
-        "keeps the 3:1 ratio for big carts",
-        CiFailureCitations.testName("\u2716 keeps the 3:1 ratio for big carts"));
-    assertEquals(
-        "returns list(empty) unchanged",
-        CiFailureCitations.testName("\u2716 returns list(empty) unchanged"));
-    assertEquals(
-        "checks that test.name stays",
-        CiFailureCitations.testName("\u2716 checks that test.name stays"));
-    assertEquals(
-        "rspec ./spec/booking_spec.rb:12",
-        CiFailureCitations.testName("rspec ./spec/booking_spec.rb:12"));
-    assertEquals("keeps # comments", CiFailureCitations.testName("\u2716 keeps # comments (1ms)"));
+  /** A line naming a file or a tally, or nothing once its decoration is cut, names no test. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "FAIL src/app.test.ts",
+        "[ERROR] Tests run: 6, Failures: 1, Errors: 0, Skipped: 0 <<< FAILURE!",
+        "[ERROR]   Suite.:12 expected"
+      })
+  void aLineThatNamesNoTestYieldsNone(String line) {
+    assertNull(CiFailureCitations.testName(line));
   }
 
   /**
@@ -417,8 +396,12 @@ class CiFailureCitationsTest {
   void aSectionsFileLinesAndCapitalWordsNameNoTest() {
     var citations =
         CiFailureCitations.parse(
-            "### test (conclusion: failure)\nFailing tests named in the job log:\n"
-                + "- FAIL src/app.test.ts\n- --- FAIL: ABCDEFGHIJ (0.00s)\n");
+            """
+            ### test (conclusion: failure)
+            Failing tests named in the job log:
+            - FAIL src/app.test.ts
+            - --- FAIL: ABCDEFGHIJ (0.00s)
+            """);
     var untitled =
         new Finding(
             RiskLevel.HIGH,
@@ -479,9 +462,14 @@ class CiFailureCitationsTest {
   void theOverviewSentenceCountsTheTestsItDoesNotName() {
     var citations =
         CiFailureCitations.parse(
-            "### test (conclusion: failure)\nFailing tests named in the job log:\n"
-                + "- --- FAIL: TestParseConfig (0.00s)\n- --- FAIL: TestParseConfig (0.01s)\n"
-                + "- --- FAIL: TestRejectsBlank (0.00s)\n- --- FAIL: TestKeepsOrder (0.00s)\n");
+            """
+            ### test (conclusion: failure)
+            Failing tests named in the job log:
+            - --- FAIL: TestParseConfig (0.00s)
+            - --- FAIL: TestParseConfig (0.01s)
+            - --- FAIL: TestRejectsBlank (0.00s)
+            - --- FAIL: TestKeepsOrder (0.00s)
+            """);
 
     assertEquals(
         "CI on this commit fails the check \"test\" (failing tests \"TestParseConfig\","

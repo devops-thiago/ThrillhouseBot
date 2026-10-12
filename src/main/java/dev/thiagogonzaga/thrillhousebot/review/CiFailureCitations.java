@@ -112,23 +112,39 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       List.of("check", "checks", "conclusion", "job", "workflow");
 
   /** The quote pairs a finding names a check between, opening mark first. */
-  private static final List<String> QUOTES = List.of("\"\"", "``", "''", "“”");
+  private static final List<String> QUOTES = List.of("\"\"", "``", "''", "\u201C\u201D");
 
   private static final Pattern NOT_A_WORD = Pattern.compile("[^a-z0-9]+");
 
   /** The apostrophes a contraction is written with, dropped so "doesn't" reads as "doesnt". */
-  private static final Pattern APOSTROPHE = Pattern.compile("['’]");
+  private static final Pattern APOSTROPHE = Pattern.compile("['\u2019]");
 
   /**
-   * What a runner prints before a failed test's name: a status mark or word, a counter, a logger's
-   * level. Anchored and possessive, so no line the pull request's code prints can make it
-   * backtrack.
+   * Maven's level and TAP's "not ok N" before a failed test's name. This and {@link #COUNTER_LEAD}
+   * are anchored and possessive, so no line the pull request's code prints can make them backtrack.
    */
-  private static final Pattern TEST_LINE_LEAD =
-      Pattern.compile(
-          "^(?:\\[ERROR]\\s++|[\u2716\u2715\u00D7\u25CF] |--- FAIL: |not ok \\d++(?: - )?+"
-              + "|(?:FAILED|ERROR|Failed) |(?:FAIL|ERROR): |==> X |- |test |\\d++/\\d++ "
-              + "|Test \\[\\d++/\\d++] |\\d++ - )");
+  private static final Pattern LOGGED_LEAD = Pattern.compile("^(?:\\[ERROR]\\s++|not ok \\d++ )");
+
+  /** The plain marks and words a runner prints before a failed test's name, tried in order. */
+  private static final List<String> TEST_LINE_LEADS =
+      List.of(
+          "- ",
+          "\u2716 ",
+          "\u2715 ",
+          "\u00D7 ",
+          "\u25CF ",
+          "--- FAIL: ",
+          "FAILED ",
+          "ERROR ",
+          "Failed ",
+          "FAIL: ",
+          "ERROR: ",
+          "==> X ",
+          "test ");
+
+  /** The counters CTest and Zig print before a test's name. */
+  private static final Pattern COUNTER_LEAD =
+      Pattern.compile("^(?:\\d++/\\d++ |Test \\[\\d++/\\d++] |\\d++ - )");
 
   /** What a runner prints after a failed test's name: a duration, a status, an assertion. */
   private static final List<String> TEST_LINE_TAILS =
@@ -163,41 +179,58 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     if (section == null || section.isBlank()) {
       return NONE;
     }
-    var names = new ArrayList<String>();
-    var testLines = new ArrayList<List<String>>();
-    var namedOnly = false;
-    var underTests = false;
+    var reader = new SectionReader();
     for (String line : section.split("\n")) {
+      reader.read(line);
+    }
+    var checks = new ArrayList<Check>();
+    for (int i = 0; i < reader.names.size(); i++) {
+      String name = reader.names.get(i).strip();
+      if (!normalized(name).isBlank()) {
+        checks.add(new Check(name, normalized(name), failingTests(reader.testLines.get(i))));
+      }
+    }
+    return checks.isEmpty() ? NONE : new CiFailureCitations(List.copyOf(checks));
+  }
+
+  /** Which list the section's {@code "- "} lines currently belong to. */
+  private enum Listing {
+    NONE,
+    NAMED_ONLY,
+    FAILING_TESTS
+  }
+
+  /** Reads the rendered section line by line: each check's name, and its failing-test lines. */
+  private static final class SectionReader {
+    private final List<String> names = new ArrayList<>();
+    private final List<List<String>> testLines = new ArrayList<>();
+    private Listing listing = Listing.NONE;
+
+    void read(String line) {
       int conclusion = line.lastIndexOf(CONCLUSION);
       if (line.startsWith(CHECK_HEADING) && conclusion > CHECK_HEADING.length()) {
         names.add(line.substring(CHECK_HEADING.length(), conclusion));
         testLines.add(new ArrayList<>());
-        namedOnly = false;
-        underTests = false;
+        listing = Listing.NONE;
       } else if (line.equals(NOT_DETAILED)) {
-        namedOnly = true;
-        underTests = false;
+        listing = Listing.NAMED_ONLY;
       } else if (line.equals(FAILING_TESTS) && !testLines.isEmpty()) {
-        underTests = true;
-        namedOnly = false;
-      } else if (namedOnly && line.startsWith(NAMED_ONLY)) {
-        names.add(line.substring(NAMED_ONLY.length()));
-        testLines.add(List.of());
-      } else if (underTests && line.startsWith(NAMED_ONLY)) {
-        testLines.getLast().add(line.substring(NAMED_ONLY.length()));
+        listing = Listing.FAILING_TESTS;
+      } else if (listing != Listing.NONE && line.startsWith(NAMED_ONLY)) {
+        listItem(line.substring(NAMED_ONLY.length()));
       } else {
-        namedOnly = false;
-        underTests = false;
+        listing = Listing.NONE;
       }
     }
-    var checks = new ArrayList<Check>();
-    for (int i = 0; i < names.size(); i++) {
-      String name = names.get(i).strip();
-      if (!normalized(name).isBlank()) {
-        checks.add(new Check(name, normalized(name), failingTests(testLines.get(i))));
+
+    private void listItem(String item) {
+      if (listing == Listing.NAMED_ONLY) {
+        names.add(item);
+        testLines.add(List.of());
+      } else {
+        testLines.getLast().add(item);
       }
     }
-    return checks.isEmpty() ? NONE : new CiFailureCitations(List.copyOf(checks));
   }
 
   /** The distinctive test names among one check's failing-test lines, each once. */
@@ -230,7 +263,7 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     if (s.startsWith("FAIL ") || s.contains("Tests run:")) {
       return null;
     }
-    s = TEST_LINE_LEAD.matcher(s).replaceFirst("");
+    s = withoutLead(s);
     for (String tail : TEST_LINE_TAILS) {
       int at = s.indexOf(tail);
       if (at > 0) {
@@ -240,6 +273,21 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     var segments = TEST_PATH_SEPARATOR.split(s);
     s = segments[segments.length - 1].strip();
     return ownName(s);
+  }
+
+  /** {@code line} without what the runner printed before the test's name. */
+  private static String withoutLead(String line) {
+    var logged = LOGGED_LEAD.matcher(line);
+    if (logged.find()) {
+      String rest = line.substring(logged.end());
+      return rest.startsWith("- ") ? rest.substring(2) : rest;
+    }
+    for (String lead : TEST_LINE_LEADS) {
+      if (line.startsWith(lead)) {
+        return line.substring(lead.length());
+      }
+    }
+    return COUNTER_LEAD.matcher(line).replaceFirst("");
   }
 
   /**
@@ -285,7 +333,7 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     if (words.length() < MIN_TEST_NAME_CHARS) {
       return false;
     }
-    if (words.indexOf(' ') > 0) {
+    if (words.contains(" ")) {
       return true;
     }
     for (int i = 1; i < name.length(); i++) {

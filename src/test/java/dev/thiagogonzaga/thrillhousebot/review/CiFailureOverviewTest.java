@@ -122,6 +122,8 @@ class CiFailureOverviewTest {
     var blank = summary("Request changes.", "");
 
     assertSame(blank, CiFailureOverview.apply(blank, CiFailureCitations.parse(SECTION), List.of()));
+    var none = summary("Request changes.", null);
+    assertSame(none, CiFailureOverview.apply(none, CiFailureCitations.parse(SECTION), List.of()));
   }
 
   /** Sentences about the change that mention checks, findings or explanations stay. */
@@ -129,7 +131,8 @@ class CiFailureOverviewTest {
   void ordinarySentencesStay() {
     var purpose =
         "Adds a health check and explains the retry policy in the docs. The findings page lists"
-            + " each check. It explains why the CI job runs nightly.";
+            + " each check. It explains why the CI job runs nightly. This finding explains the"
+            + " cache policy.";
 
     assertSame(purpose, CiFailureOverview.withoutCiVerdicts(purpose));
     assertNull(CiFailureOverview.withoutCiVerdicts(null));
