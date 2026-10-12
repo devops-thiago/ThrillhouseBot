@@ -371,6 +371,18 @@ class OverviewScreenTest {
   }
 
   @Test
+  void aKeyOpeningItsSentenceIsJudgedWithOrWithoutPunctuationBeforeIt() {
+    assertEquals(
+        "Ships it. (abcd-12) lands too. — proj-7 lands too.",
+        OverviewScreen.withoutInventedTickets(
+            "Ships it. (abcd-12) lands too. — proj-7 lands too.", "Title: ship"));
+    assertEquals(
+        "Ships it.",
+        OverviewScreen.withoutInventedTickets("Ships it. (ABCD-12) lands too.", "Title: ship"));
+    assertEquals("", OverviewScreen.withoutInventedTickets("ABCD-12 lands too.", "Title: ship"));
+  }
+
+  @Test
   void aStandardsCodeIsNotTakenForAnInventedTicket() {
     var purpose =
         "Returns HTTP-404 for unknown routes. Adds FIPS-140 validation. Speaks HTTP-2 and"
@@ -477,6 +489,11 @@ class OverviewScreenTest {
         "Some of its findings remain",
         "Two of these findings are posted inline",
         "Each of the findings is tracked",
+        // A subject ending in the findings, stating their state.
+        "The findings are all confirmed",
+        "These findings stay open",
+        "Its findings remained posted",
+        "Findings remain open",
         "hosts two or three findings",
         "holds five to ten findings",
         "lists two through four findings",
@@ -551,6 +568,9 @@ class OverviewScreenTest {
         "Most of the findings from the parser",
         "None of the code formats findings",
         "The new findings here",
+        "The findings are rendered here",
+        "The findings are shown in a table that stays open",
+        "The findings",
         "Keeps settings and refines findings",
         "Holds the findingsTable",
         // Plural artifact nouns.

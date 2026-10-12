@@ -522,11 +522,12 @@ final class OverviewScreen {
    * follows ("None of the findings are open", "Some of the findings were confirmed").
    */
   private static boolean opensWithThePhrase(String[] words, int at, boolean aboutTheBatch) {
+    // Never empty: the caller checked the finding word does not open the clause.
     var lead = Arrays.stream(words, 0, at).filter(w -> !w.isEmpty()).toList();
     var first = lead.getFirst();
     var quantified =
         DETERMINERS.contains(first) || FINDING_QUALIFIERS.contains(first) || isCount(first);
-    if (quantified && (aboutTheBatch || qualified(words, at))) {
+    if (quantified && (aboutTheBatch || qualified(words, at) || statesTheirState(words, at))) {
       return true;
     }
     // A partitive: a quantifier, "of", then only determiners before the finding word.
@@ -537,6 +538,28 @@ final class OverviewScreen {
         && at + 1 < words.length
         && PARTITIVE_PREDICATES.contains(words[at + 1]);
   }
+
+  /**
+   * Whether the words after the finding word at {@code at} state the findings' state: a form of
+   * "be", "remain" or "stay", then within two words a verdict or placement word ("The findings are
+   * all confirmed", "These findings stay open"). "The findings are rendered here" is not one.
+   */
+  private static boolean statesTheirState(String[] words, int at) {
+    if (at + 1 >= words.length || !STATE_VERBS.contains(words[at + 1])) {
+      return false;
+    }
+    for (var j = at + 2; j < Math.min(words.length, at + 4); j++) {
+      if (VERDICT_WORDS.contains(words[j]) || FINDING_PLACEMENTS.contains(words[j])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** The verbs that state a state: forms of "be", "remain" and "stay". */
+  private static final Set<String> STATE_VERBS =
+      Set.of(
+          "is", "are", "was", "were", "remain", "remains", "remained", "stay", "stays", "stayed");
 
   /**
    * What follows a partitive subject when the clause states the findings' state: a form of "be" or
@@ -583,8 +606,9 @@ final class OverviewScreen {
               Set.of(
                   "from", "in", "for", "on", "at", "of", "to", "with", "by", "about", "across",
                   "that", "which", "who", "here", "there", "this", "these", "and", "or", "but",
-                  "yet", "nor", "so", "is", "are", "was", "were", "remain", "remains", "still",
-                  "far", "total", "left", "found", "above", "below", "listed", "noted"),
+                  "yet", "nor", "so", "still", "far", "total", "left", "found", "above", "below",
+                  "listed", "noted"),
+              STATE_VERBS,
               FINDING_PLACEMENTS,
               VERDICT_WORDS));
 
@@ -766,9 +790,10 @@ final class OverviewScreen {
     }
     // The cue sits right before the key ("Closes Proj-7", "fixes ticket abcd-12"); a closing verb
     // elsewhere in the sentence ("Fixes the phase-2 layout") is about something else.
+    // Only punctuation before the key ("(abcd-12)", "— proj-7") splits into no words: no cue.
     var before =
         NON_WORD.split(sentence.substring(0, key.start()).toLowerCase(Locale.ROOT).strip());
-    return TRACKER_CUES.contains(before[before.length - 1])
+    return (before.length > 0 && TRACKER_CUES.contains(before[before.length - 1]))
         || (key.start() > 0 && sentence.charAt(key.start() - 1) == '#')
         || paragraph.contains(prefix + "-");
   }
@@ -828,6 +853,7 @@ final class OverviewScreen {
     var ends = SENTENCE_END.matcher(text);
     while (ends.find()) {
       var before = text.substring(start, ends.start());
+      // Never empty: the text before a sentence end holds that end's punctuation at least.
       var words = before.split("\\s");
       // Punctuation opening the word ("(e.g.", "—approx.") is not part of the abbreviation.
       var lastWord =
