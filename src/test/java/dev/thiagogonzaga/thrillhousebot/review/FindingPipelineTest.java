@@ -3970,6 +3970,91 @@ class FindingPipelineTest {
   }
 
   @Test
+  void theSummaryCallsPathsAreCheckedAgainstTheChangeAndTheRepository() {
+    // #1076 (react ThrillhouseBot-test#249): a sentence naming a README path that does not exist
+    // is cut, and a near miss of a changed file is mapped onto it.
+    var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var answer =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            "ok",
+            "Adds a dashboard in react/Dashboard.tsx. It also moves the README to"
+                + " docs/REACT-VIV.md.",
+            List.of(),
+            List.of(),
+            List.of(),
+            null,
+            List.of());
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), answer));
+    var files =
+        List.of(
+            new FileDiff("react/src/Dashboard.tsx", "added", 3, 0, 3, "+x"),
+            new FileDiff("docs/REACT-V17.md", "renamed", 0, 0, 0, null, "README.md"));
+    var listed = litigatedContext(List.of(), List.of());
+    var ctx =
+        new ReviewContextLoader.ReviewContext(
+            files,
+            listed.diff(),
+            listed.baseComparison(),
+            listed.omittedFiles(),
+            listed.priorReviews(),
+            listed.priorAiResponseJsons(),
+            listed.priorAiResponses(),
+            listed.isFirstVisibleReview(),
+            listed.hasContext(),
+            listed.previousAiResponseJson(),
+            listed.inlineComments(),
+            listed.previousFindings(),
+            listed.instructions(),
+            listed.pathInstructions(),
+            listed.repoLabels(),
+            listed.projectStack(),
+            listed.linkedIssuesContext(),
+            listed.configKeyContext(),
+            listed.patchCoverage(),
+            files,
+            listed.lineResolverSupplier(),
+            listed.prTotals(),
+            listed.conversationComments(),
+            listed.unmatchedIgnoreGlobs(),
+            listed.carried(),
+            listed.coverageArtifactRefusal(),
+            false);
+    var prClient = mock(GitHubPullRequestClient.class);
+    when(prClient.getTree(any(), any(), any(), any(), any(), any()))
+        .thenReturn(
+            new GitHubPullRequestClient.TreeResponse(
+                "sha",
+                List.of(
+                    new GitHubPullRequestClient.TreeEntry("docs/REACT-V17.md", "blob", 1),
+                    new GitHubPullRequestClient.TreeEntry("react/src/Dashboard.tsx", "blob", 1)),
+                false));
+    var evidence =
+        new ReviewEvidence(
+            new CitedLocationResolver(prClient)
+                .forReview("t", "owner", "repo", "sha", files, new EvidenceBudget()),
+            ContextEvidenceResolver.disabled());
+
+    var result =
+        pipeline.run(
+            session,
+            new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", ""),
+            ctx,
+            multiBatchPlan(),
+            new DiffLineResolver(Map.of()),
+            evidence);
+
+    assertEquals("Adds a dashboard in react/src/Dashboard.tsx.", result.summary().prPurpose());
+  }
+
+  @Test
   void aFollowUpWhoseSummaryCameBackEmptyKeepsThePreviousOverviewOnTheSameHead() {
     // #944: the summary node was dropped by the parser's salvage, and the in-place edit replaced
     // round 1's overview with "Not summarized" rows on a head nothing had changed.

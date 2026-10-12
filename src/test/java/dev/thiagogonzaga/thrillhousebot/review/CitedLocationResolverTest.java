@@ -584,4 +584,39 @@ class CitedLocationResolverTest {
     assertEquals(List.of(), CitedLocationResolver.normalizedLines("   "));
     assertEquals(List.of("a", "b"), CitedLocationResolver.normalizedLines("  a  \n\n b \n"));
   }
+
+  /** #1076: the repository is listed once per round, on first use, at the review's revision. */
+  @Test
+  void listsTheRepositoryOnceAtTheHead() {
+    when(prClient.getTree(any(), any(), eq("o"), eq("r"), eq("headsha"), eq("1")))
+        .thenReturn(
+            new GitHubPullRequestClient.TreeResponse(
+                "headsha",
+                List.of(
+                    new GitHubPullRequestClient.TreeEntry("docs/A.md", "blob", 1),
+                    new GitHubPullRequestClient.TreeEntry(null, "blob", 1)),
+                true));
+    var round = round(changed(PATH));
+
+    var paths = round.repositoryPaths().orElseThrow();
+    round.repositoryPaths();
+
+    assertEquals(java.util.Set.of("docs/A.md"), paths.paths());
+    assertTrue(paths.truncated());
+    verify(prClient, times(1)).getTree(any(), any(), any(), any(), any(), any());
+  }
+
+  /** A listing that fails, or comes back empty-handed, leaves the paths unknown. */
+  @Test
+  void anUnreadableRepositoryIsUnknown() {
+    when(prClient.getTree(any(), any(), any(), any(), any(), any()))
+        .thenThrow(new WebApplicationException(502));
+    assertTrue(round(changed(PATH)).repositoryPaths().isEmpty());
+
+    reset(prClient);
+    when(prClient.getTree(any(), any(), any(), any(), any(), any())).thenReturn(null);
+    assertTrue(round(changed(PATH)).repositoryPaths().isEmpty());
+
+    assertTrue(CitedLocationResolver.disabled().repositoryPaths().isEmpty());
+  }
 }

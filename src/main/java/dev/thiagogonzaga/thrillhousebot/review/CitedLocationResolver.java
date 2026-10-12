@@ -26,13 +26,17 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
@@ -125,6 +129,16 @@ public class CitedLocationResolver {
     return new Round(prClient, auth, owner, repo, ref, files, budget);
   }
 
+  /**
+   * Every path of the repository at one revision, as one recursive listing returned it; {@code
+   * truncated} when GitHub cut the listing short, so a path missing from it may still exist.
+   */
+  public record RepositoryPaths(Set<String> paths, boolean truncated) {
+    public RepositoryPaths {
+      paths = Set.copyOf(paths);
+    }
+  }
+
   /** A round that resolves nothing, for a caller with no repository access. */
   public static Round disabled() {
     return new Round(null, null, null, null, null, List.of(), new EvidenceBudget());
@@ -152,6 +166,10 @@ public class CitedLocationResolver {
 
     /** The review's evidence budget, shared with the other resolvers that attach notes (#475). */
     private final EvidenceBudget budget;
+
+    /** The repository listing, read on first use (#1076). */
+    private final Supplier<Optional<RepositoryPaths>> repositoryPaths =
+        ReviewContextLoader.memoize(this::listRepository);
 
     private Round(
         GitHubPullRequestClient prClient,
@@ -187,6 +205,37 @@ public class CitedLocationResolver {
             pathByRenameSource.put(file.previousFilename(), file.filename());
           }
         }
+      }
+    }
+
+    /**
+     * The repository's paths at the review's revision, listed on first use and at most once per
+     * review (#1076); empty when there is no repository access or the listing failed, so a caller
+     * cannot tell an invented path from an unread one and leaves the text alone.
+     */
+    public Optional<RepositoryPaths> repositoryPaths() {
+      return repositoryPaths.get();
+    }
+
+    private Optional<RepositoryPaths> listRepository() {
+      if (prClient == null) {
+        return Optional.empty();
+      }
+      try {
+        var tree = prClient.getTree(auth, ACCEPT, owner, repo, ref, "1");
+        if (tree == null) {
+          return Optional.empty();
+        }
+        var paths = new HashSet<String>();
+        tree.tree().stream()
+            .map(GitHubPullRequestClient.TreeEntry::path)
+            .filter(Objects::nonNull)
+            .forEach(paths::add);
+        return Optional.of(new RepositoryPaths(paths, tree.truncated()));
+      } catch (RuntimeException e) {
+        Log.debugf(
+            e, "Could not list %s/%s at %s; path mentions are left as written", owner, repo, ref);
+        return Optional.empty();
       }
     }
 
