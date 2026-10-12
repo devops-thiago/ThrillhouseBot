@@ -435,6 +435,13 @@ class OverviewScreenTest {
         "There are two findings here",
         "There is one finding",
         "There were not any findings",
+        // Contracted existentials, with either apostrophe.
+        "There's no findings in this file",
+        "There’s one finding here",
+        "There're two findings",
+        "Theres no findings",
+        // "and" inside a spelled count.
+        "hosts a hundred and one findings",
         "Lists numerous findings",
         "Has some findings",
         "Holds all findings",
@@ -490,6 +497,12 @@ class OverviewScreenTest {
         // A form of "be" without "there" before it is no existential.
         "Here are findings",
         "Are two findings",
+        // "and" between words that are not both numbers still breaks the phrase.
+        "Holds two tests and three findings",
+        "Hosts the tests and one finding",
+        "And the findings",
+        "Holds tests and findings",
+        "Holds two and the findings",
         "Keeps settings and refines findings",
         "Holds the findingsTable",
         // Plural artifact nouns.

@@ -400,8 +400,9 @@ final class OverviewScreen {
    * "Processes findings in this batch" name what the file does, and are not.
    */
   static boolean talksAboutFindings(String clause) {
-    var lower = clause.toLowerCase(Locale.ROOT);
-    var asWritten = NON_WORD.split(clause);
+    var expanded = expandedThere(clause);
+    var lower = expanded.toLowerCase(Locale.ROOT);
+    var asWritten = NON_WORD.split(expanded);
     // Each word lower-cased on its own, so the two arrays always line up.
     var words =
         Arrays.stream(asWritten).map(w -> w.toLowerCase(Locale.ROOT)).toArray(String[]::new);
@@ -435,7 +436,7 @@ final class OverviewScreen {
           || (EXISTENTIAL_VERBS.contains(words[j]) && j > 0 && words[j - 1].equals("there"))) {
         return true;
       }
-      if (PHRASE_BREAKERS.contains(words[j])) {
+      if (PHRASE_BREAKERS.contains(words[j]) && !joinsACount(words, j, at)) {
         return false;
       }
     }
@@ -562,6 +563,32 @@ final class OverviewScreen {
           "track",
           "shows",
           "show");
+
+  /**
+   * Whether the "and" at {@code j}, before the finding word at {@code at}, joins two number words
+   * into one count ("a hundred and one findings") rather than starting another phrase.
+   */
+  private static boolean joinsACount(String[] words, int j, int at) {
+    return words[j].equals("and")
+        && j > 0
+        && j + 1 < at
+        && isCount(words[j - 1])
+        && isCount(words[j + 1]);
+  }
+
+  /**
+   * {@code clause} with a contracted existential written out: "there's" and "theres" as "there is",
+   * "there're" as "there are", with a straight or curly apostrophe.
+   */
+  private static String expandedThere(String clause) {
+    return THERE_ARE.matcher(THERE_IS.matcher(clause).replaceAll("$1 is")).replaceAll("$1 are");
+  }
+
+  /** A contracted "there is": "there's", "there’s", "theres". */
+  private static final Pattern THERE_IS = Pattern.compile("(?i)\\b(there)(?:['’]s|s)\\b");
+
+  /** A contracted "there are": "there're", "there’re". */
+  private static final Pattern THERE_ARE = Pattern.compile("(?i)\\b(there)['’]re\\b");
 
   /** The forms of "be" that, after "there", say the findings exist: "There are two findings". */
   private static final Set<String> EXISTENTIAL_VERBS = Set.of("is", "are", "was", "were");
