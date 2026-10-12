@@ -106,8 +106,13 @@ final class LinkedIssueCitations {
   private static final Pattern CLAUSE_END =
       Pattern.compile("(?i)[,;!?\u2014\u2013]|\\.(?=\\s|$)|\\b(?:but|while|whereas|so)\\b|\n");
 
-  /** A conjunction or comma that joins a citation to an earlier claim in its sentence. */
-  private static final Pattern JOINER = Pattern.compile("(?i),\\s|\\s(?:and|or)\\s");
+  /**
+   * A comma, conjunction or subordinator that joins a citation to an earlier claim in its sentence:
+   * "…twice per period because the linked issue's '…' was never implemented".
+   */
+  private static final Pattern JOINER =
+      Pattern.compile(
+          "(?i),\\s|\\s(?:and|or|because|since|as|although|though|while|whereas|despite)\\s");
 
   /** What separates clauses before a cue, for {@link #AFFIRMS}. */
   private static final Pattern CLAUSE_BREAK = Pattern.compile("[,;:\u2014\u2013]");
@@ -419,7 +424,10 @@ final class LinkedIssueCitations {
     var sentenceStart = sentenceStart(text, citation.start());
     var joiner = lastJoiner(text, sentenceStart, citation.start());
     if (joiner >= 0) {
-      return text.substring(0, joiner) + text.substring(citation.end());
+      // The citation's clause goes with it: "…'refunds are instant' criterion was never met".
+      var clause = CLAUSE_END.matcher(text);
+      var end = clause.find(citation.end()) ? clause.start() : text.length();
+      return text.substring(0, joiner) + text.substring(end);
     }
     var end = sentenceEnd(text, citation.end());
     var next = end < text.length() ? end + 1 : end;

@@ -284,6 +284,25 @@ class LinkedIssueCitationsTest {
   }
 
   @Test
+  void aCitationJoinedByASubordinatorLosesOnlyItsClause() {
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "high",
+                        "high",
+                        "Charges run twice because the linked issue's 'refunds are instant'",
+                        "The gateway charges the plan's list price twice per period because the"
+                            + " linked issue's 'refunds are instant' criterion was never"
+                            + " implemented.")),
+                KOTLIN_228));
+
+    assertEquals("Charges run twice", held.title());
+    assertEquals("The gateway charges the plan's list price twice per period.", held.description());
+  }
+
+  @Test
   void aJoinerInsideAQuoteIsNotWhereTheCutStarts() {
     var held =
         only(
