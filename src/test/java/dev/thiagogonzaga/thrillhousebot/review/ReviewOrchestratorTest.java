@@ -9021,6 +9021,23 @@ class ReviewOrchestratorTest {
           null);
     }
 
+    private ReviewLearningService.LearningView convention(long id, String path, String text) {
+      return new ReviewLearningService.LearningView(
+          id,
+          ReviewLearning.KIND_CONVENTION,
+          null,
+          null,
+          path,
+          text,
+          180,
+          null,
+          "maintainer",
+          java.time.Instant.parse("2026-09-02T00:00:00Z"),
+          true,
+          null,
+          null);
+    }
+
     private void assertImagePolicyWasNotApplied(ReviewResponse.Finding finding) {
       assertEquals("medium", finding.confidence());
       assertEquals(
@@ -9059,21 +9076,7 @@ class ReviewOrchestratorTest {
     void aPolicyExcludedByTheItemBudgetDoesNotAffectTheFinding() throws Exception {
       var store = mock(ReviewLearningService.class);
       var policy = acceptedImagePolicy("We don't pin images by digest in Dockerfiles.");
-      var convention =
-          new ReviewLearningService.LearningView(
-              13,
-              ReviewLearning.KIND_CONVENTION,
-              null,
-              null,
-              "b/Dockerfile",
-              "Use explicit Python versions.",
-              180,
-              null,
-              "maintainer",
-              java.time.Instant.parse("2026-09-02T00:00:00Z"),
-              true,
-              null,
-              null);
+      var convention = convention(13, "b/Dockerfile", "Use explicit Python versions.");
       when(store.listActive(123L, "owner/repo", 100)).thenReturn(List.of(policy, convention));
       var finding = imageFindingWithRecall(store, new ReviewLearnings.Settings(true, 100, 1, 3000));
       assertImagePolicyWasNotApplied(finding);
@@ -9084,13 +9087,20 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void renderedPolicyTextWithoutASelectedDeclineDoesNotAffectTheFinding() throws Exception {
-      when(learnings.enabled()).thenReturn(true);
-      when(learnings.recall(eq(123L), eq("owner"), eq("repo"), any()))
-          .thenReturn(
-              new ReviewLearnings.Recall(
-                  "[L12] We don't pin images by digest in Dockerfiles.", List.of()));
-      assertImagePolicyWasNotApplied(imageFindingWithCurrentLearnings());
+    void aSelectedConventionWithImagePolicyTextDoesNotCoverTheFinding() throws Exception {
+      var store = mock(ReviewLearningService.class);
+      var policy = "We don't pin images by digest in Dockerfiles.";
+      when(store.listActive(123L, "owner/repo", 100))
+          .thenReturn(List.of(convention(12, "a/Dockerfile", policy)));
+      var finding =
+          imageFindingWithRecall(store, new ReviewLearnings.Settings(true, 100, 10, 3000));
+      assertImagePolicyWasNotApplied(finding);
+      var inputs = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+      verify(aiReviewService).review(any(ReviewSession.class), inputs.capture());
+      var guidance = inputs.getValue().repoInstructions();
+      assertTrue(guidance.contains("[L12] Convention"), guidance);
+      assertTrue(guidance.contains(policy), guidance);
+      verify(store).listActive(123L, "owner/repo", 100);
     }
 
     private static GitHubPullRequestClient.FileDiff javaFile() {
@@ -9100,23 +9110,37 @@ class ReviewOrchestratorTest {
 
     @Test
     void theRelevantLearningsRideTheReviewPromptFenced() {
-      when(learnings.enabled()).thenReturn(true);
-      when(learnings.recall(eq(123L), eq("owner"), eq("repo"), any()))
-          .thenReturn(
-              new ReviewLearnings.Recall(
-                  "- [L1] Convention on the whole repository — @m, PR #1:\n  Threads are flat.",
-                  List.of()));
+      var store = mock(ReviewLearningService.class);
+      when(store.listActive(123L, "owner/repo", 100))
+          .thenReturn(List.of(convention(1, null, "Threads are flat.")));
+      learnings =
+          new ReviewLearnings(
+              store,
+              followUpAnalyzer,
+              BOT_ID,
+              mock(GitHubInstallationClient.class),
+              new ReviewLearnings.Settings(true, 100, 10, 3000));
+      orchestrator = newOrchestrator();
 
       runReview(javaFile());
 
-      verify(learnings).recall(123L, "owner", "repo", List.of("src/main/java/A.java"));
+      verify(store).listActive(123L, "owner/repo", 100);
       var inputs = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
       verify(aiReviewService).review(any(ReviewSession.class), inputs.capture());
       var guidance = inputs.getValue().repoInstructions();
       assertTrue(guidance.contains(PrReviewPrompts.LEARNINGS_REQUEST), guidance);
+      assertTrue(guidance.contains("[L1] Convention on the whole repository"), guidance);
+      assertTrue(guidance.contains("Threads are flat."), guidance);
+      var entry = guidance.indexOf("[L1]");
+      var opening = guidance.lastIndexOf(PromptTemplateEscaper.fencePrefix(), entry);
+      assertTrue(opening >= 0 && opening < entry, guidance);
+      var openingEnd = guidance.indexOf('\n', opening);
+      assertTrue(openingEnd > opening && openingEnd < entry, guidance);
+      var fenceLine = guidance.substring(opening, openingEnd);
+      var conventionEnd = guidance.indexOf("Threads are flat.") + "Threads are flat.".length();
       assertTrue(
-          guidance.indexOf(PromptTemplateEscaper.fencePrefix()) < guidance.indexOf("[L1]"),
-          "the learnings sit inside the untrusted-data fence");
+          guidance.indexOf("\n" + fenceLine, conventionEnd) >= conventionEnd,
+          "the complete convention sits inside matching untrusted-data fence lines: " + guidance);
     }
 
     /**
