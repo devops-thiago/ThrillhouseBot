@@ -353,7 +353,7 @@ public final class SeverityCalibrator {
    * The finding's words, lower-cased, stripped of punctuation and padded, so a phrase from the
    * lists above matches whole words wherever the finding put them.
    */
-  private static String normalized(String text) {
+  static String normalized(String text) {
     String contracted = APOSTROPHE.matcher(text.toLowerCase(Locale.ROOT)).replaceAll("");
     return " " + NOT_A_WORD.matcher(contracted).replaceAll(" ").strip() + " ";
   }
@@ -438,6 +438,11 @@ public final class SeverityCalibrator {
         FindingVerificationService.recount(response.summary(), adjusted));
   }
 
+  /** Whether the finding states the mutable external reference class, without an escalation. */
+  static boolean isMutableExternalReference(ReviewResponse.Finding finding) {
+    return classify(finding) == InfrastructureClass.MUTABLE_EXTERNAL_REFERENCE;
+  }
+
   /** The class the finding states, or {@code null} when it states none of them. */
   private static InfrastructureClass classify(ReviewResponse.Finding finding) {
     if (finding.file() == null || !isInfrastructureFile(finding.file())) {
@@ -512,7 +517,7 @@ public final class SeverityCalibrator {
    * The image's own name in a reference, lower-cased: the last path segment without its tag or
    * digest ({@code ghcr.io/acme/nginx-conf:1.2.0} is {@code nginx-conf}).
    */
-  private static String imageName(String source) {
+  static String imageName(String source) {
     String reference = source.replace("\"", "").replace("'", "").toLowerCase(Locale.ROOT);
     String name = reference.substring(reference.lastIndexOf('/') + 1);
     int end = name.length();
