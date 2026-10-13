@@ -386,7 +386,7 @@ live `fence(...)` (#604).
   boundary, so wrap early. `%d` numbers are exempt.
 - **Text screens preserve code and ordinary claims.** `PromptLabelScrubber` keeps the case of a
   recovered compound identifier and removes "confirmed" only when it labels findings, never as
-  the verb in "Tests confirmed findings" (#1098, #1102). Its whole-text restart pass and
+  the verb in "Tests confirmed findings" or "This confirmed findings" (#1098, #1102). Its whole-text restart pass and
   `PathMentions` share `MarkdownFences`: backtick and tilde blocks close only at a run of their
   own marker at least as long as the opener and at its quote depth; list prefixes are recognized,
   and mixed, shorter or quoted markers inside a block and unclosed blocks stay byte-exact (#1099, #1111). `OverviewScreen` keeps count conjunctions with

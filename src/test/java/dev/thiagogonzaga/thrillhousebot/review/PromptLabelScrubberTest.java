@@ -1378,4 +1378,23 @@ class PromptLabelScrubberTest {
           PromptLabelScrubber.scrub(code + ". Confirmed findings: two."));
     }
   }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"This", "These", "Those", "Some", "Any", "All", "That"})
+  void aPronounSubjectKeepsConfirmedAsItsVerb(String subject) {
+    var text = subject + " confirmed findings in the scheduler module.";
+    assertEquals(text, PromptLabelScrubber.scrub(text));
+    assertEquals(
+        subject + " confirmed findings: two.",
+        PromptLabelScrubber.scrub(subject + " confirmed findings: two."));
+  }
+
+  @Test
+  void definiteAndCountedFindingLabelsStillLoseTheVerifierAdjective() {
+    assertEquals(
+        "The findings are listed.",
+        PromptLabelScrubber.scrub("The confirmed findings are listed."));
+    assertEquals("No findings.", PromptLabelScrubber.scrub("No confirmed findings."));
+    assertEquals("Hosts two findings.", PromptLabelScrubber.scrub("Hosts two confirmed findings."));
+  }
 }

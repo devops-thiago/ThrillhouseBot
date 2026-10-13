@@ -81,18 +81,16 @@ final class MarkdownFences {
       char c = text.charAt(i);
       if (blank(c)) {
         i++;
-        continue;
-      }
-      if (c == '>') {
+      } else if (c == '>') {
         depth++;
         i++;
-        continue;
+      } else {
+        int end = listMarkerEnd(text, i, at);
+        if (end < 0) {
+          return -1;
+        }
+        i = end;
       }
-      int end = listMarkerEnd(text, i, at);
-      if (end < 0) {
-        return -1;
-      }
-      i = end;
     }
     return depth;
   }

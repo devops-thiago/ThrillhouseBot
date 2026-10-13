@@ -872,10 +872,10 @@ public final class PromptLabelScrubber {
   }
 
   /**
-   * Whether "confirmed" labels the findings rather than being a sentence's verb. A determiner,
-   * count, holding verb or preposition introduces the adjective; an ordinary subject does not. Code
-   * immediately before this prose segment is a possible subject, so a leading lowercase "confirmed
-   * findings" there is not assumed to be a standalone label.
+   * Whether "confirmed" labels the findings rather than being a sentence's verb. A definite
+   * article, count, holding verb or preposition introduces the adjective; an ambiguous pronoun or
+   * ordinary subject does not. Code immediately before this prose segment is a possible subject, so
+   * a leading lowercase "confirmed findings" there is not assumed to be a standalone label.
    */
   private static boolean adjectiveConfirmed(String text, int at, boolean followsCode) {
     int end = at;
@@ -901,12 +901,6 @@ public final class PromptLabelScrubber {
           "a",
           "an",
           "the",
-          "this",
-          "these",
-          "those",
-          "some",
-          "any",
-          "all",
           "no",
           "of",
           "with",
