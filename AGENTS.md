@@ -146,7 +146,10 @@ same diff.
   findings. `DeclineLearningGuard` recognizes only the complete explicit decision not to pin images
   by digest in Dockerfiles, alone or with the audited rationale that the release pipeline resolves
   every image to a digest at deploy time (optionally also stating the deployed manifest carries it).
-  Qualifiers, incomplete text and other rationales abstain. It also requires a mutable-reference
+  Policy matching preserves punctuation. Case, whitespace and one final period may vary, and the
+  contraction accepts straight/curly apostrophes or the explicit `dont` spelling. The exact audited
+  rationale may follow whitespace or one colon, period, comma or semicolon; other punctuation,
+  qualifiers, incomplete text and other rationales abstain. It also requires a mutable-reference
   finding on the same file type, and an actual
   `FROM` or external `COPY --from=` image the finding names. The finding stays visible at low
   confidence with its learning id. Both its title and description must be complete policy-only

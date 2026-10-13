@@ -43,13 +43,13 @@ final class DeclineLearningGuard {
 
   private static final List<String> IMAGE_POLICIES =
       List.of(
+          "we don't pin images by digest in dockerfiles",
           "we dont pin images by digest in dockerfiles",
           "we do not pin images by digest in dockerfiles");
   private static final List<String> IMAGE_RATIONALES =
       List.of(
-          "",
-          " the release pipeline resolves every image to a digest at deploy time",
-          " the release pipeline resolves every image to a digest at deploy time and the deployed manifest carries that digest");
+          "the release pipeline resolves every image to a digest at deploy time",
+          "the release pipeline resolves every image to a digest at deploy time and the deployed manifest carries that digest");
   private static final List<String> POLICY_TITLES =
       List.of(
           "base image is not pinned by digest",
@@ -179,13 +179,20 @@ final class DeclineLearningGuard {
 
   /** Whole recognized forms only: a prefix cannot establish an unknown qualifier or premise. */
   private static boolean statesSupportedPolicy(String text) {
-    var raw = Objects.toString(text, "");
-    if (raw.contains("...") || raw.indexOf('…') >= 0) return false;
-    var policy = SeverityCalibrator.normalized(raw).strip();
-    return IMAGE_POLICIES.stream()
-        .anyMatch(
-            statement ->
-                IMAGE_RATIONALES.stream().anyMatch(reason -> policy.equals(statement + reason)));
+    var policy = canonicalClaim(text).strip().replace('’', '\'');
+    return IMAGE_POLICIES.stream().anyMatch(statement -> matchesPolicyForm(policy, statement));
+  }
+
+  /** A complete statement, optionally followed by one known separator and the exact rationale. */
+  private static boolean matchesPolicyForm(String policy, String statement) {
+    if (!policy.startsWith(statement)) return false;
+    var reason = policy.substring(statement.length());
+    if (reason.isEmpty()) return true;
+    if (" :.;,".indexOf(reason.charAt(0)) < 0) return false;
+    // The whole policy is stripped, so a nonempty remainder cannot be whitespace only.
+    reason = reason.stripLeading();
+    if (":.;,".indexOf(reason.charAt(0)) >= 0) reason = reason.substring(1).stripLeading();
+    return IMAGE_RATIONALES.contains(reason);
   }
 
   /** Complete recognized policy-only claims; any extra or unknown consequence abstains. */

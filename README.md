@@ -1052,9 +1052,12 @@ A deterministic check also recognizes one explicit policy: a selected active
 decline saying "We don't pin images by digest in Dockerfiles" (or "We do not")
 as its complete text, or followed by "the release pipeline resolves every image
 to a digest at deploy time", optionally with "and the deployed manifest carries
-that digest". Qualifiers, incomplete text and other rationales are left to the
-model. A low-risk mutable-reference finding on that
-file type, anchored on a `FROM` or external `COPY --from=` image it names, stays
+that digest". Case, whitespace and a final period may vary. The contraction accepts
+a straight or curly apostrophe, or the explicit `dont` spelling. The exact rationale
+may follow whitespace or one colon, period, comma or semicolon. Other punctuation,
+qualifiers, incomplete text and other rationales are left to the model. A low-risk
+mutable-reference finding on that file type, anchored on a `FROM` or external
+`COPY --from=` image it names, stays
 visible under **Things to double-check** with a note naming the learning id.
 The check uses the exact bounded selection sent to the review call. A disabled
 feature, a decision outside those caps, another defect class or file type,

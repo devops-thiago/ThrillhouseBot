@@ -141,6 +141,22 @@ class DeclineLearningGuardTest {
         "We don't pin images by digest in Dockerfiles; while the registry stays immutable.",
         "We don't pin images by digest in Dockerfiles...",
         "We don't pin images by digest in Dockerfiles…",
+        "We don't pin images by digest in Dockerfiles⋯",
+        "We don't pin images by digest in Dockerfiles‥",
+        "We don't pin images by digest in Dockerfiles?",
+        "We don't pin images by digest in Dockerfiles~",
+        "We don't pin images by digest in Dockerfiles’",
+        "We don't pin images⋯ by digest in Dockerfiles.",
+        "We don't; pin images by digest in Dockerfiles.",
+        "We don't pin images, by digest in Dockerfiles.",
+        "We d'ont pin images by digest in Dockerfiles.",
+        "We don't pin im'ages by digest in Dockerfiles.",
+        "We don't pin images by digest in Dockerfiles: the release pipeline resolves every image to a digest at deploy time!",
+        "We don't pin images by digest in Dockerfiles:: the release pipeline resolves every image to a digest at deploy time.",
+        "We don't pin images by digest in Dockerfilesthe release pipeline resolves every image to a digest at deploy time.",
+        "We do not not pin images by digest in Dockerfiles.",
+        "We don't pin images not by digest in Dockerfiles.",
+        "We don't pin images by digest in Dockerfiles: the release pipeline does not resolve every image to a digest at deploy time.",
         "We don't pin images by digest in Dockerfiles: the registry is immutable.",
         "We don't pin images by digest in Dockerfiles. Arbitrary explanatory text follows.",
         "We don't pin images by digest in Dockerfiles except production.",
@@ -170,7 +186,16 @@ class DeclineLearningGuardTest {
       strings = {
         "We don't pin images by digest in Dockerfiles.",
         "We do not pin images by digest in Dockerfiles",
-        "We don't pin images by digest in Dockerfiles: the release pipeline resolves every image to a digest at deploy time."
+        "We don't pin images by digest in Dockerfiles: the release pipeline resolves every image to a digest at deploy time.",
+        "We don’t pin images by digest in Dockerfiles.",
+        "WE DON'T  PIN\nIMAGES BY\tDIGEST IN DOCKERFILES .",
+        "We dont pin images by digest in Dockerfiles.",
+        "We don't pin images by digest in Dockerfiles the release pipeline resolves every image to a digest at deploy time.",
+        "We don't pin images by digest in Dockerfiles. The release pipeline resolves every image to a digest at deploy time.",
+        "We don't pin images by digest in Dockerfiles; the release pipeline resolves every image to a digest at deploy time.",
+        "We don't pin images by digest in Dockerfiles, the release pipeline resolves every image to a digest at deploy time.",
+        "We don't pin images by digest in Dockerfiles : the release pipeline resolves every image to a digest at deploy time.",
+        "We don't pin images by digest in Dockerfiles:the release pipeline resolves every image to a digest at deploy time."
       })
   void completeRecognizedPoliciesHaveTheSameMeaning(String text) {
     assertEquals(
