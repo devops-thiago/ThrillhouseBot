@@ -64,6 +64,10 @@ final class DeclineLearningGuard {
           "rebuilds of the %s image fail to reproduce identical image contents",
           "a rebuild of the %s image fails to reproduce identical image contents");
   private static final Pattern WHITESPACE = Pattern.compile("\\s++");
+
+  /** The normalized token family, including bare SHA and numeric variants without lookalikes. */
+  private static final Pattern SHA_TOKEN = Pattern.compile(" sha\\d*+ ");
+
   private static final List<String> IMAGE_WORDS =
       List.of(
           " image ",
@@ -150,9 +154,7 @@ final class DeclineLearningGuard {
     var text = SeverityCalibrator.normalized(Objects.toString(instructions, ""));
     return text.contains(" digest ")
         || text.contains(" digests ")
-        || text.contains(" sha256 ")
-        || text.contains(" sha 256 ")
-        || text.contains(" sha ");
+        || SHA_TOKEN.matcher(text).find();
   }
 
   private static boolean covers(

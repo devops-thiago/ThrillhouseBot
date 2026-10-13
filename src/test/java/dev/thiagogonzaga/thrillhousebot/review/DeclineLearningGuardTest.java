@@ -21,6 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
@@ -283,18 +284,6 @@ class DeclineLearningGuardTest {
   @ParameterizedTest
   @ValueSource(
       strings = {
-        TITLE + " and cannot start registry authentication",
-        TITLE + " and times out at startup",
-        "The python image breaks the application: " + TITLE
-      })
-  void independentClaimsInTheTitleRemainUnchanged(String title) {
-    var raw = response("b/Dockerfile", title, DESCRIPTION);
-    assertSame(raw, apply(raw, selected(), LINE));
-  }
-
-  @ParameterizedTest
-  @ValueSource(
-      strings = {
         "Base image is not pinned to a digest",
         "Base image pinned to a mutable tag",
         "Unpinned base image",
@@ -311,8 +300,17 @@ class DeclineLearningGuardTest {
 
   @ParameterizedTest
   @NullAndEmptySource
-  @ValueSource(strings = {" ", TITLE + "...", TITLE + "?", "Possibly " + TITLE})
-  void unknownOrIncompleteTitlesRemainUnchanged(String title) {
+  @ValueSource(
+      strings = {
+        " ",
+        TITLE + "...",
+        TITLE + "?",
+        "Possibly " + TITLE,
+        TITLE + " and cannot start registry authentication",
+        TITLE + " and times out at startup",
+        "The python image breaks the application: " + TITLE
+      })
+  void unknownIncompleteOrIndependentTitlesRemainUnchanged(String title) {
     var raw = response("b/Dockerfile", title, DESCRIPTION);
     assertSame(raw, apply(raw, selected(), LINE));
   }
@@ -375,6 +373,9 @@ class DeclineLearningGuardTest {
         "All images must be pinned by digest.",
         "Images shall use SHA256 references.",
         "Images use SHA references.",
+        "Images must be referenced by sha1.",
+        "Images must be referenced by sha512.",
+        "Images must be referenced by SHA3-256.",
         "Always reference the base by sha.",
         "Container sources use SHA references.",
         "Dockerfile references use digests.",
@@ -424,12 +425,34 @@ class DeclineLearningGuardTest {
   @ParameterizedTest
   @ValueSource(
       strings = {
+        "Images follow shadow and sharing conventions.",
+        "Images use xsha512y registry names.",
+        "Images use sha512suffix tags."
+      })
+  void shaLookalikeWordsDoNotEstablishADigestRequirement(String instructions) {
+    assertEquals(
+        "low",
+        DeclineLearningGuard.apply(
+                response(),
+                selected(),
+                (p, n) -> LINE,
+                ContextEvidenceResolver.disabled(),
+                instructions)
+            .findings()
+            .getFirst()
+            .confidence());
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
         "All images must be pinned by digest.",
         "Dockerfile images are referenced by digest; tags are forbidden.",
         "References must be digest-pinned.",
         "Always digest-pin every reference.",
         "References use SHA-256.",
-        "Always reference the base by sha."
+        "Always reference the base by sha.",
+        "References use sha512."
       })
   void onlyApplicableCurrentScopedRequirementsOverrideItEvenWhenNotesDoNotFit(String instructions) {
     var budget = new EvidenceBudget();
@@ -499,7 +522,9 @@ class DeclineLearningGuardTest {
   }
 
   @Test
-  void aScopedRequirementMustResolveToOneFile() {
+  void scopedRulesAndSourceAnchorsResolveTheActualFile() {
+    var patch = "@@ -0,0 +1 @@\n+" + LINE + "\n";
+    var uniqueLines = new DiffLineResolver(Map.of("repo/app/Dockerfile", patch));
     var rule = "All images must be pinned by digest.";
     var unique =
         ContextEvidenceResolver.forReview(
@@ -507,11 +532,13 @@ class DeclineLearningGuardTest {
             new PathScopedInstructions(
                 List.of(
                     new PathScopedInstructions.AppliedScope(
-                        "**/Dockerfile", rule, List.of("app/Dockerfile"))),
+                        "**/Dockerfile", rule, List.of("repo/app/Dockerfile"))),
                 "config"),
             new EvidenceBudget());
-    var raw = response("Dockerfile", TITLE, DESCRIPTION);
-    assertSame(raw, DeclineLearningGuard.apply(raw, selected(), (p, n) -> LINE, unique, ""));
+    var raw = response("app/Dockerfile", TITLE, DESCRIPTION);
+    assertEquals(LINE, uniqueLines.getLineText("app/Dockerfile", 1));
+    assertSame(
+        raw, DeclineLearningGuard.apply(raw, selected(), uniqueLines::getLineText, unique, ""));
     var ambiguous =
         ContextEvidenceResolver.forReview(
             "",
@@ -522,12 +549,27 @@ class DeclineLearningGuardTest {
                 "config"),
             new EvidenceBudget());
     assertEquals(List.of(), ambiguous.scopeInstructions("Dockerfile"));
-    assertEquals(
-        "low",
-        DeclineLearningGuard.apply(raw, selected(), (p, n) -> LINE, ambiguous, "")
-            .findings()
-            .getFirst()
-            .confidence());
+    var ambiguousLines =
+        new DiffLineResolver(Map.of("app/Dockerfile", patch, "other/Dockerfile", patch));
+    assertNull(ambiguousLines.getLineText("Dockerfile", 1));
+    var bare = response("Dockerfile", TITLE, DESCRIPTION);
+    assertSame(
+        bare,
+        DeclineLearningGuard.apply(bare, selected(), ambiguousLines::getLineText, ambiguous, ""),
+        "Production refuses a bare source anchor before considering scope rules");
+    var collidingLines =
+        new DiffLineResolver(Map.of("first/app/Dockerfile", patch, "second/app/Dockerfile", patch));
+    assertNull(collidingLines.getLineText("app/Dockerfile", 1));
+    assertSame(
+        raw,
+        DeclineLearningGuard.apply(raw, selected(), collidingLines::getLineText, unique, ""),
+        "Production also refuses a directory suffix shared by two source files");
+    var exact = response("app/Dockerfile", TITLE, DESCRIPTION);
+    assertEquals(LINE, ambiguousLines.getLineText("app/Dockerfile", 1));
+    assertSame(
+        exact,
+        DeclineLearningGuard.apply(exact, selected(), ambiguousLines::getLineText, ambiguous, ""),
+        "An exact source path also keeps its applicable current digest rule");
   }
 
   @ParameterizedTest

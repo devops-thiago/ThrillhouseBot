@@ -1080,7 +1080,9 @@ finding unchanged, including
 declarative rules without a requirement keyword. Wrapped lines, headings and
 implicit references across sentences stay together. A Dockerfile-scoped rule
 already supplies the subject, so digest/SHA wording in an applicable scoped rule
-also leaves the finding unchanged. Global artifact-only digest prose and the
+also leaves the finding unchanged. SHA-family tokens include bare SHA, numeric
+suffixes such as SHA1 and SHA512, and hyphenated forms; lookalike words do not
+establish digest context. Global artifact-only digest prose and the
 ordinary words "from" and "copy" do not make an image-pinning requirement;
 ambiguous image requirements leave the finding unchanged.
 

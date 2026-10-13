@@ -161,7 +161,8 @@ same diff.
   context retains headings, wrapped lines and implicit references across sentences. Any image
   subject (image, container, Dockerfile or base) or case-sensitive/backticked `FROM` or `COPY`
   directive together with digest/SHA wording abstains, including declarative rules without a fixed
-  requirement keyword. An applicable
+  requirement keyword. SHA-family tokens accept numeric suffixes (SHA1, SHA512, SHA3) and normalized
+  hyphenated forms, with whole-token boundaries that reject lookalike words. An applicable
   Dockerfile-scoped rule already supplies the subject, so digest/SHA wording there also abstains.
   Ordinary English "from" or "copy" and global artifact-only digest prose do not establish an image
   requirement; ambiguous image requirements conservatively abstain.
