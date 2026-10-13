@@ -131,13 +131,16 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
    */
   private static final Pattern LOGGED_LEAD = Pattern.compile("^(?:\\[ERROR]\\s++|not ok \\d++ )");
 
+  /** The mark Vitest opens a failed test's line with: "× capacity > marks a shift full 6ms". */
+  private static final String VITEST_MARK = "\u00D7 ";
+
   /** The plain marks and words a runner prints before a failed test's name, tried in order. */
   private static final List<String> TEST_LINE_LEADS =
       List.of(
           "- ",
           "\u2716 ",
           "\u2715 ",
-          "\u00D7 ",
+          VITEST_MARK,
           "\u25CF ",
           "--- FAIL: ",
           "FAILED ",
@@ -155,14 +158,19 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       Pattern.compile("^(?:\\d++/\\d++ (?:Test #\\d++: )?+|Test \\[\\d++/\\d++] |\\d++ - )");
 
   /**
-   * A bare elapsed time ending the line: after two or more blanks as munit prints it
-   * ("findByContainer", two blanks, "0.012s"), or after one blank in milliseconds or fractional
-   * seconds as Vitest prints it ("marks a shift full when signups reach capacity 6ms", #1091). A
-   * whole number of seconds after one blank is a name's own words ("waits 30s").
+   * A bare elapsed time ending the line after two or more blanks, as munit prints it after the test
+   * ("findByContainer", two blanks, "0.012s"); one blank is a name's own words ("waits 30s").
    */
   private static final Pattern TRAILING_DURATION =
-      Pattern.compile(
-          "(?:\\s{2,}+\\d++(?:\\.\\d++)?+m?s|\\s\\d++(?:\\.\\d++)?+ms|\\s\\d++\\.\\d++s)$");
+      Pattern.compile("\\s{2,}+\\d++(?:\\.\\d++)?+m?s$");
+
+  /**
+   * A bare elapsed time after one blank in milliseconds or fractional seconds, as Vitest prints it
+   * ("marks a shift full when signups reach capacity 6ms", #1091); a whole number of seconds stays
+   * a name's own words.
+   */
+  private static final Pattern TRAILING_FINE_DURATION =
+      Pattern.compile("\\s(?:\\d++ms|\\d++\\.\\d++m?s)$");
 
   /** The dot leader CTest prints between a test's name and its status: "booking_test ....". */
   private static final Pattern TRAILING_DOTS = Pattern.compile("\\s++\\.{2,}+$");
@@ -201,18 +209,16 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
    */
   private static final String GRADLE_SEPARATOR = " > ";
 
-  /** The mark Vitest opens a failed test's line with: "× capacity > marks a shift full 6ms". */
-  private static final String VITEST_MARK = "\u00D7 ";
-
   /** Maven's level, opening the Surefire line a JUnit test's class-qualified name is on. */
   private static final String MAVEN_ERROR = "[ERROR]";
 
   /**
-   * The class a Surefire line qualifies a test's name with, ended by the last dot of the name's
-   * first word: a JVM method's own name holds no dot, so the dots are all the qualifier's.
+   * The class a Surefire line qualifies a test's name with: lower-case package segments, then the
+   * class, capitalised. A display name may itself hold a dot ("v1.2 is inclusive"), so the cut ends
+   * at the class, not at the last dot; a qualifier of any other shape is left in the name.
    */
   private static final Pattern CLASS_QUALIFIER =
-      Pattern.compile("^(?:[\\w$]++\\.)++(?=[^\\s.]++ )");
+      Pattern.compile("^(?:[a-z_][\\w$]*+\\.)*+[A-Z][\\w$]*+\\.(?=\\S)");
 
   /** A {@code file:line} or {@code Class.method:line} position ending a test's token. */
   private static final Pattern LINE_POSITION = Pattern.compile(":\\d");
@@ -401,7 +407,12 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
    */
   private static String withoutTail(String line) {
     String s =
-        TRAILING_DOTS.matcher(TRAILING_DURATION.matcher(line).replaceFirst("")).replaceFirst("");
+        TRAILING_DOTS
+            .matcher(
+                TRAILING_FINE_DURATION
+                    .matcher(TRAILING_DURATION.matcher(line).replaceFirst(""))
+                    .replaceFirst(""))
+            .replaceFirst("");
     int dash = s.indexOf(" - ");
     if (dash > 0 && s.lastIndexOf(' ', dash - 1) < 0) {
       s = s.substring(0, dash);

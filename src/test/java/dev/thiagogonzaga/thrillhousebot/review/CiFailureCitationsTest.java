@@ -445,6 +445,9 @@ class CiFailureCitationsTest {
           [ERROR] testRejectsBlank(com.x.FooTest)  Time elapsed: 0.01 s  <<< FAILURE! | testRejectsBlank
           [ERROR] cowork.invoicing.InvoiceServiceTest.a single-day booking is billed as one day -- Time elapsed: 0.050 s <<< FAILURE! | a single-day booking is billed as one day
           [ERROR] cowork.InvoiceTest.single-day v1.2 booking -- Time elapsed: 0.05 s <<< FAILURE! | single-day v1.2 booking
+          [ERROR] cowork.InvoiceTest.v1.2 is inclusive -- Time elapsed: 0.05 s <<< FAILURE! | v1.2 is inclusive
+          [ERROR] cowork.FooTest$Nested.a.b is parsed -- Time elapsed: 0.05 s <<< FAILURE! | a.b is parsed
+          [ERROR] cowork.fooTest.a single day -- Time elapsed: 0.05 s <<< FAILURE! | cowork.fooTest.a single day
           \u00D7 capacity > marks a shift full when signups reach capacity 6ms | marks a shift full when signups reach capacity
           \u00D7 recall rules > schedules one reminder per attempt, starting when the lead window opens 8ms | schedules one reminder per attempt, starting when the lead window opens
           \u00D7 retries the upload 0.01s | retries the upload
