@@ -614,7 +614,10 @@ class CiFailureContextResolverTest {
           "1 - queue_test (Failed)",
           "1/5 queue.test.submit accepts copies equal to the maximum...FAIL (TooManyCopies)",
           "Test [1/5] queue.test.submit accepts copies... FAIL (TestUnexpectedResult)",
-          "rspec ./spec/booking_spec.rb:12 # Booking rejects overlaps"
+          "rspec ./spec/booking_spec.rb:12 # Booking rejects overlaps",
+          // zig build test and a C harness, ThrillhouseBot-test#274 and #277 (#1091).
+          "error: 'tests.test.compact counts every reading in the window' failed: expected 3, found 2",
+          "FAIL test_find_free_uses_last_locker"
         })
     void eachRunnersFailedTestLineIsNamed(String line) {
       assertEquals(List.of(line), lines("Running tests\n" + line + "\nPost job cleanup.\n"));
@@ -660,7 +663,12 @@ class CiFailureContextResolverTest {
           "[ERROR]   12:5  error  'shift' is assigned a value but never used  no-unused-vars",
           "[ERROR]   web/src/app.ts:12 unexpected token",
           "[ERROR]   web\\src\\app.ts:12 unexpected token",
-          "\u25CF Running coverage on untested files"
+          "\u25CF Running coverage on untested files",
+          "error: while executing test 'tests.test.compact reports window minimum', the following"
+              + " test command failed:",
+          "error: the following build command failed with exit code 1:",
+          "FAIL example.com/locker 0.012s",
+          "FAIL example.com/locker [build failed]"
         })
     void otherFailureWordsAreNotATest(String line) {
       assertEquals(List.of(), lines(line + "\n"));
