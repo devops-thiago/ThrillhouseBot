@@ -23,8 +23,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
@@ -132,6 +135,223 @@ class LinkedIssueCitationsTest {
   private static ReviewResponse.Finding only(ReviewResponse response) {
     assertEquals(1, response.findings().size());
     return response.findings().getFirst();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"quoted", "unquoted", "absent-quote", "adjacent-apostrophe"})
+  void citationPassReadsInputABoundedNumberOfTimes(String shape) {
+    var unit =
+        switch (shape) {
+          case "quoted" ->
+              "Issue #228 requires 'Annual-plan subscribers are charged only in their renewal month'. ";
+          case "unquoted" ->
+              "The acceptance criterion for annual-plan subscribers renewal month is unmet; ";
+          case "adjacent-apostrophe" ->
+              "'acceptance criterion for annual-plan subscribers renewal month is unmet, ";
+          default -> "The linked issue is about billing. ";
+        };
+    var text =
+        new CountedText(
+            (shape.equals("adjacent-apostrophe") ? "'opening " : "") + unit.repeat(2_000));
+    var citations = LinkedIssueCitations.citationsInFoldedText(text, TWO_ISSUES);
+
+    assertEquals(2_000, citations.size());
+    var expected =
+        shape.equals("absent-quote")
+            ? LinkedIssueCitations.Verdict.UNJUDGED
+            : LinkedIssueCitations.Verdict.MATCHED;
+    assertTrue(citations.stream().allMatch(citation -> citation.verdict() == expected));
+    assertTrue(text.reads[0] < text.length() * 80L, "Input reads: " + text.reads[0]);
+  }
+
+  @Test
+  void aPrefixOnlyQuoteBoundaryDoesNotChangeTheNextCitationsSource() {
+    var first =
+        "Issue #231 mentioned 'billing'acceptance criterion for annual-plan subscribers renewal month is missing";
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "low",
+                        "low",
+                        "Independent bug",
+                        first
+                            + ", and the acceptance criterion for annual-plan subscribers renewal month is missing.")),
+                TWO_ISSUES));
+    assertEquals(first + ".", held.description());
+    assertEquals("medium", held.confidence());
+  }
+
+  @Test
+  void removingAQuoteRechecksTheLaterUnquotedCriterionsSource() {
+    var description =
+        "Issue #231 is referenced in the metadata solely to identify the unrelated ticket whose validator handles meter readings, and the linked issue #228 states 'invented policy', but the acceptance criterion for annual-plan subscribers renewal month is missing.";
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(finding("low", "low", "Independent bug", description)), TWO_ISSUES));
+    assertTrue(held.description().startsWith("Issue #231 is referenced in the metadata"));
+    assertFalse(held.description().contains("invented policy"));
+    assertFalse(held.description().contains("annual-plan"));
+  }
+
+  @Test
+  void aSentenceCutInsideAnEarlierMultiSentenceQuoteRetainsTheRemainingClaim() {
+    var issues =
+        TWO_ISSUES.replace(
+            "### Issue #231:",
+            "- [ ] First sentence. Issue #231 does not govern billing.\n\n### Issue #231:");
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "low",
+                        "low",
+                        "Independent bug",
+                        "Issue #228 states 'First sentence. Issue #231 does not govern billing' per the acceptance criterion for instant refunds. The charge loop aborts.")),
+                issues));
+    assertEquals("Issue #228 states 'First sentence. The charge loop aborts.", held.description());
+    assertEquals("medium", held.confidence());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"a", "Ⅳ", "½"})
+  void unicodeLettersAndNumbersBeforeAnApostropheDoNotOpenAQuotedCriterion(String preceding) {
+    var finding =
+        finding(
+            "low",
+            "low",
+            "Independent bug",
+            "The linked issue #228 states "
+                + preceding
+                + "'Annual-plan subscribers are charged only in their renewal month'.");
+    assertSame(finding, only(LinkedIssueCitations.apply(responseOf(finding), TWO_ISSUES)));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {" ", "😀", ",", "𐐀", "𝟙"})
+  void theExistingRegexOpenerBehaviorIsPreserved(String preceding) {
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "low",
+                        "low",
+                        "Independent bug",
+                        "The linked issue #228 states "
+                            + preceding
+                            + "'Annual-plan\rsubscribers are charged only in their renewal month'.")),
+                TWO_ISSUES));
+    assertEquals("medium", held.confidence());
+  }
+
+  @Test
+  void aCompleteInnerQuoteResetsTheSourceWhileItsOuterQuoteIsIncomplete() {
+    var citations =
+        LinkedIssueCitations.citationsInFoldedText(
+            "Issue #231 mentioned 'unclosed \"billing\" the acceptance criterion for annual-plan subscribers renewal month is missing.",
+            TWO_ISSUES);
+    assertEquals(
+        List.of(LinkedIssueCitations.Verdict.UNMATCHED, LinkedIssueCitations.Verdict.MATCHED),
+        citations.stream().map(LinkedIssueCitations.Citation::verdict).toList());
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "''",
+        "\"\"",
+        "'unclosed",
+        "\"unclosed",
+        "'bad\nquoted'",
+        "\"bad\nquoted\"",
+        "'",
+        "\""
+      })
+  void emptyIncompleteAndNewlineCrossingQuotesDoNotEstablishACriterion(String passage) {
+    var finding =
+        finding("low", "low", "Independent bug", "The linked issue #228 states " + passage + ".");
+    assertSame(finding, only(LinkedIssueCitations.apply(responseOf(finding), TWO_ISSUES)));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {"billing'", "'", "Earlier 'unclosed\nbilling'", "Earlier 'unclosed\n'billing'"})
+  void prefixOnlyClosuresRespectOpenersAndLineBoundaries(String lead) {
+    var citations =
+        LinkedIssueCitations.citationsInFoldedText(
+            lead + "acceptance criterion for annual-plan subscribers renewal month is missing.",
+            TWO_ISSUES);
+    assertEquals(
+        List.of(LinkedIssueCitations.Verdict.MATCHED),
+        citations.stream().map(LinkedIssueCitations.Citation::verdict).toList());
+  }
+
+  @ParameterizedTest
+  @MethodSource("retainedScopedCitations")
+  void retainedScopedCitationsKeepTheirDescriptionAndConfidenceFloor(
+      String description, String title) {
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(finding("low", "low", title, description)), TWO_ISSUES));
+    assertEquals(description, held.description());
+    assertEquals("medium", held.confidence());
+  }
+
+  static Stream<Arguments> retainedScopedCitations() {
+    return Stream.of(
+        Arguments.of(
+            "The comment reads \"'Annual-plan subscribers\" and other prose' and the acceptance criterion for annual-plan subscribers renewal month is missing.",
+            "Independent bug"),
+        Arguments.of(
+            "Issue #231 is mentioned.acceptance criterion for annual-plan subscribers renewal month is missing, and the acceptance criterion for negative litre readings is missing.",
+            "Independent bug"),
+        Arguments.of(
+            "The linked issue #228 states 'Annual-plan subscribers are charged only in their renewal month'.\nThe code charges every month.",
+            "Independent bug"),
+        Arguments.of(
+            "Nothing implements issues #228 and #231's 'Readings with a negative litre value are rejected with reason `negative`'.",
+            "Negative readings accepted"));
+  }
+
+  /** Every regex read is counted; subsequences share the same counter. No wall-clock assertion. */
+  private static final class CountedText implements CharSequence {
+    private final String text;
+    private final long[] reads;
+
+    CountedText(String text) {
+      this(text, new long[1]);
+    }
+
+    private CountedText(String text, long[] reads) {
+      this.text = text;
+      this.reads = reads;
+    }
+
+    @Override
+    public int length() {
+      return text.length();
+    }
+
+    @Override
+    public char charAt(int index) {
+      reads[0]++;
+      return text.charAt(index);
+    }
+
+    @Override
+    public CharSequence subSequence(int start, int end) {
+      return new CountedText(text.substring(start, end), reads);
+    }
+
+    @Override
+    public String toString() {
+      return text;
+    }
   }
 
   // Rule 3: a cited criterion must be in the issue.
@@ -586,6 +806,127 @@ class LinkedIssueCitationsTest {
     var held = only(LinkedIssueCitations.apply(responseOf(finding), TWO_ISSUES));
 
     assertEquals(description, held.description());
+  }
+
+  @Test
+  void aCriterionAttributedToAnotherLinkedIssueIsNotEvidence() {
+    var criterion = "Readings with a negative litre value are rejected with reason `negative`";
+    for (var description :
+        List.of(
+            "This violates issue #228's '" + criterion + "'.",
+            "This violates the linked issue #228's '" + criterion + "'.",
+            "Issue #228's acceptance criterion for rejecting negative litre readings is unmet.")) {
+      var response =
+          LinkedIssueCitations.apply(
+              responseOf(finding("low", "low", "Wrong criterion", description)), TWO_ISSUES);
+      assertEquals(List.of(), response.findings(), description);
+    }
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "low",
+                        "low",
+                        "Negative readings accepted",
+                        "This violates issue #231's '" + criterion + "'.")),
+                TWO_ISSUES));
+    assertEquals("medium", held.risk());
+    assertEquals("medium", held.confidence());
+  }
+
+  @Test
+  void aWrongNumberedCitationIsCutWithoutPromotingAnIndependentClaim() {
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "low",
+                        "low",
+                        "Validator accepts bad input",
+                        "The validator never checks the sign, and the linked issue #228 requires 'Readings with a negative litre value are rejected with reason `negative`'.")),
+                TWO_ISSUES));
+    assertEquals("The validator never checks the sign.", held.description());
+    assertEquals("low", held.risk());
+    assertEquals("low", held.confidence());
+  }
+
+  @Test
+  void aNumberedCitationInATitleIsHeldToThatIssue() {
+    var response =
+        responseOf(
+            finding(
+                "low",
+                "low",
+                "Issue #228's acceptance criterion for rejecting negative litre readings is unmet",
+                "The validator never checks the sign."));
+    assertTrue(LinkedIssueCitations.apply(response, TWO_ISSUES).findings().isEmpty());
+  }
+
+  @Test
+  void aPreviousQuotedCitationDoesNotSupplyTheNextCitationsIssue() {
+    var description =
+        "Issue #228 requires 'Annual-plan subscribers are charged only in their renewal month', and issue #231 requires 'Annual-plan subscribers are charged only in their renewal month'.";
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(finding("high", "high", "Annual plans charged monthly", description)),
+                TWO_ISSUES));
+    assertEquals(
+        "Issue #228 requires 'Annual-plan subscribers are charged only in their renewal month'.",
+        held.description());
+    var unnamed =
+        "Issue #228 requires 'Annual-plan subscribers are charged only in their renewal month', and the linked issues require 'Readings with a negative litre value are rejected with reason `negative`'.";
+    assertEquals(
+        unnamed,
+        only(LinkedIssueCitations.apply(
+                responseOf(finding("high", "high", "Two unmet criteria", unnamed)), TWO_ISSUES))
+            .description());
+  }
+
+  @Test
+  void numberedAttributionsInSummaryGapsUseTheirOwnIssue() {
+    var wrong = "Issue #228's acceptance criterion for rejecting negative litre readings is unmet.";
+    var right = "Issue #231's acceptance criterion for rejecting negative litre readings is unmet.";
+    assertEquals(
+        List.of(right), LinkedIssueCitations.screenGaps(List.of(wrong, right), TWO_ISSUES));
+  }
+
+  @Test
+  void anUnreadIssueCannotValidateAnExplicitLinkedIssueAttribution() {
+    var description =
+        "The linked issue #999 requires 'Readings with a negative litre value are rejected with reason `negative`'.";
+    assertTrue(
+        LinkedIssueCitations.apply(
+                responseOf(finding("low", "low", "Unknown criterion", description)), TWO_ISSUES)
+            .findings()
+            .isEmpty());
+    var plural =
+        "Nothing implements issues #228 and #999's 'Annual-plan subscribers are charged only in their renewal month'.";
+    assertEquals(
+        "medium",
+        only(LinkedIssueCitations.apply(
+                responseOf(finding("low", "low", "Annual plans charged monthly", plural)),
+                TWO_ISSUES))
+            .confidence());
+  }
+
+  @Test
+  void anIssueNumberInsideAPreviousMultiSentenceQuoteIsNotAnAttribution() {
+    var firstCriterion = "First sentence. Issue #231 does not govern billing";
+    var issues =
+        TWO_ISSUES.replace("### Issue #231:", "- [ ] " + firstCriterion + ".\n\n### Issue #231:");
+    var description =
+        "Issue #228 states '"
+            + firstCriterion
+            + "', and the acceptance criterion for annual-plan subscribers charged only in their renewal month is unmet.";
+    assertEquals(
+        description,
+        only(LinkedIssueCitations.apply(
+                responseOf(finding("high", "high", "Annual plans charged monthly", description)),
+                issues))
+            .description());
   }
 
   @Test

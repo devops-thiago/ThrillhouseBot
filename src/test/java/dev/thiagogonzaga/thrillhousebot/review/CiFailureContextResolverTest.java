@@ -575,6 +575,25 @@ class CiFailureContextResolverTest {
   @Nested
   class FailingTestLines {
 
+    @Test
+    void expectedTapOutcomesAreNotFailedTests() {
+      assertEquals(
+          List.of(
+              "not ok 1 - a real failing test",
+              "not ok 6 - TODO without a directive",
+              "not ok 7 - near directive # TODOish is ordinary text"),
+          lines(
+              """
+          not ok 1 - a real failing test
+          not ok 2 - pending implementation # TODO Unimplemented
+          not ok 3 - skipped on this platform # SKIP Windows only
+          not ok 4 - pending lower-case directive # todo later
+          not ok 5 - skipped lower-case directive #skip later
+          not ok 6 - TODO without a directive
+          not ok 7 - near directive # TODOish is ordinary text
+          """));
+    }
+
     private List<String> lines(String log) {
       return CiFailureContextResolver.failingTestLines(log.getBytes(StandardCharsets.UTF_8));
     }
