@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -314,8 +315,9 @@ public final class ChangeSymbols {
     private static final Pattern BARE_HEREDOC =
         Pattern.compile("<<[-~]?\\h*([A-Z_][A-Z0-9_]*)(?!\\w)");
 
-    /** A heredoc opener of any case straight after the operator: {@code <<eof}, {@code <<-end}. */
-    private static final Pattern WORD_HEREDOC = Pattern.compile("<<[-~]?([A-Za-z_]\\w*)(?!\\w)");
+    /** A word of any case after the operator, with optional horizontal space; group 2 is it. */
+    private static final Pattern WORD_HEREDOC =
+        Pattern.compile("<<[-~]?(\\h*)([A-Za-z_]\\w*)(?!\\w)");
 
     /** What closes the string or comment the text so far ends inside; {@code null} in code. */
     private String closer;
@@ -390,11 +392,12 @@ public final class ChangeSymbols {
     /**
      * The index past the {@code <<} at {@code i}: past a heredoc opener, noting its delimiter in
      * {@link #openedHeredoc}, or past the operator alone. A quoted delimiter opens one unless code
-     * follows ({@link #continuesAsCode}); an upper-case one always does; a word of any case
-     * straight after the operator ({@code cat <<eof}, {@code <<-end}) does where the line reads as
-     * a shell command: no code follows, and the word is the last on the line or a command word
-     * comes before the operator ({@link #followsCommandWord}). So {@code x<<y + 1} and {@code a = x
-     * <<y;} open nothing.
+     * follows ({@link #continuesAsCode}); an upper-case one always does; a word of any case after
+     * the operator ({@code cat <<eof}, {@code cat << eof}, {@code <<-end}) does where the line
+     * reads as a shell command: no code follows, and the word is the last on the line or a command
+     * word comes before the operator ({@link #followsCommandWord}). So {@code x<<y + 1} and {@code
+     * a = x <<y;} open nothing. A spaced lower-case delimiter also needs a command rather than an
+     * assignment before the operator, so {@code y = x << y} remains a shift.
      */
     private int pastHeredoc(String text, int i) {
       var quoted = QUOTED_HEREDOC.matcher(text).region(i, text.length());
@@ -408,10 +411,23 @@ public final class ChangeSymbols {
       var word = WORD_HEREDOC.matcher(text).region(i, text.length());
       if (word.lookingAt()
           && !continuesAsCode(text, word.end())
+          && (word.group(1).isEmpty() || commandBeforeSpacedHeredoc(text, i))
           && (text.substring(word.end()).isBlank() || followsCommandWord(text, i))) {
-        return opens(word.group(1), word.end());
+        return opens(word.group(2), word.end());
       }
       return i + 2;
+    }
+
+    /** A spaced word belongs to a shell command, not an assignment's shift expression. */
+    private static boolean commandBeforeSpacedHeredoc(String text, int i) {
+      var before = text.substring(0, i).strip();
+      if (before.isEmpty()) {
+        return true;
+      }
+      var words = before.split("\\h+");
+      return followsCommandWord(text, i)
+          && Arrays.stream(words).noneMatch(word -> word.startsWith("="))
+          && Arrays.stream(words).anyMatch(word -> word.indexOf('=') < 0);
     }
 
     /** Notes {@code delimiter} as the heredoc the line opens and returns {@code end}. */

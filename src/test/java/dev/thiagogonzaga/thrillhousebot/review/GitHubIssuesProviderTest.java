@@ -288,6 +288,47 @@ class GitHubIssuesProviderTest {
     }
 
     @Test
+    void anOverIndentedMarkerDoesNotCloseAFence() {
+      for (var marker : List.of("```", "~~~", "````", "~~~~")) {
+        for (var indent : List.of("    ", "\t", "     ")) {
+          var body = marker + "\n" + indent + marker + "\nCloses #1\n" + marker + "\nFixes #2";
+          assertEquals(List.of(2), GitHubIssuesProvider.bodyReferences(body, "o", "r"), body);
+        }
+        for (var indent : List.of("", " ", "  ", "   ")) {
+          var body = marker + "\nCloses #1\n" + indent + marker + "\nFixes #2";
+          assertEquals(List.of(2), GitHubIssuesProvider.bodyReferences(body, "o", "r"), body);
+        }
+      }
+    }
+
+    @Test
+    void containerIndentationStillAllowsItsFenceToClose() {
+      for (var pair :
+          List.of(
+              List.of("- ~~~", "    ~~~"),
+              List.of("-   ~~~", "       ~~~"),
+              List.of("-    ~~~", "        ~~~"),
+              List.of("12. ```", "    ```"),
+              List.of("> ~~~", ">    ~~~"),
+              List.of("> > ~~~", ">    >    ~~~"))) {
+        var body = pair.getFirst() + "\nCloses #1\n" + pair.getLast() + "\nFixes #2";
+        assertEquals(List.of(2), GitHubIssuesProvider.bodyReferences(body, "o", "r"), body);
+      }
+    }
+
+    @Test
+    void anOverIndentedCloserInsideAContainerStaysCode() {
+      for (var pair :
+          List.of(
+              List.of("> ~~~", "    > ~~~"),
+              List.of("> ~~~", ">     ~~~"),
+              List.of("- ~~~", "      ~~~"))) {
+        var body = pair.getFirst() + "\n" + pair.getLast() + "\nCloses #1\n~~~\nFixes #2";
+        assertEquals(List.of(2), GitHubIssuesProvider.bodyReferences(body, "o", "r"), body);
+      }
+    }
+
+    @Test
     void fencesAtTheEdgesOfTheBodyOpenAndCloseLikeAnyOther() {
       // Opened on the body's first line, with or without a container marker before it.
       for (var opener : List.of("```", "  ```", "> ```", "1. ```")) {

@@ -372,11 +372,18 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
 
     /**
      * The end of the fenced block whose opening run of {@code width} {@code c} ends at {@code
-     * from}: the end of the first later line that holds, after blanks and blockquote markers, a run
-     * of at least {@code width} {@code c} and nothing else, or the end of the body when no line
-     * closes it.
+     * from}: the end of the first later line that holds, within three indentation columns of its
+     * list or blockquote container, a run of at least {@code width} {@code c} and nothing else, or
+     * the end of the body when no line closes it.
      */
     private int fenceEnd(char c, int width, int from) {
+      var opener = from - width;
+      var markerEnd = skipContainerBack(opener);
+      var markerStart = markerEnd > 0 ? listMarkerStart(markerEnd - 1) : -1;
+      var containerIndent =
+          markerStart < 0
+              ? 0
+              : markerEnd - markerStart + indentBefore(opener) + indentBefore(markerStart);
       var newline = body.indexOf('\n', from);
       while (newline >= 0) {
         var j = newline + 1;
@@ -392,12 +399,31 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
           trail++;
         }
         var lineEnd = trail == body.length() || body.charAt(trail) == '\n';
-        if (run - j >= width && lineEnd) {
+        if (run - j >= width && lineEnd && closingIndentFits(newline + 1, j, containerIndent)) {
           return trail;
         }
         newline = body.indexOf('\n', trail);
       }
       return body.length();
+    }
+
+    /** A closer has at most three indented columns inside its list or blockquote container. */
+    private boolean closingIndentFits(int lineStart, int marker, int containerIndent) {
+      var columns = 0;
+      var quoted = false;
+      for (var i = lineStart; i < marker; i++) {
+        var c = body.charAt(i);
+        if (c == '>') {
+          if (columns > 3 + containerIndent + (quoted ? 1 : 0)) {
+            return false;
+          }
+          columns = 0;
+          quoted = true;
+        } else {
+          columns += c == '\t' ? 4 : 1;
+        }
+      }
+      return columns <= 3 + containerIndent + (quoted ? 1 : 0);
     }
 
     /**

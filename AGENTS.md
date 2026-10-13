@@ -58,7 +58,7 @@ same diff.
 | Stand down before the first write: a chain of `review/PrePublishGuard`s run in order, first stand-down wins, shared consequences (skip counted, check run skipped) applied once. Order: head moved (#704, with the #806 carry-over), then a rejecting label gate (#1021). A new guard is added to the coordinator's list, not to the orchestrator | `review/ReviewStandDown.beforeFirstWrite` over `HeadMovedGuard` (with `SupersededFindingsCarryover`), `LabelGateGuard` (with `PullRequestLabelGate`) |
 | Load diff, every earlier round (from the stored `ReviewSession.aiResponseJson`), threads and conversation, instructions, labels, project stack, config-key and patch-coverage context | `review/ReviewContextLoader` (with `PatchCoverageResolver`, `ConfigKeyContextResolver`, `BugFixContextResolver`, `SupersededFindingsCarryover`) |
 | Previous-findings prompt section: the numbered effective round, then the unnumbered "still open from earlier rounds" and "answered in earlier rounds" sections | `review/FollowUpAnalyzer.buildPreviousFindingsContext` (with `effectivePreviousRoundIndex`, `openEarlierRoundFindings`) |
-| Early CI reading and the opt-in CI-failure section | `review/CiStatusEvaluator`, `review/CiFailureContextResolver` |
+| Early CI reading and the opt-in CI-failure section | `review/CiStatusEvaluator`, `review/CiFailureContextResolver`; TAP `TODO` and `SKIP` directives are expected outcomes, excluded both when collecting failed tests and when reading them back via `CiFailureCitations` (#1110) |
 | Opt-in review learnings: recall before the call (ranked, capped section) | `review/ReviewLearnings.promptSection` (reads `ReviewLearningService.listActive`) |
 | Opt-in linked-issue context: resolve the PR's linked issues, read them, extract acceptance criteria, sanitize and cap | `review/TicketContextResolver.resolve` over an `review/IssueTrackerProvider` (`review/GitHubIssuesProvider.linkedTickets`: PR-body closing keywords, then `closingIssuesReferences`, then optionally the branch name), called from `ReviewOrchestrator` and handed to `ReviewPromptAssembler.assemble(ctx, req, ciFailures, linkedIssues)` |
 | Fence untrusted input, build review and summary guidance, pick the system prompt | `review/ReviewPromptAssembler` (with `PromptSections`, `PromptTemplateEscaper`, `ReviewDimensionRouter`) |
@@ -377,7 +377,9 @@ live `fence(...)` (#604).
   `description_gaps` entry (`Linked issue #N: …`), never a finding: a finding claims a defect on
   a changed line, a missing criterion is scope. A finding the review call does raise against a
   criterion (the changed code contradicts it) is held to the issue text deterministically
-  (`LinkedIssueCitations`, #1073); the gaps are not turned into findings. The bug-fix efficacy section drops its own copy
+  (`LinkedIssueCitations`, #1073). A numbered attribution reads only that issue's body; explicitly
+  plural attributions read the named bodies, and unnamed ones read the full linked-issue section
+  (#1109). The gaps are not turned into findings. The bug-fix efficacy section drops its own copy
   of the issue text when the linked-issue section is present.
 - **Sanitize model and GitHub text before logging it.** Wrap every such value in
   `LogSafe.oneLine` at the point where the accessor is read. `LogSafeInvariantTest` derives the

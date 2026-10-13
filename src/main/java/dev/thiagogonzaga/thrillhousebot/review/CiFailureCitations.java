@@ -327,6 +327,9 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
    */
   static String testName(String line) {
     String s = line.strip();
+    if (CiFailureContextResolver.isExpectedTapOutcome(s)) {
+      return null;
+    }
     int comment = s.indexOf(" # ");
     if (s.startsWith("rspec ")) {
       // RSpec names the example after " # "; without one the line names only a spec file.

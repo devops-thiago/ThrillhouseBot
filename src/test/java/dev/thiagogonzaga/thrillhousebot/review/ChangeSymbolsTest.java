@@ -381,4 +381,54 @@ class ChangeSymbolsTest {
             "after_unspaced_shift"),
         ChangeSymbols.declaredNames(patch));
   }
+
+  @Test
+  void aSpacedLowerCaseHeredocDeclaresNoNamesFromItsBody() {
+    var patch =
+        """
+        @@ -0,0 +1,15 @@
+        +cat << eof > schema.py
+        +class Schema:
+        +eof
+        +cat <<- end > output.py
+        +def generated():
+        +end
+        +python3 - << mixedEnd --verbose
+        +class Generated:
+        +mixedEnd
+        +result = x << y + 1
+        +def after_shift():
+        +out << word;
+        +def after_stream():
+        """;
+    assertEquals(List.of("after_shift", "after_stream"), ChangeSymbols.declaredNames(patch));
+  }
+
+  @Test
+  void spacedHeredocsKeepShellAssignmentsAndShiftExpressionsDistinct() {
+    var patch =
+        """
+        +VALUE=1 cat << eof
+        +def in_environment_command():
+        +eof
+        +<< lower
+        +def in_bare_redirection():
+        +lower
+        +result=x << word
+        +def after_compact_assignment():
+        +result =x << word
+        +def after_spaced_assignment():
+        +x<< word
+        +def after_unspaced_shift():
+        +VALUE=1 << word
+        +def after_assignment_only():
+        """;
+    assertEquals(
+        List.of(
+            "after_compact_assignment",
+            "after_spaced_assignment",
+            "after_unspaced_shift",
+            "after_assignment_only"),
+        ChangeSymbols.declaredNames(patch));
+  }
 }

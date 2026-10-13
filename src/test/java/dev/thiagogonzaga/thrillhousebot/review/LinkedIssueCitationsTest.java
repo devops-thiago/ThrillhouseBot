@@ -589,6 +589,140 @@ class LinkedIssueCitationsTest {
   }
 
   @Test
+  void aCriterionAttributedToAnotherLinkedIssueIsNotEvidence() {
+    var criterion = "Readings with a negative litre value are rejected with reason `negative`";
+    for (var description :
+        List.of(
+            "This violates issue #228's '" + criterion + "'.",
+            "This violates the linked issue #228's '" + criterion + "'.",
+            "Issue #228's acceptance criterion for rejecting negative litre readings is unmet.")) {
+      var response =
+          LinkedIssueCitations.apply(
+              responseOf(finding("low", "low", "Wrong criterion", description)), TWO_ISSUES);
+      assertEquals(List.of(), response.findings(), description);
+    }
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "low",
+                        "low",
+                        "Negative readings accepted",
+                        "This violates issue #231's '" + criterion + "'.")),
+                TWO_ISSUES));
+    assertEquals("medium", held.risk());
+    assertEquals("medium", held.confidence());
+  }
+
+  @Test
+  void aWrongNumberedCitationIsCutWithoutPromotingAnIndependentClaim() {
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "low",
+                        "low",
+                        "Validator accepts bad input",
+                        "The validator never checks the sign, and the linked issue #228 requires 'Readings with a negative litre value are rejected with reason `negative`'.")),
+                TWO_ISSUES));
+    assertEquals("The validator never checks the sign.", held.description());
+    assertEquals("low", held.risk());
+    assertEquals("low", held.confidence());
+  }
+
+  @Test
+  void aNumberedCitationInATitleIsHeldToThatIssue() {
+    var response =
+        responseOf(
+            finding(
+                "low",
+                "low",
+                "Issue #228's acceptance criterion for rejecting negative litre readings is unmet",
+                "The validator never checks the sign."));
+    assertTrue(LinkedIssueCitations.apply(response, TWO_ISSUES).findings().isEmpty());
+  }
+
+  @Test
+  void pluralAttributionsReadBothNamedIssues() {
+    var description =
+        "Nothing implements issues #228 and #231's 'Readings with a negative litre value are rejected with reason `negative`'.";
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(finding("low", "low", "Negative readings accepted", description)),
+                TWO_ISSUES));
+    assertEquals(description, held.description());
+    assertEquals("medium", held.confidence());
+  }
+
+  @Test
+  void aPreviousQuotedCitationDoesNotSupplyTheNextCitationsIssue() {
+    var description =
+        "Issue #228 requires 'Annual-plan subscribers are charged only in their renewal month', and issue #231 requires 'Annual-plan subscribers are charged only in their renewal month'.";
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(finding("high", "high", "Annual plans charged monthly", description)),
+                TWO_ISSUES));
+    assertEquals(
+        "Issue #228 requires 'Annual-plan subscribers are charged only in their renewal month'.",
+        held.description());
+    var unnamed =
+        "Issue #228 requires 'Annual-plan subscribers are charged only in their renewal month', and the linked issues require 'Readings with a negative litre value are rejected with reason `negative`'.";
+    assertEquals(
+        unnamed,
+        only(LinkedIssueCitations.apply(
+                responseOf(finding("high", "high", "Two unmet criteria", unnamed)), TWO_ISSUES))
+            .description());
+  }
+
+  @Test
+  void numberedAttributionsInSummaryGapsUseTheirOwnIssue() {
+    var wrong = "Issue #228's acceptance criterion for rejecting negative litre readings is unmet.";
+    var right = "Issue #231's acceptance criterion for rejecting negative litre readings is unmet.";
+    assertEquals(
+        List.of(right), LinkedIssueCitations.screenGaps(List.of(wrong, right), TWO_ISSUES));
+  }
+
+  @Test
+  void anUnreadIssueCannotValidateAnExplicitLinkedIssueAttribution() {
+    var description =
+        "The linked issue #999 requires 'Readings with a negative litre value are rejected with reason `negative`'.";
+    assertTrue(
+        LinkedIssueCitations.apply(
+                responseOf(finding("low", "low", "Unknown criterion", description)), TWO_ISSUES)
+            .findings()
+            .isEmpty());
+    var plural =
+        "Nothing implements issues #228 and #999's 'Annual-plan subscribers are charged only in their renewal month'.";
+    assertEquals(
+        "medium",
+        only(LinkedIssueCitations.apply(
+                responseOf(finding("low", "low", "Annual plans charged monthly", plural)),
+                TWO_ISSUES))
+            .confidence());
+  }
+
+  @Test
+  void anIssueNumberInsideAPreviousMultiSentenceQuoteIsNotAnAttribution() {
+    var firstCriterion = "First sentence. Issue #231 does not govern billing";
+    var issues =
+        TWO_ISSUES.replace("### Issue #231:", "- [ ] " + firstCriterion + ".\n\n### Issue #231:");
+    var description =
+        "Issue #228 states '"
+            + firstCriterion
+            + "', and the acceptance criterion for annual-plan subscribers charged only in their renewal month is unmet.";
+    assertEquals(
+        description,
+        only(LinkedIssueCitations.apply(
+                responseOf(finding("high", "high", "Annual plans charged monthly", description)),
+                issues))
+            .description());
+  }
+
+  @Test
   void aQuoteAttributedToTheLinkedIssuesIsHeldToThemButNotRenamed() {
     var held =
         only(

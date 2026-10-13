@@ -20,7 +20,10 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -38,9 +41,11 @@ import java.util.regex.Pattern;
  *   <li><b>A cited criterion must be in the issue.</b> A passage quoted as the linked issue's, or
  *       an acceptance criterion named by its subject ("the acceptance criterion for declined
  *       handling"), is checked against the issue text, case-, whitespace- and punctuation-blind as
- *       {@link DescriptionGapScreen} checks the PR description (#946). A citation that matches
- *       nothing is taken out of the text: its clause when the sentence makes another claim, else
- *       the sentence. A finding whose title or description is then empty is dropped, since the
+ *       {@link DescriptionGapScreen} checks the PR description (#946). An explicit issue number
+ *       scopes the check to that issue's body, or the named bodies for a plural attribution
+ *       (#1109). An unnamed attribution reads the full linked-issue section. A citation that
+ *       matches nothing is taken out of the text: its clause when the sentence makes another claim,
+ *       else the sentence. A finding whose title or description is then empty is dropped, since the
  *       criterion was its only claim; so is a bullet. A {@code Linked issue #N: <criterion>} bullet
  *       is shortened by design, so its criterion is matched on content words instead.
  *   <li><b>A finding reporting an unmet criterion is a threaded finding.</b> One that cites a
@@ -170,6 +175,37 @@ final class LinkedIssueCitations {
     UNJUDGED
   }
 
+  private record Source(String normalized, Set<String> words) {
+    static Source of(String text) {
+      return new Source(
+          DescriptionGapScreen.normalize(text), SummarySurfaceDeduplicator.claim(text).wordSet());
+    }
+  }
+
+  /** A numbered attribution reads only that issue; an unnamed one reads the whole section. */
+  private record Sources(Source all, Map<String, Source> numbered) {
+    static Sources of(String linkedIssues, List<String> keys) {
+      var numbered = new LinkedHashMap<String, Source>();
+      for (var key : keys) {
+        numbered.put(key, Source.of(DescriptionGapCarryover.issueSection(key, linkedIssues)));
+      }
+      return new Sources(Source.of(linkedIssues), numbered);
+    }
+
+    Source forKeys(Set<String> keys) {
+      var normalized = new StringBuilder();
+      var words = new LinkedHashSet<String>();
+      for (var key : keys) {
+        var source = numbered.get(key);
+        if (source != null) {
+          normalized.append(source.normalized()).append(' ');
+          words.addAll(source.words());
+        }
+      }
+      return new Source(normalized.toString(), words);
+    }
+  }
+
   /**
    * {@code response} with every finding held to {@code linkedIssues}, the unfenced linked-issue
    * section; returned as it is when no issue is linked or nothing changes.
@@ -179,12 +215,11 @@ final class LinkedIssueCitations {
     if (keys.isEmpty() || response.findings().isEmpty()) {
       return response;
     }
-    var source = DescriptionGapScreen.normalize(linkedIssues);
-    var issueWords = SummarySurfaceDeduplicator.claim(linkedIssues).wordSet();
+    var sources = Sources.of(linkedIssues, keys);
     var kept = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     var changed = false;
     for (var finding : response.findings()) {
-      var held = held(finding, keys, source, issueWords);
+      var held = held(finding, keys, sources);
       changed |= held != finding;
       if (held != null) {
         kept.add(held);
@@ -201,13 +236,13 @@ final class LinkedIssueCitations {
 
   /** {@code finding} held to the issue; {@code null} when its only claim was a criterion. */
   private static ReviewResponse.Finding held(
-      ReviewResponse.Finding finding, List<String> keys, String source, Set<String> issueWords) {
+      ReviewResponse.Finding finding, List<String> keys, Sources sources) {
     var title = nullToEmpty(finding.title());
     var description = nullToEmpty(finding.description());
-    var titleCitations = citations(title, keys, source, issueWords);
-    var descriptionCitations = citations(description, keys, source, issueWords);
-    var newTitle = withoutUnmatched(title, keys, source, issueWords);
-    var newDescription = withoutUnmatched(description, keys, source, issueWords);
+    var titleCitations = citations(title, keys, sources);
+    var descriptionCitations = citations(description, keys, sources);
+    var newTitle = withoutUnmatched(title, keys, sources);
+    var newDescription = withoutUnmatched(description, keys, sources);
     if (emptied(title, newTitle) || emptied(description, newDescription)) {
       Log.infof(
           "Dropped finding '%s': the acceptance criterion it rests on is not in the linked issue",
@@ -264,11 +299,10 @@ final class LinkedIssueCitations {
     if (keys.isEmpty() || gaps.isEmpty()) {
       return gaps;
     }
-    var source = DescriptionGapScreen.normalize(linkedIssues);
-    var issueWords = SummarySurfaceDeduplicator.claim(linkedIssues).wordSet();
+    var sources = Sources.of(linkedIssues, keys);
     var kept = new ArrayList<String>(gaps.size());
     for (var gap : gaps) {
-      var held = heldGap(gap, keys, linkedIssues, source, issueWords);
+      var held = heldGap(gap, keys, linkedIssues, sources);
       if (held != null) {
         kept.add(held);
       } else {
@@ -282,12 +316,12 @@ final class LinkedIssueCitations {
   }
 
   private static String heldGap(
-      String gap, List<String> keys, String linkedIssues, String source, Set<String> issueWords) {
+      String gap, List<String> keys, String linkedIssues, Sources sources) {
     var linked = DescriptionGapCarryover.linkedIssueGap(gap);
     if (linked != null) {
       return criterionHeld(linked, keys, linkedIssues) ? gap : null;
     }
-    var held = withoutUnmatched(gap, keys, source, issueWords);
+    var held = withoutUnmatched(gap, keys, sources);
     return held.isBlank() ? null : named(held, keys);
   }
 
@@ -322,8 +356,7 @@ final class LinkedIssueCitations {
    * criterion, or, after a criterion noun, the words naming its subject. Cues inside a citation
    * already found are part of it.
    */
-  static List<Citation> citations(
-      String text, List<String> keys, String source, Set<String> issueWords) {
+  private static List<Citation> citations(String text, List<String> keys, Sources sources) {
     var folded = foldQuotes(text);
     var found = new ArrayList<Citation>();
     var from = 0;
@@ -332,7 +365,7 @@ final class LinkedIssueCitations {
       if (cue == null) {
         return found;
       }
-      var citation = citationAt(folded, cue, source, issueWords);
+      var citation = citationAt(folded, cue, sources);
       found.add(citation);
       from = Math.max(citation.end(), cue.end());
     }
@@ -365,7 +398,7 @@ final class LinkedIssueCitations {
     return cues.stream().min(Comparator.comparingInt(Cue::start)).orElse(null);
   }
 
-  private static Citation citationAt(String text, Cue cue, String source, Set<String> issueWords) {
+  private static Citation citationAt(String text, Cue cue, Sources sources) {
     var start = cue.start();
     var quote = QUOTED.matcher(text);
     var after = cue.end();
@@ -374,7 +407,8 @@ final class LinkedIssueCitations {
         && quote.start() - after <= MAX_CUE_TO_QUOTE
         && quote.start() < sentenceEnd) {
       var verdict =
-          DescriptionGapScreen.appearsIn(quoted(quote), source)
+          DescriptionGapScreen.appearsIn(
+                  quoted(quote), sourceFor(text, cue, quote.start(), sources).normalized())
               ? Verdict.MATCHED
               : Verdict.UNMATCHED;
       return new Citation(start, quote.end(), verdict);
@@ -384,7 +418,27 @@ final class LinkedIssueCitations {
     }
     var clause = CLAUSE_END.matcher(text);
     var end = clause.find(after) ? clause.start() : text.length();
-    return new Citation(start, end, judgeWords(text.substring(after, end), issueWords));
+    return new Citation(
+        start,
+        end,
+        judgeWords(text.substring(after, end), sourceFor(text, cue, end, sources).words()));
+  }
+
+  /** The nearest numbered attribution before this citation, outside an earlier quoted passage. */
+  private static Source sourceFor(String text, Cue cue, int end, Sources sources) {
+    var from = sentenceStart(text, cue.start());
+    var quote = QUOTED.matcher(text).region(0, cue.start());
+    while (quote.find()) {
+      from = Math.max(from, quote.end());
+    }
+    var number = ISSUE_NUMBER.matcher(text).region(from, end);
+    var namedAt = -1;
+    while (number.find()) {
+      namedAt = number.start();
+    }
+    return namedAt < 0
+        ? sources.all()
+        : sources.forKeys(DescriptionGapCarryover.issuesNamed(text.substring(namedAt, end)));
   }
 
   /** Whether the content words naming a criterion are, at least half of them, the issue's. */
@@ -407,20 +461,18 @@ final class LinkedIssueCitations {
    * removes the citations before it, so offsets taken on the original text would not hold. Every
    * cut shortens the text, so the loop ends.
    */
-  static String withoutUnmatched(
-      String text, List<String> keys, String source, Set<String> issueWords) {
+  private static String withoutUnmatched(String text, List<String> keys, Sources sources) {
     var out = text;
-    var unmatched = firstUnmatched(out, keys, source, issueWords);
+    var unmatched = firstUnmatched(out, keys, sources);
     while (unmatched != null) {
       out = cut(out, unmatched);
-      unmatched = firstUnmatched(out, keys, source, issueWords);
+      unmatched = firstUnmatched(out, keys, sources);
     }
     return out;
   }
 
-  private static Citation firstUnmatched(
-      String text, List<String> keys, String source, Set<String> issueWords) {
-    return citations(text, keys, source, issueWords).stream()
+  private static Citation firstUnmatched(String text, List<String> keys, Sources sources) {
+    return citations(text, keys, sources).stream()
         .filter(citation -> citation.verdict() == Verdict.UNMATCHED)
         .findFirst()
         .orElse(null);
