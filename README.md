@@ -1074,6 +1074,47 @@ describe a learning in plain words when the diff breaks it; a learning id that
 reaches review text anyway is rewritten to "a maintainer's earlier decision".
 The verifier and the summary call do not see learnings.
 
+A deterministic check also recognizes one explicit policy: a selected active
+decline saying "We don't pin images by digest in Dockerfiles" (or "We do not")
+as its complete text, or followed by "the release pipeline resolves every image
+to a digest at deploy time", optionally with "and the deployed manifest carries
+that digest". Case, whitespace and a final period may vary. The contraction accepts
+a straight or curly apostrophe, or the explicit `dont` spelling. The exact rationale
+may follow whitespace or one colon, period, comma or semicolon. Other punctuation,
+qualifiers, incomplete text and other rationales are left to the model. A low-risk
+mutable-reference finding on that file type, anchored on a `FROM` or external
+`COPY --from=` image it names, stays
+visible under **Things to double-check** with a note naming the learning id.
+The check uses the exact bounded selection sent to the review call. A disabled
+feature, a decision outside those caps, another defect class or file type,
+an unknown premise, an applicable current digest requirement, or independent
+failure or security evidence leaves the finding alone. Linked-issue evidence
+can still raise its confidence afterward. Deterministic scan findings skip this
+check. Other policies continue to rely on the model's assessment.
+
+The deterministic backstop recognizes complete policy-only titles and descriptions:
+the unpinned-base-image title forms with the mutable-tag/rebuild claim or the
+identical-image-content reproduction forms. Unknown wording, extra consequences
+and linked acceptance-criterion claims leave the finding unchanged. Only case,
+whitespace and a final period may vary; arbitrary prefixes, suffixes, punctuation
+or negation are not removed. The verifier's exact appended unverified paragraph
+stays visible as metadata. Other wording continues to rely on the model's
+assessment of the selected learning.
+
+A rebuild losing identical image contents is the accepted policy's own
+consequence; a functional failure or a failed CI check still leaves the finding
+unchanged. Current instructions mentioning an image, container, Dockerfile or
+base subject, or a Dockerfile directive together with digest/SHA wording leave the
+finding unchanged, including
+declarative rules without a requirement keyword. Wrapped lines, headings and
+implicit references across sentences stay together. A Dockerfile-scoped rule
+already supplies the subject, so digest/SHA wording in an applicable scoped rule
+also leaves the finding unchanged. SHA-family tokens include bare SHA, numeric
+suffixes such as SHA1 and SHA512, and hyphenated forms; lookalike words do not
+establish digest context. Global artifact-only digest prose and the
+ordinary words "from" and "copy" do not make an image-pinning requirement;
+ambiguous image requirements leave the finding unchanged.
+
 **Governance.** `/learnings` lists active learnings with their ids, what each is
 about, who taught it and a link to the source comment. `/forget <id>` retracts
 one at once; the row is kept with who retracted it and when. The dashboard

@@ -107,7 +107,8 @@ newest head is reviewed next. A CI-hold recheck runs once no review of that PR i
      project stack, linked bug-fix issue text, config-key definitions and, when enabled, patch
      coverage.
 3. Read the opt-in context sections: CI failures (`CiFailureContextResolver`), linked issues
-   (`TicketContextResolver`) and review learnings (`ReviewLearnings.promptSection`).
+   (`TicketContextResolver`) and review learnings (`ReviewLearnings.recall`, returning the same
+   bounded selection for the prompt and the deterministic decline-policy check).
 4. Assemble the prompt inputs (`ReviewPromptAssembler.assemble`) and plan the calls
    (`DiffBudgetPlanner.plan`). The CI reading for the verdict runs in parallel: from step 2 when CI
    context is on, from here otherwise.
@@ -247,9 +248,13 @@ prompt inputs, the plan, the evidence resolver, and the evidence and verifier ca
 stages produce) to the next. The constructor builds one explicit ordered list per lane; the batch
 list is the single-call list without `DedupeStage`. `FindingScreenTest` pins both orders.
 
-Every lane then ends with the same two steps (`FindingPipeline.finish`): the deterministic security
-scan merge, then the guard that drops a new finding restating one still open on its own thread
-from any earlier round. The summary call runs after that. Carried description gaps are merged
+Every lane then reaches `FindingPipeline.finish`: the narrow Dockerfile image-digest decline
+check over the selected learnings, the linked-issue evidence floor, placeholder-secret screening,
+the deterministic security scan merge, then the guard that drops a new finding restating one
+still open on its own thread from any earlier round and path-mention screening. The decline
+check keeps covered findings at low confidence and abstains on current digest requirements or
+independent failure/security evidence; the issue floor runs afterward and the scan never passes
+through the decline check. The summary call runs after that. Carried description gaps are merged
 into its result, prompt vocabulary is scrubbed from the response (`PromptLabelScrubber`) and the
 response is stored on the session.
 
@@ -412,7 +417,7 @@ calls do not get them unless stated. All are off by default.
 | Patch coverage | `REVIEW_PATCH_COVERAGE_ENABLED` | `PatchCoverageResolver` reads the CI coverage report and lists the changed lines no test covers. |
 | CI failures | `REVIEW_CI_CONTEXT_ENABLED` | `CiStatusEvaluator`'s early reading of the head. `CiFailureContextResolver` renders the failing checks, one annotations page each (runner notices dropped), and the failing tests named in up to two failing Actions job logs, plus a job-log tail with `REVIEW_CI_CONTEXT_INCLUDE_LOGS`. The review call and the summary call both get it, each with its own request. Pending checks contribute a count only. |
 | Linked issues | `REVIEW_TICKET_CONTEXT_ENABLED` | `TicketContextResolver` over `GitHubIssuesProvider`: PR-body closing keywords, then GitHub's closing references, then optionally the branch name. Same-repository issues only, read and never written. The summary call gets it too and lists unaddressed acceptance criteria as description gaps, never as findings. |
-| Review learnings | `REVIEW_LEARNINGS_ENABLED` | `ReviewLearnings` ranks the repository's active learnings by how close their file is to the changed files, and caps them in count and characters. |
+| Review learnings | `REVIEW_LEARNINGS_ENABLED` | `ReviewLearnings` ranks the repository's active learnings by how close their file is to the changed files, and caps them in count and characters. The same typed selection feeds the prompt and the narrow Dockerfile image-digest decline check; excluded rows do not affect findings. |
 
 Learnings are captured after a review is posted. `FollowUpAnalyzer.survivingDeclines` keeps only
 the `justified` findings whose decline the re-check ran against and whose every reason rests on no
