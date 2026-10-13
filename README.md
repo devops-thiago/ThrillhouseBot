@@ -911,8 +911,15 @@ secret duplicates are looked up by the identifiers their text names. An
 environment key aliases a secret only when its fallback expression reads that
 secret's simple identifier, or a comment directly above the declaration names
 the key. SQL/Lua `--` and HTML/XML/SVG `<!--` comments are recognized in
-those file types, along with `//`, `#`, `/*` and `*` comment lines. A different
-call argument does not tie the key to the secret.
+those file types, along with `//`, `#`, `/*` and `*` comment lines. INI and
+systemd unit files accept `;`, including unit drop-in `.conf` files under
+`name.service.d/` or `service.d/` (and the other unit types); an arbitrary
+`.conf` extension does not establish this syntax. Properties files accept `!`.
+A complete standalone Python triple-quoted string (plain, raw or Unicode)
+may document the next declaration, with only whitespace or a trailing `#`
+comment after its closing delimiter. Assigned, concatenated or unclosed
+strings and Java operators do not supply aliases. A different call argument
+does not tie the key to the secret.
 
 **Grades.** Every scan finding is high confidence, so none carries the "verify
 before acting" note: a match settles whether the pattern is on the line. The

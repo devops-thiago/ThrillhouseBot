@@ -1089,6 +1089,176 @@ class SecurityScanTest {
   }
 
   @Test
+  void iniAndSystemdSemicolonCommentAliasesRemainSupported() {
+    var value = fake.genericSecret(40);
+    assertEquals(
+        Set.of("apiToken", "PAYMENT_API_TOKEN"),
+        aliasesOf(
+            added(
+                "CONFIG.INI",
+                "[Auth]",
+                "; Used when PAYMENT_API_TOKEN is unset",
+                "apiToken = \"" + value + "\"")));
+    for (var file :
+        List.of(
+            "payments.service",
+            "payments.socket",
+            "payments.device",
+            "payments.mount",
+            "payments.automount",
+            "payments.swap",
+            "payments.target",
+            "payments.path",
+            "payments.timer",
+            "payments.slice",
+            "payments.scope",
+            "deploy/systemd/system/payments.service.d/override.conf",
+            "payments.service.d/override.conf",
+            "systemd/system/service.d/10-all.conf",
+            "service.d/10-all.conf",
+            "PAYMENTS.SERVICE.D/OVERRIDE.CONF")) {
+      assertEquals(
+          Set.of("apiToken", "PAYMENT_API_TOKEN"),
+          aliasesOf(
+              added(
+                  file,
+                  "[Service]",
+                  "; Used when PAYMENT_API_TOKEN is unset",
+                  "Environment='apiToken=\"" + value + "\"'")),
+          file);
+    }
+  }
+
+  @Test
+  void propertiesExclamationCommentAliasesRemainSupported() {
+    var value = fake.genericSecret(40);
+    assertEquals(
+        Set.of("apiToken", "PAYMENT_API_TOKEN"),
+        aliasesOf(
+            added(
+                "CONFIG.PROPERTIES",
+                " \t! Used when PAYMENT_API_TOKEN is unset",
+                "apiToken = \"" + value + "\"")));
+  }
+
+  @Test
+  void completeStandalonePythonDocstringAliasesRemainSupported() {
+    var value = fake.genericSecret(40);
+    for (var file : List.of("config.py", "config.pyi", "CONFIG.PYW")) {
+      for (var doc :
+          List.of(
+              "\"\"\"Used when PAYMENT_API_TOKEN is unset.\"\"\"",
+              "'''Used when PAYMENT_API_TOKEN is unset.'''",
+              "  \"\"\"Used when PAYMENT_API_TOKEN is unset.\"\"\" # documentation",
+              "r\"\"\"Used when PAYMENT_API_TOKEN is unset.\"\"\"",
+              "U'''Used when PAYMENT_API_TOKEN is unset.'''",
+              "\"\"\"Used when PAYMENT_API_TOKEN is unset; escaped \\\"\"\" text.\"\"\"")) {
+        assertEquals(
+            Set.of("apiToken", "PAYMENT_API_TOKEN"),
+            aliasesOf(added(file, doc, "apiToken = \"" + value + "\"")),
+            file + ": " + doc);
+      }
+    }
+  }
+
+  @Test
+  void ambiguousCommentMarkersAndPythonStringDataDoNotCreateAliases() {
+    var value = fake.genericSecret(40);
+    for (var above :
+        List.of("; PAYMENT_API_TOKEN--;", "!PAYMENT_API_TOKEN;", "\"\"\"PAYMENT_API_TOKEN\"\"\"")) {
+      assertEquals(
+          Set.of("apiToken"),
+          aliasesOf(added("Config.java", above, "String apiToken = \"" + value + "\";")));
+    }
+    for (var file :
+        List.of(
+            "nginx.conf",
+            "misc.d/override.conf",
+            "payments.service.data/override.conf",
+            "service.d/override.conf.json",
+            "service",
+            "timer")) {
+      assertEquals(
+          Set.of("apiToken"),
+          aliasesOf(added(file, "; PAYMENT_API_TOKEN", "apiToken = \"" + value + "\"")),
+          file);
+    }
+    assertEquals(
+        Set.of("apiToken"),
+        aliasesOf(added("config.ini", "! PAYMENT_API_TOKEN", "apiToken = \"" + value + "\"")));
+    assertEquals(
+        Set.of("apiToken"),
+        aliasesOf(
+            added("config.properties", "; PAYMENT_API_TOKEN", "apiToken = \"" + value + "\"")));
+    for (var above :
+        List.of(
+            "",
+            "x",
+            "\"\"\"PAYMENT_API_TOKEN",
+            "'''PAYMENT_API_TOKEN",
+            "label = \"\"\"PAYMENT_API_TOKEN\"\"\"",
+            "\"\"\"PAYMENT_API_TOKEN\"\"\" + label",
+            "inspect(\"\"\"PAYMENT_API_TOKEN\"\"\")",
+            "\"\"\"PAYMENT_API_TOKEN\"\"\"; enabled = True",
+            "f\"\"\"PAYMENT_API_TOKEN\"\"\"",
+            "b\"\"\"PAYMENT_API_TOKEN\"\"\"",
+            "\"\"\"PAYMENT_API_TOKEN \\\"\"\"")) {
+      assertEquals(
+          Set.of("apiToken"),
+          aliasesOf(added("config.py", above, "apiToken = \"" + value + "\"")),
+          above);
+    }
+  }
+
+  @Test
+  void languageCommentAliasesCollapseOnlyTheirOwnCredentialAndKeepRedaction() throws Exception {
+    var value = fake.genericSecret(40);
+    var files =
+        List.of(
+            added(
+                "config.ini",
+                "[Auth]",
+                "; PAYMENT_API_TOKEN fallback",
+                "apiToken = \"" + value + "\""),
+            added(
+                "config.properties",
+                "! PAYMENT_API_TOKEN fallback",
+                "apiToken = \"" + value + "\""),
+            added(
+                "payments.service",
+                "[Service]",
+                "; PAYMENT_API_TOKEN fallback",
+                "Environment='apiToken=\"" + value + "\"'"),
+            added(
+                "payments.service.d/override.conf",
+                "[Service]",
+                "; PAYMENT_API_TOKEN fallback",
+                "Environment='apiToken=\"" + value + "\"'"),
+            added(
+                "config.py",
+                "\"\"\"PAYMENT_API_TOKEN fallback.\"\"\"",
+                "apiToken = \"" + value + "\""));
+    for (var file : files) {
+      var own =
+          modelFinding(
+              file.filename(),
+              15,
+              "PAYMENT_API_TOKEN falls back to a hardcoded token",
+              "The apiToken literal is " + value + ".");
+      var other =
+          modelFinding(
+              file.filename(),
+              20,
+              "DB_PASSWORD falls back to a hardcoded password",
+              "The apiToken constant is independent of this password.");
+      var merged = merge(scan(true, false), response(own, other), List.of(file));
+      assertEquals(2, merged.findings().size(), file.filename());
+      assertTrue(merged.findings().contains(other));
+      assertFalse(everySurface(merged).contains(value));
+    }
+  }
+
+  @Test
   void luaSqlAndMarkupCommentAliasesStaySupported() {
     var value = fake.genericSecret(40);
     for (var file : List.of("config.lua", "config.sql")) {

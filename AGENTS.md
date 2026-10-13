@@ -150,8 +150,12 @@ same diff.
   scalar punctuation (ARN/URL slashes, non-whitespace `#`, quotes and parentheses) as text,
   consumes quoted/tagged/nested nodes without promoting their stars, and accepts block-comment
   trivia only in Terraform. An unclosed comment proves no wildcard. Environment-key aliases from the
-  preceding comment preserve SQL/Lua `--` and HTML/XML/SVG `<!--` in their file types, without
-  treating a Java decrement or an adjacent key assignment as a comment.
+  preceding comment preserve SQL/Lua `--`, HTML/XML/SVG `<!--`, INI/systemd-unit `;` and
+  properties `!` in their file types. Systemd unit drop-in `.conf` paths also permit `;`; an
+  arbitrary `.conf` suffix does not prove comment syntax. A complete standalone Python triple-quoted
+  string (plain, raw or Unicode), optionally followed by a comment, can document the next declaration;
+  assigned, concatenated and unclosed strings do not. Java operators and adjacent key assignments
+  never supply a comment alias.
 - **Deterministic scan findings skip the verifier and calibrator.** `SecurityScan.merge` runs in
   `FindingPipeline.finish`, after every verifier call and (on the single-call lane) after
   `SeverityCalibrator.calibrate`, so no model grades a pattern match, and `markUnscreened` and

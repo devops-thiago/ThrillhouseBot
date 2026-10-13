@@ -1468,12 +1468,82 @@ public class SecurityScan {
     if (text.startsWith("--")) {
       return path.endsWith(".sql") || path.endsWith(".lua");
     }
-    return text.startsWith("<!--")
-        && (path.endsWith(".xml")
-            || path.endsWith(".html")
-            || path.endsWith(".htm")
-            || path.endsWith(".xhtml")
-            || path.endsWith(".svg"));
+    if (text.startsWith("<!--")) {
+      return path.endsWith(".xml")
+          || path.endsWith(".html")
+          || path.endsWith(".htm")
+          || path.endsWith(".xhtml")
+          || path.endsWith(".svg");
+    }
+    if (text.startsWith(";")) {
+      return iniAliasCommentFile(path);
+    }
+    if (text.startsWith("!")) {
+      return path.endsWith(".properties");
+    }
+    return (path.endsWith(".py") || path.endsWith(".pyi") || path.endsWith(".pyw"))
+        && closedPythonDocstring(text);
+  }
+
+  private static final Set<String> SYSTEMD_UNIT_TYPES =
+      Set.of(
+          "service",
+          "socket",
+          "device",
+          "mount",
+          "automount",
+          "swap",
+          "target",
+          "path",
+          "timer",
+          "slice",
+          "scope");
+
+  /** A .conf suffix alone does not establish INI syntax; known unit drop-in directories do. */
+  private static boolean iniAliasCommentFile(String path) {
+    if (path.endsWith(".ini") || systemdUnitFile(path)) {
+      return true;
+    }
+    if (!path.endsWith(".conf")) {
+      return false;
+    }
+    int parentEnd = path.lastIndexOf('/');
+    if (parentEnd < 0) {
+      return false;
+    }
+    int parentStart = path.lastIndexOf('/', parentEnd - 1) + 1;
+    var parent = path.substring(parentStart, parentEnd);
+    if (!parent.endsWith(".d")) {
+      return false;
+    }
+    var unit = parent.substring(0, parent.length() - 2);
+    return SYSTEMD_UNIT_TYPES.contains(unit) || systemdUnitFile(unit);
+  }
+
+  private static boolean systemdUnitFile(String path) {
+    int dot = path.lastIndexOf('.');
+    return dot >= 0 && SYSTEMD_UNIT_TYPES.contains(path.substring(dot + 1));
+  }
+
+  /** A complete standalone string expression, never an assignment, concatenation or open body. */
+  private static boolean closedPythonDocstring(String text) {
+    if (text.length() < 6) {
+      return false;
+    }
+    int start = "rRuU".indexOf(text.charAt(0)) >= 0 ? 1 : 0;
+    if (!text.startsWith("\"\"\"", start) && !text.startsWith("'''", start)) {
+      return false;
+    }
+    var delimiter = text.substring(start, start + 3);
+    int at = start + 3;
+    while (at < text.length()) {
+      if (text.startsWith(delimiter, at)) {
+        int tail = skipSpace(text, at + 3);
+        return tail == text.length() || text.charAt(tail) == '#';
+      }
+      at += text.charAt(at) == '\\' ? 2 : 1;
+    }
+    return false;
   }
 
   /**
