@@ -127,6 +127,35 @@ same diff.
   candidates. `FindingVerificationService.markUnscreened` caps them at medium confidence and
   appends the unverified note (#885), and `VerificationCoverage` discloses the round's coverage. Do
   not make a verifier failure drop findings or block a review.
+- **Scanner matching is bounded by compatible identities** (#1031). Model duplicates read only
+  detections in the same file's three-line window, or identifiers their text names at a distant use
+  site, never every detection in the file. Environment-key aliases belong only to the simple
+  identifier read by a fallback expression (possibly qualified or parenthesized), or to a comment
+  immediately above the declaration in the same hunk; another argument never supplies an alias
+  (#1101). The generic secret rule skips credential assignments embedded in complete sample
+  strings with explicit before/text-before/prefix prose in list/sample-builder positions, or
+  fixture/sample/example-named assignments (#981). New forms require a bare key or one of those
+  prose leaders, and whitespace only after the assignment inside the string. New exclusions
+  also require a standalone literal/factory or a simple sample-named assignment/collection:
+  unknown outer calls, unknown assignment targets, expressions and additional same-line
+  statements and preceding sibling entries stay scanned. Closing delimiters and quoted sibling
+  inputs are permitted. Unknown
+  prefixes and command suffixes stay scanned even with a sample-named target; earlier bare-key list inputs
+  keep their classification. Known-format credentials still match.
+  IAM wildcard arrays are read in linear time with no element-count or element-width cap (#983).
+  A quoted wildcard ending at a list delimiter proves the setting even when other items are
+  Terraform expressions or YAML plain scalars; nested quoted stars do not prove a wildcard.
+  Scalar wildcards also allow trailing Terraform `#`/`//` or whitespace-separated YAML `#`
+  comments; comment text never supplies a later wildcard. The element reader keeps YAML plain
+  scalar punctuation (ARN/URL slashes, non-whitespace `#`, quotes and parentheses) as text,
+  consumes quoted/tagged/nested nodes without promoting their stars, and accepts block-comment
+  trivia only in Terraform. An unclosed comment proves no wildcard. Environment-key aliases from the
+  preceding comment preserve SQL/Lua `--`, HTML/XML/SVG `<!--`, INI/systemd-unit `;` and
+  properties `!` in their file types. Systemd unit drop-in `.conf` paths also permit `;`; an
+  arbitrary `.conf` suffix does not prove comment syntax. A complete standalone Python triple-quoted
+  string (plain, raw or Unicode), optionally followed by a comment, can document the next declaration;
+  assigned, concatenated and unclosed strings do not. Java operators and adjacent key assignments
+  never supply a comment alias.
 - **Deterministic scan findings skip the verifier and calibrator.** `SecurityScan.merge` runs in
   `FindingPipeline.finish`, after every verifier call and (on the single-call lane) after
   `SeverityCalibrator.calibrate`, so no model grades a pattern match, and `markUnscreened` and
