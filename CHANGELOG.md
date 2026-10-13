@@ -4,6 +4,8 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-10-13
+
 ### Fixed
 
 - **Summary and finding text no longer name files that do not exist** (#1076): round 17 summaries said a README was moved to "docs/REACT-VIV.md" for `docs/REACT-V17.md` (react ThrillhouseBot-test#249), and a finding cited `angular/src/docs/CONFIG-ANGULAR.md` for `angular/docs/CONFIG-ANGULAR.md` (angular #251). A path in the summary's purpose, assessment, description gaps and file summaries, or in a finding's description, must now name a changed file (or a rename's source), be quoted from a patch, the PR text or a linked issue, or name a file of the repository at the head, read from one listing only when a path gets that far. A near miss of exactly one changed file is replaced by it. Otherwise its sentence leaves the summary text (the path alone leaves the walkthrough diagram, whose syntax stays), or the mention, with a parenthetical holding only it, leaves the finding's description. A one-slash directory such as `react/src` is judged when it opens with a changed file's top-level directory. A finding is never dropped. URLs, routes, package and image names, domains, globs, one-slash prose such as `and/or`, and names like `Node.js` are not paths, and when the repository cannot be listed, or the listing is truncated, the text is left as written.
