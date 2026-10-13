@@ -1397,4 +1397,43 @@ class PromptLabelScrubberTest {
     assertEquals("No findings.", PromptLabelScrubber.scrub("No confirmed findings."));
     assertEquals("Hosts two findings.", PromptLabelScrubber.scrub("Hosts two confirmed findings."));
   }
+
+  @ParameterizedTest
+  @CsvSource(
+      value = {
+        "- Confirmed findings: two.|- Findings: two.",
+        "**Confirmed findings:** two|**Findings:** two",
+        "*Confirmed findings:* two|*Findings:* two",
+        "→ Confirmed findings.|→ Findings."
+      },
+      delimiter = '|')
+  void standaloneLabelsAfterMarkdownPrefixesStillCleanUp(String text, String expected) {
+    assertEquals(expected, PromptLabelScrubber.scrub(text));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"**The suite**", "_This_", "The run →"})
+  void aFormattedSubjectStillKeepsConfirmedAsItsVerb(String subject) {
+    var text = subject + " confirmed findings in the scheduler module.";
+    assertEquals(text, PromptLabelScrubber.scrub(text));
+  }
+
+  @Test
+  void markupKeepsTheCodeSubjectAndSentenceBoundaryDecisions() {
+    assertEquals(
+        "`Tests` **confirmed findings**.",
+        PromptLabelScrubber.scrub("`Tests` **confirmed findings**."));
+    assertEquals(
+        "`Tests`\n**Findings:** two.",
+        PromptLabelScrubber.scrub("`Tests`\n**Confirmed findings:** two."));
+    assertEquals(
+        "Done. **Findings:** two.",
+        PromptLabelScrubber.scrub("Done. **Confirmed findings:** two."));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"```", "```plain"})
+  void anUnclosedBacktickInfoLineStaysByteExact(String text) {
+    assertEquals(text, PromptLabelScrubber.scrub(text));
+  }
 }

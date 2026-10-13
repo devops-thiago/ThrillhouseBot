@@ -19,10 +19,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTimeout;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -602,5 +604,13 @@ class PathMentionsTest {
           mentions.withoutUnresolvedMentions(block + "\nOutside build/missing.conf."));
       assertEquals(block, mentions.withoutUnresolvedSentences(block));
     }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"```a``` ", "```a``` prose ", "```a```\n"})
+  void manyInlineTripleBacktickSpansKeepTheFenceScanBounded(String span) {
+    var text = span.repeat(160_000);
+    assertTimeout(
+        Duration.ofSeconds(2), () -> assertEquals(160_000, MarkdownFences.spans(text).size()));
   }
 }

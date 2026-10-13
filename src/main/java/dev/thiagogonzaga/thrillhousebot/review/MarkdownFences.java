@@ -37,10 +37,12 @@ final class MarkdownFences {
     int length = from - at;
     int depth = lineDepth(text, at, true);
     if (c == '`') {
-      int newline = text.indexOf('\n', from);
-      int tick = text.indexOf('`', from);
-      // A backtick in the opening line's info text makes this an inline span, not a block.
-      if (tick >= 0 && (newline < 0 || tick < newline)) {
+      int next = from;
+      while (next < text.length() && text.charAt(next) != '\n' && text.charAt(next) != '`') {
+        next++;
+      }
+      // Stop at the first newline or backtick, without rereading a whole line for each inline span.
+      if (next < text.length() && text.charAt(next) == '`') {
         depth = -1;
       }
     }

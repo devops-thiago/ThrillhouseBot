@@ -879,7 +879,12 @@ public final class PromptLabelScrubber {
    */
   private static boolean adjectiveConfirmed(String text, int at, boolean followsCode) {
     int end = at;
-    while (end > 0 && Character.isWhitespace(text.charAt(end - 1))) {
+    int labelAt = at;
+    while (end > 0
+        && (Character.isWhitespace(text.charAt(end - 1)) || text.charAt(end - 1) == '*')) {
+      if (text.charAt(end - 1) == '*') {
+        labelAt = end - 1;
+      }
       end--;
     }
     int start = end;
@@ -888,8 +893,10 @@ public final class PromptLabelScrubber {
     }
     var previous = text.substring(start, end).toLowerCase(Locale.ROOT);
     if (previous.isEmpty()) {
+      boolean arrowLabel =
+          end > 0 && text.charAt(end - 1) == '→' && opensSentence(text, end - 1, 0);
       return !(followsCode && end == 0 && text.substring(0, at).indexOf('\n') < 0)
-          && opensSentence(text, at, 0);
+          && (opensSentence(text, labelAt, 0) || arrowLabel);
     }
     return CONFIRMED_ADJECTIVE_LEADS.contains(previous)
         || COUNT_WORDS.contains(previous)
