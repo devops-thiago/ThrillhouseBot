@@ -400,4 +400,18 @@ class DescriptionGapScreenTest {
     assertFalse(
         DescriptionGapScreen.omissionCovered("The description never mentions 'bookings'.", source));
   }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"The server's URL is hardcoded.", "The server’s URL is hardcoded."})
+  void aPossessiveBetweenCompoundIdentifierWordsStillHoldsTheClaim(String description) {
+    var gap = "The description says 'serverUrl' is hardcoded, but the server URL is configurable.";
+    assertEquals(List.of(gap), DescriptionGapScreen.screen(List.of(gap), description, ""));
+    assertEquals(
+        List.of(),
+        DescriptionGapScreen.screen(
+            List.of("The description says 'serverTimeout' is hardcoded, but it is configurable."),
+            description,
+            ""));
+    assertFalse(DescriptionGapScreen.misquotes(gap, DescriptionGapScreen.normalize(description)));
+  }
 }
