@@ -313,4 +313,47 @@ class EstablishedConfidenceFloorTest {
 
     assertEquals(false, evidence.failingChecks().cites(finding("low", "low", "t", "d")));
   }
+
+  @Test
+  void incrementAndDecrementHunkLinesRemainCodeEvidence() {
+    var raw =
+        finding(
+            "high",
+            "low",
+            "SQL injection: organizer concatenated",
+            "The value from `request.getParameter(\"organizer\")` reaches"
+                + " `statement.execute(sql)` without parameterization.");
+    for (var prefix :
+        List.of(
+            "+++counter;",
+            "---counter;",
+            "+++ counter;",
+            "--- counter;",
+            "+counter++;",
+            " counter++;")) {
+      var diff =
+          "index abc..def 100644\n\n@@ -1,2 +1,2 @@\n"
+              + prefix
+              + " String organizer = request.getParameter(\"organizer\");\n"
+              + "+String sql = \"SELECT * FROM bookings WHERE organizer=\" + organizer; statement.execute(sql);\n";
+      assertEquals("medium", floored(raw, diff), prefix);
+    }
+  }
+
+  @Test
+  void fileHeadersAfterAHunkNeverSupplyCodeEvidence() {
+    var raw =
+        finding(
+            "high",
+            "low",
+            "SQL injection: organizer concatenated",
+            "The value from `request.getParameter(\"organizer\")` reaches `statement.execute(sql)` without parameterization.");
+    for (String boundary : List.of("diff --git a/new b/new", "### next.java", "```")) {
+      var diff =
+          "@@ -1 +1 @@\n+statement.execute(sql);\n"
+              + boundary
+              + "\n--- request.getParameter(\"organizer\")\n+++ request.getParameter(\"organizer\")\n";
+      assertEquals("low", floored(raw, diff), boundary);
+    }
+  }
 }

@@ -490,11 +490,11 @@ public final class PromptLabelScrubber {
         i++;
         continue;
       }
-      out.append(scrubProse(text.substring(prose, i))).append(text, i, end);
+      out.append(scrubProse(text.substring(prose, i), prose > 0)).append(text, i, end);
       prose = end;
       i = end;
     }
-    out.append(scrubProse(text.substring(prose)));
+    out.append(scrubProse(text.substring(prose), prose > 0));
     return replaceExamplePaths(out.toString(), realPaths);
   }
 
@@ -638,10 +638,9 @@ public final class PromptLabelScrubber {
    * end.
    */
   private static int protectedEnd(String text, int i) {
-    for (var fence : List.of("```", "~~~")) {
-      if (text.startsWith(fence, i)) {
-        return closeAt(text, i + fence.length(), fence);
-      }
+    int fenceEnd = MarkdownFences.endAt(text, i);
+    if (fenceEnd >= 0) {
+      return fenceEnd;
     }
     if (text.startsWith("<!--", i)) {
       return closeAt(text, i + 4, "-->");
@@ -661,7 +660,7 @@ public final class PromptLabelScrubber {
     return close < 0 ? text.length() : close + closer.length();
   }
 
-  private static String scrubProse(String prose) {
+  private static String scrubProse(String prose, boolean followsCode) {
     if (prose.isEmpty()) {
       return prose;
     }
@@ -721,7 +720,7 @@ public final class PromptLabelScrubber {
                   var phrase = m.group(1).toLowerCase(Locale.ROOT) + " of";
                   return opensSentence(defined, m.start(), 0) ? capitalize(phrase) : phrase;
                 });
-    return removeScratchText(removeSelfRatedConfidence(s));
+    return removeScratchText(removeSelfRatedConfidence(s), followsCode);
   }
 
   /**
@@ -730,7 +729,7 @@ public final class PromptLabelScrubber {
    * ("confirmed findings", "no findings in this batch", "among the three verified above",
    * "confirmed rather than counted") goes, since neither stage is visible to a reader.
    */
-  private static String removeScratchText(String text) {
+  private static String removeScratchText(String text, boolean followsCode) {
     var s = PARENTHETICAL_SELF_CORRECTION.matcher(text).replaceAll("(");
     s = DASH_SELF_CORRECTION.matcher(s).replaceAll(" $1 ");
     var corrected = s;
@@ -752,7 +751,16 @@ public final class PromptLabelScrubber {
         AMONG_THE_VERIFIED
             .matcher(s)
             .replaceAll(m -> countsFindings(m.group(1)) ? "" : Matcher.quoteReplacement(m.group()));
-    s = CONFIRMED_FINDINGS.matcher(s).replaceAll(m -> capitalizeLike(m.group(1), m.group(2)));
+    var verdicts = s;
+    s =
+        CONFIRMED_FINDINGS
+            .matcher(verdicts)
+            .replaceAll(
+                m ->
+                    Matcher.quoteReplacement(
+                        adjectiveConfirmed(verdicts, m.start(), followsCode)
+                            ? capitalizeLike(m.group(1), m.group(2))
+                            : m.group()));
     s = removeNoFindingsAsides(s);
     s = NOT_COUNTED.matcher(s).replaceAll("$1");
     return FINDINGS_IN_BATCH.matcher(s).replaceAll("$1");
@@ -795,14 +803,14 @@ public final class PromptLabelScrubber {
 
   /**
    * A restart {@code m} found by {@link #RESTARTED_SENTENCE} or {@link #RESTARTED_AFTER_CODE_SPAN}
-   * without its broken-off start: the marker before it and the capitalized restart, or the match
-   * unchanged when its connector is not a restart word.
+   * without its broken-off start: the marker and restart (prose capitalized, identifier case kept),
+   * or the match unchanged when its connector is not a restart word.
    */
-  private static String restarted(MatchResult m) {
+  private static String restarted(String text, MatchResult m) {
     if (!RESTART_CONNECTORS.contains(m.group(2).toLowerCase(Locale.ROOT))) {
       return m.group();
     }
-    return m.group(1) + capitalize(m.group(3));
+    return m.group(1) + (identifierCaseAt(text, m.start(3)) ? m.group(3) : capitalize(m.group(3)));
   }
 
   /**
@@ -813,7 +821,7 @@ public final class PromptLabelScrubber {
    * which kept the pattern over the regex complexity budget.
    */
   private static String restartedSentence(String text, MatchResult m) {
-    return opensRestart(text, m.end(1)) ? restarted(m) : m.group();
+    return opensRestart(text, m.end(1)) ? restarted(text, m) : m.group();
   }
 
   /**
@@ -833,20 +841,84 @@ public final class PromptLabelScrubber {
     if (!text.contains("`")) {
       return text;
     }
-    return RESTARTED_AFTER_CODE_SPAN
-        .matcher(text)
-        .replaceAll(
-            m -> Matcher.quoteReplacement(insideFence(text, m.start()) ? m.group() : restarted(m)));
+    var out = new StringBuilder(text.length());
+    int from = 0;
+    for (var span : MarkdownFences.spans(text)) {
+      out.append(restartsOutsideFences(text.substring(from, span[0])));
+      out.append(text, span[0], span[1]);
+      from = span[1];
+    }
+    return out.append(restartsOutsideFences(text.substring(from))).toString();
   }
 
-  /** Whether {@code at} lies inside a fenced block: an odd number of fence markers precede it. */
-  private static boolean insideFence(String text, int at) {
-    boolean inside = false;
-    for (int i = text.indexOf("```"); i >= 0 && i < at; i = text.indexOf("```", i + 3)) {
-      inside = !inside;
-    }
-    return inside;
+  private static String restartsOutsideFences(String text) {
+    return RESTARTED_AFTER_CODE_SPAN
+        .matcher(text)
+        .replaceAll(m -> Matcher.quoteReplacement(restarted(text, m)));
   }
+
+  /** A recovered code identifier keeps its case; ordinary prose still opens with a capital. */
+  private static boolean identifierCaseAt(String text, int start) {
+    for (int i = start + 1; i < text.length(); i++) {
+      char c = text.charAt(i);
+      if (!Character.isLetterOrDigit(c) && c != '_') {
+        break;
+      }
+      if (Character.isUpperCase(c) || Character.isDigit(c) || c == '_') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether "confirmed" labels the findings rather than being a sentence's verb. A definite
+   * article, count, holding verb or preposition introduces the adjective; an ambiguous pronoun or
+   * ordinary subject does not. Code immediately before this prose segment is a possible subject, so
+   * a leading lowercase "confirmed findings" there is not assumed to be a standalone label.
+   */
+  private static boolean adjectiveConfirmed(String text, int at, boolean followsCode) {
+    int end = at;
+    int labelAt = at;
+    while (end > 0
+        && (Character.isWhitespace(text.charAt(end - 1)) || text.charAt(end - 1) == '*')) {
+      if (text.charAt(end - 1) == '*') {
+        labelAt = end - 1;
+      }
+      end--;
+    }
+    int start = end;
+    while (start > 0 && Character.isLetterOrDigit(text.charAt(start - 1))) {
+      start--;
+    }
+    var previous = text.substring(start, end).toLowerCase(Locale.ROOT);
+    if (previous.isEmpty()) {
+      boolean arrowLabel =
+          end > 0 && text.charAt(end - 1) == '→' && opensSentence(text, end - 1, 0);
+      return !(followsCode && end == 0 && text.substring(0, at).indexOf('\n') < 0)
+          && (opensSentence(text, labelAt, 0) || arrowLabel);
+    }
+    return CONFIRMED_ADJECTIVE_LEADS.contains(previous)
+        || COUNT_WORDS.contains(previous)
+        || previous.chars().allMatch(Character::isDigit);
+  }
+
+  private static final Set<String> CONFIRMED_ADJECTIVE_LEADS =
+      Set.of(
+          "a",
+          "an",
+          "the",
+          "no",
+          "of",
+          "with",
+          "without",
+          "for",
+          "by",
+          "among",
+          "hosts",
+          "holds",
+          "contains",
+          "lists");
 
   /**
    * Drops each "no findings in this batch" aside; one that started a line takes the blanks after
