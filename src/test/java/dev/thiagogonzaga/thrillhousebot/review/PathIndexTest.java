@@ -72,4 +72,29 @@ class PathIndexTest {
     assertTrue(index.candidates("svc/Dockerfile", "other").isEmpty());
     assertTrue(index.candidates(null, "k").isEmpty());
   }
+
+  @Test
+  void existenceMatchesTheSameFileWithoutDependingOnTheGroupSize() {
+    var index = new PathIndex<String>();
+    for (var path : PATHS) {
+      index.add(path, "k", path);
+      for (var query : PATHS) {
+        assertEquals(!index.candidates(query, "k").isEmpty(), index.contains(query, "k"), query);
+        assertEquals(false, index.contains(query, "other"));
+      }
+    }
+    assertEquals(false, index.contains(null, "k"));
+    assertEquals(false, index.contains("missing.txt", "k"));
+    assertEquals(false, index.contains("nowhere/else.txt", "k"));
+    var repeated = new PathIndex<String>();
+    for (int i = 0; i < 2000; i++) {
+      String path = "service" + i + "/src/Main.java";
+      assertEquals(false, repeated.contains(path, "k"));
+      repeated.add(path, "k", path);
+      assertTrue(repeated.contains(path, "k"));
+    }
+    assertTrue(repeated.contains("src/Main.java", "k"));
+    assertTrue(repeated.contains("repo/service1999/src/Main.java", "k"));
+    assertEquals(false, repeated.contains("Main.java", "k"));
+  }
 }

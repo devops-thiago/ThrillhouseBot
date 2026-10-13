@@ -237,7 +237,7 @@ final class DefectIdentity {
     }
     var name = cited.file().substring(cited.file().lastIndexOf('/') + 1);
     if (name.isBlank()
-        || !citesLine(description, name, cited.line())
+        || !citesLine(description, cited.file(), name, cited.line())
         || collectNamed(subjects(cited), description, new HashSet<>()).isEmpty()) {
       return false;
     }
@@ -246,25 +246,30 @@ final class DefectIdentity {
   }
 
   /** Whether {@code text} cites {@code fileName}{@code :line} or a range covering {@code line}. */
-  private static boolean citesLine(String text, String fileName, int line) {
-    var name = Pattern.quote(fileName);
+  private static boolean citesLine(String text, String file, String fileName, int line) {
+    var path = "((?:[^\\s`\"'(),;:<>]{1,200}/)?" + Pattern.quote(fileName) + ")";
     var range = "(\\d{1,6})(?:\\s{0,2}(?:[-–]|\\.\\.|to)\\s{0,2}(\\d{1,6}))?";
-    // "Main.scala:31-32", "Main.scala, lines 31-32", "line 32 of Main.scala", "Main.scala:31..32".
     var citation =
         Pattern.compile(
-                "(?<!\\w)"
-                    + name
+                "(?<![\\w/])"
+                    + path
                     + "(?::|,?\\s{1,2}lines?\\s{1,2})"
                     + range
                     + "|\\blines?\\s{1,2}"
                     + range
-                    + "\\s{1,2}(?:of|in)\\s{1,2}(?:\\S{0,200}/)?"
-                    + name,
+                    + "\\s{1,2}(?:of|in)\\s{1,2}[`\"']?"
+                    + path,
                 Pattern.CASE_INSENSITIVE)
             .matcher(text);
     var tolerance = FollowUpAnalyzer.DUPLICATE_LINE_TOLERANCE;
     while (citation.find()) {
-      var first = citation.group(1) != null ? 1 : 3;
+      var pathGroup = citation.group(1) != null ? 1 : 6;
+      var mentionedPath = citation.group(pathGroup).toLowerCase(Locale.ROOT);
+      if (mentionedPath.indexOf('/') >= 0
+          && !FilePaths.same(mentionedPath, file.toLowerCase(Locale.ROOT))) {
+        continue;
+      }
+      var first = pathGroup == 1 ? 2 : 4;
       var from = Integer.parseInt(citation.group(first));
       var to =
           citation.group(first + 1) == null ? from : Integer.parseInt(citation.group(first + 1));
