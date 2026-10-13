@@ -231,7 +231,7 @@ class ReviewOrchestratorTest {
                 1));
     diagramConfig = mock(ThrillhouseConfig.DiagramConfig.class);
     when(reviewConfig.diagram()).thenReturn(diagramConfig);
-    // Follow-up delta comment: off, as it ships — these tests assert the default posting behaviour.
+    // Follow-up delta section: off, as it ships — these tests assert the default posting behaviour.
     followUpSummaryConfig = mock(ThrillhouseConfig.FollowUpSummaryConfig.class);
     lenient().when(reviewConfig.followUpSummary()).thenReturn(followUpSummaryConfig);
     lenient().when(followUpSummaryConfig.enabled()).thenReturn(false);
@@ -3060,7 +3060,7 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void shouldPostDeltaCommentOnFollowUpReviewWhenFollowUpSummaryEnabled() {
+    void shouldIncludeDeltaInFollowUpReviewWhenFollowUpSummaryEnabled() {
       when(followUpSummaryConfig.enabled()).thenReturn(true);
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
@@ -3127,9 +3127,11 @@ class ReviewOrchestratorTest {
                 123L,
                 false));
 
-        // The delta comment lands, and it is not the first-run summary comment.
-        verify(commentClient)
-            .createComment(
+        // The round sends one review notification: verdict, delta and findings together.
+        verify(commentClient, never())
+            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(reviewClient)
+            .createReview(
                 anyString(),
                 anyString(),
                 anyString(),
@@ -3137,25 +3139,20 @@ class ReviewOrchestratorTest {
                 anyInt(),
                 argThat(
                     req ->
-                        req.body().startsWith(FollowUpDeltaSummary.DELTA_HEADING)
+                        req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)
                             && req.body().contains("**New findings this round:** 1")
                             && req.body().contains("**Previous findings resolved:** 1")
                             && !ReviewContextLoader.isBotSummaryComment(req.body())));
-        // ...and it is the only comment the round posts, so no summary lands beside it.
-        verify(commentClient, times(1))
-            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
       }
     }
 
     @Test
-    void shouldPostTheDeltaCommentWhenASupersededFindingRefreshedTheSummary() {
+    void shouldIncludeDeltaInReviewWhenASupersededFindingRefreshedTheSummary() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = reviewAFollowUpWithASupersededPrevious(mockedStatic, false);
 
-        // #927: the superseded status makes the summary stand in for the round, which used to skip
-        // the delta as well. This is no /summary round, so the delta lands beside the summary the
-        // upsert posted (none was left on the pull request).
+        // The summary refresh still occurs; the round's delta rides its actual review.
         verify(commentClient)
             .createComment(
                 anyString(),
@@ -3164,8 +3161,10 @@ class ReviewOrchestratorTest {
                 anyString(),
                 anyInt(),
                 argThat(req -> req.body().startsWith(PrSummaryGenerator.SUMMARY_MARKER)));
-        verify(commentClient)
-            .createComment(
+        verify(commentClient, times(1))
+            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(reviewClient)
+            .createReview(
                 anyString(),
                 anyString(),
                 anyString(),
@@ -3173,8 +3172,11 @@ class ReviewOrchestratorTest {
                 anyInt(),
                 argThat(
                     req ->
-                        req.body().startsWith(FollowUpDeltaSummary.DELTA_HEADING)
-                            && req.body().contains("**New findings this round:** 1")));
+                        req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)
+                            && req.body().contains("**New findings this round:** 1")
+                            && req.body().contains("src/Main.java:5")
+                            && req.body().indexOf("Null check")
+                                == req.body().lastIndexOf("Null check")));
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
       }
     }
@@ -3201,6 +3203,17 @@ class ReviewOrchestratorTest {
                 anyString(),
                 anyInt(),
                 argThat(req -> req.body().startsWith(FollowUpDeltaSummary.DELTA_HEADING)));
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(
+                    req ->
+                        !req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)
+                            && req.body().contains("Null check")));
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
       }
     }
@@ -3210,8 +3223,59 @@ class ReviewOrchestratorTest {
      * makes {@link ReviewPublisher#publishSummary} report the summary as standing in for the round
      * (#927). {@code forceSummary} makes it a {@code /summary} round.
      */
+    @Test
+    void failedDeltaRenderingStillPublishesTheLegacyClosureAndReview() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = reviewAFollowUpWithASupersededPrevious(mockedStatic, false, true);
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(
+                    req ->
+                        req.body().contains("Null check")
+                            && req.body().contains(ClosedFindingNames.REVIEW_BODY_LEAD_IN)
+                            && !req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)));
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
+    @Test
+    void failedSummaryCommandKeepsTheDeltaOnTheReviewOutcome() {
+      lenient()
+          .when(
+              commentClient.createComment(
+                  anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+          .thenThrow(new RuntimeException("summary unavailable"));
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = reviewAFollowUpWithASupersededPrevious(mockedStatic, true);
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(
+                    req ->
+                        req.body().contains("Null check")
+                            && req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)));
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
     private ReviewSession reviewAFollowUpWithASupersededPrevious(
         org.mockito.MockedStatic<ReviewSession> mockedStatic, boolean forceSummary) {
+      return reviewAFollowUpWithASupersededPrevious(mockedStatic, forceSummary, false);
+    }
+
+    private ReviewSession reviewAFollowUpWithASupersededPrevious(
+        org.mockito.MockedStatic<ReviewSession> mockedStatic,
+        boolean forceSummary,
+        boolean failRendering) {
       when(followUpSummaryConfig.enabled()).thenReturn(true);
       when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
           .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
@@ -3278,6 +3342,9 @@ class ReviewOrchestratorTest {
                           "medium", "src/Main.java", 10, "Style", "Improve naming", null, null)),
                   List.of(),
                   null));
+      if (failRendering) {
+        when(followUpSummaryConfig.enabled()).thenThrow(new RuntimeException("config unavailable"));
+      }
       orchestrator.review(
           new ReviewOrchestrator.ReviewRequest(
               "owner",
@@ -3296,9 +3363,8 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void shouldStillPostTheReviewWhenTheDeltaCommentFailsToPost() {
-      // The delta comment is enrichment, not the review: a failed post must be swallowed so the
-      // review still reaches the PR and the session completes rather than failing.
+    void shouldPostConsolidatedReviewWithoutNeedingTheDeltaCommentService() {
+      // The review must not need an additional conversation write for its follow-up counts.
       when(followUpSummaryConfig.enabled()).thenReturn(true);
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
@@ -3351,8 +3417,10 @@ class ReviewOrchestratorTest {
                             "medium", "src/Main.java", 10, "Style", "Improve naming", null, null)),
                     List.of(),
                     null));
-        when(commentClient.createComment(
-                anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+        lenient()
+            .when(
+                commentClient.createComment(
+                    anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
             .thenThrow(new RuntimeException("503 Service Unavailable"));
         // The PR reports no files, so the finding has no line to anchor to and GitHub refuses the
         // file-level fallback too (#712) — that is what leaves it for the review body, and so what
@@ -3379,9 +3447,8 @@ class ReviewOrchestratorTest {
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
-        // The delta post was attempted exactly once and its failure produced no further comment
-        // (no failure notice) — the review itself is the run's visible outcome.
-        verify(commentClient, times(1))
+        // Delta reporting needs no independent conversation write.
+        verify(commentClient, never())
             .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
       }
     }

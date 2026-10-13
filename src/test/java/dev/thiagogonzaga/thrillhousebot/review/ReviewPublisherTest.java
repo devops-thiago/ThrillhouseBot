@@ -25,7 +25,6 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -44,7 +43,7 @@ import org.mockito.ArgumentCaptor;
 
 /**
  * Unit tests for {@link ReviewPublisher#publishSummary}'s and {@link
- * ReviewPublisher#publishFollowUpDelta}'s posting conditions.
+ * ReviewPublisher#followUpDeltaSection}'s posting conditions.
  */
 class ReviewPublisherTest {
 
@@ -301,82 +300,33 @@ class ReviewPublisherTest {
   }
 
   @Test
-  void followUpDeltaIsNotPostedWhenTheFeatureIsOff() {
+  void followUpDeltaIsAbsentWhenTheFeatureIsOff() {
     followUpSummaryEnabled(false);
+    assertEquals("", publisher.followUpDeltaSection(RESOLVED_FOLLOW_UP, false, List.of()));
+  }
 
-    assertFalse(
-        publisher.publishFollowUpDelta("auth", "o", "r", 1, RESOLVED_FOLLOW_UP, false, List.of()));
+  @Test
+  void followUpDeltaRendersCountsAndNamesWithoutPostingAComment() {
+    followUpSummaryEnabled(true);
+    var body =
+        publisher.followUpDeltaSection(RESOLVED_FOLLOW_UP, false, List.of(THREADLESS_PREVIOUS));
+    assertTrue(body.startsWith(FollowUpDeltaSummary.DELTA_HEADING), body);
+    assertTrue(body.contains("**Previous findings resolved:** 1"), body);
+    assertTrue(body.contains("src/main/java/A.java:42") && body.contains("Unbounded retry"), body);
     verify(commentClient, never())
         .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
   }
 
   @Test
-  void followUpDeltaIsPostedWhenEnabledAndTheDeltaIsNonEmpty() {
-    followUpSummaryEnabled(true);
-
-    assertTrue(
-        publisher.publishFollowUpDelta("auth", "o", "r", 1, RESOLVED_FOLLOW_UP, false, List.of()));
-
-    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
-    verify(commentClient)
-        .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), body.capture());
-    assertTrue(
-        body.getValue().body().startsWith(FollowUpDeltaSummary.DELTA_HEADING),
-        body.getValue().body());
-    assertTrue(
-        body.getValue().body().contains("**Previous findings resolved:** 1"),
-        body.getValue().body());
-  }
-
-  @Test
-  void postedFollowUpDeltaNamesTheFindingsItClosed() {
-    // #714: the comment used to carry the resolved count and nothing else, so a maintainer who
-    // cleared a finding by directive could only learn whether the match took by diffing the PR's
-    // thread state across rounds. The previous round reaches the publisher, so the comment can
-    // name what closed with the directive's own identifiers.
-    followUpSummaryEnabled(true);
-
-    assertTrue(
-        publisher.publishFollowUpDelta(
-            "auth",
-            "o",
-            "r",
-            1,
-            RESOLVED_FOLLOW_UP,
-            false,
-            List.of(
-                new ReviewResponse.Finding(
-                    "high", "src/main/java/A.java", 42, "Unbounded retry", "d", null, null))));
-
-    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
-    verify(commentClient)
-        .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), body.capture());
-    assertTrue(
-        body.getValue().body().contains("  - `src/main/java/A.java:42` — Unbounded retry"),
-        body.getValue().body());
-  }
-
-  @Test
-  void followUpDeltaIsSkippedWhenNothingChangedThisRound() {
-    // Enabled, but the round raised nothing and closed nothing — previous findings that merely
-    // stayed open are not a delta, so the PR gets no comment at all.
+  void followUpDeltaIsAbsentWhenNothingMoved() {
     followUpSummaryEnabled(true);
     var stalled =
         followUpResult(List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", "still")));
-
-    assertFalse(publisher.publishFollowUpDelta("auth", "o", "r", 1, stalled, false, List.of()));
-    verify(commentClient, never())
-        .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    assertEquals("", publisher.followUpDeltaSection(stalled, false, List.of()));
   }
 
   @Test
-  void followUpDeltaNeverDuplicatesTheFirstRunSummary() {
-    // A first review posts its summary and nothing else: the round leaves exactly one comment on
-    // the PR, the summary. The delta is suppressed by the first-review check on its own — hence
-    // {@code summaryPosted == false} here, so the assertion cannot be satisfied by the
-    // already-posted-a-summary branch instead. That combination is also the real failure mode:
-    // ReviewOrchestrator swallows a failed summary post and passes false, and the delta must not
-    // step in as a stand-in first summary.
+  void firstReviewDoesNotGainAFollowUpDeltaEvenWhenSummaryFailed() {
     followUpSummaryEnabled(true);
     var firstReview =
         new ReviewResult(
@@ -392,27 +342,13 @@ class ReviewPublisherTest {
             List.of(new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed")),
             List.of(),
             0);
-
-    assertTrue(publisher.publishSummary("auth", "o", "r", 1, firstReview, false));
-    assertFalse(publisher.publishFollowUpDelta("auth", "o", "r", 1, firstReview, false, List.of()));
-
-    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
-    verify(commentClient, times(1))
-        .createComment(
-            anyString(), anyString(), anyString(), anyString(), anyInt(), body.capture());
-    assertEquals(posted("summary"), body.getValue().body());
+    assertEquals("", publisher.followUpDeltaSection(firstReview, false, List.of()));
   }
 
   @Test
-  void followUpDeltaIsSkippedOnASummaryCommandRoundThatPostedTheSummary() {
-    // /summary posted the summary comment this round, so the delta must not land beside it. An
-    // in-place edit (a superseded finding refreshing the summary) is not this case (#927).
+  void successfulSummaryCommandDoesNotGainAFollowUpDelta() {
     followUpSummaryEnabled(true);
-
-    assertFalse(
-        publisher.publishFollowUpDelta("auth", "o", "r", 1, RESOLVED_FOLLOW_UP, true, List.of()));
-    verify(commentClient, never())
-        .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    assertEquals("", publisher.followUpDeltaSection(RESOLVED_FOLLOW_UP, true, List.of()));
   }
 
   /**
@@ -447,8 +383,7 @@ class ReviewPublisherTest {
                 new GitHubReviewClient.ReviewResponse.User("thrillhousebot")));
 
     var delta =
-        publisher.publishFollowUpDelta(
-            "auth", "o", "r", 1, RESOLVED_FOLLOW_UP, false, List.of(THREADLESS_PREVIOUS));
+        publisher.followUpDeltaSection(RESOLVED_FOLLOW_UP, false, List.of(THREADLESS_PREVIOUS));
     publisher.resolveAddressedThreads(
         "auth",
         req,
@@ -468,7 +403,7 @@ class ReviewPublisherTest {
             List.of(THREADLESS_PREVIOUS)));
 
     // Neither of #714's surfaces reaches this maintainer: no delta comment, no thread reply.
-    assertFalse(delta);
+    assertTrue(delta.isEmpty());
     verify(commentClient, never())
         .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
     verify(reviewClient, never())

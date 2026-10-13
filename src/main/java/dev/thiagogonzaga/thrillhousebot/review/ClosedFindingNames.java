@@ -30,13 +30,14 @@ import java.util.List;
  * not tell which the reviewer matched and which it silently skipped — matching is by {@code
  * path:line} plus title and the guards reject several spellings, so a skip is a real outcome.
  *
- * <p>Shared by the opt-in follow-up delta comment and the review body because the delta alone did
- * not reach a default install: it is gated on {@code thrillhousebot.review.follow-up-summary
- * .enabled}, which defaults to false, and the other naming surface — a reply on the closed
- * finding's thread — does not exist for a finding published with no thread at all (#712). That
- * threadless finding is exactly the one the clearing directive is the only available action for
- * (#709), so it is where the attribution is needed most and where it was missing (#737). The review
- * body posts on every round with something to say and is behind no flag, so the names ride it.
+ * <p>Shared by the opt-in follow-up delta section and the default review body because the delta
+ * alone did not reach a default install: it is gated on {@code
+ * thrillhousebot.review.follow-up-summary .enabled}, which defaults to false, and the other naming
+ * surface — a reply on the closed finding's thread — does not exist for a finding published with no
+ * thread at all (#712). That threadless finding is exactly the one the clearing directive is the
+ * only available action for (#709), so it is where the attribution is needed most and where it was
+ * missing (#737). The review body posts on every round with something to say and is behind no flag,
+ * so the names ride it.
  *
  * <p>Every finding the {@code resolved} count covers is named, not only the directive-cleared ones:
  * the list has to add up to the integer it explains, and a fix that landed is just as unnamed

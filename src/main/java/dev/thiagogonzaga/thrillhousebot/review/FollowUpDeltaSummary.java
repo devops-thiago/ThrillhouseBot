@@ -20,55 +20,40 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Renders the short "what moved since the last pass" comment posted on a follow-up review when
- * {@code thrillhousebot.review.follow-up-summary.enabled} is on.
+ * Renders the opt-in "what moved since the last pass" section of a follow-up review outcome.
  *
- * <p>Deliberately <em>not</em> a second render method on {@link PrSummaryGenerator}: that class
- * assembles the 500-line first-review summary from the model's summary object, the PR-level diff
- * stats, the walkthrough table and the optional diagram, and is gated on its own config. This
- * comment needs none of that — it is a pure function of the {@link ReviewResult} counts and the
- * previous round's findings it names them from — so folding it in would mean threading unrelated
- * inputs through, and would put two different comment shapes behind one entry point. Keeping it
- * separate also keeps {@link PrSummaryGenerator#SUMMARY_HEADING} out of the rendered body, which
- * matters: that heading is one of the two markers {@code ReviewContextLoader.isBotSummaryComment}
- * uses to recognize the bot's summary, and a delta comment carrying it would be mistaken for one —
- * overwritten by the next round's summary edit (#868), and counted as an already-posted summary
- * when deciding whether a review is the first.
+ * <p>The section is separate from the persistent PR summary and carries no summary marker: that
+ * marker would make {@code ReviewContextLoader} mistake it for the editable PR summary (#868). Its
+ * counts come from the round's reconciled statuses, with closed findings named by locator and title
+ * through {@link ClosedFindingNames}. Declined and superseded statuses are not fixes; an
+ * earlier-round close recorded on this round is counted and named once (#1066).
  *
- * <p>Three counts are rendered, all sourced from the statuses the follow-up pipeline already
- * produced rather than recomputed here: findings raised this round, previous findings the round
- * closed, and previous findings still open. The closed ones are also named, one {@code path:line} —
- * title line each ({@link ClosedFindingNames}). A {@code justified} status (declined by a
- * maintainer) is in none of them — it is neither newly fixed nor still open — and {@code
- * superseded} is not counted either: it is an auto-close because the targeted code left the diff,
- * not something the round fixed. A superseded round also re-posts the full summary, and the caller
- * skips this comment whenever that re-post lands. An earlier round's finding the round closed
- * (cleared, or its code left the diff) is counted and named: it has no model verdict, and the round
- * records the close, so it is counted on that round only and never posts this comment again (#957,
- * #1066, {@link ReviewResult#resolvedPreviousCount}).
- *
- * <p>The counts are only as good as the previous-finding statuses handed to them: issue #455
- * records that a round returning zero findings corrupts the previous-findings context, which can
- * both drop a real finding out of tracking and inflate the still-open count. That defect is tracked
- * separately; the guard below limits the blast radius here, since a round whose only "movement" is
- * a phantom carry-over renders nothing at all.
+ * <p>Only a new finding or a closure earns a delta. Findings that merely stay open never add a
+ * section on their own. A superseded finding refreshing the PR summary does not suppress the
+ * section (#927); the publisher suppresses it on a successful explicit {@code /summary} command.
+ * Coverage and verification disclosures stay with the counts, and the review keeps its actual
+ * verdict and delivery fallback instead of making a separate delta write.
  */
 final class FollowUpDeltaSummary {
 
   /**
-   * First line of the delta comment. Distinct from {@link PrSummaryGenerator#SUMMARY_HEADING} on
+   * First line of the delta section. Distinct from {@link PrSummaryGenerator#SUMMARY_HEADING} on
    * purpose — see the class javadoc.
    */
   static final String DELTA_HEADING = "## 🤖 ThrillhouseBot — changes since the last review";
 
+  private static final String NEW_COUNT = "- **New findings this round:** ";
+  private static final String RESOLVED_COUNT = "- **Previous findings resolved:** ";
+  private static final String OPEN_COUNT = "- **Previous findings still open:** ";
+
   private FollowUpDeltaSummary() {}
 
   /**
-   * The delta comment body, or {@link Optional#empty()} when this round has no delta to report.
+   * The delta section body, or {@link Optional#empty()} when this round has no delta to report.
    *
    * <p>"Delta" means the round moved something: it raised at least one finding, or it closed at
    * least one previous finding. Previous findings that merely stayed open are reported inside a
-   * comment that posts for one of those reasons, but never trigger one on their own — a pass that
+   * section that renders for one of those reasons, but never trigger one on their own — a pass that
    * re-states the same open count is exactly the per-push noise this feature must not add, and it
    * is also the shape a miscounted carry-over takes, which is better left un-amplified.
    */
@@ -79,34 +64,56 @@ final class FollowUpDeltaSummary {
     if (newFindings == 0 && resolved == 0) {
       return Optional.empty();
     }
-    var coverageDisclosure =
-        ReviewResult.truncationDisclosure(result.omittedFiles(), result.truncation());
     var body =
         DELTA_HEADING
             + "\n\n"
-            + "- **New findings this round:** "
+            + NEW_COUNT
             + newFindings
             + "\n"
-            + "- **Previous findings resolved:** "
+            + RESOLVED_COUNT
             + resolved
             + "\n"
             + ClosedFindingNames.bulletList(result, previousFindings, "  ")
-            + "- **Previous findings still open:** "
+            + OPEN_COUNT
             + result.unresolvedPreviousCount()
-            + "\n"
-            // Same partial-coverage wording the on-demand commands use: these counts cover only the
-            // reviewed portion of a truncated diff, so the comment has to say so. Pass the
-            // truncation detail, not just the count — on the budgeted path the count folds in
-            // clipped files, which are partially analyzed, not omitted (F8).
-            + coverageDisclosure;
-    // The delta's counts must not read as fully screened when verification did not cover them
-    // (#623) — same disclosure the posted review and check run carry, in its one-sentence form.
-    // Only when no coverage disclosure rendered above: that one folds the verification clause in
-    // alongside the file gaps, and the same fact must not stack twice on one comment.
+            + "\n";
+    var coverageDisclosure =
+        ReviewResult.truncationDisclosure(result.omittedFiles(), result.truncation());
+    body +=
+        // Counts cover the reviewed portion only. Preserve named gaps and clipped files (F8).
+        coverageDisclosure;
+    // The gap disclosure already includes verification; add its brief only without gaps (#623).
     if (result.truncation().verification().disclosed() && coverageDisclosure.isEmpty()) {
       body += "\n\n> ⚠️ " + ReviewResult.verificationBrief(result.truncation().verification());
     }
     return Optional.of(body);
+  }
+
+  /** End of this producer's counts and closed-name section, never a following findings list. */
+  static int endOfSection(List<String> lines, int start) {
+    if (!lines.get(start).strip().equals(DELTA_HEADING)) {
+      return start;
+    }
+    var at = start + 1;
+    while (at < lines.size() && lines.get(at).isBlank()) {
+      at++;
+    }
+    if (at + 1 >= lines.size()
+        || !hasCount(lines.get(at), NEW_COUNT)
+        || !hasCount(lines.get(at + 1), RESOLVED_COUNT)) {
+      return start;
+    }
+    at += 2;
+    while (at < lines.size() && lines.get(at).startsWith("  - ")) {
+      at++;
+    }
+    return at < lines.size() && hasCount(lines.get(at), OPEN_COUNT) ? at + 1 : start;
+  }
+
+  private static boolean hasCount(String line, String prefix) {
+    return line.startsWith(prefix)
+        && line.length() > prefix.length()
+        && line.substring(prefix.length()).chars().allMatch(Character::isDigit);
   }
 
   /**
