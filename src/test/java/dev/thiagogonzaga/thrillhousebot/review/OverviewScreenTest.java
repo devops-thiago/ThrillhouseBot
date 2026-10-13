@@ -747,4 +747,73 @@ class OverviewScreenTest {
     }
     return warnings;
   }
+
+  @Test
+  void cfKeepsTheInventedKeyInItsWholeSentence() {
+    assertEquals(
+        "Ships.",
+        OverviewScreen.withoutInventedTickets(
+            "Adds the fix, cf. THRILLHOUSEBOT-122 for details. Ships.", ""));
+    assertEquals(
+        "Adds the fix, cf. THRILLHOUSEBOT-122 for details. Ships.",
+        OverviewScreen.withoutInventedTickets(
+            "Adds the fix, cf. THRILLHOUSEBOT-122 for details. Ships.", "THRILLHOUSEBOT-122"));
+    assertEquals(
+        List.of("Adds the fix, cf. THRILLHOUSEBOT-122 for details.", "Ships."),
+        OverviewScreen.sentences("Adds the fix, cf. THRILLHOUSEBOT-122 for details. Ships."));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "Holds a hundred and one findings",
+        "Hosts two or three findings",
+        "Hosts two or more findings",
+        "Holds 10 or fewer findings",
+        "Hosts five to ten findings"
+      })
+  void compoundAndApproximateCountsAreCutByTheFullScreen(String clause) {
+    assertTrue(OverviewScreen.talksAboutFindings(clause));
+    assertEquals("", OverviewScreen.screenedText(clause, "+x", ""));
+    assertEquals(
+        "Renders the dashboard",
+        OverviewScreen.screenedText("Renders the dashboard; " + clause, "+x", ""));
+    var screened =
+        OverviewScreen.screen(
+            summary("Purpose", List.of(row("react/src/main.tsx", clause))), FILES, "");
+    assertEquals(List.of(), screened.fileSummaries());
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "Retries two or more times before giving up", "Pages through a hundred and one findings",
+        "Loads two or fewer findings per request", "Renders the dashboard and loads the findings",
+        "Loads, parses and caches findings"
+      })
+  void countConjunctionsInFileRolesStayWhole(String clause) {
+    assertEquals(clause, OverviewScreen.screenedText(clause, "+x", ""));
+  }
+
+  @Test
+  void countSeparatorsAtClauseEdgesDoNotTurnRolesIntoBookkeeping() {
+    for (var text :
+        List.of(" and loads findings.", "Hosts two findings and ", "Hosts two or less findings.")) {
+      var expected = text.startsWith(" and") ? "and loads findings." : "";
+      assertEquals(expected, OverviewScreen.screenedText(text, "", ""));
+    }
+  }
+
+  @Test
+  void countBoundariesKeepMarkupAndNonCountAlternatives() {
+    for (var text :
+        List.of(
+            "two or more retries",
+            "Loads **two** or **more** rows",
+            "Retries two or alternative strategies")) {
+      assertEquals(text, OverviewScreen.screenedText(text, "+x", ""));
+    }
+    assertEquals("", OverviewScreen.screenedText("() or []", "+x", ""));
+    assertEquals("", OverviewScreen.screenedText("Hosts **two** or **more** findings", "+x", ""));
+  }
 }

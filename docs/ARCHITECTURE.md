@@ -108,7 +108,8 @@ newest head is reviewed next. A CI-hold recheck runs once no review of that PR i
      project stack, linked bug-fix issue text, config-key definitions and, when enabled, patch
      coverage.
 3. Read the opt-in context sections: CI failures (`CiFailureContextResolver`), linked issues
-   (`TicketContextResolver`) and review learnings (`ReviewLearnings.promptSection`).
+   (`TicketContextResolver`) and review learnings (`ReviewLearnings.recall`, returning the same
+   bounded selection for the prompt and the deterministic decline-policy check).
 4. Assemble the prompt inputs (`ReviewPromptAssembler.assemble`) and plan the calls
    (`DiffBudgetPlanner.plan`). The CI reading for the verdict runs in parallel: from step 2 when CI
    context is on, from here otherwise.
@@ -122,7 +123,7 @@ newest head is reviewed next. A CI-hold recheck runs once no review of that PR i
    stop. Then, for an automatic run with a label gate configured, read the PR's labels again
    (`LabelGateGuard`): if a gate now rejects the PR, mark the check run `skipped` and stop. A
    failed read of either lets the round post.
-8. Publish the summary comment, the optional delta comment and the PR review, then conclude the
+8. Publish the summary comment and the PR review with its optional delta section, then conclude the
    check run.
 9. Run the post-result steps. Each may fail without undoing the review: resolve the threads of
    addressed findings, capture finding feedback, capture review learnings, apply or suggest labels,
@@ -249,9 +250,13 @@ prompt inputs, the plan, the evidence resolver, and the evidence and verifier ca
 stages produce) to the next. The constructor builds one explicit ordered list per lane; the batch
 list is the single-call list without `DedupeStage`. `FindingScreenTest` pins both orders.
 
-Every lane then ends with the same two steps (`FindingPipeline.finish`): the deterministic security
-scan merge, then the guard that drops a new finding restating one still open on its own thread
-from any earlier round. The summary call runs after that. Carried description gaps are merged
+Every lane then reaches `FindingPipeline.finish`: the narrow Dockerfile image-digest decline
+check over the selected learnings, the linked-issue evidence floor, placeholder-secret screening,
+the deterministic security scan merge, then the guard that drops a new finding restating one
+still open on its own thread from any earlier round and path-mention screening. The decline
+check keeps covered findings at low confidence and abstains on current digest requirements or
+independent failure/security evidence; the issue floor runs afterward and the scan never passes
+through the decline check. The summary call runs after that. Carried description gaps are merged
 into its result, prompt vocabulary is scrubbed from the response (`PromptLabelScrubber`) and the
 response is stored on the session.
 
@@ -345,11 +350,12 @@ again.
    justified without holding anything open; its thread, found by marker and content, is resolved
    and the decline is offered to the learnings capture. Every other older-round finding still gets
    a status: superseded when its code left the diff, resolved when its suggested fix landed beside
-   the flagged line, and resolved or justified when a maintainer cleared or declined it on the PR
-   conversation. A finding closed this way has its thread resolved and is named once under the
-   round's closed findings; the round records the close, so later rounds do not name or count it
-   again. These statuses are recomputed every round, so on their own they never post the delta
-   comment or re-post the summary.
+   the flagged line, and resolved or justified when a maintainer
+   cleared or declined it on the PR conversation. Holds and standing declines are evaluated again
+   on later rounds. An earlier finding closed this round is recorded once with its finding identity
+   in the persisted response (#1066), so the next round does not report that closure again. Those
+   recorded closes contribute to the resolved count and names in the review outcome, including its
+   opt-in delta section.
 
 The still-open set is the `unresolved` findings plus the backstop's holds, one entry per finding.
 That one set feeds the summary's counts and lists, the "Still present" count and the verdict.
@@ -365,14 +371,20 @@ not rewritten. A new comment is posted when the old one was deleted or the edit 
 Because the edit replaces the whole body, each round renders the PR as it stands. The risk counts,
 Key Findings and "Things to double-check" cover the round's new findings plus every earlier finding
 still open, tagged as open since an earlier review. Description gaps the previous summary listed
-are passed to the summary call (`DescriptionGapCarryover`). They stay listed until the call says
-they are addressed, the round reports them again, or their issue is no longer linked. When the
-summary call returns no overview on an unchanged head, the previous round's overview is reused
-(`PriorOverviewCarryover`).
+are passed to the summary call (`DescriptionGapCarryover`). On a changed head, the call can mark
+a gap addressed. On an unchanged head, that answer cannot clear a gap unless the PR description
+changed since the summary that listed it; then only description gaps can leave, never linked-issue
+gaps. A quoted omission also leaves when the edited description now contains the quoted passage.
+The current round's matching finding replaces its gap entry, and gaps tied to an issue that is no
+longer linked are removed. When the summary call returns no overview on an unchanged head, the
+previous round's overview is reused (`PriorOverviewCarryover`).
 
 The comment keeps no history of its own. Each round's review and inline comments record that
-round, and the optional delta comment (`REVIEW_FOLLOW_UP_SUMMARY_ENABLED`, off by default) lists
-what changed since the last round.
+round. The optional delta section (`REVIEW_FOLLOW_UP_SUMMARY_ENABLED`, off by default) lists
+what changed since the last round inside that review, replacing its default closed-names section.
+One review notification therefore carries the verdict, counts and closed identities. A definite
+review refusal keeps the same body in the existing comment fallback; an ambiguous failure does
+not risk posting it twice. An explicit `/summary` that posts its summary adds no delta section.
 
 ### Threads
 
@@ -420,7 +432,7 @@ calls do not get them unless stated. All are off by default.
 | Patch coverage | `REVIEW_PATCH_COVERAGE_ENABLED` | `PatchCoverageResolver` reads the CI coverage report and lists the changed lines no test covers. |
 | CI failures | `REVIEW_CI_CONTEXT_ENABLED` | `CiStatusEvaluator`'s early reading of the head. `CiFailureContextResolver` renders the failing checks, one annotations page each (runner notices dropped), and the failing tests named in up to two failing Actions job logs, plus a job-log tail with `REVIEW_CI_CONTEXT_INCLUDE_LOGS`. The review call and the summary call both get it, each with its own request. Pending checks contribute a count only. |
 | Linked issues | `REVIEW_TICKET_CONTEXT_ENABLED` | `TicketContextResolver` over `GitHubIssuesProvider`: PR-body closing keywords, then GitHub's closing references, then optionally the branch name. Same-repository issues only, read and never written. The summary call gets it too and lists unaddressed acceptance criteria as description gaps, never as findings. |
-| Review learnings | `REVIEW_LEARNINGS_ENABLED` | `ReviewLearnings` ranks the repository's active learnings by how close their file is to the changed files, and caps them in count and characters. |
+| Review learnings | `REVIEW_LEARNINGS_ENABLED` | `ReviewLearnings` ranks the repository's active learnings by how close their file is to the changed files, and caps them in count and characters. The same typed selection feeds the prompt and the narrow Dockerfile image-digest decline check; excluded rows do not affect findings. |
 
 Learnings are captured after a review is posted. `FollowUpAnalyzer.survivingDeclines` keeps only
 the `justified` findings whose decline the re-check ran against and whose every reason rests on no

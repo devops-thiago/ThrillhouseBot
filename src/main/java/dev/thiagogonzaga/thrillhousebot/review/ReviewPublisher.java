@@ -95,7 +95,7 @@ public class ReviewPublisher {
    * rounds' findings still open, not only the round's own (#917): a render of the round alone would
    * erase every open finding from the counts and lists. The comment keeps no history of its own:
    * the round-to-round story lives in the per-round surfaces, which stay append-only — each round's
-   * review with its inline findings, and the opt-in delta comment — and GitHub keeps the edit
+   * review, including its inline findings and opt-in delta section — and GitHub keeps the edit
    * history of the comment itself. Keeping none also keeps the comment inside the same size budget
    * the summary was always bounded by.
    *
@@ -104,10 +104,10 @@ public class ReviewPublisher {
    *     was superseded ({@link ReviewResult#hasSupersededPrevious}) — its targeted code left the
    *     diff, which is the round the summary used to be re-rendered for. {@code false} when this
    *     review has no summary to post, and for the in-place edit of an ordinary follow-up round: an
-   *     edit notifies nobody, so the review and the delta comment stay that round's visible
-   *     outcome. {@code postReview} suppresses a redundant no-issues review (summary-only re-run,
-   *     or a first review held back solely by pending/failed CI) only when this returned {@code
-   *     true} — a failed or skipped summary must leave the review as the run's visible outcome.
+   *     edit notifies nobody, so the review stays that round's visible outcome. {@code postReview}
+   *     suppresses a redundant no-issues review (summary-only re-run, or a first review held back
+   *     solely by pending/failed CI) only when this returned {@code true} — a failed or skipped
+   *     summary must leave the review as the run's visible outcome.
    */
   boolean publishSummary(
       String auth,
@@ -152,57 +152,21 @@ public class ReviewPublisher {
   }
 
   /**
-   * Posts the opt-in follow-up delta comment — the short "what moved since the last pass" note
-   * described by {@link FollowUpDeltaSummary}. Independent of {@link #publishSummary}: it never
-   * runs on a first review, and never on a {@code /summary} round that posted the summary ({@link
-   * #publishSummary} with {@code forceSummary} always posts a new comment), so the delta never
-   * lands beside the summary that command was asked for. Every other follow-up round posts it: one
-   * whose summary a superseded finding refreshed in place (the edit notifies nobody, and
-   * suppressing the delta there left follow-up rounds with no delta at all, #927), and one whose
-   * upsert posted a new summary because none was left.
-   *
-   * <p>Its outcome deliberately does <em>not</em> feed the {@code summaryPosted} flag {@link
-   * #postReview} keys its redundant-review skips on. That flag means "the PR already carries this
-   * round's verdict in a comment"; a delta comment carries counts, not a verdict, so letting it
-   * suppress the review would leave a clean follow-up with no stated outcome at all.
-   *
-   * @param summaryCommandPosted whether this is a {@code /summary} round whose summary comment was
-   *     posted — when it is, this comment is skipped rather than posted beside it
-   * @param previousFindings the previous round's findings, in prompt-id order, so the comment can
-   *     name the ones it closed by {@code path:line} and title instead of reporting a bare count
-   *     (#714)
-   * @return {@code true} when the delta comment was created; {@code false} when the feature is off,
-   *     the review is a first review, a summary was posted, or the round has no delta to report
+   * Renders the opt-in follow-up counts for the review outcome, without a separate GitHub write.
+   * First reviews, a successfully posted /summary command and rounds with no movement add none.
    */
-  boolean publishFollowUpDelta(
-      String auth,
-      String owner,
-      String repo,
-      int prNumber,
+  String followUpDeltaSection(
       ReviewResult result,
       boolean summaryCommandPosted,
       List<ReviewResponse.Finding> previousFindings) {
     if (!config.review().followUpSummary().enabled()
         || result.isFirstReview()
         || summaryCommandPosted) {
-      return false;
+      return "";
     }
-    var body = FollowUpDeltaSummary.render(result, previousFindings);
-    if (body.isEmpty()) {
-      Log.debugf(
-          "No delta to report for %s/%s #%d — skipping the follow-up summary comment",
-          owner, repo, prNumber);
-      return false;
-    }
-    commentClient.createComment(
-        auth,
-        ACCEPT,
-        owner,
-        repo,
-        prNumber,
-        new GitHubCommentClient.CreateCommentRequest(
-            PromptLabelScrubber.scrubMarkdown(body.get(), result.findings())));
-    return true;
+    return FollowUpDeltaSummary.render(result, previousFindings)
+        .map(body -> PromptLabelScrubber.scrubMarkdown(body, result.findings()))
+        .orElse("");
   }
 
   /**
@@ -383,7 +347,36 @@ public class ReviewPublisher {
       ReviewResult result,
       DiffLineResolver lineResolver,
       boolean summaryPosted,
-      List<ReviewResponse.Finding> previousFindings) {}
+      List<ReviewResponse.Finding> previousFindings,
+      String followUpDeltaSection) {
+    PostReviewRequest {
+      followUpDeltaSection = java.util.Objects.requireNonNullElse(followUpDeltaSection, "");
+    }
+
+    // Direct callers retain the default closed-finding report without opt-in enrichment.
+    PostReviewRequest(
+        String auth,
+        String owner,
+        String repo,
+        int prNumber,
+        String commitSha,
+        ReviewResult result,
+        DiffLineResolver lineResolver,
+        boolean summaryPosted,
+        List<ReviewResponse.Finding> previousFindings) {
+      this(
+          auth,
+          owner,
+          repo,
+          prNumber,
+          commitSha,
+          result,
+          lineResolver,
+          summaryPosted,
+          previousFindings,
+          "");
+    }
+  }
 
   /**
    * Back-compat convenience for tests and callers with no summary outcome to report. Defaults
@@ -468,9 +461,9 @@ public class ReviewPublisher {
             owner, repo, prNumber);
       }
       var fallbackParts = new ArrayList<>(skippedFindingsBodyParts(inline));
-      appendClosedFindingNames(fallbackParts, result, post.previousFindings());
+      appendPreviousOutcome(fallbackParts, result, post);
       fallbackParts.addAll(reopenedDeclineNotes(result));
-      appendTruncationNotice(fallbackParts, result);
+      appendReviewNotice(fallbackParts, result, post);
       createReviewWithFallback(
           auth,
           owner,
@@ -486,9 +479,9 @@ public class ReviewPublisher {
       bodyParts.add("ThrillhouseBot requested changes — see inline comments on the diff.");
     }
     bodyParts.addAll(skippedFindingsBodyParts(inline));
-    appendClosedFindingNames(bodyParts, result, post.previousFindings());
+    appendPreviousOutcome(bodyParts, result, post);
     bodyParts.addAll(reopenedDeclineNotes(result));
-    appendTruncationNotice(bodyParts, result);
+    appendReviewNotice(bodyParts, result, post);
     if (!bodyParts.isEmpty()) {
       createReviewWithFallback(
           auth,
@@ -500,38 +493,34 @@ public class ReviewPublisher {
     }
   }
 
-  /**
-   * Adds the partial-review notice to a findings review body when the diff was truncated. The
-   * truncation banner otherwise lives only in the summary comment, which is posted best-effort and
-   * only on first reviews — if that post fails or is skipped, the review body is the sole PR
-   * surface left to disclose the partial coverage. A duplicated notice when the summary does post
-   * is the acceptable cost of never dropping it (same standard as {@link #noIssuesBody}).
-   */
-  private static void appendTruncationNotice(List<String> bodyParts, ReviewResult result) {
-    if (result.truncated()) {
-      bodyParts.add(result.truncationNotice().strip());
+  /** One coverage notice for the outcome, including verification-only delta disclosures. */
+  private static void appendReviewNotice(
+      List<String> bodyParts, ReviewResult result, PostReviewRequest post) {
+    var notice = reviewNotice(result, post);
+    if (!notice.isEmpty()) {
+      bodyParts.add(notice.strip());
     }
   }
 
+  private static String reviewNotice(ReviewResult result, PostReviewRequest post) {
+    // The delta already includes its partial/verification disclosure; do not repeat it.
+    return result.truncated() && post.followUpDeltaSection().isBlank()
+        ? result.truncationNotice()
+        : "";
+  }
+
   /**
-   * Adds the section naming the previous findings this round closed, when there are any to name.
-   *
-   * <p>The names used to render only on the follow-up delta comment, which is opt-in and off by
-   * default, and on a reply to the closed finding's own review thread — a surface a finding
-   * published with no thread (#712) does not have, which is precisely the finding a clearing
-   * directive is the only way to close (#709). So on a default install the one case #714 called
-   * worst still closed with nothing naming what closed (#737). This body is behind no flag and
-   * already carries the round's other previous-finding disclosures — the unresolved count and the
-   * overturned-decline notes — so the names ride it too.
-   *
-   * <p>Placed below the findings sections on purpose: {@code
-   * FollowUpAnalyzer.isSelfAuthoredStatusBody} classifies a body by its first line, and this
-   * section must lead only a body that carries nothing but the bot's own status prose. It stays
-   * above the partial-coverage banner, keeping the coverage caveat outermost.
+   * Counts and closed names ride one section; default callers still name closures without a flag.
    */
-  private static void appendClosedFindingNames(
-      List<String> bodyParts, ReviewResult result, List<ReviewResponse.Finding> previousFindings) {
-    var section = ClosedFindingNames.reviewBodySection(result, previousFindings);
+  private static String previousOutcomeSection(ReviewResult result, PostReviewRequest post) {
+    return post.followUpDeltaSection().isBlank()
+        ? ClosedFindingNames.reviewBodySection(result, post.previousFindings())
+        : post.followUpDeltaSection();
+  }
+
+  private static void appendPreviousOutcome(
+      List<String> bodyParts, ReviewResult result, PostReviewRequest post) {
+    var section = previousOutcomeSection(result, post);
     if (!section.isEmpty()) {
       bodyParts.add(section.strip());
     }
@@ -699,7 +688,6 @@ public class ReviewPublisher {
     var commitSha = post.commitSha();
     var result = post.result();
     var summaryPosted = post.summaryPosted();
-    var previousFindings = post.previousFindings();
     if (result.reviewState() == ReviewState.APPROVE) {
       // The round that closes the last open finding approves, so this is the body a cleared
       // finding most often lands on — it has to name what it closed (#737).
@@ -707,7 +695,8 @@ public class ReviewPublisher {
       if (!result.isFirstReview()) {
         approveParts.add(PrSummaryGenerator.ZERO_ISSUES_MESSAGE);
       }
-      appendClosedFindingNames(approveParts, result, previousFindings);
+      appendPreviousOutcome(approveParts, result, post);
+      appendReviewNotice(approveParts, result, post);
       var req =
           new GitHubReviewClient.CreateReviewRequest(
               commitSha, String.join("\n\n", approveParts), EVENT_APPROVE, List.of());
@@ -724,7 +713,7 @@ public class ReviewPublisher {
     var req =
         new GitHubReviewClient.CreateReviewRequest(
             commitSha,
-            noIssuesBody(result, previousFindings),
+            noIssuesBody(result, post),
             result.reviewState() == ReviewState.REQUEST_CHANGES
                 ? EVENT_REQUEST_CHANGES
                 : EVENT_COMMENT,
@@ -743,10 +732,10 @@ public class ReviewPublisher {
    * lead-in that makes no claim about the pull request as a whole (#933). The CI lead-ins open with
    * "found no issues in this PR", which is true only when nothing earlier is open; a follow-up
    * round posted it with state CHANGES_REQUESTED over sixteen open threads. The open count is
-   * {@link ReviewResult#unresolvedPreviousCount()}, the same statuses the delta comment's "still
+   * {@link ReviewResult#unresolvedPreviousCount()}, the same statuses the delta section's "still
    * open" line and the summary's carried list (#917) are built from.
    */
-  private String noIssuesBody(ReviewResult result, List<ReviewResponse.Finding> previousFindings) {
+  private String noIssuesBody(ReviewResult result, PostReviewRequest post) {
     long unresolved = result.unresolvedPreviousCount();
     var sb = new StringBuilder();
     if (unresolved > 0) {
@@ -754,8 +743,8 @@ public class ReviewPublisher {
       appendReopenedDeclineNotes(sb, result);
     }
     appendSection(sb, ciHoldSection(result, unresolved > 0));
-    appendSection(sb, ClosedFindingNames.reviewBodySection(result, previousFindings));
-    appendSection(sb, result.truncated() ? result.truncationNotice() : "");
+    appendSection(sb, previousOutcomeSection(result, post));
+    appendSection(sb, reviewNotice(result, post));
     return sb.toString();
   }
 

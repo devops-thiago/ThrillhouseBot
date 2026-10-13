@@ -31,7 +31,8 @@ import java.util.regex.Pattern;
  * findings, and an explaining finding still open from an earlier round is not among them. So the
  * overview's sentences of that kind are removed, and one sentence per failing check is added from
  * {@link CiFailureCitations#overviewSentences}, over every finding the summary lists. It runs when
- * the summary is rendered, so a carried overview loses a stale sentence too.
+ * the summary is rendered, so a carried overview loses a stale sentence too: the call's, and a
+ * computed one, which need not speak of a finding at all (#1091).
  */
 final class CiFailureOverview {
 
@@ -93,9 +94,14 @@ final class CiFailureOverview {
         summary.addressedGaps());
   }
 
-  /** {@code text} without its sentences on whether a finding explains a CI failure. */
+  /**
+   * {@code text} without its sentences on whether a finding explains a CI failure, and without the
+   * computed sentences on the failing checks.
+   */
   static String withoutCiVerdicts(String text) {
-    if (text == null || !EXPLAINS.matcher(text).find()) {
+    if (text == null
+        || (!EXPLAINS.matcher(text).find()
+            && !text.contains(CiFailureCitations.SENTENCE_OPENING))) {
       return text;
     }
     var sentences = OverviewScreen.sentences(text);
@@ -104,9 +110,10 @@ final class CiFailureOverview {
   }
 
   private static boolean isCiVerdict(String sentence) {
-    return EXPLAINS.matcher(sentence).find()
-        && FINDING.matcher(sentence).find()
-        && CI_RUN.matcher(sentence).find()
-        && FAILURE.matcher(sentence).find();
+    return sentence.startsWith(CiFailureCitations.SENTENCE_OPENING)
+        || (EXPLAINS.matcher(sentence).find()
+            && FINDING.matcher(sentence).find()
+            && CI_RUN.matcher(sentence).find()
+            && FAILURE.matcher(sentence).find());
   }
 }

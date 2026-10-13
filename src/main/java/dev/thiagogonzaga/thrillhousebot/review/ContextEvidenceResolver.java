@@ -411,6 +411,17 @@ public final class ContextEvidenceResolver {
       return sb.toString();
     }
 
+    /** Current scoped rules before the verifier-note budget, for an exact or unique path. */
+    List<String> scopeInstructions(String cited) {
+      if (silent || cited == null) return List.of();
+      var governed = governedPathFor(cited.strip());
+      return governed == null
+          ? List.of()
+          : scopesByFile.get(governed).stream()
+              .map(PathScopedInstructions.AppliedScope::instructions)
+              .toList();
+    }
+
     /**
      * The governed file a citation names, or {@code null} when none does or more than one does.
      * Exact first, then the single governed file a citation that lost a leading directory matches —

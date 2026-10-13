@@ -892,4 +892,53 @@ class DefectIdentityTest {
             "Only the first page of usage records reaches the aggregator",
             "only the first page of usage records is returned"));
   }
+
+  @Test
+  void aQualifiedCitationCannotBindAnotherDirectorysSameNamedFile() {
+    var cited =
+        at(
+            "medium",
+            "low",
+            "src/port/Main.scala",
+            32,
+            "PortEvent.parse crashes on missing columns",
+            "d");
+    for (var citation :
+        List.of(
+            "src/registry/Main.scala:32", "src/registry/Main.scala, lines 31-32",
+            "line 32 of src/registry/Main.scala", "lines 31 to 32 in src/registry/Main.scala",
+            "line 32 of `src/registry/Main.scala`", "line 32 of 'src/registry/Main.scala'")) {
+      var other =
+          at(
+              "medium",
+              "high",
+              "src/registry/Reader.scala",
+              10,
+              "Registry request crashes on invalid input",
+              "Calls PortEvent.parse in " + citation + ".");
+      assertFalse(DefectIdentity.sameDefect(cited, other), citation);
+      assertFalse(DefectIdentity.sameDefect(other, cited), citation);
+    }
+    for (var citation :
+        List.of(
+            "src/port/Main.scala:32",
+            "port/Main.scala:32",
+            "line 32 of src/port/Main.scala",
+            "line 32 of `src/port/Main.scala`",
+            "line 32 of 'src/port/Main.scala'",
+            "line 32 of \"src/port/Main.scala\"",
+            "lines 31 to 32 in port/Main.scala",
+            "Main.scala:32")) {
+      var same =
+          at(
+              "medium",
+              "high",
+              "src/registry/Reader.scala",
+              10,
+              "Registry request crashes on invalid input",
+              "Calls PortEvent.parse in " + citation + ".");
+      assertTrue(DefectIdentity.sameDefect(cited, same), citation);
+      assertTrue(DefectIdentity.sameDefect(same, cited), citation);
+    }
+  }
 }

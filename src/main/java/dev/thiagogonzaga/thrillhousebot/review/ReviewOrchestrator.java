@@ -330,14 +330,7 @@ public class ReviewOrchestrator {
 
       // #38: what maintainers taught the review on earlier pull requests, bounded and relevant to
       // the files this one changes; blank when the feature is off.
-      var learned =
-          learnings.promptSection(
-              req.installationId(),
-              req.owner(),
-              req.repo(),
-              ctx.reviewableFiles().stream()
-                  .map(GitHubPullRequestClient.FileDiff::filename)
-                  .toList());
+      var learned = recallLearnings(req, ctx);
       // Bound the one prompt section that grows every round before anything is sized or sent, so
       // the plan's overhead estimate and the text the calls actually carry are the same (#583).
       var promptInputs =
@@ -345,7 +338,8 @@ public class ReviewOrchestrator {
               promptAssembler.assemble(
                   ctx,
                   req,
-                  new ReviewPromptAssembler.TrailingContext(ciFailures, linkedIssues, learned)));
+                  new ReviewPromptAssembler.TrailingContext(
+                      ciFailures, linkedIssues, learned.section())));
       var plan = budgetPlanner.plan(ctx.reviewableFiles(), promptInputs);
 
       if (ciFuture == null) {
@@ -357,13 +351,14 @@ public class ReviewOrchestrator {
       // files this pull request changes are ever read.
       var evidence =
           ReviewEvidence.forReview(
-              citedLocationResolver,
-              auth,
-              req.owner(),
-              req.repo(),
-              req.commitSha(),
-              ctx,
-              ciFailures);
+                  citedLocationResolver,
+                  auth,
+                  req.owner(),
+                  req.repo(),
+                  req.commitSha(),
+                  ctx,
+                  ciFailures)
+              .withLearnings(learned.selected());
       var aiResponse =
           findingPipeline.run(session, promptInputs, ctx, plan, lineResolver, evidence);
 
@@ -397,14 +392,9 @@ public class ReviewOrchestrator {
       }
 
       boolean summaryPosted = publishSummaryBestEffort(auth, req, result);
-      // Opt-in follow-up delta comment. Skipped only on a /summary round that posted the summary:
-      // that command always posts a fresh summary comment, so the delta would land beside it. Any
-      // other round posts the delta, including one whose summary a superseded finding refreshed in
-      // place (an edit notifies nobody, #927) and one whose upsert posted a summary because none
-      // was
-      // left. The outcome is intentionally discarded — it must not feed summaryPosted below.
-      publishFollowUpDeltaBestEffort(
-          auth, req, result, summaryPosted && req.forceSummary(), previousFindings);
+      // The optional delta enriches the review, never a second notification beside it.
+      var followUpDelta =
+          followUpDeltaBestEffort(result, summaryPosted && req.forceSummary(), previousFindings);
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       // summaryPosted gates the redundant-review skips: a failed summary post leaves review
@@ -419,7 +409,8 @@ public class ReviewOrchestrator {
               result,
               lineResolver,
               summaryPosted,
-              previousFindings));
+              previousFindings,
+              followUpDelta));
 
       resultSurfaced = true;
       final var doneReq = req;
@@ -524,6 +515,18 @@ public class ReviewOrchestrator {
     return resultSurfaced;
   }
 
+  /** The exact bounded recall used by both the prompt and the deterministic decline check. */
+  private ReviewLearnings.Recall recallLearnings(
+      ReviewRequest req, ReviewContextLoader.ReviewContext ctx) {
+    return learnings.enabled()
+        ? learnings.recall(
+            req.installationId(),
+            req.owner(),
+            req.repo(),
+            ctx.reviewableFiles().stream().map(GitHubPullRequestClient.FileDiff::filename).toList())
+        : ReviewLearnings.Recall.EMPTY;
+  }
+
   /**
    * Records the verdict when the strict CI gate was all that kept it from APPROVE (#825), so the CI
    * completion for this head can post the approval without another review.
@@ -597,35 +600,16 @@ public class ReviewOrchestrator {
     }
   }
 
-  /**
-   * Posts the opt-in follow-up delta comment, swallowing any failure for the same reason {@link
-   * #publishSummaryBestEffort} does: it is enrichment, not the review, so a transient failure here
-   * must not abort before {@code postReview}. The result is not returned — the delta comment never
-   * stands in for the review, so it can never gate the redundant-review skips.
-   */
-  private void publishFollowUpDeltaBestEffort(
-      String auth,
-      ReviewRequest req,
+  /** Optional delta rendering cannot suppress the review if enrichment fails. */
+  private String followUpDeltaBestEffort(
       ReviewResult result,
       boolean summaryCommandPosted,
       List<ReviewResponse.Finding> previousFindings) {
     try {
-      reviewPublisher.publishFollowUpDelta(
-          auth,
-          req.owner(),
-          req.repo(),
-          req.prNumber(),
-          result,
-          summaryCommandPosted,
-          previousFindings);
+      return reviewPublisher.followUpDeltaSection(result, summaryCommandPosted, previousFindings);
     } catch (RuntimeException e) {
-      Log.warnf(
-          e,
-          "Failed to post the follow-up delta comment for %s/%s #%d — continuing to post the"
-              + " review",
-          req.owner(),
-          req.repo(),
-          req.prNumber());
+      Log.warn("Failed to render the follow-up delta — continuing with the review outcome", e);
+      return "";
     }
   }
 

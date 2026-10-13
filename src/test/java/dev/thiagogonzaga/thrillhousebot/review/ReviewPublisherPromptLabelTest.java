@@ -124,20 +124,24 @@ class ReviewPublisherPromptLabelTest {
             + "\n<!-- thrillhousebot:finding=1 -->";
 
     publisher.publishSummary("auth", "o", "r", 1, result(true, leakedSummary), false);
-    publisher.publishFollowUpDelta(
-        "auth",
-        "o",
-        "r",
-        1,
-        result(false, leakedSummary),
-        false,
+    var previous =
         List.of(
             new ReviewResponse.Finding(
-                "high", "rust/Dockerfile", 9, LEAKED.title(), LEAKED.description(), null, null)));
-    // No diff lines resolve, so the finding lands in the review body: the surface that carried the
-    // round-9 leaks this test is built from.
+                "high", "rust/Dockerfile", 9, LEAKED.title(), LEAKED.description(), null, null));
+    var delta = publisher.followUpDeltaSection(result(false, leakedSummary), false, previous);
+    // Unanchored findings and the optional delta share the same scrubbed review outcome.
     publisher.postReview(
-        "auth", "o", "r", 1, "sha", result(true, leakedSummary), new DiffLineResolver(Map.of()));
+        new ReviewPublisher.PostReviewRequest(
+            "auth",
+            "o",
+            "r",
+            1,
+            "sha",
+            result(false, leakedSummary),
+            new DiffLineResolver(Map.of()),
+            false,
+            previous,
+            delta));
 
     var posted = postedText();
     assertTrue(

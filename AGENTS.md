@@ -58,8 +58,8 @@ same diff.
 | Stand down before the first write: a chain of `review/PrePublishGuard`s run in order, first stand-down wins, shared consequences (skip counted, check run skipped) applied once. Order: head moved (#704, with the #806 carry-over), then a rejecting label gate (#1021). A new guard is added to the coordinator's list, not to the orchestrator | `review/ReviewStandDown.beforeFirstWrite` over `HeadMovedGuard` (with `SupersededFindingsCarryover`), `LabelGateGuard` (with `PullRequestLabelGate`) |
 | Load diff, every earlier round (from the stored `ReviewSession.aiResponseJson`), threads and conversation, instructions, labels, project stack, config-key and patch-coverage context | `review/ReviewContextLoader` (with `PatchCoverageResolver`, `ConfigKeyContextResolver`, `BugFixContextResolver`, `SupersededFindingsCarryover`) |
 | Previous-findings prompt section: the numbered effective round, then the unnumbered "still open from earlier rounds" and "answered in earlier rounds" sections | `review/FollowUpAnalyzer.buildPreviousFindingsContext` (with `effectivePreviousRoundIndex`, `openEarlierRoundFindings`) |
-| Early CI reading and the opt-in CI-failure section | `review/CiStatusEvaluator`, `review/CiFailureContextResolver` |
-| Opt-in review learnings: recall before the call (ranked, capped section) | `review/ReviewLearnings.promptSection` (reads `ReviewLearningService.listActive`) |
+| Early CI reading and the opt-in CI-failure section | `review/CiStatusEvaluator`, `review/CiFailureContextResolver`; TAP `TODO` and `SKIP` directives are expected outcomes, excluded both when collecting failed tests and when reading them back via `CiFailureCitations` (#1110) |
+| Opt-in review learnings: recall before the call (ranked, capped section and typed selection) | `review/ReviewLearnings.recall` (reads `ReviewLearningService.listActive` once) |
 | Opt-in linked-issue context: resolve the PR's linked issues, read them, extract acceptance criteria, sanitize and cap | `review/TicketContextResolver.resolve` over an `review/IssueTrackerProvider` (`review/GitHubIssuesProvider.linkedTickets`: PR-body closing keywords, then `closingIssuesReferences`, then optionally the branch name), called from `ReviewOrchestrator` and handed to `ReviewPromptAssembler.assemble(ctx, req, ciFailures, linkedIssues)` |
 | Fence untrusted input, build review and summary guidance, pick the system prompt | `review/ReviewPromptAssembler` (with `PromptSections`, `PromptTemplateEscaper`, `ReviewDimensionRouter`) |
 | Token budget and batches | `review/DiffBudgetPlanner` (`plan`, `boundPreviousFindings`, `perCallInputBudget`) |
@@ -121,10 +121,41 @@ same diff.
 - **Truncations state figures.** `ResponseCaps` resolves each lane's `ResponseCap`, and
   `TruncationReport` states the licensed cap, the setting that supplies it and the billed usage. It
   names the setting as the remedy only when the stop reached the cap (#895).
+- **Verifier evidence reads hunk code, not diff headers.** `+++` and `---` can begin added or
+  removed code inside a hunk; only the file headings outside it are excluded (#1103).
 - **Verification fails open.** Any verifier error, cut response or ceiling skip keeps the
   candidates. `FindingVerificationService.markUnscreened` caps them at medium confidence and
   appends the unverified note (#885), and `VerificationCoverage` discloses the round's coverage. Do
   not make a verifier failure drop findings or block a review.
+- **Scanner matching is bounded by compatible identities** (#1031). Model duplicates read only
+  detections in the same file's three-line window, or identifiers their text names at a distant use
+  site, never every detection in the file. Environment-key aliases belong only to the simple
+  identifier read by a fallback expression (possibly qualified or parenthesized), or to a comment
+  immediately above the declaration in the same hunk; another argument never supplies an alias
+  (#1101). The generic secret rule skips credential assignments embedded in complete sample
+  strings with explicit before/text-before/prefix prose in list/sample-builder positions, or
+  fixture/sample/example-named assignments (#981). New forms require a bare key or one of those
+  prose leaders, and whitespace only after the assignment inside the string. New exclusions
+  also require a standalone literal/factory or a simple sample-named assignment/collection:
+  unknown outer calls, unknown assignment targets, expressions and additional same-line
+  statements and preceding sibling entries stay scanned. Closing delimiters and quoted sibling
+  inputs are permitted. Unknown
+  prefixes and command suffixes stay scanned even with a sample-named target; earlier bare-key list inputs
+  keep their classification. Known-format credentials still match.
+  IAM wildcard arrays are read in linear time with no element-count or element-width cap (#983).
+  A quoted wildcard ending at a list delimiter proves the setting even when other items are
+  Terraform expressions or YAML plain scalars; nested quoted stars do not prove a wildcard.
+  Scalar wildcards also allow trailing Terraform `#`/`//` or whitespace-separated YAML `#`
+  comments; comment text never supplies a later wildcard. The element reader keeps YAML plain
+  scalar punctuation (ARN/URL slashes, non-whitespace `#`, quotes and parentheses) as text,
+  consumes quoted/tagged/nested nodes without promoting their stars, and accepts block-comment
+  trivia only in Terraform. An unclosed comment proves no wildcard. Environment-key aliases from the
+  preceding comment preserve SQL/Lua `--`, HTML/XML/SVG `<!--`, INI/systemd-unit `;` and
+  properties `!` in their file types. Systemd unit drop-in `.conf` paths also permit `;`; an
+  arbitrary `.conf` suffix does not prove comment syntax. A complete standalone Python triple-quoted
+  string (plain, raw or Unicode), optionally followed by a comment, can document the next declaration;
+  assigned, concatenated and unclosed strings do not. Java operators and adjacent key assignments
+  never supply a comment alias.
 - **Deterministic scan findings skip the verifier and calibrator.** `SecurityScan.merge` runs in
   `FindingPipeline.finish`, after every verifier call and (on the single-call lane) after
   `SeverityCalibrator.calibrate`, so no model grades a pattern match, and `markUnscreened` and
@@ -140,6 +171,37 @@ same diff.
   batches and the summary-only lane all pass through `FindingPipeline.finish` before the summary
   call and persistence. A filter that must hold for every published finding (the scan merge, the
   open-thread guard) goes there, not in `refine` or the batch path.
+- **A selected decline can demote only its supported policy class** (#1070).
+  `ReviewLearnings.recall` returns the same ranked, credential-screened and capped list for the
+  fenced prompt and `ReviewEvidence.selectedLearnings`; rows excluded by those caps cannot act on
+  findings. `DeclineLearningGuard` recognizes only the complete explicit decision not to pin images
+  by digest in Dockerfiles, alone or with the audited rationale that the release pipeline resolves
+  every image to a digest at deploy time (optionally also stating the deployed manifest carries it).
+  Policy matching preserves punctuation. Case, whitespace and one final period may vary, and the
+  contraction accepts straight/curly apostrophes or the explicit `dont` spelling. The exact audited
+  rationale may follow whitespace or one colon, period, comma or semicolon; other punctuation,
+  qualifiers, incomplete text and other rationales abstain. It also requires a mutable-reference
+  finding on the same file type, and an actual
+  `FROM` or external `COPY --from=` image the finding names. The finding stays visible at low
+  confidence with its learning id. Both its title and description must be complete policy-only
+  forms from `DeclineLearningGuard`: the four unpinned-base-image titles and five mutable-tag or
+  identical-image-content rebuild descriptions. Case, whitespace and one final period may vary;
+  punctuation, negation and extra claim text are never discarded. Only the verifier's exact appended
+  unverified paragraph is recognized as metadata and preserved. Unfamiliar finding wording relies
+  on the model's learning assessment. Unknown or conditional premises, other classes and file types,
+  current repository or applicable scoped digest requirements, and independent failure/security
+  evidence are left alone. Losing identical image contents on rebuild is that policy's own
+  consequence; actual functional failures and failed-check evidence still abstain. Current digest
+  context retains headings, wrapped lines and implicit references across sentences. Any image
+  subject (image, container, Dockerfile or base) or case-sensitive/backticked `FROM` or `COPY`
+  directive together with digest/SHA wording abstains, including declarative rules without a fixed
+  requirement keyword. SHA-family tokens accept numeric suffixes (SHA1, SHA512, SHA3) and normalized
+  hyphenated forms, with whole-token boundaries that reject lookalike words. An applicable
+  Dockerfile-scoped rule already supplies the subject, so digest/SHA wording there also abstains.
+  Ordinary English "from" or "copy" and global artifact-only digest prose do not establish an image
+  requirement; ambiguous image requirements conservatively abstain.
+  The check runs in `finish`, after calibration and before linked-issue
+  evidence floors and the deterministic scan. Scan findings never pass through it.
 - **AI services are stateless.** Every `@RegisterAiService` sets
   `NoChatMemoryProviderSupplier`. Review state travels in the previous-findings section, never in
   chat history.
@@ -216,7 +278,7 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   (`replacedPriors`, `withoutReplaced`). An item this round's own finding replaces
   (`replacedThisRound`) keeps an `unresolved` status under `REPLACED_NOTE` and is listed as its
   replacement in the still-open set, so "Still present" adds up to the findings carried in and the
-  summary folds it into the round's entry as open since an earlier review; the delta comment does
+  summary folds it into the round's entry as open since an earlier review; the delta section does
   not count it as new (`FollowUpDeltaSummary.newFindingCount`, #969). The guard also drops a new
   listed item restating an open threaded finding. The summary's "Same issue as" note
   (`SummarySurfaceDeduplicator.restatedBy`) uses the same predicate, so the note and the counts
@@ -226,7 +288,9 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   other (shared phrase and 0.75 overlap); in any file, a key or symbol named by both titles plus
   another shared title word or defect class (#956); a subject that is only the class a file is
   named after (common prose) pairs only when one description also names a symbol of the other's
-  title; or a description citing the other's `file:line` and naming a symbol of its title. Two
+  title; or a description citing the other's `file:line` and naming a symbol of its title. A qualified
+  citation must match its directory too; a shared basename alone cannot bind another directory
+  (#1100). Two
   vetoes come first: titles naming different identifiers (`namesDifferentIdentifiers`), and titles
   naming disjoint defect classes (`classesConflict`: a race is not an off-by-one, #964). A key
   named only in a description, or common title words, are not identity (`DefectIdentityTest`).
@@ -239,6 +303,16 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   `SecurityScan.fingerprintKey`, #985; a decline under the unkeyed 0.7.0 marker still matches
   through `Detection.legacyFingerprint`). Each decline covers one detection
   (`DeclinedScanFindingAcrossRoundsTest`).
+- **Summary carry-over preserves every distinct path.** `PriorOverviewCarryover` uses
+  `PathIndex.contains` for coverage membership, preserving `FilePaths.same` directory-suffix
+  semantics without enumerating groups of same-named files (#1104).
+- **Follow-up counts and closures use one review outcome** (#1117). The opt-in delta is a body
+  section, replacing the default closed-names section rather than creating a separate comment.
+  The review retains its verdict and definite-refusal fallback; first reviews, a successful
+  `/summary` and zero movement add no delta. Its coverage/verification notice is not repeated.
+  Direct publisher callers and disabled/failed enrichment still name closures by default.
+  `FollowUpAnalyzer` removes the delta's bounded counts/closed-name section from fallback prior
+  context, preserving subsequent findings; leading delta status prose is never a prior finding.
 - **The summary comment is found by its marker every round** (`<!-- thrillhousebot:summary -->`,
   or the heading for summaries from before #868), never by an id held in memory, so a restart
   loses nothing. An unchanged body is not rewritten; a failed edit posts a new comment.
@@ -370,20 +444,41 @@ live `fence(...)` (#604).
   `escape` / `neutralizeMarkers` only rewrite legacy markers. They are not an injection defense.
 - **Linked issues are read, never written, and their text is untrusted.** An
   `IssueTrackerProvider` only reads: no comment, label or state change on the issue, ever
-  (`GitHubIssuesProviderTest.onlyReadsNeverWrites`). Only issues of the PR's own repository are
+  (`GitHubIssuesProviderTest.onlyReadsNeverWrites`). PR-body fence indentation uses absolute
+  four-column tab stops, including list padding and blockquote delimiters; only the indentation
+  comparison resets after a quote marker (#1032). Only issues of the PR's own repository are
   read. Issue title and body are attacker-editable, so `TicketContextResolver` strips them with
   `CiFailureContextResolver.clean`, clips them and caps the section, and the assembler fences it
   in both calls. An acceptance criterion the change does not address is a summary
   `description_gaps` entry (`Linked issue #N: …`), never a finding: a finding claims a defect on
   a changed line, a missing criterion is scope. A finding the review call does raise against a
   criterion (the changed code contradicts it) is held to the issue text deterministically
-  (`LinkedIssueCitations`, #1073); the gaps are not turned into findings. The bug-fix efficacy section drops its own copy
+  (`LinkedIssueCitations`, #1073). A numbered attribution reads only that issue's body; explicitly
+  plural attributions read the named bodies, and unnamed ones read the full linked-issue section
+  (#1109). Each citation pass shares advancing cue/source/sentence searches and quote-position
+  indexes; it does not reread every preceding quote or absent-pattern suffix for each cue. Quote
+  indexes preserve Unicode guards and prefix-only quote boundaries. Cuts remain sequential and
+  recheck the changed text's attribution; this does not bound whole-string cut copying as linear.
+  The gaps are not turned into findings. The bug-fix efficacy section drops its own copy
   of the issue text when the linked-issue section is present.
 - **Sanitize model and GitHub text before logging it.** Wrap every such value in
   `LogSafe.oneLine` at the point where the accessor is read. `LogSafeInvariantTest` derives the
   untrusted accessors from the `*Response` records in `review.ai` and fails on a log call that
   splices one in, directly or through a same-file local. It cannot follow a value across a method
   boundary, so wrap early. `%d` numbers are exempt.
+- **Text screens preserve code and ordinary claims.** `PromptLabelScrubber` keeps the case of a
+  recovered compound identifier and removes "confirmed" only when it labels findings, never as
+  the verb in "Tests confirmed findings" or "This confirmed findings" (#1098, #1102). Standalone
+  labels after bullet, asterisk emphasis and arrow prefixes still clean up; a formatted subject
+  keeps its verb. Its whole-text restart pass and `PathMentions` share `MarkdownFences`:
+  backtick and tilde blocks close only at a run of their own marker at least as long as the opener
+  and at its quote depth; list prefixes are recognized, and mixed, shorter or quoted markers inside
+  a block and unclosed blocks stay byte-exact (#1099, #1111). Inline-span probing stops at the next
+  marker or newline instead of rereading the line's tail for every span. `OverviewScreen` keeps
+  count conjunctions with their clause while screening compound or approximate review counts,
+  preserves real file roles using the same numbers, and treats "cf." as an abbreviation before a
+  ticket key (#1105, #1106). `DescriptionGapScreen` matches a quoted compound identifier to
+  possessive prose such as "server's URL" while still rejecting unsupported quotes (#1108).
 - **Text the bot posts to GitHub** goes through `review/MarkdownSafe`, not `LogSafe`.
 - **Review learnings are maintainer text and stay data.** `ReviewLearningService.save` refuses
   credential-shaped text (`LearningText.containsCredential`) and flattens the rest
@@ -426,6 +521,13 @@ live `fence(...)` (#604).
 
 ## Tests
 
+- **Summary declaration evidence excludes literal bodies.** `ChangeSymbols` treats complete quoted
+  words and backtick or dollar substitutions as shell words before a heredoc. Spaces and equals
+  signs inside those atoms are not assignment syntax;
+  assignments and bare parenthesized/braced groups retain their code controls. The lexical prefix
+  facts and suffix end are shared per line, so many candidate operators do not rescan the prefix
+  or allocate whole suffixes. Keep spaced/unspaced parity and long-input controls when changing
+  this reader.
 - **Streaming test doubles** live in `src/test/java/.../review/ai/`, one `TokenStream` per shape:
   `FakeTokenStream` (fixed payload), `CompleteOnlyTokenStream`, `DelayedChunkTokenStream`,
   `ErrorTokenStream`, `PartialThenErrorTokenStream`, `LateErrorTokenStream`, `HangingTokenStream`,

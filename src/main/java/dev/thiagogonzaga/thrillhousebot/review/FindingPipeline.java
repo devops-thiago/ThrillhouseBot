@@ -332,6 +332,7 @@ public class FindingPipeline {
             ctx,
             lineResolver,
             promptInputs.linkedIssues(),
+            evidence,
             mentions);
     if (budgetPlanner.callCapLeavesNoSummaryCall()) {
       return summarySkippedAtCallCap(session, refined, plan, ctx, carryFor(ctx, promptInputs));
@@ -542,28 +543,37 @@ public class FindingPipeline {
     refined = populateMissingAnchors(refined, lineResolver);
     // #60: as in the single-call lane, after every model stage and before the summary call.
     var mentions = pathMentions(ctx, promptInputs, evidence);
-    refined = finish(refined, ctx, lineResolver, promptInputs.linkedIssues(), mentions);
+    refined = finish(refined, ctx, lineResolver, promptInputs.linkedIssues(), evidence, mentions);
     return withSummary(session, refined, promptInputs, ctx, plan, mentions);
   }
 
   /**
    * The last steps before a review's findings are summarized, persisted and published, on every
-   * lane (the model-less one too): the findings held to the linked issue they cite (#1073: its
-   * number named, an acceptance criterion it does not hold taken out, an unmet one it does hold
-   * kept on a thread at medium or above), the drop of model secret findings on a line that assigns
-   * only an interpolation or a placeholder (#926), the deterministic scan's merge (#60), then the
-   * guard that drops a finding restating one still open on its own thread from any earlier round
-   * (#939). The guard runs here, on the one response every path converges on — a retried call, a
-   * salvaged cut, the batches, the scan — so no way of producing the findings can post a second
-   * thread for an open one, and the summary counts and the persisted round agree with what is
-   * posted.
+   * lane (the model-less one too): the narrow Dockerfile decline-policy check over the exact
+   * recalled learning selection (#1070), then the findings held to the linked issue they cite
+   * (#1073: its number named, an acceptance criterion it does not hold taken out, an unmet one it
+   * does hold kept on a thread at medium or above), the drop of model secret findings on a line
+   * that assigns only an interpolation or a placeholder (#926), the deterministic scan's merge
+   * (#60), then the guard that drops a finding restating one still open on its own thread from any
+   * earlier round (#939). The guard runs here, on the one response every path converges on — a
+   * retried call, a salvaged cut, the batches, the scan — so no way of producing the findings can
+   * post a second thread for an open one, and the summary counts and the persisted round agree with
+   * what is posted.
    */
   private ReviewResponse finish(
       ReviewResponse refined,
       ReviewContextLoader.ReviewContext ctx,
       DiffLineResolver lineResolver,
       String linkedIssues,
+      ReviewEvidence evidence,
       PathMentions mentions) {
+    refined =
+        DeclineLearningGuard.apply(
+            refined,
+            evidence.selectedLearnings(),
+            lineResolver::getLineText,
+            evidence.contextEvidence(),
+            ctx.instructions().content());
     // #1076: a path no file resolves leaves the description; the finding stays.
     return mentions.screen(
         FollowUpAnalyzer.withoutOpenThreadDuplicates(
@@ -1083,6 +1093,7 @@ public class FindingPipeline {
             ctx,
             ctx.lineResolver(),
             promptInputs.linkedIssues(),
+            evidence,
             mentions),
         promptInputs,
         ctx,

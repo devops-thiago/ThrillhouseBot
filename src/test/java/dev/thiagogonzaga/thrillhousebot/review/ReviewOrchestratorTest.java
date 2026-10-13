@@ -231,7 +231,7 @@ class ReviewOrchestratorTest {
                 1));
     diagramConfig = mock(ThrillhouseConfig.DiagramConfig.class);
     when(reviewConfig.diagram()).thenReturn(diagramConfig);
-    // Follow-up delta comment: off, as it ships — these tests assert the default posting behaviour.
+    // Follow-up delta section: off, as it ships — these tests assert the default posting behaviour.
     followUpSummaryConfig = mock(ThrillhouseConfig.FollowUpSummaryConfig.class);
     lenient().when(reviewConfig.followUpSummary()).thenReturn(followUpSummaryConfig);
     lenient().when(followUpSummaryConfig.enabled()).thenReturn(false);
@@ -3060,7 +3060,7 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void shouldPostDeltaCommentOnFollowUpReviewWhenFollowUpSummaryEnabled() {
+    void shouldIncludeDeltaInFollowUpReviewWhenFollowUpSummaryEnabled() {
       when(followUpSummaryConfig.enabled()).thenReturn(true);
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
@@ -3127,9 +3127,11 @@ class ReviewOrchestratorTest {
                 123L,
                 false));
 
-        // The delta comment lands, and it is not the first-run summary comment.
-        verify(commentClient)
-            .createComment(
+        // The round sends one review notification: verdict, delta and findings together.
+        verify(commentClient, never())
+            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(reviewClient)
+            .createReview(
                 anyString(),
                 anyString(),
                 anyString(),
@@ -3137,25 +3139,20 @@ class ReviewOrchestratorTest {
                 anyInt(),
                 argThat(
                     req ->
-                        req.body().startsWith(FollowUpDeltaSummary.DELTA_HEADING)
+                        req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)
                             && req.body().contains("**New findings this round:** 1")
                             && req.body().contains("**Previous findings resolved:** 1")
                             && !ReviewContextLoader.isBotSummaryComment(req.body())));
-        // ...and it is the only comment the round posts, so no summary lands beside it.
-        verify(commentClient, times(1))
-            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
       }
     }
 
     @Test
-    void shouldPostTheDeltaCommentWhenASupersededFindingRefreshedTheSummary() {
+    void shouldIncludeDeltaInReviewWhenASupersededFindingRefreshedTheSummary() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = reviewAFollowUpWithASupersededPrevious(mockedStatic, false);
 
-        // #927: the superseded status makes the summary stand in for the round, which used to skip
-        // the delta as well. This is no /summary round, so the delta lands beside the summary the
-        // upsert posted (none was left on the pull request).
+        // The summary refresh still occurs; the round's delta rides its actual review.
         verify(commentClient)
             .createComment(
                 anyString(),
@@ -3164,8 +3161,10 @@ class ReviewOrchestratorTest {
                 anyString(),
                 anyInt(),
                 argThat(req -> req.body().startsWith(PrSummaryGenerator.SUMMARY_MARKER)));
-        verify(commentClient)
-            .createComment(
+        verify(commentClient, times(1))
+            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(reviewClient)
+            .createReview(
                 anyString(),
                 anyString(),
                 anyString(),
@@ -3173,8 +3172,11 @@ class ReviewOrchestratorTest {
                 anyInt(),
                 argThat(
                     req ->
-                        req.body().startsWith(FollowUpDeltaSummary.DELTA_HEADING)
-                            && req.body().contains("**New findings this round:** 1")));
+                        req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)
+                            && req.body().contains("**New findings this round:** 1")
+                            && req.body().contains("src/Main.java:5")
+                            && req.body().indexOf("Null check")
+                                == req.body().lastIndexOf("Null check")));
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
       }
     }
@@ -3201,6 +3203,17 @@ class ReviewOrchestratorTest {
                 anyString(),
                 anyInt(),
                 argThat(req -> req.body().startsWith(FollowUpDeltaSummary.DELTA_HEADING)));
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(
+                    req ->
+                        !req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)
+                            && req.body().contains("Null check")));
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
       }
     }
@@ -3210,8 +3223,59 @@ class ReviewOrchestratorTest {
      * makes {@link ReviewPublisher#publishSummary} report the summary as standing in for the round
      * (#927). {@code forceSummary} makes it a {@code /summary} round.
      */
+    @Test
+    void failedDeltaRenderingStillPublishesTheLegacyClosureAndReview() {
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = reviewAFollowUpWithASupersededPrevious(mockedStatic, false, true);
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(
+                    req ->
+                        req.body().contains("Null check")
+                            && req.body().contains(ClosedFindingNames.REVIEW_BODY_LEAD_IN)
+                            && !req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)));
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
+    @Test
+    void failedSummaryCommandKeepsTheDeltaOnTheReviewOutcome() {
+      lenient()
+          .when(
+              commentClient.createComment(
+                  anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+          .thenThrow(new RuntimeException("summary unavailable"));
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = reviewAFollowUpWithASupersededPrevious(mockedStatic, true);
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(
+                    req ->
+                        req.body().contains("Null check")
+                            && req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)));
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
     private ReviewSession reviewAFollowUpWithASupersededPrevious(
         org.mockito.MockedStatic<ReviewSession> mockedStatic, boolean forceSummary) {
+      return reviewAFollowUpWithASupersededPrevious(mockedStatic, forceSummary, false);
+    }
+
+    private ReviewSession reviewAFollowUpWithASupersededPrevious(
+        org.mockito.MockedStatic<ReviewSession> mockedStatic,
+        boolean forceSummary,
+        boolean failRendering) {
       when(followUpSummaryConfig.enabled()).thenReturn(true);
       when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
           .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
@@ -3278,6 +3342,9 @@ class ReviewOrchestratorTest {
                           "medium", "src/Main.java", 10, "Style", "Improve naming", null, null)),
                   List.of(),
                   null));
+      if (failRendering) {
+        when(followUpSummaryConfig.enabled()).thenThrow(new RuntimeException("config unavailable"));
+      }
       orchestrator.review(
           new ReviewOrchestrator.ReviewRequest(
               "owner",
@@ -3296,9 +3363,8 @@ class ReviewOrchestratorTest {
     }
 
     @Test
-    void shouldStillPostTheReviewWhenTheDeltaCommentFailsToPost() {
-      // The delta comment is enrichment, not the review: a failed post must be swallowed so the
-      // review still reaches the PR and the session completes rather than failing.
+    void shouldPostConsolidatedReviewWithoutNeedingTheDeltaCommentService() {
+      // The review must not need an additional conversation write for its follow-up counts.
       when(followUpSummaryConfig.enabled()).thenReturn(true);
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
@@ -3351,8 +3417,10 @@ class ReviewOrchestratorTest {
                             "medium", "src/Main.java", 10, "Style", "Improve naming", null, null)),
                     List.of(),
                     null));
-        when(commentClient.createComment(
-                anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+        lenient()
+            .when(
+                commentClient.createComment(
+                    anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
             .thenThrow(new RuntimeException("503 Service Unavailable"));
         // The PR reports no files, so the finding has no line to anchor to and GitHub refuses the
         // file-level fallback too (#712) — that is what leaves it for the review body, and so what
@@ -3379,9 +3447,8 @@ class ReviewOrchestratorTest {
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
-        // The delta post was attempted exactly once and its failure produced no further comment
-        // (no failure notice) — the review itself is the run's visible outcome.
-        verify(commentClient, times(1))
+        // Delta reporting needs no independent conversation write.
+        verify(commentClient, never())
             .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
       }
     }
@@ -8854,6 +8921,11 @@ class ReviewOrchestratorTest {
   class LearningsThroughReview {
 
     private void runReview(GitHubPullRequestClient.FileDiff... files) {
+      runReview(new ReviewResponse(List.of(), List.of(), null), files);
+    }
+
+    private ReviewSession runReview(
+        ReviewResponse response, GitHubPullRequestClient.FileDiff... files) {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -8879,8 +8951,7 @@ class ReviewOrchestratorTest {
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        when(aiReviewService.review(any(ReviewSession.class), any()))
-            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+        when(aiReviewService.review(any(ReviewSession.class), any())).thenReturn(response);
 
         orchestrator.review(
             new ReviewOrchestrator.ReviewRequest(
@@ -8894,7 +8965,209 @@ class ReviewOrchestratorTest {
                 "main",
                 123L,
                 false));
+        return session;
       }
+    }
+
+    @Test
+    void aSelectedImagePolicyKeepsItsCoveredFindingOnlyAsADoubleCheck() throws Exception {
+      var learning =
+          new ReviewLearningService.LearningView(
+              12,
+              ReviewLearning.KIND_DECLINE,
+              "Base image is not pinned by digest",
+              "medium",
+              "a/Dockerfile",
+              "We don't pin images by digest in Dockerfiles: the release pipeline resolves every image to a digest at deploy time and the deployed manifest carries that digest.",
+              180,
+              "https://github.com/owner/repo/pull/180#discussion_r12",
+              "maintainer",
+              java.time.Instant.parse("2026-09-01T00:00:00Z"),
+              true,
+              null,
+              null);
+      var store = mock(ReviewLearningService.class);
+      when(store.listActive(123L, "owner/repo", 100)).thenReturn(List.of(learning));
+      learnings =
+          new ReviewLearnings(
+              store,
+              followUpAnalyzer,
+              BOT_ID,
+              mock(GitHubInstallationClient.class),
+              new ReviewLearnings.Settings(true, 100, 10, 3000));
+      orchestrator = newOrchestrator();
+      var raw =
+          new ReviewResponse.Finding(
+              "medium",
+              "high",
+              "b/Dockerfile",
+              1,
+              "Base image is not pinned by digest",
+              "The python image is referenced by a mutable tag, so rebuilding can use different image contents.",
+              "FROM python:3-slim",
+              null);
+      var session =
+          runReview(
+              new ReviewResponse(List.of(raw), List.of(), null),
+              new GitHubPullRequestClient.FileDiff(
+                  "b/Dockerfile",
+                  "modified",
+                  1,
+                  1,
+                  2,
+                  "@@ -1 +1 @@\n-FROM python:2-slim\n+FROM python:3-slim"));
+      var stored = ArgumentCaptor.forClass(String.class);
+      verify(session, atLeastOnce()).setAiResponseJson(stored.capture());
+      var response = mapper.readValue(stored.getAllValues().getLast(), ReviewResponse.class);
+      assertEquals(1, response.findings().size(), "A covered finding stays visible, never dropped");
+      var held = response.findings().getFirst();
+      assertEquals(
+          FindingPlacement.DOUBLE_CHECK,
+          FindingPlacement.of(
+              RiskLevel.fromString(held.risk()), Confidence.fromString(held.confidence())),
+          "The same accepted image policy makes this a double-check");
+      assertEquals("low", held.confidence());
+      assertTrue(held.description().contains("L12"), held.description());
+      assertEquals(raw.file(), held.file());
+      assertEquals(raw.line(), held.line());
+      assertEquals(raw.title(), held.title());
+    }
+
+    private ReviewResponse.Finding imageFindingWithRecall(
+        ReviewLearningService store, ReviewLearnings.Settings settings) throws Exception {
+      learnings =
+          new ReviewLearnings(
+              store, followUpAnalyzer, BOT_ID, mock(GitHubInstallationClient.class), settings);
+      return imageFindingWithCurrentLearnings();
+    }
+
+    private ReviewResponse.Finding imageFindingWithCurrentLearnings() throws Exception {
+      orchestrator = newOrchestrator();
+      var raw =
+          new ReviewResponse.Finding(
+              "medium",
+              "high",
+              "b/Dockerfile",
+              1,
+              "Base image is not pinned by digest",
+              "The python image is referenced by a mutable tag, so rebuilding can use different image contents.",
+              "FROM python:3-slim",
+              null);
+      var session =
+          runReview(
+              new ReviewResponse(List.of(raw), List.of(), null),
+              new GitHubPullRequestClient.FileDiff(
+                  "b/Dockerfile",
+                  "modified",
+                  1,
+                  1,
+                  2,
+                  "@@ -1 +1 @@\n-FROM python:2-slim\n+FROM python:3-slim"));
+      var stored = ArgumentCaptor.forClass(String.class);
+      verify(session, atLeastOnce()).setAiResponseJson(stored.capture());
+      return mapper
+          .readValue(stored.getAllValues().getLast(), ReviewResponse.class)
+          .findings()
+          .getFirst();
+    }
+
+    private ReviewLearningService.LearningView acceptedImagePolicy(String text) {
+      return new ReviewLearningService.LearningView(
+          12,
+          ReviewLearning.KIND_DECLINE,
+          "Base image is not pinned by digest",
+          "medium",
+          "a/Dockerfile",
+          text,
+          180,
+          "https://github.com/owner/repo/pull/180#discussion_r12",
+          "maintainer",
+          java.time.Instant.parse("2026-09-01T00:00:00Z"),
+          true,
+          null,
+          null);
+    }
+
+    private ReviewLearningService.LearningView convention(long id, String path, String text) {
+      return new ReviewLearningService.LearningView(
+          id,
+          ReviewLearning.KIND_CONVENTION,
+          null,
+          null,
+          path,
+          text,
+          180,
+          null,
+          "maintainer",
+          java.time.Instant.parse("2026-09-02T00:00:00Z"),
+          true,
+          null,
+          null);
+    }
+
+    private void assertImagePolicyWasNotApplied(ReviewResponse.Finding finding) {
+      assertEquals("medium", finding.confidence());
+      assertEquals(
+          FindingPlacement.INLINE,
+          FindingPlacement.of(
+              RiskLevel.fromString(finding.risk()), Confidence.fromString(finding.confidence())));
+      assertFalse(finding.description().contains("Maintainer learning"));
+    }
+
+    @Test
+    void disabledLearningsDoNotReadOrApplyAStoredPolicy() throws Exception {
+      var store = mock(ReviewLearningService.class);
+      var finding =
+          imageFindingWithRecall(store, new ReviewLearnings.Settings(false, 100, 10, 3000));
+      assertImagePolicyWasNotApplied(finding);
+      verifyNoInteractions(store);
+    }
+
+    @Test
+    void aPolicyExcludedByTheCharacterBudgetDoesNotAffectTheFinding() throws Exception {
+      var store = mock(ReviewLearningService.class);
+      var policy =
+          acceptedImagePolicy(
+              "We don't pin images by digest in Dockerfiles. "
+                  + "The release pipeline resolves images to a digest at deployment. ".repeat(12));
+      when(store.listActive(123L, "owner/repo", 100)).thenReturn(List.of(policy));
+      var finding = imageFindingWithRecall(store, new ReviewLearnings.Settings(true, 100, 10, 500));
+      assertImagePolicyWasNotApplied(finding);
+      var inputs = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+      verify(aiReviewService).review(any(ReviewSession.class), inputs.capture());
+      assertFalse(inputs.getValue().repoInstructions().contains("[L12]"));
+      verify(store).listActive(123L, "owner/repo", 100);
+    }
+
+    @Test
+    void aPolicyExcludedByTheItemBudgetDoesNotAffectTheFinding() throws Exception {
+      var store = mock(ReviewLearningService.class);
+      var policy = acceptedImagePolicy("We don't pin images by digest in Dockerfiles.");
+      var convention = convention(13, "b/Dockerfile", "Use explicit Python versions.");
+      when(store.listActive(123L, "owner/repo", 100)).thenReturn(List.of(policy, convention));
+      var finding = imageFindingWithRecall(store, new ReviewLearnings.Settings(true, 100, 1, 3000));
+      assertImagePolicyWasNotApplied(finding);
+      var inputs = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+      verify(aiReviewService).review(any(ReviewSession.class), inputs.capture());
+      assertTrue(inputs.getValue().repoInstructions().contains("[L13]"));
+      assertFalse(inputs.getValue().repoInstructions().contains("[L12]"));
+    }
+
+    @Test
+    void aSelectedConventionWithImagePolicyTextDoesNotCoverTheFinding() throws Exception {
+      var store = mock(ReviewLearningService.class);
+      var policy = "We don't pin images by digest in Dockerfiles.";
+      when(store.listActive(123L, "owner/repo", 100))
+          .thenReturn(List.of(convention(12, "a/Dockerfile", policy)));
+      var finding =
+          imageFindingWithRecall(store, new ReviewLearnings.Settings(true, 100, 10, 3000));
+      assertImagePolicyWasNotApplied(finding);
+      var inputs = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+      verify(aiReviewService).review(any(ReviewSession.class), inputs.capture());
+      var guidance = inputs.getValue().repoInstructions();
+      assertTrue(guidance.contains("[L12] Convention"), guidance);
+      assertTrue(guidance.contains(policy), guidance);
+      verify(store).listActive(123L, "owner/repo", 100);
     }
 
     private static GitHubPullRequestClient.FileDiff javaFile() {
@@ -8904,21 +9177,37 @@ class ReviewOrchestratorTest {
 
     @Test
     void theRelevantLearningsRideTheReviewPromptFenced() {
-      when(learnings.enabled()).thenReturn(true);
-      when(learnings.promptSection(eq(123L), eq("owner"), eq("repo"), any()))
-          .thenReturn(
-              "- [L1] Convention on the whole repository — @m, PR #1:\n  Threads are flat.");
+      var store = mock(ReviewLearningService.class);
+      when(store.listActive(123L, "owner/repo", 100))
+          .thenReturn(List.of(convention(1, null, "Threads are flat.")));
+      learnings =
+          new ReviewLearnings(
+              store,
+              followUpAnalyzer,
+              BOT_ID,
+              mock(GitHubInstallationClient.class),
+              new ReviewLearnings.Settings(true, 100, 10, 3000));
+      orchestrator = newOrchestrator();
 
       runReview(javaFile());
 
-      verify(learnings).promptSection(123L, "owner", "repo", List.of("src/main/java/A.java"));
+      verify(store).listActive(123L, "owner/repo", 100);
       var inputs = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
       verify(aiReviewService).review(any(ReviewSession.class), inputs.capture());
       var guidance = inputs.getValue().repoInstructions();
       assertTrue(guidance.contains(PrReviewPrompts.LEARNINGS_REQUEST), guidance);
+      assertTrue(guidance.contains("[L1] Convention on the whole repository"), guidance);
+      assertTrue(guidance.contains("Threads are flat."), guidance);
+      var entry = guidance.indexOf("[L1]");
+      var opening = guidance.lastIndexOf(PromptTemplateEscaper.fencePrefix(), entry);
+      assertTrue(opening >= 0 && opening < entry, guidance);
+      var openingEnd = guidance.indexOf('\n', opening);
+      assertTrue(openingEnd > opening && openingEnd < entry, guidance);
+      var fenceLine = guidance.substring(opening, openingEnd);
+      var conventionEnd = guidance.indexOf("Threads are flat.") + "Threads are flat.".length();
       assertTrue(
-          guidance.indexOf(PromptTemplateEscaper.fencePrefix()) < guidance.indexOf("[L1]"),
-          "the learnings sit inside the untrusted-data fence");
+          guidance.indexOf("\n" + fenceLine, conventionEnd) >= conventionEnd,
+          "the complete convention sits inside matching untrusted-data fence lines: " + guidance);
     }
 
     /**
@@ -8972,7 +9261,8 @@ class ReviewOrchestratorTest {
     @Test
     void aPostedReviewHandsItsFinalStatusesToTheLearningsCapture() {
       when(learnings.enabled()).thenReturn(true);
-      when(learnings.promptSection(anyLong(), anyString(), anyString(), any())).thenReturn("");
+      when(learnings.recall(anyLong(), anyString(), anyString(), any()))
+          .thenReturn(ReviewLearnings.Recall.EMPTY);
 
       runReview(javaFile());
 
@@ -8992,7 +9282,8 @@ class ReviewOrchestratorTest {
 
     @Test
     void withTheStoreOffNothingIsCaptured() {
-      when(learnings.promptSection(anyLong(), anyString(), anyString(), any())).thenReturn("");
+      when(learnings.recall(anyLong(), anyString(), anyString(), any()))
+          .thenReturn(ReviewLearnings.Recall.EMPTY);
 
       runReview(javaFile());
 

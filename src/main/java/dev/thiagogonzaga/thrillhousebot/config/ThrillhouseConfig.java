@@ -702,15 +702,13 @@ public interface ThrillhouseConfig {
   }
 
   /**
-   * Opt-in delta summary comment on follow-up reviews. The first review posts the full PR summary;
-   * every later pass normally carries its signal in the review itself, so a maintainer on a busy PR
-   * has to read the inline threads to see what moved. When {@link #enabled()} a follow-up pass that
-   * actually changed something also posts a short comment with the new-finding, resolved, and
-   * still-open counts. Off by default — the quiet follow-up is the released behaviour — and skipped
-   * whenever the round has no delta, so enabling it never adds a per-push comment.
+   * Opt-in delta counts in the follow-up review outcome. A pass that raises or closes findings
+   * includes new, resolved and still-open counts alongside the actual verdict, naming each closed
+   * finding once. No separate delta comment is posted. Off by default; first reviews, a successful
+   * explicit summary command and rounds without movement add no section.
    */
   interface FollowUpSummaryConfig {
-    /** Master switch — no delta comment is rendered or posted unless this is {@code true}. */
+    /** Master switch — no delta section is rendered unless this is {@code true}. */
     @WithDefault("false")
     boolean enabled();
   }

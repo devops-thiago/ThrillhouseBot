@@ -136,6 +136,13 @@ public class CiFailureContextResolver {
   /** The status Jest and Vitest open a passed test file's line with. */
   private static final String JEST_PASSED_FILE = "PASS ";
 
+  /**
+   * A test harness's "FAIL test_find_free_uses_last_locker": one identifier after the status, so
+   * neither Jest's "FAIL src/app.test.ts" nor Go's "FAIL example.com/pkg 0.01s" (#1091). {@link
+   * CiFailureCitations} reads the name back by the same expression.
+   */
+  static final Pattern BARE_FAIL = Pattern.compile("^FAIL [A-Za-z_]\\w*+$");
+
   /** The bullet Jest heads each failed test, and its other notices, with. */
   private static final String JEST_BULLET = "\u25CF ";
 
@@ -178,10 +185,13 @@ public class CiFailureContextResolver {
           line -> line.contains("*** FAILED ***"),
           line -> line.startsWith("==> X "),
           // ctest "1 - name (Failed)", zig "1/5 test.name...FAIL (Error)" (older releases: "Test
-          // [1/5] test.name... FAIL (Error)"), rspec failed examples.
+          // [1/5] test.name... FAIL (Error)"; zig build's "error: 'mod.test.name' failed: …"),
+          // rspec failed examples, and a harness's "FAIL test_name".
           line -> line.endsWith("(Failed)"),
           line -> line.contains("...FAIL (") || line.contains("... FAIL ("),
-          Pattern.compile("^rspec \\./[^\\s:]++:\\d").asPredicate());
+          Pattern.compile("^error: '[^']++' failed:").asPredicate(),
+          Pattern.compile("^rspec \\./[^\\s:]++:\\d").asPredicate(),
+          BARE_FAIL.asPredicate());
 
   /** A dotnet test duration as the console logger prints it: {@code [12 ms]}, {@code [< 1 ms]}. */
   private static final Pattern DOTNET_DURATION = Pattern.compile("\\[(?:< )?+\\d[^\\]]*+]");
@@ -596,8 +606,17 @@ public class CiFailureContextResolver {
   }
 
   private static boolean namesAFailedTest(String line) {
-    return FAILING_TEST_LINES.stream().anyMatch(shape -> shape.test(line));
+    return !isExpectedTapOutcome(line)
+        && FAILING_TEST_LINES.stream().anyMatch(shape -> shape.test(line));
   }
+
+  /** TAP expected-outcome directives do not name a test failure that explains the job. */
+  static boolean isExpectedTapOutcome(String line) {
+    return EXPECTED_TAP_OUTCOME.matcher(line).find();
+  }
+
+  private static final Pattern EXPECTED_TAP_OUTCOME =
+      Pattern.compile("(?i)^not ok \\d++\\b[^\\n]*?\\h#\\h*+(?:TODO|SKIP)\\b");
 
   /**
    * The last {@link #LOG_TAIL_LINES} non-blank lines of a log tail, timestamps and control

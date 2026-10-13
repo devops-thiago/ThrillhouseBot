@@ -238,7 +238,8 @@ final class OverviewScreen {
    * Abbreviations that introduce what follows, whatever its case: "e.g. THRILLHOUSEBOT-100" does
    * not start a sentence.
    */
-  private static final Set<String> MID_SENTENCE_ABBREVIATIONS = Set.of("e.g.", "i.e.", "vs.");
+  private static final Set<String> MID_SENTENCE_ABBREVIATIONS =
+      Set.of("e.g.", "i.e.", "cf.", "vs.");
 
   /**
    * Title abbreviations, which precede a name: "Dr. Smith" does not start a sentence at "Smith". A
@@ -415,6 +416,9 @@ final class OverviewScreen {
     var from = 0;
     var cuts = PART_SEPARATOR.matcher(clause);
     while (cuts.find()) {
+      if (countConnector(clause, cuts.start(), cuts.end())) {
+        continue;
+      }
       parts.add(clause.substring(from, cuts.start()).strip());
       separators.add(cuts.group());
       from = cuts.end();
@@ -677,8 +681,41 @@ final class OverviewScreen {
         && j > 0
         && j + 1 < at
         && isCount(words[j - 1])
-        && isCount(words[j + 1]);
+        && countEnd(words[j + 1]);
   }
+
+  /** A part separator inside a number or approximate range does not start another clause. */
+  private static boolean countConnector(String clause, int start, int end) {
+    var connector = clause.substring(start, end).strip().toLowerCase(Locale.ROOT);
+    if (!COUNT_CONNECTORS.contains(connector)) {
+      return false;
+    }
+    int left = start;
+    while (left > 0 && !Character.isLetterOrDigit(clause.charAt(left - 1))) {
+      left--;
+    }
+    int leftStart = left;
+    while (leftStart > 0 && Character.isLetterOrDigit(clause.charAt(leftStart - 1))) {
+      leftStart--;
+    }
+    int right = end;
+    while (right < clause.length() && !Character.isLetterOrDigit(clause.charAt(right))) {
+      right++;
+    }
+    int rightEnd = right;
+    while (rightEnd < clause.length() && Character.isLetterOrDigit(clause.charAt(rightEnd))) {
+      rightEnd++;
+    }
+    return isCount(clause.substring(leftStart, left).toLowerCase(Locale.ROOT))
+        && countEnd(clause.substring(right, rightEnd).toLowerCase(Locale.ROOT));
+  }
+
+  /** The end of a count range: another number, or "two or more/fewer/less". */
+  private static boolean countEnd(String word) {
+    return isCount(word) || APPROXIMATE_COUNT_ENDS.contains(word);
+  }
+
+  private static final Set<String> APPROXIMATE_COUNT_ENDS = Set.of("more", "fewer", "less");
 
   /** Words that join two numbers into one count or range. */
   private static final Set<String> COUNT_CONNECTORS = Set.of("and", "or", "to", "through", "thru");

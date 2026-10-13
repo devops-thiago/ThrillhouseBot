@@ -6486,4 +6486,88 @@ class FollowUpAnalyzerTest {
     assertEquals("resolved", cleared.status().status());
     assertEquals(FollowUpAnalyzer.conversationClearedNote(BOT_ID), cleared.status().note());
   }
+
+  @Test
+  void consolidatedDeltaNamesAreNotOfferedAsPriorFindings() {
+    var delta =
+        FollowUpDeltaSummary.DELTA_HEADING
+            + "\n\n"
+            + "- **New findings this round:** 1\n"
+            + "- **Previous findings resolved:** 1\n"
+            + "  - src/A.java:10 — Closed bug\n"
+            + "- **Previous findings still open:** 2\n";
+    var body =
+        "ThrillhouseBot requested changes — see inline.\n\n"
+            + delta
+            + "\n- src/B.java:20 — Actual open bug\n\n> Partial coverage remains disclosed.";
+    var context =
+        analyzer.buildPreviousFindingsContext(
+            List.of(
+                new GitHubReviewClient.ReviewResponse(
+                    1L,
+                    body,
+                    "CHANGES_REQUESTED",
+                    "sha",
+                    new GitHubReviewClient.ReviewResponse.User(BOT))),
+            BOT_ID);
+    assertFalse(context.contains("Closed bug"), context);
+    assertFalse(context.contains("findings resolved"), context);
+    assertTrue(context.contains("Actual open bug"), context);
+    assertTrue(context.contains("Partial coverage"), context);
+    assertTrue(FollowUpAnalyzer.isSelfAuthoredStatusBody(delta));
+  }
+
+  @Test
+  void consolidatedDeltaAtTheEndOrStartKeepsOnlyUnrelatedContent() {
+    var delta =
+        FollowUpDeltaSummary.DELTA_HEADING
+            + "\n\n"
+            + "- **New findings this round:** 1\n"
+            + "- **Previous findings resolved:** 0\n"
+            + "- **Previous findings still open:** 0";
+    assertEquals("", FollowUpAnalyzer.withoutClosedFindingNames(delta));
+    assertEquals(
+        "real finding", FollowUpAnalyzer.withoutClosedFindingNames("real finding\n\n" + delta));
+    assertEquals(
+        "real finding", FollowUpAnalyzer.withoutClosedFindingNames(delta + "\n\nreal finding"));
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(
+      strings = {
+        "",
+        "\n\n",
+        "\n\n- **New findings this round:** 1",
+        "\n\n- ordinary finding\n- **Previous findings resolved:** 0",
+        "\n\n- **New findings this round:** 1\n- ordinary finding",
+        "\n\n- **New findings this round:** 1\n- **Previous findings resolved:** 0",
+        "\n\n- **New findings this round:** 1\n- **Previous findings resolved:** 0\n- ordinary finding",
+        "\n\n- **New findings this round:** \n- **Previous findings resolved:** 0",
+        "\n\n- **New findings this round:** x\n- **Previous findings resolved:** 0"
+      })
+  void incompleteDeltaLookalikesAreNotStrippedFromRealReviewContent(String suffix) {
+    var body = "real finding\n\n" + FollowUpDeltaSummary.DELTA_HEADING + suffix;
+    assertEquals(body.strip(), FollowUpAnalyzer.withoutClosedFindingNames(body));
+  }
+
+  @Test
+  void consolidatedBotStatusCannotClearAnOpenFindingAsAMaintainerDirective() {
+    var prior =
+        new ReviewResponse.Finding("medium", "src/A.java", 10, "Closed bug", "details", null, null);
+    var body =
+        FollowUpDeltaSummary.DELTA_HEADING
+            + "\n\n"
+            + "- **New findings this round:** 0\n- **Previous findings resolved:** 1\n"
+            + "  - src/A.java:10 — Closed bug\n- **Previous findings still open:** 0";
+    var statuses = List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still open"));
+    var rewritten =
+        analyzer.clearNamedInConversation(
+            List.of(prior),
+            statuses,
+            List.of(
+                new GitHubCommentClient.IssueComment(
+                    1L, body, new GitHubReviewClient.ReviewResponse.User(BOT), "OWNER")),
+            BOT_ID);
+    assertEquals(statuses, rewritten);
+  }
 }

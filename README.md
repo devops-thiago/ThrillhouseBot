@@ -331,7 +331,7 @@ bounds at boot while it is on.
 | `REVIEW_IMPROVE_ENABLED` | Allow `/improve` | `true` |
 | `REVIEW_GENERATE_TESTS_ENABLED` | Allow `/generate-tests` | `true` |
 | `REVIEW_DIAGRAM_ENABLED` | Add a Mermaid control-flow diagram to the summary | `false` |
-| `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | On follow-up rounds, post a short delta comment with new, resolved and still-open counts. A round where nothing moved posts nothing | `false` |
+| `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | Include new, resolved and still-open counts in the follow-up review outcome, naming closed findings once. No separate delta comment; nothing is added when no finding is raised or closed | `false` |
 | `REVIEW_LARGE_PR_NUDGE_ENABLED` | On a large PR whose review opened no inline finding and left no earlier finding open, add a note to the summary pointing at `/review` and `/improve`. No extra AI call; the verdict is unchanged | `false` |
 | `REVIEW_LARGE_PR_NUDGE_MIN_FILES` | Changed files (ignored files included) at which a PR counts as large. `0` turns this test off | `20` |
 | `REVIEW_LARGE_PR_NUDGE_MIN_CHANGED_LINES` | Added plus deleted lines at which a PR counts as large; either test is enough. `0` turns this test off | `1000` |
@@ -617,7 +617,10 @@ posted before 0.7.0, by its heading) and replaces its body, so it always
 describes the current head. A round that renders the same body makes no write.
 If the summary was deleted, the round posts a new one; if an edit fails, it
 posts a new one and logs a WARN. GitHub keeps the edit history. Inline
-findings, review bodies and the optional delta comment stay per round.
+findings and review bodies stay per round. With `REVIEW_FOLLOW_UP_SUMMARY_ENABLED`,
+the review body also carries new, resolved and still-open counts, naming each closed
+finding once instead of posting a second delta comment. The review keeps its verdict;
+a definite review refusal preserves the same outcome as a regular comment.
 
 The risk counts, Key Findings and "Things to double-check" cover the round's
 new findings and every earlier finding still open, each listed once and marked
@@ -834,7 +837,7 @@ IaC rules (high confidence):
 |---|---|---|---|
 | Admin port open to the internet | `.tf`, `.yaml`/`.yml`, `.json` | an ingress rule admitting `0.0.0.0/0` or `::/0` to port 22, 23, 3389, 5985 or 5986, to a range containing one, or to every protocol | high |
 | S3 bucket made public | `.tf`, `.yaml`/`.yml`, `.json` | a `public-read`/`public-read-write` ACL (`AccessControl: PublicRead…`), or a Block Public Access setting set to `false` | high |
-| IAM wildcard | `.tf`, `.yaml`/`.yml`, `.json` | `Action: "*"` with `Resource: "*"` in the same statement and no `Effect: Deny`; a `"*"` anywhere in a one-line list counts (up to 64 quoted elements before it, each at most 256 characters; a longer or wider list is not reported) | high |
+| IAM wildcard | `.tf`, `.yaml`/`.yml`, `.json` | `Action: "*"` with `Resource: "*"` in the same statement and no `Effect: Deny`; a `"*"` anywhere in a valid one-line list counts, with no element-count or element-width limit; scalar wildcards allow trailing Terraform `#`/`//` and whitespace-separated YAML `#` comments | high |
 | Privileged container | `.yaml`/`.yml`, `.json` | `privileged: true` (in YAML also `yes`, `on`, `y`, any case) | high |
 | Host namespace | `.yaml`/`.yml`, `.json` | `hostNetwork`, `hostPID` or `hostIPC` set to `true` (in YAML also `yes`, `on`, `y`) | high |
 | Final stage runs as root | Dockerfiles | `USER root` (or `0`) with no later `FROM` or `USER`, in a new file or in a last hunk that reaches the end of the file | medium |
@@ -845,30 +848,46 @@ statement's resource, what follows a `USER`) reads it from the same hunk. When
 the context is not in the patch the rule does not fire, and the model review
 still covers the line.
 
-**What is skipped.**
+**What is skipped.** Files the review ignores (the deployment list and the
+repository's `review.ignored-files`), files matching
+`REVIEW_SECURITY_SCAN_SKIPPED_FILES`, files GitHub sends no patch for, comment
+lines for the IaC rules, and placeholder values: anything containing `example`,
+`sample`, `dummy`, `placeholder`, `changeme`, `redacted`, `your_`/`your-`,
+`fake`, `xxxx`, `****`, `<`/`>`, `${`, `{{`, `$(`, `%s` or an ellipsis, a run of
+six identical characters, and for assignments any value starting with `$` or
+written as a Windows `%VAR%` reference, a
+regular expression (a value holding `(?`, a character-class range such as
+`[A-Z0-9]` or an escape such as `\d`, with at least a quarter of its characters
+regex syntax), and sample text quoted inside another complete string, including
+the explicit prose leaders `before`, `text before` or `prefix` before the
+credential name in a raw list or a `List.of`, `Set.of`, `Arrays.asList` or
+`Stream.of` builder, and a string
+assigned to a fixture/sample/example-named variable
+(`String fixture = "prefix client_secret: 'abc…'";`). New sample forms require
+a bare key or one of those prose leaders and whitespace only after the
+assignment inside the string, and a standalone literal/factory or simple
+fixture/sample/example-named assignment or collection declaration. Unknown outer
+calls, other assignment targets, expressions and additional statements on the
+same line, including preceding comma-separated sibling entries, remain scanned;
+closing delimiters and further quoted inputs are
+allowed. Unknown prefixes and trailing command text
+stay scanned even with a sample-named variable. Other calls, including
+`Map.of` and `fixtures.add`, retain scanning for prefixed strings because
+their values can be executable command text. An assignment in a
+direct or assigned command string, or a prefixed execution call such as
+`Runtime.exec("export API_KEY='…'")`, is still reported. Bare command strings
+written as list elements can read exactly like samples, as before. Known
+token formats are reported wherever they appear. To
+accept a line, put `thrillhousebot:allow-secret` (or `thrillhousebot:allow-iac`)
+in a comment on that line or the line above; above is the only place a
+Dockerfile instruction can take one. JSON cannot hold a comment, so put such a
+JSON file in the skipped globs.
 
-- Files the review ignores (the deployment list and the repository's
-  `review.ignored-files`), files matching `REVIEW_SECURITY_SCAN_SKIPPED_FILES`,
-  and files GitHub sends no patch for.
-- Comment lines, for the IaC rules.
-- Placeholder values: anything containing `example`, `sample`, `dummy`,
-  `placeholder`, `changeme`, `redacted`, `your_`/`your-`, `fake`, `xxxx`,
-  `****`, `<`/`>`, `${`, `{{`, `$(`, `%s` or an ellipsis, and a run of six
-  identical characters.
-- For assignments, also: a value starting with `$` or written as a Windows
-  `%VAR%` reference; a regular expression (a value holding `(?`, a
-  character-class range such as `[A-Z0-9]` or an escape such as `\d`, with at
-  least a quarter of its characters regex syntax); and sample text quoted
-  inside another string that sits first on its line or after `(`, `[`, `{` or
-  `,` (`"client_secret: 'abc…'",` in a test's list of inputs). An assignment in
-  a command string (`sh -c 'API_KEY="…"'`) is still reported; one in a command
-  string written as a list element (`["sh", "-c", "API_KEY='…'"]`) is not,
-  since it reads exactly like sample text.
-
-To accept a line, put `thrillhousebot:allow-secret` (or
-`thrillhousebot:allow-iac`) in a comment on that line or the line above; above
-is the only place a Dockerfile instruction can take one. JSON cannot hold a
-comment, so put such a JSON file in the skipped globs.
+IAM list elements use their file format: YAML ARN/URL slashes, non-whitespace
+`#` fragments, and quotes or parentheses inside plain scalars do not start
+comments or expressions. Nested or tagged stars do not prove a literal wildcard.
+Block-comment trivia belongs to Terraform, and an unclosed comment proves no
+wildcard.
 
 **The secret is never repeated.** A secret finding shows only the value's first
 characters and its length: the four-character provider prefix for a known
@@ -909,7 +928,22 @@ cases:
   `root-owned`, `subnet`).
 
 A title that only names a key (`PAYMENT_API_KEY is never read`) is a different
-defect and is kept.
+defect and is kept. Nearby detections are indexed by file and line; distant
+secret duplicates are looked up by the identifiers their text names.
+
+An
+environment key aliases a secret only when its fallback expression reads that
+secret's simple identifier, or a comment directly above the declaration names
+the key. SQL/Lua `--` and HTML/XML/SVG `<!--` comments are recognized in
+those file types, along with `//`, `#`, `/*` and `*` comment lines. INI and
+systemd unit files accept `;`, including unit drop-in `.conf` files under
+`name.service.d/` or `service.d/` (and the other unit types); an arbitrary
+`.conf` extension does not establish this syntax. Properties files accept `!`.
+A complete standalone Python triple-quoted string (plain, raw or Unicode)
+may document the next declaration, with only whitespace or a trailing `#`
+comment after its closing delimiter. Assigned, concatenated or unclosed
+strings and Java operators do not supply aliases. A different call argument
+does not tie the key to the secret.
 
 **Grades.** Every scan finding is high confidence, so none carries the "verify
 before acting" note: a match settles whether the pattern is on the line. The
@@ -1070,6 +1104,47 @@ not to raise a declined finding again while its reason still holds, and to
 describe a learning in plain words when the diff breaks it; a learning id that
 reaches review text anyway is rewritten to "a maintainer's earlier decision".
 The verifier and the summary call do not see learnings.
+
+A deterministic check also recognizes one explicit policy: a selected active
+decline saying "We don't pin images by digest in Dockerfiles" (or "We do not")
+as its complete text, or followed by "the release pipeline resolves every image
+to a digest at deploy time", optionally with "and the deployed manifest carries
+that digest". Case, whitespace and a final period may vary. The contraction accepts
+a straight or curly apostrophe, or the explicit `dont` spelling. The exact rationale
+may follow whitespace or one colon, period, comma or semicolon. Other punctuation,
+qualifiers, incomplete text and other rationales are left to the model. A low-risk
+mutable-reference finding on that file type, anchored on a `FROM` or external
+`COPY --from=` image it names, stays
+visible under **Things to double-check** with a note naming the learning id.
+The check uses the exact bounded selection sent to the review call. A disabled
+feature, a decision outside those caps, another defect class or file type,
+an unknown premise, an applicable current digest requirement, or independent
+failure or security evidence leaves the finding alone. Linked-issue evidence
+can still raise its confidence afterward. Deterministic scan findings skip this
+check. Other policies continue to rely on the model's assessment.
+
+The deterministic backstop recognizes complete policy-only titles and descriptions:
+the unpinned-base-image title forms with the mutable-tag/rebuild claim or the
+identical-image-content reproduction forms. Unknown wording, extra consequences
+and linked acceptance-criterion claims leave the finding unchanged. Only case,
+whitespace and a final period may vary; arbitrary prefixes, suffixes, punctuation
+or negation are not removed. The verifier's exact appended unverified paragraph
+stays visible as metadata. Other wording continues to rely on the model's
+assessment of the selected learning.
+
+A rebuild losing identical image contents is the accepted policy's own
+consequence; a functional failure or a failed CI check still leaves the finding
+unchanged. Current instructions mentioning an image, container, Dockerfile or
+base subject, or a Dockerfile directive together with digest/SHA wording leave the
+finding unchanged, including
+declarative rules without a requirement keyword. Wrapped lines, headings and
+implicit references across sentences stay together. A Dockerfile-scoped rule
+already supplies the subject, so digest/SHA wording in an applicable scoped rule
+also leaves the finding unchanged. SHA-family tokens include bare SHA, numeric
+suffixes such as SHA1 and SHA512, and hyphenated forms; lookalike words do not
+establish digest context. Global artifact-only digest prose and the
+ordinary words "from" and "copy" do not make an image-pinning requirement;
+ambiguous image requirements leave the finding unchanged.
 
 **Governance.** `/learnings` lists active learnings with their ids, what each is
 about, who taught it and a link to the source comment. `/forget <id>` retracts
