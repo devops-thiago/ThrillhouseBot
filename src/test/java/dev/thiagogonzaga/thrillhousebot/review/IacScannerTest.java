@@ -754,6 +754,155 @@ class IacScannerTest {
   }
 
   @Test
+  void yamlPlainScalarPunctuationDoesNotHideALaterWildcard() {
+    for (var value :
+        List.of(
+            "arn:aws:s3:::bucket/*",
+            "https://example.com/docs",
+            "arn:aws:s3:::bucket#frag",
+            "owner's-read",
+            "read (primary",
+            "read\"label",
+            "!Ref \"read, actions\"",
+            "'path\\'",
+            "/* ordinary YAML text */")) {
+      assertEquals(
+          List.of(SecurityRule.IAM_WILDCARD),
+          rules(
+              scanNew(
+                  "p.yaml",
+                  "Statement:",
+                  "  Action: [" + value + ", \"*\"]",
+                  "  Resource: [" + value + ", \"*\"]")),
+          value);
+    }
+  }
+
+  @Test
+  void yamlOpaqueScalarPunctuationDoesNotHideALaterSetting() {
+    for (var value :
+        List.of(
+            "https://example.com/docs",
+            "arn:aws:s3:::bucket#frag",
+            "arn:aws:s3:::bucket/*",
+            "owner's-read",
+            "read (primary",
+            "read\"label")) {
+      assertEquals(
+          List.of(SecurityRule.IAM_WILDCARD),
+          rules(
+              scanNew(
+                  "p.yaml",
+                  "Statement: [{Action: "
+                      + value
+                      + ", Resource: !Ref ReadResources}, {Action: \"*\", Resource: \"*\"}]")),
+          value);
+    }
+  }
+
+  @Test
+  void yamlCommentsAndNestedOrTaggedStarsDoNotProveAWildcard() {
+    for (var value :
+        List.of(
+            "read # , \"*\"]",
+            "# , \"*\"]",
+            "[\"*\"]]",
+            "{key: \"*\"}]",
+            "!Ref \"*\"]",
+            "!Ref \"read, \\\"*\\\"\"]",
+            "&read \"*\"]",
+            "'read, ''*'']",
+            "https://example.com/docs]")) {
+      assertTrue(
+          scanNew("p.yaml", "Statement:", "  Action: [" + value, "  Resource: [\"*\"]").isEmpty(),
+          value);
+    }
+  }
+
+  @Test
+  void jsonDoesNotAcquireTerraformCommentTrivia() {
+    for (var value :
+        List.of(
+            "/* comment */ \"*\"",
+            "\"*\" /* comment */",
+            "[/* comment */ \"*\"]",
+            "[\"read\", /* comment */ \"*\"]",
+            "[\"*\" /* comment */]")) {
+      assertTrue(
+          scanNew("p.json", "{", "  \"Action\": " + value + ",", "  \"Resource\": \"*\"", "}")
+              .isEmpty(),
+          value);
+    }
+  }
+
+  @Test
+  void terraformCompleteCommentTriviaCountsButUnclosedCommentsDoNot() {
+    assertEquals(
+        List.of(SecurityRule.IAM_WILDCARD),
+        rules(
+            scanNew(
+                "iam.tf",
+                "statement {",
+                "  actions = /* before */ \"*\" /* after */",
+                "  resources = [\"*\"]",
+                "}")));
+    for (var value :
+        List.of(
+            "/* unclosed \"*\"",
+            "\"*\" /* unclosed",
+            "[/* unclosed \"*\"]",
+            "[read # , \"*\"]",
+            "[read // , \"*\"]")) {
+      assertTrue(
+          scanNew("iam.tf", "statement {", "  actions = " + value, "  resources = [\"*\"]", "}")
+              .isEmpty(),
+          value);
+    }
+  }
+
+  @Test
+  void yamlFlowAndTaggedNodesKeepTheirInternalDelimitersOpaque() {
+    for (var value :
+        List.of(
+            "{\"key\":\"read, name\", other: [read, write]}",
+            "{key:, other: read}",
+            "!<tag:example.com,2026:read> \"get, put\"",
+            "!read",
+            "{key:}")) {
+      assertEquals(
+          List.of(SecurityRule.IAM_WILDCARD),
+          rules(
+              scanNew(
+                  "p.yaml",
+                  "Statement:",
+                  "  Action: [" + value + ", \"*\"]",
+                  "  Resource: [\"*\"]")),
+          value);
+    }
+    assertEquals(
+        List.of(SecurityRule.IAM_WILDCARD),
+        rules(scanNew("p.yaml", "Statement:", "  Action: '*'", "  Resource: '*'")));
+    for (var value :
+        List.of(
+            "plain[read], \"*\"]",
+            "!<unterminated",
+            "!read",
+            "{key: \"*\"]",
+            "\"unterminated",
+            "'unterminated",
+            "\"escape\\",
+            "'path\\",
+            "read:",
+            "")) {
+      assertTrue(
+          scanNew("p.yaml", "Statement:", "  Action: [" + value, "  Resource: [\"*\"]").isEmpty(),
+          value);
+    }
+    assertTrue(scanNew("p.yaml", "Statement:", "  Action:", "  Resource: '*'").isEmpty());
+    assertTrue(scanNew("p.yaml", "Statement:", "  Action: read:", "  Resource: '*'").isEmpty());
+  }
+
+  @Test
   void aWildcardAfterManyOpaqueElementsIsReported() {
     assertEquals(
         List.of(SecurityRule.IAM_WILDCARD),

@@ -142,9 +142,9 @@ final class IacScanner {
   private record WildcardValue(int end, boolean wildcard) {}
 
   /**
-   * A bare quoted wildcard, alone or anywhere in a one-line list (#983). Every character is read at
-   * most once per setting, without a count or element-width limit. Other list elements are skipped
-   * with quote, escape and delimiter nesting state, without evaluating their expressions. A
+   * A bare quoted wildcard, alone or anywhere in a one-line list (#983). Each setting takes a fixed
+   * number of forward passes, without a count or element-width limit. Other list elements are
+   * skipped with quote, escape and delimiter nesting state, without evaluating their expressions. A
    * wildcard ending at a list delimiter proves the setting independently of later elements.
    */
   private static boolean containsWildcard(String text, Pattern setting, FileKind kind) {
@@ -160,22 +160,28 @@ final class IacScanner {
   }
 
   private static WildcardValue wildcardValue(String text, int at, FileKind kind) {
-    at = skipListTrivia(text, at);
-    if (at < text.length() && text.charAt(at) == '[') {
-      return wildcardList(text, at + 1);
+    at = skipListTrivia(text, at, kind);
+    if (at < 0) {
+      return new WildcardValue(text.length(), false);
     }
-    int end = quotedEnd(text, at);
+    if (at < text.length() && text.charAt(at) == '[') {
+      return wildcardList(text, at + 1, kind);
+    }
+    int end = literalEnd(text, at, kind);
     if (end < 0) {
-      return opaqueValue(text, at);
+      return opaqueValue(text, at, kind);
     }
     int start = at;
     boolean wildcard = end == at + 3 && text.charAt(at + 1) == '*';
-    at = skipListTrivia(text, end);
+    at = skipListTrivia(text, end, kind);
+    if (at < 0) {
+      return new WildcardValue(text.length(), false);
+    }
     if (startsLineComment(text, at, end, kind)) {
       return new WildcardValue(text.length(), wildcard);
     }
     if (at < text.length() && ",}]".indexOf(text.charAt(at)) < 0) {
-      return opaqueValue(text, start);
+      return opaqueValue(text, start, kind);
     }
     return new WildcardValue(at, wildcard);
   }
@@ -185,16 +191,16 @@ final class IacScanner {
     if (kind == FileKind.TERRAFORM) {
       return text.startsWith("#", at) || text.startsWith("//", at);
     }
-    return kind == FileKind.YAML
-        && text.startsWith("#", at)
-        && at > quotedEnd
-        && Character.isWhitespace(text.charAt(at - 1));
+    return kind == FileKind.YAML && text.startsWith("#", at) && at > quotedEnd;
   }
 
-  private static WildcardValue wildcardList(String text, int at) {
+  private static WildcardValue wildcardList(String text, int at, FileKind kind) {
     while (true) {
-      at = skipListTrivia(text, at);
-      int end = elementEnd(text, at, ']');
+      at = skipListTrivia(text, at, kind);
+      if (at < 0) {
+        return new WildcardValue(text.length(), false);
+      }
+      int end = elementEnd(text, at, ']', kind);
       if (end < 0) {
         return new WildcardValue(text.length(), false);
       }
@@ -203,7 +209,7 @@ final class IacScanner {
               && "\"'".indexOf(text.charAt(at)) >= 0
               && text.charAt(at + 1) == '*'
               && text.charAt(at + 2) == text.charAt(at)
-              && skipListTrivia(text, at + 3) == end;
+              && skipListTrivia(text, at + 3, kind) == end;
       if (wildcard) {
         return new WildcardValue(end + 1, true);
       }
@@ -217,20 +223,20 @@ final class IacScanner {
   /**
    * Skip an unknown scalar/expression through its top-level delimiter, without probing its text.
    */
-  private static WildcardValue opaqueValue(String text, int at) {
-    int end = elementEnd(text, at, '}');
+  private static WildcardValue opaqueValue(String text, int at, FileKind kind) {
+    int end = elementEnd(text, at, '}', kind);
     return new WildcardValue(end < 0 ? text.length() : end, false);
   }
 
-  /** Whitespace and complete block comments are trivia around a literal list element. */
-  private static int skipListTrivia(String text, int at) {
+  /** Whitespace, and Terraform-only complete block comments, are trivia around a literal. */
+  private static int skipListTrivia(String text, int at, FileKind kind) {
     while (at < text.length()) {
       if (Character.isWhitespace(text.charAt(at))) {
         at++;
-      } else if (text.startsWith("/*", at)) {
-        int end = afterSlash(text, at);
+      } else if (kind == FileKind.TERRAFORM && text.startsWith("/*", at)) {
+        int end = afterSlash(text, at, kind);
         if (end < 0) {
-          return text.length();
+          return -1;
         }
         at = end;
       } else {
@@ -241,10 +247,13 @@ final class IacScanner {
   }
 
   /** A top-level comma or list close; nested strings and expressions do not end an element. */
-  private static int elementEnd(String text, int at, char outerClose) {
+  private static int elementEnd(String text, int at, char outerClose, FileKind kind) {
+    if (kind == FileKind.YAML) {
+      return yamlElementEnd(text, at, outerClose);
+    }
     var closing = new StringBuilder();
     while (at < text.length()) {
-      int next = listElementStep(text, at, closing, outerClose);
+      int next = listElementStep(text, at, closing, outerClose, kind);
       if (next <= at) {
         return next;
       }
@@ -253,7 +262,8 @@ final class IacScanner {
     return -1;
   }
 
-  private static int listElementStep(String text, int at, StringBuilder closing, char outerClose) {
+  private static int listElementStep(
+      String text, int at, StringBuilder closing, char outerClose, FileKind kind) {
     char c = text.charAt(at);
     return switch (c) {
       case '\'', '"' -> quotedEnd(text, at);
@@ -275,9 +285,140 @@ final class IacScanner {
       }
       case ',' -> closing.isEmpty() ? at : at + 1;
       case '#' -> -1;
-      case '/' -> afterSlash(text, at);
+      case '/' -> afterSlash(text, at, kind);
       default -> at + 1;
     };
+  }
+
+  /**
+   * YAML plain scalar punctuation is text, not an expression, quote opener or Terraform comment.
+   */
+  private static final class YamlElement {
+    final StringBuilder closing = new StringBuilder();
+    boolean nodeStart = true;
+    boolean quoted;
+  }
+
+  private static int yamlElementEnd(String text, int at, char outerClose) {
+    var state = new YamlElement();
+    while (at < text.length()) {
+      int next = yamlElementStep(text, at, state, outerClose);
+      if (next <= at) {
+        return next;
+      }
+      at = next;
+    }
+    return -1;
+  }
+
+  private static int yamlElementStep(String text, int at, YamlElement state, char outerClose) {
+    char c = text.charAt(at);
+    if (Character.isWhitespace(c)) {
+      return at + 1;
+    }
+    if (state.nodeStart && "\"'".indexOf(c) >= 0) {
+      state.nodeStart = false;
+      state.quoted = true;
+      return yamlQuotedEnd(text, at);
+    }
+    if (state.nodeStart && "!&".indexOf(c) >= 0) {
+      return yamlPropertyEnd(text, at);
+    }
+    if (c == '[' || c == '{') {
+      return yamlCollectionOpen(c, at, state);
+    }
+    if (c == '#' && (state.nodeStart || Character.isWhitespace(text.charAt(at - 1)))) {
+      return -1;
+    }
+    return yamlBoundaryStep(text, at, state, outerClose);
+  }
+
+  private static int yamlCollectionOpen(char c, int at, YamlElement state) {
+    if (!state.nodeStart) {
+      return -1;
+    }
+    state.closing.append(c == '[' ? ']' : '}');
+    state.nodeStart = true;
+    state.quoted = false;
+    return at + 1;
+  }
+
+  private static int yamlBoundaryStep(String text, int at, YamlElement state, char outerClose) {
+    char c = text.charAt(at);
+    return switch (c) {
+      case ']', '}' -> {
+        if (c == outerClose && state.closing.isEmpty()) {
+          yield at;
+        }
+        state.nodeStart = false;
+        state.quoted = false;
+        yield closeDelimiter(state.closing, c, at);
+      }
+      case ',' -> {
+        if (state.closing.isEmpty()) {
+          yield at;
+        }
+        state.nodeStart = true;
+        state.quoted = false;
+        yield at + 1;
+      }
+      case ':' -> {
+        state.nodeStart = state.quoted || yamlValueBoundary(text, at + 1);
+        state.quoted = false;
+        yield at + 1;
+      }
+      default -> {
+        state.nodeStart = false;
+        state.quoted = false;
+        yield at + 1;
+      }
+    };
+  }
+
+  private static boolean yamlValueBoundary(String text, int at) {
+    return at == text.length()
+        || Character.isWhitespace(text.charAt(at))
+        || ",]}".indexOf(text.charAt(at)) >= 0;
+  }
+
+  /** Skip a tag or anchor before a node; its quoted value must still hide internal commas. */
+  private static int yamlPropertyEnd(String text, int at) {
+    if (text.startsWith("!<", at)) {
+      int end = text.indexOf('>', at + 2);
+      return end < 0 ? -1 : end + 1;
+    }
+    at++;
+    while (at < text.length()
+        && !Character.isWhitespace(text.charAt(at))
+        && ",[]{}".indexOf(text.charAt(at)) < 0) {
+      at++;
+    }
+    return at;
+  }
+
+  private static int literalEnd(String text, int at, FileKind kind) {
+    return kind == FileKind.YAML ? yamlQuotedEnd(text, at) : quotedEnd(text, at);
+  }
+
+  /** Single-quoted YAML uses doubled apostrophes; a backslash is ordinary text there. */
+  private static int yamlQuotedEnd(String text, int at) {
+    if (at == text.length() || "\"'".indexOf(text.charAt(at)) < 0) {
+      return -1;
+    }
+    char quote = text.charAt(at++);
+    while (at < text.length()) {
+      char c = text.charAt(at++);
+      if (c == quote) {
+        if (quote == '\'' && at < text.length() && text.charAt(at) == quote) {
+          at++;
+        } else {
+          return at;
+        }
+      } else if (quote == '"' && c == '\\') {
+        at++;
+      }
+    }
+    return -1;
   }
 
   private static int closeDelimiter(StringBuilder closing, char c, int at) {
@@ -288,7 +429,7 @@ final class IacScanner {
     return at + 1;
   }
 
-  private static int afterSlash(String text, int at) {
+  private static int afterSlash(String text, int at, FileKind kind) {
     if (at + 1 == text.length()) {
       return at + 1;
     }
@@ -297,6 +438,9 @@ final class IacScanner {
       return -1;
     }
     if (next == '*') {
+      if (kind != FileKind.TERRAFORM) {
+        return -1;
+      }
       int end = text.indexOf("*/", at + 2);
       return end < 0 ? -1 : end + 2;
     }

@@ -140,7 +140,10 @@ same diff.
   A quoted wildcard ending at a list delimiter proves the setting even when other items are
   Terraform expressions or YAML plain scalars; nested quoted stars do not prove a wildcard.
   Scalar wildcards also allow trailing Terraform `#`/`//` or whitespace-separated YAML `#`
-  comments; comment text never supplies a later wildcard. Environment-key aliases from the
+  comments; comment text never supplies a later wildcard. The element reader keeps YAML plain
+  scalar punctuation (ARN/URL slashes, non-whitespace `#`, quotes and parentheses) as text,
+  consumes quoted/tagged/nested nodes without promoting their stars, and accepts block-comment
+  trivia only in Terraform. An unclosed comment proves no wildcard. Environment-key aliases from the
   preceding comment preserve SQL/Lua `--` and HTML/XML/SVG `<!--` in their file types, without
   treating a Java decrement or an adjacent key assignment as a comment.
 - **Deterministic scan findings skip the verifier and calibrator.** `SecurityScan.merge` runs in

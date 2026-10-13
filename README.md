@@ -866,6 +866,12 @@ in a comment on that line or the line above; above is the only place a
 Dockerfile instruction can take one. JSON cannot hold a comment, so put such a
 JSON file in the skipped globs.
 
+IAM list elements use their file format: YAML ARN/URL slashes, non-whitespace
+`#` fragments, and quotes or parentheses inside plain scalars do not start
+comments or expressions. Nested or tagged stars do not prove a literal wildcard.
+Block-comment trivia belongs to Terraform, and an unclosed comment proves no
+wildcard.
+
 **The secret is never repeated.** A secret finding shows only the value's first
 characters and its length: the four-character provider prefix for a known
 format (`ghp_…, 40 chars`), at most one character in four for a generic value.
