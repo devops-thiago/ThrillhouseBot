@@ -455,56 +455,6 @@ public final class ChangeSymbols {
       return shellLine;
     }
 
-    private record ShellAtoms(String text, int invalidFrom) {}
-
-    /**
-     * Complete atoms keep their width as words; an unsupported expression invalidates later
-     * prefixes.
-     */
-    private static ShellAtoms shellAtoms(String text) {
-      var chars = text.toCharArray();
-      maskShellLiterals(text, chars);
-      var literals = new String(chars);
-      var invalidFrom = text.length();
-      var i = 0;
-      while (i < literals.length()) {
-        var c = literals.charAt(i);
-        var expansion =
-            c == '$' && i + 1 < literals.length() && "({".indexOf(literals.charAt(i + 1)) >= 0;
-        if (expansion) {
-          var start = i + 1;
-          var end = shellRegionEnd(literals, start);
-          if (end < 0) {
-            invalidFrom = i;
-            break;
-          }
-          Arrays.fill(chars, i, end, 'w');
-          i = end;
-        } else if (c == '(' || c == '{') {
-          invalidFrom = i;
-          break;
-        } else {
-          i++;
-        }
-      }
-      return new ShellAtoms(new String(chars), invalidFrom);
-    }
-
-    /** Advance past each quoted/escaped atom once, including an incomplete tail. */
-    private static void maskShellLiterals(String text, char[] chars) {
-      var i = 0;
-      while (i < text.length()) {
-        var c = text.charAt(i);
-        if (c == '\\' || c == '\'' || c == '"' || c == '`') {
-          var end = c == '\\' ? Math.min(i + 2, text.length()) : endOfQuoted(text, i);
-          Arrays.fill(chars, i, end, 'w');
-          i = end;
-        } else {
-          i++;
-        }
-      }
-    }
-
     /** Prefix facts are indexed once, so many operators on one line do not rescan its beginning. */
     private static final class ShellLine {
       private final boolean[] blank;
@@ -512,6 +462,76 @@ public final class ChangeSymbols {
       private final boolean[] assignment;
       private final boolean[] separated;
       private final int invalidFrom;
+
+      private record ShellAtoms(String text, int invalidFrom) {}
+
+      /**
+       * Complete atoms keep their width as words; an unsupported expression invalidates later
+       * prefixes.
+       */
+      private static ShellAtoms shellAtoms(String text) {
+        var chars = text.toCharArray();
+        maskShellLiterals(text, chars);
+        var literals = new String(chars);
+        var invalidFrom = text.length();
+        var i = 0;
+        while (i < literals.length() && i < invalidFrom) {
+          var c = literals.charAt(i);
+          var expansion =
+              c == '$' && i + 1 < literals.length() && "({".indexOf(literals.charAt(i + 1)) >= 0;
+          if (expansion) {
+            var start = i + 1;
+            var end = shellRegionEnd(literals, start);
+            if (end < 0) {
+              invalidFrom = i;
+            } else {
+              Arrays.fill(chars, i, end, 'w');
+              i = end;
+            }
+          } else if (c == '(' || c == '{') {
+            invalidFrom = i;
+          } else {
+            i++;
+          }
+        }
+        return new ShellAtoms(new String(chars), invalidFrom);
+      }
+
+      /** Advance past each quoted/escaped atom once, including an incomplete tail. */
+      private static void maskShellLiterals(String text, char[] chars) {
+        var i = 0;
+        while (i < text.length()) {
+          var c = text.charAt(i);
+          if (c == '\\' || c == '\'' || c == '"' || c == '`') {
+            var end = c == '\\' ? Math.min(i + 2, text.length()) : endOfQuoted(text, i);
+            Arrays.fill(chars, i, end, 'w');
+            i = end;
+          } else {
+            i++;
+          }
+        }
+      }
+
+      /** The end of a balanced substitution; {@code -1} for an incomplete region. */
+      private static int shellRegionEnd(String text, int start) {
+        var closers = new ArrayDeque<Character>();
+        closers.push(shellCloser(text.charAt(start)));
+        for (var i = start + 1; i < text.length(); i++) {
+          var c = text.charAt(i);
+          if (c == '(' || c == '{') {
+            closers.push(shellCloser(c));
+          } else if (c == ')' || c == '}') {
+            if (closers.pop() != c) return -1;
+            if (closers.isEmpty()) return i + 1;
+          }
+        }
+        return -1;
+      }
+
+      /** The matching closer of a parenthesis or brace used by a shell substitution. */
+      private static char shellCloser(char opener) {
+        return opener == '(' ? ')' : '}';
+      }
 
       private ShellLine(String text) {
         var atoms = shellAtoms(text);
@@ -567,27 +587,6 @@ public final class ChangeSymbols {
           equals |= c == '=';
         }
       }
-    }
-
-    /** The end of a balanced substitution; {@code -1} for an incomplete region. */
-    private static int shellRegionEnd(String text, int start) {
-      var closers = new ArrayDeque<Character>();
-      closers.push(shellCloser(text.charAt(start)));
-      for (var i = start + 1; i < text.length(); i++) {
-        var c = text.charAt(i);
-        if (c == '(' || c == '{') {
-          closers.push(shellCloser(c));
-        } else if (c == ')' || c == '}') {
-          if (closers.pop() != c) return -1;
-          if (closers.isEmpty()) return i + 1;
-        }
-      }
-      return -1;
-    }
-
-    /** The matching closer of a parenthesis or brace used by a shell substitution. */
-    private static char shellCloser(char opener) {
-      return opener == '(' ? ')' : '}';
     }
 
     /**
