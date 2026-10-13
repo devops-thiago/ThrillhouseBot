@@ -113,6 +113,14 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
           "not caused by",
           "not the cause");
 
+  /**
+   * What a finding says when it holds that a test passes. A finding that names a failing test
+   * without saying it fails explains that failure only when it does not say the test passes either:
+   * "the test passes as written" names the test and contradicts the failure (#1091).
+   */
+  private static final List<String> PASS_WORDS =
+      phrases("pass", "passes", "passed", "passing", "succeeds", "succeeded");
+
   /** The words that make a name next to them the name of a check. */
   private static final List<String> CHECK_WORDS =
       List.of("check", "checks", "conclusion", "job", "workflow");
@@ -644,7 +652,8 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
             .toLowerCase(Locale.ROOT);
     String text = normalized(raw);
     boolean failureStated = states(text, FAILURE_WORDS);
-    if ((!failureStated && !testNameSuffices) || states(text, DISCLAIMERS)) {
+    if ((!failureStated && (!testNameSuffices || states(text, PASS_WORDS)))
+        || states(text, DISCLAIMERS)) {
       return List.of();
     }
     var cited = new ArrayList<Citation>();

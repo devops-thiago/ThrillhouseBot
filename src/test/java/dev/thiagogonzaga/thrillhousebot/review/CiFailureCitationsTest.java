@@ -871,8 +871,31 @@ class CiFailureCitationsTest {
     var checkOnly =
         new Finding(
             RiskLevel.HIGH, "src/a.ts", 4, "Check named", "The unit check runs here.", null, null);
+    var passing =
+        new Finding(
+            RiskLevel.HIGH,
+            "src/a.ts",
+            5,
+            "Guard is fine",
+            "The in-diff test topCandidatesReturnsAtMostLimit passes as written; the guard is fine.",
+            null,
+            null);
+    var fixedThenPassing =
+        new Finding(
+            RiskLevel.HIGH,
+            "src/a.ts",
+            6,
+            "Limit off by one",
+            "topCandidatesReturnsAtMostLimit fails on this line; with the fix it passes.",
+            null,
+            null);
 
-    var sentences = citations.overviewSentences(List.of(disclaimed, checkOnly));
+    var sentences = citations.overviewSentences(List.of(disclaimed, checkOnly, passing));
+    assertTrue(
+        citations
+            .overviewSentences(List.of(passing, fixedThenPassing))
+            .contains("which the finding \"Limit off by one\" explains"),
+        "a stated failure still explains it beside a pass after the fix");
 
     assertFalse(sentences.contains("explains"), sentences);
   }
