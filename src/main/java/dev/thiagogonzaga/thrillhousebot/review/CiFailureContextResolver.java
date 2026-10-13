@@ -606,8 +606,17 @@ public class CiFailureContextResolver {
   }
 
   private static boolean namesAFailedTest(String line) {
-    return FAILING_TEST_LINES.stream().anyMatch(shape -> shape.test(line));
+    return !isExpectedTapOutcome(line)
+        && FAILING_TEST_LINES.stream().anyMatch(shape -> shape.test(line));
   }
+
+  /** TAP expected-outcome directives do not name a test failure that explains the job. */
+  static boolean isExpectedTapOutcome(String line) {
+    return EXPECTED_TAP_OUTCOME.matcher(line).find();
+  }
+
+  private static final Pattern EXPECTED_TAP_OUTCOME =
+      Pattern.compile("(?i)^not ok \\d++\\b[^\\n]*?\\h#\\h*+(?:TODO|SKIP)\\b");
 
   /**
    * The last {@link #LOG_TAIL_LINES} non-blank lines of a log tail, timestamps and control

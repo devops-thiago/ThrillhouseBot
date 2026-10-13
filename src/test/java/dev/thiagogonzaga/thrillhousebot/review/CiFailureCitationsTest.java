@@ -374,6 +374,24 @@ class CiFailureCitationsTest {
     assertSame(CiFailureCitations.NONE, citations);
   }
 
+  @Test
+  void expectedTapOutcomesCannotCiteOrExplainAFailedCheck() {
+    var citations =
+        CiFailureCitations.parse(
+            """
+        ### node-test (conclusion: failure)
+        Failing tests named in the job log:
+        - not ok 1 - pending implementation # TODO later
+        - not ok 2 - skipped on this platform # SKIP Windows only
+        """);
+    assertFalse(citations.cites(described("pending implementation fails on this commit")));
+    assertFalse(citations.cites(described("skipped on this platform fails on this commit")));
+    assertNull(CiFailureCitations.testName("not ok 1 - pending implementation # TODO later"));
+    assertNull(
+        CiFailureCitations.testName("not ok 2 - skipped on this platform # SKIP Windows only"));
+    assertFalse(citations.overviewSentences(List.of()).contains("failing test"));
+  }
+
   /**
    * Only a detailed check's job log names failing tests: a failing-test list after a check that is
    * only named is read as no check's, and the parse does not fail on it.
