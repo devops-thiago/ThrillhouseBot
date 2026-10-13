@@ -524,6 +524,67 @@ class SecretScannerTest {
   }
 
   @Test
+  void aNestedAssignmentIsSampleTextWithAPrefixOrAnAssignedEnclosingString() {
+    var value = fake.genericSecret(40);
+    for (var line :
+        List.of(
+            "\"before client_secret: '" + value + "'\",",
+            "List.of(\"text before token: '" + value + "'\")",
+            "String fixture = \"client_secret: '" + value + "'\";",
+            "fixture := \"prefix password='" + value + "'\"",
+            "fixture: \"prefix password='" + value + "'\"")) {
+      assertTrue(scan(line).isEmpty(), line);
+    }
+    assertGenericHit("API_TOKEN", value, "val API_TOKEN = \"" + value + "\"");
+    assertGenericHit("API_KEY", value, "sh -c 'prefix API_KEY=\"" + value + "\" run'");
+  }
+
+  @Test
+  void assignedAndPrefixedExecutableCommandStringsRemainDetectable() {
+    var value = fake.genericSecret(40);
+    for (var line :
+        List.of(
+            "String command = \"export API_KEY='" + value + "' run\";",
+            "val script = \"API_KEY='" + value + "' run\"",
+            "command: \"export API_KEY='" + value + "' run\"",
+            "Runtime.exec(\"export API_KEY='" + value + "' run\")",
+            "execute(\"sh\", \"export API_KEY='" + value + "' run\")",
+            "new ProcessBuilder(List.of(\"sh\", \"-c\", \"export API_KEY='" + value + "' run\"))",
+            "new ProcessBuilder(new String[]{\"sh\", \"-c\", \"export API_KEY='"
+                + value
+                + "' run\"})",
+            "String[] args = {\"sh\", \"-c\", \"export API_KEY='" + value + "' run\"}",
+            "subprocess.run([\"sh\", \"-c\", \"export API_KEY='" + value + "' run\"])",
+            "command: [\"sh\", \"-c\", \"export API_KEY='" + value + "' run\"]",
+            "List.of(\"send API_KEY='" + value + "'\")",
+            "Runtime.exec(\"prefix API_KEY='" + value + "'\")")) {
+      assertGenericHit("API_KEY", value, line);
+    }
+    for (var name : List.of("fixture", "sampleText", "exampleInput")) {
+      assertTrue(scan("String " + name + " = \"prefix API_KEY='" + value + "'\";").isEmpty());
+    }
+  }
+
+  @Test
+  void prefixedSamplesStayExcludedInCollectionsAndNamedFixtureFields() {
+    var value = fake.genericSecret(40);
+    var sample = "\"prefix password='" + value + "'\"";
+    for (var line :
+        List.of(
+            "fixtures = [" + sample + "]",
+            "[\"label\", " + sample + "]",
+            "loadSamples([\"label\", " + sample + "])",
+            "Set.of(" + sample + ")",
+            "Arrays.asList(" + sample + ")",
+            "Stream.of(" + sample + ")",
+            "String fixture\t= " + sample,
+            "\"exampleText\": " + sample)) {
+      assertTrue(scan(line).isEmpty(), line);
+    }
+    assertGenericHit("password", value, "= " + sample);
+  }
+
+  @Test
   void anAssignmentInACommandStringIsStillACredential() {
     assertGenericHit(
         "DB_PASSWORD", "q8#Lm2!vRt9Z", "ExecStart=/bin/sh -c 'DB_PASSWORD=\"q8#Lm2!vRt9Z\" run'");

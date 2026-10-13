@@ -510,6 +510,61 @@ class IacScannerTest {
   }
 
   @Test
+  void aWildcardAfterArbitrarilyManyOrWideElementsIsReported() {
+    for (int preceding : List.of(65, 500, 2000)) {
+      var actions = "[" + "\"s3:GetObject\", ".repeat(preceding) + "\"*\"]";
+      var resources = "[\"" + "a".repeat(5000) + "\", \"*\"]";
+      assertEquals(
+          List.of(SecurityRule.IAM_WILDCARD),
+          rules(
+              scanNew(
+                  "p.json",
+                  "{",
+                  "  \"Action\": " + actions + ",",
+                  "  \"Resource\": " + resources,
+                  "}")));
+    }
+  }
+
+  @Test
+  void wildcardListsReadEscapesAndRejectMalformedValues() {
+    assertEquals(
+        List.of(SecurityRule.IAM_WILDCARD),
+        rules(
+            scanNew(
+                "p.json",
+                "  \"Action\": [\"s3:Get\\\"Object\", \"*\"],",
+                "  \"Resource\": \"*\"")));
+    for (var actions :
+        List.of(
+            "\"x\"",
+            "",
+            "[]",
+            "[",
+            "[42, \"*\"]",
+            "[\"*\" 42]",
+            "[\"*\", \"unterminated]",
+            "\"*\"x")) {
+      assertTrue(
+          scanNew("p.json", "  \"Action\": " + actions, "  \"Resource\": \"*\"").isEmpty(),
+          actions);
+    }
+  }
+
+  @Test
+  void aTerraformWildcardListKeepsItsTrailingComma() {
+    assertEquals(
+        List.of(SecurityRule.IAM_WILDCARD),
+        rules(
+            scanNew(
+                "iam.tf",
+                "statement {",
+                "  actions = [\"s3:GetObject\", \"*\", ]",
+                "  resources = [\"*\",]",
+                "}")));
+  }
+
+  @Test
   void aListWithoutABareWildcardIsNotReported() {
     for (var actions :
         List.of(

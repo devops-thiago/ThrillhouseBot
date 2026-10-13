@@ -458,10 +458,19 @@ public class SecurityScan {
 
     var kept = new ArrayList<ReviewResponse.Finding>();
     int duplicates = 0;
-    var detectionsByFile = PathIndex.of(result.detections(), d -> d.finding().file(), d -> "");
+    var detectionsByLine =
+        PathIndex.of(
+            result.detections(),
+            d -> d.finding().file(),
+            d -> Integer.toString(d.finding().line()));
+    var detectionsByIdentifier =
+        PathIndex.of(
+            result.detections().stream().filter(d -> d.identifier() != null).toList(),
+            d -> d.finding().file(),
+            Detection::identifier);
     var byAlias = byAlias(result.detections());
     for (var finding : response.findings()) {
-      if (duplicatesDetection(finding, detectionsByFile, byAlias)) {
+      if (duplicatesDetection(finding, detectionsByLine, detectionsByIdentifier, byAlias)) {
         duplicates++;
       } else {
         kept.add(scrub(finding, scrubber));
@@ -1069,28 +1078,58 @@ public class SecurityScan {
    * word could be about. The finding is then collapsed into the scan's, the redacted one. A title
    * that only names the key ({@code PAYMENT_API_KEY is never read}) is not a topic word, so a
    * different defect on that line is kept ({@link #words}). Only the detections in the finding's
-   * file ({@link FilePaths#same}) are read, from an index (#1031); then a doc or config finding is
-   * matched against the identified secrets of other files ({@link #documentsIdentifiedSecret}).
+   * file ({@link FilePaths#same}) and line window are read, from an index (#1031); a distant use
+   * site reads only detections named by its words, and then a doc or config finding is matched
+   * against the identified secrets of other files ({@link #documentsIdentifiedSecret}).
    */
   private static boolean duplicatesDetection(
       ReviewResponse.Finding finding,
-      PathIndex<Detection> detectionsByFile,
+      PathIndex<Detection> detectionsByLine,
+      PathIndex<Detection> detectionsByIdentifier,
       Map<String, List<Detection>> byAlias) {
     if (finding.file() == null) {
       return false;
     }
     var titleWords = words(finding.title());
-    for (var detection : detectionsByFile.candidates(finding.file(), "")) {
-      var scanned = detection.finding();
-      IDENTITY_COMPARISONS.incrementAndGet();
-      if (nearbySameDefect(finding, scanned, titleWords, detection.rule())
-          || sameLineSecret(finding, scanned, titleWords, detection.rule())
-          || namesSameSecret(finding, detection, titleWords)
-          || nearbyIacDefect(finding, scanned, titleWords, detection.rule())) {
-        return true;
+    long from = (long) finding.line() - FindingDeduplicator.LINE_TOLERANCE;
+    long to = (long) finding.line() + FindingDeduplicator.LINE_TOLERANCE;
+    for (long line = Math.max(Integer.MIN_VALUE, from);
+        line <= Math.min(Integer.MAX_VALUE, to);
+        line++) {
+      for (var detection : detectionsByLine.candidates(finding.file(), Long.toString(line))) {
+        var scanned = detection.finding();
+        IDENTITY_COMPARISONS.incrementAndGet();
+        if (nearbySameDefect(finding, scanned, titleWords, detection.rule())
+            || sameLineSecret(finding, scanned, titleWords, detection.rule())
+            || namesSameSecret(finding, detection, titleWords)
+            || nearbyIacDefect(finding, scanned, titleWords, detection.rule())) {
+          return true;
+        }
       }
     }
+    if (namesIdentifiedSecretInItsFile(finding, titleWords, detectionsByIdentifier)) {
+      return true;
+    }
     return documentsIdentifiedSecret(finding, byAlias);
+  }
+
+  /** Identified secrets are looked up by name when their use site is outside the line window. */
+  private static boolean namesIdentifiedSecretInItsFile(
+      ReviewResponse.Finding finding,
+      Set<String> titleWords,
+      PathIndex<Detection> detectionsByIdentifier) {
+    if (topicWords(titleWords, SecurityRule.GENERIC_SECRET) == 0) {
+      return false;
+    }
+    for (var token : Set.copyOf(Arrays.asList(NON_IDENTIFIER.split(findingText(finding))))) {
+      for (var detection : detectionsByIdentifier.candidates(finding.file(), token)) {
+        IDENTITY_COMPARISONS.incrementAndGet();
+        if (namesSameSecret(finding, detection, titleWords)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private static boolean nearbySameDefect(
@@ -1229,15 +1268,16 @@ public class SecurityScan {
   /**
    * Gives each of one file's detections that carries an identifier its {@linkplain
    * Detection#aliases aliases}: the identifier and the environment key the patch ties to it. That
-   * key is read from the line above the secret in the same hunk ({@code // Used when
+   * key is read from a comment above the secret in the same hunk ({@code // Used when
    * HOLDS_CATALOG_TOKEN is not set}), and from every line of the file that names the identifier,
    * its use sites, where the key is a quoted string ({@code env["PAYMENT_API_TOKEN"] ?: apiToken},
-   * {@code env.getOrDefault("SCHEDULER_API_TOKEN", SCHEDULER_API_TOKEN)}). A line contributes a key
-   * only when it names exactly one ({@link #envKeyOf}), so a line that passes two credentials, or
-   * names another variable ({@code connect(dbPassword, apiToken)}), ties nothing to the secret. A
-   * model naming the environment key the constant stands in for is naming this secret, not another
-   * one. One pass over the file serves every detection in it: each line's words are looked up among
-   * the identifiers. Kept in memory only, like the identifier; nothing here is posted.
+   * {@code env.getOrDefault("SCHEDULER_API_TOKEN", SCHEDULER_API_TOKEN)}). A use site contributes a
+   * key only to the simple identifier (possibly qualified or parenthesized) its default expression
+   * reads, and only when the line names exactly one key ({@link #envKeyOf}); another call argument,
+   * a transformed value or an unknown expression ties nothing to the secret (#1101). A model naming
+   * the environment key the constant stands in for is naming this secret, not another one. One pass
+   * over the file serves every detection in it: each line's words are looked up among the
+   * identifiers. Kept in memory only, like the identifier; nothing here is posted.
    */
   static void withAliases(List<PatchLines.Line> lines, List<Detection> fileDetections) {
     var keysByIdentifier = new HashMap<String, Set<String>>();
@@ -1270,16 +1310,21 @@ public class SecurityScan {
   }
 
   /**
-   * Adds the quoted environment key a line holds ({@link #envKeyOf}) to the keys of every
-   * identifier among the line's words.
+   * Adds a key only to the identifier its fallback expression actually reads. A credential in a
+   * different call argument is not that fallback, even when it shares the use-site line.
    */
   private static void addUseSiteKey(String text, Map<String, Set<String>> keysByIdentifier) {
     var key = envKeyOf(text, QUOTED_ENV_KEY);
     if (key == null) {
       return;
     }
-    for (var word : NON_IDENTIFIER.split(text)) {
-      var keys = keysByIdentifier.get(word);
+    var matcher = QUOTED_ENV_KEY.matcher(text);
+    while (matcher.find()) {
+      if (!key.equals(matcher.group(1))) {
+        continue;
+      }
+      var identifier = fallbackIdentifier(text, matcher.start(), matcher.end());
+      var keys = keysByIdentifier.get(identifier);
       if (keys != null) {
         keys.add(key);
       }
@@ -1287,8 +1332,112 @@ public class SecurityScan {
   }
 
   /**
+   * The first identifier of a conditional/coalescing fallback, or get/getOrDefault's default
+   * argument. Reading only that expression prevents a sibling credential argument becoming an
+   * alias. Unknown shapes are left unmatched: a missed duplicate is safer than losing a finding.
+   */
+  private static String fallbackIdentifier(String text, int keyStart, int keyEnd) {
+    int at = fallbackStart(text, keyStart, keyEnd);
+    if (at < 0) {
+      return null;
+    }
+    int parentheses = 0;
+    while (at < text.length() && text.charAt(at) == '(') {
+      parentheses++;
+      at = skipSpace(text, at + 1);
+    }
+    var reference = simpleReference(text, at);
+    if (reference == null) {
+      return null;
+    }
+    at = reference.end();
+    while (parentheses > 0) {
+      if (at >= text.length() || text.charAt(at) != ')') {
+        return null;
+      }
+      parentheses--;
+      at = skipSpace(text, at + 1);
+    }
+    // A method call or another operation changes the value; it is not the literal's alias.
+    return at == text.length() || "),;]}".indexOf(text.charAt(at)) >= 0
+        ? reference.identifier()
+        : null;
+  }
+
+  /** The default expression after a keyed lookup, rather than after a standalone key string. */
+  private static int fallbackStart(String text, int keyStart, int keyEnd) {
+    int at = skipSpace(text, keyEnd);
+    if (at == text.length()) {
+      return -1;
+    }
+    if (text.charAt(at) == ']' || text.charAt(at) == ')') {
+      at = skipSpace(text, at + 1);
+      if (text.startsWith("?:", at)
+          || text.startsWith("??", at)
+          || text.startsWith("||", at)
+          || text.startsWith("or ", at)) {
+        return skipSpace(text, at + 2);
+      }
+      return -1;
+    }
+    return text.charAt(at) == ',' && isDefaultArgument(text, keyStart)
+        ? skipSpace(text, at + 1)
+        : -1;
+  }
+
+  private record Reference(String identifier, int end) {}
+
+  /** A plain or qualified identifier, stopping before any operation on its value. */
+  private static Reference simpleReference(String text, int at) {
+    while (true) {
+      int end = at;
+      while (end < text.length() && isIdentifierChar(text.charAt(end))) {
+        end++;
+      }
+      if (end == at) {
+        return null;
+      }
+      var identifier = text.substring(at, end);
+      at = skipSpace(text, end);
+      if (at >= text.length() || text.charAt(at) != '.') {
+        return new Reference(identifier, at);
+      }
+      at = skipSpace(text, at + 1);
+    }
+  }
+
+  private static boolean isDefaultArgument(String text, int keyStart) {
+    int opening = skipSpaceBack(text, keyStart);
+    if (opening == 0 || text.charAt(opening - 1) != '(') {
+      return false;
+    }
+    int end = skipSpaceBack(text, opening - 1);
+    int start = end;
+    while (start > 0 && isIdentifierChar(text.charAt(start - 1))) {
+      start--;
+    }
+    var method = text.substring(start, end);
+    return method.equals("getOrDefault") || method.equals("get");
+  }
+
+  private static int skipSpace(String text, int at) {
+    while (at < text.length() && Character.isWhitespace(text.charAt(at))) {
+      at++;
+    }
+    return at;
+  }
+
+  private static int skipSpaceBack(String text, int at) {
+    while (at > 0 && Character.isWhitespace(text.charAt(at - 1))) {
+      at--;
+    }
+    return at;
+  }
+
+  /**
    * An identified detection's aliases: its identifier, the keys its use sites hold, and the key the
-   * line above it in the same hunk names, the secret being on line {@code index} of {@code lines}.
+   * comment above it in the same hunk names, the secret being on line {@code index} of {@code
+   * lines}.
    */
   private static Set<String> aliases(
       Detection detection,
@@ -1298,7 +1447,14 @@ public class SecurityScan {
     var aliases = new HashSet<>(keysByIdentifier.get(detection.identifier()));
     aliases.add(detection.identifier());
     if (index > 0 && lines.get(index - 1).hunk() == lines.get(index).hunk()) {
-      var above = envKeyOf(lines.get(index - 1).text(), ENV_KEY);
+      var text = lines.get(index - 1).text().stripLeading();
+      var above =
+          text.startsWith("//")
+                  || text.startsWith("#")
+                  || text.startsWith("/*")
+                  || text.startsWith("*")
+              ? envKeyOf(text, ENV_KEY)
+              : null;
       if (above != null) {
         aliases.add(above);
       }

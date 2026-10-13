@@ -298,11 +298,12 @@ final class SecretScanner {
     if (line.length() > MAX_GENERIC_LINE_LENGTH) {
       return hits;
     }
+    var enclosing = enclosingLiterals(line);
     Matcher generic = GENERIC_ASSIGNMENT.matcher(line);
     while (generic.find()) {
       var value = generic.group(3);
       if (claimed(hits, value)
-          || insideStringLiteral(line, generic)
+          || insideStringLiteral(line, generic, enclosing)
           || !looksLikeSecret(value, entropyThreshold)) {
         continue;
       }
@@ -311,45 +312,106 @@ final class SecretScanner {
     return hits;
   }
 
+  /** A complete quoted string's location; its contents never leave the scanner. */
+  private record StringLiteral(int start, int end) {}
+
   /**
-   * Whether a generic match is sample text quoted inside another string literal (#981), such as
-   * {@code "client_secret: 'abcdefgh12345'",} in a test's list of inputs: a quote opens right
-   * before the key, is not closed before the value's own quote, and is a different quote character
-   * from the value's. A quoted key in JSON, YAML or a dictionary ({@code "apiKey": "…"}, {@code
-   * {"token": '…'}}) closes its quote before the operator, so it is still read as an assignment.
-   * The rule reads only quoted values, so an unquoted value inside a string ({@code "password=…"})
-   * is not an assignment to it either way.
-   *
-   * <p>The enclosing string must also sit where a list element or a call argument does: first on
-   * its line, or right after {@code (}, {@code [}, {@code {} or {@code ,}. A string a command runs
-   * ({@code sh -c 'DB_PASSWORD="…"'}, {@code ExecStart=… 'API_KEY="…"'}) follows a word or an
-   * operator, so a real credential there is still reported. A command string passed as a list
-   * element ({@code ["sh", "-c", "PASSWORD='…'"]}) is the case this cannot tell from sample text.
+   * The enclosing quoted string at each character, read once on a generic-rule line (#981). Other
+   * quote characters inside a string are ordinary contents, and an escaped quote does not close it.
+   * Incomplete strings are left unclassified, so uncertain text still gets scanned.
    */
-  private static boolean insideStringLiteral(String line, Matcher generic) {
-    int keyStart = generic.start(1);
-    if (keyStart == 0) {
-      return false;
+  private static StringLiteral[] enclosingLiterals(String line) {
+    var enclosing = new StringLiteral[line.length()];
+    for (int at = 0; at < line.length(); at++) {
+      char quote = line.charAt(at);
+      if ("\"'`".indexOf(quote) < 0) {
+        continue;
+      }
+      int end = at + 1;
+      while (end < line.length() && line.charAt(end) != quote) {
+        end += line.charAt(end) == '\\' ? 2 : 1;
+      }
+      if (end >= line.length()) {
+        break;
+      }
+      var literal = new StringLiteral(at, end);
+      Arrays.fill(enclosing, at + 1, end, literal);
+      at = end;
     }
-    char before = line.charAt(keyStart - 1);
-    if (before != '"' && before != '\'' && before != '`') {
-      return false;
-    }
-    return line.charAt(generic.start(2)) != before
-        && line.substring(generic.end(1), generic.start(2)).indexOf(before) < 0
-        && inElementPosition(line, keyStart - 1);
+    return enclosing;
   }
 
   /**
-   * Whether the string opening at {@code quote} is first on its line or follows {@code (}, {@code
-   * [}, {@code {} or {@code ,}, ignoring whitespace.
+   * Whether a generic assignment sits inside sample text, including a before/text-before/prefix
+   * sample or a string assigned to a fixture/sample/example-named variable (#981). The enclosing
+   * string must contain both key and value; a quoted JSON/dictionary key ends before its value and
+   * remains a real assignment. A command argument after a word (sh -c 'API_KEY="…"') stays scanned.
+   * A command supplied as a bare-key quoted list element is still indistinguishable from sample
+   * text to this lexical guard; known-format matches remain independent.
    */
-  private static boolean inElementPosition(String line, int quote) {
-    int i = quote - 1;
-    while (i >= 0 && Character.isWhitespace(line.charAt(i))) {
-      i--;
+  private static boolean insideStringLiteral(
+      String line, Matcher generic, StringLiteral[] enclosing) {
+    var literal = enclosing[generic.start(1)];
+    return literal != null
+        && generic.end(3) < literal.end()
+        && inSamplePosition(line, literal.start(), generic.start(1));
+  }
+
+  /** Explicit sample prose, read only within the bounded generic-rule line. */
+  private static final Pattern SAMPLE_PROSE_PREFIX =
+      Pattern.compile("(?i)\\s*(?:before|text\\s+before|prefix)\\s*");
+
+  /** A recognized sample position and prefix, or an explicitly sample-named assignment. */
+  private static boolean inSamplePosition(String line, int quote, int key) {
+    int at = quote - 1;
+    while (at >= 0 && Character.isWhitespace(line.charAt(at))) {
+      at--;
     }
-    return i < 0 || "([{,".indexOf(line.charAt(i)) >= 0;
+    if (at >= 0 && (line.charAt(at) == '=' || line.charAt(at) == ':')) {
+      return sampleAssignment(line, at);
+    }
+    boolean bareKey = key == quote + 1;
+    if (!bareKey && !SAMPLE_PROSE_PREFIX.matcher(line).region(quote + 1, key).matches()) {
+      // New enclosing-string forms must read like samples. A command container with an
+      // arbitrary prefix is still scanned, regardless of how its collection is constructed.
+      return false;
+    }
+    if (at < 0 || "[{".indexOf(line.charAt(at)) >= 0) {
+      return true;
+    }
+    char before = line.charAt(at);
+    if (before == '(' || before == ',') {
+      return bareKey || sampleContainer(line, at);
+    }
+    return false;
+  }
+
+  /** An explicitly fixture/sample/example-named target, rather than an executable command. */
+  private static boolean sampleAssignment(String line, int operator) {
+    int end = operator;
+    while (end > 0
+        && (Character.isWhitespace(line.charAt(end - 1))
+            || ":=\"'".indexOf(line.charAt(end - 1)) >= 0)) {
+      end--;
+    }
+    int start = end;
+    while (start > 0 && Character.isJavaIdentifierPart(line.charAt(start - 1))) {
+      start--;
+    }
+    var name = line.substring(start, end).toLowerCase(java.util.Locale.ROOT);
+    return name.contains("fixture") || name.contains("sample") || name.contains("example");
+  }
+
+  private static boolean sampleContainer(String line, int beforeQuote) {
+    int opening = line.lastIndexOf('(', beforeQuote);
+    if (opening < 0 || line.lastIndexOf('[', beforeQuote) > opening) {
+      return true;
+    }
+    var call = line.substring(0, opening).stripTrailing();
+    return call.endsWith("List.of")
+        || call.endsWith("Set.of")
+        || call.endsWith("Arrays.asList")
+        || call.endsWith("Stream.of");
   }
 
   /** Whether a private-key header is followed by a key body; see {@link #PEM_BODY}. */

@@ -88,15 +88,6 @@ final class IacScanner {
               "\"?(?:BlockPublicAcls|BlockPublicPolicy|IgnorePublicAcls|RestrictPublicBuckets)"
                   + "\"?\\s*:\\s*[\"']?false\\b"));
 
-  /**
-   * One quoted element of a one-line list that is not the bare wildcard, so the run of elements
-   * before a wildcard can be taken possessively without swallowing it.
-   */
-  private static final String LIST_ELEMENT = "[\"'](?!\\*[\"'])[^\"'\\n]{0,256}+[\"']";
-
-  /** At most this many elements before the wildcard in a one-line list are read. */
-  private static final int MAX_LIST_ELEMENTS = 64;
-
   private static final Pattern WILDCARD_ACTION = wildcardSetting("actions?");
 
   private static final Pattern WILDCARD_RESOURCE = wildcardSetting("resources?");
@@ -143,20 +134,92 @@ final class IacScanner {
 
   private IacScanner() {}
 
-  /**
-   * A {@code key} set to the bare wildcard {@code "*"}, alone or as any element of a one-line list
-   * ({@code ["s3:GetObject", "*"]}, #983). Every run is bounded and possessive, and the elements
-   * before the wildcard exclude it, so a failed match gives nothing back and the scan stays linear.
-   */
+  /** The start of a wildcard setting; its value is read by a linear scan, not a repeated regex. */
   private static Pattern wildcardSetting(String key) {
-    return Pattern.compile(
-        "(?i)(?<![a-z])\"?"
-            + key
-            + "\"?\\s*+[=:]\\s*+(?:\\[\\s*+(?:"
-            + LIST_ELEMENT
-            + "\\s*+,\\s*+){0,"
-            + MAX_LIST_ELEMENTS
-            + "}+)?[\"']\\*[\"']\\s*+(?:[,}\\]]|$)");
+    return Pattern.compile("(?i)(?<![a-z])\"?" + key + "\"?\\s*+[=:]\\s*+");
+  }
+
+  private record WildcardValue(int end, boolean wildcard) {}
+
+  /**
+   * A bare quoted wildcard, alone or anywhere in a complete one-line quoted list (#983). Every
+   * character is read at most once per setting, without a count or element-width limit. Escaped
+   * quotes stay inside their element, and a malformed list never proves a wildcard setting.
+   */
+  private static boolean containsWildcard(String text, Pattern setting) {
+    var matcher = setting.matcher(text);
+    while (matcher.find()) {
+      var value = wildcardValue(text, matcher.end());
+      if (value.wildcard()) {
+        return true;
+      }
+      matcher.region(Math.max(matcher.end(), value.end()), text.length());
+    }
+    return false;
+  }
+
+  private static WildcardValue wildcardValue(String text, int at) {
+    if (at < text.length() && text.charAt(at) == '[') {
+      return wildcardList(text, at + 1);
+    }
+    int end = quotedEnd(text, at);
+    if (end < 0) {
+      return new WildcardValue(text.length(), false);
+    }
+    boolean wildcard = end == at + 3 && text.charAt(at + 1) == '*';
+    at = skipWhitespace(text, end);
+    return new WildcardValue(
+        at, wildcard && (at == text.length() || ",}]".indexOf(text.charAt(at)) >= 0));
+  }
+
+  private static WildcardValue wildcardList(String text, int at) {
+    boolean wildcard = false;
+    while (true) {
+      at = skipWhitespace(text, at);
+      int end = quotedEnd(text, at);
+      if (end < 0) {
+        return new WildcardValue(text.length(), false);
+      }
+      wildcard |= end == at + 3 && text.charAt(at + 1) == '*';
+      at = skipWhitespace(text, end);
+      if (at < text.length() && text.charAt(at) == ']') {
+        return new WildcardValue(at + 1, wildcard);
+      }
+      if (at == text.length() || text.charAt(at) != ',') {
+        return new WildcardValue(at, false);
+      }
+      at = skipWhitespace(text, at + 1);
+      // A trailing comma is valid in Terraform lists, and was recognized by the earlier rule.
+      if (at < text.length() && text.charAt(at) == ']') {
+        return new WildcardValue(at + 1, wildcard);
+      }
+    }
+  }
+
+  /** The position after a complete quoted element, or -1 for an unclosed one. */
+  private static int quotedEnd(String text, int start) {
+    if (start == text.length() || "\"'".indexOf(text.charAt(start)) < 0) {
+      return -1;
+    }
+    char quote = text.charAt(start);
+    int at = start + 1;
+    while (at < text.length()) {
+      char c = text.charAt(at++);
+      if (c == quote) {
+        return at;
+      }
+      if (c == '\\') {
+        at++;
+      }
+    }
+    return -1;
+  }
+
+  private static int skipWhitespace(String text, int at) {
+    while (at < text.length() && Character.isWhitespace(text.charAt(at))) {
+      at++;
+    }
+    return at;
   }
 
   /**
@@ -203,7 +266,7 @@ final class IacScanner {
     if (PUBLIC_BUCKET.stream().anyMatch(p -> p.matcher(text).find())) {
       return SecurityRule.PUBLIC_BUCKET;
     }
-    if (WILDCARD_ACTION.matcher(text.stripTrailing()).find()
+    if (containsWildcard(text.stripTrailing(), WILDCARD_ACTION)
         && isAllowAllStatement(window(lines, index))) {
       return SecurityRule.IAM_WILDCARD;
     }
@@ -272,7 +335,7 @@ final class IacScanner {
       if (DENY_EFFECT.matcher(line.text()).find()) {
         return false;
       }
-      wildcardResource |= WILDCARD_RESOURCE.matcher(line.text().stripTrailing()).find();
+      wildcardResource |= containsWildcard(line.text().stripTrailing(), WILDCARD_RESOURCE);
     }
     return wildcardResource;
   }

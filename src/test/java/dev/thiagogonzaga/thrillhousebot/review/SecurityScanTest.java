@@ -1006,6 +1006,121 @@ class SecurityScanTest {
   }
 
   @Test
+  void anEnvironmentFallbackInAnotherArgumentIsNotAnAliasOfTheScannedSecret() {
+    var value = fake.genericSecret(40);
+    var model =
+        modelFinding(
+            "docs/CONFIG.md",
+            1,
+            "Hardcoded password fallback for DB_PASSWORD",
+            "DB_PASSWORD has a separate fallback; the apiToken leak is already covered.");
+    for (var use :
+        List.of(
+            "connect(env[\"DB_PASSWORD\"] ?: dbPassword, apiToken)",
+            "connect(env[\"DB_PASSWORD\"] ?: otherValue, apiToken)",
+            "connect(env.getOrDefault(\"DB_PASSWORD\", dbPassword), apiToken)",
+            "connect(Environment.GetEnvironmentVariable(\"DB_PASSWORD\") ?? dbPassword, apiToken)")) {
+      for (var file :
+          List.of(
+              added("Config.kt", "val apiToken = \"" + value + "\"", use),
+              added("Config.kt", use, "val apiToken = \"" + value + "\""))) {
+        assertEquals(Set.of("apiToken"), aliasesOf(file), use);
+        assertEquals(
+            2, merge(scan(true, false), response(model), List.of(file)).findings().size(), use);
+      }
+    }
+  }
+
+  @Test
+  void onlySimpleFallbackExpressionsBecomeEnvironmentAliases() {
+    var value = fake.genericSecret(40);
+    for (var use :
+        List.of(
+            "env[\"PAYMENT_API_TOKEN\"] ?: (apiToken)",
+            "env[\"PAYMENT_API_TOKEN\"] || Config.apiToken",
+            "env.getOrDefault(\"PAYMENT_API_TOKEN\", Config.apiToken)",
+            "env.get(\"PAYMENT_API_TOKEN\", ((apiToken)))",
+            "os.getenv(\"PAYMENT_API_TOKEN\") or apiToken",
+            "connect(\"RUN_MODE\", env[\"PAYMENT_API_TOKEN\"] ?: apiToken)",
+            "env.getOrDefault ( \"PAYMENT_API_TOKEN\" , apiToken)")) {
+      assertEquals(
+          Set.of("apiToken", "PAYMENT_API_TOKEN"),
+          aliasesOf(added("Config.kt", "val apiToken = \"" + value + "\"", use)),
+          use);
+    }
+    for (var use :
+        List.of(
+            "env[\"PAYMENT_API_TOKEN\"] ?: apiToken.take(2)",
+            "env[\"PAYMENT_API_TOKEN\"] ?: apiToken + suffix",
+            "env[\"PAYMENT_API_TOKEN\"] ?: ()",
+            "env[\"PAYMENT_API_TOKEN\"] ?: (apiToken",
+            "env[\"PAYMENT_API_TOKEN\"] ?: (apiToken) + suffix",
+            "env[\"PAYMENT_API_TOKEN\"] ?: (apiToken).take(2)",
+            "env[\"PAYMENT_API_TOKEN\"] ?: Config.",
+            "unknown(\"PAYMENT_API_TOKEN\", apiToken)",
+            "env[\"PAYMENT_API_TOKEN\"]",
+            "\"PAYMENT_API_TOKEN\"",
+            "\"PAYMENT_API_TOKEN\", apiToken",
+            "\"PAYMENT_API_TOKEN\" ?: apiToken",
+            "\"PAYMENT_API_TOKEN\" || apiToken",
+            "prefix \"PAYMENT_API_TOKEN\", apiToken",
+            "env[\"PAYMENT_API_TOKEN\"] ?: ",
+            "env[\"PAYMENT_API_TOKEN\"] ?: (",
+            "env[\"PAYMENT_API_TOKEN\"] ?: (apiToken + suffix)")) {
+      assertEquals(
+          Set.of("apiToken"),
+          aliasesOf(added("Config.kt", "val apiToken = \"" + value + "\"", use)),
+          use);
+    }
+  }
+
+  @Test
+  void commentAliasesRemainSupportedWithoutBorrowingAnAdjacentCodeKey() {
+    var value = fake.genericSecret(40);
+    for (var comment : List.of("//", "#", "/*", "*")) {
+      assertEquals(
+          Set.of("apiToken", "PAYMENT_API_TOKEN"),
+          aliasesOf(
+              added(
+                  "Config.kt",
+                  comment + " Used when PAYMENT_API_TOKEN is unset",
+                  "val apiToken = \"" + value + "\"")));
+    }
+  }
+
+  @Test
+  void namedSecretDuplicatesKeepThePathAndOtherCredentialGuards() {
+    var value = fake.genericSecret(40);
+    var file =
+        addedWith(
+            "service/src/Config.kt",
+            40,
+            Map.of(
+                1,
+                "payment = env[\"PAYMENT_API_TOKEN\"] ?: apiToken",
+                40,
+                "val apiToken = \"" + value + "\""));
+    var other =
+        modelFinding(
+            "service/src/Config.kt",
+            10,
+            "Hardcoded DB_PASSWORD credential",
+            "apiToken and PAYMENT_API_TOKEN are separate from DB_PASSWORD.");
+    var near =
+        modelFinding("src/Config.kt", 38, "Hardcoded apiToken", "The apiToken literal leaks.");
+    var independent =
+        modelFinding(
+            "other/src/Config.kt", 10, "Hardcoded apiToken", "This file's apiToken literal leaks.");
+    var merged = merge(scan(true, false), response(other, near, independent), List.of(file));
+    assertEquals(3, merged.findings().size());
+    assertTrue(merged.findings().stream().anyMatch(f -> f.title().equals(other.title())));
+    assertTrue(merged.findings().stream().anyMatch(f -> f.title().equals(independent.title())));
+    assertTrue(
+        merged.findings().stream()
+            .noneMatch(f -> f.file().equals(near.file()) && f.line() == near.line()));
+  }
+
+  @Test
   void aDocFindingIsLookedUpByItsWordsNotComparedWithEverySecret() {
     // Review of #1072: the doc lane must not walk every identified secret for every doc finding.
     var files = new ArrayList<FileDiff>();
@@ -2139,6 +2254,48 @@ class SecurityScanTest {
   }
 
   // --- #1031: identity matching scales with the matches, not the product of the sets ---
+
+  @Test
+  void distantModelFindingsInOneFileDoNotWalkEveryDetection() {
+    for (int n : List.of(100, 200, 400, 800)) {
+      var detections = new ArrayList<SecurityScan.Detection>();
+      var models = new ArrayList<ReviewResponse.Finding>();
+      for (int i = 0; i < n; i++) {
+        var found = modelFinding("src/config.env", i * 10 + 1, "scan identity " + i, "d");
+        detections.add(
+            new SecurityScan.Detection(SecurityRule.GENERIC_SECRET, found, null, null, Set.of()));
+        models.add(modelFinding("src/config.env", 1000000 + i, "unrelated allocation " + i, "d"));
+      }
+      var result = new SecurityScan.Result(detections, List.of(), List.of("src/config.env"));
+      long before = SecurityScan.IDENTITY_COMPARISONS.get();
+      var merged =
+          scan(true, false)
+              .merge(new ReviewResponse(models, List.of(), null), result, List.of(), Set.of());
+      long comparisons = SecurityScan.IDENTITY_COMPARISONS.get() - before;
+      assertTrue(comparisons <= 3L * n, "n=" + n + ": " + comparisons);
+      assertEquals(2 * n, merged.findings().size());
+    }
+  }
+
+  @Test
+  void distantSecretsWithTheSameIdentifierAreLookedUpOnlyInTheirOwnFile() {
+    int n = 400;
+    var files = new ArrayList<FileDiff>();
+    var models = new ArrayList<ReviewResponse.Finding>();
+    for (int i = 0; i < n; i++) {
+      var path = "svc" + i + "/Config.kt";
+      files.add(added(path, "val apiToken = \"" + fake.genericSecret(40) + "\""));
+      models.add(modelFinding(path, 100, "Hardcoded apiToken", "The apiToken literal leaks."));
+    }
+    var s = scan(true, false);
+    var result = s.scan(files);
+    long before = SecurityScan.IDENTITY_COMPARISONS.get();
+    var merged = s.merge(new ReviewResponse(models, List.of(), null), result, List.of(), Set.of());
+    assertEquals(2L * n, SecurityScan.IDENTITY_COMPARISONS.get() - before);
+    assertEquals(n, merged.findings().size());
+    assertTrue(
+        merged.findings().stream().allMatch(f -> f.title().startsWith(SecurityRule.TITLE_PREFIX)));
+  }
 
   @Test
   void identityMatchingComparesEachDetectionOnlyWithItsOwnFile() {

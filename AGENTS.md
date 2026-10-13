@@ -125,6 +125,16 @@ same diff.
   candidates. `FindingVerificationService.markUnscreened` caps them at medium confidence and
   appends the unverified note (#885), and `VerificationCoverage` discloses the round's coverage. Do
   not make a verifier failure drop findings or block a review.
+- **Scanner matching is bounded by compatible identities** (#1031). Model duplicates read only
+  detections in the same file's three-line window, or identifiers their text names at a distant use
+  site, never every detection in the file. Environment-key aliases belong only to the simple
+  identifier read by a fallback expression (possibly qualified or parenthesized), or to a comment
+  immediately above the declaration in the same hunk; another argument never supplies an alias
+  (#1101). The generic secret rule skips credential assignments embedded in complete sample
+  strings with explicit before/text-before/prefix prose in list/sample-builder positions, or
+  fixture/sample/example-named assignments (#981);
+  command strings and known-format credentials still match.
+  IAM wildcard arrays are read in linear time with no element-count or element-width cap (#983).
 - **Deterministic scan findings skip the verifier and calibrator.** `SecurityScan.merge` runs in
   `FindingPipeline.finish`, after every verifier call and (on the single-call lane) after
   `SeverityCalibrator.calibrate`, so no model grades a pattern match, and `markUnscreened` and
