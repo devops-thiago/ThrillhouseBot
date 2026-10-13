@@ -51,7 +51,10 @@ import java.util.regex.Pattern;
  * enough to be that test counts: a phrase of several words or a compound identifier, never one
  * plain word. The same reading decides the summary's sentence on each failing check ({@link
  * #overviewSentences}), so that sentence and the floor cannot disagree about which finding explains
- * a failure.
+ * a failure — except that for the sentence a finding naming a failing test need not also say it
+ * fails (#1091): the review prompt has a finding predict a failure ("CI will confirm") rather than
+ * state it, and such a finding named the very test CI reports failing. A finding that names no
+ * failing test or check says nothing about it, so the sentence then states the failure alone.
  */
 final class CiFailureCitations implements FindingVerificationService.FailingChecks {
 
@@ -78,6 +81,9 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
 
   /** Characters of a test name's words below which the name is too common to cite a test by. */
   static final int MIN_TEST_NAME_CHARS = 8;
+
+  /** How the summary's sentence on each failing check opens ({@link #overviewSentences}). */
+  static final String SENTENCE_OPENING = "CI on this commit fails the check ";
 
   /** Failing tests named per check in the summary's sentence; the rest are counted. */
   static final int MAX_TESTS_NAMED = 2;
@@ -138,6 +144,8 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
           "ERROR ",
           "Failed ",
           "FAIL: ",
+          "FAIL ",
+          "error: '",
           "ERROR: ",
           "==> X ",
           "test ");
@@ -147,11 +155,14 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       Pattern.compile("^(?:\\d++/\\d++ (?:Test #\\d++: )?+|Test \\[\\d++/\\d++] |\\d++ - )");
 
   /**
-   * A bare elapsed time ending the line after two or more blanks, as munit prints it after the test
-   * ("findByContainer", two blanks, "0.012s"); one blank is a name's own words ("waits 30s").
+   * A bare elapsed time ending the line: after two or more blanks as munit prints it
+   * ("findByContainer", two blanks, "0.012s"), or after one blank in milliseconds or fractional
+   * seconds as Vitest prints it ("marks a shift full when signups reach capacity 6ms", #1091). A
+   * whole number of seconds after one blank is a name's own words ("waits 30s").
    */
   private static final Pattern TRAILING_DURATION =
-      Pattern.compile("\\s{2,}+\\d++(?:\\.\\d++)?+m?s$");
+      Pattern.compile(
+          "(?:\\s{2,}+\\d++(?:\\.\\d++)?+m?s|\\s\\d++(?:\\.\\d++)?+ms|\\s\\d++\\.\\d++s)$");
 
   /** The dot leader CTest prints between a test's name and its status: "booking_test ....". */
   private static final Pattern TRAILING_DOTS = Pattern.compile("\\s++\\.{2,}+$");
@@ -174,7 +185,8 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
           " *** FAILED",
           "***Failed",
           "***Exception",
-          "***Timeout");
+          "***Timeout",
+          "' failed:");
 
   /** The status Gradle and Karma end a failed test's line with. */
   private static final String FAILED_STATUS = " FAILED";
@@ -183,10 +195,24 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   private static final Pattern TEST_PATH_SEPARATOR = Pattern.compile(" \u203A |::");
 
   /**
-   * Gradle's separator between a test class and its method, read only on a line Gradle's status
-   * ends: elsewhere " > " is a test name's own comparison ("expects 1 > 0").
+   * The separator between a test's suites and its own name that Gradle and Vitest print, read only
+   * on a line Gradle's status ends or Vitest's {@link #VITEST_MARK} opens: elsewhere " > " is a
+   * test name's own comparison ("expects 1 > 0").
    */
   private static final String GRADLE_SEPARATOR = " > ";
+
+  /** The mark Vitest opens a failed test's line with: "× capacity > marks a shift full 6ms". */
+  private static final String VITEST_MARK = "\u00D7 ";
+
+  /** Maven's level, opening the Surefire line a JUnit test's class-qualified name is on. */
+  private static final String MAVEN_ERROR = "[ERROR]";
+
+  /**
+   * The class a Surefire line qualifies a test's name with, ended by the last dot of the name's
+   * first word: a JVM method's own name holds no dot, so the dots are all the qualifier's.
+   */
+  private static final Pattern CLASS_QUALIFIER =
+      Pattern.compile("^(?:[\\w$]++\\.)++(?=[^\\s.]++ )");
 
   /** A {@code file:line} or {@code Class.method:line} position ending a test's token. */
   private static final Pattern LINE_POSITION = Pattern.compile(":\\d");
@@ -332,19 +358,26 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       // RSpec names the example after " # "; without one the line names only a spec file.
       return comment > 0 ? s.substring(comment + 3).strip() : null;
     }
-    // Jest's and Vitest's "FAIL src/app.test.ts" names a file; Surefire's tally names no test.
-    if (s.startsWith("FAIL ") || s.contains("Tests run:")) {
+    // Jest's and Vitest's "FAIL src/app.test.ts" names a file, unlike a harness's "FAIL test_x";
+    // Surefire's tally names no test.
+    if ((s.startsWith("FAIL ") && !CiFailureContextResolver.BARE_FAIL.matcher(s).matches())
+        || s.contains("Tests run:")) {
       return null;
     }
+    boolean maven = s.startsWith(MAVEN_ERROR);
+    boolean vitest = s.startsWith(VITEST_MARK);
     s = cutAtTails(withoutLead(s));
     boolean gradle = s.endsWith(FAILED_STATUS);
     s = withoutTail(gradle ? s.substring(0, s.length() - FAILED_STATUS.length()) : s);
-    if (gradle && s.contains(GRADLE_SEPARATOR)) {
+    if ((gradle || vitest) && s.contains(GRADLE_SEPARATOR)) {
       s = s.substring(s.lastIndexOf(GRADLE_SEPARATOR) + GRADLE_SEPARATOR.length());
     }
     var segments = TEST_PATH_SEPARATOR.split(s);
     s = segments[segments.length - 1].strip();
-    return ownName(s);
+    // A Kotlin test's name of several words keeps Surefire's class before it (#1091).
+    String name = ownName(maven ? CLASS_QUALIFIER.matcher(s).replaceFirst("") : s);
+    // node:test heads its list of failed tests "✖ failing tests:", which names none of them.
+    return name == null || name.endsWith(":") ? null : name;
   }
 
   /** {@code line} cut at the first of the {@link #TEST_LINE_TAILS} it holds. */
@@ -474,7 +507,7 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
 
   @Override
   public boolean cites(ReviewResponse.Finding finding) {
-    return !citations(finding.title(), finding.description()).isEmpty();
+    return !citations(finding.title(), finding.description(), false).isEmpty();
   }
 
   /**
@@ -484,7 +517,7 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
    * makes it fail stays the verifier's call.
    */
   String noteFor(ReviewResponse.Finding finding) {
-    var cited = citations(finding.title(), finding.description());
+    var cited = citations(finding.title(), finding.description(), false);
     if (cited.isEmpty()) {
       return null;
     }
@@ -517,11 +550,13 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
 
   /**
    * One sentence for every failing check the section records, in its order: the check, the failing
-   * tests its job log names, and the first of {@code open} that cites the check or one of those
-   * tests — or, when none does, that no open finding explains it (#1075). Empty when the section
-   * recorded no check. The summary call, asked for this sentence, wrote "no finding explains it"
-   * beside the finding that did; it is decided here instead, by the reading that floors that
-   * finding's confidence, so the two cannot disagree.
+   * tests its job log names, and the first of {@code open} that cites the check or names one of
+   * those tests (#1075). Empty when the section recorded no check. The summary call, asked for this
+   * sentence, wrote "no finding explains it" beside the finding that did; it is decided here
+   * instead, by the reading that floors that finding's confidence, so the two cannot disagree. A
+   * finding that names a failing test explains it whether or not it also says the test fails; with
+   * none citing the check the sentence states the failure and claims nothing about the findings,
+   * since one may describe the failing assertion without naming its test (#1091).
    *
    * @param open the findings the summary lists: this round's, then the earlier rounds' still open
    */
@@ -531,16 +566,16 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     }
     // Each finding's citations once, in the summary's order; a check takes the first citing it.
     var citedBy = new ArrayList<List<Citation>>(open.size());
-    open.forEach(finding -> citedBy.add(citations(finding.title(), finding.description())));
+    open.forEach(finding -> citedBy.add(citations(finding.title(), finding.description(), true)));
     var sentences = new ArrayList<String>();
     for (Check check : checks) {
       var explaining = firstCiting(check, open, citedBy);
       sentences.add(
-          "CI on this commit fails the check "
+          SENTENCE_OPENING
               + quoted(check.name())
               + testsNamed(check.tests())
               + (explaining == null
-                  ? ", which no open finding explains."
+                  ? "."
                   : ", which the finding " + label(explaining) + " explains."));
     }
     return String.join(" ", sentences);
@@ -583,8 +618,13 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     return "\"" + CiFailureContextResolver.clip(name, MAX_NAME_CHARS) + "\"";
   }
 
-  /** The failing checks a finding's own words cite, by name or by one of their failing tests. */
-  private List<Citation> citations(String title, String description) {
+  /**
+   * The failing checks a finding's own words cite, by name or by one of their failing tests.
+   *
+   * @param testNameSuffices whether a failing test named without a failure word cites its check, as
+   *     it does for the summary's sentence and not for the confidence floor
+   */
+  private List<Citation> citations(String title, String description, boolean testNameSuffices) {
     if (checks.isEmpty()) {
       return List.of();
     }
@@ -592,12 +632,13 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
         ((title == null ? "" : title) + "\n" + (description == null ? "" : description))
             .toLowerCase(Locale.ROOT);
     String text = normalized(raw);
-    if (!states(text, FAILURE_WORDS) || states(text, DISCLAIMERS)) {
+    boolean failureStated = states(text, FAILURE_WORDS);
+    if ((!failureStated && !testNameSuffices) || states(text, DISCLAIMERS)) {
       return List.of();
     }
     var cited = new ArrayList<Citation>();
     for (Check check : checks) {
-      if (namesAsACheck(check, raw, text)) {
+      if (failureStated && namesAsACheck(check, raw, text)) {
         cited.add(new Citation(check, null));
       }
       check.tests().stream()

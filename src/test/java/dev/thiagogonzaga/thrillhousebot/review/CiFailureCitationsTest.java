@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -330,8 +331,7 @@ class CiFailureCitationsTest {
     assertFalse(citations.cites(described("It parses and fails on the empty case.")));
     assertFalse(citations.cites(described("test_y fails on the empty case.")));
     assertEquals(
-        "CI on this commit fails the check \"ci\", which no open finding explains.",
-        citations.overviewSentences(List.of()));
+        "CI on this commit fails the check \"ci\".", citations.overviewSentences(List.of()));
   }
 
   /**
@@ -443,6 +443,14 @@ class CiFailureCitationsTest {
           - rejects a blank name *** FAILED *** | rejects a blank name
           Chrome Headless 120.0 (Linux) Suite rejects blank names FAILED | Chrome Headless 120.0 (Linux) Suite rejects blank names
           [ERROR] testRejectsBlank(com.x.FooTest)  Time elapsed: 0.01 s  <<< FAILURE! | testRejectsBlank
+          [ERROR] cowork.invoicing.InvoiceServiceTest.a single-day booking is billed as one day -- Time elapsed: 0.050 s <<< FAILURE! | a single-day booking is billed as one day
+          [ERROR] cowork.InvoiceTest.single-day v1.2 booking -- Time elapsed: 0.05 s <<< FAILURE! | single-day v1.2 booking
+          \u00D7 capacity > marks a shift full when signups reach capacity 6ms | marks a shift full when signups reach capacity
+          \u00D7 recall rules > schedules one reminder per attempt, starting when the lead window opens 8ms | schedules one reminder per attempt, starting when the lead window opens
+          \u00D7 retries the upload 0.01s | retries the upload
+          \u2716 accepts a team of exactly maxTeamSize members (0.320076ms) | accepts a team of exactly maxTeamSize members
+          error: 'tests.test.compact counts every reading in the window' failed: expected 3, found 2 | compact counts every reading in the window
+          FAIL test_find_free_uses_last_locker | test_find_free_uses_last_locker
           """)
   void eachRunnersLineYieldsTheTestsOwnName(String line, String name) {
     assertEquals(name, CiFailureCitations.testName(line));
@@ -455,7 +463,9 @@ class CiFailureCitationsTest {
         "FAIL src/app.test.ts",
         "rspec ./spec/booking_spec.rb:12",
         "[ERROR] Tests run: 6, Failures: 1, Errors: 0, Skipped: 0 <<< FAILURE!",
-        "[ERROR]   Suite.:12 expected"
+        "[ERROR]   Suite.:12 expected",
+        "\u2716 failing tests:",
+        "FAIL example.com/locker 0.012s"
       })
   void aLineThatNamesNoTestYieldsNone(String line) {
     assertNull(CiFailureCitations.testName(line));
@@ -514,8 +524,7 @@ class CiFailureCitationsTest {
         "CI on this commit fails the check \"test\" (failing test \"returns exactly `slots`"
             + " applications when enough are eligible\"), which the finding \"Shortlist returns"
             + " slots-1 items, violating the 25-slot contract\" explains. CI on this commit fails"
-            + " the check \"unit\" (failing test \"topCandidatesReturnsAtMostLimit\"), which no"
-            + " open finding explains.",
+            + " the check \"unit\" (failing test \"topCandidatesReturnsAtMostLimit\").",
         sentences);
     assertEquals(
         sentences,
@@ -523,14 +532,16 @@ class CiFailureCitationsTest {
         "the first citing finding is named wherever it stands");
   }
 
-  /** With no open finding citing a check, its sentence says none explains it. */
+  /**
+   * With no open finding citing a check, its sentence states the failure and claims nothing about
+   * the findings: one may describe the failing assertion without naming its test (#1091).
+   */
   @Test
-  void theOverviewSentenceSaysNoFindingExplainsAnUncitedFailure() {
+  void theOverviewSentenceStatesAnUncitedFailureAlone() {
     var citations = CiFailureCitations.parse(ROUND_12_SECTION);
 
     assertEquals(
-        "CI on this commit fails the check \"test\", which no open finding explains.",
-        citations.overviewSentences(List.of()));
+        "CI on this commit fails the check \"test\".", citations.overviewSentences(List.of()));
     assertEquals("", CiFailureCitations.NONE.overviewSentences(List.of()));
   }
 
@@ -550,7 +561,316 @@ class CiFailureCitationsTest {
 
     assertEquals(
         "CI on this commit fails the check \"test\" (failing tests \"TestParseConfig\","
-            + " \"TestRejectsBlank\" and 1 more), which no open finding explains.",
+            + " \"TestRejectsBlank\" and 1 more).",
         citations.overviewSentences(List.of()));
+  }
+
+  /**
+   * The section the resolver renders for one failing "test" check over the given job-log lines: the
+   * failing-test lines are those {@link CiFailureContextResolver#failingTestLines} reads from them,
+   * so a test sees exactly what reached the round-18 summaries.
+   */
+  private static CiFailureCitations fromJobLog(String log) {
+    var section = new StringBuilder("### test (conclusion: failure)\n");
+    var lines = CiFailureContextResolver.failingTestLines(log.getBytes(StandardCharsets.UTF_8));
+    if (!lines.isEmpty()) {
+      section.append("Failing tests named in the job log:\n");
+      lines.forEach(line -> section.append("- ").append(line).append('\n'));
+    }
+    return CiFailureCitations.parse(section.toString());
+  }
+
+  /**
+   * csharp ThrillhouseBot-test#270 (finding 4253711864): the finding names the failing test but, as
+   * the review prompt asks of a prediction, says "CI will confirm" instead of that it fails. It
+   * explains the check for the summary's sentence; the confidence floor still wants the failure
+   * stated (#1091).
+   */
+  @Test
+  void aFindingNamingTheFailingTestExplainsItWithoutSayingItFails() {
+    var citations =
+        fromJobLog(
+            """
+            [xUnit.net 00:00:00.25]     MuseumTickets.Tests.TimedEntryAllocatorTests.TryHold_CanTakeEveryRemainingTicketInASlot [FAIL]
+            Failed MuseumTickets.Tests.TimedEntryAllocatorTests.TryHold_CanTakeEveryRemainingTicketInASlot [1 ms]
+            Error Message:
+            Assert.NotNull() Failure: Value is null
+            """);
+    var finding =
+        new ReviewResponse.Finding(
+            "high",
+            "high",
+            "csharp/MuseumTickets/TimedEntryAllocator.cs",
+            39,
+            "Hold rejected when the request exactly fills the remaining slot capacity",
+            "The guard is `if (remaining > request.Quantity)`, so a request whose Quantity equals"
+                + " the tickets left (e.g. 40 requested of 40 remaining in a fresh slot, equal to"
+                + " AllocatorConfig.DefaultSlotCapacity) takes the else branch and `return null;` —"
+                + " the slot cannot take its last party even though there is room. The docstring"
+                + " above it says the method returns null only \"when the slot cannot take them\","
+                + " and an in-diff test, TryHold_CanTakeEveryRemainingTicketInASlot, calls TryHold"
+                + " with `capacity` tickets on a fresh slot and asserts NotNull — CI will confirm"
+                + " the outcome; the trace shows every exact-fit request getting null and the"
+                + " caller answering 409.",
+            null,
+            null);
+
+    assertEquals(
+        "CI on this commit fails the check \"test\" (failing test"
+            + " \"TryHold_CanTakeEveryRemainingTicketInASlot\"), which the finding \"Hold rejected"
+            + " when the request exactly fills the remaining slot capacity\" explains.",
+        citations.overviewSentences(List.of(Finding.fromAiResponse(finding))));
+    assertFalse(citations.cites(finding), "the floor still wants the failure stated");
+  }
+
+  /**
+   * kotlin ThrillhouseBot-test#276 (finding 4253722678): Surefire prints a Kotlin test's name of
+   * several words after its class, and the class stayed in the name, so the finding that names the
+   * test and says it "fails on this commit" did not match it (#1091).
+   */
+  @Test
+  void aKotlinTestIsNamedWithoutItsClass() {
+    var citations =
+        fromJobLog(
+            """
+            [ERROR] Tests run: 7, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.149 s <<< FAILURE! -- in cowork.invoicing.InvoiceServiceTest
+            [ERROR] cowork.invoicing.InvoiceServiceTest.a single-day booking is billed as one day -- Time elapsed: 0.050 s <<< FAILURE!
+            org.opentest4j.AssertionFailedError: expected: <1> but was: <0>
+            at cowork.invoicing.InvoiceServiceTest.a single-day booking is billed as one day(InvoiceServiceTest.kt:46)
+            [ERROR] Failures:
+            [ERROR]   InvoiceServiceTest.a single-day booking is billed as one day:46 expected: <1> but was: <0>
+            [ERROR] Tests run: 7, Failures: 1, Errors: 0, Skipped: 0
+            """);
+    var finding =
+        new ReviewResponse.Finding(
+            "high",
+            "medium",
+            "kotlin/src/main/kotlin/cowork/invoicing/InvoiceService.kt",
+            78,
+            "billableDays is off by one: inclusive date range returns one day too few",
+            "Booking dates are documented as inclusive in Models.kt: \"Both [startDate] and"
+                + " [endDate] are inclusive: a booking for a single day has startDate == endDate.\""
+                + " billableDays returns ChronoUnit.DAYS.between(start, end), which excludes the end"
+                + " date. For the test's single-day booking LocalDate.of(2026, 3, 10) to"
+                + " LocalDate.of(2026, 3, 10), DAYS.between returns 0, not 1, so the CI test 'a"
+                + " single-day booking is billed as one day' (assertEquals(1, days)) fails on this"
+                + " commit.",
+            null,
+            null);
+
+    assertTrue(citations.cites(finding));
+    assertEquals(
+        "CI on this commit fails the check \"test\" (failing test \"a single-day booking is billed"
+            + " as one day\"), which the finding \"billableDays is off by one: inclusive date range"
+            + " returns one day too few\" explains.",
+        citations.overviewSentences(List.of(Finding.fromAiResponse(finding))));
+  }
+
+  /**
+   * rust ThrillhouseBot-test#279 (finding 4253724050) quotes the test's assertion, which the job
+   * log does not print ("got 4"), and not the test's name: nothing ties it to the failure, so the
+   * sentence states the failure and says nothing of the findings (#1091).
+   */
+  @Test
+  void aFindingQuotingAnAssertionTheLogDoesNotPrintClaimsNothing() {
+    var citations =
+        fromJobLog(
+            """
+            test rms_uses_exactly_the_last_window_values ... FAILED
+            test thresholds_are_sorted ... ok
+            ---- rms_uses_exactly_the_last_window_values stdout ----
+            thread 'rms_uses_exactly_the_last_window_values' (2483) panicked at tests/ingest_test.rs:34:5:
+            got 4
+            test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+            """);
+    var finding =
+        new Finding(
+            RiskLevel.HIGH,
+            "rust/src/ingest.rs",
+            45,
+            "rms_of_last window arithmetic is off by one and drops a sample",
+            "Worked from the values quoted verbatim in the test: for `[0.0, 0.0, 3.0, 4.0]` with"
+                + " `window = 2`, `4 - 2 = 2`, `+ 1 = 3`, so the tail is `[4.0]` and the RMS would"
+                + " be 4.0, while the assertion `assert!((rms - 12.5f64.sqrt()).abs() < 1e-9, \"got"
+                + " {rms}\");` expects roughly 3.5355 — the committed `cargo test` run will confirm"
+                + " whether this assertion fails as written.",
+            null,
+            null);
+
+    assertEquals(
+        "CI on this commit fails the check \"test\" (failing test"
+            + " \"rms_uses_exactly_the_last_window_values\").",
+        citations.overviewSentences(List.of(finding)));
+  }
+
+  /**
+   * react ThrillhouseBot-test#273 and angular #275: Vitest prints the suite path and the duration
+   * around the test's name, and both stayed in it. Neither round-18 finding names its test (the
+   * angular one, 4253711454, quotes the spec's assertions), so the sentence states the failure; a
+   * finding naming the test explains it (#1091).
+   */
+  @Test
+  void aVitestTestIsNamedWithoutItsSuitesAndDuration() {
+    var react =
+        fromJobLog(
+            """
+            ❯ src/__tests__/board.test.ts (8 tests | 1 failed) 12ms
+            × capacity > marks a shift full when signups reach capacity 6ms
+            → expected false to be true // Object.is equality
+            FAIL  src/__tests__/board.test.ts > capacity > marks a shift full when signups reach capacity
+            """);
+    var angular =
+        fromJobLog(
+            """
+            ❯ src/app/recall-board.spec.ts (10 tests | 1 failed) 15ms
+            × recall rules > schedules one reminder per attempt, starting when the lead window opens 8ms
+            FAIL  src/app/recall-board.spec.ts > recall rules > schedules one reminder per attempt, starting when the lead window opens
+            """);
+    var angularFinding =
+        new Finding(
+            RiskLevel.MEDIUM,
+            "angular/src/app/recall-rules.ts",
+            35,
+            "reminderSchedule starts at i=1, so it emits one fewer reminder and never fires on the"
+                + " window-open day",
+            "The spec at angular/src/app/recall-board.spec.ts asserts"
+                + " `expect(schedule).toHaveLength(3);` and `expect(schedule[0]).toEqual(addDays(due,"
+                + " -21));`, which the loop as written cannot satisfy (it produces length 2 and a"
+                + " first element at due-14) — that test run and the CI run on this commit will show"
+                + " the mismatch directly.",
+            null,
+            null);
+    var naming =
+        new Finding(
+            RiskLevel.HIGH,
+            "react/src/lib/schedule.ts",
+            15,
+            "isFull uses a strict greater-than comparison",
+            "The test \"marks a shift full when signups reach capacity\" expects true here.",
+            null,
+            null);
+
+    assertEquals(
+        "CI on this commit fails the check \"test\" (failing test \"schedules one reminder per"
+            + " attempt, starting when the lead window opens\").",
+        angular.overviewSentences(List.of(angularFinding)));
+    assertEquals(
+        "CI on this commit fails the check \"test\" (failing test \"marks a shift full when signups"
+            + " reach capacity\"), which the finding \"isFull uses a strict greater-than"
+            + " comparison\" explains.",
+        react.overviewSentences(List.of(naming)));
+  }
+
+  /**
+   * node ThrillhouseBot-test#278: node:test heads its list of failed tests "✖ failing tests:",
+   * which was named as a second failing test (#1091).
+   */
+  @Test
+  void nodeTestsListHeaderIsNoTest() {
+    var citations =
+        fromJobLog(
+            """
+            ▶ TeamService.register
+            ✖ accepts a team of exactly maxTeamSize members (0.320076ms)
+            ✖ TeamService.register (4.06223ms)
+            ℹ fail 1
+
+            ✖ failing tests:
+
+            test at test/teams.test.ts:64:3
+            ✖ accepts a team of exactly maxTeamSize members (0.320076ms)
+            """);
+
+    assertEquals(
+        "CI on this commit fails the check \"test\" (failing test \"accepts a team of exactly"
+            + " maxTeamSize members\").",
+        citations.overviewSentences(List.of()));
+  }
+
+  /**
+   * zig ThrillhouseBot-test#274 (finding 4253722582) and c #277 (finding 4253705906): zig build's
+   * "error: '…' failed:" and a harness's "FAIL test_name" name the failing test, which each finding
+   * names too (#1091).
+   */
+  @Test
+  void zigBuildAndBareFailLinesNameTheirTests() {
+    var zig =
+        fromJobLog(
+            """
+            +- run test 5/6 passed, 1 failed
+            error: 'tests.test.compact counts every reading in the window' failed: expected 3, found 2
+            return error.TestExpectedEqual;
+            error: while executing test 'tests.test.compact reports window minimum in celsius', the following test command failed:
+            Build Summary: 1/3 steps succeeded; 1 failed; 5/6 tests passed; 1 failed
+            """);
+    var c =
+        fromJobLog(
+            """
+            ./build/test_dispenser
+            tests/test_dispenser.c:53: check failed: idx == 2
+            PASS test_find_free_returns_first_slot
+            FAIL test_find_free_uses_last_locker
+            PASS test_pin_is_six_digits
+            1 failure(s)
+            """);
+    var zigFinding =
+        new Finding(
+            RiskLevel.HIGH,
+            "zig/src/compactor.zig",
+            68,
+            "compact() drops the last reading of every batch, and the new unit test fails on it",
+            "Trace: for the input in `zig/src/tests.zig` test \"compact counts every reading in the"
+                + " window\" (ts 0, 60, 120, window 300), the loop runs for i=0 and i=1 only.",
+            null,
+            null);
+    var cFinding =
+        new Finding(
+            RiskLevel.HIGH,
+            "c/src/locker.c",
+            18,
+            "locker_find_free never examines the last locker in the bank",
+            "The unit test added in this PR traces straight into the bug:"
+                + " test_find_free_uses_last_locker builds a 3-slot bank, marks slots 0 and 1"
+                + " occupied, and expects `locker_find_free(&bank)` to return 2 — but the loop bound"
+                + " `i < bank->count - 1` (i.e. i < 2) never reaches index 2, the function returns"
+                + " -1, and the `CHECK(idx == 2)` assertion fails; CI will confirm this.",
+            null,
+            null);
+
+    assertEquals(
+        "CI on this commit fails the check \"test\" (failing test \"compact counts every reading in"
+            + " the window\"), which the finding \"compact() drops the last reading of every batch,"
+            + " and the new unit test fails on it\" explains.",
+        zig.overviewSentences(List.of(zigFinding)));
+    assertEquals(
+        "CI on this commit fails the check \"test\" (failing test"
+            + " \"test_find_free_uses_last_locker\"), which the finding \"locker_find_free never"
+            + " examines the last locker in the bank\" explains.",
+        c.overviewSentences(List.of(cFinding)));
+  }
+
+  /**
+   * A finding that names the failing test but sets the failure aside does not explain it, and a
+   * check named without a failure is no citation for the sentence either.
+   */
+  @Test
+  void aDisclaimedTestOrABareCheckNameExplainsNothing() {
+    var citations = CiFailureCitations.parse(ROUND_17_SECTION);
+    var disclaimed =
+        new Finding(
+            RiskLevel.HIGH,
+            "src/a.ts",
+            3,
+            "Unrelated",
+            "topCandidatesReturnsAtMostLimit is unrelated to this line.",
+            null,
+            null);
+    var checkOnly =
+        new Finding(
+            RiskLevel.HIGH, "src/a.ts", 4, "Check named", "The unit check runs here.", null, null);
+
+    var sentences = citations.overviewSentences(List.of(disclaimed, checkOnly));
+
+    assertFalse(sentences.contains("explains"), sentences);
   }
 }
