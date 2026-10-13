@@ -345,7 +345,9 @@ final class SecretScanner {
 
   /**
    * Whether a generic assignment sits inside sample text, including a before/text-before/prefix
-   * sample or a string assigned to a fixture/sample/example-named variable (#981). The enclosing
+   * sample or a string assigned to a fixture/sample/example-named variable (#981). New sample forms
+   * must end after the credential assignment, with whitespace only before the outer close. Unknown
+   * prefixes and command suffixes stay scanned, even with a sample-named target. The enclosing
    * string must contain both key and value; a quoted JSON/dictionary key ends before its value and
    * remains a real assignment. A command argument after a word (sh -c 'API_KEY="…"') stays scanned.
    * A command supplied as a bare-key quoted list element is still indistinguishable from sample
@@ -356,21 +358,19 @@ final class SecretScanner {
     var literal = enclosing[generic.start(1)];
     return literal != null
         && generic.end(3) < literal.end()
-        && inSamplePosition(line, literal.start(), generic.start(1));
+        && inSamplePosition(line, literal.start(), generic.start(1), generic.end(), literal.end());
   }
 
   /** Explicit sample prose, read only within the bounded generic-rule line. */
   private static final Pattern SAMPLE_PROSE_PREFIX =
       Pattern.compile("(?i)\\s*(?:before|text\\s+before|prefix)\\s*");
 
-  /** A recognized sample position and prefix, or an explicitly sample-named assignment. */
-  private static boolean inSamplePosition(String line, int quote, int key) {
+  /** A recognized sample position and complete assignment, retaining old bare-key list inputs. */
+  private static boolean inSamplePosition(
+      String line, int quote, int key, int assignmentEnd, int quoteEnd) {
     int at = quote - 1;
     while (at >= 0 && Character.isWhitespace(line.charAt(at))) {
       at--;
-    }
-    if (at >= 0 && (line.charAt(at) == '=' || line.charAt(at) == ':')) {
-      return sampleAssignment(line, at);
     }
     boolean bareKey = key == quote + 1;
     if (!bareKey && !SAMPLE_PROSE_PREFIX.matcher(line).region(quote + 1, key).matches()) {
@@ -378,17 +378,30 @@ final class SecretScanner {
       // arbitrary prefix is still scanned, regardless of how its collection is constructed.
       return false;
     }
+    if (at >= 0 && (line.charAt(at) == '=' || line.charAt(at) == ':')) {
+      return sampleAssignment(line, at) && whitespaceOnly(line, assignmentEnd, quoteEnd);
+    }
     if (at < 0 || "[{".indexOf(line.charAt(at)) >= 0) {
-      return true;
+      return bareKey || whitespaceOnly(line, assignmentEnd, quoteEnd);
     }
     char before = line.charAt(at);
     if (before == '(' || before == ',') {
-      return bareKey || sampleContainer(line, at);
+      return bareKey
+          || (sampleContainer(line, at) && whitespaceOnly(line, assignmentEnd, quoteEnd));
     }
     return false;
   }
 
-  /** An explicitly fixture/sample/example-named target, rather than an executable command. */
+  private static boolean whitespaceOnly(String line, int start, int end) {
+    for (int at = start; at < end; at++) {
+      if (!Character.isWhitespace(line.charAt(at))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Whether the assignment target has an explicit fixture/sample/example name. */
   private static boolean sampleAssignment(String line, int operator) {
     int end = operator;
     while (end > 0

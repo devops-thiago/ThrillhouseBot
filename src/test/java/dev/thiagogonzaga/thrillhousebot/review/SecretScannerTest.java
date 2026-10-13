@@ -566,6 +566,33 @@ class SecretScannerTest {
   }
 
   @Test
+  void fixtureNamedCommandsWithUnknownPrefixesOrSuffixesStayScanned() {
+    var value = fake.genericSecret(40);
+    for (var name : List.of("fixtureCommand", "sampleCommand", "exampleCommand")) {
+      for (var prefix : List.of("export ", "send ", "", "before ", "text before ", "prefix ")) {
+        var line =
+            "String "
+                + name
+                + " = \""
+                + prefix
+                + "API_KEY='"
+                + value
+                + "' run\"; "
+                + "new ProcessBuilder(\"sh\", \"-c\", "
+                + name
+                + ");";
+        assertGenericHit("API_KEY", value, line);
+      }
+      assertGenericHit(
+          "API_KEY", value, "String " + name + " = \"export API_KEY='" + value + "'\";");
+    }
+    assertGenericHit("API_KEY", value, "List.of(\"before API_KEY='" + value + "' run\")");
+    assertGenericHit("API_KEY", value, "[\"before API_KEY='" + value + "' run\"]");
+    // Existing bare-key list inputs retain their earlier sample classification.
+    assertTrue(scan("List.of(\"API_KEY='" + value + "' run\")").isEmpty());
+  }
+
+  @Test
   void prefixedSamplesStayExcludedInCollectionsAndNamedFixtureFields() {
     var value = fake.genericSecret(40);
     var sample = "\"prefix password='" + value + "'\"";

@@ -850,7 +850,10 @@ regex syntax), and sample text quoted inside another complete string, including
 the explicit prose leaders `before`, `text before` or `prefix` before the
 credential name in a raw list or a `List.of`-style builder, and a string
 assigned to a fixture/sample/example-named variable
-(`String fixture = "prefix client_secret: 'abc…'";`). An assignment in a
+(`String fixture = "prefix client_secret: 'abc…'";`). New sample forms require
+a bare key or one of those prose leaders and whitespace only after the
+assignment inside the string. Unknown prefixes and trailing command text
+stay scanned even with a sample-named variable. An assignment in a
 direct or assigned command string, or a prefixed execution call such as
 `Runtime.exec("export API_KEY='…'")`, is still reported. Bare command strings
 written as list elements can read exactly like samples, as before. Known

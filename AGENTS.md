@@ -132,8 +132,10 @@ same diff.
   immediately above the declaration in the same hunk; another argument never supplies an alias
   (#1101). The generic secret rule skips credential assignments embedded in complete sample
   strings with explicit before/text-before/prefix prose in list/sample-builder positions, or
-  fixture/sample/example-named assignments (#981);
-  command strings and known-format credentials still match.
+  fixture/sample/example-named assignments (#981). New forms require a bare key or one of those
+  prose leaders, and whitespace only after the assignment inside the string. Unknown prefixes
+  and command suffixes stay scanned even with a sample-named target; earlier bare-key list inputs
+  keep their classification. Known-format credentials still match.
   IAM wildcard arrays are read in linear time with no element-count or element-width cap (#983).
   A quoted wildcard ending at a list delimiter proves the setting even when other items are
   Terraform expressions or YAML plain scalars; nested quoted stars do not prove a wildcard.
