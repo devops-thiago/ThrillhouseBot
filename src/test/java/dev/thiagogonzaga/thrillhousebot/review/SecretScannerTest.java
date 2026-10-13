@@ -524,6 +524,220 @@ class SecretScannerTest {
   }
 
   @Test
+  void aNestedAssignmentIsSampleTextWithAPrefixOrAnAssignedEnclosingString() {
+    var value = fake.genericSecret(40);
+    for (var line :
+        List.of(
+            "\"before client_secret: '" + value + "'\",",
+            "List.of(\"text before token: '" + value + "'\")",
+            "String fixture = \"client_secret: '" + value + "'\";",
+            "fixture := \"prefix password='" + value + "'\"",
+            "fixture: \"prefix password='" + value + "'\"")) {
+      assertTrue(scan(line).isEmpty(), line);
+    }
+    assertGenericHit("API_TOKEN", value, "val API_TOKEN = \"" + value + "\"");
+    assertGenericHit("API_KEY", value, "sh -c 'prefix API_KEY=\"" + value + "\" run'");
+  }
+
+  @Test
+  void assignedAndPrefixedExecutableCommandStringsRemainDetectable() {
+    var value = fake.genericSecret(40);
+    for (var line :
+        List.of(
+            "String command = \"export API_KEY='" + value + "' run\";",
+            "val script = \"API_KEY='" + value + "' run\"",
+            "command: \"export API_KEY='" + value + "' run\"",
+            "Runtime.exec(\"export API_KEY='" + value + "' run\")",
+            "execute(\"sh\", \"export API_KEY='" + value + "' run\")",
+            "new ProcessBuilder(List.of(\"sh\", \"-c\", \"export API_KEY='" + value + "' run\"))",
+            "new ProcessBuilder(new String[]{\"sh\", \"-c\", \"export API_KEY='"
+                + value
+                + "' run\"})",
+            "String[] args = {\"sh\", \"-c\", \"export API_KEY='" + value + "' run\"}",
+            "subprocess.run([\"sh\", \"-c\", \"export API_KEY='" + value + "' run\"])",
+            "command: [\"sh\", \"-c\", \"export API_KEY='" + value + "' run\"]",
+            "List.of(\"send API_KEY='" + value + "'\")",
+            "Runtime.exec(\"prefix API_KEY='" + value + "'\")")) {
+      assertGenericHit("API_KEY", value, line);
+    }
+    for (var name : List.of("fixture", "sampleText", "exampleInput")) {
+      assertTrue(scan("String " + name + " = \"prefix API_KEY='" + value + "'\";").isEmpty());
+    }
+  }
+
+  @Test
+  void fixtureNamedCommandsWithUnknownPrefixesOrSuffixesStayScanned() {
+    var value = fake.genericSecret(40);
+    for (var name : List.of("fixtureCommand", "sampleCommand", "exampleCommand")) {
+      for (var prefix : List.of("export ", "send ", "", "before ", "text before ", "prefix ")) {
+        var line =
+            "String "
+                + name
+                + " = \""
+                + prefix
+                + "API_KEY='"
+                + value
+                + "' run\"; "
+                + "new ProcessBuilder(\"sh\", \"-c\", "
+                + name
+                + ");";
+        assertGenericHit("API_KEY", value, line);
+      }
+      assertGenericHit(
+          "API_KEY", value, "String " + name + " = \"export API_KEY='" + value + "'\";");
+    }
+    assertGenericHit("API_KEY", value, "List.of(\"before API_KEY='" + value + "' run\")");
+    assertGenericHit("API_KEY", value, "[\"before API_KEY='" + value + "' run\"]");
+    // Existing bare-key list inputs retain their earlier sample classification.
+    assertTrue(scan("List.of(\"API_KEY='" + value + "' run\")").isEmpty());
+  }
+
+  @Test
+  void prefixedSamplesStayExcludedInCollectionsAndNamedFixtureFields() {
+    var value = fake.genericSecret(40);
+    var sample = "\"prefix password='" + value + "'\"";
+    for (var line :
+        List.of(
+            "fixtures = [" + sample + "]",
+            "[\"label\", " + sample + "]",
+            "Set.of(" + sample + ")",
+            "Arrays.asList(" + sample + ")",
+            "Stream.of(" + sample + ")",
+            "String fixture\t= " + sample,
+            "\"exampleText\": " + sample)) {
+      assertTrue(scan(line).isEmpty(), line);
+    }
+    assertGenericHit("password", value, "= " + sample);
+  }
+
+  @Test
+  void prosePrefixedStringsInWrappedCollectionsRemainCredentials() {
+    var value = fake.genericSecret(40);
+    for (var prefix : List.of("before", "text before", "prefix")) {
+      var quoted = "\"" + prefix + " API_KEY='" + value + "'\"";
+      for (var line :
+          List.of(
+              "new ProcessBuilder(List.of(\"sh\", \"-c\", " + quoted + "))",
+              "subprocess.run([\"sh\", \"-c\", " + quoted + "])",
+              "subprocess.run([" + quoted + "])",
+              "launch(Set.of(" + quoted + "))",
+              "launch(Arrays.asList(" + quoted + "))",
+              "launch(Stream.of(" + quoted + "))",
+              "loadSamples([\"label\", " + quoted + "])",
+              "List.of(" + quoted + "); launch(command);")) {
+        assertGenericHit("API_KEY", value, line);
+      }
+    }
+  }
+
+  @Test
+  void fixtureAssignmentWithAnotherStatementOrExpressionRemainsScanned() {
+    var value = fake.genericSecret(40);
+    for (var name : List.of("fixture", "sampleText", "exampleInput")) {
+      for (var prefix : List.of("", "before ", "text before ", "prefix ")) {
+        var line = "String " + name + " = \"" + prefix + "password='" + value + "'\"";
+        assertGenericHit("password", value, line + "; Runtime.exec(" + name + ");");
+        assertGenericHit("password", value, line + "; inspect(" + name + ");");
+        assertGenericHit("password", value, line + " + suffix;");
+      }
+    }
+  }
+
+  @Test
+  void standaloneSamplesKeepSimpleDeclarationsAndCollectionClosings() {
+    var value = fake.genericSecret(40);
+    var quoted = "\"before password='" + value + "'\"";
+    for (var line :
+        List.of(
+            "  String fixture = " + quoted + "; // sample",
+            "fixture := " + quoted,
+            "\"exampleText\": " + quoted + ", # sample",
+            "   List.of(" + quoted + ", \"other input\");",
+            "List<String> fixtures = List.of(" + quoted + ");",
+            "var sampleInputs = Set.of(" + quoted + ");",
+            "List<String> exampleInputs = Arrays.asList(" + quoted + ");",
+            "Stream<String> fixtures = Stream.of(" + quoted + ");",
+            "fixtures = [\"label\", " + quoted + "]",
+            "[" + quoted + ", \"other input\"]")) {
+      assertTrue(scan(line).isEmpty(), line);
+    }
+    assertGenericHit("password", value, "var commands = List.of(" + quoted + ");");
+    assertGenericHit("password", value, "start(); String fixture = " + quoted + ";");
+    assertGenericHit("password", value, "if (ready) { fixture = " + quoted + "; }");
+    // The legacy bare-key list case keeps its existing lexical classification.
+    assertTrue(scan("new ProcessBuilder(List.of(\"password='" + value + "'\"))").isEmpty());
+  }
+
+  @Test
+  void standaloneSampleTailsKeepQuotedInputsAndRejectUnknownTokens() {
+    var value = fake.genericSecret(40);
+    var quoted = "\"before password='" + value + "'\"";
+    for (var line :
+        List.of(
+            "List.of(" + quoted + ", \"\", \"other input\")",
+            "List.of(" + quoted + ") // sample",
+            "fixture = " + quoted + "; # sample",
+            "java.util.List.of(" + quoted + ")",
+            "java.util.Set.of(" + quoted + ")",
+            "java.util.Arrays.asList(" + quoted + ")",
+            "java.util.stream.Stream.of(" + quoted + ")")) {
+      assertTrue(scan(line).isEmpty(), line);
+    }
+    for (var line :
+        List.of(
+            "\"label\", " + quoted,
+            "[" + quoted + "]; inspect(command);",
+            "List.of(" + quoted + ", 42)",
+            "List.of(" + quoted + ", \"",
+            "List.of(" + quoted + ", \"unterminated)")) {
+      assertGenericHit("password", value, line);
+    }
+  }
+
+  @Test
+  void siblingEntryPrefixesRemainScannedInsteadOfBecomingStandaloneSamples() {
+    var value = fake.genericSecret(40);
+    var quoted = "\"before API_KEY='" + value + "'\"";
+    for (var line :
+        List.of(
+            "otherValue, fixture = " + quoted + ";",
+            "\"db_host\": \"localhost\", \"fixture\": " + quoted,
+            "otherValue, fixtures = List.of(" + quoted + ");",
+            "otherValue, fixtures = [" + quoted + "]",
+            "std::basic_string<char, Traits> other, fixture = " + quoted + ";")) {
+      assertGenericHit("API_KEY", value, line);
+    }
+  }
+
+  @Test
+  void standaloneGenericDeclarationsRequireBalancedTypeDelimiters() {
+    var value = fake.genericSecret(40);
+    var quoted = "\"before password='" + value + "'\"";
+    for (var line :
+        List.of(
+            "std::basic_string<char, Traits> fixture = " + quoted + ";",
+            "std::basic_string<char, std::char_traits<char>> fixture = " + quoted + ";")) {
+      assertTrue(scan(line).isEmpty(), line);
+    }
+    assertGenericHit("password", value, "Type<Other fixture = " + quoted + ";");
+    assertGenericHit("password", value, "String> fixture = " + quoted + ";");
+  }
+
+  @Test
+  void ambiguousPrefixedStringsInOtherCallsRemainScanned() {
+    var value = fake.genericSecret(40);
+    var quoted = "\"prefix password='" + value + "'\"";
+    for (var line :
+        List.of(
+            "Map.of(\"tag\", " + quoted + ")",
+            "fixtures.add(" + quoted + ")",
+            "commands.add(" + quoted + ")",
+            "Runtime.exec(" + quoted + ")")) {
+      assertGenericHit("password", value, line);
+    }
+  }
+
+  @Test
   void anAssignmentInACommandStringIsStillACredential() {
     assertGenericHit(
         "DB_PASSWORD", "q8#Lm2!vRt9Z", "ExecStart=/bin/sh -c 'DB_PASSWORD=\"q8#Lm2!vRt9Z\" run'");
