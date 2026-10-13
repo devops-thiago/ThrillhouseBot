@@ -513,4 +513,94 @@ class PathMentionsTest {
         "The build fails:\n```\ncat  build/x.conf .\n```\nSee.",
         mentions.withoutUnresolvedMentions(text));
   }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"~~~", "```"})
+  void eitherFenceStyleProtectsPathsAndWhitespace(String fence) {
+    var mentions = mentions(ANGULAR, "", Set.of());
+    var block = fence + "sh\ncat  build/x.conf .\n" + fence;
+    assertEquals(block, mentions.withoutUnresolvedMentions(block));
+    assertEquals(block, mentions.withoutUnresolvedSentences(block));
+    assertEquals(
+        block + "\noutside", mentions.withoutUnresolvedMentions(block + "\noutside build/x.conf"));
+    assertEquals(
+        block + "\noutside", mentions.withoutUnresolvedSentences(block + "\noutside build/x.conf"));
+    var unclosed = fence + "sh\ncat  build/x.conf .";
+    assertEquals(unclosed, mentions.withoutUnresolvedMentions(unclosed));
+  }
+
+  @Test
+  void aDifferentFenceMarkerInsideCodeDoesNotEndTheBlock() {
+    var mentions = mentions(ANGULAR, "", Set.of());
+    var block = "~~~sh\n```\ncat  build/x.conf .\n~~~";
+    assertEquals(
+        block + "\noutside", mentions.withoutUnresolvedMentions(block + "\noutside build/x.conf"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"````", "~~~~"})
+  void shorterMarkersInsideLongerFencesStayByteExact(String fence) {
+    var mentions = mentions(REACT, "", REACT_TREE);
+    var shorter = fence.substring(0, 3);
+    var block = fence + "\n" + shorter + "\ncat  build/x.conf .\n" + fence;
+    assertEquals(block, mentions.withoutUnresolvedSentences(block));
+    assertEquals(
+        block + "\nOutside.",
+        mentions.withoutUnresolvedMentions(block + "\nOutside build/missing.conf."));
+    var unclosed = fence + "\n" + shorter + "\ncat  build/x.conf .";
+    assertEquals(unclosed, mentions.withoutUnresolvedSentences(unclosed));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"```", "~~~"})
+  void markersInCodeLiteralsDoNotExposePaths(String fence) {
+    var mentions = mentions(ANGULAR, "", Set.of());
+    var block =
+        fence
+            + "sh\necho \""
+            + fence
+            + "\"\n"
+            + fence
+            + "still-code\ncat  build/x.conf .\n "
+            + fence
+            + "\t\r\n";
+    assertEquals(
+        block + "Outside.",
+        mentions.withoutUnresolvedMentions(block + "Outside build/missing.conf."));
+    assertEquals(block, mentions.withoutUnresolvedSentences(block));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"````", "~~~~"})
+  void listFencesIgnoreInnerQuotedShorterAndMixedMarkers(String fence) {
+    var mentions = mentions(ANGULAR, "", Set.of());
+    for (var opener : List.of("- ", "* ", "+ ", "12. ", "1) ", "> - ")) {
+      var quote = opener.startsWith(">") ? "> " : "";
+      var block =
+          opener
+              + fence
+              + "sh\n"
+              + quote
+              + "  "
+              + fence.substring(0, 3)
+              + "\n"
+              + quote
+              + "  "
+              + (fence.startsWith("~") ? "````" : "~~~~")
+              + "\n"
+              + quote
+              + "  > "
+              + fence
+              + "\n"
+              + quote
+              + "  cat  build/x.conf .\n"
+              + quote
+              + "  "
+              + fence;
+      assertEquals(
+          block + "\nOutside.",
+          mentions.withoutUnresolvedMentions(block + "\nOutside build/missing.conf."));
+      assertEquals(block, mentions.withoutUnresolvedSentences(block));
+    }
+  }
 }
