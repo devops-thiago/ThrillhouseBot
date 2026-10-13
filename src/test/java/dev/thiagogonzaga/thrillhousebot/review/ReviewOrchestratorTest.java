@@ -8854,6 +8854,11 @@ class ReviewOrchestratorTest {
   class LearningsThroughReview {
 
     private void runReview(GitHubPullRequestClient.FileDiff... files) {
+      runReview(new ReviewResponse(List.of(), List.of(), null), files);
+    }
+
+    private ReviewSession runReview(
+        ReviewResponse response, GitHubPullRequestClient.FileDiff... files) {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -8879,8 +8884,7 @@ class ReviewOrchestratorTest {
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
-        when(aiReviewService.review(any(ReviewSession.class), any()))
-            .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+        when(aiReviewService.review(any(ReviewSession.class), any())).thenReturn(response);
 
         orchestrator.review(
             new ReviewOrchestrator.ReviewRequest(
@@ -8894,7 +8898,199 @@ class ReviewOrchestratorTest {
                 "main",
                 123L,
                 false));
+        return session;
       }
+    }
+
+    @Test
+    void aSelectedImagePolicyKeepsItsCoveredFindingOnlyAsADoubleCheck() throws Exception {
+      var learning =
+          new ReviewLearningService.LearningView(
+              12,
+              ReviewLearning.KIND_DECLINE,
+              "Base image is not pinned by digest",
+              "medium",
+              "a/Dockerfile",
+              "We don't pin images by digest in Dockerfiles: the release pipeline resolves every image to a digest at deploy time and the deployed manifest carries that digest.",
+              180,
+              "https://github.com/owner/repo/pull/180#discussion_r12",
+              "maintainer",
+              java.time.Instant.parse("2026-09-01T00:00:00Z"),
+              true,
+              null,
+              null);
+      var store = mock(ReviewLearningService.class);
+      when(store.listActive(123L, "owner/repo", 100)).thenReturn(List.of(learning));
+      learnings =
+          new ReviewLearnings(
+              store,
+              followUpAnalyzer,
+              BOT_ID,
+              mock(GitHubInstallationClient.class),
+              new ReviewLearnings.Settings(true, 100, 10, 3000));
+      orchestrator = newOrchestrator();
+      var raw =
+          new ReviewResponse.Finding(
+              "medium",
+              "high",
+              "b/Dockerfile",
+              1,
+              "Base image is not pinned by digest",
+              "The python image is referenced by a mutable tag, so rebuilding can use different image contents.",
+              "FROM python:3-slim",
+              null);
+      var session =
+          runReview(
+              new ReviewResponse(List.of(raw), List.of(), null),
+              new GitHubPullRequestClient.FileDiff(
+                  "b/Dockerfile",
+                  "modified",
+                  1,
+                  1,
+                  2,
+                  "@@ -1 +1 @@\n-FROM python:2-slim\n+FROM python:3-slim"));
+      var stored = ArgumentCaptor.forClass(String.class);
+      verify(session, atLeastOnce()).setAiResponseJson(stored.capture());
+      var response = mapper.readValue(stored.getAllValues().getLast(), ReviewResponse.class);
+      assertEquals(1, response.findings().size(), "A covered finding stays visible, never dropped");
+      var held = response.findings().getFirst();
+      assertEquals(
+          FindingPlacement.DOUBLE_CHECK,
+          FindingPlacement.of(
+              RiskLevel.fromString(held.risk()), Confidence.fromString(held.confidence())),
+          "The same accepted image policy makes this a double-check");
+      assertEquals("low", held.confidence());
+      assertTrue(held.description().contains("L12"), held.description());
+      assertEquals(raw.file(), held.file());
+      assertEquals(raw.line(), held.line());
+      assertEquals(raw.title(), held.title());
+    }
+
+    private ReviewResponse.Finding imageFindingWithRecall(
+        ReviewLearningService store, ReviewLearnings.Settings settings) throws Exception {
+      learnings =
+          new ReviewLearnings(
+              store, followUpAnalyzer, BOT_ID, mock(GitHubInstallationClient.class), settings);
+      return imageFindingWithCurrentLearnings();
+    }
+
+    private ReviewResponse.Finding imageFindingWithCurrentLearnings() throws Exception {
+      orchestrator = newOrchestrator();
+      var raw =
+          new ReviewResponse.Finding(
+              "medium",
+              "high",
+              "b/Dockerfile",
+              1,
+              "Base image is not pinned by digest",
+              "The python image is referenced by a mutable tag, so rebuilding can use different image contents.",
+              "FROM python:3-slim",
+              null);
+      var session =
+          runReview(
+              new ReviewResponse(List.of(raw), List.of(), null),
+              new GitHubPullRequestClient.FileDiff(
+                  "b/Dockerfile",
+                  "modified",
+                  1,
+                  1,
+                  2,
+                  "@@ -1 +1 @@\n-FROM python:2-slim\n+FROM python:3-slim"));
+      var stored = ArgumentCaptor.forClass(String.class);
+      verify(session, atLeastOnce()).setAiResponseJson(stored.capture());
+      return mapper
+          .readValue(stored.getAllValues().getLast(), ReviewResponse.class)
+          .findings()
+          .getFirst();
+    }
+
+    private ReviewLearningService.LearningView acceptedImagePolicy(String text) {
+      return new ReviewLearningService.LearningView(
+          12,
+          ReviewLearning.KIND_DECLINE,
+          "Base image is not pinned by digest",
+          "medium",
+          "a/Dockerfile",
+          text,
+          180,
+          "https://github.com/owner/repo/pull/180#discussion_r12",
+          "maintainer",
+          java.time.Instant.parse("2026-09-01T00:00:00Z"),
+          true,
+          null,
+          null);
+    }
+
+    private void assertImagePolicyWasNotApplied(ReviewResponse.Finding finding) {
+      assertEquals("medium", finding.confidence());
+      assertEquals(
+          FindingPlacement.INLINE,
+          FindingPlacement.of(
+              RiskLevel.fromString(finding.risk()), Confidence.fromString(finding.confidence())));
+      assertFalse(finding.description().contains("Maintainer learning"));
+    }
+
+    @Test
+    void disabledLearningsDoNotReadOrApplyAStoredPolicy() throws Exception {
+      var store = mock(ReviewLearningService.class);
+      var finding =
+          imageFindingWithRecall(store, new ReviewLearnings.Settings(false, 100, 10, 3000));
+      assertImagePolicyWasNotApplied(finding);
+      verifyNoInteractions(store);
+    }
+
+    @Test
+    void aPolicyExcludedByTheCharacterBudgetDoesNotAffectTheFinding() throws Exception {
+      var store = mock(ReviewLearningService.class);
+      var policy =
+          acceptedImagePolicy(
+              "We don't pin images by digest in Dockerfiles. "
+                  + "The release pipeline resolves images to a digest at deployment. ".repeat(12));
+      when(store.listActive(123L, "owner/repo", 100)).thenReturn(List.of(policy));
+      var finding = imageFindingWithRecall(store, new ReviewLearnings.Settings(true, 100, 10, 500));
+      assertImagePolicyWasNotApplied(finding);
+      var inputs = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+      verify(aiReviewService).review(any(ReviewSession.class), inputs.capture());
+      assertFalse(inputs.getValue().repoInstructions().contains("[L12]"));
+      verify(store).listActive(123L, "owner/repo", 100);
+    }
+
+    @Test
+    void aPolicyExcludedByTheItemBudgetDoesNotAffectTheFinding() throws Exception {
+      var store = mock(ReviewLearningService.class);
+      var policy = acceptedImagePolicy("We don't pin images by digest in Dockerfiles.");
+      var convention =
+          new ReviewLearningService.LearningView(
+              13,
+              ReviewLearning.KIND_CONVENTION,
+              null,
+              null,
+              "b/Dockerfile",
+              "Use explicit Python versions.",
+              180,
+              null,
+              "maintainer",
+              java.time.Instant.parse("2026-09-02T00:00:00Z"),
+              true,
+              null,
+              null);
+      when(store.listActive(123L, "owner/repo", 100)).thenReturn(List.of(policy, convention));
+      var finding = imageFindingWithRecall(store, new ReviewLearnings.Settings(true, 100, 1, 3000));
+      assertImagePolicyWasNotApplied(finding);
+      var inputs = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
+      verify(aiReviewService).review(any(ReviewSession.class), inputs.capture());
+      assertTrue(inputs.getValue().repoInstructions().contains("[L13]"));
+      assertFalse(inputs.getValue().repoInstructions().contains("[L12]"));
+    }
+
+    @Test
+    void renderedPolicyTextWithoutASelectedDeclineDoesNotAffectTheFinding() throws Exception {
+      when(learnings.enabled()).thenReturn(true);
+      when(learnings.recall(eq(123L), eq("owner"), eq("repo"), any()))
+          .thenReturn(
+              new ReviewLearnings.Recall(
+                  "[L12] We don't pin images by digest in Dockerfiles.", List.of()));
+      assertImagePolicyWasNotApplied(imageFindingWithCurrentLearnings());
     }
 
     private static GitHubPullRequestClient.FileDiff javaFile() {
@@ -8905,13 +9101,15 @@ class ReviewOrchestratorTest {
     @Test
     void theRelevantLearningsRideTheReviewPromptFenced() {
       when(learnings.enabled()).thenReturn(true);
-      when(learnings.promptSection(eq(123L), eq("owner"), eq("repo"), any()))
+      when(learnings.recall(eq(123L), eq("owner"), eq("repo"), any()))
           .thenReturn(
-              "- [L1] Convention on the whole repository — @m, PR #1:\n  Threads are flat.");
+              new ReviewLearnings.Recall(
+                  "- [L1] Convention on the whole repository — @m, PR #1:\n  Threads are flat.",
+                  List.of()));
 
       runReview(javaFile());
 
-      verify(learnings).promptSection(123L, "owner", "repo", List.of("src/main/java/A.java"));
+      verify(learnings).recall(123L, "owner", "repo", List.of("src/main/java/A.java"));
       var inputs = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);
       verify(aiReviewService).review(any(ReviewSession.class), inputs.capture());
       var guidance = inputs.getValue().repoInstructions();
@@ -8972,7 +9170,8 @@ class ReviewOrchestratorTest {
     @Test
     void aPostedReviewHandsItsFinalStatusesToTheLearningsCapture() {
       when(learnings.enabled()).thenReturn(true);
-      when(learnings.promptSection(anyLong(), anyString(), anyString(), any())).thenReturn("");
+      when(learnings.recall(anyLong(), anyString(), anyString(), any()))
+          .thenReturn(ReviewLearnings.Recall.EMPTY);
 
       runReview(javaFile());
 
@@ -8992,7 +9191,8 @@ class ReviewOrchestratorTest {
 
     @Test
     void withTheStoreOffNothingIsCaptured() {
-      when(learnings.promptSection(anyLong(), anyString(), anyString(), any())).thenReturn("");
+      when(learnings.recall(anyLong(), anyString(), anyString(), any()))
+          .thenReturn(ReviewLearnings.Recall.EMPTY);
 
       runReview(javaFile());
 

@@ -1048,6 +1048,21 @@ describe a learning in plain words when the diff breaks it; a learning id that
 reaches review text anyway is rewritten to "a maintainer's earlier decision".
 The verifier and the summary call do not see learnings.
 
+A deterministic check also recognizes one explicit policy: a selected active
+decline saying "We don't pin images by digest in Dockerfiles" (or "We do not")
+as its complete text, or followed by "the release pipeline resolves every image
+to a digest at deploy time", optionally with "and the deployed manifest carries
+that digest". Qualifiers, incomplete text and other rationales are left to the
+model. A low-risk mutable-reference finding on that
+file type, anchored on a `FROM` or external `COPY --from=` image it names, stays
+visible under **Things to double-check** with a note naming the learning id.
+The check uses the exact bounded selection sent to the review call. A disabled
+feature, a decision outside those caps, another defect class or file type,
+an unknown premise, an applicable current digest requirement, or independent
+failure or security evidence leaves the finding alone. Linked-issue evidence
+can still raise its confidence afterward. Deterministic scan findings skip this
+check. Other policies continue to rely on the model's assessment.
+
 **Governance.** `/learnings` lists active learnings with their ids, what each is
 about, who taught it and a link to the source comment. `/forget <id>` retracts
 one at once; the row is kept with who retracted it and when. The dashboard

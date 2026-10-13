@@ -59,7 +59,7 @@ same diff.
 | Load diff, every earlier round (from the stored `ReviewSession.aiResponseJson`), threads and conversation, instructions, labels, project stack, config-key and patch-coverage context | `review/ReviewContextLoader` (with `PatchCoverageResolver`, `ConfigKeyContextResolver`, `BugFixContextResolver`, `SupersededFindingsCarryover`) |
 | Previous-findings prompt section: the numbered effective round, then the unnumbered "still open from earlier rounds" and "answered in earlier rounds" sections | `review/FollowUpAnalyzer.buildPreviousFindingsContext` (with `effectivePreviousRoundIndex`, `openEarlierRoundFindings`) |
 | Early CI reading and the opt-in CI-failure section | `review/CiStatusEvaluator`, `review/CiFailureContextResolver` |
-| Opt-in review learnings: recall before the call (ranked, capped section) | `review/ReviewLearnings.promptSection` (reads `ReviewLearningService.listActive`) |
+| Opt-in review learnings: recall before the call (ranked, capped section and typed selection) | `review/ReviewLearnings.recall` (reads `ReviewLearningService.listActive` once) |
 | Opt-in linked-issue context: resolve the PR's linked issues, read them, extract acceptance criteria, sanitize and cap | `review/TicketContextResolver.resolve` over an `review/IssueTrackerProvider` (`review/GitHubIssuesProvider.linkedTickets`: PR-body closing keywords, then `closingIssuesReferences`, then optionally the branch name), called from `ReviewOrchestrator` and handed to `ReviewPromptAssembler.assemble(ctx, req, ciFailures, linkedIssues)` |
 | Fence untrusted input, build review and summary guidance, pick the system prompt | `review/ReviewPromptAssembler` (with `PromptSections`, `PromptTemplateEscaper`, `ReviewDimensionRouter`) |
 | Token budget and batches | `review/DiffBudgetPlanner` (`plan`, `boundPreviousFindings`, `perCallInputBudget`) |
@@ -140,6 +140,19 @@ same diff.
   batches and the summary-only lane all pass through `FindingPipeline.finish` before the summary
   call and persistence. A filter that must hold for every published finding (the scan merge, the
   open-thread guard) goes there, not in `refine` or the batch path.
+- **A selected decline can demote only its supported policy class** (#1070).
+  `ReviewLearnings.recall` returns the same ranked, credential-screened and capped list for the
+  fenced prompt and `ReviewEvidence.selectedLearnings`; rows excluded by those caps cannot act on
+  findings. `DeclineLearningGuard` recognizes only the complete explicit decision not to pin images
+  by digest in Dockerfiles, alone or with the audited rationale that the release pipeline resolves
+  every image to a digest at deploy time (optionally also stating the deployed manifest carries it).
+  Qualifiers, incomplete text and other rationales abstain. It also requires a mutable-reference
+  finding on the same file type, and an actual
+  `FROM` or external `COPY --from=` image the finding names. The finding stays visible at low
+  confidence with its learning id. Unknown or conditional premises, other classes and file types,
+  current repository or applicable scoped digest requirements, and independent failure/security
+  evidence are left alone. The check runs in `finish`, after calibration and before linked-issue
+  evidence floors and the deterministic scan. Scan findings never pass through it.
 - **AI services are stateless.** Every `@RegisterAiService` sets
   `NoChatMemoryProviderSupplier`. Review state travels in the previous-findings section, never in
   chat history.

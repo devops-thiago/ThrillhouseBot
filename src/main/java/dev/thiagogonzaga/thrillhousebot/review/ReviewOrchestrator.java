@@ -331,13 +331,15 @@ public class ReviewOrchestrator {
       // #38: what maintainers taught the review on earlier pull requests, bounded and relevant to
       // the files this one changes; blank when the feature is off.
       var learned =
-          learnings.promptSection(
-              req.installationId(),
-              req.owner(),
-              req.repo(),
-              ctx.reviewableFiles().stream()
-                  .map(GitHubPullRequestClient.FileDiff::filename)
-                  .toList());
+          learnings.enabled()
+              ? learnings.recall(
+                  req.installationId(),
+                  req.owner(),
+                  req.repo(),
+                  ctx.reviewableFiles().stream()
+                      .map(GitHubPullRequestClient.FileDiff::filename)
+                      .toList())
+              : ReviewLearnings.Recall.EMPTY;
       // Bound the one prompt section that grows every round before anything is sized or sent, so
       // the plan's overhead estimate and the text the calls actually carry are the same (#583).
       var promptInputs =
@@ -345,7 +347,8 @@ public class ReviewOrchestrator {
               promptAssembler.assemble(
                   ctx,
                   req,
-                  new ReviewPromptAssembler.TrailingContext(ciFailures, linkedIssues, learned)));
+                  new ReviewPromptAssembler.TrailingContext(
+                      ciFailures, linkedIssues, learned.section())));
       var plan = budgetPlanner.plan(ctx.reviewableFiles(), promptInputs);
 
       if (ciFuture == null) {
@@ -357,13 +360,14 @@ public class ReviewOrchestrator {
       // files this pull request changes are ever read.
       var evidence =
           ReviewEvidence.forReview(
-              citedLocationResolver,
-              auth,
-              req.owner(),
-              req.repo(),
-              req.commitSha(),
-              ctx,
-              ciFailures);
+                  citedLocationResolver,
+                  auth,
+                  req.owner(),
+                  req.repo(),
+                  req.commitSha(),
+                  ctx,
+                  ciFailures)
+              .withLearnings(learned.selected());
       var aiResponse =
           findingPipeline.run(session, promptInputs, ctx, plan, lineResolver, evidence);
 
