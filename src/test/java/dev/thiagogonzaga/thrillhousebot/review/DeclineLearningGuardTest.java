@@ -304,6 +304,11 @@ class DeclineLearningGuardTest {
         "All `from` references must use digests.",
         "All COPY sources must use digests.",
         "All base images follow our supply-chain policy. They must be pinned by digest.",
+        "Dockerfile images are referenced by digest; tags are forbidden.",
+        "Base images use their sha256 digest, never tags.",
+        "Image references are digest-addressed.",
+        "`FROM` sources are identified by digest.",
+        "Image examples and digest details are listed below.",
         "The artifact digest must be recorded. Image examples belong in the README."
       })
   void currentRepositoryRequirementsOverrideTheLearning(String instructions) {
@@ -334,17 +339,20 @@ class DeclineLearningGuardTest {
             .confidence());
   }
 
-  @Test
-  void onlyApplicableCurrentScopedRequirementsOverrideItEvenWhenNotesDoNotFit() {
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "All images must be pinned by digest.",
+        "Dockerfile images are referenced by digest; tags are forbidden."
+      })
+  void onlyApplicableCurrentScopedRequirementsOverrideItEvenWhenNotesDoNotFit(String instructions) {
     var budget = new EvidenceBudget();
     for (var i = 0; i < 5; i++) assertNotNull(budget.attach("x".repeat(1200)));
     var scope =
         new PathScopedInstructions(
             List.of(
                 new PathScopedInstructions.AppliedScope(
-                    "**/Dockerfile",
-                    "All images must be pinned by digest.",
-                    List.of("b/Dockerfile"))),
+                    "**/Dockerfile", instructions, List.of("b/Dockerfile"))),
             ".github/thrillhousebot.yml");
     var context = ContextEvidenceResolver.forReview("", scope, budget);
     var raw = response();
@@ -353,8 +361,7 @@ class DeclineLearningGuardTest {
     var other = response("unrelated/Dockerfile", TITLE, DESCRIPTION);
     assertEquals(
         "low",
-        DeclineLearningGuard.apply(
-                other, selected(), (p, n) -> LINE, context, "A document discusses image digests.")
+        DeclineLearningGuard.apply(other, selected(), (p, n) -> LINE, context, "")
             .findings()
             .getFirst()
             .confidence());

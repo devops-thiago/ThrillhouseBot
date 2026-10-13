@@ -68,9 +68,6 @@ final class DeclineLearningGuard {
           " wrong result ",
           " will not start ",
           " wont start ");
-  private static final List<String> REQUIREMENTS =
-      List.of(
-          " must ", " require ", " required ", " shall ", " always ", " mandatory ", " enforce ");
   private static final List<String> IMAGE_WORDS = List.of(" image ", " images ");
   private static final List<String> IMAGE_REPRODUCTION =
       List.of(
@@ -149,14 +146,14 @@ final class DeclineLearningGuard {
 
   private static boolean requiresDigest(String instructions) {
     // Keep headings, wrapped demands and implicit references across sentences together. Ambiguous
-    // image requirements abstain; bare English "from" and "copy" do not establish that subject.
+    // image/digest context abstains even without an imperative keyword. Bare English "from" and
+    // "copy" do not establish that subject.
     var raw = Objects.toString(instructions, "");
     var text = SeverityCalibrator.normalized(raw);
     return (text.contains(" digest ")
             || text.contains(" digests ")
             || text.contains(" sha256 ")
             || text.contains(" sha 256 "))
-        && (text.contains(" pin ") || REQUIREMENTS.stream().anyMatch(text::contains))
         && (IMAGE_WORDS.stream().anyMatch(text::contains) || IMAGE_DIRECTIVES.matcher(raw).find());
   }
 

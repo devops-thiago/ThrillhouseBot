@@ -153,9 +153,10 @@ same diff.
   current repository or applicable scoped digest requirements, and independent failure/security
   evidence are left alone. Losing identical image contents on rebuild is that policy's own
   consequence; actual functional failures and failed-check evidence still abstain. Current digest
-  demands retain headings, wrapped lines and implicit references across sentences, with an image
-  subject or a case-sensitive/backticked `FROM` or `COPY` directive. Ordinary English "from" or
-  "copy" and artifact-only digest prose do not establish an image requirement; ambiguous image
+  context retains headings, wrapped lines and implicit references across sentences. Any image
+  subject or case-sensitive/backticked `FROM` or `COPY` directive together with digest/SHA wording
+  abstains, including declarative rules without a fixed requirement keyword. Ordinary English
+  "from" or "copy" and artifact-only digest prose do not establish an image requirement; ambiguous image
   requirements conservatively abstain.
   The check runs in `finish`, after calibration and before linked-issue
   evidence floors and the deterministic scan. Scan findings never pass through it.

@@ -1065,10 +1065,11 @@ check. Other policies continue to rely on the model's assessment.
 
 A rebuild losing identical image contents is the accepted policy's own
 consequence; a functional failure or a failed CI check still leaves the finding
-unchanged. Current digest requirements are checked with their image subject or
-Dockerfile directive, keeping wrapped lines, headings and implicit references
-across sentences together. Artifact-only digest prose and the ordinary words
-"from" and "copy" do not make an image-pinning requirement; ambiguous image
+unchanged. Current instructions mentioning an image subject or Dockerfile
+directive together with digest/SHA wording leave the finding unchanged, including
+declarative rules without a requirement keyword. Wrapped lines, headings and
+implicit references across sentences stay together. Artifact-only digest prose
+and the ordinary words "from" and "copy" do not make an image-pinning requirement; ambiguous image
 requirements leave the finding unchanged.
 
 **Governance.** `/learnings` lists active learnings with their ids, what each is
