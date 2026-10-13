@@ -211,9 +211,10 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   private static final Pattern TEST_PATH_SEPARATOR = Pattern.compile(" \u203A |::");
 
   /**
-   * The separator between a test's suites and its own name that Gradle and Vitest print, read only
-   * on a line Gradle's status ends or Vitest's {@link #VITEST_MARK} opens: elsewhere " > " is a
-   * test name's own comparison ("expects 1 > 0").
+   * The separator between a test's suites and its own name that Gradle and Vitest print. Gradle's
+   * is cut only on a line its status ends: elsewhere " > " is a test name's own comparison
+   * ("expects 1 > 0"). Vitest's is kept, and each name after one is a phrase the test is cited by
+   * ({@link #phrasesOf}), since only the finding shows where the suites end.
    */
   private static final String GRADLE_SEPARATOR = " > ";
 
@@ -232,17 +233,18 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   private static final Pattern LINE_POSITION = Pattern.compile(":\\d");
 
   /**
-   * A failing test the job log names: its name as read, and as the padded words a phrase-shaped
-   * name is matched on. A name written as one identifier ({@code test_validates_the_input}, {@code
+   * A failing test the job log names: its name as read, and the padded words of each phrase a
+   * phrase-shaped name is matched on: the name, and for a Vitest path each distinctive tail of it.
+   * A name written as one identifier ({@code test_validates_the_input}, {@code
    * topCandidatesReturnsAtMostLimit}) is matched only as that identifier, a whole token of the
    * finding's lower-cased text: its words are ordinary prose ("validates the input"), which a
    * finding about something else can say.
    */
-  private record FailingTest(String name, String words) {
+  private record FailingTest(String name, List<String> phrases) {
 
     boolean namedIn(String raw, String text) {
       if (name.indexOf(' ') >= 0) {
-        return text.contains(words);
+        return phrases.stream().anyMatch(text::contains);
       }
       String identifier = name.toLowerCase(Locale.ROOT);
       for (int at = raw.indexOf(identifier); at >= 0; at = raw.indexOf(identifier, at + 1)) {
@@ -352,10 +354,31 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     for (String line : lines) {
       String name = testName(line);
       if (name != null && distinctive(name) && seen.add(normalized(name))) {
-        tests.add(new FailingTest(name, normalized(name)));
+        tests.add(new FailingTest(name, phrasesOf(name, line.strip().startsWith(VITEST_MARK))));
       }
     }
     return List.copyOf(tests);
+  }
+
+  /**
+   * The padded words a test's name is cited by: the whole name, and on a Vitest line also each
+   * distinctive tail after a " > " (#1091). Vitest prints "timers > skips the run when count >
+   * limit", and only a finding's own words show whether "count > limit" ends a suite path or is the
+   * name's comparison: a finding naming "skips the run when count > limit" cites it, while the bare
+   * "limit" is too common to.
+   */
+  private static List<String> phrasesOf(String name, boolean vitest) {
+    var phrases = new ArrayList<String>();
+    phrases.add(normalized(name));
+    for (int at = name.indexOf(GRADLE_SEPARATOR);
+        vitest && at >= 0;
+        at = name.indexOf(GRADLE_SEPARATOR, at + 1)) {
+      String tail = name.substring(at + GRADLE_SEPARATOR.length());
+      if (distinctive(tail)) {
+        phrases.add(normalized(tail));
+      }
+    }
+    return List.copyOf(phrases);
   }
 
   /**
@@ -379,11 +402,10 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       return null;
     }
     boolean maven = s.startsWith(MAVEN_ERROR);
-    boolean vitest = s.startsWith(VITEST_MARK);
     s = cutAtTails(withoutLead(s));
     boolean gradle = s.endsWith(FAILED_STATUS);
     s = withoutTail(gradle ? s.substring(0, s.length() - FAILED_STATUS.length()) : s);
-    if ((gradle || vitest) && s.contains(GRADLE_SEPARATOR)) {
+    if (gradle && s.contains(GRADLE_SEPARATOR)) {
       s = s.substring(s.lastIndexOf(GRADLE_SEPARATOR) + GRADLE_SEPARATOR.length());
     }
     var segments = TEST_PATH_SEPARATOR.split(s);

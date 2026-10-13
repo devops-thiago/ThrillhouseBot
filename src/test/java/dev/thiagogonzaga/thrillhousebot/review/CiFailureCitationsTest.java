@@ -448,8 +448,8 @@ class CiFailureCitationsTest {
           [ERROR] cowork.InvoiceTest.v1.2 is inclusive -- Time elapsed: 0.05 s <<< FAILURE! | v1.2 is inclusive
           [ERROR] cowork.FooTest$Nested.a.b is parsed -- Time elapsed: 0.05 s <<< FAILURE! | a.b is parsed
           [ERROR] cowork.fooTest.a single day -- Time elapsed: 0.05 s <<< FAILURE! | cowork.fooTest.a single day
-          \u00D7 capacity > marks a shift full when signups reach capacity 6ms | marks a shift full when signups reach capacity
-          \u00D7 recall rules > schedules one reminder per attempt, starting when the lead window opens 8ms | schedules one reminder per attempt, starting when the lead window opens
+          \u00D7 capacity > marks a shift full when signups reach capacity 6ms | capacity > marks a shift full when signups reach capacity
+          \u00D7 recall rules > schedules one reminder per attempt, starting when the lead window opens 8ms | recall rules > schedules one reminder per attempt, starting when the lead window opens
           \u00D7 retries the upload 0.01s | retries the upload
           \u2716 accepts a team of exactly maxTeamSize members (0.320076ms) | accepts a team of exactly maxTeamSize members
           error: 'tests.test.compact counts every reading in the window' failed: expected 3, found 2 | compact counts every reading in the window
@@ -708,12 +708,13 @@ class CiFailureCitationsTest {
 
   /**
    * react ThrillhouseBot-test#273 and angular #275: Vitest prints the suite path and the duration
-   * around the test's name, and both stayed in it. Neither round-18 finding names its test (the
-   * angular one, 4253711454, quotes the spec's assertions), so the sentence states the failure; a
-   * finding naming the test explains it (#1091).
+   * around the test's name, and the duration stayed in it, so no finding could name it. Neither
+   * round-18 finding names its test (the angular one, 4253711454, quotes the spec's assertions), so
+   * the sentence states the failure; a finding naming the test without its suite explains it
+   * (#1091).
    */
   @Test
-  void aVitestTestIsNamedWithoutItsSuitesAndDuration() {
+  void aVitestTestIsNamedWithoutItsDurationAndCitedWithoutItsSuite() {
     var react =
         fromJobLog(
             """
@@ -754,14 +755,41 @@ class CiFailureCitationsTest {
             null);
 
     assertEquals(
-        "CI on this commit fails the check \"test\" (failing test \"schedules one reminder per"
-            + " attempt, starting when the lead window opens\").",
+        "CI on this commit fails the check \"test\" (failing test \"recall rules > schedules one"
+            + " reminder per attempt, starting when the lead window opens\").",
         angular.overviewSentences(List.of(angularFinding)));
     assertEquals(
-        "CI on this commit fails the check \"test\" (failing test \"marks a shift full when signups"
-            + " reach capacity\"), which the finding \"isFull uses a strict greater-than"
-            + " comparison\" explains.",
+        "CI on this commit fails the check \"test\" (failing test \"capacity > marks a shift full"
+            + " when signups reach capacity\"), which the finding \"isFull uses a strict"
+            + " greater-than comparison\" explains.",
         react.overviewSentences(List.of(naming)));
+  }
+
+  /**
+   * A Vitest test whose own name holds " > " is cited by the whole name after its suite, and a tail
+   * too short to name a test cites nothing.
+   */
+  @Test
+  void aVitestNameHoldingAComparisonIsCitedWhole() {
+    var citations = fromJobLog("× timers > skips the run when count > limit 6ms\n");
+    var naming =
+        new Finding(
+            RiskLevel.HIGH,
+            "src/timers.ts",
+            9,
+            "Guard inverted",
+            "The test 'skips the run when count > limit' runs the job anyway.",
+            null,
+            null);
+    var tailOnly =
+        new Finding(RiskLevel.HIGH, "src/a.ts", 2, "Bound", "The limit is wrong.", null, null);
+
+    assertTrue(citations.overviewSentences(List.of(naming)).contains("explains"));
+    assertFalse(citations.overviewSentences(List.of(tailOnly)).contains("explains"));
+    assertEquals(
+        "CI on this commit fails the check \"test\" (failing test \"timers > skips the run when"
+            + " count > limit\").",
+        citations.overviewSentences(List.of()));
   }
 
   /**
