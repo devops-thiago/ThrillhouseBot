@@ -68,7 +68,15 @@ final class DeclineLearningGuard {
           " wrong result ",
           " will not start ",
           " wont start ");
-  private static final List<String> IMAGE_WORDS = List.of(" image ", " images ");
+  private static final List<String> IMAGE_WORDS =
+      List.of(
+          " image ",
+          " images ",
+          " container ",
+          " containers ",
+          " dockerfile ",
+          " dockerfiles ",
+          " base ");
   private static final List<String> IMAGE_REPRODUCTION =
       List.of(
           " fails to reproduce identical image contents ",
@@ -140,7 +148,7 @@ final class DeclineLearningGuard {
         || !namesAnchoredImage(claim, lineText.apply(finding.file(), finding.line()))
         || requiresDigest(repoInstructions)
         || context.scopeInstructions(finding.file()).stream()
-            .anyMatch(DeclineLearningGuard::requiresDigest)) return null;
+            .anyMatch(DeclineLearningGuard::mentionsDigest)) return null;
     return selected.stream().filter(learning -> covers(learning, finding)).findFirst().orElse(null);
   }
 
@@ -150,11 +158,18 @@ final class DeclineLearningGuard {
     // "copy" do not establish that subject.
     var raw = Objects.toString(instructions, "");
     var text = SeverityCalibrator.normalized(raw);
-    return (text.contains(" digest ")
-            || text.contains(" digests ")
-            || text.contains(" sha256 ")
-            || text.contains(" sha 256 "))
+    return mentionsDigest(raw)
         && (IMAGE_WORDS.stream().anyMatch(text::contains) || IMAGE_DIRECTIVES.matcher(raw).find());
+  }
+
+  /** Applicable Dockerfile-scoped instructions already supply the subject. */
+  private static boolean mentionsDigest(String instructions) {
+    var text = SeverityCalibrator.normalized(Objects.toString(instructions, ""));
+    return text.contains(" digest ")
+        || text.contains(" digests ")
+        || text.contains(" sha256 ")
+        || text.contains(" sha 256 ")
+        || text.contains(" sha ");
   }
 
   private static boolean hasIndependentFailure(String claim) {

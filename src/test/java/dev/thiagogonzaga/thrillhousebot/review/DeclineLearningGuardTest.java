@@ -296,6 +296,10 @@ class DeclineLearningGuardTest {
       strings = {
         "All images must be pinned by digest.",
         "Images shall use SHA256 references.",
+        "Images use SHA references.",
+        "Always reference the base by sha.",
+        "Container sources use SHA references.",
+        "Dockerfile references use digests.",
         "All FROM references must use SHA-256.",
         "Pin images by digest.",
         "# Dockerfile rules\nPin images by digest.",
@@ -343,7 +347,11 @@ class DeclineLearningGuardTest {
   @ValueSource(
       strings = {
         "All images must be pinned by digest.",
-        "Dockerfile images are referenced by digest; tags are forbidden."
+        "Dockerfile images are referenced by digest; tags are forbidden.",
+        "References must be digest-pinned.",
+        "Always digest-pin every reference.",
+        "References use SHA-256.",
+        "Always reference the base by sha."
       })
   void onlyApplicableCurrentScopedRequirementsOverrideItEvenWhenNotesDoNotFit(String instructions) {
     var budget = new EvidenceBudget();
@@ -423,6 +431,26 @@ class DeclineLearningGuardTest {
     assertEquals(
         "low",
         DeclineLearningGuard.apply(raw, selected(), (p, n) -> LINE, ambiguous, "")
+            .findings()
+            .getFirst()
+            .confidence());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"Use four spaces.", "An artifact copy comes from build output.", ""})
+  void applicableScopedRulesWithoutDigestContextStillAllowTheLearning(String instructions) {
+    var context =
+        ContextEvidenceResolver.forReview(
+            "",
+            new PathScopedInstructions(
+                List.of(
+                    new PathScopedInstructions.AppliedScope(
+                        "**/Dockerfile", instructions, List.of("b/Dockerfile"))),
+                "config"),
+            new EvidenceBudget());
+    assertEquals(
+        "low",
+        DeclineLearningGuard.apply(response(), selected(), (p, n) -> LINE, context, "")
             .findings()
             .getFirst()
             .confidence());

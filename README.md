@@ -1065,12 +1065,15 @@ check. Other policies continue to rely on the model's assessment.
 
 A rebuild losing identical image contents is the accepted policy's own
 consequence; a functional failure or a failed CI check still leaves the finding
-unchanged. Current instructions mentioning an image subject or Dockerfile
-directive together with digest/SHA wording leave the finding unchanged, including
+unchanged. Current instructions mentioning an image, container, Dockerfile or
+base subject, or a Dockerfile directive together with digest/SHA wording leave the
+finding unchanged, including
 declarative rules without a requirement keyword. Wrapped lines, headings and
-implicit references across sentences stay together. Artifact-only digest prose
-and the ordinary words "from" and "copy" do not make an image-pinning requirement; ambiguous image
-requirements leave the finding unchanged.
+implicit references across sentences stay together. A Dockerfile-scoped rule
+already supplies the subject, so digest/SHA wording in an applicable scoped rule
+also leaves the finding unchanged. Global artifact-only digest prose and the
+ordinary words "from" and "copy" do not make an image-pinning requirement;
+ambiguous image requirements leave the finding unchanged.
 
 **Governance.** `/learnings` lists active learnings with their ids, what each is
 about, who taught it and a link to the source comment. `/forget <id>` retracts

@@ -154,10 +154,12 @@ same diff.
   evidence are left alone. Losing identical image contents on rebuild is that policy's own
   consequence; actual functional failures and failed-check evidence still abstain. Current digest
   context retains headings, wrapped lines and implicit references across sentences. Any image
-  subject or case-sensitive/backticked `FROM` or `COPY` directive together with digest/SHA wording
-  abstains, including declarative rules without a fixed requirement keyword. Ordinary English
-  "from" or "copy" and artifact-only digest prose do not establish an image requirement; ambiguous image
-  requirements conservatively abstain.
+  subject (image, container, Dockerfile or base) or case-sensitive/backticked `FROM` or `COPY`
+  directive together with digest/SHA wording abstains, including declarative rules without a fixed
+  requirement keyword. An applicable
+  Dockerfile-scoped rule already supplies the subject, so digest/SHA wording there also abstains.
+  Ordinary English "from" or "copy" and global artifact-only digest prose do not establish an image
+  requirement; ambiguous image requirements conservatively abstain.
   The check runs in `finish`, after calibration and before linked-issue
   evidence floors and the deterministic scan. Scan findings never pass through it.
 - **AI services are stateless.** Every `@RegisterAiService` sets
