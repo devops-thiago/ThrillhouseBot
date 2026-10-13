@@ -310,22 +310,23 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
      */
     private boolean atLineStart(int i) {
       var k = skipContainerBack(i);
-      var indent = indentBefore(i);
       if (k == 0 || body.charAt(k - 1) == '\n') {
         // Only blanks and blockquote markers lie between k and i, so a marker there quotes the
         // line.
         var quoted = body.substring(k, i).indexOf('>') >= 0;
-        return indent <= (quoted ? 4 : 3);
+        return indentBefore(i) <= (quoted ? 4 : 3);
       }
-      if (k == i || indent > 4) {
-        return false; // a list marker needs a blank, and no more than four, before the fence
+      if (k == i) {
+        return false; // a list marker needs a blank before the fence
       }
       var marker = listMarkerStart(k - 1);
       if (marker < 0) {
         return false;
       }
       var before = skipContainerBack(marker);
-      return before == 0 || body.charAt(before - 1) == '\n';
+      // Establish a container-only prefix before scanning its columns, so an inline run never
+      // rereads the whole line just to measure the blanks directly before it.
+      return (before == 0 || body.charAt(before - 1) == '\n') && indentBefore(i) <= 4;
     }
 
     /**
@@ -348,13 +349,21 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
       return digits == last ? -1 : digits;
     }
 
-    /** The columns of blanks right before {@code i}, a tab counting four. */
+    /** The width of the blanks right before {@code i}, at absolute four-column tab stops. */
     private int indentBefore(int i) {
       var columns = 0;
-      for (var k = i; k > 0 && (body.charAt(k - 1) == ' ' || body.charAt(k - 1) == '\t'); k--) {
-        columns += body.charAt(k - 1) == '\t' ? 4 : 1;
+      var indent = 0;
+      for (var k = body.lastIndexOf('\n', i - 1) + 1; k < i; k++) {
+        var c = body.charAt(k);
+        var next = columnAfter(columns, c);
+        indent = c == ' ' || c == '\t' ? indent + next - columns : 0;
+        columns = next;
       }
-      return columns;
+      return indent;
+    }
+
+    private static int columnAfter(int columns, char c) {
+      return columns + (c == '\t' ? 4 - columns % 4 : 1);
     }
 
     private static boolean isAsciiDigit(char c) {
@@ -413,20 +422,22 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
     /** A closer has at most three indented columns inside its list or blockquote container. */
     private boolean closingIndentFits(int lineStart, int marker, int containerIndent) {
       var columns = 0;
+      var contentStart = 0;
       var quoted = false;
       for (var i = lineStart; i < marker; i++) {
         var c = body.charAt(i);
         if (c == '>') {
-          if (columns > 3 + containerIndent + (quoted ? 1 : 0)) {
+          if (columns - contentStart > 3 + containerIndent + (quoted ? 1 : 0)) {
             return false;
           }
-          columns = 0;
+          // A quote resets relative indentation, but a later tab still uses the original line's
+          // column. One optional blank following the quote remains part of its delimiter.
+          contentStart = columns + 1;
           quoted = true;
-        } else {
-          columns += c == '\t' ? 4 : 1;
         }
+        columns = columnAfter(columns, c);
       }
-      return columns <= 3 + containerIndent + (quoted ? 1 : 0);
+      return columns - contentStart <= 3 + containerIndent + (quoted ? 1 : 0);
     }
 
     /**

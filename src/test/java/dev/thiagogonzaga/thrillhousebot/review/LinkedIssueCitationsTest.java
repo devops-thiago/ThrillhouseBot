@@ -23,8 +23,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
@@ -287,40 +290,32 @@ class LinkedIssueCitationsTest {
         citations.stream().map(LinkedIssueCitations.Citation::verdict).toList());
   }
 
-  @Test
-  void aQuoteOpenerInsideAnAlreadyCompletedQuoteDoesNotResetTheSourceLater() {
-    var description =
-        "The comment reads \"'Annual-plan subscribers\" and other prose' and the acceptance criterion for annual-plan subscribers renewal month is missing.";
+  @ParameterizedTest
+  @MethodSource("retainedScopedCitations")
+  void retainedScopedCitationsKeepTheirDescriptionAndConfidenceFloor(
+      String description, String title) {
     var held =
         only(
             LinkedIssueCitations.apply(
-                responseOf(finding("low", "low", "Independent bug", description)), TWO_ISSUES));
+                responseOf(finding("low", "low", title, description)), TWO_ISSUES));
     assertEquals(description, held.description());
     assertEquals("medium", held.confidence());
   }
 
-  @Test
-  void aPrefixOnlySentenceMarkIsLocalToItsCue() {
-    var description =
-        "Issue #231 is mentioned.acceptance criterion for annual-plan subscribers renewal month is missing, and the acceptance criterion for negative litre readings is missing.";
-    var held =
-        only(
-            LinkedIssueCitations.apply(
-                responseOf(finding("low", "low", "Independent bug", description)), TWO_ISSUES));
-    assertEquals(description, held.description());
-    assertEquals("medium", held.confidence());
-  }
-
-  @Test
-  void aCompleteCriterionQuoteBeforeALineBreakRemainsEvidence() {
-    var description =
-        "The linked issue #228 states 'Annual-plan subscribers are charged only in their renewal month'.\nThe code charges every month.";
-    var held =
-        only(
-            LinkedIssueCitations.apply(
-                responseOf(finding("low", "low", "Independent bug", description)), TWO_ISSUES));
-    assertEquals(description, held.description());
-    assertEquals("medium", held.confidence());
+  static Stream<Arguments> retainedScopedCitations() {
+    return Stream.of(
+        Arguments.of(
+            "The comment reads \"'Annual-plan subscribers\" and other prose' and the acceptance criterion for annual-plan subscribers renewal month is missing.",
+            "Independent bug"),
+        Arguments.of(
+            "Issue #231 is mentioned.acceptance criterion for annual-plan subscribers renewal month is missing, and the acceptance criterion for negative litre readings is missing.",
+            "Independent bug"),
+        Arguments.of(
+            "The linked issue #228 states 'Annual-plan subscribers are charged only in their renewal month'.\nThe code charges every month.",
+            "Independent bug"),
+        Arguments.of(
+            "Nothing implements issues #228 and #231's 'Readings with a negative litre value are rejected with reason `negative`'.",
+            "Negative readings accepted"));
   }
 
   /** Every regex read is counted; subsequences share the same counter. No wall-clock assertion. */
@@ -867,19 +862,6 @@ class LinkedIssueCitationsTest {
                 "Issue #228's acceptance criterion for rejecting negative litre readings is unmet",
                 "The validator never checks the sign."));
     assertTrue(LinkedIssueCitations.apply(response, TWO_ISSUES).findings().isEmpty());
-  }
-
-  @Test
-  void pluralAttributionsReadBothNamedIssues() {
-    var description =
-        "Nothing implements issues #228 and #231's 'Readings with a negative litre value are rejected with reason `negative`'.";
-    var held =
-        only(
-            LinkedIssueCitations.apply(
-                responseOf(finding("low", "low", "Negative readings accepted", description)),
-                TWO_ISSUES));
-    assertEquals(description, held.description());
-    assertEquals("medium", held.confidence());
   }
 
   @Test

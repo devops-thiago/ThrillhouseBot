@@ -37,9 +37,13 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubGraphQLClient;
 import jakarta.ws.rs.WebApplicationException;
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 
 class GitHubIssuesProviderTest {
@@ -326,6 +330,64 @@ class GitHubIssuesProviderTest {
         var body = pair.getFirst() + "\n" + pair.getLast() + "\nCloses #1\n~~~\nFixes #2";
         assertEquals(List.of(2), GitHubIssuesProvider.bodyReferences(body, "o", "r"), body);
       }
+    }
+
+    @Test
+    void aTabIndentedQuoteCloserLeavesTheLaterClosingReferenceVisible() {
+      // GitHub's GFM renderer leaves #17 outside the quote, then opens a new fence before #2.
+      assertEquals(
+          List.of(17),
+          GitHubIssuesProvider.bodyReferences(
+              "> ~~~\n> \t~~~\nCloses #17\n~~~\nFixes #2", "o", "r"));
+      assertEquals(
+          List.of(17, 2),
+          GitHubIssuesProvider.bodyReferences("> ~~~\n> \t~~~\nCloses #17\nFixes #2", "o", "r"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("tabIndentedFences")
+    void tabsAdvanceToColumnStopsInFenceContainers(String opener, String closer) {
+      var body = opener + "\nCloses #1\n" + closer + "\nFixes #2";
+      assertEquals(List.of(2), GitHubIssuesProvider.bodyReferences(body, "o", "r"), body);
+    }
+
+    static Stream<Arguments> tabIndentedFences() {
+      return Stream.of(
+          Arguments.of("> ~~~", ">\t~~~"),
+          Arguments.of("> ~~~", "> \t~~~"),
+          Arguments.of("> ~~~", ">  \t~~~"),
+          Arguments.of("> ~~~", "> \t ~~~"),
+          Arguments.of("> ~~~", "  >\t~~~"),
+          Arguments.of("> > ~~~", "> >\t~~~"),
+          Arguments.of("> > ~~~", "> \t>\t~~~"),
+          Arguments.of("> \t~~~", "> ~~~"),
+          Arguments.of("  >\t~~~", "> ~~~"),
+          Arguments.of("-\t~~~", "\t~~~"),
+          Arguments.of("-\t~~~", "       ~~~"),
+          Arguments.of("12.\t~~~", "       ~~~"),
+          Arguments.of(" -\t~~~", " \t~~~"),
+          Arguments.of("1.\t~~~", "\t~~~"),
+          Arguments.of("> -\t~~~", "> \t~~~"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("overIndentedTabClosers")
+    void tabStopsKeepOverIndentedFenceClosersAsCode(String opener, String closer) {
+      var body = opener + "\n" + closer + "\nCloses #1\n~~~\nFixes #2";
+      assertEquals(List.of(2), GitHubIssuesProvider.bodyReferences(body, "o", "r"), body);
+    }
+
+    static Stream<Arguments> overIndentedTabClosers() {
+      return Stream.of(
+          Arguments.of("~~~", "\t~~~"),
+          Arguments.of("~~~", " \t~~~"),
+          Arguments.of("> ~~~", ">\t\t~~~"),
+          Arguments.of("> ~~~", ">   \t~~~"),
+          Arguments.of("> ~~~", ">    \t~~~"),
+          Arguments.of("> ~~~", "> \t  ~~~"),
+          Arguments.of("- ~~~", "\t\t~~~"),
+          Arguments.of("-\t~~~", "        ~~~"),
+          Arguments.of("12.\t~~~", "        ~~~"));
     }
 
     @Test

@@ -437,7 +437,9 @@ live `fence(...)` (#604).
   `escape` / `neutralizeMarkers` only rewrite legacy markers. They are not an injection defense.
 - **Linked issues are read, never written, and their text is untrusted.** An
   `IssueTrackerProvider` only reads: no comment, label or state change on the issue, ever
-  (`GitHubIssuesProviderTest.onlyReadsNeverWrites`). Only issues of the PR's own repository are
+  (`GitHubIssuesProviderTest.onlyReadsNeverWrites`). PR-body fence indentation uses absolute
+  four-column tab stops, including list padding and blockquote delimiters; only the indentation
+  comparison resets after a quote marker (#1032). Only issues of the PR's own repository are
   read. Issue title and body are attacker-editable, so `TicketContextResolver` strips them with
   `CiFailureContextResolver.clean`, clips them and caps the section, and the assembler fences it
   in both calls. An acceptance criterion the change does not address is a summary
