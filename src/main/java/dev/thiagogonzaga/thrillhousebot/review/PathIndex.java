@@ -55,12 +55,28 @@ final class PathIndex<T> {
     return index;
   }
 
-  private void add(String path, String key, T item) {
+  void add(String path, String key, T item) {
     var entry = new Entry<>(added++, item);
     exact.computeIfAbsent(compound(path, key), unused -> new ArrayList<>()).add(entry);
     for (var suffix : properSuffixes(path)) {
       bySuffix.computeIfAbsent(compound(suffix, key), unused -> new ArrayList<>()).add(entry);
     }
+  }
+
+  /** Whether a matching item exists, without collecting or sorting the matching group. */
+  boolean contains(String path, String key) {
+    if (path == null) {
+      return false;
+    }
+    if (exact.containsKey(compound(path, key))) {
+      return true;
+    }
+    for (var suffix : properSuffixes(path)) {
+      if (exact.containsKey(compound(suffix, key))) {
+        return true;
+      }
+    }
+    return path.indexOf('/') >= 0 && bySuffix.containsKey(compound(path, key));
   }
 
   /**

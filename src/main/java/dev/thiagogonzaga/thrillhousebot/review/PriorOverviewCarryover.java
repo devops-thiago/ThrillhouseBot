@@ -18,9 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -135,21 +133,19 @@ final class PriorOverviewCarryover {
 
   /**
    * The paths a file list already summarizes, matched as {@link FilePaths#same} matches them (one
-   * path a suffix of the other at a directory boundary), indexed by file name so a lookup weighs
-   * only the paths that could match rather than the whole list.
+   * path a suffix of the other at a directory boundary), indexed by exact path and directory suffix
+   * so even distinct files sharing a name need no pairwise comparisons.
    */
   private static final class CoveredPaths {
 
-    private final Map<String, List<String>> byFileName = new HashMap<>();
+    private final PathIndex<String> paths = new PathIndex<>();
 
     /** Records {@code path}; {@code false} when a path it is the same as is already recorded. */
     boolean add(String path) {
-      var name = path.substring(path.lastIndexOf('/') + 1);
-      var same = byFileName.computeIfAbsent(name, k -> new ArrayList<>());
-      if (same.stream().anyMatch(p -> FilePaths.same(p, path))) {
+      if (paths.contains(path, "")) {
         return false;
       }
-      same.add(path);
+      paths.add(path, "", path);
       return true;
     }
   }
