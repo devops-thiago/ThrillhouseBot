@@ -377,13 +377,7 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
      * the end of the body when no line closes it.
      */
     private int fenceEnd(char c, int width, int from) {
-      var opener = from - width;
-      var markerEnd = skipContainerBack(opener);
-      var markerStart = markerEnd > 0 ? listMarkerStart(markerEnd - 1) : -1;
-      var containerIndent =
-          markerStart < 0
-              ? 0
-              : markerEnd - markerStart + indentBefore(opener) + indentBefore(markerStart);
+      var containerIndent = fenceContainerIndent(from - width);
       var newline = body.indexOf('\n', from);
       while (newline >= 0) {
         var j = newline + 1;
@@ -405,6 +399,15 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
         newline = body.indexOf('\n', trail);
       }
       return body.length();
+    }
+
+    /** Indentation consumed by the list marker and its surrounding blanks on the opener. */
+    private int fenceContainerIndent(int opener) {
+      var markerEnd = skipContainerBack(opener);
+      var markerStart = markerEnd > 0 ? listMarkerStart(markerEnd - 1) : -1;
+      return markerStart < 0
+          ? 0
+          : markerEnd - markerStart + indentBefore(opener) + indentBefore(markerStart);
     }
 
     /** A closer has at most three indented columns inside its list or blockquote container. */

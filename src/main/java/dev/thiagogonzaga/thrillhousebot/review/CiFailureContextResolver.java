@@ -600,7 +600,7 @@ public class CiFailureContextResolver {
         && FAILING_TEST_LINES.stream().anyMatch(shape -> shape.test(line));
   }
 
-  /** TAP TODO/SKIP directives mark expected outcomes, not a test failure that explains the job. */
+  /** TAP expected-outcome directives do not name a test failure that explains the job. */
   static boolean isExpectedTapOutcome(String line) {
     return EXPECTED_TAP_OUTCOME.matcher(line).find();
   }
