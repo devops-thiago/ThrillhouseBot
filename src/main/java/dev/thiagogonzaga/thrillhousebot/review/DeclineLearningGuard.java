@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.function.BiFunction;
+import java.util.regex.Pattern;
 
 /**
  * A narrow, deterministic backstop for the accepted Dockerfile image-digest policy (#1070). Only an
@@ -70,8 +71,15 @@ final class DeclineLearningGuard {
   private static final List<String> REQUIREMENTS =
       List.of(
           " must ", " require ", " required ", " shall ", " always ", " mandatory ", " enforce ");
-  private static final List<String> IMAGE_WORDS =
-      List.of(" image ", " images ", " from ", " copy ");
+  private static final List<String> IMAGE_WORDS = List.of(" image ", " images ");
+  private static final List<String> IMAGE_REPRODUCTION =
+      List.of(
+          " fails to reproduce identical image contents ",
+          " fails to reproduce the identical image contents ",
+          " fail to reproduce identical image contents ",
+          " fail to reproduce the identical image contents ");
+  private static final Pattern IMAGE_DIRECTIVES =
+      Pattern.compile("\\b(?:FROM|COPY)\\b|(?i:`(?:from|copy)`)");
 
   static ReviewResponse apply(
       ReviewResponse response,
@@ -131,7 +139,7 @@ final class DeclineLearningGuard {
             Objects.toString(finding.title(), "")
                 + "\n"
                 + Objects.toString(finding.description(), ""));
-    if (INDEPENDENT_FAILURES.stream().anyMatch(claim::contains)
+    if (hasIndependentFailure(claim)
         || !namesAnchoredImage(claim, lineText.apply(finding.file(), finding.line()))
         || requiresDigest(repoInstructions)
         || context.scopeInstructions(finding.file()).stream()
@@ -140,13 +148,30 @@ final class DeclineLearningGuard {
   }
 
   private static boolean requiresDigest(String instructions) {
-    var text = SeverityCalibrator.normalized(Objects.toString(instructions, ""));
+    // Keep headings, wrapped demands and implicit references across sentences together. Ambiguous
+    // image requirements abstain; bare English "from" and "copy" do not establish that subject.
+    var raw = Objects.toString(instructions, "");
+    var text = SeverityCalibrator.normalized(raw);
     return (text.contains(" digest ")
             || text.contains(" digests ")
             || text.contains(" sha256 ")
             || text.contains(" sha 256 "))
         && (text.contains(" pin ") || REQUIREMENTS.stream().anyMatch(text::contains))
-        && IMAGE_WORDS.stream().anyMatch(text::contains);
+        && (IMAGE_WORDS.stream().anyMatch(text::contains) || IMAGE_DIRECTIVES.matcher(raw).find());
+  }
+
+  private static boolean hasIndependentFailure(String claim) {
+    var remainder = claim;
+    // Losing identical image contents on rebuild is the mutable-reference policy's own
+    // consequence. Functional output failures and every other failure clause stay independent.
+    if (claim.contains(" rebuild ")
+        || claim.contains(" rebuilds ")
+        || claim.contains(" rebuilding ")) {
+      for (var wording : IMAGE_REPRODUCTION) {
+        remainder = remainder.replace(wording, " ");
+      }
+    }
+    return INDEPENDENT_FAILURES.stream().anyMatch(remainder::contains);
   }
 
   private static boolean covers(

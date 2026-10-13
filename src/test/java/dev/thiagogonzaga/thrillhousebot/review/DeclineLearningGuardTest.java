@@ -243,6 +243,37 @@ class DeclineLearningGuardTest {
     assertSame(raw, apply(raw, selected(), LINE));
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "Rebuilding the python image fails to reproduce the identical image contents.",
+        "Rebuilding the python image fails to reproduce identical image contents.",
+        "Rebuilds of the python image fail to reproduce identical image contents.",
+        "A rebuild of the python image fails to reproduce identical image contents."
+      })
+  void imageContentReproducibilityIsTheAcceptedPolicyConsequence(String description) {
+    assertEquals(
+        "low",
+        apply(response("b/Dockerfile", TITLE, description), selected(), LINE)
+            .findings()
+            .getFirst()
+            .confidence());
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The python image fails to initialize the validator.",
+        "Rebuilding the python image fails to reproduce expected application output.",
+        "The python image fails to reproduce identical image contents.",
+        "The python image fails to authenticate to the registry.",
+        "Rebuilding the python image fails to reproduce identical image contents and the application fails to start."
+      })
+  void functionalFailuresRemainIndependentOfImageReproducibility(String description) {
+    var raw = response("b/Dockerfile", TITLE, description);
+    assertSame(raw, apply(raw, selected(), LINE));
+  }
+
   @Test
   void actualCiEvidenceOverridesTheLearning() {
     var raw =
@@ -267,7 +298,13 @@ class DeclineLearningGuardTest {
         "Images shall use SHA256 references.",
         "All FROM references must use SHA-256.",
         "Pin images by digest.",
-        "# Dockerfile rules\nPin images by digest."
+        "# Dockerfile rules\nPin images by digest.",
+        "# Dockerfile rules\nAll images must be pinned\nby digest.",
+        "Pin images\nby digest.",
+        "All `from` references must use digests.",
+        "All COPY sources must use digests.",
+        "All base images follow our supply-chain policy. They must be pinned by digest.",
+        "The artifact digest must be recorded. Image examples belong in the README."
       })
   void currentRepositoryRequirementsOverrideTheLearning(String instructions) {
     var raw = response();
@@ -275,6 +312,26 @@ class DeclineLearningGuardTest {
         raw,
         DeclineLearningGuard.apply(
             raw, selected(), (p, n) -> LINE, ContextEvidenceResolver.disabled(), instructions));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The changelog must record the sha256 digest of each artifact, and keep its summary copy short.",
+        "Record the artifact digest always from build output."
+      })
+  void artifactOnlyDigestProseDoesNotEstablishAnImageRequirement(String instructions) {
+    assertEquals(
+        "low",
+        DeclineLearningGuard.apply(
+                response(),
+                selected(),
+                (p, n) -> LINE,
+                ContextEvidenceResolver.disabled(),
+                instructions)
+            .findings()
+            .getFirst()
+            .confidence());
   }
 
   @Test

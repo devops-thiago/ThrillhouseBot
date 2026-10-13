@@ -151,7 +151,13 @@ same diff.
   `FROM` or external `COPY --from=` image the finding names. The finding stays visible at low
   confidence with its learning id. Unknown or conditional premises, other classes and file types,
   current repository or applicable scoped digest requirements, and independent failure/security
-  evidence are left alone. The check runs in `finish`, after calibration and before linked-issue
+  evidence are left alone. Losing identical image contents on rebuild is that policy's own
+  consequence; actual functional failures and failed-check evidence still abstain. Current digest
+  demands retain headings, wrapped lines and implicit references across sentences, with an image
+  subject or a case-sensitive/backticked `FROM` or `COPY` directive. Ordinary English "from" or
+  "copy" and artifact-only digest prose do not establish an image requirement; ambiguous image
+  requirements conservatively abstain.
+  The check runs in `finish`, after calibration and before linked-issue
   evidence floors and the deterministic scan. Scan findings never pass through it.
 - **AI services are stateless.** Every `@RegisterAiService` sets
   `NoChatMemoryProviderSupplier`. Review state travels in the previous-findings section, never in

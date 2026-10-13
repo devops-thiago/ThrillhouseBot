@@ -330,16 +330,7 @@ public class ReviewOrchestrator {
 
       // #38: what maintainers taught the review on earlier pull requests, bounded and relevant to
       // the files this one changes; blank when the feature is off.
-      var learned =
-          learnings.enabled()
-              ? learnings.recall(
-                  req.installationId(),
-                  req.owner(),
-                  req.repo(),
-                  ctx.reviewableFiles().stream()
-                      .map(GitHubPullRequestClient.FileDiff::filename)
-                      .toList())
-              : ReviewLearnings.Recall.EMPTY;
+      var learned = recallLearnings(req, ctx);
       // Bound the one prompt section that grows every round before anything is sized or sent, so
       // the plan's overhead estimate and the text the calls actually carry are the same (#583).
       var promptInputs =
@@ -526,6 +517,18 @@ public class ReviewOrchestrator {
       }
     }
     return resultSurfaced;
+  }
+
+  /** The exact bounded recall used by both the prompt and the deterministic decline check. */
+  private ReviewLearnings.Recall recallLearnings(
+      ReviewRequest req, ReviewContextLoader.ReviewContext ctx) {
+    return learnings.enabled()
+        ? learnings.recall(
+            req.installationId(),
+            req.owner(),
+            req.repo(),
+            ctx.reviewableFiles().stream().map(GitHubPullRequestClient.FileDiff::filename).toList())
+        : ReviewLearnings.Recall.EMPTY;
   }
 
   /**
