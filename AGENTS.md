@@ -121,6 +121,8 @@ same diff.
 - **Truncations state figures.** `ResponseCaps` resolves each lane's `ResponseCap`, and
   `TruncationReport` states the licensed cap, the setting that supplies it and the billed usage. It
   names the setting as the remedy only when the stop reached the cap (#895).
+- **Verifier evidence reads hunk code, not diff headers.** `+++` and `---` can begin added or
+  removed code inside a hunk; only the file headings outside it are excluded (#1103).
 - **Verification fails open.** Any verifier error, cut response or ceiling skip keeps the
   candidates. `FindingVerificationService.markUnscreened` caps them at medium confidence and
   appends the unverified note (#885), and `VerificationCoverage` discloses the round's coverage. Do
@@ -226,7 +228,9 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   other (shared phrase and 0.75 overlap); in any file, a key or symbol named by both titles plus
   another shared title word or defect class (#956); a subject that is only the class a file is
   named after (common prose) pairs only when one description also names a symbol of the other's
-  title; or a description citing the other's `file:line` and naming a symbol of its title. Two
+  title; or a description citing the other's `file:line` and naming a symbol of its title. A qualified
+  citation must match its directory too; a shared basename alone cannot bind another directory
+  (#1100). Two
   vetoes come first: titles naming different identifiers (`namesDifferentIdentifiers`), and titles
   naming disjoint defect classes (`classesConflict`: a race is not an off-by-one, #964). A key
   named only in a description, or common title words, are not identity (`DefectIdentityTest`).
@@ -239,6 +243,9 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   `SecurityScan.fingerprintKey`, #985; a decline under the unkeyed 0.7.0 marker still matches
   through `Detection.legacyFingerprint`). Each decline covers one detection
   (`DeclinedScanFindingAcrossRoundsTest`).
+- **Summary carry-over preserves every distinct path.** `PriorOverviewCarryover` uses
+  `PathIndex.contains` for coverage membership, preserving `FilePaths.same` directory-suffix
+  semantics without enumerating groups of same-named files (#1104).
 - **The summary comment is found by its marker every round** (`<!-- thrillhousebot:summary -->`,
   or the heading for summaries from before #868), never by an id held in memory, so a restart
   loses nothing. An unchanged body is not rewritten; a failed edit posts a new comment.

@@ -79,9 +79,9 @@ class CiFailureOverviewTest {
     assertEquals("Request changes.", applied.overallAssessment());
   }
 
-  /** No open finding cites the failure: the computed sentence says so. */
+  /** No open finding cites the failure: the computed sentence states it alone (#1091). */
   @Test
-  void anUncitedFailureSaysNoOpenFindingExplainsIt() {
+  void anUncitedFailureIsStatedAlone() {
     var unrelated =
         new Finding(RiskLevel.MEDIUM, "node/src/triage.ts", 18, "O(n^2) scan", "Slow.", null, null);
 
@@ -94,8 +94,35 @@ class CiFailureOverviewTest {
     assertEquals(
         "Introduces a new TypeScript service under node/ that pulls open grant applications. CI on"
             + " this commit fails the check \"test\" (failing test \"returns exactly `slots`"
-            + " applications when enough are eligible\"), which no open finding explains.",
+            + " applications when enough are eligible\").",
         applied.prPurpose());
+  }
+
+  /**
+   * A purpose that already holds the computed sentence, in either form, gets it once: the stated
+   * failure names no finding, so it is removed by its opening rather than as a verdict (#1091).
+   */
+  @Test
+  void applyingTwiceKeepsOneSentencePerCheck() {
+    var unrelated =
+        new Finding(RiskLevel.MEDIUM, "node/src/triage.ts", 18, "O(n^2) scan", "Slow.", null, null);
+    var citations = CiFailureCitations.parse(SECTION);
+
+    for (var open : List.of(List.of(SHORTLIST), List.of(unrelated))) {
+      var once =
+          CiFailureOverview.apply(summary("Request changes.", NODE_PURPOSE), citations, open);
+      var twice = CiFailureOverview.apply(once, citations, open);
+
+      assertEquals(once.prPurpose(), twice.prPurpose());
+    }
+    var stated =
+        "Adds a scheduler. CI on this commit fails the check \"test\" (failing test \"returns"
+            + " exactly `slots` applications when enough are eligible\").";
+    assertEquals(
+        "Adds a scheduler.",
+        CiFailureOverview.apply(
+                summary("Request changes.", stated), CiFailureCitations.NONE, List.of())
+            .prPurpose());
   }
 
   /**

@@ -410,4 +410,30 @@ class PriorOverviewCarryoverTest {
         current,
         PriorOverviewCarryover.fill(current, context(List.of(round(priorWithoutPurpose)), true)));
   }
+
+  @Test
+  void manySameNamedFilesKeepEveryDistinctPathAndPreferCurrentSummaries() {
+    var priorFiles = new java.util.ArrayList<ReviewResponse.FileSummary>();
+    var currentFiles = new java.util.ArrayList<ReviewResponse.FileSummary>();
+    for (int i = 0; i < 2000; i++) {
+      priorFiles.add(
+          new ReviewResponse.FileSummary("repo/service" + i + "/Main.java", "prior " + i));
+      if (i % 2 == 0) {
+        currentFiles.add(
+            new ReviewResponse.FileSummary("service" + i + "/Main.java", "current " + i));
+      }
+    }
+    var prior =
+        new ReviewResponse.Summary(
+            0, 0, 0, 0, 0, null, "Prior", List.of(), List.of(), priorFiles, null, List.of());
+    var current =
+        new ReviewResponse.Summary(
+            0, 0, 0, 0, 0, null, "Current", List.of(), List.of(), currentFiles, null, List.of());
+    var kept = PriorOverviewCarryover.fill(current, context(List.of(round(prior)), true));
+    var expected = new java.util.ArrayList<>(currentFiles);
+    for (int i = 1; i < 2000; i += 2) {
+      expected.add(priorFiles.get(i));
+    }
+    assertEquals(expected, kept.fileSummaries());
+  }
 }
