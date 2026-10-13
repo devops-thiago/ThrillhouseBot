@@ -825,7 +825,7 @@ IaC rules (high confidence):
 |---|---|---|---|
 | Admin port open to the internet | `.tf`, `.yaml`/`.yml`, `.json` | an ingress rule admitting `0.0.0.0/0` or `::/0` to port 22, 23, 3389, 5985 or 5986, to a range containing one, or to every protocol | high |
 | S3 bucket made public | `.tf`, `.yaml`/`.yml`, `.json` | a `public-read`/`public-read-write` ACL (`AccessControl: PublicRead…`), or a Block Public Access setting set to `false` | high |
-| IAM wildcard | `.tf`, `.yaml`/`.yml`, `.json` | `Action: "*"` with `Resource: "*"` in the same statement and no `Effect: Deny`; a `"*"` anywhere in a one-line list counts (up to 64 quoted elements before it, each at most 256 characters; a longer or wider list is not reported) | high |
+| IAM wildcard | `.tf`, `.yaml`/`.yml`, `.json` | `Action: "*"` with `Resource: "*"` in the same statement and no `Effect: Deny`; a `"*"` anywhere in a valid one-line list counts, with no element-count or element-width limit; scalar wildcards allow trailing Terraform `#`/`//` and whitespace-separated YAML `#` comments | high |
 | Privileged container | `.yaml`/`.yml`, `.json` | `privileged: true` (in YAML also `yes`, `on`, `y`, any case) | high |
 | Host namespace | `.yaml`/`.yml`, `.json` | `hostNetwork`, `hostPID` or `hostIPC` set to `true` (in YAML also `yes`, `on`, `y`) | high |
 | Final stage runs as root | Dockerfiles | `USER root` (or `0`) with no later `FROM` or `USER`, in a new file or in a last hunk that reaches the end of the file | medium |
@@ -846,16 +846,36 @@ six identical characters, and for assignments any value starting with `$` or
 written as a Windows `%VAR%` reference, a
 regular expression (a value holding `(?`, a character-class range such as
 `[A-Z0-9]` or an escape such as `\d`, with at least a quarter of its characters
-regex syntax), and sample text quoted inside another string that sits first on
-its line or after `(`, `[`, `{` or `,` (`"client_secret: 'abc…'",` in a test's
-list of inputs). An assignment in a command string (`sh -c 'API_KEY="…"'`) is
-still reported; one in a command string written as a list element
-(`["sh", "-c", "API_KEY='…'"]`) is not, since it reads exactly like sample
-text. To
+regex syntax), and sample text quoted inside another complete string, including
+the explicit prose leaders `before`, `text before` or `prefix` before the
+credential name in a raw list or a `List.of`, `Set.of`, `Arrays.asList` or
+`Stream.of` builder, and a string
+assigned to a fixture/sample/example-named variable
+(`String fixture = "prefix client_secret: 'abc…'";`). New sample forms require
+a bare key or one of those prose leaders and whitespace only after the
+assignment inside the string, and a standalone literal/factory or simple
+fixture/sample/example-named assignment or collection declaration. Unknown outer
+calls, other assignment targets, expressions and additional statements on the
+same line, including preceding comma-separated sibling entries, remain scanned;
+closing delimiters and further quoted inputs are
+allowed. Unknown prefixes and trailing command text
+stay scanned even with a sample-named variable. Other calls, including
+`Map.of` and `fixtures.add`, retain scanning for prefixed strings because
+their values can be executable command text. An assignment in a
+direct or assigned command string, or a prefixed execution call such as
+`Runtime.exec("export API_KEY='…'")`, is still reported. Bare command strings
+written as list elements can read exactly like samples, as before. Known
+token formats are reported wherever they appear. To
 accept a line, put `thrillhousebot:allow-secret` (or `thrillhousebot:allow-iac`)
 in a comment on that line or the line above; above is the only place a
 Dockerfile instruction can take one. JSON cannot hold a comment, so put such a
 JSON file in the skipped globs.
+
+IAM list elements use their file format: YAML ARN/URL slashes, non-whitespace
+`#` fragments, and quotes or parentheses inside plain scalars do not start
+comments or expressions. Nested or tagged stars do not prove a literal wildcard.
+Block-comment trivia belongs to Terraform, and an unclosed comment proves no
+wildcard.
 
 **The secret is never repeated.** A secret finding shows only the value's first
 characters and its length: the four-character provider prefix for a known
@@ -886,7 +906,20 @@ word that names that rule's defect (`root`, `privileged`,
 naming a neighbouring defect (`filesystem`, `read-only`, `writable`,
 `root-owned`, `subnet`). A title
 that only names a key (`PAYMENT_API_KEY is never read`) is a different defect
-and is kept.
+and is kept. Nearby detections are indexed by file and line, and distant
+secret duplicates are looked up by the identifiers their text names. An
+environment key aliases a secret only when its fallback expression reads that
+secret's simple identifier, or a comment directly above the declaration names
+the key. SQL/Lua `--` and HTML/XML/SVG `<!--` comments are recognized in
+those file types, along with `//`, `#`, `/*` and `*` comment lines. INI and
+systemd unit files accept `;`, including unit drop-in `.conf` files under
+`name.service.d/` or `service.d/` (and the other unit types); an arbitrary
+`.conf` extension does not establish this syntax. Properties files accept `!`.
+A complete standalone Python triple-quoted string (plain, raw or Unicode)
+may document the next declaration, with only whitespace or a trailing `#`
+comment after its closing delimiter. Assigned, concatenated or unclosed
+strings and Java operators do not supply aliases. A different call argument
+does not tie the key to the secret.
 
 **Grades.** Every scan finding is high confidence, so none carries the "verify
 before acting" note: a match settles whether the pattern is on the line. The

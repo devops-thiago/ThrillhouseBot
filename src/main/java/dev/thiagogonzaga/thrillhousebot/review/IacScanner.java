@@ -88,15 +88,6 @@ final class IacScanner {
               "\"?(?:BlockPublicAcls|BlockPublicPolicy|IgnorePublicAcls|RestrictPublicBuckets)"
                   + "\"?\\s*:\\s*[\"']?false\\b"));
 
-  /**
-   * One quoted element of a one-line list that is not the bare wildcard, so the run of elements
-   * before a wildcard can be taken possessively without swallowing it.
-   */
-  private static final String LIST_ELEMENT = "[\"'](?!\\*[\"'])[^\"'\\n]{0,256}+[\"']";
-
-  /** At most this many elements before the wildcard in a one-line list are read. */
-  private static final int MAX_LIST_ELEMENTS = 64;
-
   private static final Pattern WILDCARD_ACTION = wildcardSetting("actions?");
 
   private static final Pattern WILDCARD_RESOURCE = wildcardSetting("resources?");
@@ -143,20 +134,336 @@ final class IacScanner {
 
   private IacScanner() {}
 
-  /**
-   * A {@code key} set to the bare wildcard {@code "*"}, alone or as any element of a one-line list
-   * ({@code ["s3:GetObject", "*"]}, #983). Every run is bounded and possessive, and the elements
-   * before the wildcard exclude it, so a failed match gives nothing back and the scan stays linear.
-   */
+  /** The start of a wildcard setting; its value is read by a linear scan, not a repeated regex. */
   private static Pattern wildcardSetting(String key) {
-    return Pattern.compile(
-        "(?i)(?<![a-z])\"?"
-            + key
-            + "\"?\\s*+[=:]\\s*+(?:\\[\\s*+(?:"
-            + LIST_ELEMENT
-            + "\\s*+,\\s*+){0,"
-            + MAX_LIST_ELEMENTS
-            + "}+)?[\"']\\*[\"']\\s*+(?:[,}\\]]|$)");
+    return Pattern.compile("(?i)(?<![a-z])\"?" + key + "\"?\\s*+[=:]\\s*+");
+  }
+
+  private record WildcardValue(int end, boolean wildcard) {}
+
+  /**
+   * A bare quoted wildcard, alone or anywhere in a one-line list (#983). Each setting takes a fixed
+   * number of forward passes, without a count or element-width limit. Other list elements are
+   * skipped with quote, escape and delimiter nesting state, without evaluating their expressions. A
+   * wildcard ending at a list delimiter proves the setting independently of later elements.
+   */
+  private static boolean containsWildcard(String text, Pattern setting, FileKind kind) {
+    var matcher = setting.matcher(text);
+    while (matcher.find()) {
+      var value = wildcardValue(text, matcher.end(), kind);
+      if (value.wildcard()) {
+        return true;
+      }
+      matcher.region(Math.max(matcher.end(), value.end()), text.length());
+    }
+    return false;
+  }
+
+  private static WildcardValue wildcardValue(String text, int at, FileKind kind) {
+    at = skipListTrivia(text, at, kind);
+    if (at < 0) {
+      return new WildcardValue(text.length(), false);
+    }
+    if (at < text.length() && text.charAt(at) == '[') {
+      return wildcardList(text, at + 1, kind);
+    }
+    int end = literalEnd(text, at, kind);
+    if (end < 0) {
+      return opaqueValue(text, at, kind);
+    }
+    int start = at;
+    boolean wildcard = end == at + 3 && text.charAt(at + 1) == '*';
+    at = skipListTrivia(text, end, kind);
+    if (at < 0) {
+      return new WildcardValue(text.length(), false);
+    }
+    if (startsLineComment(text, at, end, kind)) {
+      return new WildcardValue(text.length(), wildcard);
+    }
+    if (at < text.length() && ",}]".indexOf(text.charAt(at)) < 0) {
+      return opaqueValue(text, start, kind);
+    }
+    return new WildcardValue(at, wildcard);
+  }
+
+  /** A trailing line comment ends the scalar; stars and setting names inside it are not values. */
+  private static boolean startsLineComment(String text, int at, int quotedEnd, FileKind kind) {
+    if (kind == FileKind.TERRAFORM) {
+      return text.startsWith("#", at) || text.startsWith("//", at);
+    }
+    return kind == FileKind.YAML && text.startsWith("#", at) && at > quotedEnd;
+  }
+
+  private static WildcardValue wildcardList(String text, int at, FileKind kind) {
+    while (true) {
+      at = skipListTrivia(text, at, kind);
+      if (at < 0) {
+        return new WildcardValue(text.length(), false);
+      }
+      int end = elementEnd(text, at, ']', kind);
+      if (end < 0) {
+        return new WildcardValue(text.length(), false);
+      }
+      boolean wildcard =
+          at + 3 <= end
+              && "\"'".indexOf(text.charAt(at)) >= 0
+              && text.charAt(at + 1) == '*'
+              && text.charAt(at + 2) == text.charAt(at)
+              && skipListTrivia(text, at + 3, kind) == end;
+      if (wildcard) {
+        return new WildcardValue(end + 1, true);
+      }
+      if (text.charAt(end) == ']' || end == at) {
+        return new WildcardValue(end + 1, false);
+      }
+      at = end + 1;
+    }
+  }
+
+  /**
+   * Skip an unknown scalar/expression through its top-level delimiter, without probing its text.
+   */
+  private static WildcardValue opaqueValue(String text, int at, FileKind kind) {
+    int end = elementEnd(text, at, '}', kind);
+    return new WildcardValue(end < 0 ? text.length() : end, false);
+  }
+
+  /** Whitespace, and Terraform-only complete block comments, are trivia around a literal. */
+  private static int skipListTrivia(String text, int at, FileKind kind) {
+    while (at < text.length()) {
+      if (Character.isWhitespace(text.charAt(at))) {
+        at++;
+      } else if (kind == FileKind.TERRAFORM && text.startsWith("/*", at)) {
+        int end = afterSlash(text, at, kind);
+        if (end < 0) {
+          return -1;
+        }
+        at = end;
+      } else {
+        return at;
+      }
+    }
+    return at;
+  }
+
+  /** A top-level comma or list close; nested strings and expressions do not end an element. */
+  private static int elementEnd(String text, int at, char outerClose, FileKind kind) {
+    if (kind == FileKind.YAML) {
+      return yamlElementEnd(text, at, outerClose);
+    }
+    var closing = new StringBuilder();
+    while (at < text.length()) {
+      int next = listElementStep(text, at, closing, outerClose, kind);
+      if (next <= at) {
+        return next;
+      }
+      at = next;
+    }
+    return -1;
+  }
+
+  private static int listElementStep(
+      String text, int at, StringBuilder closing, char outerClose, FileKind kind) {
+    char c = text.charAt(at);
+    return switch (c) {
+      case '\'', '"' -> quotedEnd(text, at);
+      case '(', '[', '{' -> {
+        char close =
+            switch (c) {
+              case '(' -> ')';
+              case '[' -> ']';
+              default -> '}';
+            };
+        closing.append(close);
+        yield at + 1;
+      }
+      case ')', ']', '}' -> {
+        if (c == outerClose && closing.isEmpty()) {
+          yield at;
+        }
+        yield closeDelimiter(closing, c, at);
+      }
+      case ',' -> closing.isEmpty() ? at : at + 1;
+      case '#' -> -1;
+      case '/' -> afterSlash(text, at, kind);
+      default -> at + 1;
+    };
+  }
+
+  /**
+   * YAML plain scalar punctuation is text, not an expression, quote opener or Terraform comment.
+   */
+  private static final class YamlElement {
+    final StringBuilder closing = new StringBuilder();
+    boolean nodeStart = true;
+    boolean quoted;
+  }
+
+  private static int yamlElementEnd(String text, int at, char outerClose) {
+    var state = new YamlElement();
+    while (at < text.length()) {
+      int next = yamlElementStep(text, at, state, outerClose);
+      if (next <= at) {
+        return next;
+      }
+      at = next;
+    }
+    return -1;
+  }
+
+  private static int yamlElementStep(String text, int at, YamlElement state, char outerClose) {
+    char c = text.charAt(at);
+    if (Character.isWhitespace(c)) {
+      return at + 1;
+    }
+    if (state.nodeStart && "\"'".indexOf(c) >= 0) {
+      state.nodeStart = false;
+      state.quoted = true;
+      return yamlQuotedEnd(text, at);
+    }
+    if (state.nodeStart && "!&".indexOf(c) >= 0) {
+      return yamlPropertyEnd(text, at);
+    }
+    if (c == '[' || c == '{') {
+      return yamlCollectionOpen(c, at, state);
+    }
+    if (c == '#' && (state.nodeStart || Character.isWhitespace(text.charAt(at - 1)))) {
+      return -1;
+    }
+    return yamlBoundaryStep(text, at, state, outerClose);
+  }
+
+  private static int yamlCollectionOpen(char c, int at, YamlElement state) {
+    if (!state.nodeStart) {
+      return -1;
+    }
+    state.closing.append(c == '[' ? ']' : '}');
+    state.nodeStart = true;
+    state.quoted = false;
+    return at + 1;
+  }
+
+  private static int yamlBoundaryStep(String text, int at, YamlElement state, char outerClose) {
+    char c = text.charAt(at);
+    return switch (c) {
+      case ']', '}' -> {
+        if (c == outerClose && state.closing.isEmpty()) {
+          yield at;
+        }
+        state.nodeStart = false;
+        state.quoted = false;
+        yield closeDelimiter(state.closing, c, at);
+      }
+      case ',' -> {
+        if (state.closing.isEmpty()) {
+          yield at;
+        }
+        state.nodeStart = true;
+        state.quoted = false;
+        yield at + 1;
+      }
+      case ':' -> {
+        state.nodeStart = state.quoted || yamlValueBoundary(text, at + 1);
+        state.quoted = false;
+        yield at + 1;
+      }
+      default -> {
+        state.nodeStart = false;
+        state.quoted = false;
+        yield at + 1;
+      }
+    };
+  }
+
+  private static boolean yamlValueBoundary(String text, int at) {
+    return at == text.length()
+        || Character.isWhitespace(text.charAt(at))
+        || ",]}".indexOf(text.charAt(at)) >= 0;
+  }
+
+  /** Skip a tag or anchor before a node; its quoted value must still hide internal commas. */
+  private static int yamlPropertyEnd(String text, int at) {
+    if (text.startsWith("!<", at)) {
+      int end = text.indexOf('>', at + 2);
+      return end < 0 ? -1 : end + 1;
+    }
+    at++;
+    while (at < text.length()
+        && !Character.isWhitespace(text.charAt(at))
+        && ",[]{}".indexOf(text.charAt(at)) < 0) {
+      at++;
+    }
+    return at;
+  }
+
+  private static int literalEnd(String text, int at, FileKind kind) {
+    return kind == FileKind.YAML ? yamlQuotedEnd(text, at) : quotedEnd(text, at);
+  }
+
+  /** Single-quoted YAML uses doubled apostrophes; a backslash is ordinary text there. */
+  private static int yamlQuotedEnd(String text, int at) {
+    if (at == text.length() || "\"'".indexOf(text.charAt(at)) < 0) {
+      return -1;
+    }
+    char quote = text.charAt(at++);
+    while (at < text.length()) {
+      char c = text.charAt(at++);
+      if (c == quote) {
+        if (quote == '\'' && at < text.length() && text.charAt(at) == quote) {
+          at++;
+        } else {
+          return at;
+        }
+      } else if (quote == '"' && c == '\\') {
+        at++;
+      }
+    }
+    return -1;
+  }
+
+  private static int closeDelimiter(StringBuilder closing, char c, int at) {
+    if (closing.isEmpty() || closing.charAt(closing.length() - 1) != c) {
+      return -1;
+    }
+    closing.setLength(closing.length() - 1);
+    return at + 1;
+  }
+
+  private static int afterSlash(String text, int at, FileKind kind) {
+    if (at + 1 == text.length()) {
+      return at + 1;
+    }
+    char next = text.charAt(at + 1);
+    if (next == '/') {
+      return -1;
+    }
+    if (next == '*') {
+      if (kind != FileKind.TERRAFORM) {
+        return -1;
+      }
+      int end = text.indexOf("*/", at + 2);
+      return end < 0 ? -1 : end + 2;
+    }
+    return at + 1;
+  }
+
+  /** The position after a complete quoted element, or -1 for an unclosed one. */
+  private static int quotedEnd(String text, int start) {
+    if (start == text.length() || "\"'".indexOf(text.charAt(start)) < 0) {
+      return -1;
+    }
+    char quote = text.charAt(start);
+    int at = start + 1;
+    while (at < text.length()) {
+      char c = text.charAt(at++);
+      if (c == quote) {
+        return at;
+      }
+      if (c == '\\') {
+        at++;
+      }
+    }
+    return -1;
   }
 
   /**
@@ -203,8 +510,8 @@ final class IacScanner {
     if (PUBLIC_BUCKET.stream().anyMatch(p -> p.matcher(text).find())) {
       return SecurityRule.PUBLIC_BUCKET;
     }
-    if (WILDCARD_ACTION.matcher(text.stripTrailing()).find()
-        && isAllowAllStatement(window(lines, index))) {
+    if (containsWildcard(text.stripTrailing(), WILDCARD_ACTION, kind)
+        && isAllowAllStatement(window(lines, index), kind)) {
       return SecurityRule.IAM_WILDCARD;
     }
     if (OPEN_CIDR.matcher(text).find() && isOpenAdminIngress(window(lines, index))) {
@@ -266,13 +573,13 @@ final class IacScanner {
    * wildcard {@code Resource} in the same statement ({@link #block}) and no {@code Effect: Deny}
    * there. A statement spread wider than the hunk shows does not fire.
    */
-  private static boolean isAllowAllStatement(Window window) {
+  private static boolean isAllowAllStatement(Window window, FileKind kind) {
     boolean wildcardResource = false;
     for (var line : block(window)) {
       if (DENY_EFFECT.matcher(line.text()).find()) {
         return false;
       }
-      wildcardResource |= WILDCARD_RESOURCE.matcher(line.text().stripTrailing()).find();
+      wildcardResource |= containsWildcard(line.text().stripTrailing(), WILDCARD_RESOURCE, kind);
     }
     return wildcardResource;
   }
