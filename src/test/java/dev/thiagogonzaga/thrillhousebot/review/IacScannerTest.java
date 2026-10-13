@@ -527,7 +527,7 @@ class IacScannerTest {
   }
 
   @Test
-  void wildcardListsReadEscapesAndRejectMalformedValues() {
+  void wildcardListsReadEscapesAndRejectUnprovenValues() {
     assertEquals(
         List.of(SecurityRule.IAM_WILDCARD),
         rules(
@@ -541,9 +541,20 @@ class IacScannerTest {
             "",
             "[]",
             "[",
-            "[42, \"*\"]",
+            "[42]",
+            "[foo]",
+            "[), \"*\"]",
+            "[var.action /",
+            "var.action",
+            "[, \"*\"]",
+            "[format(\"s3:%s\", \"GetObject\"], \"*\"]",
+            "[var.action // , \"*\"]",
+            "[var.action /* , \"*\"]",
+            "[/* unclosed]",
+            "[var.action # , \"*\"]",
             "[\"*\" 42]",
-            "[\"*\", \"unterminated]",
+            "[\"*\"",
+            "[\"unterminated, \"*\"]",
             "\"*\"x")) {
       assertTrue(
           scanNew("p.json", "  \"Action\": " + actions, "  \"Resource\": \"*\"").isEmpty(),
@@ -562,6 +573,141 @@ class IacScannerTest {
                 "  actions = [\"s3:GetObject\", \"*\", ]",
                 "  resources = [\"*\",]",
                 "}")));
+  }
+
+  @Test
+  void aTerraformTrailingCommaDoesNotInventAWildcard() {
+    assertTrue(
+        scanNew(
+                "iam.tf",
+                "statement {",
+                "  actions = [\"s3:GetObject\", ]",
+                "  resources = [\"*\",]",
+                "}")
+            .isEmpty());
+  }
+
+  @Test
+  void aProvenWildcardSurvivesUnrelatedLaterListItems() {
+    for (var actions :
+        List.of("[\"*\", var.extra_action]", "[\"s3:GetObject\", \"*\", var.extra_action]")) {
+      for (var resources : List.of("[\"*\"]", "[\"*\", var.bucket_arn]")) {
+        assertEquals(
+            List.of(SecurityRule.IAM_WILDCARD),
+            rules(
+                scanNew(
+                    "iam.tf",
+                    "statement {",
+                    "  actions = " + actions,
+                    "  resources = " + resources,
+                    "}")),
+            actions + " / " + resources);
+      }
+    }
+    for (var actions :
+        List.of("[\"*\", s3:GetObject]", "[\"s3:GetObject\", \"*\", s3:PutObject]")) {
+      assertEquals(
+          List.of(SecurityRule.IAM_WILDCARD),
+          rules(scanNew("p.yaml", "Action: " + actions, "Resource: [\"*\", arn:aws:s3:::logs]")),
+          actions);
+    }
+  }
+
+  @Test
+  void aWildcardAfterOpaqueListItemsIsReported() {
+    for (var actions :
+        List.of(
+            "[var.extra_action, \"*\"]",
+            "[var.extra_action /* ordinary, comment */, \"*\"]",
+            "[format(\"s3:%s\", \"Get,Object\"), \"*\"]",
+            "[local.actions[0], \"*\"]",
+            "[(8/2 > 1 ? var.extra_action : \"s3:GetObject\"), \"*\"]",
+            "[lookup({ action = \"s3:GetObject\" }, \"action\"), \"*\"]")) {
+      assertEquals(
+          List.of(SecurityRule.IAM_WILDCARD),
+          rules(
+              scanNew(
+                  "iam.tf",
+                  "statement {",
+                  "  actions = " + actions,
+                  "  resources = [var.bucket_arn, \"*\"]",
+                  "}")),
+          actions);
+    }
+    assertEquals(
+        List.of(SecurityRule.IAM_WILDCARD),
+        rules(
+            scanNew(
+                "p.yaml",
+                "Action: [s3:GetObject, \"*\", s3:PutObject]",
+                "Resource: [arn:aws:s3:::logs, \"*\"]")));
+  }
+
+  @Test
+  void blockCommentsAroundAWildcardAreListTrivia() {
+    for (var actions :
+        List.of(
+            "[/* ordinary */ \"*\"]",
+            "[\"*\" /* ordinary */]",
+            "[var.action, /* ordinary */ \"*\" /* ordinary */, var.other]")) {
+      assertEquals(
+          List.of(SecurityRule.IAM_WILDCARD),
+          rules(
+              scanNew(
+                  "iam.tf", "statement {", "  actions = " + actions, "  resources = [\"*\"]", "}")),
+          actions);
+    }
+  }
+
+  @Test
+  void anOpaqueSettingDoesNotHideALaterWildcardSettingOnTheSameLine() {
+    assertEquals(
+        List.of(SecurityRule.IAM_WILDCARD),
+        rules(
+            scanNew(
+                "p.yaml",
+                "Statement: [{Action: !Ref ReadActions, Resource: !Ref ReadResources}, {Action: \"*\", Resource: \"*\"}]")));
+    assertEquals(
+        List.of(SecurityRule.IAM_WILDCARD),
+        rules(
+            scanNew(
+                "iam.tf",
+                "policies = [{actions = var.read_actions, resources = var.read_resources}, {actions = [\"*\"], resources = [\"*\"]}]")));
+    assertTrue(
+        scanNew(
+                "iam.tf",
+                "policies = [{actions = \"s3:\" == var.prefix ? local.by_name[\"Action: '*'\"] : [\"s3:GetObject\"], resources = [\"*\"]}]")
+            .isEmpty());
+  }
+
+  @Test
+  void aWildcardAfterManyOpaqueElementsIsReported() {
+    assertEquals(
+        List.of(SecurityRule.IAM_WILDCARD),
+        rules(
+            scanNew(
+                "iam.tf",
+                "statement {",
+                "  actions = [" + "format(\"s3:%s\", \"GetObject\"), ".repeat(2000) + "\"*\"]",
+                "  resources = [\"*\"]",
+                "}")));
+  }
+
+  @Test
+  void aWildcardInsideAnOpaqueElementDoesNotProveAWildcardAction() {
+    for (var actions :
+        List.of(
+            "[local.actions[\"*\"]]",
+            "[format(\"s3:%s\", \"*\") ]",
+            "[[\"*\"]]",
+            "[{ key = \"*\" }]",
+            "[var.extra_action, \"s3:GetObject\"]",
+            "[var.extra_action /* \"*\", comment */]")) {
+      assertTrue(
+          scanNew("iam.tf", "statement {", "  actions = " + actions, "  resources = [\"*\"]", "}")
+              .isEmpty(),
+          actions);
+    }
   }
 
   @Test

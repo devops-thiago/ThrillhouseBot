@@ -135,6 +135,8 @@ same diff.
   fixture/sample/example-named assignments (#981);
   command strings and known-format credentials still match.
   IAM wildcard arrays are read in linear time with no element-count or element-width cap (#983).
+  A quoted wildcard ending at a list delimiter proves the setting even when other items are
+  Terraform expressions or YAML plain scalars; nested quoted stars do not prove a wildcard.
 - **Deterministic scan findings skip the verifier and calibrator.** `SecurityScan.merge` runs in
   `FindingPipeline.finish`, after every verifier call and (on the single-call lane) after
   `SeverityCalibrator.calibrate`, so no model grades a pattern match, and `markUnscreened` and

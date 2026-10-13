@@ -322,21 +322,23 @@ final class SecretScanner {
    */
   private static StringLiteral[] enclosingLiterals(String line) {
     var enclosing = new StringLiteral[line.length()];
-    for (int at = 0; at < line.length(); at++) {
+    int at = 0;
+    while (at < line.length()) {
       char quote = line.charAt(at);
       if ("\"'`".indexOf(quote) < 0) {
-        continue;
+        at++;
+      } else {
+        int end = at + 1;
+        while (end < line.length() && line.charAt(end) != quote) {
+          end += line.charAt(end) == '\\' ? 2 : 1;
+        }
+        if (end >= line.length()) {
+          return enclosing;
+        }
+        var literal = new StringLiteral(at, end);
+        Arrays.fill(enclosing, at + 1, end, literal);
+        at = end + 1;
       }
-      int end = at + 1;
-      while (end < line.length() && line.charAt(end) != quote) {
-        end += line.charAt(end) == '\\' ? 2 : 1;
-      }
-      if (end >= line.length()) {
-        break;
-      }
-      var literal = new StringLiteral(at, end);
-      Arrays.fill(enclosing, at + 1, end, literal);
-      at = end;
     }
     return enclosing;
   }

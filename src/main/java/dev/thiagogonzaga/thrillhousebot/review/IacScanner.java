@@ -142,9 +142,10 @@ final class IacScanner {
   private record WildcardValue(int end, boolean wildcard) {}
 
   /**
-   * A bare quoted wildcard, alone or anywhere in a complete one-line quoted list (#983). Every
-   * character is read at most once per setting, without a count or element-width limit. Escaped
-   * quotes stay inside their element, and a malformed list never proves a wildcard setting.
+   * A bare quoted wildcard, alone or anywhere in a one-line list (#983). Every character is read at
+   * most once per setting, without a count or element-width limit. Other list elements are skipped
+   * with quote, escape and delimiter nesting state, without evaluating their expressions. A
+   * wildcard ending at a list delimiter proves the setting independently of later elements.
    */
   private static boolean containsWildcard(String text, Pattern setting) {
     var matcher = setting.matcher(text);
@@ -159,41 +160,133 @@ final class IacScanner {
   }
 
   private static WildcardValue wildcardValue(String text, int at) {
+    at = skipListTrivia(text, at);
     if (at < text.length() && text.charAt(at) == '[') {
       return wildcardList(text, at + 1);
     }
     int end = quotedEnd(text, at);
     if (end < 0) {
-      return new WildcardValue(text.length(), false);
+      return opaqueValue(text, at);
     }
+    int start = at;
     boolean wildcard = end == at + 3 && text.charAt(at + 1) == '*';
-    at = skipWhitespace(text, end);
-    return new WildcardValue(
-        at, wildcard && (at == text.length() || ",}]".indexOf(text.charAt(at)) >= 0));
+    at = skipListTrivia(text, end);
+    if (at < text.length() && ",}]".indexOf(text.charAt(at)) < 0) {
+      return opaqueValue(text, start);
+    }
+    return new WildcardValue(at, wildcard);
   }
 
   private static WildcardValue wildcardList(String text, int at) {
-    boolean wildcard = false;
     while (true) {
-      at = skipWhitespace(text, at);
-      int end = quotedEnd(text, at);
+      at = skipListTrivia(text, at);
+      int end = elementEnd(text, at, ']');
       if (end < 0) {
         return new WildcardValue(text.length(), false);
       }
-      wildcard |= end == at + 3 && text.charAt(at + 1) == '*';
-      at = skipWhitespace(text, end);
-      if (at < text.length() && text.charAt(at) == ']') {
-        return new WildcardValue(at + 1, wildcard);
+      boolean wildcard =
+          at + 3 <= end
+              && "\"'".indexOf(text.charAt(at)) >= 0
+              && text.charAt(at + 1) == '*'
+              && text.charAt(at + 2) == text.charAt(at)
+              && skipListTrivia(text, at + 3) == end;
+      if (wildcard) {
+        return new WildcardValue(end + 1, true);
       }
-      if (at == text.length() || text.charAt(at) != ',') {
-        return new WildcardValue(at, false);
+      if (text.charAt(end) == ']' || end == at) {
+        return new WildcardValue(end + 1, false);
       }
-      at = skipWhitespace(text, at + 1);
-      // A trailing comma is valid in Terraform lists, and was recognized by the earlier rule.
-      if (at < text.length() && text.charAt(at) == ']') {
-        return new WildcardValue(at + 1, wildcard);
+      at = end + 1;
+    }
+  }
+
+  /**
+   * Skip an unknown scalar/expression through its top-level delimiter, without probing its text.
+   */
+  private static WildcardValue opaqueValue(String text, int at) {
+    int end = elementEnd(text, at, '}');
+    return new WildcardValue(end < 0 ? text.length() : end, false);
+  }
+
+  /** Whitespace and complete block comments are trivia around a literal list element. */
+  private static int skipListTrivia(String text, int at) {
+    while (at < text.length()) {
+      if (Character.isWhitespace(text.charAt(at))) {
+        at++;
+      } else if (text.startsWith("/*", at)) {
+        int end = afterSlash(text, at);
+        if (end < 0) {
+          return text.length();
+        }
+        at = end;
+      } else {
+        return at;
       }
     }
+    return at;
+  }
+
+  /** A top-level comma or list close; nested strings and expressions do not end an element. */
+  private static int elementEnd(String text, int at, char outerClose) {
+    var closing = new StringBuilder();
+    while (at < text.length()) {
+      int next = listElementStep(text, at, closing, outerClose);
+      if (next <= at) {
+        return next;
+      }
+      at = next;
+    }
+    return -1;
+  }
+
+  private static int listElementStep(String text, int at, StringBuilder closing, char outerClose) {
+    char c = text.charAt(at);
+    return switch (c) {
+      case '\'', '"' -> quotedEnd(text, at);
+      case '(', '[', '{' -> {
+        char close =
+            switch (c) {
+              case '(' -> ')';
+              case '[' -> ']';
+              default -> '}';
+            };
+        closing.append(close);
+        yield at + 1;
+      }
+      case ')', ']', '}' -> {
+        if (c == outerClose && closing.isEmpty()) {
+          yield at;
+        }
+        yield closeDelimiter(closing, c, at);
+      }
+      case ',' -> closing.isEmpty() ? at : at + 1;
+      case '#' -> -1;
+      case '/' -> afterSlash(text, at);
+      default -> at + 1;
+    };
+  }
+
+  private static int closeDelimiter(StringBuilder closing, char c, int at) {
+    if (closing.isEmpty() || closing.charAt(closing.length() - 1) != c) {
+      return -1;
+    }
+    closing.setLength(closing.length() - 1);
+    return at + 1;
+  }
+
+  private static int afterSlash(String text, int at) {
+    if (at + 1 == text.length()) {
+      return at + 1;
+    }
+    char next = text.charAt(at + 1);
+    if (next == '/') {
+      return -1;
+    }
+    if (next == '*') {
+      int end = text.indexOf("*/", at + 2);
+      return end < 0 ? -1 : end + 2;
+    }
+    return at + 1;
   }
 
   /** The position after a complete quoted element, or -1 for an unclosed one. */
@@ -213,13 +306,6 @@ final class IacScanner {
       }
     }
     return -1;
-  }
-
-  private static int skipWhitespace(String text, int at) {
-    while (at < text.length() && Character.isWhitespace(text.charAt(at))) {
-      at++;
-    }
-    return at;
   }
 
   /**
