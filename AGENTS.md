@@ -278,7 +278,7 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   (`replacedPriors`, `withoutReplaced`). An item this round's own finding replaces
   (`replacedThisRound`) keeps an `unresolved` status under `REPLACED_NOTE` and is listed as its
   replacement in the still-open set, so "Still present" adds up to the findings carried in and the
-  summary folds it into the round's entry as open since an earlier review; the delta comment does
+  summary folds it into the round's entry as open since an earlier review; the delta section does
   not count it as new (`FollowUpDeltaSummary.newFindingCount`, #969). The guard also drops a new
   listed item restating an open threaded finding. The summary's "Same issue as" note
   (`SummarySurfaceDeduplicator.restatedBy`) uses the same predicate, so the note and the counts
@@ -306,6 +306,13 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
 - **Summary carry-over preserves every distinct path.** `PriorOverviewCarryover` uses
   `PathIndex.contains` for coverage membership, preserving `FilePaths.same` directory-suffix
   semantics without enumerating groups of same-named files (#1104).
+- **Follow-up counts and closures use one review outcome** (#1117). The opt-in delta is a body
+  section, replacing the default closed-names section rather than creating a separate comment.
+  The review retains its verdict and definite-refusal fallback; first reviews, a successful
+  `/summary` and zero movement add no delta. Its coverage/verification notice is not repeated.
+  Direct publisher callers and disabled/failed enrichment still name closures by default.
+  `FollowUpAnalyzer` removes the delta's bounded counts/closed-name section from fallback prior
+  context, preserving subsequent findings; leading delta status prose is never a prior finding.
 - **The summary comment is found by its marker every round** (`<!-- thrillhousebot:summary -->`,
   or the heading for summaries from before #868), never by an id held in memory, so a restart
   loses nothing. An unchanged body is not rewritten; a failed edit posts a new comment.

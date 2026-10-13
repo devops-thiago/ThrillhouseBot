@@ -392,14 +392,9 @@ public class ReviewOrchestrator {
       }
 
       boolean summaryPosted = publishSummaryBestEffort(auth, req, result);
-      // Opt-in follow-up delta comment. Skipped only on a /summary round that posted the summary:
-      // that command always posts a fresh summary comment, so the delta would land beside it. Any
-      // other round posts the delta, including one whose summary a superseded finding refreshed in
-      // place (an edit notifies nobody, #927) and one whose upsert posted a summary because none
-      // was
-      // left. The outcome is intentionally discarded — it must not feed summaryPosted below.
-      publishFollowUpDeltaBestEffort(
-          auth, req, result, summaryPosted && req.forceSummary(), previousFindings);
+      // The optional delta enriches the review, never a second notification beside it.
+      var followUpDelta =
+          followUpDeltaBestEffort(result, summaryPosted && req.forceSummary(), previousFindings);
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       // summaryPosted gates the redundant-review skips: a failed summary post leaves review
@@ -414,7 +409,8 @@ public class ReviewOrchestrator {
               result,
               lineResolver,
               summaryPosted,
-              previousFindings));
+              previousFindings,
+              followUpDelta));
 
       resultSurfaced = true;
       final var doneReq = req;
@@ -604,35 +600,16 @@ public class ReviewOrchestrator {
     }
   }
 
-  /**
-   * Posts the opt-in follow-up delta comment, swallowing any failure for the same reason {@link
-   * #publishSummaryBestEffort} does: it is enrichment, not the review, so a transient failure here
-   * must not abort before {@code postReview}. The result is not returned — the delta comment never
-   * stands in for the review, so it can never gate the redundant-review skips.
-   */
-  private void publishFollowUpDeltaBestEffort(
-      String auth,
-      ReviewRequest req,
+  /** Optional delta rendering cannot suppress the review if enrichment fails. */
+  private String followUpDeltaBestEffort(
       ReviewResult result,
       boolean summaryCommandPosted,
       List<ReviewResponse.Finding> previousFindings) {
     try {
-      reviewPublisher.publishFollowUpDelta(
-          auth,
-          req.owner(),
-          req.repo(),
-          req.prNumber(),
-          result,
-          summaryCommandPosted,
-          previousFindings);
+      return reviewPublisher.followUpDeltaSection(result, summaryCommandPosted, previousFindings);
     } catch (RuntimeException e) {
-      Log.warnf(
-          e,
-          "Failed to post the follow-up delta comment for %s/%s #%d — continuing to post the"
-              + " review",
-          req.owner(),
-          req.repo(),
-          req.prNumber());
+      Log.warn("Failed to render the follow-up delta — continuing with the review outcome", e);
+      return "";
     }
   }
 

@@ -4249,7 +4249,7 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * The body with its closed-findings section removed, wherever that section sits.
+   * The body with closed names and consolidated delta counts removed, wherever they sit.
    *
    * <p>{@link #isSelfAuthoredStatusBody} only recognizes a body the section <em>leads</em>, which
    * is the no-new-findings shape. A body that also carries findings opens with those instead, so it
@@ -4269,17 +4269,23 @@ public class FollowUpAnalyzer {
     var out = new ArrayList<String>(lines.size());
     var index = 0;
     while (index < lines.size()) {
-      if (!lines.get(index).strip().startsWith(ClosedFindingNames.REVIEW_BODY_LEAD_IN)) {
+      var deltaEnd = FollowUpDeltaSummary.endOfSection(lines, index);
+      if (deltaEnd > index) {
+        index = skipWhile(lines, deltaEnd, String::isBlank);
+        if (!out.isEmpty() && index < lines.size()) {
+          out.add("");
+        }
+      } else if (lines.get(index).strip().startsWith(ClosedFindingNames.REVIEW_BODY_LEAD_IN)) {
+        index++;
+        index = skipWhile(lines, index, String::isBlank);
+        index = skipWhile(lines, index, line -> line.strip().startsWith("- "));
+        index = skipWhile(lines, index, String::isBlank);
+        if (!out.isEmpty() && index < lines.size()) {
+          out.add("");
+        }
+      } else {
         out.add(lines.get(index));
         index++;
-        continue;
-      }
-      index++;
-      index = skipWhile(lines, index, String::isBlank);
-      index = skipWhile(lines, index, line -> line.strip().startsWith("- "));
-      index = skipWhile(lines, index, String::isBlank);
-      if (!out.isEmpty() && index < lines.size()) {
-        out.add("");
       }
     }
     return String.join("\n", out).strip();
@@ -4307,6 +4313,7 @@ public class FollowUpAnalyzer {
     }
     var line = first.get();
     return ReviewResult.isUnresolvedPreviousMessage(line)
+        || line.equals(FollowUpDeltaSummary.DELTA_HEADING)
         || line.startsWith(ClosedFindingNames.REVIEW_BODY_LEAD_IN)
         || line.startsWith(ReviewResult.NO_ISSUES_CI_PENDING_LEAD_IN)
         || line.startsWith(ReviewResult.NO_ISSUES_CI_UNREADABLE_LEAD_IN)

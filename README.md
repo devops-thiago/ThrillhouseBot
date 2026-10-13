@@ -331,7 +331,7 @@ bounds at boot while it is on.
 | `REVIEW_IMPROVE_ENABLED` | Allow `/improve` | `true` |
 | `REVIEW_GENERATE_TESTS_ENABLED` | Allow `/generate-tests` | `true` |
 | `REVIEW_DIAGRAM_ENABLED` | Add a Mermaid control-flow diagram to the summary | `false` |
-| `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | On follow-up rounds, post a short delta comment with new, resolved and still-open counts. A round where nothing moved posts nothing | `false` |
+| `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | Include new, resolved and still-open counts in the follow-up review outcome, naming closed findings once. No separate delta comment; nothing is added when no finding is raised or closed | `false` |
 | `REVIEW_LARGE_PR_NUDGE_ENABLED` | On a large PR whose review opened no inline finding and left no earlier finding open, add a note to the summary pointing at `/review` and `/improve`. No extra AI call; the verdict is unchanged | `false` |
 | `REVIEW_LARGE_PR_NUDGE_MIN_FILES` | Changed files (ignored files included) at which a PR counts as large. `0` turns this test off | `20` |
 | `REVIEW_LARGE_PR_NUDGE_MIN_CHANGED_LINES` | Added plus deleted lines at which a PR counts as large; either test is enough. `0` turns this test off | `1000` |
@@ -617,7 +617,10 @@ posted before 0.7.0, by its heading) and replaces its body, so it always
 describes the current head. A round that renders the same body makes no write.
 If the summary was deleted, the round posts a new one; if an edit fails, it
 posts a new one and logs a WARN. GitHub keeps the edit history. Inline
-findings, review bodies and the optional delta comment stay per round.
+findings and review bodies stay per round. With `REVIEW_FOLLOW_UP_SUMMARY_ENABLED`,
+the review body also carries new, resolved and still-open counts, naming each closed
+finding once instead of posting a second delta comment. The review keeps its verdict;
+a definite review refusal preserves the same outcome as a regular comment.
 
 The risk counts, Key Findings and **Things to double-check** cover the round's
 new findings and every earlier finding still open, each listed once and marked

@@ -122,7 +122,7 @@ newest head is reviewed next. A CI-hold recheck runs once no review of that PR i
    stop. Then, for an automatic run with a label gate configured, read the PR's labels again
    (`LabelGateGuard`): if a gate now rejects the PR, mark the check run `skipped` and stop. A
    failed read of either lets the round post.
-8. Publish the summary comment, the optional delta comment and the PR review, then conclude the
+8. Publish the summary comment and the PR review with its optional delta section, then conclude the
    check run.
 9. Run the post-result steps. Each may fail without undoing the review: resolve the threads of
    addressed findings, capture finding feedback, capture review learnings, apply or suggest labels,
@@ -345,8 +345,11 @@ again.
    justified without holding anything open; its thread, found by marker and content, is resolved
    and the decline is offered to the learnings capture. Every other older-round finding still gets
    a status: superseded when its code left the diff, resolved or justified when a maintainer
-   cleared or declined it on the PR conversation. These statuses are recomputed every round, so
-   they are counted in the summary but never post the delta comment or re-post the summary.
+   cleared or declined it on the PR conversation. Holds and standing declines are evaluated again
+   on later rounds. An earlier finding closed this round is recorded once with its finding identity
+   in the persisted response (#1066), so the next round does not report that closure again. Those
+   recorded closes contribute to the resolved count and names in the review outcome, including its
+   opt-in delta section.
 
 The still-open set is the `unresolved` findings plus the backstop's holds, one entry per finding.
 That one set feeds the summary's counts and lists, the "Still present" count and the verdict.
@@ -368,8 +371,11 @@ summary call returns no overview on an unchanged head, the previous round's over
 (`PriorOverviewCarryover`).
 
 The comment keeps no history of its own. Each round's review and inline comments record that
-round, and the optional delta comment (`REVIEW_FOLLOW_UP_SUMMARY_ENABLED`, off by default) lists
-what changed since the last round.
+round. The optional delta section (`REVIEW_FOLLOW_UP_SUMMARY_ENABLED`, off by default) lists
+what changed since the last round inside that review, replacing its default closed-names section.
+One review notification therefore carries the verdict, counts and closed identities. A definite
+review refusal keeps the same body in the existing comment fallback; an ambiguous failure does
+not risk posting it twice. An explicit `/summary` that posts its summary adds no delta section.
 
 ### Threads
 
