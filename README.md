@@ -580,7 +580,7 @@ non-blocking.
 
 Strictness affects only the verdict. Where a finding is posted is separate: a
 LOW-confidence finding at MEDIUM or LOW risk goes to the summary's
-**Things to double-check** list instead of an inline thread, while CRITICAL and
+"Things to double-check" list instead of an inline thread, while CRITICAL and
 HIGH findings stay inline at any confidence. Placement reads the finding's final
 grade, after the verifier and the deterministic confidence floors, the same way
 on every review lane.
@@ -622,43 +622,49 @@ the review body also carries new, resolved and still-open counts, naming each cl
 finding once instead of posting a second delta comment. The review keeps its verdict;
 a definite review refusal preserves the same outcome as a regular comment.
 
-The risk counts, Key Findings and **Things to double-check** cover the round's
+The risk counts, Key Findings and "Things to double-check" cover the round's
 new findings and every earlier finding still open, each listed once and marked
 "open since an earlier review". Key Findings ranks both together by severity. A
 finding leaves the summary once it is resolved, declined, cleared with
 `@thrillhousebot resolved`, or its code leaves the diff. A later finding replaces
-an open double-check item only when it is the same defect, so a finding about one
-config key does not replace an item about the key on the next row, while the same
-key restated on its paired doc or code file does. A double-check item is marked
-"Same issue as" an inline finding by the same test, never by location or common
-words alone. The verdict
+an open double-check item only when it is the same defect. A finding about one
+config key does not replace an item about the key on the next row, but the same
+key restated on its paired doc or code file does. The same test decides when a
+double-check item is marked "Same issue as" an inline finding; location or a
+few shared words are not enough. The verdict
 is computed over the same open set, so an earlier CRITICAL still open keeps a
 follow-up round at `REQUEST_CHANGES` under the configured strictness. When a
 follow-up opens nothing new while earlier findings are open, its review body
 leads with "No new issues in this revision, but N previous finding(s) remain
 unresolved".
 
-The **Description vs. Implementation** section appears only when the PR
+The Description vs. Implementation section appears only when the PR
 description and the change disagree. A summary with model prose ("What this PR
 does", per-file summaries) and no such section means the check ran and found
 nothing; a counts-only summary means it did not run, and says why. Each gap
-names what the description or a linked issue says; a gap that quotes the
-description is dropped when the quoted words are not in it, and a finding that
+names what the description or a linked issue says. A gap that quotes the
+description is dropped when the quoted words are not in it. A finding that
 reports a mismatch with the description is named in the section by title and
-location. A gap stays listed on later rounds until the summary call says what
-resolved it (never on the head the previous round reviewed, where nothing the
-call reads has changed), the same gap is reported again, the quoted claim leaves
-the description, or the PR stops linking the issue the gap names. A
-follow-up on the head the previous round reviewed keeps that round's overview
-where its own summary has none: the whole overview when the summary call returns
-none or is skipped, cut or failed (the banner then says the overview is carried
-and only the counts are new), and otherwise each file summary and the diagram
-the new answer leaves out.
+location.
+
+A gap stays listed on later rounds until one of these happens: the summary call
+says what resolved it, the same gap is reported again, the quoted claim leaves
+the description, or the PR stops linking the issue the gap names. On the head
+the previous round reviewed, the summary call cannot resolve a gap, because
+nothing it reads has changed. The exception is an edited title or description:
+then the call may release a description gap (never a linked-issue gap), and a
+gap saying the description omits something leaves once the edited text holds it.
+
+A follow-up on the head the previous round reviewed also keeps that round's
+overview where its own summary has none. When the summary call returns no
+overview, or is skipped, cut or fails, the whole overview is carried, and a
+banner says so and that only the counts are new. Otherwise the new summary keeps
+each earlier file summary and the diagram that its answer leaves out.
 
 ### Re-checking declines
 
 When a maintainer replies to a finding to decline it, the next review records
-the finding **justified**. A decline is a claim, though, and a correct finding
+the finding justified. A decline is a claim, though, and a correct finding
 can be closed by a wrong rebuttal that names the very mechanism making the bug
 real ("it only runs after the webhook is acked, so there's no race", on an
 executor that starts a thread per event).
@@ -673,8 +679,8 @@ the claim and the contradicting line. The check is conservative:
   respected.
 - It pushes back once. The re-check runs only while the thread has a single
   maintainer reply; a second reply always ends it.
-- A re-opened finding is not posted again. It stays in **Previous Findings
-  Status** and counts toward the verdict at its own severity.
+- A re-opened finding is not posted again. It stays in Previous Findings
+  Status and counts toward the verdict at its own severity.
 - When the review keeps a finding open after a maintainer replied on its
   thread, the review body says why, while the decline re-check is enabled. A
   decline the re-check overturns reads "Decline re-checked against the code
@@ -695,25 +701,28 @@ concurrent (a server that handles each request on its own thread, an executor
 in another file) is rarely in the diff. Any other reply, or a second one,
 stands: the finding is counted justified, its thread is resolved, and with
 review learnings on the reply is offered to the store under the same rules as
-any other decline. An older round's finding whose code left the diff is counted
-superseded, and one cleared or declined from the PR conversation is counted
-resolved or justified, so the summary's counts add up to the findings carried
-in. One whose flagged line is still there is closed as resolved when every line
-its suggestion adds is now an added line of the file beside the flagged code
-(with at least one real line of code among them); otherwise it stays open until a reply or a directive closes
-it. One whose code left the diff, whose suggested fix landed, or that a
-maintainer cleared, is closed once:
-its review thread is resolved, the review body names it under the round's
-closed findings, and the round records the close so later rounds neither name
-it nor count it again. A clear wins over the code leaving the diff, so the
-thread still gets the reply that records the clear. None of these re-post the
-summary.
+any other decline.
+
+Every older round's finding gets a status, so the summary's counts add up to
+the findings carried in. One whose code left the diff is counted superseded,
+and one cleared or declined from the PR conversation is counted resolved or
+justified. One whose flagged line is still there is closed as resolved when
+every line its suggestion adds is now an added line of the file beside the
+flagged code, with at least one real line of code among them; otherwise it
+stays open until a reply or a directive closes it.
+
+A finding whose code left the diff, whose suggested fix landed, or that a
+maintainer cleared is closed once. Its review thread is resolved, the review body
+names it under the round's closed findings, and the round records the close so
+later rounds neither name it nor count it again. A clear wins over the code
+leaving the diff, so the thread still gets the reply that records the clear.
+None of these re-post the summary.
 
 Set it to `false` to make a maintainer's reply final.
 
 ### Clearing a finding with no thread
 
-A finding listed under **Things to double-check** has no review thread to reply
+A finding listed under "Things to double-check" has no review thread to reply
 on, yet follow-up reviews keep it unresolved and it holds approval (`APPROVE`
 becomes `COMMENT`). To close one, comment on the PR conversation:
 
@@ -730,7 +739,7 @@ strict, and an ambiguous comment leaves the finding held:
   Directive words in backticks, in a fenced block or on a `>` quoted line are
   read as documentation and clear nothing.
 - **Name the finding by its `path:line` and its title** (or its description when
-  it has no title). Each **Things to double-check** row prints both, title first
+  it has no title). Each "Things to double-check" row prints both, title first
   and then the locator, so copying the row is the reliable way. Naming only one
   clears nothing. The path is written from the repository root and matched
   whole, so `Widget.java:42` never closes `Widget.java:4`. The locator and title
@@ -743,14 +752,14 @@ strict, and an ambiguous comment leaves the finding held:
 
 One comment may name several findings; each is matched on its own. A finding
 with neither title nor description cannot be named, so fix it or reply on its
-thread if it has one. The next review records a named finding **resolved**.
+thread if it has one. The next review records a named finding resolved.
 
 **On a finding's own review thread**, reply `@thrillhousebot resolved` (the
 `path:line` and title are optional there, since the thread names the finding).
 The bot resolves the thread straight away and replies with a fixed
 acknowledgement, not a generated answer; if GitHub does not confirm the
 resolution, the reply says the next review closes the finding instead. The next
-review records the finding **resolved** either way. The same write-access rule
+review records the finding resolved either way. The same write-access rule
 applies, and a reply whose `path:line` is not that finding's own (another file,
 or another line of the same file) closes nothing on that thread.
 
@@ -786,7 +795,7 @@ unchanged: plain-text directive, both locator and title, write access, quoted
 blocks dropped, `declined?` declines nothing, an ambiguous naming holds the
 finding, and the conversation read limit applies.
 
-The next review records the named finding **justified**, unless the reviewed code
+The next review records the named finding justified, unless the reviewed code
 plainly contradicts the reason; then the finding stays open for one more round
 with the same note a thread re-check writes. Fenced code, blockquotes and inline
 code inside the reason are quoted material, not the maintainer's claim, and the
@@ -802,7 +811,7 @@ acknowledges the directive the same way it acknowledges `resolved`.
 ### Security scan
 
 `REVIEW_SECRET_SCAN_ENABLED` and `REVIEW_IAC_SCAN_ENABLED` turn on a scan of the
-lines a pull request **adds**, for leaked credentials and risky
+lines a pull request adds, for leaked credentials and risky
 infrastructure-as-code settings. It is a fixed list of regular expressions: no
 model call, no extra dependency, and the same input always gives the same
 findings. Both halves are off by default, because each adds findings that can
@@ -898,19 +907,31 @@ it is still in the git history.
 
 **How scan findings join the review.** They are added after the verifier and
 severity calibration, so no model re-grades them, and they are never marked
-unverified. A model finding in the same file is dropped as a duplicate when it
-is within three lines and reports the same defect (same title by the
-deduplicator's measure, or a title using two of the rule's words), or, for a
-secret, when it sits on the matched line and its title uses one of the rule's
-words, or, for an IaC rule, when it is within three lines and its title uses a
-word that names that rule's defect (`root`, `privileged`,
-`hostNetwork`/`hostPID`/`hostIPC`, `SSH`/`RDP`/`WinRM`/`Telnet`, `public`,
-`wildcard`/`administrator`, `encryption`/`encrypted`/`unencrypted`) and no word
-naming a neighbouring defect (`filesystem`, `read-only`, `writable`,
-`root-owned`, `subnet`). A title
-that only names a key (`PAYMENT_API_KEY is never read`) is a different defect
-and is kept. Nearby detections are indexed by file and line, and distant
-secret duplicates are looked up by the identifiers their text names. An
+unverified. A model finding in the same file is dropped as a duplicate in these
+cases:
+
+- It is within three lines and reports the same defect: the same title by the
+  deduplicator's measure, or a title using two of the rule's words.
+- For a secret, it sits on the matched line and its title uses one of the
+  rule's words.
+- For a generic secret assigned to a distinctive name (`apiToken`,
+  `SCHEDULER_API_TOKEN`), its title makes a secret claim and its text names
+  that identifier, at any distance. A finding in a documentation or
+  configuration file of the same pull request that names the identifier with a
+  credential word, or names the environment key it stands in for with a
+  credential claim in its title, is dropped the same way.
+- For an IaC rule, it is within three lines and its title uses a word that
+  names that rule's defect (`root`, `privileged`,
+  `hostNetwork`/`hostPID`/`hostIPC`, `SSH`/`RDP`/`WinRM`/`Telnet`, `public`,
+  `wildcard`/`administrator`, `encryption`/`encrypted`/`unencrypted`) and no
+  word naming a neighbouring defect (`filesystem`, `read-only`, `writable`,
+  `root-owned`, `subnet`).
+
+A title that only names a key (`PAYMENT_API_KEY is never read`) is a different
+defect and is kept. Nearby detections are indexed by file and line; distant
+secret duplicates are looked up by the identifiers their text names.
+
+An
 environment key aliases a secret only when its fallback expression reads that
 secret's simple identifier, or a comment directly above the declaration names
 the key. SQL/Lua `--` and HTML/XML/SVG `<!--` comments are recognized in
@@ -930,15 +951,15 @@ risk is the rule's, from the tables above. A final stage running as root is
 medium, the grade the review gives the same defect when the model raises it: a
 container that starts as root breaks nothing by itself, but a compromise of it
 starts with root. Medium never requests changes under any strictness, so it
-informs the verdict without deciding it.
+informs the verdict without deciding it. Under `balanced` strictness a critical
+or high scan finding requests changes on its own.
 
 **Model secret findings on a stand-in.** Whether or not the scan is on, a model
 finding whose title reports a secret is dropped when its own line assigns every
 credential-named key an interpolation (`${VAR}`, `$VAR`, `%VAR%`, `$(…)`,
 `{{ … }}`) or a placeholder (the list under "What is skipped"), and no scan rule
-matches the line: `ENV API_TOKEN=${API_TOKEN}` names where a credential comes
-from, and `API_TOKEN=changeme` in a sample stands in for one. Under `balanced` strictness a critical or high
-scan finding requests changes on its own.
+matches the line. `ENV API_TOKEN=${API_TOKEN}` names where a credential comes
+from, and `API_TOKEN=changeme` in a sample stands in for one.
 
 **Later rounds.** A scan finding an earlier round raised is not posted again. It
 stays `unresolved` while the pattern is still on an added line, and becomes
@@ -954,10 +975,10 @@ pull request cannot test a guessed value against the marker. The same secret
 gives the same marker across rounds and restarts; changing the webhook secret
 makes each declined secret finding come back once, and the next decline stores
 the new marker. A decline recorded under the unkeyed marker of 0.7.0 keeps
-matching its line. A new value, or any other change to the line apart from leading and
-trailing whitespace, is raised again. A secret finding declined before 0.7.0 has
-no fingerprint, so its decline holds only until the head moves; it is then
-raised once more, with the marker.
+matching its line. A new value, or any other change to the line apart from
+leading and trailing whitespace, is raised again. A secret finding declined
+before 0.7.0 has no fingerprint, so its decline holds only until the head moves;
+it is then raised once more, with the marker.
 
 ### CI-failure context
 
@@ -1032,7 +1053,7 @@ The review call reads the issue as intent: a changed line that contradicts a
 criterion is a finding and must quote it, but work the diff does not contain is
 not. The summary call checks each criterion against the PR description, the
 changed-file list and the findings, and lists the ones the change shows it does
-not address under **Description vs. Implementation**, each starting with
+not address under Description vs. Implementation, each starting with
 `Linked issue #N:`. A missing criterion is a question of scope, so it never
 becomes a finding or changes the verdict. The summary call does not see the
 diff, so it reports only what it can show (a file the criterion names that the
@@ -1162,7 +1183,7 @@ again. Commands such as `/describe` or `/improve` send nothing.
   "schema_version": 1,
   "event": "review.completed",
   "timestamp": "2026-09-29T12:00:00Z",
-  "bot": { "name": "thrillhousebot", "version": "0.7.0" },
+  "bot": { "name": "thrillhousebot", "version": "0.7.1" },
   "repository": "octo/repo",
   "pull_request": { "number": 42, "head_sha": "0123abc…", "url": "https://github.com/octo/repo/pull/42" },
   "session_url": "https://bot.example/session/…",
@@ -1533,14 +1554,14 @@ Sigstore) and carry build-provenance attestations. To check a release:
 cosign verify \
   --certificate-identity-regexp='https://github.com/devops-thiago/ThrillhouseBot.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/devops-thiago/thrillhousebot:v0.7.0
+  ghcr.io/devops-thiago/thrillhousebot:v0.7.1
 
 # Provenance (image)
-gh attestation verify oci://ghcr.io/devops-thiago/thrillhousebot:v0.7.0 \
+gh attestation verify oci://ghcr.io/devops-thiago/thrillhousebot:v0.7.1 \
   --repo devops-thiago/ThrillhouseBot
 
 # Provenance (a downloaded binary)
-gh attestation verify thrillhousebot-v0.7.0-linux-amd64.tar.gz \
+gh attestation verify thrillhousebot-v0.7.1-linux-amd64.tar.gz \
   --repo devops-thiago/ThrillhouseBot
 ```
 
@@ -1571,7 +1592,7 @@ openssl genrsa -traditional 2048 | awk '{printf "%s\\n", $0}'
 `-traditional` writes the PKCS#1 format (`BEGIN RSA PRIVATE KEY`) that GitHub's
 keys use and the bot parses; OpenSSL 3 otherwise writes PKCS#8. The `awk` step
 puts the key on one line with literal `\n` escapes, as `.env` needs. Paste it
-**unquoted**, since quotes are read as part of the key:
+unquoted, since quotes are read as part of the key:
 
 ```dotenv
 GITHUB_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----\nMIIEow...\n-----END RSA PRIVATE KEY-----
@@ -1638,7 +1659,7 @@ Both images are built from the same native binary and published to GHCR:
 
 - `ghcr.io/devops-thiago/thrillhousebot:latest`: UBI9-micro (default).
 - `ghcr.io/devops-thiago/thrillhousebot:latest-distroless`: distroless base
-  (`:v0.7.0-distroless`, and so on).
+  (`:v0.7.1-distroless`, and so on).
 - Snapshot tags: `:snapshot`, `:v<version>-<short-sha>-snapshot` and
   `:<full-sha>`, each with a `-distroless` variant.
 

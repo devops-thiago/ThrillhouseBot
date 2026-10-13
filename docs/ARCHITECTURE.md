@@ -74,8 +74,9 @@ flowchart TD
 
 `WebhookController` verifies the signature, drops a redelivered delivery id, routes the event and
 answers 200 before any review work starts. Only cheap gates run on the request thread: the pause
-lookup, the trigger filters, the 👀 reaction on a command (bounded by `ACK_REACTION_TIMEOUT`, default `3s`) and the
-write-access check for `/review` (bounded by `MANUAL_TRIGGER_AUTH_TIMEOUT`, default `5s`).
+lookup, the trigger filters, the 👀 reaction on a command (bounded by `ACK_REACTION_TIMEOUT`,
+default `3s`) and the write-access check for `/review` (bounded by `MANUAL_TRIGGER_AUTH_TIMEOUT`,
+default `5s`).
 
 | Event | What it starts |
 |---|---|
@@ -237,10 +238,11 @@ which both lanes share):
 9. Fill missing code anchors.
 
 On the multi-call lane each batch runs steps 1, 2, 3, 5 and 6 in its own thread. Once every batch
-has finished, the pipeline merges the statuses the batches reported and runs steps 4, 8 and 9 over
-the combined findings. Severity calibration does not run on this lane.
+has finished, the pipeline merges the statuses the batches reported and runs steps 4, 7, 8 and 9
+over the combined findings, so both lanes calibrate severity before a finding is placed inline or
+under "Things to double-check".
 
-`FindingScreen` is a small pipes-and-filters chain. Each of steps 1 to 6 is a `FindingStage`
+`FindingScreen` is a chain of stages. Each of steps 1 to 6 is a `FindingStage`
 (`EvidenceStage`, `QuoteValidationStage`, `FrameworkFilterStage`, `DedupeStage`,
 `RejectionScreenStage`, `VerificationStage`, `RememberVerdictsStage`) that owns only its own
 collaborator and maps one immutable `ScreeningContext` (the call's response, its quote source and
@@ -284,7 +286,9 @@ encryption. `SecurityRule` holds each rule's severity and title. A `thrillhouseb
 
 The merge runs after verification, so no model grades a pattern match and the verifier's
 fail-open marking never applies to one. A model finding that reports the same defect nearby is
-dropped in favour of the scan's. Every matched value is replaced in the remaining findings, status
+dropped in favour of the scan's, and so is a model secret finding that names the identifier a
+generic secret rule matched, at any distance in the same file or in a documentation or
+configuration file of the PR. Every matched value is replaced in the remaining findings, status
 notes and summary before anything is stored or posted. A secret finding shows only the value's
 first characters and length and carries no code anchor, so the value reaches no comment, log line,
 stored session or dashboard view.
@@ -296,8 +300,9 @@ The scan also tracks its own findings across rounds:
   not.
 - A detection that matches a scan finding a maintainer declined (a round recorded it `justified`)
   is not raised again while the content is the same: same file, title and anchor, and for a secret
-  the same line, compared through a short hash kept in a hidden `thrillhousebot:scan-content`
-  marker in the finding's text. A new value on that line is raised again.
+  the same line, compared through a short HMAC, keyed from `GITHUB_WEBHOOK_SECRET`, kept in a
+  hidden `thrillhousebot:scan-content` marker in the finding's text. A new value on that line is
+  raised again.
 
 ## Follow-up rounds
 
@@ -344,7 +349,8 @@ again.
    the decline is contradicted or rests on an unconfirmed premise, and otherwise counts as
    justified without holding anything open; its thread, found by marker and content, is resolved
    and the decline is offered to the learnings capture. Every other older-round finding still gets
-   a status: superseded when its code left the diff, resolved or justified when a maintainer
+   a status: superseded when its code left the diff, resolved when its suggested fix landed beside
+   the flagged line, and resolved or justified when a maintainer
    cleared or declined it on the PR conversation. Holds and standing declines are evaluated again
    on later rounds. An earlier finding closed this round is recorded once with its finding identity
    in the persisted response (#1066), so the next round does not report that closure again. Those
@@ -365,10 +371,13 @@ not rewritten. A new comment is posted when the old one was deleted or the edit 
 Because the edit replaces the whole body, each round renders the PR as it stands. The risk counts,
 Key Findings and "Things to double-check" cover the round's new findings plus every earlier finding
 still open, tagged as open since an earlier review. Description gaps the previous summary listed
-are passed to the summary call (`DescriptionGapCarryover`). They stay listed until the call says
-they are addressed, the round reports them again, or their issue is no longer linked. When the
-summary call returns no overview on an unchanged head, the previous round's overview is reused
-(`PriorOverviewCarryover`).
+are passed to the summary call (`DescriptionGapCarryover`). On a changed head, the call can mark
+a gap addressed. On an unchanged head, that answer cannot clear a gap unless the PR description
+changed since the summary that listed it; then only description gaps can leave, never linked-issue
+gaps. A quoted omission also leaves when the edited description now contains the quoted passage.
+The current round's matching finding replaces its gap entry, and gaps tied to an issue that is no
+longer linked are removed. When the summary call returns no overview on an unchanged head, the
+previous round's overview is reused (`PriorOverviewCarryover`).
 
 The comment keeps no history of its own. Each round's review and inline comments record that
 round. The optional delta section (`REVIEW_FOLLOW_UP_SUMMARY_ENABLED`, off by default) lists
@@ -406,10 +415,10 @@ CI. When pending CI was the only thing between the round and APPROVE, the verdic
 the head green then posts the approval (`CiHoldRevisit`) without another model call.
 
 A follow-up round with no new findings but earlier findings still open says how many remain
-unresolved rather than calling the PR clean. Findings are posted as individual inline comments, with a committable
-suggestion where the range resolves. A comment GitHub refuses is retried without the suggestion,
-then as a file-level comment. Low-confidence medium and low findings go to the summary's "Things to
-double-check" list instead. At most `thrillhousebot.review.max-review-comments` (default 50)
+unresolved instead of calling the PR clean. Findings are posted as individual inline comments, with
+a committable suggestion where the range resolves. A comment GitHub refuses is retried without the
+suggestion, then as a file-level comment. Low-confidence medium and low findings go to the
+summary's "Things to double-check" list instead. At most `thrillhousebot.review.max-review-comments` (default 50)
 findings are posted inline.
 
 ## Context sections
