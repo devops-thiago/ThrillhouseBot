@@ -391,6 +391,19 @@ live `fence(...)` (#604).
   untrusted accessors from the `*Response` records in `review.ai` and fails on a log call that
   splices one in, directly or through a same-file local. It cannot follow a value across a method
   boundary, so wrap early. `%d` numbers are exempt.
+- **Text screens preserve code and ordinary claims.** `PromptLabelScrubber` keeps the case of a
+  recovered compound identifier and removes "confirmed" only when it labels findings, never as
+  the verb in "Tests confirmed findings" or "This confirmed findings" (#1098, #1102). Standalone
+  labels after bullet, asterisk emphasis and arrow prefixes still clean up; a formatted subject
+  keeps its verb. Its whole-text restart pass and `PathMentions` share `MarkdownFences`:
+  backtick and tilde blocks close only at a run of their own marker at least as long as the opener
+  and at its quote depth; list prefixes are recognized, and mixed, shorter or quoted markers inside
+  a block and unclosed blocks stay byte-exact (#1099, #1111). Inline-span probing stops at the next
+  marker or newline instead of rereading the line's tail for every span. `OverviewScreen` keeps
+  count conjunctions with their clause while screening compound or approximate review counts,
+  preserves real file roles using the same numbers, and treats "cf." as an abbreviation before a
+  ticket key (#1105, #1106). `DescriptionGapScreen` matches a quoted compound identifier to
+  possessive prose such as "server's URL" while still rejecting unsupported quotes (#1108).
 - **Text the bot posts to GitHub** goes through `review/MarkdownSafe`, not `LogSafe`.
 - **Review learnings are maintainer text and stay data.** `ReviewLearningService.save` refuses
   credential-shaped text (`LearningText.containsCredential`) and flattens the rest

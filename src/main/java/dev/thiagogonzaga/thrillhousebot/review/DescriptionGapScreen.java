@@ -194,6 +194,9 @@ final class DescriptionGapScreen {
   /** An omission inside a quote: a bracketed insertion, or an ellipsis. */
   private static final Pattern OMISSION = Pattern.compile("\\[[^]]*+]|\\.{3}|…");
 
+  /** A possessive ending belongs to its word, not between a compound identifier's parts. */
+  private static final Pattern POSSESSIVE = Pattern.compile("(?i)(?<=[\\p{L}\\p{N}])['’]s\\b");
+
   private static final Pattern NON_ALPHANUMERIC = Pattern.compile("[^\\p{L}\\p{N}]+");
 
   /** Full stops ending a name, which end its sentence rather than the name. */
@@ -570,8 +573,11 @@ final class DescriptionGapScreen {
     return text.replace('“', '"').replace('”', '"').replace('‘', '\'').replace('’', '\'');
   }
 
-  /** Lowercase letters and digits, every other run collapsed to one space. */
+  /** Lowercase letters and digits; possessive endings fold into the word they belong to. */
   static String normalize(String text) {
-    return NON_ALPHANUMERIC.matcher(text.toLowerCase(Locale.ROOT)).replaceAll(" ").strip();
+    return NON_ALPHANUMERIC
+        .matcher(POSSESSIVE.matcher(text).replaceAll("").toLowerCase(Locale.ROOT))
+        .replaceAll(" ")
+        .strip();
   }
 }

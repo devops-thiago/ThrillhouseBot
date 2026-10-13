@@ -1212,4 +1212,228 @@ class PromptLabelScrubberTest {
             .map(ReviewResponse.FileSummary::summary)
             .toList());
   }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"onOrderClose", "apiToken", "handler_v2", "retry2"})
+  void aRecoveredIdentifierKeepsItsOriginalCase(String identifier) {
+    for (var start : List.of("notesFor(shift.signups)", "`foo.bar()`")) {
+      var expected = identifier + " handles it.";
+      assertEquals(expected, PromptLabelScrubber.scrub(start + "... wait, " + expected));
+      assertEquals(expected, PromptLabelScrubber.scrub(expected));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"~~~", "```"})
+  void aRestartInsideEitherFenceStyleStaysByteExact(String fence) {
+    var block =
+        fence
+            + "java\n`foo.bar()`... rather,grep confirms it.\n"
+            + "notesFor(shift.signups)... wait,onOrderClose handles it.\n"
+            + fence;
+    // Spaces after the connector also make these valid restart candidates outside code.
+    block = block.replace(",grep", ", grep").replace(",onOrderClose", ", onOrderClose");
+    assertEquals(block, PromptLabelScrubber.scrub(block));
+    assertEquals(
+        block + "\nGrep confirms it.",
+        PromptLabelScrubber.scrub(block + "\n`foo.bar()`... rather, grep confirms it."));
+    assertEquals(
+        block.substring(0, block.lastIndexOf(fence)),
+        PromptLabelScrubber.scrub(block.substring(0, block.lastIndexOf(fence))));
+  }
+
+  @Test
+  void anotherFenceStyleInsideABlockDoesNotChangeItsBoundary() {
+    var block = "~~~\n```\n`foo.bar()`... rather, grep confirms it.\n~~~";
+    assertEquals(
+        block + "\nGrep confirms it.",
+        PromptLabelScrubber.scrub(block + "\n`foo.bar()`... rather, grep confirms it."));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "Subsequent runs confirmed findings in the scheduler module.",
+        "The suite confirmed findings from the earlier round.",
+        "Tests confirmed findings before the release."
+      })
+  void confirmedAsAVerbKeepsTheSentenceMeaning(String text) {
+    assertEquals(text, PromptLabelScrubber.scrub(text));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"````", "~~~~"})
+  void shorterMarkersInsideALongerFenceRemainCode(String fence) {
+    var shorter = fence.substring(0, 3);
+    var block = fence + "\n" + shorter + "\n`foo.bar()`... rather, grep confirms it.\n" + fence;
+    assertEquals(block, PromptLabelScrubber.scrub(block));
+    assertEquals(
+        block + "\nGrep confirms it.",
+        PromptLabelScrubber.scrub(block + "\n`foo.bar()`... rather, grep confirms it."));
+    assertEquals(
+        fence + "\n" + shorter + "\n`foo.bar()`... rather, grep confirms it.",
+        PromptLabelScrubber.scrub(
+            fence + "\n" + shorter + "\n`foo.bar()`... rather, grep confirms it."));
+  }
+
+  @Test
+  void codeSubjectsKeepConfirmedAsAVerbAndSeparateLabelsStillCleanUp() {
+    assertEquals(
+        "`Tests` confirmed findings before release.",
+        PromptLabelScrubber.scrub("`Tests` confirmed findings before release."));
+    assertEquals(
+        "`Tests`\nFindings: two.", PromptLabelScrubber.scrub("`Tests`\nConfirmed findings: two."));
+    assertEquals("Hosts 2 findings.", PromptLabelScrubber.scrub("Hosts 2 confirmed findings."));
+    assertEquals("Hosts two findings.", PromptLabelScrubber.scrub("Hosts two confirmed findings."));
+    assertEquals("Contains findings.", PromptLabelScrubber.scrub("Contains confirmed findings."));
+  }
+
+  @Test
+  void aRecoveryAtTheEndOfTextStillCapitalizesProse() {
+    assertEquals("Grep", PromptLabelScrubber.scrub("notesFor(shift.signups)... wait, grep"));
+    assertEquals("g", PromptLabelScrubber.scrub("g"));
+    assertEquals(
+        "The [tests] confirmed findings.",
+        PromptLabelScrubber.scrub("The [tests] confirmed findings."));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"```", "~~~"})
+  void markerTextInsideCodeCannotCloseABlock(String fence) {
+    var block =
+        fence
+            + "java\nvar marker = \""
+            + fence
+            + "\";\n"
+            + fence
+            + "still-code\n`foo.bar()`... rather, grep confirms it.\n\t"
+            + fence
+            + " \t\r\n";
+    assertEquals(block, PromptLabelScrubber.scrub(block));
+    assertEquals(
+        block + "Grep confirms it.",
+        PromptLabelScrubber.scrub(block + "`foo.bar()`... rather, grep confirms it."));
+    var quoted = "> " + fence + "\n> `foo.bar()`... rather, grep confirms it.\n> " + fence;
+    assertEquals(
+        quoted + "\nGrep confirms it.",
+        PromptLabelScrubber.scrub(quoted + "\n`foo.bar()`... rather, grep confirms it."));
+  }
+
+  @Test
+  void inlineMultiBacktickCodeKeepsItsBoundary() {
+    assertEquals(
+        "Uses ```Confirmed findings```. Findings: two.",
+        PromptLabelScrubber.scrub("Uses ```Confirmed findings```. Confirmed findings: two."));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"````", "~~~~"})
+  void listAndQuoteContextsKeepTheirOwnFenceBoundary(String fence) {
+    for (var opener : List.of("- ", "* ", "+ ", "12. ", "1) ", "> - ")) {
+      var quote = opener.startsWith(">") ? "> " : "";
+      var block =
+          opener
+              + fence
+              + "java\n"
+              + quote
+              + "  "
+              + fence.substring(0, 3)
+              + "\n"
+              + quote
+              + "  "
+              + (fence.startsWith("~") ? "````" : "~~~~")
+              + "\n"
+              + quote
+              + "  > "
+              + fence
+              + "\n"
+              + quote
+              + "  `foo.bar()`... rather, grep confirms it.\n"
+              + quote
+              + "  "
+              + fence;
+      assertEquals(block, PromptLabelScrubber.scrub(block));
+      assertEquals(
+          block + "\nGrep confirms it.",
+          PromptLabelScrubber.scrub(block + "\n`foo.bar()`... rather, grep confirms it."));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"```", "~~~"})
+  void aQuotedMarkerDoesNotCloseAPlainBlock(String fence) {
+    var block = fence + "\n> " + fence + "\n`foo.bar()`... rather, grep confirms it.\n" + fence;
+    assertEquals(block, PromptLabelScrubber.scrub(block));
+  }
+
+  @Test
+  void inlineMultiBacktickCodeAtAListOrLineStartStillEnds() {
+    for (var prefix : List.of("", "- ", "> ", "42 ", "42", "1.", ". ", "-. ")) {
+      var code = prefix + "```Confirmed findings```";
+      assertEquals(
+          code + "\nFindings: two.",
+          PromptLabelScrubber.scrub(code + "\nConfirmed findings: two."));
+      assertEquals(
+          code + ". Findings: two.",
+          PromptLabelScrubber.scrub(code + ". Confirmed findings: two."));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"This", "These", "Those", "Some", "Any", "All", "That"})
+  void aPronounSubjectKeepsConfirmedAsItsVerb(String subject) {
+    var text = subject + " confirmed findings in the scheduler module.";
+    assertEquals(text, PromptLabelScrubber.scrub(text));
+    assertEquals(
+        subject + " confirmed findings: two.",
+        PromptLabelScrubber.scrub(subject + " confirmed findings: two."));
+  }
+
+  @Test
+  void definiteAndCountedFindingLabelsStillLoseTheVerifierAdjective() {
+    assertEquals(
+        "The findings are listed.",
+        PromptLabelScrubber.scrub("The confirmed findings are listed."));
+    assertEquals("No findings.", PromptLabelScrubber.scrub("No confirmed findings."));
+    assertEquals("Hosts two findings.", PromptLabelScrubber.scrub("Hosts two confirmed findings."));
+  }
+
+  @ParameterizedTest
+  @CsvSource(
+      value = {
+        "- Confirmed findings: two.|- Findings: two.",
+        "**Confirmed findings:** two|**Findings:** two",
+        "*Confirmed findings:* two|*Findings:* two",
+        "→ Confirmed findings.|→ Findings."
+      },
+      delimiter = '|')
+  void standaloneLabelsAfterMarkdownPrefixesStillCleanUp(String text, String expected) {
+    assertEquals(expected, PromptLabelScrubber.scrub(text));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"**The suite**", "_This_", "The run →"})
+  void aFormattedSubjectStillKeepsConfirmedAsItsVerb(String subject) {
+    var text = subject + " confirmed findings in the scheduler module.";
+    assertEquals(text, PromptLabelScrubber.scrub(text));
+  }
+
+  @Test
+  void markupKeepsTheCodeSubjectAndSentenceBoundaryDecisions() {
+    assertEquals(
+        "`Tests` **confirmed findings**.",
+        PromptLabelScrubber.scrub("`Tests` **confirmed findings**."));
+    assertEquals(
+        "`Tests`\n**Findings:** two.",
+        PromptLabelScrubber.scrub("`Tests`\n**Confirmed findings:** two."));
+    assertEquals(
+        "Done. **Findings:** two.",
+        PromptLabelScrubber.scrub("Done. **Confirmed findings:** two."));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"```", "```plain"})
+  void anUnclosedBacktickInfoLineStaysByteExact(String text) {
+    assertEquals(text, PromptLabelScrubber.scrub(text));
+  }
 }
