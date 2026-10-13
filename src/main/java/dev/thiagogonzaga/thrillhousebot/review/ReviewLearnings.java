@@ -137,16 +137,30 @@ public class ReviewLearnings {
    */
   public String promptSection(
       long installationId, String owner, String repo, List<String> changedPaths) {
+    return recall(installationId, owner, repo, changedPaths).section();
+  }
+
+  /** The same bounded selection feeds both the prompt and the deterministic decline check. */
+  public record Recall(String section, List<ReviewLearningService.LearningView> selected) {
+    public static final Recall EMPTY = new Recall("", List.of());
+
+    public Recall {
+      selected = List.copyOf(selected);
+    }
+  }
+
+  public Recall recall(long installationId, String owner, String repo, List<String> changedPaths) {
     if (!settings.enabled()) {
-      return "";
+      return Recall.EMPTY;
     }
     try {
       var active = store.listActive(installationId, owner + "/" + repo, settings.maxPerRepo());
-      return render(
-          select(active, changedPaths, settings.promptMaxItems(), settings.promptMaxChars()));
+      var selected =
+          select(active, changedPaths, settings.promptMaxItems(), settings.promptMaxChars());
+      return new Recall(render(selected), selected);
     } catch (RuntimeException e) {
       Log.warnf(e, "Could not read review learnings for %s/%s (continuing without)", owner, repo);
-      return "";
+      return Recall.EMPTY;
     }
   }
 

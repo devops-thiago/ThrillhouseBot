@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * One review's deterministic per-finding evidence: what the finding's cited {@code path:line}
@@ -30,9 +31,26 @@ import java.util.List;
  *
  * @param citedLocations the round that reads the repository at the head commit
  * @param contextEvidence the round that reads this review's own context sections
+ * @param selectedLearnings the active, bounded decline selection also rendered in the review prompt
  */
 public record ReviewEvidence(
-    CitedLocationResolver.Round citedLocations, ContextEvidenceResolver.Round contextEvidence) {
+    CitedLocationResolver.Round citedLocations,
+    ContextEvidenceResolver.Round contextEvidence,
+    List<ReviewLearningService.LearningView> selectedLearnings) {
+
+  public ReviewEvidence {
+    selectedLearnings = List.copyOf(Objects.requireNonNullElse(selectedLearnings, List.of()));
+  }
+
+  public ReviewEvidence(
+      CitedLocationResolver.Round citedLocations, ContextEvidenceResolver.Round contextEvidence) {
+    this(citedLocations, contextEvidence, List.of());
+  }
+
+  /** Only the active, relevant, capped selection the prompt read may affect a finding. */
+  ReviewEvidence withLearnings(List<ReviewLearningService.LearningView> selected) {
+    return new ReviewEvidence(citedLocations, contextEvidence, selected);
+  }
 
   /** Attaches nothing at all, for a caller with no repository access and no loaded context. */
   public static final ReviewEvidence NONE =
