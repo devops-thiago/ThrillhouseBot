@@ -463,6 +463,7 @@ final class SecretScanner {
     if ("=:".indexOf(line.charAt(operator)) < 0 || !sampleAssignment(line, operator)) {
       return false;
     }
+    int angle = 0;
     for (int at = 0; at < operator; at++) {
       char c = line.charAt(at);
       if (!Character.isJavaIdentifierPart(c)
@@ -470,8 +471,23 @@ final class SecretScanner {
           && ".<>[],:'\"".indexOf(c) < 0) {
         return false;
       }
+      angle = sampleTypeDepth(c, angle);
+      if (angle < 0) {
+        return false;
+      }
     }
-    return true;
+    return angle == 0;
+  }
+
+  /** Commas may belong to a balanced generic type, but cannot precede a sibling entry. */
+  private static int sampleTypeDepth(char c, int depth) {
+    if (c == '<') {
+      return depth + 1;
+    }
+    if (c == '>') {
+      return depth == 0 ? -1 : depth - 1;
+    }
+    return c == ',' && depth == 0 ? -1 : depth;
   }
 
   private static boolean completeSample(

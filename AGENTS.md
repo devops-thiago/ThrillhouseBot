@@ -136,7 +136,8 @@ same diff.
   prose leaders, and whitespace only after the assignment inside the string. New exclusions
   also require a standalone literal/factory or a simple sample-named assignment/collection:
   unknown outer calls, unknown assignment targets, expressions and additional same-line
-  statements stay scanned. Closing delimiters and quoted sibling inputs are permitted. Unknown
+  statements and preceding sibling entries stay scanned. Closing delimiters and quoted sibling
+  inputs are permitted. Unknown
   prefixes and command suffixes stay scanned even with a sample-named target; earlier bare-key list inputs
   keep their classification. Known-format credentials still match.
   IAM wildcard arrays are read in linear time with no element-count or element-width cap (#983).

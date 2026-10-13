@@ -695,6 +695,35 @@ class SecretScannerTest {
   }
 
   @Test
+  void siblingEntryPrefixesRemainScannedInsteadOfBecomingStandaloneSamples() {
+    var value = fake.genericSecret(40);
+    var quoted = "\"before API_KEY='" + value + "'\"";
+    for (var line :
+        List.of(
+            "otherValue, fixture = " + quoted + ";",
+            "\"db_host\": \"localhost\", \"fixture\": " + quoted,
+            "otherValue, fixtures = List.of(" + quoted + ");",
+            "otherValue, fixtures = [" + quoted + "]",
+            "std::basic_string<char, Traits> other, fixture = " + quoted + ";")) {
+      assertGenericHit("API_KEY", value, line);
+    }
+  }
+
+  @Test
+  void standaloneGenericDeclarationsRequireBalancedTypeDelimiters() {
+    var value = fake.genericSecret(40);
+    var quoted = "\"before password='" + value + "'\"";
+    for (var line :
+        List.of(
+            "std::basic_string<char, Traits> fixture = " + quoted + ";",
+            "std::basic_string<char, std::char_traits<char>> fixture = " + quoted + ";")) {
+      assertTrue(scan(line).isEmpty(), line);
+    }
+    assertGenericHit("password", value, "Type<Other fixture = " + quoted + ";");
+    assertGenericHit("password", value, "String> fixture = " + quoted + ";");
+  }
+
+  @Test
   void ambiguousPrefixedStringsInOtherCallsRemainScanned() {
     var value = fake.genericSecret(40);
     var quoted = "\"prefix password='" + value + "'\"";

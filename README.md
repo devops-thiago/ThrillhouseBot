@@ -856,7 +856,8 @@ a bare key or one of those prose leaders and whitespace only after the
 assignment inside the string, and a standalone literal/factory or simple
 fixture/sample/example-named assignment or collection declaration. Unknown outer
 calls, other assignment targets, expressions and additional statements on the
-same line remain scanned; closing delimiters and further quoted inputs are
+same line, including preceding comma-separated sibling entries, remain scanned;
+closing delimiters and further quoted inputs are
 allowed. Unknown prefixes and trailing command text
 stay scanned even with a sample-named variable. Other calls, including
 `Map.of` and `fixtures.add`, retain scanning for prefixed strings because
