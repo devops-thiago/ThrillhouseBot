@@ -133,8 +133,11 @@ same diff.
   (#1101). The generic secret rule skips credential assignments embedded in complete sample
   strings with explicit before/text-before/prefix prose in list/sample-builder positions, or
   fixture/sample/example-named assignments (#981). New forms require a bare key or one of those
-  prose leaders, and whitespace only after the assignment inside the string. Unknown prefixes
-  and command suffixes stay scanned even with a sample-named target; earlier bare-key list inputs
+  prose leaders, and whitespace only after the assignment inside the string. New exclusions
+  also require a standalone literal/factory or a simple sample-named assignment/collection:
+  unknown outer calls, unknown assignment targets, expressions and additional same-line
+  statements stay scanned. Closing delimiters and quoted sibling inputs are permitted. Unknown
+  prefixes and command suffixes stay scanned even with a sample-named target; earlier bare-key list inputs
   keep their classification. Known-format credentials still match.
   IAM wildcard arrays are read in linear time with no element-count or element-width cap (#983).
   A quoted wildcard ending at a list delimiter proves the setting even when other items are

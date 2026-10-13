@@ -346,7 +346,8 @@ final class SecretScanner {
   /**
    * Whether a generic assignment sits inside sample text, including a before/text-before/prefix
    * sample or a string assigned to a fixture/sample/example-named variable (#981). New sample forms
-   * must end after the credential assignment, with whitespace only before the outer close. Unknown
+   * must end after the credential assignment, with whitespace only before the outer close, and sit
+   * on a standalone sample line: no unknown outer call, expression or extra statement. Unknown
    * prefixes and command suffixes stay scanned, even with a sample-named target. The enclosing
    * string must contain both key and value; a quoted JSON/dictionary key ends before its value and
    * remains a real assignment. A command argument after a word (sh -c 'API_KEY="…"') stays scanned.
@@ -358,7 +359,8 @@ final class SecretScanner {
     var literal = enclosing[generic.start(1)];
     return literal != null
         && generic.end(3) < literal.end()
-        && inSamplePosition(line, literal.start(), generic.start(1), generic.end(), literal.end());
+        && inSamplePosition(
+            line, literal.start(), generic.start(1), generic.end(), literal.end(), enclosing);
   }
 
   /** Explicit sample prose, read only within the bounded generic-rule line. */
@@ -367,7 +369,7 @@ final class SecretScanner {
 
   /** A recognized sample position and complete assignment, retaining old bare-key list inputs. */
   private static boolean inSamplePosition(
-      String line, int quote, int key, int assignmentEnd, int quoteEnd) {
+      String line, int quote, int key, int assignmentEnd, int quoteEnd, StringLiteral[] enclosing) {
     int at = quote - 1;
     while (at >= 0 && Character.isWhitespace(line.charAt(at))) {
       at--;
@@ -378,16 +380,16 @@ final class SecretScanner {
       // arbitrary prefix is still scanned, regardless of how its collection is constructed.
       return false;
     }
-    if (at >= 0 && (line.charAt(at) == '=' || line.charAt(at) == ':')) {
-      return sampleAssignment(line, at) && whitespaceOnly(line, assignmentEnd, quoteEnd);
+    boolean complete = completeSample(line, assignmentEnd, quoteEnd, enclosing);
+    if (at >= 0 && "=:".indexOf(line.charAt(at)) >= 0) {
+      return sampleAssignment(line, at) && standalonePrefix(line, at + 1) && complete;
     }
     if (at < 0 || "[{".indexOf(line.charAt(at)) >= 0) {
-      return bareKey || whitespaceOnly(line, assignmentEnd, quoteEnd);
+      return bareKey || rawSample(line, at, complete);
     }
     char before = line.charAt(at);
     if (before == '(' || before == ',') {
-      return bareKey
-          || (sampleContainer(line, at) && whitespaceOnly(line, assignmentEnd, quoteEnd));
+      return bareKey || (sampleContainer(line, at) && complete);
     }
     return false;
   }
@@ -417,16 +419,118 @@ final class SecretScanner {
     return name.contains("fixture") || name.contains("sample") || name.contains("example");
   }
 
+  private static final List<String> SAMPLE_BUILDERS =
+      List.of(
+          "List.of",
+          "java.util.List.of",
+          "Set.of",
+          "java.util.Set.of",
+          "Arrays.asList",
+          "java.util.Arrays.asList",
+          "Stream.of",
+          "java.util.stream.Stream.of");
+
+  /** New sample forms must be a standalone literal/factory or a simple sample-named assignment. */
   private static boolean sampleContainer(String line, int beforeQuote) {
     int opening = line.lastIndexOf('(', beforeQuote);
-    if (opening < 0 || line.lastIndexOf('[', beforeQuote) > opening) {
-      return true;
+    int array = Math.max(line.lastIndexOf('[', beforeQuote), line.lastIndexOf('{', beforeQuote));
+    if (array > opening) {
+      return standalonePrefix(line, array);
+    }
+    if (opening < 0) {
+      return false;
     }
     var call = line.substring(0, opening).stripTrailing();
-    return call.endsWith("List.of")
-        || call.endsWith("Set.of")
-        || call.endsWith("Arrays.asList")
-        || call.endsWith("Stream.of");
+    return SAMPLE_BUILDERS.stream()
+        .anyMatch(
+            builder ->
+                call.endsWith(builder) && standalonePrefix(line, call.length() - builder.length()));
+  }
+
+  private static boolean rawSample(String line, int opening, boolean complete) {
+    return complete && standalonePrefix(line, Math.max(0, opening));
+  }
+
+  /** No outer calls, preceding statement, operator expression or unknown assignment target. */
+  private static boolean standalonePrefix(String line, int end) {
+    while (end > 0 && Character.isWhitespace(line.charAt(end - 1))) {
+      end--;
+    }
+    if (end == 0) {
+      return true;
+    }
+    int operator = end - 1;
+    if ("=:".indexOf(line.charAt(operator)) < 0 || !sampleAssignment(line, operator)) {
+      return false;
+    }
+    for (int at = 0; at < operator; at++) {
+      char c = line.charAt(at);
+      if (!Character.isJavaIdentifierPart(c)
+          && !Character.isWhitespace(c)
+          && ".<>[],:'\"".indexOf(c) < 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean completeSample(
+      String line, int assignmentEnd, int quoteEnd, StringLiteral[] enclosing) {
+    return whitespaceOnly(line, assignmentEnd, quoteEnd)
+        && simpleSampleTail(line, quoteEnd, enclosing);
+  }
+
+  /** Only collection closings, further quoted inputs, or a final terminator/comment follow. */
+  private static boolean simpleSampleTail(String line, int quoteEnd, StringLiteral[] enclosing) {
+    int at = quoteEnd + 1;
+    boolean afterComma = false;
+    while (at < line.length()) {
+      char c = line.charAt(at);
+      int next = sampleTailTokenEnd(line, at, afterComma, enclosing);
+      if (next <= at) {
+        return false;
+      }
+      if (c == ',') {
+        afterComma = true;
+      } else if ("\"'`".indexOf(c) >= 0) {
+        afterComma = false;
+      }
+      at = next;
+    }
+    return true;
+  }
+
+  private static int sampleTailTokenEnd(
+      String line, int at, boolean afterComma, StringLiteral[] enclosing) {
+    char c = line.charAt(at);
+    if (Character.isWhitespace(c) || ")]},".indexOf(c) >= 0) {
+      return at + 1;
+    }
+    if (c == ';') {
+      return onlyCommentTail(line, at + 1) ? line.length() : -1;
+    }
+    if (line.startsWith("//", at) || line.startsWith("#", at)) {
+      return line.length();
+    }
+    return afterComma ? completeLiteralEnd(line, at, enclosing) + 1 : -1;
+  }
+
+  private static boolean onlyCommentTail(String line, int at) {
+    while (at < line.length() && Character.isWhitespace(line.charAt(at))) {
+      at++;
+    }
+    return at == line.length() || line.startsWith("//", at) || line.startsWith("#", at);
+  }
+
+  private static int completeLiteralEnd(String line, int at, StringLiteral[] enclosing) {
+    if ("\"'`".indexOf(line.charAt(at)) < 0 || at + 1 == line.length()) {
+      return -1;
+    }
+    if (line.charAt(at + 1) == line.charAt(at)) {
+      return at + 1;
+    }
+    var literal = enclosing[at + 1];
+    return literal != null ? literal.end() : -1;
   }
 
   /** Whether a private-key header is followed by a key body; see {@link #PEM_BODY}. */
