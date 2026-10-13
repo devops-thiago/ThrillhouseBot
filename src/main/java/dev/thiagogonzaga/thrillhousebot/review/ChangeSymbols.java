@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -328,6 +329,12 @@ public final class ChangeSymbols {
     /** The word that ends a heredoc the current line opens; it starts on the next line. */
     private String openedHeredoc;
 
+    /** One indexed lexical view per line, shared by every candidate heredoc operator. */
+    private ShellLine shellLine;
+
+    /** Last non-whitespace position plus one, shared by candidate suffix checks. */
+    private int lineEnd;
+
     boolean inCode() {
       return closer == null && heredocEnd == null;
     }
@@ -341,6 +348,8 @@ public final class ChangeSymbols {
         return;
       }
       openedHeredoc = null;
+      shellLine = null;
+      lineEnd = text.stripTrailing().length();
       var i = 0;
       while (i < text.length()) {
         i = closer == null ? pastCode(text, i) : pastCloser(text, i);
@@ -380,6 +389,7 @@ public final class ChangeSymbols {
         closer = "`";
         return i + 1;
       }
+      if (c == '\\') return Math.min(i + 2, text.length());
       if (c == '"' || c == '\'') {
         return endOfQuoted(text, i);
       }
@@ -412,22 +422,16 @@ public final class ChangeSymbols {
       if (word.lookingAt()
           && !continuesAsCode(text, word.end())
           && (word.group(1).isEmpty() || commandBeforeSpacedHeredoc(text, i))
-          && (text.substring(word.end()).isBlank() || followsCommandWord(text, i))) {
+          && (word.end() >= lineEnd || followsCommandWord(text, i))) {
         return opens(word.group(2), word.end());
       }
       return i + 2;
     }
 
     /** A spaced word belongs to a shell command, not an assignment's shift expression. */
-    private static boolean commandBeforeSpacedHeredoc(String text, int i) {
-      var before = text.substring(0, i).strip();
-      if (before.isEmpty()) {
-        return true;
-      }
-      var words = before.split("\\h+");
-      return followsCommandWord(text, i)
-          && Arrays.stream(words).noneMatch(word -> word.startsWith("="))
-          && Arrays.stream(words).anyMatch(word -> word.indexOf('=') < 0);
+    private boolean commandBeforeSpacedHeredoc(String text, int i) {
+      var line = shellLine(text);
+      return line.blank[i] || (line.followsWord(i) && line.command[i] && !line.assignment[i]);
     }
 
     /** Notes {@code delimiter} as the heredoc the line opens and returns {@code end}. */
@@ -438,16 +442,152 @@ public final class ChangeSymbols {
 
     /**
      * Whether a command word and a space come before the {@code <<} at {@code i}, as on a shell
-     * command line: {@code cat <<eof}, {@code python3 - <<py}.
+     * command line: {@code cat <<eof}, {@code python3 - <<py}, {@code echo "hello world" <<eof}.
+     * Complete literal words and substitutions count as words; their internal spaces and equals
+     * signs are not command-prefix assignment syntax.
      */
-    private static boolean followsCommandWord(String text, int i) {
-      var before = text.substring(0, i);
-      var word = before.stripTrailing();
-      if (word.isEmpty() || word.length() == before.length()) {
-        return false;
+    private boolean followsCommandWord(String text, int i) {
+      return shellLine(text).followsWord(i);
+    }
+
+    private ShellLine shellLine(String text) {
+      if (shellLine == null) shellLine = new ShellLine(text);
+      return shellLine;
+    }
+
+    private record ShellAtoms(String text, int invalidFrom) {}
+
+    /**
+     * Complete atoms keep their width as words; an unsupported expression invalidates later
+     * prefixes.
+     */
+    private static ShellAtoms shellAtoms(String text) {
+      var chars = text.toCharArray();
+      maskShellLiterals(text, chars);
+      var literals = new String(chars);
+      var invalidFrom = text.length();
+      var i = 0;
+      while (i < literals.length()) {
+        var c = literals.charAt(i);
+        var expansion =
+            c == '$' && i + 1 < literals.length() && "({".indexOf(literals.charAt(i + 1)) >= 0;
+        if (expansion) {
+          var start = i + 1;
+          var end = shellRegionEnd(literals, start);
+          if (end < 0) {
+            invalidFrom = i;
+            break;
+          }
+          Arrays.fill(chars, i, end, 'w');
+          i = end;
+        } else if (c == '(' || c == '{') {
+          invalidFrom = i;
+          break;
+        } else {
+          i++;
+        }
       }
-      var last = word.charAt(word.length() - 1);
-      return isWordChar(last) || last == '-';
+      return new ShellAtoms(new String(chars), invalidFrom);
+    }
+
+    /** Advance past each quoted/escaped atom once, including an incomplete tail. */
+    private static void maskShellLiterals(String text, char[] chars) {
+      var i = 0;
+      while (i < text.length()) {
+        var c = text.charAt(i);
+        if (c == '\\' || c == '\'' || c == '"' || c == '`') {
+          var end = c == '\\' ? Math.min(i + 2, text.length()) : endOfQuoted(text, i);
+          Arrays.fill(chars, i, end, 'w');
+          i = end;
+        } else {
+          i++;
+        }
+      }
+    }
+
+    /** Prefix facts are indexed once, so many operators on one line do not rescan its beginning. */
+    private static final class ShellLine {
+      private final boolean[] blank;
+      private final boolean[] command;
+      private final boolean[] assignment;
+      private final boolean[] separated;
+      private final int invalidFrom;
+
+      private ShellLine(String text) {
+        var atoms = shellAtoms(text);
+        invalidFrom = atoms.invalidFrom();
+        blank = new boolean[text.length() + 1];
+        command = new boolean[text.length() + 1];
+        assignment = new boolean[text.length() + 1];
+        separated = new boolean[text.length() + 1];
+        blank[0] = true;
+        var words = new ShellWords();
+        for (var i = 0; i < text.length(); i++) {
+          words.accept(atoms.text().charAt(i));
+          blank[i + 1] = words.blank;
+          command[i + 1] = words.command;
+          assignment[i + 1] = words.assignment;
+          separated[i + 1] = words.separated;
+        }
+      }
+
+      private boolean followsWord(int i) {
+        return i <= invalidFrom && separated[i];
+      }
+    }
+
+    /** Assignment syntax is read only outside the literal/substitution/group atoms. */
+    private static final class ShellWords {
+      private boolean blank = true;
+      private boolean command;
+      private boolean assignment;
+      private boolean separated;
+      private boolean inWord;
+      private boolean equals;
+      private boolean startsEquals;
+      private boolean wordTail;
+
+      private void accept(char c) {
+        if (Character.isWhitespace(c)) {
+          if (inWord) {
+            command |= !equals;
+            assignment |= startsEquals;
+            inWord = false;
+          }
+          separated = wordTail;
+        } else {
+          blank = false;
+          separated = false;
+          wordTail = isWordChar(c) || c == '-';
+          if (!inWord) {
+            inWord = true;
+            equals = false;
+            startsEquals = c == '=';
+          }
+          equals |= c == '=';
+        }
+      }
+    }
+
+    /** The end of a balanced substitution; {@code -1} for an incomplete region. */
+    private static int shellRegionEnd(String text, int start) {
+      var closers = new ArrayDeque<Character>();
+      closers.push(shellCloser(text.charAt(start)));
+      for (var i = start + 1; i < text.length(); i++) {
+        var c = text.charAt(i);
+        if (c == '(' || c == '{') {
+          closers.push(shellCloser(c));
+        } else if (c == ')' || c == '}') {
+          if (closers.pop() != c) return -1;
+          if (closers.isEmpty()) return i + 1;
+        }
+      }
+      return -1;
+    }
+
+    /** The matching closer of a parenthesis or brace used by a shell substitution. */
+    private static char shellCloser(char opener) {
+      return opener == '(' ? ')' : '}';
     }
 
     /**
@@ -461,12 +601,13 @@ public final class ChangeSymbols {
      * --dry-run}, {@code ssh host bash -s <<'EOF' arg}). Leaning to the heredoc only costs a
      * declaration it hides, while reading a heredoc's body as code invents one.
      */
-    private static boolean continuesAsCode(String text, int end) {
-      var rest = text.substring(end).strip();
-      return !rest.isEmpty()
-          && (CODE_AFTER_STRING.indexOf(rest.charAt(0)) >= 0
+    private boolean continuesAsCode(String text, int end) {
+      var start = end;
+      while (start < lineEnd && Character.isWhitespace(text.charAt(start))) start++;
+      return start < lineEnd
+          && (CODE_AFTER_STRING.indexOf(text.charAt(start)) >= 0
               || isMethodCall(text, end)
-              || rest.endsWith(";"));
+              || text.charAt(lineEnd - 1) == ';');
     }
 
     /** The characters that, right after a quoted string, show the line is code. */

@@ -428,6 +428,13 @@ live `fence(...)` (#604).
 
 ## Tests
 
+- **Summary declaration evidence excludes literal bodies.** `ChangeSymbols` treats complete quoted
+  words and backtick or dollar substitutions as shell words before a heredoc. Spaces and equals
+  signs inside those atoms are not assignment syntax;
+  assignments and bare parenthesized/braced groups retain their code controls. The lexical prefix
+  facts and suffix end are shared per line, so many candidate operators do not rescan the prefix
+  or allocate whole suffixes. Keep spaced/unspaced parity and long-input controls when changing
+  this reader.
 - **Streaming test doubles** live in `src/test/java/.../review/ai/`, one `TokenStream` per shape:
   `FakeTokenStream` (fixed payload), `CompleteOnlyTokenStream`, `DelayedChunkTokenStream`,
   `ErrorTokenStream`, `PartialThenErrorTokenStream`, `LateErrorTokenStream`, `HangingTokenStream`,

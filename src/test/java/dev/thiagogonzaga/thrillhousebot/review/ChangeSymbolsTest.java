@@ -23,6 +23,7 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** The names a file's added lines declare, as the summary call's evidence (#920). */
 class ChangeSymbolsTest {
@@ -430,5 +431,79 @@ class ChangeSymbolsTest {
             "after_unspaced_shift",
             "after_assignment_only"),
         ChangeSymbols.declaredNames(patch));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "echo 'hi' << eof",
+        "echo \"hi\" << eof",
+        "echo 'hello world' << eof",
+        "echo \"hello world\" << eof > generated.py",
+        "echo `printf hi` << eof",
+        "echo $(printf hi) << eof",
+        "echo $((1 + 2)) << eof",
+        "echo 'a = b' << eof",
+        "echo \"a=b\" << eof",
+        "VALUE=\"a b\" echo hi << eof",
+        "VALUE=\"a = b\" echo hi << eof",
+        "echo \"= hi\" << eof",
+        "echo $(printf '(') << eof",
+        "echo \"say \\\"hi\\\"\" << eof",
+        "echo pre'a = b'post << eof",
+        "echo \"one\"two\"three\" << eof",
+        "echo $name << eof",
+        "echo ${item:-${default}} << eof",
+        "echo \\\"hi\\\" << eof",
+        "echo hello\\ world << eof",
+        "cat << eof $",
+        "echo 'hi' <<eof",
+        "echo \"hi\" <<eof"
+      })
+  void quotedCommandArgumentsBeforeAHeredocDoNotExposeItsLiteralBody(String command) {
+    var patch = "+" + command + "\n+def literal():\n+eof\n+def real():\n";
+    assertEquals(List.of("real"), ChangeSymbols.declaredNames(patch));
+    assertEquals(List.of("real"), ChangeSymbols.declaredNames(patch.replace("<< eof", "<<eof")));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "result=\"hi\" << word",
+        "result = 'hi' << word",
+        "(x + y) << word",
+        "(x +y) << word",
+        "(x -y) << word",
+        "(x *y) << word",
+        "(x /y) << word",
+        "(x %y) << word",
+        "(x <<y) << word",
+        "(x and y) << word",
+        "(x) << word",
+        "(echo hi) << word",
+        "{ echo hi; } << word",
+        "echo $({)} << word",
+        "echo ${unfinished << word",
+        "call(x) << word",
+        "x<< word"
+      })
+  void aQuotedAssignmentBeforeAShiftRemainsCode(String expression) {
+    assertEquals(
+        List.of("real"), ChangeSymbols.declaredNames("+" + expression + "\n+def real():\n"));
+  }
+
+  @Test
+  void longQuotedAtomsAndManyCandidateOperatorsKeepTheLiteralBodyExcluded() {
+    var commands =
+        List.of(
+            "echo \"" + "a".repeat(20_000) + "\" << eof",
+            "echo `" + "a".repeat(20_000) + "` << eof",
+            "cat << eof \"" + "a\\\"".repeat(8_000),
+            "cat << eof arg ".repeat(1_000));
+    for (var command : commands) {
+      assertEquals(
+          List.of("real"),
+          ChangeSymbols.declaredNames("+" + command + "\n+def literal():\n+eof\n+def real():\n"));
+    }
   }
 }
