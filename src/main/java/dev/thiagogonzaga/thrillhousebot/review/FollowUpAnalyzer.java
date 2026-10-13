@@ -4275,19 +4275,17 @@ public class FollowUpAnalyzer {
         if (!out.isEmpty() && index < lines.size()) {
           out.add("");
         }
-        continue;
-      }
-      if (!lines.get(index).strip().startsWith(ClosedFindingNames.REVIEW_BODY_LEAD_IN)) {
+      } else if (lines.get(index).strip().startsWith(ClosedFindingNames.REVIEW_BODY_LEAD_IN)) {
+        index++;
+        index = skipWhile(lines, index, String::isBlank);
+        index = skipWhile(lines, index, line -> line.strip().startsWith("- "));
+        index = skipWhile(lines, index, String::isBlank);
+        if (!out.isEmpty() && index < lines.size()) {
+          out.add("");
+        }
+      } else {
         out.add(lines.get(index));
         index++;
-        continue;
-      }
-      index++;
-      index = skipWhile(lines, index, String::isBlank);
-      index = skipWhile(lines, index, line -> line.strip().startsWith("- "));
-      index = skipWhile(lines, index, String::isBlank);
-      if (!out.isEmpty() && index < lines.size()) {
-        out.add("");
       }
     }
     return String.join("\n", out).strip();
