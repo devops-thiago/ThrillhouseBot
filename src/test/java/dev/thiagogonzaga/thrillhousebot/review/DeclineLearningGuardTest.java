@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.time.Instant;
 import java.util.List;
@@ -267,11 +268,88 @@ class DeclineLearningGuardTest {
         "Rebuilding the python image fails to reproduce expected application output.",
         "The python image fails to reproduce identical image contents.",
         "The python image fails to authenticate to the registry.",
-        "Rebuilding the python image fails to reproduce identical image contents and the application fails to start."
+        "Rebuilding the python image fails to reproduce identical image contents and the application fails to start.",
+        DESCRIPTION + " Rebuilding the python image cannot start the registry authentication.",
+        DESCRIPTION + " The python image does not start the application.",
+        DESCRIPTION + " The python image refuses to start the application.",
+        DESCRIPTION + " The python image times out during startup.",
+        DESCRIPTION + " The python image breaks the application."
       })
   void functionalFailuresRemainIndependentOfImageReproducibility(String description) {
     var raw = response("b/Dockerfile", TITLE, description);
     assertSame(raw, apply(raw, selected(), LINE));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        TITLE + " and cannot start registry authentication",
+        TITLE + " and times out at startup",
+        "The python image breaks the application: " + TITLE
+      })
+  void independentClaimsInTheTitleRemainUnchanged(String title) {
+    var raw = response("b/Dockerfile", title, DESCRIPTION);
+    assertSame(raw, apply(raw, selected(), LINE));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "Base image is not pinned to a digest",
+        "Base image pinned to a mutable tag",
+        "Unpinned base image",
+        "BASE  IMAGE IS NOT PINNED BY DIGEST."
+      })
+  void completeRecognizedTitlesStillCoverThePolicy(String title) {
+    assertEquals(
+        "low",
+        apply(response("b/Dockerfile", title, DESCRIPTION), selected(), LINE)
+            .findings()
+            .getFirst()
+            .confidence());
+  }
+
+  @ParameterizedTest
+  @NullAndEmptySource
+  @ValueSource(strings = {" ", TITLE + "...", TITLE + "?", "Possibly " + TITLE})
+  void unknownOrIncompleteTitlesRemainUnchanged(String title) {
+    var raw = response("b/Dockerfile", title, DESCRIPTION);
+    assertSame(raw, apply(raw, selected(), LINE));
+  }
+
+  @ParameterizedTest
+  @NullAndEmptySource
+  @ValueSource(
+      strings = {
+        " ",
+        DESCRIPTION + "...",
+        DESCRIPTION + "?",
+        "Possibly " + DESCRIPTION,
+        "The python image is not referenced by a mutable tag, so rebuilding can use different image contents.",
+        DESCRIPTION + " Additional context has an unknown consequence.",
+        DESCRIPTION + "\n\nUnverified: arbitrary metadata is not an exact verifier paragraph.",
+        FindingVerificationService.UNVERIFIED_NOTE + "\n\n" + DESCRIPTION,
+        DESCRIPTION
+            + "\n\n"
+            + FindingVerificationService.UNVERIFIED_NOTE
+            + "\n\nThe python image cannot start.",
+        DESCRIPTION
+            + " The python image cannot start.\n\n"
+            + FindingVerificationService.UNVERIFIED_NOTE
+      })
+  void unknownOrExtraDescriptionsRemainUnchanged(String description) {
+    var raw = response("b/Dockerfile", TITLE, description);
+    assertSame(raw, apply(raw, selected(), LINE));
+  }
+
+  @Test
+  void theExactAppendedVerifierNoteRemainsVisibleWithTheCoveredFinding() {
+    var description = DESCRIPTION + "\n\n" + FindingVerificationService.UNVERIFIED_NOTE;
+    var finding =
+        apply(response("b/Dockerfile", TITLE, description), selected(), LINE).findings().getFirst();
+    assertEquals("low", finding.confidence());
+    assertTrue(finding.description().startsWith(description));
+    assertTrue(finding.description().contains("L12"));
   }
 
   @Test
@@ -390,14 +468,30 @@ class DeclineLearningGuardTest {
   }
 
   @Test
-  void linkedIssueEvidenceCanStillRestoreItsFloorAfterThisCheck() {
+  void aLinkedCriterionIsNotCoveredAndItsEvidenceStillRaisesTheFloor() {
     var raw =
         response(
             "b/Dockerfile",
             TITLE,
             DESCRIPTION + " This violates the linked issue's 'Images must be pinned by digest'.");
-    var held = apply(raw, selected(), LINE);
-    assertEquals("low", held.findings().getFirst().confidence());
+    assertSame(raw, apply(raw, selected(), LINE), "The extra current criterion is not policy-only");
+    var finding = raw.findings().getFirst();
+    var low =
+        new ReviewResponse(
+            List.of(
+                new ReviewResponse.Finding(
+                    finding.risk(),
+                    "low",
+                    finding.file(),
+                    finding.line(),
+                    finding.title(),
+                    finding.description(),
+                    finding.suggestionOld(),
+                    finding.suggestionNew())),
+            List.of(),
+            null);
+    var held = apply(low, selected(), LINE);
+    assertSame(low, held, "The guard leaves a model's low-confidence criterion claim untouched");
     var issues =
         "Issues this pull request is linked to: #7\n\n### Issue #7: Image policy\nIssue body:\nImages must be pinned by digest.\n";
     assertEquals(

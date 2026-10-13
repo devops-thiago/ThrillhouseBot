@@ -31,8 +31,9 @@ import java.util.regex.Pattern;
  * titles must name the mutable-reference class and both paths must have the Dockerfile type. An
  * actual FROM or external COPY source must name the image the finding discusses.
  *
- * <p>Covered findings stay visible, at low confidence with their learning id. Unknown premises,
- * other classes/types, missing anchors, current digest requirements and independent
+ * <p>Only complete recognized policy-only titles and descriptions are covered. Extra or unfamiliar
+ * claims abstain. Covered findings stay visible, at low confidence with their learning id. Unknown
+ * premises, other classes/types, missing anchors, current digest requirements and independent
  * failure/security evidence are left alone. This runs after calibration, before linked-criterion
  * floors and the deterministic scan, which never passes through this guard. It reads no prompt text
  * and makes no model call.
@@ -49,25 +50,20 @@ final class DeclineLearningGuard {
           "",
           " the release pipeline resolves every image to a digest at deploy time",
           " the release pipeline resolves every image to a digest at deploy time and the deployed manifest carries that digest");
-  private static final List<String> INDEPENDENT_FAILURES =
+  private static final List<String> POLICY_TITLES =
       List.of(
-          " crash ",
-          " crashes ",
-          " crashed ",
-          " incompatible ",
-          " unsupported ",
-          " exception ",
-          " fails at ",
-          " fails to ",
-          " fail at ",
-          " fail to ",
-          " permission denied ",
-          " data loss ",
-          " incorrect output ",
-          " incorrect result ",
-          " wrong result ",
-          " will not start ",
-          " wont start ");
+          "base image is not pinned by digest",
+          "base image is not pinned to a digest",
+          "base image pinned to a mutable tag",
+          "unpinned base image");
+  private static final List<String> POLICY_DESCRIPTIONS =
+      List.of(
+          "the %s image is referenced by a mutable tag, so rebuilding can use different image contents",
+          "rebuilding the %s image fails to reproduce the identical image contents",
+          "rebuilding the %s image fails to reproduce identical image contents",
+          "rebuilds of the %s image fail to reproduce identical image contents",
+          "a rebuild of the %s image fails to reproduce identical image contents");
+  private static final Pattern WHITESPACE = Pattern.compile("\\s++");
   private static final List<String> IMAGE_WORDS =
       List.of(
           " image ",
@@ -77,12 +73,6 @@ final class DeclineLearningGuard {
           " dockerfile ",
           " dockerfiles ",
           " base ");
-  private static final List<String> IMAGE_REPRODUCTION =
-      List.of(
-          " fails to reproduce identical image contents ",
-          " fails to reproduce the identical image contents ",
-          " fail to reproduce identical image contents ",
-          " fail to reproduce the identical image contents ");
   private static final Pattern IMAGE_DIRECTIVES =
       Pattern.compile("\\b(?:FROM|COPY)\\b|(?i)`(?:from|copy)`");
 
@@ -104,8 +94,7 @@ final class DeclineLearningGuard {
             "Maintainer learning L"
                 + learning.id()
                 + " accepts this Dockerfile image-digest policy; verify whether it still applies.";
-        var description = Objects.toString(finding.description(), "");
-        if (!description.contains(note)) description = (description + "\n\n" + note).strip();
+        var description = (Objects.toString(finding.description(), "") + "\n\n" + note).strip();
         kept.add(
             new ReviewResponse.Finding(
                 finding.risk(),
@@ -139,13 +128,7 @@ final class DeclineLearningGuard {
         || RiskLevel.fromString(finding.risk()) != RiskLevel.LOW
         || !SeverityCalibrator.isMutableExternalReference(finding)
         || context.failingChecks().cites(finding)) return null;
-    var claim =
-        SeverityCalibrator.normalized(
-            Objects.toString(finding.title(), "")
-                + "\n"
-                + Objects.toString(finding.description(), ""));
-    if (hasIndependentFailure(claim)
-        || !namesAnchoredImage(claim, lineText.apply(finding.file(), finding.line()))
+    if (!statesOnlyImagePolicy(finding, lineText.apply(finding.file(), finding.line()))
         || requiresDigest(repoInstructions)
         || context.scopeInstructions(finding.file()).stream()
             .anyMatch(DeclineLearningGuard::mentionsDigest)) return null;
@@ -170,20 +153,6 @@ final class DeclineLearningGuard {
         || text.contains(" sha256 ")
         || text.contains(" sha 256 ")
         || text.contains(" sha ");
-  }
-
-  private static boolean hasIndependentFailure(String claim) {
-    var remainder = claim;
-    // Losing identical image contents on rebuild is the mutable-reference policy's own
-    // consequence. Functional output failures and every other failure clause stay independent.
-    if (claim.contains(" rebuild ")
-        || claim.contains(" rebuilds ")
-        || claim.contains(" rebuilding ")) {
-      for (var wording : IMAGE_REPRODUCTION) {
-        remainder = remainder.replace(wording, " ");
-      }
-    }
-    return INDEPENDENT_FAILURES.stream().anyMatch(remainder::contains);
   }
 
   private static boolean covers(
@@ -217,11 +186,31 @@ final class DeclineLearningGuard {
                 IMAGE_RATIONALES.stream().anyMatch(reason -> policy.equals(statement + reason)));
   }
 
-  private static boolean namesAnchoredImage(String claim, String line) {
+  /** Complete recognized policy-only claims; any extra or unknown consequence abstains. */
+  private static boolean statesOnlyImagePolicy(ReviewResponse.Finding finding, String line) {
     var source = imageSource(line);
     if (source == null || source.indexOf('$') >= 0 || source.indexOf('@') >= 0) return false;
     var name = SeverityCalibrator.imageName(source);
-    return name.length() >= 3 && claim.contains(SeverityCalibrator.normalized(name));
+    if (name.length() < 3) return false;
+    var title = canonicalClaim(finding.title());
+    var description = canonicalClaim(withoutTrailingUnverifiedNote(finding.description()));
+    return POLICY_TITLES.contains(title)
+        && POLICY_DESCRIPTIONS.stream()
+            .anyMatch(form -> description.equals(form.formatted(name.toLowerCase(Locale.ROOT))));
+  }
+
+  /** Only the verifier's exact appended paragraph is round metadata rather than a claim. */
+  private static String withoutTrailingUnverifiedNote(String description) {
+    var raw = Objects.toString(description, "").strip();
+    var suffix = "\n\n" + FindingVerificationService.UNVERIFIED_NOTE;
+    return raw.endsWith(suffix) ? raw.substring(0, raw.length() - suffix.length()) : raw;
+  }
+
+  /** Keep punctuation and every claim word; permit whitespace, case and one final period. */
+  private static String canonicalClaim(String text) {
+    var raw = Objects.toString(text, "").strip();
+    if (raw.endsWith(".")) raw = raw.substring(0, raw.length() - 1);
+    return WHITESPACE.matcher(raw).replaceAll(" ").toLowerCase(Locale.ROOT);
   }
 
   private static String imageSource(String line) {

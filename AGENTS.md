@@ -149,7 +149,12 @@ same diff.
   Qualifiers, incomplete text and other rationales abstain. It also requires a mutable-reference
   finding on the same file type, and an actual
   `FROM` or external `COPY --from=` image the finding names. The finding stays visible at low
-  confidence with its learning id. Unknown or conditional premises, other classes and file types,
+  confidence with its learning id. Both its title and description must be complete policy-only
+  forms from `DeclineLearningGuard`: the four unpinned-base-image titles and five mutable-tag or
+  identical-image-content rebuild descriptions. Case, whitespace and one final period may vary;
+  punctuation, negation and extra claim text are never discarded. Only the verifier's exact appended
+  unverified paragraph is recognized as metadata and preserved. Unfamiliar finding wording relies
+  on the model's learning assessment. Unknown or conditional premises, other classes and file types,
   current repository or applicable scoped digest requirements, and independent failure/security
   evidence are left alone. Losing identical image contents on rebuild is that policy's own
   consequence; actual functional failures and failed-check evidence still abstain. Current digest

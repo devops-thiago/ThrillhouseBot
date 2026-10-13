@@ -1063,6 +1063,15 @@ failure or security evidence leaves the finding alone. Linked-issue evidence
 can still raise its confidence afterward. Deterministic scan findings skip this
 check. Other policies continue to rely on the model's assessment.
 
+The deterministic backstop recognizes complete policy-only titles and descriptions:
+the unpinned-base-image title forms with the mutable-tag/rebuild claim or the
+identical-image-content reproduction forms. Unknown wording, extra consequences
+and linked acceptance-criterion claims leave the finding unchanged. Only case,
+whitespace and a final period may vary; arbitrary prefixes, suffixes, punctuation
+or negation are not removed. The verifier's exact appended unverified paragraph
+stays visible as metadata. Other wording continues to rely on the model's
+assessment of the selected learning.
+
 A rebuild losing identical image contents is the accepted policy's own
 consequence; a functional failure or a failed CI check still leaves the finding
 unchanged. Current instructions mentioning an image, container, Dockerfile or
