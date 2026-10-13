@@ -79,7 +79,7 @@ final class DeclineLearningGuard {
           " fail to reproduce identical image contents ",
           " fail to reproduce the identical image contents ");
   private static final Pattern IMAGE_DIRECTIVES =
-      Pattern.compile("\\b(?:FROM|COPY)\\b|(?i:`(?:from|copy)`)");
+      Pattern.compile("\\b(?:FROM|COPY)\\b|(?i)`(?:from|copy)`");
 
   static ReviewResponse apply(
       ReviewResponse response,
