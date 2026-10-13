@@ -1328,18 +1328,25 @@ public class FindingVerificationService {
    * so a finding that only names two files, whose paths appear in those headings, quotes no code.
    */
   private static List<String> codeLines(String diff) {
-    return Objects.requireNonNullElse(diff, "")
-        .lines()
-        .filter(FindingVerificationService::isCodeLine)
-        .map(line -> collapsedWhitespace(line.substring(1)).strip())
-        .toList();
+    var code = new ArrayList<String>();
+    boolean inHunk = false;
+    for (String line : Objects.requireNonNullElse(diff, "").lines().toList()) {
+      if (line.startsWith("@@")) {
+        inHunk = true;
+      } else if (line.startsWith("diff --git ")
+          || line.startsWith("### ")
+          || line.startsWith("```")) {
+        inHunk = false;
+      } else if (isCodeLine(line)
+          && (inHunk || (!line.startsWith("+++ ") && !line.startsWith("--- ")))) {
+        code.add(collapsedWhitespace(line.substring(1)).strip());
+      }
+    }
+    return code;
   }
 
   private static boolean isCodeLine(String line) {
-    return !line.isEmpty()
-        && "+- ".indexOf(line.charAt(0)) >= 0
-        && !line.startsWith("+++")
-        && !line.startsWith("---");
+    return !line.isEmpty() && "+- ".indexOf(line.charAt(0)) >= 0;
   }
 
   /** A finding's location and title, which the audit never rewrites. */
