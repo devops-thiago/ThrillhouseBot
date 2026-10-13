@@ -612,6 +612,20 @@ class SecretScannerTest {
   }
 
   @Test
+  void ambiguousPrefixedStringsInOtherCallsRemainScanned() {
+    var value = fake.genericSecret(40);
+    var quoted = "\"prefix password='" + value + "'\"";
+    for (var line :
+        List.of(
+            "Map.of(\"tag\", " + quoted + ")",
+            "fixtures.add(" + quoted + ")",
+            "commands.add(" + quoted + ")",
+            "Runtime.exec(" + quoted + ")")) {
+      assertGenericHit("password", value, line);
+    }
+  }
+
+  @Test
   void anAssignmentInACommandStringIsStillACredential() {
     assertGenericHit(
         "DB_PASSWORD", "q8#Lm2!vRt9Z", "ExecStart=/bin/sh -c 'DB_PASSWORD=\"q8#Lm2!vRt9Z\" run'");

@@ -660,6 +660,79 @@ class IacScannerTest {
   }
 
   @Test
+  void scalarWildcardsPermitTheFilesActualTrailingLineComment() {
+    for (var comment : List.of("# everything", "// everything")) {
+      assertEquals(
+          List.of(SecurityRule.IAM_WILDCARD),
+          rules(
+              scanNew(
+                  "iam.tf",
+                  "statement {",
+                  "  actions = \"*\" " + comment,
+                  "  resources = \"*\" " + comment,
+                  "}")),
+          comment);
+    }
+    assertEquals(
+        List.of(SecurityRule.IAM_WILDCARD),
+        rules(
+            scanNew(
+                "p.yaml",
+                "Statement:",
+                "  Action: \"*\" # everything",
+                "  Resource: \"*\" # everything")));
+    assertEquals(
+        List.of(SecurityRule.IAM_WILDCARD),
+        rules(
+            scanNew(
+                "iam.tf",
+                "statement {",
+                "  actions = \"*\"// everything",
+                "  resources = \"*\"# everything",
+                "}")));
+  }
+
+  @Test
+  void trailingCommentRecognitionDoesNotInventAWildcard() {
+    for (var action :
+        List.of(
+            "[var.action # , \"*\"]",
+            "[var.action // , \"*\"]",
+            "var.action # actions = \"*\"",
+            "var.action // actions = \"*\"",
+            "\"s3:GetObject\" # actions = \"*\"",
+            "\"s3:GetObject\" // actions = \"*\"")) {
+      assertTrue(
+          scanNew("iam.tf", "statement {", "  actions = " + action, "  resources = [\"*\"]", "}")
+              .isEmpty(),
+          action);
+    }
+    for (var file : List.of("p.json", "p.yaml")) {
+      assertTrue(
+          scanNew(file, "{", "  Action: \"*\" // unsupported comment", "  Resource: \"*\"", "}")
+              .isEmpty(),
+          file);
+    }
+    assertTrue(
+        scanNew("p.json", "{", "  Action: \"*\" # unsupported comment", "  Resource: \"*\"", "}")
+            .isEmpty());
+    assertTrue(
+        scanNew("p.yaml", "Statement:", "  Action: \"*\"# not separated", "  Resource: \"*\"")
+            .isEmpty());
+  }
+
+  @Test
+  void aYamlScalarDoesNotAcquireTerraformBlockCommentSyntax() {
+    assertTrue(
+        scanNew(
+                "p.yaml",
+                "Statement:",
+                "  Action: \"*\" /* not YAML */# comment",
+                "  Resource: \"*\"")
+            .isEmpty());
+  }
+
+  @Test
   void anOpaqueSettingDoesNotHideALaterWildcardSettingOnTheSameLine() {
     assertEquals(
         List.of(SecurityRule.IAM_WILDCARD),

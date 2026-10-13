@@ -825,7 +825,7 @@ IaC rules (high confidence):
 |---|---|---|---|
 | Admin port open to the internet | `.tf`, `.yaml`/`.yml`, `.json` | an ingress rule admitting `0.0.0.0/0` or `::/0` to port 22, 23, 3389, 5985 or 5986, to a range containing one, or to every protocol | high |
 | S3 bucket made public | `.tf`, `.yaml`/`.yml`, `.json` | a `public-read`/`public-read-write` ACL (`AccessControl: PublicRead…`), or a Block Public Access setting set to `false` | high |
-| IAM wildcard | `.tf`, `.yaml`/`.yml`, `.json` | `Action: "*"` with `Resource: "*"` in the same statement and no `Effect: Deny`; a `"*"` anywhere in a valid one-line list counts, with no element-count or element-width limit | high |
+| IAM wildcard | `.tf`, `.yaml`/`.yml`, `.json` | `Action: "*"` with `Resource: "*"` in the same statement and no `Effect: Deny`; a `"*"` anywhere in a valid one-line list counts, with no element-count or element-width limit; scalar wildcards allow trailing Terraform `#`/`//` and whitespace-separated YAML `#` comments | high |
 | Privileged container | `.yaml`/`.yml`, `.json` | `privileged: true` (in YAML also `yes`, `on`, `y`, any case) | high |
 | Host namespace | `.yaml`/`.yml`, `.json` | `hostNetwork`, `hostPID` or `hostIPC` set to `true` (in YAML also `yes`, `on`, `y`) | high |
 | Final stage runs as root | Dockerfiles | `USER root` (or `0`) with no later `FROM` or `USER`, in a new file or in a last hunk that reaches the end of the file | medium |
@@ -848,12 +848,15 @@ regular expression (a value holding `(?`, a character-class range such as
 `[A-Z0-9]` or an escape such as `\d`, with at least a quarter of its characters
 regex syntax), and sample text quoted inside another complete string, including
 the explicit prose leaders `before`, `text before` or `prefix` before the
-credential name in a raw list or a `List.of`-style builder, and a string
+credential name in a raw list or a `List.of`, `Set.of`, `Arrays.asList` or
+`Stream.of` builder, and a string
 assigned to a fixture/sample/example-named variable
 (`String fixture = "prefix client_secret: 'abc…'";`). New sample forms require
 a bare key or one of those prose leaders and whitespace only after the
 assignment inside the string. Unknown prefixes and trailing command text
-stay scanned even with a sample-named variable. An assignment in a
+stay scanned even with a sample-named variable. Other calls, including
+`Map.of` and `fixtures.add`, retain scanning for prefixed strings because
+their values can be executable command text. An assignment in a
 direct or assigned command string, or a prefixed execution call such as
 `Runtime.exec("export API_KEY='…'")`, is still reported. Bare command strings
 written as list elements can read exactly like samples, as before. Known
@@ -896,7 +899,9 @@ and is kept. Nearby detections are indexed by file and line, and distant
 secret duplicates are looked up by the identifiers their text names. An
 environment key aliases a secret only when its fallback expression reads that
 secret's simple identifier, or a comment directly above the declaration names
-the key. A different call argument does not tie the key to the secret.
+the key. SQL/Lua `--` and HTML/XML/SVG `<!--` comments are recognized in
+those file types, along with `//`, `#`, `/*` and `*` comment lines. A different
+call argument does not tie the key to the secret.
 
 **Grades.** Every scan finding is high confidence, so none carries the "verify
 before acting" note: a match settles whether the pattern is on the line. The

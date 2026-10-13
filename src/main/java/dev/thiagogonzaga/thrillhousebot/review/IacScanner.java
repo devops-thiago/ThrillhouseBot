@@ -147,10 +147,10 @@ final class IacScanner {
    * with quote, escape and delimiter nesting state, without evaluating their expressions. A
    * wildcard ending at a list delimiter proves the setting independently of later elements.
    */
-  private static boolean containsWildcard(String text, Pattern setting) {
+  private static boolean containsWildcard(String text, Pattern setting, FileKind kind) {
     var matcher = setting.matcher(text);
     while (matcher.find()) {
-      var value = wildcardValue(text, matcher.end());
+      var value = wildcardValue(text, matcher.end(), kind);
       if (value.wildcard()) {
         return true;
       }
@@ -159,7 +159,7 @@ final class IacScanner {
     return false;
   }
 
-  private static WildcardValue wildcardValue(String text, int at) {
+  private static WildcardValue wildcardValue(String text, int at, FileKind kind) {
     at = skipListTrivia(text, at);
     if (at < text.length() && text.charAt(at) == '[') {
       return wildcardList(text, at + 1);
@@ -171,10 +171,24 @@ final class IacScanner {
     int start = at;
     boolean wildcard = end == at + 3 && text.charAt(at + 1) == '*';
     at = skipListTrivia(text, end);
+    if (startsLineComment(text, at, end, kind)) {
+      return new WildcardValue(text.length(), wildcard);
+    }
     if (at < text.length() && ",}]".indexOf(text.charAt(at)) < 0) {
       return opaqueValue(text, start);
     }
     return new WildcardValue(at, wildcard);
+  }
+
+  /** A trailing line comment ends the scalar; stars and setting names inside it are not values. */
+  private static boolean startsLineComment(String text, int at, int quotedEnd, FileKind kind) {
+    if (kind == FileKind.TERRAFORM) {
+      return text.startsWith("#", at) || text.startsWith("//", at);
+    }
+    return kind == FileKind.YAML
+        && text.startsWith("#", at)
+        && at > quotedEnd
+        && Character.isWhitespace(text.charAt(at - 1));
   }
 
   private static WildcardValue wildcardList(String text, int at) {
@@ -352,8 +366,8 @@ final class IacScanner {
     if (PUBLIC_BUCKET.stream().anyMatch(p -> p.matcher(text).find())) {
       return SecurityRule.PUBLIC_BUCKET;
     }
-    if (containsWildcard(text.stripTrailing(), WILDCARD_ACTION)
-        && isAllowAllStatement(window(lines, index))) {
+    if (containsWildcard(text.stripTrailing(), WILDCARD_ACTION, kind)
+        && isAllowAllStatement(window(lines, index), kind)) {
       return SecurityRule.IAM_WILDCARD;
     }
     if (OPEN_CIDR.matcher(text).find() && isOpenAdminIngress(window(lines, index))) {
@@ -415,13 +429,13 @@ final class IacScanner {
    * wildcard {@code Resource} in the same statement ({@link #block}) and no {@code Effect: Deny}
    * there. A statement spread wider than the hunk shows does not fire.
    */
-  private static boolean isAllowAllStatement(Window window) {
+  private static boolean isAllowAllStatement(Window window, FileKind kind) {
     boolean wildcardResource = false;
     for (var line : block(window)) {
       if (DENY_EFFECT.matcher(line.text()).find()) {
         return false;
       }
-      wildcardResource |= containsWildcard(line.text().stripTrailing(), WILDCARD_RESOURCE);
+      wildcardResource |= containsWildcard(line.text().stripTrailing(), WILDCARD_RESOURCE, kind);
     }
     return wildcardResource;
   }

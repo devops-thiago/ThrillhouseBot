@@ -1089,6 +1089,53 @@ class SecurityScanTest {
   }
 
   @Test
+  void luaSqlAndMarkupCommentAliasesStaySupported() {
+    var value = fake.genericSecret(40);
+    for (var file : List.of("config.lua", "config.sql")) {
+      assertEquals(
+          Set.of("apiToken", "PAYMENT_API_TOKEN"),
+          aliasesOf(
+              added(
+                  file, "-- Used when PAYMENT_API_TOKEN is unset", "apiToken = \"" + value + "\"")),
+          file);
+    }
+    for (var file :
+        List.of("config.xml", "config.html", "CONFIG.XHTML", "config.svg", "config.htm")) {
+      assertEquals(
+          Set.of("apiToken", "PAYMENT_API_TOKEN"),
+          aliasesOf(
+              added(
+                  file,
+                  "<!-- Used when PAYMENT_API_TOKEN is unset -->",
+                  "<config apiToken=\"" + value + "\" />")),
+          file);
+    }
+  }
+
+  @Test
+  void commentMarkersInUnrelatedCodeDoNotCreateAliases() {
+    var value = fake.genericSecret(40);
+    for (var above :
+        List.of(
+            "--PAYMENT_API_TOKEN;",
+            "<!-- PAYMENT_API_TOKEN -->",
+            "String label = \"<!-- PAYMENT_API_TOKEN -->\";",
+            "var key = \"PAYMENT_API_TOKEN\";")) {
+      assertEquals(
+          Set.of("apiToken"),
+          aliasesOf(added("Config.java", above, "String apiToken = \"" + value + "\";")),
+          above);
+    }
+    assertEquals(
+        Set.of("apiToken"),
+        aliasesOf(
+            added(
+                "config.xml",
+                "<setting key=\"PAYMENT_API_TOKEN\" />",
+                "<config apiToken=\"" + value + "\" />")));
+  }
+
+  @Test
   void namedSecretDuplicatesKeepThePathAndOtherCredentialGuards() {
     var value = fake.genericSecret(40);
     var file =

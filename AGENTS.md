@@ -139,6 +139,10 @@ same diff.
   IAM wildcard arrays are read in linear time with no element-count or element-width cap (#983).
   A quoted wildcard ending at a list delimiter proves the setting even when other items are
   Terraform expressions or YAML plain scalars; nested quoted stars do not prove a wildcard.
+  Scalar wildcards also allow trailing Terraform `#`/`//` or whitespace-separated YAML `#`
+  comments; comment text never supplies a later wildcard. Environment-key aliases from the
+  preceding comment preserve SQL/Lua `--` and HTML/XML/SVG `<!--` in their file types, without
+  treating a Java decrement or an adjacent key assignment as a comment.
 - **Deterministic scan findings skip the verifier and calibrator.** `SecurityScan.merge` runs in
   `FindingPipeline.finish`, after every verifier call and (on the single-call lane) after
   `SeverityCalibrator.calibrate`, so no model grades a pattern match, and `markUnscreened` and

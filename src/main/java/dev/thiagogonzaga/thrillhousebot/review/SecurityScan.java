@@ -1448,18 +1448,32 @@ public class SecurityScan {
     aliases.add(detection.identifier());
     if (index > 0 && lines.get(index - 1).hunk() == lines.get(index).hunk()) {
       var text = lines.get(index - 1).text().stripLeading();
-      var above =
-          text.startsWith("//")
-                  || text.startsWith("#")
-                  || text.startsWith("/*")
-                  || text.startsWith("*")
-              ? envKeyOf(text, ENV_KEY)
-              : null;
+      var above = isAliasComment(text, detection.finding().file()) ? envKeyOf(text, ENV_KEY) : null;
       if (above != null) {
         aliases.add(above);
       }
     }
     return aliases;
+  }
+
+  /** Comment styles whose meaning depends on the file type must not borrow a key from code. */
+  private static boolean isAliasComment(String text, String filename) {
+    if (text.startsWith("//")
+        || text.startsWith("#")
+        || text.startsWith("/*")
+        || text.startsWith("*")) {
+      return true;
+    }
+    var path = filename.toLowerCase(java.util.Locale.ROOT);
+    if (text.startsWith("--")) {
+      return path.endsWith(".sql") || path.endsWith(".lua");
+    }
+    return text.startsWith("<!--")
+        && (path.endsWith(".xml")
+            || path.endsWith(".html")
+            || path.endsWith(".htm")
+            || path.endsWith(".xhtml")
+            || path.endsWith(".svg"));
   }
 
   /**
