@@ -417,7 +417,11 @@ live `fence(...)` (#604).
   criterion (the changed code contradicts it) is held to the issue text deterministically
   (`LinkedIssueCitations`, #1073). A numbered attribution reads only that issue's body; explicitly
   plural attributions read the named bodies, and unnamed ones read the full linked-issue section
-  (#1109). The gaps are not turned into findings. The bug-fix efficacy section drops its own copy
+  (#1109). Each citation pass shares advancing cue/source/sentence searches and quote-position
+  indexes; it does not reread every preceding quote or absent-pattern suffix for each cue. Quote
+  indexes preserve Unicode guards and prefix-only quote boundaries. Cuts remain sequential and
+  recheck the changed text's attribution; this does not bound whole-string cut copying as linear.
+  The gaps are not turned into findings. The bug-fix efficacy section drops its own copy
   of the issue text when the linked-issue section is present.
 - **Sanitize model and GitHub text before logging it.** Wrap every such value in
   `LogSafe.oneLine` at the point where the accessor is read. `LogSafeInvariantTest` derives the

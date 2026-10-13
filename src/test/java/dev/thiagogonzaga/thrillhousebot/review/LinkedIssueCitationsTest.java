@@ -134,6 +134,231 @@ class LinkedIssueCitationsTest {
     return response.findings().getFirst();
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"quoted", "unquoted", "absent-quote", "adjacent-apostrophe"})
+  void citationPassReadsInputABoundedNumberOfTimes(String shape) {
+    var unit =
+        switch (shape) {
+          case "quoted" ->
+              "Issue #228 requires 'Annual-plan subscribers are charged only in their renewal month'. ";
+          case "unquoted" ->
+              "The acceptance criterion for annual-plan subscribers renewal month is unmet; ";
+          case "adjacent-apostrophe" ->
+              "'acceptance criterion for annual-plan subscribers renewal month is unmet, ";
+          default -> "The linked issue is about billing. ";
+        };
+    var text =
+        new CountedText(
+            (shape.equals("adjacent-apostrophe") ? "'opening " : "") + unit.repeat(2_000));
+    var citations = LinkedIssueCitations.citationsInFoldedText(text, TWO_ISSUES);
+
+    assertEquals(2_000, citations.size());
+    var expected =
+        shape.equals("absent-quote")
+            ? LinkedIssueCitations.Verdict.UNJUDGED
+            : LinkedIssueCitations.Verdict.MATCHED;
+    assertTrue(citations.stream().allMatch(citation -> citation.verdict() == expected));
+    assertTrue(text.reads[0] < text.length() * 80L, "Input reads: " + text.reads[0]);
+  }
+
+  @Test
+  void aPrefixOnlyQuoteBoundaryDoesNotChangeTheNextCitationsSource() {
+    var first =
+        "Issue #231 mentioned 'billing'acceptance criterion for annual-plan subscribers renewal month is missing";
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "low",
+                        "low",
+                        "Independent bug",
+                        first
+                            + ", and the acceptance criterion for annual-plan subscribers renewal month is missing.")),
+                TWO_ISSUES));
+    assertEquals(first + ".", held.description());
+    assertEquals("medium", held.confidence());
+  }
+
+  @Test
+  void removingAQuoteRechecksTheLaterUnquotedCriterionsSource() {
+    var description =
+        "Issue #231 is referenced in the metadata solely to identify the unrelated ticket whose validator handles meter readings, and the linked issue #228 states 'invented policy', but the acceptance criterion for annual-plan subscribers renewal month is missing.";
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(finding("low", "low", "Independent bug", description)), TWO_ISSUES));
+    assertTrue(held.description().startsWith("Issue #231 is referenced in the metadata"));
+    assertFalse(held.description().contains("invented policy"));
+    assertFalse(held.description().contains("annual-plan"));
+  }
+
+  @Test
+  void aSentenceCutInsideAnEarlierMultiSentenceQuoteRetainsTheRemainingClaim() {
+    var issues =
+        TWO_ISSUES.replace(
+            "### Issue #231:",
+            "- [ ] First sentence. Issue #231 does not govern billing.\n\n### Issue #231:");
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "low",
+                        "low",
+                        "Independent bug",
+                        "Issue #228 states 'First sentence. Issue #231 does not govern billing' per the acceptance criterion for instant refunds. The charge loop aborts.")),
+                issues));
+    assertEquals("Issue #228 states 'First sentence. The charge loop aborts.", held.description());
+    assertEquals("medium", held.confidence());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"a", "Ⅳ", "½"})
+  void unicodeLettersAndNumbersBeforeAnApostropheDoNotOpenAQuotedCriterion(String preceding) {
+    var finding =
+        finding(
+            "low",
+            "low",
+            "Independent bug",
+            "The linked issue #228 states "
+                + preceding
+                + "'Annual-plan subscribers are charged only in their renewal month'.");
+    assertSame(finding, only(LinkedIssueCitations.apply(responseOf(finding), TWO_ISSUES)));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {" ", "😀", ",", "𐐀", "𝟙"})
+  void theExistingRegexOpenerBehaviorIsPreserved(String preceding) {
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(
+                    finding(
+                        "low",
+                        "low",
+                        "Independent bug",
+                        "The linked issue #228 states "
+                            + preceding
+                            + "'Annual-plan\rsubscribers are charged only in their renewal month'.")),
+                TWO_ISSUES));
+    assertEquals("medium", held.confidence());
+  }
+
+  @Test
+  void aCompleteInnerQuoteResetsTheSourceWhileItsOuterQuoteIsIncomplete() {
+    var citations =
+        LinkedIssueCitations.citationsInFoldedText(
+            "Issue #231 mentioned 'unclosed \"billing\" the acceptance criterion for annual-plan subscribers renewal month is missing.",
+            TWO_ISSUES);
+    assertEquals(
+        List.of(LinkedIssueCitations.Verdict.UNMATCHED, LinkedIssueCitations.Verdict.MATCHED),
+        citations.stream().map(LinkedIssueCitations.Citation::verdict).toList());
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "''",
+        "\"\"",
+        "'unclosed",
+        "\"unclosed",
+        "'bad\nquoted'",
+        "\"bad\nquoted\"",
+        "'",
+        "\""
+      })
+  void emptyIncompleteAndNewlineCrossingQuotesDoNotEstablishACriterion(String passage) {
+    var finding =
+        finding("low", "low", "Independent bug", "The linked issue #228 states " + passage + ".");
+    assertSame(finding, only(LinkedIssueCitations.apply(responseOf(finding), TWO_ISSUES)));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {"billing'", "'", "Earlier 'unclosed\nbilling'", "Earlier 'unclosed\n'billing'"})
+  void prefixOnlyClosuresRespectOpenersAndLineBoundaries(String lead) {
+    var citations =
+        LinkedIssueCitations.citationsInFoldedText(
+            lead + "acceptance criterion for annual-plan subscribers renewal month is missing.",
+            TWO_ISSUES);
+    assertEquals(
+        List.of(LinkedIssueCitations.Verdict.MATCHED),
+        citations.stream().map(LinkedIssueCitations.Citation::verdict).toList());
+  }
+
+  @Test
+  void aQuoteOpenerInsideAnAlreadyCompletedQuoteDoesNotResetTheSourceLater() {
+    var description =
+        "The comment reads \"'Annual-plan subscribers\" and other prose' and the acceptance criterion for annual-plan subscribers renewal month is missing.";
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(finding("low", "low", "Independent bug", description)), TWO_ISSUES));
+    assertEquals(description, held.description());
+    assertEquals("medium", held.confidence());
+  }
+
+  @Test
+  void aPrefixOnlySentenceMarkIsLocalToItsCue() {
+    var description =
+        "Issue #231 is mentioned.acceptance criterion for annual-plan subscribers renewal month is missing, and the acceptance criterion for negative litre readings is missing.";
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(finding("low", "low", "Independent bug", description)), TWO_ISSUES));
+    assertEquals(description, held.description());
+    assertEquals("medium", held.confidence());
+  }
+
+  @Test
+  void aCompleteCriterionQuoteBeforeALineBreakRemainsEvidence() {
+    var description =
+        "The linked issue #228 states 'Annual-plan subscribers are charged only in their renewal month'.\nThe code charges every month.";
+    var held =
+        only(
+            LinkedIssueCitations.apply(
+                responseOf(finding("low", "low", "Independent bug", description)), TWO_ISSUES));
+    assertEquals(description, held.description());
+    assertEquals("medium", held.confidence());
+  }
+
+  /** Every regex read is counted; subsequences share the same counter. No wall-clock assertion. */
+  private static final class CountedText implements CharSequence {
+    private final String text;
+    private final long[] reads;
+
+    CountedText(String text) {
+      this(text, new long[1]);
+    }
+
+    private CountedText(String text, long[] reads) {
+      this.text = text;
+      this.reads = reads;
+    }
+
+    @Override
+    public int length() {
+      return text.length();
+    }
+
+    @Override
+    public char charAt(int index) {
+      reads[0]++;
+      return text.charAt(index);
+    }
+
+    @Override
+    public CharSequence subSequence(int start, int end) {
+      return new CountedText(text.substring(start, end), reads);
+    }
+
+    @Override
+    public String toString() {
+      return text;
+    }
+  }
+
   // Rule 3: a cited criterion must be in the issue.
 
   @Test

@@ -26,6 +26,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -102,6 +104,14 @@ final class LinkedIssueCitations {
    */
   private static final Pattern QUOTED =
       Pattern.compile("\"([^\"\n]++)\"|(?<![\\p{L}\\p{N}])'([^\n]+?)'(?![\\p{L}\\p{N}])");
+
+  /** An eligible single-quote opener, including a quote closed only by a truncated region end. */
+  private static final Pattern SINGLE_QUOTE_OPEN = Pattern.compile("(?<![\\p{L}\\p{N}])'");
+
+  private static final Pattern SINGLE_QUOTE_CLOSE = Pattern.compile("'(?![\\p{L}\\p{N}])");
+  private static final Pattern DOUBLE_QUOTE = Pattern.compile("\"");
+
+  private static final Pattern LINE_BREAK = Pattern.compile("\n");
 
   /** What ends a sentence: a full stop, semicolon or mark before a blank or the end, or a break. */
   private static final Pattern SENTENCE_END = Pattern.compile("[.;!?](?=\\s|$)|\n");
@@ -357,88 +367,274 @@ final class LinkedIssueCitations {
    * already found are part of it.
    */
   private static List<Citation> citations(String text, List<String> keys, Sources sources) {
-    var folded = foldQuotes(text);
-    var found = new ArrayList<Citation>();
-    var from = 0;
-    while (true) {
-      var cue = nextCue(folded, from, keys);
-      if (cue == null) {
-        return found;
-      }
-      var citation = citationAt(folded, cue, sources);
-      found.add(citation);
-      from = Math.max(citation.end(), cue.end());
-    }
+    return new CitationScan(foldQuotes(text), keys, sources).all();
+  }
+
+  /** Quote-folded text, with a CharSequence seam for checking the amount of parser input read. */
+  static List<Citation> citationsInFoldedText(CharSequence text, String linkedIssues) {
+    var keys = TicketContextResolver.linkedKeys(linkedIssues);
+    return new CitationScan(text, keys, Sources.of(linkedIssues, keys)).all();
   }
 
   /**
-   * A cue naming the linked issue or a criterion: where it runs, and whether it is a criterion noun
-   * (after which unquoted words name the criterion's subject).
+   * One left-to-right pass. A missing cue or quote is searched for once, not again for every
+   * intervening citation; sentence and source boundaries advance with the citations too. A new pass
+   * after a cut deliberately reads the changed text, since its attribution may have changed.
    */
-  private record Cue(int start, int end, boolean noun) {}
+  private static final class CitationScan {
+    private final CharSequence text;
+    private final Sources sources;
+    private final List<CueSearch> cues = new ArrayList<>();
+    private final QuotePositions quotes;
+    private final Search sentences;
+    private final Search precedingSentences;
+    private final Search numbers;
+    private int previousSentenceEnd;
+    private int previousNumberStart = -1;
 
-  /** The earliest cue at or after {@code from}; {@code null} when none. */
-  private static Cue nextCue(String text, int from, List<String> keys) {
-    var cues = new ArrayList<Cue>();
-    for (var pattern : CUES) {
-      var m = pattern.matcher(text);
-      if (m.find(from)) {
-        cues.add(new Cue(m.start(), m.end(), CRITERION_NOUNS.contains(pattern)));
+    CitationScan(CharSequence text, List<String> keys, Sources sources) {
+      this.text = text;
+      this.sources = sources;
+      for (var pattern : CUES) {
+        cues.add(new CueSearch(pattern, CRITERION_NOUNS.contains(pattern), keys));
+      }
+      cues.add(new CueSearch(ISSUE_NUMBER, false, keys));
+      quotes = new QuotePositions(text);
+      sentences = new Search(SENTENCE_END, text);
+      precedingSentences = new Search(SENTENCE_END, text);
+      numbers = new Search(ISSUE_NUMBER, text);
+    }
+
+    List<Citation> all() {
+      var found = new ArrayList<Citation>();
+      var from = 0;
+      while (true) {
+        var cue = nextCue(from);
+        if (cue == null) {
+          return found;
+        }
+        var citation = citationAt(cue);
+        found.add(citation);
+        from = Math.max(citation.end(), cue.end());
       }
     }
-    // Only an issue the pull request links is a citation of it.
-    var number = ISSUE_NUMBER.matcher(text);
-    var found = number.find(from);
-    while (found && !keys.contains(number.group(1))) {
-      found = number.find();
-    }
-    if (found) {
-      cues.add(new Cue(number.start(), number.end(), false));
-    }
-    return cues.stream().min(Comparator.comparingInt(Cue::start)).orElse(null);
-  }
 
-  private static Citation citationAt(String text, Cue cue, Sources sources) {
-    var start = cue.start();
-    var quote = QUOTED.matcher(text);
-    var after = cue.end();
-    var sentenceEnd = sentenceEnd(text, after);
-    if (quote.find(after)
-        && quote.start() - after <= MAX_CUE_TO_QUOTE
-        && quote.start() < sentenceEnd) {
-      var verdict =
-          DescriptionGapScreen.appearsIn(
-                  quoted(quote), sourceFor(text, cue, quote.start(), sources).normalized())
-              ? Verdict.MATCHED
-              : Verdict.UNMATCHED;
-      return new Citation(start, quote.end(), verdict);
+    Citation firstUnmatched() {
+      var from = 0;
+      while (true) {
+        var cue = nextCue(from);
+        if (cue == null) {
+          return null;
+        }
+        var citation = citationAt(cue);
+        if (citation.verdict() == Verdict.UNMATCHED) {
+          return citation;
+        }
+        from = Math.max(citation.end(), cue.end());
+      }
     }
-    if (!cue.noun()) {
-      return new Citation(start, after, Verdict.UNJUDGED);
-    }
-    var clause = CLAUSE_END.matcher(text);
-    var end = clause.find(after) ? clause.start() : text.length();
-    return new Citation(
-        start,
-        end,
-        judgeWords(text.substring(after, end), sourceFor(text, cue, end, sources).words()));
-  }
 
-  /** The nearest numbered attribution before this citation, outside an earlier quoted passage. */
-  private static Source sourceFor(String text, Cue cue, int end, Sources sources) {
-    var from = sentenceStart(text, cue.start());
-    var quote = QUOTED.matcher(text).region(0, cue.start());
-    while (quote.find()) {
-      from = Math.max(from, quote.end());
+    private Cue nextCue(int from) {
+      Cue earliest = null;
+      for (var search : cues) {
+        var cue = search.atOrAfter(from);
+        if (cue != null && (earliest == null || cue.start() < earliest.start())) {
+          earliest = cue;
+        }
+      }
+      return earliest;
     }
-    var number = ISSUE_NUMBER.matcher(text).region(from, end);
-    var namedAt = -1;
-    while (number.find()) {
-      namedAt = number.start();
+
+    private final class CueSearch {
+      private final Search search;
+      private final boolean noun;
+      private final List<String> keys;
+      private final boolean numbered;
+
+      CueSearch(Pattern pattern, boolean noun, List<String> keys) {
+        search = new Search(pattern, text);
+        this.noun = noun;
+        this.keys = keys;
+        numbered = pattern == ISSUE_NUMBER;
+      }
+
+      Cue atOrAfter(int from) {
+        var found = search.atOrAfter(from);
+        // Only an issue the pull request links is a citation of it.
+        while (found && numbered && !keys.contains(search.matcher.group(1))) {
+          found = search.advance();
+        }
+        return found ? new Cue(search.matcher.start(), search.matcher.end(), noun) : null;
+      }
     }
-    return namedAt < 0
-        ? sources.all()
-        : sources.forKeys(DescriptionGapCarryover.issuesNamed(text.substring(namedAt, end)));
+
+    private Citation citationAt(Cue cue) {
+      var start = cue.start();
+      var quote = quotes.atOrAfter(cue.end());
+      var after = cue.end();
+      var sentenceEnd = sentenceEnd(after);
+      if (quote != null
+          && quote.start() - after <= MAX_CUE_TO_QUOTE
+          && quote.start() < sentenceEnd) {
+        var verdict =
+            DescriptionGapScreen.appearsIn(
+                    text.subSequence(quote.start() + 1, quote.end() - 1).toString(),
+                    sourceFor(cue, quote.start()).normalized())
+                ? Verdict.MATCHED
+                : Verdict.UNMATCHED;
+        return new Citation(start, quote.end(), verdict);
+      }
+      if (!cue.noun()) {
+        return new Citation(start, after, Verdict.UNJUDGED);
+      }
+      var clause = CLAUSE_END.matcher(text);
+      var end = clause.find(after) ? clause.start() : text.length();
+      return new Citation(
+          start,
+          end,
+          judgeWords(text.subSequence(after, end).toString(), sourceFor(cue, end).words()));
+    }
+
+    /** The nearest numbered attribution before this citation, outside an earlier quoted passage. */
+    private Source sourceFor(Cue cue, int end) {
+      var from = Math.max(sentenceStart(cue.start()), quotes.endBefore(cue.start()));
+      while (numbers.found && numbers.matcher.end() <= end) {
+        previousNumberStart = numbers.matcher.start();
+        numbers.advance();
+      }
+      return previousNumberStart < from
+          ? sources.all()
+          : sources.forKeys(
+              DescriptionGapCarryover.issuesNamed(
+                  text.subSequence(previousNumberStart, end).toString()));
+    }
+
+    private int sentenceStart(int at) {
+      while (precedingSentences.found && precedingSentences.matcher.end() <= at) {
+        previousSentenceEnd = precedingSentences.matcher.end();
+        precedingSentences.advance();
+      }
+      var from = previousSentenceEnd;
+      if (at > 0 && ".;!?".indexOf(text.charAt(at - 1)) >= 0) {
+        from = at;
+      }
+      while (from < at && Character.isWhitespace(text.charAt(from))) {
+        from++;
+      }
+      return from;
+    }
+
+    private int sentenceEnd(int from) {
+      while (sentences.found && sentences.matcher.start() < from) {
+        sentences.advance();
+      }
+      return sentences.found ? sentences.matcher.start() : text.length();
+    }
+
+    /**
+     * Quote matching by positions, preserving QUOTED's nonempty bodies, Unicode guards and newline
+     * boundary. Incomplete openers do not repeatedly search the same tail. Prefix queries activate
+     * complete matches by end position; an earlier newly completed quote absorbs the matches inside
+     * it, just as a fresh matcher over that longer prefix would. Each position is added/removed
+     * once.
+     */
+    private static final class QuotePositions {
+      private record Quote(int start, int end) {}
+
+      private final CharSequence text;
+      private final TreeMap<Integer, Quote> byStart = new TreeMap<>();
+      private final List<Quote> byEnd;
+      private final TreeMap<Integer, Quote> prefix = new TreeMap<>();
+      private final TreeSet<Integer> unusedSingleOpeners;
+      private final TreeSet<Integer> newlines;
+      private int activated;
+
+      QuotePositions(CharSequence text) {
+        this.text = text;
+        var doubles = positions(DOUBLE_QUOTE, text);
+        unusedSingleOpeners = positions(SINGLE_QUOTE_OPEN, text);
+        var singleClosers = positions(SINGLE_QUOTE_CLOSE, text);
+        newlines = positions(LINE_BREAK, text);
+        for (var start : doubles) {
+          add(start, doubles.higher(start));
+        }
+        for (var start : unusedSingleOpeners) {
+          add(start, singleClosers.ceiling(start + 2));
+        }
+        byEnd = new ArrayList<>(byStart.values());
+        byEnd.sort(Comparator.comparingInt(Quote::end).thenComparingInt(Quote::start));
+      }
+
+      private void add(int start, Integer closing) {
+        var newline = newlines.higher(start);
+        if (closing != null && closing > start + 1 && (newline == null || closing < newline)) {
+          byStart.put(start, new Quote(start, closing + 1));
+        }
+      }
+
+      Quote atOrAfter(int from) {
+        var entry = byStart.ceilingEntry(from);
+        return entry == null ? null : entry.getValue();
+      }
+
+      int endBefore(int at) {
+        while (activated < byEnd.size() && byEnd.get(activated).end() <= at) {
+          var quote = byEnd.get(activated++);
+          var enclosing = prefix.floorEntry(quote.start());
+          if (enclosing == null || enclosing.getValue().end() <= quote.start()) {
+            prefix.tailMap(quote.start()).clear();
+            prefix.put(quote.start(), quote);
+            unusedSingleOpeners.subSet(quote.start(), true, quote.end(), false).clear();
+          }
+        }
+        // A single quote at the prefix's end has no following letter in that region. This closure
+        // is local: extending the prefix can make it an apostrophe again. An unconsumed opener may
+        // precede a completed inner quote, which this temporary outer quote would absorb.
+        if (at > 0 && text.charAt(at - 1) == '\'') {
+          var newline = newlines.lower(at);
+          var opener = unusedSingleOpeners.ceiling(newline == null ? 0 : newline + 1);
+          if (opener != null && opener + 1 < at - 1) {
+            return at;
+          }
+        }
+        return prefix.isEmpty() ? 0 : prefix.lastEntry().getValue().end();
+      }
+
+      private static TreeSet<Integer> positions(Pattern pattern, CharSequence text) {
+        var found = new TreeSet<Integer>();
+        var matcher = pattern.matcher(text);
+        while (matcher.find()) {
+          found.add(matcher.start());
+        }
+        return found;
+      }
+    }
+
+    /** A cue naming an issue, or a criterion noun followed by words naming its subject. */
+    private record Cue(int start, int end, boolean noun) {}
+
+    /** A monotonically searched pattern, including a cached exhausted suffix. */
+    private static final class Search {
+      private final Matcher matcher;
+      private boolean found;
+
+      Search(Pattern pattern, CharSequence text) {
+        matcher = pattern.matcher(text);
+        found = matcher.find();
+      }
+
+      boolean atOrAfter(int from) {
+        if (found && matcher.start() < from) {
+          found = matcher.find(from);
+        }
+        return found;
+      }
+
+      boolean advance() {
+        found = matcher.find();
+        return found;
+      }
+    }
   }
 
   /** Whether the content words naming a criterion are, at least half of them, the issue's. */
@@ -472,10 +668,7 @@ final class LinkedIssueCitations {
   }
 
   private static Citation firstUnmatched(String text, List<String> keys, Sources sources) {
-    return citations(text, keys, sources).stream()
-        .filter(citation -> citation.verdict() == Verdict.UNMATCHED)
-        .findFirst()
-        .orElse(null);
+    return new CitationScan(foldQuotes(text), keys, sources).firstUnmatched();
   }
 
   private static String cut(String text, Citation citation) {
