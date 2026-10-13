@@ -20,14 +20,18 @@
     "@astrojs/starlight": "^0.42.0",
     "astro": "^7.0.6",
     "astro-mermaid": "^2.1.0",
-    "mermaid": "^11.16.0",
+    "mermaid": "^12.2.0",
     "sharp": "^0.35.3",
     "starlight-links-validator": "^0.26.0",
     "starlight-versions": "^0.10.0"
   },
   "overrides": {
     "postcss": "8.5.23",
-    "nanoid": "^3.3.17"
+    "nanoid": "^3.3.17",
+    "postcss-selector-parser": "^7.1.6",
+    "astro-mermaid": {
+      "mermaid": "$mermaid"
+    }
   },
   "devDependencies": {
     "@astrojs/markdown-remark": "^7.2.2",
