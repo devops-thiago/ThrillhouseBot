@@ -11,7 +11,7 @@
   <a href="https://codecov.io/gh/devops-thiago/ThrillhouseBot"><img src="https://codecov.io/gh/devops-thiago/ThrillhouseBot/branch/main/graph/badge.svg" alt="Coverage" /></a>
   <a href="https://sonarcloud.io/dashboard?id=devops-thiago_ThrillhouseBot"><img src="https://sonarcloud.io/api/project_badges/measure?project=devops-thiago_ThrillhouseBot&metric=alert_status" alt="Quality Gate" /></a>
   <a href="https://securityscorecards.dev/viewer/?uri=github.com/devops-thiago/ThrillhouseBot"><img src="https://api.securityscorecards.dev/projects/github.com/devops-thiago/ThrillhouseBot/badge" alt="OpenSSF Scorecard" /></a>
-  <a href="https://www.bestpractices.dev/projects/13330"><img src="https://www.bestpractices.dev/projects/13330/badge"></a>
+  <a href="https://www.bestpractices.dev/projects/13330"><img src="https://www.bestpractices.dev/projects/13330/badge" alt="OpenSSF Best Practices" /></a>
   <a href="https://github.com/devops-thiago/ThrillhouseBot/releases"><img src="https://img.shields.io/github/v/release/devops-thiago/ThrillhouseBot" alt="Release" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/devops-thiago/ThrillhouseBot" alt="License" /></a>
 </p>
@@ -1565,6 +1565,24 @@ gh attestation verify thrillhousebot-v0.7.1-linux-amd64.tar.gz \
   --repo devops-thiago/ThrillhouseBot
 ```
 
+## Upgrading
+
+Only the latest release receives fixes, including security fixes. To upgrade,
+read the release's section in [CHANGELOG.md](CHANGELOG.md), then point your
+deployment at the new image tag and restart it:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Each release's notes start with what changes for an existing installation:
+new or renamed settings, changed defaults and database changes. There are no
+migration scripts. On startup the production profile lets Hibernate update the
+PostgreSQL schema in place (`schema-management.strategy=update`), and new
+settings default to the previous behaviour unless the notes say otherwise. If
+you pin a version with `IMAGE_TAG` in `.env`, set it to the new tag before
+pulling.
+
 ## Development
 
 Local development without Docker needs Java 25+, Node.js 22+ (dashboard) and a
@@ -1636,6 +1654,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
 ## Community
 
 Ask questions and get setup help in [GitHub Discussions](https://github.com/devops-thiago/ThrillhouseBot/discussions) (see the pinned welcome post). Use [Issues](https://github.com/devops-thiago/ThrillhouseBot/issues/new/choose) for bugs and feature requests.
+
+[GOVERNANCE.md](GOVERNANCE.md) explains how decisions are made, who holds
+which role, and how the project continues if the maintainer cannot.
 
 ## Architecture
 
