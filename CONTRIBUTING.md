@@ -50,8 +50,8 @@ If you changed the dashboard, also run
 site or any page it includes (README, CONTRIBUTING, `docs/`), run
 `cd website && npm ci && npm run build`; the build fails on a broken link.
 
-CI runs the same checks, plus actionlint, Dependency Review, SonarCloud, Trivy
-and a Docker build; CodeQL runs on pull requests to `main`. CI builds the GraalVM native image when a pull request
+CI runs the same checks, plus actionlint, the DCO sign-off check, Dependency
+Review, SonarCloud, Trivy and a Docker build; CodeQL runs on pull requests to `main`. CI builds the GraalVM native image when a pull request
 touches `pom.xml`, `src/main/**` or `.github/workflows/ci.yml`. To build a
 throwaway test image for a branch or pull request without touching `latest`, run
 the Docker test image workflow (`.github/workflows/docker-test-image.yml`) from
@@ -69,6 +69,19 @@ CI enforces this bar:
   with a comment explaining it.
 - No new Sonar issues. The quality gate requires an A reliability and security
   rating on new code.
+- Every commit is signed off (see
+  [Developer Certificate of Origin](#developer-certificate-of-origin)).
+
+## Coding style
+
+Java code follows the
+[Google Java Style Guide](https://google.github.io/styleguide/javaguide.html).
+Spotless formats it with google-java-format on every compile, and the `format`
+job in CI runs `spotless:check`, which fails on any file that is not formatted.
+There are no formatter exceptions in the code base; do not add `spotless:off`
+markers. The dashboard is TypeScript compiled with `strict` on, and the
+workflows are checked by actionlint, which also runs shellcheck on their
+scripts.
 
 ## Merge policy: two gates
 
@@ -107,6 +120,29 @@ Use [Conventional Commits](https://www.conventionalcommits.org/): `feat`,
 `fix`, `perf`, `refactor`, `test`, `docs`, `ci`, `build`, `deps` and `chore`,
 usually with a scope, for example `fix(review): …`. Make one logical change per
 commit, and say why in the body when the subject does not.
+
+## Developer Certificate of Origin
+
+Every commit in a pull request must carry a `Signed-off-by:` line. By adding
+it you certify that you wrote the change, or otherwise have the right to submit
+it under the project's license, as set out in the
+[Developer Certificate of Origin](https://developercertificate.org/). The line
+must use the same email address as the commit author. `git commit -s` adds it
+for you:
+
+```text
+Signed-off-by: Your Name <you@example.com>
+```
+
+To sign off commits you already made on your branch, run
+`git rebase --signoff main` and force-push. The `dco` check fails a pull request
+that has a commit without a matching sign-off. Commits that Dependabot or
+GitHub Actions author in pull requests they open are exempt.
+
+## Governance
+
+The project's decision process, roles and continuity plan are in
+[GOVERNANCE.md](https://github.com/devops-thiago/ThrillhouseBot/blob/main/GOVERNANCE.md).
 
 ## Architecture
 
