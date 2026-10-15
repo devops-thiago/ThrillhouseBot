@@ -30,8 +30,29 @@ A release is prepared on its own branch, `release/vX.Y.Z`, cut from `main`.
    each pull request's commit on `main`, enable merge commits for this merge.
 7. Wait for CI on `main` to finish. It publishes the images that the release
    workflow promotes, tagged with the commit SHA.
-8. Tag the merge commit on `main` as `vX.Y.Z` and push the tag. That starts the
-   release workflow.
+8. Tag the merge commit on `main` as `vX.Y.Z` with a signed tag and push it.
+   That starts the release workflow.
+
+   ```bash
+   git tag -s vX.Y.Z -m vX.Y.Z <merge-commit>
+   git tag -v vX.Y.Z
+   git push origin vX.Y.Z
+   ```
+
+## Verifying a release tag
+
+Release tags from v0.6.8 on are signed with the maintainer's SSH signing key,
+except v0.7.0 and v0.7.1, which were pushed unsigned. GitHub publishes the
+key, so anyone can check a tag:
+
+```bash
+gh api users/devops-thiago/ssh_signing_keys \
+  --jq '.[] | "* " + .key' > allowed_signers
+git -c gpg.ssh.allowedSignersFile=allowed_signers tag -v vX.Y.Z
+```
+
+The images and binaries a release publishes are signed separately with cosign;
+see [Verifying a release](../README.md#verifying-a-release).
 
 ## The release workflow
 
