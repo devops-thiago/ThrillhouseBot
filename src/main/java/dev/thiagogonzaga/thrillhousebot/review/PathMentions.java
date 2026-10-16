@@ -67,7 +67,8 @@ import java.util.regex.Pattern;
  * /src/zig-out/bin/app /usr/local/bin/ap}) gets the path the line holds, when exactly one fits. A
  * suggestion that introduces a repository file nothing resolves, or a glob over an absolute
  * directory ({@code /app/lib/*}) that no patch, the PR text or the replaced lines name, is dropped;
- * the finding stays.
+ * the finding stays. A path the suggestion itself writes (a {@code COPY} destination, a {@code cp}
+ * or {@code mkdir} target) is not held to that.
  *
  * <p>Not paths: URLs, a route ({@code /scan}, {@code /triage/run}), a package name ({@code
  * com.example.x}), a scoped package ({@code @angular/core}), an image reference ({@code
@@ -746,8 +747,9 @@ final class PathMentions {
   /**
    * The first path {@code finding}'s suggestion introduces that nothing resolves, or {@code null}
    * (#1094): a file named in the new lines and not in the replaced ones that no step of {@link
-   * #resolve} settles, or a glob over an absolute directory that no patch, PR text or the replaced
-   * lines name.
+   * #resolve} settles, unless the suggestion writes it ({@link #createdBySuggestion}), or a glob
+   * over an absolute directory that no patch, PR text or the replaced lines name, unless the
+   * suggestion's own new lines make the directory ({@link #createsDirectory}).
    */
   private String unresolvedInSuggestion(ReviewResponse.Finding finding) {
     String suggested = finding.suggestionNew();
