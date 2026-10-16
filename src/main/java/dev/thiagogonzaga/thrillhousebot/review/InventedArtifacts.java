@@ -229,8 +229,9 @@ final class InventedArtifacts {
    * Settings Screen".
    */
   static boolean invents(String sentence, Change change) {
-    // A qualifier in a code span ("a `settings` page") is read as its words.
-    var text = CAMEL_HUMP.matcher(sentence.replace("`", "")).replaceAll(" ");
+    // A qualifier in a code span ("a `settings` page") or in asterisk emphasis ("a **settings
+    // page**") is read as its words.
+    var text = CAMEL_HUMP.matcher(sentence.replace("`", "").replace("*", "")).replaceAll(" ");
     var introduced = INTRODUCED.matcher(text);
     while (introduced.find()) {
       var lead = text.substring(0, introduced.start());

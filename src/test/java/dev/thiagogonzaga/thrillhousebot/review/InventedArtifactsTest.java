@@ -136,6 +136,8 @@ class InventedArtifactsTest {
                 added("web/src/App.tsx", "const app = 1;")));
 
     assertTrue(InventedArtifacts.invents("It adds a settings page.", change));
+    assertTrue(InventedArtifacts.invents("It adds a **settings page** for admins.", change));
+    assertTrue(InventedArtifacts.invents("It adds **a** *new* settings page.", change));
     assertFalse(InventedArtifacts.invents("It removes a settings page.", change));
     // A removal elsewhere in the sentence does not cover an added artifact.
     assertTrue(
