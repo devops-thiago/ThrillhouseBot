@@ -847,4 +847,57 @@ class PathMentionsTest {
     assertEquals("COPY nginx.conf /etc/x/", screened.findings().get(1).suggestionNew());
     assertEquals("COPY ops/site.conf /etc/x/", screened.findings().get(2).suggestionNew());
   }
+
+  /**
+   * What a suggestion creates or does not name as a file is not judged: a COPY or ADD destination,
+   * relative or absolute, a directory, a volume mapping. A dotless file name it relies on is.
+   */
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          COPY nginx.conf conf/site.conf | true
+          COPY ["nginx.conf", "conf/site.conf"] | true
+          add nginx.conf conf/site.conf | true
+          COPY --from=build /app/target/service.war /usr/local/tomcat/webapps/ROOT.war | true
+          COPY src/ /app/src/ | true
+          volumes: [conf/app.yml:/etc/app.yml] | true
+          RUN docker build -f ops/Dockerfile . | false
+          COPY conf/site.conf nginx.conf | false
+          """)
+  void aSuggestionIsJudgedOnlyByWhatItReliesOn(String suggestion, boolean kept) {
+    var raised = findingOn("angular/Dockerfile", "No config is copied.", null, suggestion);
+
+    var screened =
+        mentions(ANGULAR, "", Set.of("angular/nginx.conf"))
+            .screen(new ReviewResponse(List.of(raised), List.of(), null));
+
+    assertEquals(kept ? suggestion : null, screened.findings().getFirst().suggestionNew());
+  }
+
+  /** A misquote is corrected whichever side of the path the quoted code is on. */
+  @Test
+  void aMisquoteIsCorrectedWithTheCodeAfterThePath() {
+    var image =
+        List.of(
+            new FileDiff(
+                "Dockerfile", "added", 1, 0, 1, "+RUN /usr/local/bin/gcompact-server --check"));
+
+    assertEquals(
+        "`/usr/local/bin/gcompact-server --check` fails.",
+        mentions(image, "", Set.of())
+            .withQuotedPathsCorrected("`/usr/local/bin/gcompressed --check` fails.", "Dockerfile"));
+  }
+
+  /** A span inside a fenced block is the block's code, not a quote to correct. */
+  @Test
+  void aSpanInAFenceIsLeftAlone() {
+    var description =
+        "```\n`COPY --from=build /src/zig-out/bin/gcompact-server /usr/local/bin/x`\n```";
+
+    assertSame(
+        description,
+        mentions(ZIG_IMAGE, "", Set.of()).withQuotedPathsCorrected(description, "zig/Dockerfile"));
+  }
 }

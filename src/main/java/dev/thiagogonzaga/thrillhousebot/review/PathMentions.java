@@ -226,6 +226,13 @@ final class PathMentions {
   private static final Pattern ABSOLUTE_GLOB =
       Pattern.compile("(?<![\\w.~/\\\\+-])(/[\\w.+-]++(?:/[\\w.+-]++)*+)/\\*");
 
+  /** A Dockerfile instruction that copies into the image. */
+  private static final Pattern COPY_INSTRUCTION =
+      Pattern.compile("\\s*+(?:COPY|ADD)\\s", Pattern.CASE_INSENSITIVE);
+
+  /** What may follow a line's last argument: the close of an exec-form array, and blanks. */
+  private static final Pattern LINE_END = Pattern.compile("[\"\\]\\s]*+");
+
   /** An inline code span on one line. */
   private static final Pattern CODE_SPAN = Pattern.compile("`([^`\\n]++)`");
 
@@ -729,11 +736,25 @@ final class PathMentions {
           && namesAFile(token)
           && !replaced.contains(token)
           && !partOfSomethingElse(suggested, start, start + token.length())
+          && !copyDestination(suggested, start + token.length())
           && resolve(token) == null) {
         return token;
       }
     }
     return null;
+  }
+
+  /**
+   * Whether the token ending at {@code end} is the destination of a Dockerfile {@code COPY} or
+   * {@code ADD}: the last argument on a line those open. The suggestion creates that path in the
+   * image; it is not a repository file the suggestion relies on.
+   */
+  private static boolean copyDestination(String text, int end) {
+    int lineStart = text.lastIndexOf('\n', end - 1) + 1;
+    int lineEnd = text.indexOf('\n', end);
+    String line = text.substring(lineStart, lineEnd < 0 ? text.length() : lineEnd);
+    return COPY_INSTRUCTION.matcher(line).lookingAt()
+        && LINE_END.matcher(text.substring(end, lineEnd < 0 ? text.length() : lineEnd)).matches();
   }
 
   /** Whether a path-shaped token ends in a file name: an extension or a dotless file name. */
