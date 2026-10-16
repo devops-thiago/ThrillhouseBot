@@ -2769,7 +2769,8 @@ class SecurityScanTest {
         modelFinding(
             "kotlin/Dockerfile",
             3,
-            "BOOKING_API_TOKEN is baked into the image via ARG/ENV",
+            // The round-18 title, with a repeat and a spaced dash, which split into equal tokens.
+            "BOOKING_API_TOKEN is baked into the image via ARG/ENV — BOOKING_API_TOKEN",
             "Whatever token was present in the build environment is readable from the image, and"
                 + " this build-secret passthrough adds only exposure.");
     var unread =

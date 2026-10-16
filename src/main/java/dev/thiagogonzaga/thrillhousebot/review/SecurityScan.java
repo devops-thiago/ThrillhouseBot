@@ -557,7 +557,8 @@ public class SecurityScan {
 
   /** Whether {@code title} names, as a whole identifier in any case, a key {@code line} assigns. */
   private static boolean namesAssignedKey(String title, String line) {
-    var named = Set.of(NON_IDENTIFIER.split(title.toLowerCase(Locale.ROOT)));
+    // Set.copyOf, not Set.of: a title repeats a word, or splits into empty tokens, often.
+    var named = Set.copyOf(Arrays.asList(NON_IDENTIFIER.split(title.toLowerCase(Locale.ROOT))));
     return SecretScanner.assignedCredentialKeys(line).stream().anyMatch(named::contains);
   }
 

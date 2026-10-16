@@ -1383,7 +1383,6 @@ public class FindingVerificationService {
     return !line.isEmpty() && "+- ".indexOf(line.charAt(0)) >= 0;
   }
 
-  /** A finding's location and title, which the audit never rewrites. */
   /**
    * The risk the review raised {@code finding} at, lower-cased, when the audit graded it lower;
    * {@code null} when there is no raised copy or the audit kept or raised the grade.
@@ -1398,6 +1397,7 @@ public class FindingVerificationService {
         : null;
   }
 
+  /** A finding's location and title, which the audit never rewrites. */
   private static String identity(ReviewResponse.Finding finding) {
     return finding.file() + "\u0000" + finding.line() + "\u0000" + finding.title();
   }
