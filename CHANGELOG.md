@@ -8,6 +8,10 @@ All notable changes to ThrillhouseBot.
 
 - **Pull request commits need a DCO sign-off, and the JVM build is reproducible** (#1124): the new `dco` check fails a pull request with a commit whose `Signed-off-by` line does not match its author; `git commit -s` adds one (see CONTRIBUTING). `pom.xml` now fixes archive timestamps, so two builds of the same commit produce identical jars. GOVERNANCE.md documents the decision process, roles and continuity plan, and docs/SECURITY_MODEL.md the security model.
 
+### Fixed
+
+- **The summary no longer describes pages, screens, migrations or endpoints the change does not add** (#1090): on a test pull request the overview said it added "two docs files (CONFIG-ZIG.md and a settings page)", and there was no settings page. A sentence that introduces such an artifact is now removed unless a changed file's path or an added line names it. A changed file described by its role is not affected, and findings are never changed.
+
 ## [0.7.1] — 2026-10-13
 
 A bug-fix release. Most of the fixes are in follow-up rounds and the summary comment: findings from earlier rounds now get a status and have their threads resolved once fixed, the summary and its Description vs. Implementation section keep to what the change and its description contain, and a finding is placed, counted and matched to its duplicates the same way on every review.
