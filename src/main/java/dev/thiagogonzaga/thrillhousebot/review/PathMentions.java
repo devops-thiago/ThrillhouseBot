@@ -15,11 +15,15 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import io.quarkus.logging.Log;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -42,6 +46,8 @@ import java.util.regex.Pattern;
  * <ol>
  *   <li>a file the pull request changes (its current or, for a rename, its earlier path), or a
  *       directory holding one; a bare file name by the name of one;
+ *   <li>the one changed file whose path ends with it, which replaces it: {@code docs/CONFIG-C.md}
+ *       for {@code c/docs/CONFIG-C.md}, even where a patch quotes the shorter form (#1094);
  *   <li>text the review was given verbatim: a patch, the PR title and description, the linked
  *       issues. A path that is missing on purpose ("the description promises docs/FOO.md, which no
  *       file adds", a {@code COPY} source the build cannot find) is quoted from there;
@@ -52,9 +58,16 @@ import java.util.regex.Pattern;
  *
  * <p>A token none of these resolves is invented: its sentence leaves the summary text, and the
  * mention (with a parenthetical holding only it) leaves a finding's description. A finding is never
- * dropped, and its title, file and suggestions are never touched. When the repository could not be
- * listed, or the listing was truncated, a token the earlier steps do not resolve is left as
- * written: it may exist.
+ * dropped, and its title and file are never touched. When the repository could not be listed, or
+ * the listing was truncated, a token the earlier steps do not resolve is left as written: it may
+ * exist.
+ *
+ * <p>Two more checks on findings (#1094). A code span in a finding's description that quotes a line
+ * of the finding's file with an absolute path the line does not hold ({@code COPY --from=build
+ * /src/zig-out/bin/app /usr/local/bin/ap}) gets the path the line holds, when exactly one fits. A
+ * suggestion that introduces a repository file nothing resolves, or a glob over an absolute
+ * directory ({@code /app/lib/*}) that no patch, the PR text or the replaced lines name, is dropped;
+ * the finding stays.
  *
  * <p>Not paths: URLs, a route ({@code /scan}, {@code /triage/run}), a package name ({@code
  * com.example.x}), a scoped package ({@code @angular/core}), an image reference ({@code
@@ -202,11 +215,30 @@ final class PathMentions {
           "brewfile",
           "justfile");
 
+  /**
+   * An absolute path of two segments or more ({@code /usr/local/bin/app}), never the tail of a
+   * longer token; a route-like single segment is not one.
+   */
+  private static final Pattern ABSOLUTE_PATH =
+      Pattern.compile("(?<![\\w.~/\\\\+-])/[\\w.+-]++(?:/[\\w.+-]++)++");
+
+  /** A glob over an absolute directory ({@code /app/lib/*}): the directory, without its slash. */
+  private static final Pattern ABSOLUTE_GLOB =
+      Pattern.compile("(?<![\\w.~/\\\\+-])(/[\\w.+-]++(?:/[\\w.+-]++)*+)/\\*");
+
+  /** An inline code span on one line. */
+  private static final Pattern CODE_SPAN = Pattern.compile("`([^`\\n]++)`");
+
   private static final Pattern BLANK_RUN = Pattern.compile(" {2,}");
 
   private static final Pattern BLANK_BEFORE_PUNCTUATION = Pattern.compile(" ([.,;:!?])");
 
   private final PathIndex changed;
+  private final Set<String> currentFiles;
+
+  /** Each changed file's patch lines, without their diff markers, for the quote check. */
+  private final Map<String, List<String>> patchLines;
+
   private final DiffLineResolver resolver;
   private final String verbatim;
   private final Supplier<Optional<PathIndex>> repository;
@@ -259,6 +291,7 @@ final class PathMentions {
     var paths = new HashSet<String>();
     var current = new HashSet<String>();
     var text = new StringBuilder(known == null ? "" : known);
+    var lines = new HashMap<String, List<String>>();
     for (var file : files) {
       paths.add(file.filename());
       current.add(file.filename());
@@ -267,9 +300,12 @@ final class PathMentions {
       }
       if (file.patch() != null) {
         text.append('\n').append(file.patch());
+        lines.put(file.filename(), codeLines(file.patch()));
       }
     }
     this.changed = PathIndex.of(paths);
+    this.currentFiles = Set.copyOf(current);
+    this.patchLines = Map.copyOf(lines);
     this.resolver = new DiffLineResolver(Map.of(), current);
     this.verbatim = text.toString();
     // A truncated listing may lack a path that exists, so it judges nothing, like no listing.
@@ -305,8 +341,23 @@ final class PathMentions {
     var changedAny = false;
     var findings = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     for (var finding : response.findings()) {
-      var description = withoutUnresolvedMentions(finding.description());
-      if (Objects.equals(description, finding.description())) {
+      var description =
+          withQuotedPathsCorrected(
+              withoutUnresolvedMentions(finding.description()), finding.file());
+      var suggestionNew = finding.suggestionNew();
+      var unresolved = unresolvedInSuggestion(finding);
+      if (unresolved != null) {
+        Log.infof(
+            "Finding '%s' (%s:%d) suggests %s, which nothing resolves; dropping its suggestion and"
+                + " keeping the finding",
+            LogSafe.oneLine(finding.title()),
+            LogSafe.oneLine(finding.file()),
+            finding.line(),
+            LogSafe.oneLine(unresolved));
+        suggestionNew = null;
+      }
+      if (Objects.equals(description, finding.description())
+          && Objects.equals(suggestionNew, finding.suggestionNew())) {
         findings.add(finding);
       } else {
         changedAny = true;
@@ -319,7 +370,7 @@ final class PathMentions {
                 finding.title(),
                 description,
                 finding.suggestionOld(),
-                finding.suggestionNew()));
+                suggestionNew));
       }
     }
     return changedAny
@@ -548,7 +599,14 @@ final class PathMentions {
 
   /** {@link #resolve} for a token not judged before in this review. */
   private String judge(String token) {
-    if (verbatim.contains(token) || changed.names(token)) {
+    if (changed.names(token)) {
+      return token;
+    }
+    String completed = changedFileEndingWith(token);
+    if (completed != null) {
+      return completed;
+    }
+    if (verbatim.contains(token)) {
       return token;
     }
     if (token.contains("/") && !token.endsWith("/")) {
@@ -560,6 +618,143 @@ final class PathMentions {
     }
     var index = repository.get();
     return index.isEmpty() || index.get().names(token) ? token : null;
+  }
+
+  /**
+   * The one changed file whose path ends with {@code token} after a slash, or {@code null} for a
+   * bare name, a directory, or none or several: {@code c/docs/CONFIG-C.md} for {@code
+   * docs/CONFIG-C.md} (#1094).
+   */
+  private String changedFileEndingWith(String token) {
+    if (token.indexOf('/') < 0 || token.endsWith("/")) {
+      return null;
+    }
+    String tail = "/" + token;
+    String match = null;
+    for (String file : currentFiles) {
+      if (file.endsWith(tail)) {
+        if (match != null) {
+          return null;
+        }
+        match = file;
+      }
+    }
+    return match;
+  }
+
+  /**
+   * {@code description} with each code span that quotes a line of {@code file}'s patch, but with an
+   * absolute path the line does not hold, given the path the line holds (#1094). A span is a quote
+   * when the text around the path in it surrounds exactly one other absolute path in the patch's
+   * lines; anything else is left as written.
+   */
+  String withQuotedPathsCorrected(String description, String file) {
+    if (description == null || description.indexOf('`') < 0) {
+      return description;
+    }
+    var lines = patchLines.get(resolver.diffPathFor(file));
+    if (lines == null) {
+      return description;
+    }
+    var fenced = new SpanCursor(fences(description));
+    var out = new StringBuilder(description.length());
+    var spans = CODE_SPAN.matcher(description);
+    int at = 0;
+    while (spans.find()) {
+      if (!fenced.covers(spans.start())) {
+        out.append(description, at, spans.start(1)).append(correctedQuote(spans.group(1), lines));
+        at = spans.end(1);
+      }
+    }
+    out.append(description, at, description.length());
+    String result = out.toString();
+    return result.equals(description) ? description : result;
+  }
+
+  /** {@code quote} with an absolute path the patch lines do not hold replaced, where one fits. */
+  private static String correctedQuote(String quote, List<String> lines) {
+    if (lines.stream().anyMatch(line -> line.contains(quote))) {
+      return quote;
+    }
+    var paths = ABSOLUTE_PATH.matcher(quote);
+    while (paths.find()) {
+      String path = paths.group();
+      String before = quote.substring(0, paths.start());
+      String after = quote.substring(paths.end());
+      if ((before.isBlank() && after.isBlank())
+          || lines.stream().anyMatch(line -> line.contains(path))) {
+        continue;
+      }
+      var fits = new LinkedHashSet<String>();
+      for (String line : lines) {
+        var candidates = ABSOLUTE_PATH.matcher(line);
+        while (candidates.find()) {
+          if (line.contains(before + candidates.group() + after)) {
+            fits.add(candidates.group());
+          }
+        }
+      }
+      if (fits.size() == 1) {
+        return before + fits.getFirst() + after;
+      }
+    }
+    return quote;
+  }
+
+  /**
+   * The first path {@code finding}'s suggestion introduces that nothing resolves, or {@code null}
+   * (#1094): a file named in the new lines and not in the replaced ones that no step of {@link
+   * #resolve} settles, or a glob over an absolute directory that no patch, PR text or the replaced
+   * lines name.
+   */
+  private String unresolvedInSuggestion(ReviewResponse.Finding finding) {
+    String suggested = finding.suggestionNew();
+    if (suggested == null || suggested.isBlank()) {
+      return null;
+    }
+    String replaced = finding.suggestionOld() == null ? "" : finding.suggestionOld();
+    var globs = ABSOLUTE_GLOB.matcher(suggested);
+    while (globs.find()) {
+      var directory = Pattern.compile(Pattern.quote(globs.group(1)) + "(?![\\w.+-])");
+      if (!directory.matcher(replaced).find() && !directory.matcher(verbatim).find()) {
+        return globs.group();
+      }
+    }
+    var urls = new SpanCursor(spans(URL, suggested));
+    var tokens = TOKEN.matcher(suggested);
+    while (tokens.find()) {
+      String token = stripTrailingDots(tokens.group(1));
+      int start = tokens.start(1);
+      if (!urls.covers(start)
+          && namesAFile(token)
+          && !replaced.contains(token)
+          && !partOfSomethingElse(suggested, start, start + token.length())
+          && resolve(token) == null) {
+        return token;
+      }
+    }
+    return null;
+  }
+
+  /** Whether a path-shaped token ends in a file name: an extension or a dotless file name. */
+  private static boolean namesAFile(String token) {
+    if (!pathShaped(token) || token.endsWith("/")) {
+      return false;
+    }
+    String last = fileName(token);
+    return (last.lastIndexOf('.') > 0 && EXTENSIONS.contains(extension(last)))
+        || DOTLESS_FILE_NAMES.contains(last.toLowerCase(Locale.ROOT));
+  }
+
+  /** A patch's code lines: hunk headers and "no newline" notes left out, diff markers removed. */
+  private static List<String> codeLines(String patch) {
+    var lines = new ArrayList<String>();
+    for (String line : patch.split("\n", -1)) {
+      if (!line.isEmpty() && !line.startsWith("@@") && !line.startsWith("\\")) {
+        lines.add(line.substring(1));
+      }
+    }
+    return List.copyOf(lines);
   }
 
   /**
