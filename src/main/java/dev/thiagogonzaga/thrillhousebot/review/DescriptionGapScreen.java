@@ -393,7 +393,17 @@ final class DescriptionGapScreen {
       return false;
     }
     var own = QUOTED.matcher(foldQuotes(gap)).replaceAll(" ");
-    return anyFinds(CONCESSIONS, own);
+    for (var pattern : CONCESSIONS) {
+      var concession = pattern.matcher(own);
+      while (concession.find()) {
+        // In a clause the description is said to state ("the description says no gap remains
+        // …"), the words are the claim being reported, not the bullet's verdict.
+        if (!attributedBefore(clauseOf(own.substring(0, concession.start())))) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**

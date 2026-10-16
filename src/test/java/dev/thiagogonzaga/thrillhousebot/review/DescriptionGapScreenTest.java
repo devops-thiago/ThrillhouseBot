@@ -453,7 +453,12 @@ class DescriptionGapScreenTest {
         "The description says the README moves unchanged; `docs/RUST-V10.md` rewrites it.",
         // The concession is the description's own words, quoted.
         "The description says \"no gap remains in the retry logic\", but `Client.java` retries"
-            + " forever."
+            + " forever.",
+        // The concession is the claim the description is said to make, paraphrased.
+        "The description says no gap remains in the retry logic, but `Client.java` retries"
+            + " forever.",
+        "The description says the config table matches the diff; `Config.java` adds a new key.",
+        "The description says every limit is disclosed; `README.md` omits the burst limit."
       })
   void aStatedGapOrAnUnmetLinkedIssueCriterionIsNotAConcession(String gap) {
     assertFalse(DescriptionGapScreen.concedesNoGap(gap));
