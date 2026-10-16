@@ -342,10 +342,6 @@ final class LinkedIssueCriteria {
   }
 
   /**
-   * Whether {@code clause} says the criterion of {@code criterionWords} is not met: an {@link
-   * #UNMET} word anywhere, or a {@link #NEGATORS} negation that binds it.
-   */
-  /**
    * Whether one of the last {@value #PRAISE_REACH} words of {@code lead} negates what follows:
    * "never fails", "nothing is missing", "no longer drops".
    */
@@ -359,6 +355,10 @@ final class LinkedIssueCriteria {
     return false;
   }
 
+  /**
+   * Whether {@code clause} says the criterion of {@code criterionWords} is not met: an {@link
+   * #UNMET} word no negation turns into praise, or a {@link #NEGATORS} negation that binds it.
+   */
   private static boolean saysUnmet(String clause, Set<String> criterionWords) {
     // A clause about the summary's own text ("the '…' wording is missing from the walkthrough")
     // says nothing about the change.
