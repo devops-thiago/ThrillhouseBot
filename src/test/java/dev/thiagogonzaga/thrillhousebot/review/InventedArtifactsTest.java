@@ -141,6 +141,12 @@ class InventedArtifactsTest {
             "It adds a settings page for data dropped from the flow.", change));
     assertFalse(
         InventedArtifacts.invents("It drops the old flow and deletes a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It has removed a settings page.", change));
+    // A removal that does not govern the artifact leaves it judged.
+    assertTrue(
+        InventedArtifacts.invents("It drops the old flow then adds a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents("It drops the legacy flow — a settings page is added.", change));
     assertTrue(InventedArtifacts.invents("It adds an audit screen.", change));
     assertTrue(InventedArtifacts.invents("It adds a metrics endpoint.", change));
     assertTrue(

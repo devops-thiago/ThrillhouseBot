@@ -98,8 +98,8 @@ final class InventedArtifacts {
   /** A sentence about taking something out: "removes", "deleted", "drops", "retires". */
   private static final Pattern REMOVAL = Pattern.compile("(?i)\\b(?:remov|delet|drop|retir)\\w*+");
 
-  /** Where a sentence's clauses split, for {@link #REMOVAL}: punctuation, "and", "but". */
-  private static final Pattern CLAUSE_BREAK = Pattern.compile("(?i)[,;:]|\\b(?:and|but|while)\\b");
+  /** Words, at most, between a {@link #REMOVAL} verb and the artifact it governs. */
+  static final int REMOVAL_REACH = 2;
 
   /**
    * {@code summary} with every sentence of its purpose and assessment that introduces an artifact
@@ -167,14 +167,14 @@ final class InventedArtifacts {
     return false;
   }
 
-  /** Whether the clause {@code lead} ends in holds a {@link #REMOVAL} verb. */
+  /**
+   * Whether one of the last {@value #REMOVAL_REACH} words of {@code lead}, those right before the
+   * artifact, is a {@link #REMOVAL} verb: "removes a …", "has deleted the old … and a …" is not.
+   */
   private static boolean removedInClause(String lead) {
-    var breaks = CLAUSE_BREAK.matcher(lead);
-    var start = 0;
-    while (breaks.find()) {
-      start = breaks.end();
-    }
-    return REMOVAL.matcher(lead.substring(start)).find();
+    var words = words(lead);
+    return words.subList(Math.max(0, words.size() - REMOVAL_REACH), words.size()).stream()
+        .anyMatch(word -> REMOVAL.matcher(word).lookingAt());
   }
 
   /**
