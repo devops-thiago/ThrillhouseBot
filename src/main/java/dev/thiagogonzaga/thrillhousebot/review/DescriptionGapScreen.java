@@ -384,9 +384,12 @@ final class DescriptionGapScreen {
   /**
    * Whether {@code gap} says in its own words that it is not a mismatch: "(disclosed, not
    * contradicted)", "which matches the diff — no gap beyond the noted scope". Such a bullet listed
-   * under the section's "does not fully match" intro contradicts itself. Quoted passages are the PR
-   * text's words, not the bullet's. A {@code Linked issue #N:} gap reports an unmet criterion of
-   * the issue and is never one, even when it adds that "the change matches the description".
+   * under the section's "does not fully match" intro contradicts itself. The concession is the
+   * bullet's verdict only in its last clause, one the description is not said to state: "there is
+   * no mismatch in the parser, but `Cache.java` drops it" goes on to state a gap. Quoted passages
+   * are the PR text's words, not the bullet's. A {@code Linked issue #N:} gap reports an unmet
+   * criterion of the issue and is never one, even when it adds that "the change matches the
+   * description".
    */
   static boolean concedesNoGap(String gap) {
     if (DescriptionGapCarryover.linkedIssueGap(gap) != null) {
@@ -398,7 +401,8 @@ final class DescriptionGapScreen {
       while (concession.find()) {
         // In a clause the description is said to state ("the description says no gap remains
         // …"), the words are the claim being reported, not the bullet's verdict.
-        if (!attributedBefore(clauseOf(own.substring(0, concession.start())))) {
+        if (!attributedBefore(clauseOf(own.substring(0, concession.start())))
+            && !CLAUSE_BREAK.matcher(own.substring(concession.end())).find()) {
           return true;
         }
       }
@@ -408,7 +412,7 @@ final class DescriptionGapScreen {
 
   /**
    * A bullet's own concession that there is no mismatch, one pattern per shape: "no gap", "not
-   * contradicted", "matches the description", "disclosed".
+   * contradicted", "matches the description".
    */
   private static final List<Pattern> CONCESSIONS =
       List.of(
@@ -416,8 +420,7 @@ final class DescriptionGapScreen {
           Pattern.compile("(?i)\\bnot\\s++(?:contradicted|a\\s++(?:gap|mismatch))\\b"),
           Pattern.compile(
               "(?i)(?<!\\bnot\\s)(?<!\\bnever\\s)\\b(?:matches|matched|consistent\\s++with)"
-                  + "\\s++the\\s++(?:description|diff)\\b"),
-          Pattern.compile("(?i)(?<!\\bnot\\s)\\bdisclosed\\b"));
+                  + "\\s++the\\s++(?:description|diff)\\b"));
 
   /** Whether {@code gap} names the description, its title, the author or a linked issue. */
   static boolean cites(String gap) {

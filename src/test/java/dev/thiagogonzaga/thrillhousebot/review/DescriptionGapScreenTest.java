@@ -463,7 +463,12 @@ class DescriptionGapScreenTest {
         "The description says retries are capped; `Client.java` is not consistent with the"
             + " description.",
         "The description says the cap is 8; the change never matches the description.",
-        "The description says the export is atomic; the rename is not disclosed."
+        "The description says the export is atomic; the rename is not disclosed.",
+        // A concession the bullet goes on past states a gap after it.
+        "The description says the parser is unchanged; there is no mismatch in the parser, but"
+            + " `Cache.java` drops entries.",
+        // The description as the one disclosing.
+        "The description disclosed the burst limit; `README.md` omits it."
       })
   void aStatedGapOrAnUnmetLinkedIssueCriterionIsNotAConcession(String gap) {
     assertFalse(DescriptionGapScreen.concedesNoGap(gap));
