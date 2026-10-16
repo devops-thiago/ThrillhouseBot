@@ -2392,6 +2392,13 @@ class PrSummaryGeneratorTest {
     assertEquals(
         List.of(credited, plain),
         PrSummaryGenerator.backedByFindings(List.of(credited, plain), List.of(listed)));
+    // Of two credited gaps, only the one a finding states stays; without any, the list is kept.
+    var unbacked = "A review pass flags that the pom timestamp is not reproducible.";
+    assertEquals(
+        List.of(credited),
+        PrSummaryGenerator.backedByFindings(List.of(credited, unbacked), List.of(listed)));
+    var none = List.of(plain);
+    assertSame(none, PrSummaryGenerator.backedByFindings(none, List.of()));
 
     var result =
         new ReviewResult(
