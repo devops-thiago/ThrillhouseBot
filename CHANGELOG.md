@@ -10,7 +10,7 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
-- **Paths in findings are checked in quotes and suggestions too, and a path missing its folder is completed** (#1094): a path such as `docs/CONFIG-C.md` that only one changed file (`c/docs/CONFIG-C.md`) ends with is replaced by that file's path, even where a patch quotes the short form. A finding that quotes a line of its file with an absolute path the line does not hold gets the path from the line. A suggestion that names a repository file nothing resolves, or puts a glob over a directory nothing creates (`/app/lib/*`) in place, loses its suggestion block; the finding is kept.
+- **Paths in findings are checked in quotes and suggestions too, and a path missing its folder is completed** (#1094): a path such as `docs/CONFIG-C.md` that only one changed file (`c/docs/CONFIG-C.md`) ends with is replaced by that file's path, even where a patch quotes the short form. A finding that quotes a line of its file with an absolute path the line does not hold gets the path from the line. A suggestion that relies on a repository file nothing resolves, or puts a glob over a directory (`/app/lib/*`) that no patch, PR text or replaced line names and that the suggestion does not create itself, loses its suggestion block; the finding is kept. Paths the suggestion writes, such as a `COPY` destination or a `cp` or `mkdir` target, are not checked.
 
 ## [0.7.1] — 2026-10-13
 
