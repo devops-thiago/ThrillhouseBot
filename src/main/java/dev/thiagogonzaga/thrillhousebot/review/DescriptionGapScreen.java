@@ -298,16 +298,25 @@ final class DescriptionGapScreen {
   private static final Pattern SENTENCE_END = Pattern.compile("[.;!?](?=\\s|$)");
 
   /**
-   * A review pass or a finding named as what flags a gap's claim (#1127): "a review pass flags",
-   * "the earlier review noted", "flagged by the review", "a finding reports". One pattern per
+   * A review pass or a reviewer as a clause's subject, "a review pass", "the earlier review", "one
+   * reviewer": a credit when a {@link #REVIEW_VERB} follows it.
+   */
+  private static final Pattern REVIEW_SUBJECT =
+      Pattern.compile(
+          "(?i)\\b(?:an?|the|one|another)\\s++(?:(?:earlier|previous|prior)\\s++)?"
+              + "review(?:er)?+(?:\\s++(?:pass|round|call))?+");
+
+  /** What a {@link #REVIEW_SUBJECT} does when it credits a claim: flags, noted, found… */
+  private static final Pattern REVIEW_VERB =
+      Pattern.compile("(?i)\\s++(?:flag|note|raise|report|find|found|warn|suggest)");
+
+  /**
+   * A review pass or a finding named as what flags a gap's claim (#1127), besides a {@link
+   * #REVIEW_SUBJECT} with its verb: "flagged by the review", "a finding reports". One pattern per
    * shape.
    */
   private static final List<Pattern> REVIEW_CREDIT =
       List.of(
-          Pattern.compile(
-              "(?i)\\b(?:an?|the|one|another)\\s++(?:(?:earlier|previous|prior)\\s++)?"
-                  + "review(?:er)?+(?:\\s++(?:pass|round|call))?+"
-                  + "\\s++(?:flag|note|raise|report|find|found|warn|suggest)\\w*+"),
           Pattern.compile(
               "(?i)\\b(?:flagged|noted|raised|reported)\\s++(?:by|in)\\s++"
                   + "(?:an?|the)\\s++(?:(?:earlier|previous|prior)\\s++)?review"),
@@ -430,12 +439,7 @@ final class DescriptionGapScreen {
       var rest = linked.group(2);
       own = rest.substring(DescriptionGapCarryover.criterionOf(rest).length());
     }
-    // A code span names a symbol ("`may-retry`"): it keeps its backticks, as the evidence of a
-    // stated mismatch, but not its words.
-    var unquoted =
-        STATED_EVIDENCE
-            .matcher(QUOTED.matcher(foldQuotes(own)).replaceAll(" "))
-            .replaceAll("`code`");
+    var unquoted = ownWords(own);
     if (CONDITIONAL.matcher(unquoted).find()) {
       return true;
     }
@@ -515,16 +519,34 @@ final class DescriptionGapScreen {
    * reported downtime"), are the PR text's words, not the bullet's.
    */
   static boolean creditsReview(String gap) {
-    var unquoted = QUOTED.matcher(foldQuotes(gap)).replaceAll(" ");
+    var own = ownWords(gap);
+    var subject = REVIEW_SUBJECT.matcher(own);
+    while (subject.find()) {
+      if (REVIEW_VERB.matcher(own).region(subject.end(), own.length()).lookingAt()
+          && !attributedBefore(clauseOf(own.substring(0, subject.start())))) {
+        return true;
+      }
+    }
     for (var pattern : REVIEW_CREDIT) {
-      var credit = pattern.matcher(unquoted);
+      var credit = pattern.matcher(own);
       while (credit.find()) {
-        if (!attributedBefore(clauseOf(unquoted.substring(0, credit.start())))) {
+        if (!attributedBefore(clauseOf(own.substring(0, credit.start())))) {
           return true;
         }
       }
     }
     return false;
+  }
+
+  /**
+   * {@code text} as the bullet's own words: quoted passages blanked, and each code span, which
+   * names a symbol ("`may-retry`"), reduced to a placeholder that keeps its backticks as the
+   * evidence of a stated mismatch.
+   */
+  private static String ownWords(String text) {
+    return STATED_EVIDENCE
+        .matcher(QUOTED.matcher(foldQuotes(text)).replaceAll(" "))
+        .replaceAll("`code`");
   }
 
   /**

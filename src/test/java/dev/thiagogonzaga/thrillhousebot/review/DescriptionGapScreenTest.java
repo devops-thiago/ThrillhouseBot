@@ -536,7 +536,11 @@ class DescriptionGapScreenTest {
         "The description says findings are posted inline, but `Publisher.java` lists them.",
         // The credit is the description's own words: stated, or quoted.
         "The description says one reviewer reported downtime; `health.sh` reports healthy.",
-        "The description says \"a review pass flags every commit\", but `dco.yml` skips merges."
+        "The description says \"a review pass flags every commit\", but `dco.yml` skips merges.",
+        "The checklist is done, but `a review pass flags every commit` is not backed here.",
+        "The description says one finding reports downtime; `health.sh` passes.",
+        // A reviewer named without a verb crediting the claim.
+        "The description says a review step gates releases, but no workflow runs one."
       })
   void aBulletNotCreditingTheReviewIsNotRecognised(String gap) {
     assertFalse(DescriptionGapScreen.creditsReview(gap));
