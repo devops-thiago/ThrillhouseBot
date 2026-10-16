@@ -190,6 +190,43 @@ class LinkedIssueCriteriaTest {
   }
 
   @Test
+  void oneSentenceCanNameSeveralUnmetCriteria() {
+    var both =
+        "The issue's \"the current week\" board listing is missing and its \"Sign-ups closed\""
+            + " card for imminent shifts is not implemented.";
+
+    var lines = unmet(ISSUE_260, List.of(), both, Map.of()).lines();
+
+    assertEquals(2, lines.size(), lines.toString());
+    assertTrue(lines.get(0).startsWith("Linked issue #260: The board lists"), lines.toString());
+    assertTrue(lines.get(1).startsWith("Linked issue #260: Shifts that start"), lines.toString());
+  }
+
+  @Test
+  void aClauseAboutTheSummarysOwnTextIsNotAnUnmetCriterion() {
+    var meta =
+        "The issue's 'next in-borough applicant' rule is implemented but the 'records when the"
+            + " offer expires' wording is missing from the walkthrough.";
+
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), meta, Map.of()));
+  }
+
+  @Test
+  void aFindingEquallyCloseToTwoCriteriaIsTiedToNone() {
+    var button =
+        new Finding(
+            RiskLevel.MEDIUM,
+            "react/src/components/ShiftBoard.tsx",
+            27,
+            "Contrary to the linked issue, the Sign up button stays enabled",
+            null,
+            null,
+            null);
+
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_260, List.of(button), null, Map.of()));
+  }
+
+  @Test
   void aQuoteSeveralCriteriaHoldGoesToTheClearBestOrToNone() {
     // Criteria 1 and 3 of #260 both hold "the Sign up button".
     var locked =

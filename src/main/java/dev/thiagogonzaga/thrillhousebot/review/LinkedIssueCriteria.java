@@ -109,6 +109,13 @@ final class LinkedIssueCriteria {
           Pattern.compile("(?i)\\b(?:not|never|no|cannot|without)\\b"),
           Pattern.compile("(?i)n['’]t\\b"));
 
+  /**
+   * Words naming text rather than behaviour: an {@link #UNMET} word in a clause holding one is
+   * about that text ("the '…' wording is missing from the walkthrough").
+   */
+  private static final Pattern META =
+      Pattern.compile("(?i)\\b(?:wording|walkthrough|summary|mention|phrasing|docs?)\\b");
+
   /** What turns a negation into an affirmation: "not only", "not just", "not merely". */
   private static final Pattern AFFIRMING = Pattern.compile("(?i)\\s++(?:only|just|merely)\\b");
 
@@ -218,9 +225,10 @@ final class LinkedIssueCriteria {
       }
     }
     for (var sentence : sentences(overview)) {
-      var at = overviewMatch(sentence, criteria);
-      if (open(at, lines, criteria, gaps)) {
-        lines.put(at, line(key, criteria.get(at)) + " — the overview above reports it unmet");
+      for (var at : overviewMatches(sentence, criteria)) {
+        if (open(at, lines, criteria, gaps)) {
+          lines.put(at, line(key, criteria.get(at)) + " — the overview above reports it unmet");
+        }
       }
     }
     for (var row : new TreeMap<>(fileSummaries).entrySet()) {
@@ -298,34 +306,28 @@ final class LinkedIssueCriteria {
 
   /** The criterion sharing the most words with {@code words}, at least {@value #MIN_SHARED}. */
   private static int bestMatch(Set<String> words, List<String> criteria) {
-    var best = -1;
-    var bestShared = MIN_SHARED - 1;
-    for (var i = 0; i < criteria.size(); i++) {
-      var shared = shared(words, words(criteria.get(i)));
-      if (shared > bestShared) {
-        best = i;
-        bestShared = shared;
-      }
-    }
-    return best;
+    var best = clearBest(words, criteria);
+    return best >= 0 && shared(words, words(criteria.get(best))) >= MIN_SHARED ? best : -1;
   }
 
   /**
-   * The criterion an overview sentence states unmet: the sentence cites the issue, and one of its
-   * clauses says it is not met ({@link #UNMET}) and quotes a passage of the criterion or shares
-   * half its words.
+   * The criteria an overview sentence states unmet, in the order it names them: the sentence cites
+   * the issue, and a clause of it says the criterion is not met ({@link #UNMET}, {@link #NEGATORS})
+   * and quotes a passage of it or shares half its words.
    */
-  private static int overviewMatch(String sentence, List<String> criteria) {
+  private static List<Integer> overviewMatches(String sentence, List<String> criteria) {
     if (!citesIssue(sentence)) {
-      return -1;
+      return List.of();
     }
+    var found = new ArrayList<Integer>();
     for (var clause : OVERVIEW_CLAUSE.split(foldQuotes(sentence))) {
-      var at = stated(clause, criteria);
-      if (at >= 0 && saysUnmet(clause, words(criteria.get(at)))) {
-        return at;
+      for (var at : stated(clause, criteria)) {
+        if (saysUnmet(clause, words(criteria.get(at)))) {
+          found.add(at);
+        }
       }
     }
-    return -1;
+    return found;
   }
 
   /**
@@ -333,7 +335,9 @@ final class LinkedIssueCriteria {
    * #UNMET} word anywhere, or a {@link #NEGATORS} negation that binds it.
    */
   private static boolean saysUnmet(String clause, Set<String> criterionWords) {
-    if (UNMET.stream().anyMatch(p -> p.matcher(clause).find())) {
+    // A clause about the summary's own text ("the '…' wording is missing from the walkthrough")
+    // says nothing about the change.
+    if (!META.matcher(clause).find() && UNMET.stream().anyMatch(p -> p.matcher(clause).find())) {
       return true;
     }
     for (var pattern : NEGATORS) {
@@ -394,9 +398,13 @@ final class LinkedIssueCriteria {
     return tied ? -1 : best;
   }
 
-  /** The criterion {@code clause} quotes a passage of, or else shares half the words of; or -1. */
-  private static int stated(String clause, List<String> criteria) {
+  /**
+   * The criteria {@code clause} quotes a passage of, in order; or else the one it shares half the
+   * words of; or none.
+   */
+  private static List<Integer> stated(String clause, List<String> criteria) {
     var words = words(clause);
+    var quoted = new LinkedHashSet<Integer>();
     var quotes = QUOTED.matcher(clause);
     while (quotes.find()) {
       var quote = normalize(quotes.group(quotes.group(1) != null ? 1 : 2));
@@ -411,13 +419,16 @@ final class LinkedIssueCriteria {
               .toList();
       var best = clearBest(words, holding);
       if (best >= 0) {
-        return criteria.indexOf(holding.get(best));
+        quoted.add(criteria.indexOf(holding.get(best)));
       }
+    }
+    if (!quoted.isEmpty()) {
+      return List.copyOf(quoted);
     }
     var at = bestMatch(words, criteria);
     return at >= 0 && shared(words, words(criteria.get(at))) * 2 >= words(criteria.get(at)).size()
-        ? at
-        : -1;
+        ? List.of(at)
+        : List.of();
   }
 
   /**
