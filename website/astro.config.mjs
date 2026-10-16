@@ -40,7 +40,8 @@ export default defineConfig({
       title: "ThrillhouseBot",
       description:
         "Self-hosted AI pull-request reviewer — a GraalVM-native GitHub App built with Quarkus",
-      logo: { src: "./src/assets/icon.png", alt: "ThrillhouseBot" },
+      // Empty alt: the visible site title next to the logo already names the site.
+      logo: { src: "./src/assets/icon.png", alt: "" },
       favicon: "/icon.png",
       social: [
         {

@@ -59,4 +59,30 @@ describe('TokensPage', () => {
     });
     expect(tokens.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('names the period select and reloads tokens for the chosen period', async () => {
+    const tokens = vi.fn().mockResolvedValue(mockTokenData);
+    vi.mocked(api).mockReturnValue({ tokens } as unknown as ReturnType<typeof api>);
+
+    render(<TokensPage />);
+
+    const select = await screen.findByRole('combobox', { name: 'Period' });
+    await userEvent.selectOptions(select, 'day');
+
+    await waitFor(() => {
+      expect(tokens).toHaveBeenLastCalledWith('day');
+    });
+  });
+
+  it('puts the chart titles one level below the page heading', async () => {
+    render(<TokensPage />);
+
+    await screen.findByRole('heading', { level: 1, name: 'Token Analytics' });
+
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
+      'Tokens by Model (Input vs Output)',
+      'Model Breakdown',
+    ]);
+    expect(screen.queryByRole('heading', { level: 3 })).not.toBeInTheDocument();
+  });
 });

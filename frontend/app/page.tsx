@@ -104,7 +104,7 @@ const styles: Record<string, React.CSSProperties> = {
   button: {
     padding: "0.75rem 2rem",
     fontSize: "1rem",
-    background: "var(--accent)",
+    background: "var(--accent-emphasis)",
     color: "#fff",
     border: "none",
     borderRadius: 6,

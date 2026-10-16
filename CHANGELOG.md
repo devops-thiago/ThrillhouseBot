@@ -8,6 +8,10 @@ All notable changes to ThrillhouseBot.
 
 - **Pull request commits need a DCO sign-off, and the JVM build is reproducible** (#1124): the new `dco` check fails a pull request with a commit whose `Signed-off-by` line does not match its author; `git commit -s` adds one (see CONTRIBUTING). `pom.xml` now fixes archive timestamps, so two builds of the same commit produce identical jars. GOVERNANCE.md documents the decision process, roles and continuity plan, and docs/SECURITY_MODEL.md the security model.
 
+### Fixed
+
+- **Accessibility fixes on the dashboard and the docs site** (#1123): the period selects on the Costs and Tokens pages had no accessible name, and their chart titles were `<h3>` directly under the page `<h1>`. The selects are now labelled "Period" and the titles are `<h2>` at the same size. White button text on the light accent blue had a contrast ratio of 2.5:1; solid buttons (sign in, Retry) now use a darker blue. On the docs site, the Configuration page jumped from the page title to `<h4>` and the logo's alt text repeated the site title next to it. Lighthouse now scores 100 for accessibility on every dashboard page and on the docs Configuration page.
+
 ## [0.7.1] — 2026-10-13
 
 A bug-fix release. Most of the fixes are in follow-up rounds and the summary comment: findings from earlier rounds now get a status and have their threads resolved once fixed, the summary and its Description vs. Implementation section keep to what the change and its description contain, and a finding is placed, counted and matched to its duplicates the same way on every review.
