@@ -358,7 +358,9 @@ public class ReviewPublisher {
       priorReviews = priorReviews == null ? List.of() : List.copyOf(priorReviews);
     }
 
-    // Direct callers retain the default closed-finding report without opt-in enrichment.
+    // Direct callers retain the default closed-finding report without opt-in enrichment. They
+    // carry no prior reviews, so the summary-only skip never fires for them and the review posts
+    // (#1144); the orchestrator, the one production caller, passes the reviews it fetched.
     PostReviewRequest(
         String auth,
         String owner,
