@@ -458,7 +458,12 @@ class DescriptionGapScreenTest {
         "The description says no gap remains in the retry logic, but `Client.java` retries"
             + " forever.",
         "The description says the config table matches the diff; `Config.java` adds a new key.",
-        "The description says every limit is disclosed; `README.md` omits the burst limit."
+        "The description says every limit is disclosed; `README.md` omits the burst limit.",
+        // A negated concession states the mismatch.
+        "The description says retries are capped; `Client.java` is not consistent with the"
+            + " description.",
+        "The description says the cap is 8; the change never matches the description.",
+        "The description says the export is atomic; the rename is not disclosed."
       })
   void aStatedGapOrAnUnmetLinkedIssueCriterionIsNotAConcession(String gap) {
     assertFalse(DescriptionGapScreen.concedesNoGap(gap));

@@ -415,8 +415,9 @@ final class DescriptionGapScreen {
           Pattern.compile("(?i)\\bno\\s++(?:gap|mismatch|contradiction|discrepancy)\\b"),
           Pattern.compile("(?i)\\bnot\\s++(?:contradicted|a\\s++(?:gap|mismatch))\\b"),
           Pattern.compile(
-              "(?i)\\b(?:matches|matched|consistent\\s++with)\\s++the\\s++(?:description|diff)\\b"),
-          Pattern.compile("(?i)\\bdisclosed\\b"));
+              "(?i)(?<!\\bnot\\s)(?<!\\bnever\\s)\\b(?:matches|matched|consistent\\s++with)"
+                  + "\\s++the\\s++(?:description|diff)\\b"),
+          Pattern.compile("(?i)(?<!\\bnot\\s)\\bdisclosed\\b"));
 
   /** Whether {@code gap} names the description, its title, the author or a linked issue. */
   static boolean cites(String gap) {
