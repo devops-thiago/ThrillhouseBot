@@ -104,11 +104,12 @@ final class InventedArtifacts {
       Pattern.compile("(?<=\\p{Ll})(?=\\p{Lu})|(?<=\\p{Lu})(?=\\p{Lu}\\p{Ll})");
 
   /**
-   * A fence marker opening a line, after at most three blanks. A block runs from such a line to the
-   * next line opening with the same marker, or to the end of the text; a marker inside a line opens
-   * nothing.
+   * A fence opening a line, after at most three blanks: a run of three or more backticks or tildes
+   * (group 1), then the rest of the line (group 2). A block runs from such a line to the next line
+   * holding only a run of the same character at least as long, or to the end of the text; a marker
+   * inside a line opens nothing.
    */
-  private static final Pattern FENCE_LINE = Pattern.compile("[ \t]{0,3}+(```|~~~)");
+  private static final Pattern FENCE_LINE = Pattern.compile("[ \t]{0,3}+(`{3,}+|~{3,}+)(.*+)");
 
   /** A blank line between paragraphs, with the blanks around it; LF or CRLF line ends. */
   private static final Pattern PARAGRAPH_BREAK = Pattern.compile("\r?+\n[ \t]*+\r?+\n\\s*+");
@@ -122,7 +123,7 @@ final class InventedArtifacts {
    * add", "neither a … nor a …".
    */
   private static final Pattern NEGATION =
-      Pattern.compile("(?i)\\b(?:not|never|without|nor|neither|no\\s++longer)\\b|n['’]t\\b");
+      Pattern.compile("(?i)\\b(?:not|cannot|never|without|nor|neither|no\\s++longer)\\b|n['’]t\\b");
 
   /**
    * A verb of taking something out: "removes", "deleted", "drops", "retires". A noun or adjective
@@ -135,8 +136,9 @@ final class InventedArtifacts {
 
   /**
    * A conjunction that starts a new statement after a negated one: "ships without config and adds".
+   * "Or" is not one: "does not bump v2 or add a …" negates both verbs.
    */
-  private static final Pattern CONJUNCTION = Pattern.compile("(?i)\\b(?:and|or|then|plus)\\b");
+  private static final Pattern CONJUNCTION = Pattern.compile("(?i)\\b(?:and|then|plus)\\b");
 
   /**
    * An underscore that opens or closes emphasis ("a _settings page_"): one with no letter or digit
@@ -145,19 +147,44 @@ final class InventedArtifacts {
   private static final Pattern UNDERSCORE_EMPHASIS =
       Pattern.compile("(?<![\\p{L}\\p{N}])_++|_++(?![\\p{L}\\p{N}])");
 
-  /** A verb of addition, which takes the artifact after it away from an earlier removal verb. */
+  /**
+   * A verb of addition, which takes the artifact after it away from an earlier removal verb. A noun
+   * or adjective sharing its stem ("address", "additional", "introduction", "creation",
+   * "implementation", "wireframe") is not one.
+   */
   private static final Pattern ADDITION =
-      Pattern.compile("(?i)\\b(?:add|introduc|creat|implement|ship|build|wire)\\w*+");
+      Pattern.compile(
+          "(?i)\\b(?:add(?!ress|ition)|introduc(?!tion)|creat(?!ion|or)|implement(?!ation)"
+              + "|ship|build|wire(?!less|frame))\\w*+");
 
   /** A contrast that ends a negation's reach: "does not touch billing but adds …". */
   private static final Pattern CONTRAST =
       Pattern.compile("(?i)\\b(?:but|however|instead|while|whereas|although|though)\\b");
 
+  /** An "or" right before an addition verb, which carries the negation to it. */
+  private static final Pattern OR_BEFORE = Pattern.compile("(?i)\\bor\\s*+$");
+
   /** Words at most between a negation and the addition verb it negates: "does not yet add". */
   static final int NEGATED_REACH = 2;
 
-  /** Where an artifact's clause starts, for {@link #REMOVAL}: punctuation or a dash. */
-  private static final Pattern CLAUSE_END = Pattern.compile("[,;:.!?—–]");
+  /** What leads into examples after a clause break: "e.g.", "i.e.", "including", "such as". */
+  private static final Pattern EXAMPLE_LEAD =
+      Pattern.compile("(?i)\\s*+(?:e\\.g\\.|i\\.e\\.|including\\b|such\\s++as\\b)");
+
+  /**
+   * Where an artifact's clause starts, for {@link #REMOVAL}: punctuation or a dash. A comma or
+   * colon between digits ("1,000", "10:30") ends nothing, nor does a period not followed by a blank
+   * or the end ("v1.2") or one closing a common abbreviation ("e.g.", "i.e.", "etc.", "vs.").
+   */
+  private static final Pattern CLAUSE_END =
+      Pattern.compile("[;!?—–]|(?<!\\d)[,:]|[,:](?!\\d)|\\.(?=\\s|\\z)");
+
+  /** A common abbreviation a period closes, read just before that period's end. */
+  private static final Pattern ABBREVIATION =
+      Pattern.compile("(?i)\\b(?:e\\.g|i\\.e|etc|vs|cf)\\.\\z");
+
+  /** Characters at most an {@link #ABBREVIATION} spans, its period included. */
+  private static final int ABBREVIATION_CHARS = 4;
 
   /**
    * {@code summary} with every sentence of its purpose and assessment that introduces an artifact
@@ -211,7 +238,7 @@ final class InventedArtifacts {
           out.append(withoutInventedProse(text.substring(from, lineStart), change));
           open = lineStart;
           marker = fence.group(1);
-        } else if (marker.equals(fence.group(1))) {
+        } else if (closes(fence.group(1), fence.group(2), marker)) {
           out.append(text, open, lineEnd);
           from = lineEnd;
           marker = null;
@@ -226,6 +253,11 @@ final class InventedArtifacts {
     }
     var result = out.toString();
     return result.equals(text) ? text : result;
+  }
+
+  /** Whether a fence line of {@code run} and {@code rest} closes a block {@code marker} opened. */
+  private static boolean closes(String run, String rest, String marker) {
+    return run.charAt(0) == marker.charAt(0) && run.length() >= marker.length() && rest.isBlank();
   }
 
   /** {@code prose}, holding no fence, without its sentences that invent an artifact. */
@@ -309,10 +341,11 @@ final class InventedArtifacts {
   /**
    * Whether a {@link #NEGATION} governs the artifact {@code lead} leads to: the negation is in the
    * artifact's clause and either no {@link #ADDITION} verb follows it ("ships without a …"), or the
-   * first one follows within {@value #NEGATED_REACH} words with no contrast or conjunction between
-   * ("does not add a …", "doesn't yet ship a … or a …", "nor does it add a …"). "does not touch
-   * billing but adds a …", "does not touch billing and adds a …" and "ships without config and adds
-   * a …" are judged: the conjunction starts a statement the negation does not reach.
+   * first one follows within {@value #NEGATED_REACH} words, or right after "or", with no contrast
+   * or conjunction between ("does not add a …", "doesn't yet ship a … or a …", "nor does it add a
+   * …", "does not bump the v2.0 schema or add a …"). "does not touch billing but adds a …", "does
+   * not touch billing and adds a …" and "ships without config and adds a …" are judged: the
+   * conjunction starts a statement the negation does not reach.
    */
   private static boolean negatedInClause(String lead) {
     var clause = clauseOf(lead);
@@ -332,15 +365,24 @@ final class InventedArtifacts {
     var between = rest.substring(0, addition.start());
     return !CONTRAST.matcher(rest).find()
         && !CONJUNCTION.matcher(between).find()
-        && words(between).size() <= NEGATED_REACH;
+        && (words(between).size() <= NEGATED_REACH || OR_BEFORE.matcher(between).find());
   }
 
-  /** The clause {@code lead} ends in: what follows its last punctuation or dash. */
+  /**
+   * The clause {@code lead} ends in: what follows its last punctuation or dash. A break that leads
+   * into examples of what came before ("removes legacy pages, e.g. a …") does not end the clause.
+   */
   private static String clauseOf(String lead) {
     var breaks = CLAUSE_END.matcher(lead);
+    var example = EXAMPLE_LEAD.matcher(lead);
+    var abbreviation = ABBREVIATION.matcher(lead).useTransparentBounds(true);
     var start = 0;
     while (breaks.find()) {
-      start = breaks.end();
+      var end = breaks.end();
+      var abbreviated = abbreviation.region(Math.max(0, end - ABBREVIATION_CHARS - 1), end).find();
+      if (!abbreviated && !example.region(end, lead.length()).lookingAt()) {
+        start = end;
+      }
     }
     return lead.substring(start);
   }

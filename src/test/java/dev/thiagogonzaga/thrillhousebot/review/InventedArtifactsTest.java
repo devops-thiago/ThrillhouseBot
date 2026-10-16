@@ -209,7 +209,8 @@ class InventedArtifactsTest {
         InventedArtifacts.invents("It ships without config and adds a settings page.", change));
     assertTrue(InventedArtifacts.invents("It does not bill and adds a settings page.", change));
     assertTrue(InventedArtifacts.invents("It never fails, then adds a settings page.", change));
-    assertTrue(InventedArtifacts.invents("It does not bill or ships a settings page.", change));
+    // "Or" carries the negation to the next verb.
+    assertFalse(InventedArtifacts.invents("It does not bill or add a settings page.", change));
     // More than two words between the negation and the addition verb, with no conjunction.
     assertTrue(
         InventedArtifacts.invents(
@@ -251,6 +252,74 @@ class InventedArtifactsTest {
     assertFalse(InventedArtifacts.invents("It retires a settings page.", change));
     assertFalse(InventedArtifacts.invents("It is deleting a settings page.", change));
     assertFalse(InventedArtifacts.invents("It dropped a settings page.", change));
+  }
+
+  @Test
+  void aPeriodOrCommaInsideANumberOrAnAbbreviationEndsNoClause() {
+    var change =
+        InventedArtifacts.Change.of(
+            List.of(
+                new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                added("web/src/App.tsx", "const app = 1;")));
+
+    assertFalse(
+        InventedArtifacts.invents("It deletes the old v1.2 flow and a settings page.", change));
+    assertFalse(
+        InventedArtifacts.invents("It removes legacy endpoints, e.g. a settings page.", change));
+    assertFalse(
+        InventedArtifacts.invents("It removes legacy endpoints, i.e. a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It removes logs etc. and a settings page.", change));
+    assertFalse(
+        InventedArtifacts.invents("It removes 1,000 stale rows and a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It drops the 10:30 job and a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It does not bump v2.0 or add a settings page.", change));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It removes the old vs. new toggle and a settings page.", change));
+    assertFalse(
+        InventedArtifacts.invents("It removes legacy pages, including a settings page.", change));
+    assertFalse(
+        InventedArtifacts.invents("It removes legacy pages: such as a settings page.", change));
+    // A real sentence or clause end still bounds the removal.
+    assertTrue(InventedArtifacts.invents("It removes v1. It adds a settings page.", change));
+    assertTrue(InventedArtifacts.invents("It removes cruft, 2 is a settings page.", change));
+    assertTrue(InventedArtifacts.invents("It drops rows: a settings page is added.", change));
+  }
+
+  @Test
+  void cannotIsANegation() {
+    var change = InventedArtifacts.Change.of(List.of(added("web/src/App.tsx", "const app = 1;")));
+
+    assertFalse(InventedArtifacts.invents("It cannot add a settings page yet.", change));
+    assertFalse(InventedArtifacts.invents("It Cannot ship a settings page.", change));
+  }
+
+  @Test
+  void aNounOfAdditionDoesNotTakeTheArtifactFromAnEarlierRemoval() {
+    var change =
+        InventedArtifacts.Change.of(
+            List.of(
+                new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                added("web/src/App.tsx", "const app = 1;")));
+
+    assertFalse(
+        InventedArtifacts.invents(
+            "It removes the old implementation and a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It deletes an additional settings page.", change));
+    assertFalse(
+        InventedArtifacts.invents("It drops the address book and a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It retires the wireframe and a settings page.", change));
+    assertFalse(
+        InventedArtifacts.invents("It removes the creation flow and a settings page.", change));
+    assertFalse(
+        InventedArtifacts.invents("It removes the introduction and a settings page.", change));
+    // The verbs still take it.
+    assertTrue(
+        InventedArtifacts.invents("It removes the old flow and adds a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents("It drops the old flow and creates a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents("It drops the flow and implements a settings page.", change));
   }
 
   @Test
@@ -317,6 +386,17 @@ class InventedArtifactsTest {
         InventedArtifacts.withoutInvented(
             "It adds a settings page. Done.\n~~~\n```\nIt adds a settings page.\n~~~\nKept.",
             change));
+    // A longer fence is closed only by a run at least as long, with nothing after it.
+    assertEquals(
+        "Done.\n````\n```\nIt adds a settings page.\n```java\n````\nKept.",
+        InventedArtifacts.withoutInvented(
+            "It adds a settings page. Done.\n````\n```\nIt adds a settings page.\n```java\n````\n"
+                + "Kept.",
+            change));
+    assertEquals(
+        "```\nIt adds a settings page.\n```java\nStill inside.\n```  \nKept.",
+        InventedArtifacts.withoutInvented(
+            "```\nIt adds a settings page.\n```java\nStill inside.\n```  \nKept.", change));
     // The blank between paragraphs before a fence stays.
     assertEquals(
         "Done.\r\n```\na settings page\n```",
