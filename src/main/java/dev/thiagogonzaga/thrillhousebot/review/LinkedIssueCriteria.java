@@ -137,8 +137,7 @@ final class LinkedIssueCriteria {
       Pattern.compile("(?i)[,;—–]|\\b(?:but|however|while|whereas|although|though)\\b");
 
   /** Where a walkthrough row's clauses split. */
-  private static final Pattern CLAUSE_SPLIT =
-      Pattern.compile("[;.()]|,\\s++|\\s++(?:and|or|but)\\s++");
+  private static final Pattern CLAUSE_SPLIT = Pattern.compile("[;.(),]|\\s(?:and|or|but)\\s");
 
   /** A clause opening with a negation: "no lockout for …", "without a cancel path". */
   private static final Pattern NEGATED_CLAUSE =
@@ -208,7 +207,7 @@ final class LinkedIssueCriteria {
         continue;
       }
       var at = bestMatch(words(text), criteria);
-      if (at >= 0 && !lines.containsKey(at) && !named(criteria.get(at), gaps)) {
+      if (open(at, lines, criteria, gaps)) {
         lines.put(
             at,
             line(key, criteria.get(at))
@@ -220,14 +219,14 @@ final class LinkedIssueCriteria {
     }
     for (var sentence : sentences(overview)) {
       var at = overviewMatch(sentence, criteria);
-      if (at >= 0 && !lines.containsKey(at) && !named(criteria.get(at), gaps)) {
+      if (open(at, lines, criteria, gaps)) {
         lines.put(at, line(key, criteria.get(at)) + " — the overview above reports it unmet");
       }
     }
     for (var row : new TreeMap<>(fileSummaries).entrySet()) {
       for (var clause : CLAUSE_SPLIT.split(row.getValue())) {
         var at = clauseMatch(clause, criteria);
-        if (at >= 0 && !lines.containsKey(at) && !named(criteria.get(at), gaps)) {
+        if (open(at, lines, criteria, gaps)) {
           lines.put(
               at,
               line(key, criteria.get(at))
@@ -240,6 +239,15 @@ final class LinkedIssueCriteria {
     }
     var ordered = new TreeMap<>(lines);
     return new Lines(List.copyOf(ordered.values()), pointed);
+  }
+
+  /**
+   * Whether criterion {@code at} still wants a line: one was found, none is placed yet, and no
+   * {@code Linked issue} gap names it.
+   */
+  private static boolean open(
+      int at, Map<Integer, String> lines, List<String> criteria, List<String> gaps) {
+    return at >= 0 && !lines.containsKey(at) && !named(criteria.get(at), gaps);
   }
 
   /**
