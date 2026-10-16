@@ -277,7 +277,7 @@ final class DescriptionGapScreen {
   private static final List<Pattern> SPECULATION =
       List.of(
           Pattern.compile("(?i)(?<![\\w-])(?:may|might|could)(?:n'?t)?+(?![\\w-])"),
-          Pattern.compile("(?i)(?<![\\w-])(?:possibly|perhaps|presumably)(?![\\w-])"));
+          Pattern.compile("(?i)(?<![\\w-])(?:possibly|perhaps|presumably|maybe)(?![\\w-])"));
 
   /** Where the PR text splits into sentences before a hedge's context is looked up in it. */
   private static final Pattern SOURCE_SENTENCE = Pattern.compile("[.!?;:](?=\\s|$)|\n");

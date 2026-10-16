@@ -457,6 +457,7 @@ class DescriptionGapScreenTest {
         "The description says the limit holds; it couldn't be enforced on a retry.",
         "The description says the limit holds; it couldn’t be enforced on a retry.",
         "The description says the export is atomic; it is possibly written in place.",
+        "The description says the cap holds; maybe the next retry drops it.",
         // A hedge opening its sentence.
         "The description says the export is atomic. Perhaps the rename is skipped."
       })
@@ -482,7 +483,7 @@ class DescriptionGapScreenTest {
         "Linked issue #113: the cache may be bypassed with a header — no changed file reads one.",
         // Nothing follows a dash, so the whole text is the criterion.
         "Linked issue #113: listings might expire past a TTL",
-        // "Mighty" and "maybe" are not hedges.
+        // "Mighty" is not a hedge, nor is the hyphenated name "maybe-tagged".
         "The description says the mighty README moves; maybe-tagged files are left out."
       })
   void aStatedGapIsNotAGuess(String gap) {
