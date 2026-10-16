@@ -319,11 +319,12 @@ public final class DescriptionGapLabels {
   }
 
   /**
-   * Whether the first character from {@code at}, stepping by {@code step} past blanks, is a word.
+   * Whether the first character from {@code at}, stepping by {@code step} past blanks and tabs, is
+   * a word.
    */
   private static boolean wordBeside(String text, int at, int step) {
     var i = at;
-    while (i >= 0 && i < text.length() && text.charAt(i) == ' ') {
+    while (i >= 0 && i < text.length() && Character.isWhitespace(text.charAt(i))) {
       i += step;
     }
     return i != at && i >= 0 && i < text.length() && Character.isLetterOrDigit(text.charAt(i));

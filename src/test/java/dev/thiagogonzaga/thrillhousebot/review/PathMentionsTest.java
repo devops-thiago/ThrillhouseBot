@@ -413,6 +413,8 @@ class PathMentionsTest {
           It is new. docs/NOPE.md; | It is new.
           docs/NOPE.md, Then x. | Then x.
           docs/NOPE.md,then x. | Then x.
+          It is new. docs/NOPE.md,then x. | It is new. Then x.
+          It is cited: docs/NOPE.md;then x. | It is cited: then x.
           docs/NOPE.md; | docs/NOPE.md;
           `a` cites docs/NOPE.md and `b`. | `a` cites and `b`.
           """)

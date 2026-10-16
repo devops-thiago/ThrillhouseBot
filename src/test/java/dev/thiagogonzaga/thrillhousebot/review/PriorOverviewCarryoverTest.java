@@ -500,10 +500,18 @@ class PriorOverviewCarryoverTest {
     assertFalse(PriorOverviewCarryover.sizeOnly("Bumps 3 dependencies."));
     assertFalse(PriorOverviewCarryover.sizeOnly(" "));
     assertFalse(PriorOverviewCarryover.sizeOnly(null));
-    // A size statement may lead the first sentence; what follows its clause is not read.
+    // A size statement may lead the first sentence with a side note after it, an addition or
+    // something the change also does; a clause saying what it does makes the purpose its own.
     assertTrue(
         PriorOverviewCarryover.sizeOnly(
             "This is a large change (12 files; 900 lines), with a new CI job."));
+    assertTrue(
+        PriorOverviewCarryover.sizeOnly(
+            "It is a 900-line change, and it also bumps the base image."));
+    assertFalse(
+        PriorOverviewCarryover.sizeOnly(
+            "It is a feature-sized change that adds a team signup service."));
+    assertFalse(PriorOverviewCarryover.sizeOnly("It is a 900-line change, and it adds a poller."));
     assertFalse(
         PriorOverviewCarryover.sizeOnly(
             "It is a feature-sized change (+555 lines). It adds a team signup service."));

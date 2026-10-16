@@ -202,6 +202,11 @@ class DescriptionGapLabelsTest {
     assertEquals(
         List.of("The TTL is never read."),
         DescriptionGapLabels.stripIssued(List.of("The TTL is never read (G1 still open)."), 1));
+    // A tab joins the label to its phrase as a blank does.
+    assertEquals(
+        List.of("The TTL is never read."),
+        DescriptionGapLabels.stripIssued(
+            List.of("The TTL is never read (carried from the earlier review as\tG2)."), 2));
     // Set off by a separator, the remark is not part of the label's phrase and stays (#974),
     // also beside a part the label finishes, which goes alone.
     for (var parenthetical :
