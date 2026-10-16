@@ -290,7 +290,7 @@ final class DescriptionGapScreen {
    * it.
    */
   private static final Pattern SOURCE_BLOCK =
-      Pattern.compile("\n(?=[ \t]*+(?:\n|[-*+][ \t]|\\d++[.)][ \t]))");
+      Pattern.compile("\n(?=[ \t\r]*+(?:\n|[-*+][ \t]|\\d++[.)][ \t]))");
 
   /**
    * The month, not the modal verb: "May" capitalised inside its sentence ("cut in May"), or before

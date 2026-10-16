@@ -542,6 +542,11 @@ class DescriptionGapScreenTest {
         DescriptionGapScreen.speculative(
             "The description says answers that may be stale are kept verbatim, but no file does.",
             "Answers that may\n  \nbe stale entries are dropped"));
+    // A CRLF blank line splits the same way.
+    assertTrue(
+        DescriptionGapScreen.speculative(
+            "The description says answers that may be stale are kept verbatim, but no file does.",
+            "Answers that may\r\n\r\nbe stale entries are dropped"));
     // A hedge's context is read within one sentence of the source.
     assertTrue(
         DescriptionGapScreen.speculative(
