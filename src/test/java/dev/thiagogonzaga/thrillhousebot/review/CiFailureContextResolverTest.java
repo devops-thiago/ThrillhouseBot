@@ -69,6 +69,11 @@ class CiFailureContextResolverTest {
         List.of(), false, true, new CiStatusEvaluator.CiFailures(List.of(failed), pending));
   }
 
+  private static CiStatusEvaluator.CiEvaluation evaluationOf(
+      CiStatusEvaluator.CiFailures failures) {
+    return new CiStatusEvaluator.CiEvaluation(List.of(), false, true, failures);
+  }
+
   private static GitHubCheckRunClient.Annotation annotation(
       String path, int line, String level, String message) {
     return new GitHubCheckRunClient.Annotation(path, line, level, "T", message);
@@ -100,6 +105,114 @@ class CiFailureContextResolverTest {
       // The usual automatic review starts while CI is still running: that is not worth a section.
       assertEquals("", resolver(true, true, 4000).resolve("a", "o", "r", evaluation(4)));
       verifyNoInteractions(checkRunClient, actionsClient, fetcher);
+    }
+  }
+
+  /** #1092: the section rebuilt from a reading taken after the model call. */
+  @Nested
+  class Refresh {
+
+    private static final String SECTION = "the review-start section";
+
+    private CiStatusEvaluator.CiFailures failures(
+        int pending, CiStatusEvaluator.FailedCheck... failed) {
+      return new CiStatusEvaluator.CiFailures(List.of(failed), pending);
+    }
+
+    @Test
+    void aCheckThatFailedSinceReviewStartIsAppendedAfterTheSection() {
+      var early = failures(1, actionsFailure(11L, "lint", 3));
+      var fresh = failures(0, actionsFailure(11L, "lint", 3), actionsFailure(12L, "test", 0));
+
+      var section = resolver(true, false, 4000).refresh("a", "o", "r", SECTION, early, fresh);
+
+      assertTrue(section.startsWith(SECTION + "\n"), section);
+      assertTrue(
+          section.contains("completed without passing after this review started: 1"), section);
+      assertTrue(section.contains("### test (conclusion: failure)"), section);
+      assertFalse(section.contains("### lint"), "a check the section describes is not re-rendered");
+      assertFalse(section.contains("had not finished"), "nothing is pending any more");
+      verify(checkRunClient, never())
+          .listAnnotations(any(), any(), any(), any(), eq(11L), anyInt());
+    }
+
+    @Test
+    void withNoEarlyFailureTheBlockIsTheWholeSection() {
+      var fresh = failures(1, actionsFailure(12L, "test", 0));
+
+      var section = resolver(true, false, 4000).refresh("a", "o", "r", "", failures(2), fresh);
+
+      assertTrue(
+          section.startsWith(
+              "Checks on this commit that completed without passing after this review started: 1\n"
+                  + "1 other check(s) had not finished"),
+          section);
+      assertEquals(
+          CiFailureCitations.SENTENCE_OPENING + "\"test\".",
+          CiFailureCitations.parse(section).overviewSentences(List.of()));
+    }
+
+    @Test
+    void theNewChecksGetTheLogBudgetAndAreCitedAfterANamedOnlyList() {
+      // The review-start section already spent both log fetches and listed checks by name only.
+      var early =
+          failures(
+              1,
+              IntStream.rangeClosed(1, CiFailureContextResolver.MAX_CHECKS_DETAILED + 1)
+                  .mapToObj(i -> actionsFailure(i, "job" + i, 0))
+                  .toArray(CiStatusEvaluator.FailedCheck[]::new));
+      var section = resolver(true, false, 4000).resolve("a", "o", "r", evaluationOf(early));
+      assertTrue(section.contains(CiFailureContextResolver.NOT_DETAILED), section);
+      clearInvocations(actionsClient);
+      when(actionsClient.downloadJobLogs(any(), any(), any(), any(), eq(99L)))
+          .thenReturn(Response.status(302).location(LOG_URI).build());
+      when(fetcher.fetchTail(LOG_URI, CiFailureContextResolver.LOG_TAIL_BYTES))
+          .thenReturn("✖ refuses an expired token\n".getBytes(StandardCharsets.UTF_8));
+      var fresh = new ArrayList<>(early.failed());
+      fresh.add(actionsFailure(99L, "auth tests", 0));
+
+      var refreshed =
+          resolver(true, false, 4000)
+              .refresh("a", "o", "r", section, early, new CiStatusEvaluator.CiFailures(fresh, 0));
+
+      verify(actionsClient, times(1)).downloadJobLogs(any(), any(), any(), any(), anyLong());
+      var sentences = CiFailureCitations.parse(refreshed).overviewSentences(List.of());
+      assertTrue(sentences.contains("\"job6\""), "the named-only check is still read");
+      assertTrue(
+          sentences.contains("\"auth tests\" (failing test \"refuses an expired token\")"),
+          sentences);
+    }
+
+    @Test
+    void theSectionIsKeptWhenNoNewCheckFailed() {
+      var early = failures(2, actionsFailure(11L, "lint", 4));
+      var fresh = failures(1, actionsFailure(11L, "lint", 4));
+
+      assertSame(
+          SECTION, resolver(true, false, 4000).refresh("a", "o", "r", SECTION, early, fresh));
+      assertSame(
+          SECTION, resolver(true, false, 4000).refresh("a", "o", "r", SECTION, early, failures(0)));
+      verifyNoInteractions(checkRunClient, actionsClient, fetcher);
+    }
+
+    @Test
+    void aDisabledDeploymentKeepsTheSection() {
+      var fresh = failures(0, actionsFailure(12L, "test", 2));
+
+      assertSame(
+          SECTION,
+          resolver(false, false, 4000).refresh("a", "o", "r", SECTION, failures(1), fresh));
+      verifyNoInteractions(checkRunClient, actionsClient, fetcher);
+    }
+
+    @Test
+    void aRebuildThatFailsKeepsTheReviewStartSection() {
+      when(checkRunClient.listAnnotations(any(), any(), any(), any(), anyLong(), anyInt()))
+          .thenReturn(Arrays.asList((GitHubCheckRunClient.Annotation) null));
+      var fresh = failures(0, actionsFailure(12L, "test", 2));
+
+      assertSame(
+          SECTION, resolver(true, false, 4000).refresh("a", "o", "r", SECTION, failures(1), fresh));
     }
   }
 

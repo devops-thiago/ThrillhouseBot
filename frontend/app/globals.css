@@ -7,6 +7,8 @@
   --text: #e6edf3;
   --text-muted: #8b949e;
   --accent: #58a6ff;
+  /* Background of solid buttons with white text: #58a6ff is too light for it. */
+  --accent-emphasis: #1f6feb;
   --green: #3fb950;
   --red: #f85149;
   --orange: #d2991d;

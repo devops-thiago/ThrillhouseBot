@@ -7931,6 +7931,177 @@ class ReviewOrchestratorTest {
       }
     }
 
+    /** #1092: the required "build" passed; an optional "test" is in the state given. */
+    private List<GitHubCheckRunClient.CheckRunsResponse.CheckRun> buildPassedTest(
+        String status, String conclusion) {
+      return List.of(
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              1L, "build", "completed", "success", null),
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+              2L, "test", status, conclusion, null));
+    }
+
+    /** Runs one review with the CI-failure context on and returns the summary it rendered. */
+    private ReviewResponse.Summary renderedSummaryWithCiContext() {
+      ciFailureContext =
+          new CiFailureContextResolver(checkRunClient, null, null, true, false, 4000);
+      orchestrator = newOrchestrator();
+      when(aiReviewService.summarize(any(ReviewSession.class), any()))
+          .thenReturn(
+              new ReviewResponse(
+                  List.of(),
+                  List.of(),
+                  new ReviewResponse.Summary(
+                      0, 0, 0, 0, 0, "Looks fine.", "Adds a cache.", List.of(), List.of())));
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        orchestrator.review(request());
+      }
+      var captor = ArgumentCaptor.forClass(ReviewResponse.Summary.class);
+      verify(summaryGenerator)
+          .generate(anyInt(), anyInt(), anyInt(), any(), captor.capture(), any(), any());
+      return captor.getValue();
+    }
+
+    @Test
+    void aCheckThatFailsWhileTheReviewRunsIsInThatReviewsCiSentence() {
+      stubCommonReviewMocks(buildCheck("completed", "success"));
+      // The early read sees "test" running; it has failed by the time the model answers.
+      when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(
+              buildPassedTest("in_progress", null), buildPassedTest("completed", "failure"));
+
+      var summary = renderedSummaryWithCiContext();
+
+      assertTrue(
+          summary.prPurpose().contains(CiFailureCitations.SENTENCE_OPENING + "\"test\""),
+          summary.prPurpose());
+      // The required check passed, so nothing held approval: the second read is one check-runs
+      // call, not a whole gate read.
+      verify(checkRunClient, times(2)).getAllCheckRuns(any(), any(), any(), any(), any());
+      verify(checkRunClient, times(1)).getAllCombinedStatus(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void aCheckThatFailsWhileAHeldReviewRunsIsReadFromTheGatesOwnReRead() {
+      stubCommonReviewMocks(buildCheck("in_progress", null));
+      when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(
+              buildCheck("in_progress", null).checkRuns(),
+              buildCheck("completed", "failure").checkRuns());
+
+      var summary = renderedSummaryWithCiContext();
+
+      assertTrue(
+          summary.prPurpose().contains(CiFailureCitations.SENTENCE_OPENING + "\"build\""),
+          summary.prPurpose());
+      verify(checkRunClient, times(2)).getAllCheckRuns(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void aRequiredCheckNotYetReportedAtReviewStartIsReadFromTheGatesReRead() {
+      stubCommonReviewMocks(buildCheck("completed", "success"));
+      // Nothing reported yet, so nothing counts as pending; the missing required check holds.
+      when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(List.of(), buildCheck("completed", "failure").checkRuns());
+
+      var summary = renderedSummaryWithCiContext();
+
+      assertTrue(
+          summary.prPurpose().contains(CiFailureCitations.SENTENCE_OPENING + "\"build\""),
+          summary.prPurpose());
+      verify(checkRunClient, times(2)).getAllCheckRuns(any(), any(), any(), any(), any());
+    }
+
+    /**
+     * #1092, #952 (round 18, rust #279): the round-1 finding the failing test confirms was posted
+     * at low confidence because the test failed after review start. The refreshed CI section floors
+     * it at medium, and the round is stored with the floored grade.
+     */
+    @Test
+    void aFindingCitingACheckThatFailedWhileTheReviewRanIsFlooredAndStored() {
+      stubCommonReviewMocks(buildCheck("completed", "success"));
+      when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(
+              buildPassedTest("in_progress", null), buildPassedTest("completed", "failure"));
+      when(prClient.getPullRequestFiles(
+              anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(
+              List.of(
+                  new GitHubPullRequestClient.FileDiff(
+                      "src/ingest.rs",
+                      "added",
+                      3,
+                      0,
+                      3,
+                      "@@ -0,0 +1,3 @@\n+fn rms(v: &[f64]) -> f64 {\n+    v[1..].len() as f64\n+}")));
+      var offByOne =
+          new ReviewResponse.Finding(
+              "high",
+              "low",
+              "src/ingest.rs",
+              2,
+              "Window arithmetic is off by one",
+              "The window drops a sample, and the failing \"test\" check fails on exactly this.",
+              null,
+              null);
+      when(aiReviewService.review(any(ReviewSession.class), any()))
+          .thenReturn(new ReviewResponse(List.of(offByOne), List.of(), null));
+      ciFailureContext =
+          new CiFailureContextResolver(checkRunClient, null, null, true, false, 4000);
+      orchestrator = newOrchestrator();
+
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        orchestrator.review(request());
+
+        var stored = ArgumentCaptor.forClass(String.class);
+        verify(session, atLeastOnce()).setAiResponseJson(stored.capture());
+        assertTrue(stored.getValue().contains("\"confidence\":\"medium\""), stored.getValue());
+      }
+      var result = ArgumentCaptor.forClass(ReviewResult.class);
+      verify(summaryGenerator)
+          .generate(anyInt(), anyInt(), anyInt(), any(), any(), result.capture(), any());
+      assertEquals(Confidence.MEDIUM, result.getValue().findings().getFirst().confidence());
+    }
+
+    @Test
+    void aFailedReReadKeepsTheReviewStartReading() {
+      stubCommonReviewMocks(buildCheck("completed", "success"));
+      when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(buildPassedTest("in_progress", null))
+          .thenThrow(new RuntimeException("check runs API down"));
+
+      var summary = renderedSummaryWithCiContext();
+
+      assertEquals("Adds a cache.", summary.prPurpose());
+      verify(checkRunClient, times(2)).getAllCheckRuns(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void nothingIsReReadWhenNoCheckWasPendingAtReviewStart() {
+      stubCommonReviewMocks(buildCheck("completed", "success"));
+      when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(buildPassedTest("completed", "failure"));
+
+      var summary = renderedSummaryWithCiContext();
+
+      // The failure seen at review start is in the sentence, from the one reading taken.
+      assertTrue(
+          summary.prPurpose().contains(CiFailureCitations.SENTENCE_OPENING + "\"test\""),
+          summary.prPurpose());
+      verify(checkRunClient, times(1)).getAllCheckRuns(any(), any(), any(), any(), any());
+      verify(checkRunClient, times(1)).getAllCombinedStatus(any(), any(), any(), any(), any());
+    }
+
     @Test
     void reviewShouldReleaseTheTrackedHeadWhenItFails() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {

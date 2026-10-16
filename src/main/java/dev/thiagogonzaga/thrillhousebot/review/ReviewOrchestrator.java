@@ -25,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.notification.ReviewNotifier;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
+import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TruncationReport;
 import io.quarkus.logging.Log;
@@ -32,6 +33,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
@@ -359,10 +361,12 @@ public class ReviewOrchestrator {
                   ctx,
                   ciFailures)
               .withLearnings(learned.selected());
-      var aiResponse =
-          findingPipeline.run(session, promptInputs, ctx, plan, lineResolver, evidence);
+      var reviewed = findingPipeline.run(session, promptInputs, ctx, plan, lineResolver, evidence);
 
-      CiStatusEvaluator.CiEvaluation ciEvaluation = rereadCiIfHeld(auth, ciReq, ciFuture.join());
+      var earlyCi = ciFuture.join();
+      CiStatusEvaluator.CiEvaluation ciEvaluation = rereadCiIfHeld(auth, ciReq, earlyCi);
+      var renderedCiFailures = refreshCiFailures(auth, ciReq, ciFailures, earlyCi, ciEvaluation);
+      var aiResponse = floorOnRefreshedCi(session, reviewed, ciFailures, renderedCiFailures);
 
       // #1074: the description findings the summary names must quote or paraphrase this text.
       var result =
@@ -372,7 +376,7 @@ public class ReviewOrchestrator {
               ciEvaluation,
               plan,
               PromptSections.prContext(req.prTitle(), req.prDescription()) + "\n" + linkedIssues,
-              CiFailureCitations.parse(ciFailures),
+              CiFailureCitations.parse(renderedCiFailures),
               linkedIssues);
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
@@ -653,6 +657,58 @@ public class ReviewOrchestrator {
           req.owner(), req.repo(), req.prNumber(), heldByNames(early));
     }
     return fresh;
+  }
+
+  /**
+   * The CI-failure section the summary is rendered with (#1092). The section the review call read
+   * was built from the review-start reading, and a check still running then often fails before the
+   * review posts. The re-read {@link #rereadCiIfHeld} took is used when there is one (a required
+   * check not yet reported at review start holds approval without counting as pending); otherwise,
+   * when the early reading counted a pending check, the check runs are read with one call. Nothing
+   * is read when nothing was pending, and a failed read keeps the review-start section.
+   */
+  private String refreshCiFailures(
+      String auth,
+      ReviewRequest req,
+      String section,
+      CiStatusEvaluator.CiEvaluation early,
+      CiStatusEvaluator.CiEvaluation verdictReading) {
+    if (!ciFailureContext.enabled()
+        || (verdictReading == early && early.failures().pending() == 0)) {
+      return section;
+    }
+    var fresh =
+        verdictReading == early
+            ? ciStatusEvaluator.checkRunFailures(auth, req.owner(), req.repo(), req.commitSha())
+            : Optional.of(verdictReading.failures());
+    return fresh
+        .map(
+            failures ->
+                ciFailureContext.refresh(
+                    auth, req.owner(), req.repo(), section, early.failures(), failures))
+        .orElse(section);
+  }
+
+  /**
+   * {@code reviewed} with the established-evidence confidence floor applied once more, over the CI
+   * section refreshed after the model call (#1092, #952). The verifier floored the findings that
+   * cite a check the review-start reading saw failing; a finding citing a check that failed while
+   * the review ran is lifted from low to medium confidence here, and the round is persisted again,
+   * since later rounds read it from the stored response. Unchanged when the section was not
+   * refreshed or no finding cites what it added.
+   */
+  private ReviewResponse floorOnRefreshedCi(
+      ReviewSession session, ReviewResponse reviewed, String section, String refreshed) {
+    if (refreshed.equals(section)) {
+      return reviewed;
+    }
+    var floored =
+        FindingVerificationService.floorCiCitedConfidence(
+            reviewed, CiFailureCitations.parse(refreshed));
+    if (floored != reviewed) {
+      findingPipeline.persistAiResponse(session, floored);
+    }
+    return floored;
   }
 
   /** The check names an early CI reading held approval on, flattened for one log line. */

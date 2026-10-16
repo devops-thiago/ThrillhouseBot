@@ -1,11 +1,24 @@
 "use client";
 
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import GithubCorner from "@/components/GithubCorner";
 import SiteFooter from "@/components/SiteFooter";
 
 export default function LoginPage() {
+  const router = useRouter();
   const { user, loading, accessDenied, notConfigured, login, logout } = useAuth();
+  const signedIn = !loading && !notConfigured && !accessDenied && !!user;
+
+  // Redirect after render: the static export prerenders this page on the server,
+  // where `window` does not exist (mock mode starts signed in).
+  // The path is relative to basePath (/dashboard).
+  useEffect(() => {
+    if (signedIn) {
+      router.replace("/overview/");
+    }
+  }, [signedIn, router]);
 
   if (loading)
     return (
@@ -55,8 +68,7 @@ export default function LoginPage() {
       </div>
     );
   }
-  if (user) {
-    window.location.href = "/dashboard/overview/";
+  if (signedIn) {
     return null;
   }
 
@@ -104,7 +116,7 @@ const styles: Record<string, React.CSSProperties> = {
   button: {
     padding: "0.75rem 2rem",
     fontSize: "1rem",
-    background: "var(--accent)",
+    background: "var(--accent-emphasis)",
     color: "#fff",
     border: "none",
     borderRadius: 6,
