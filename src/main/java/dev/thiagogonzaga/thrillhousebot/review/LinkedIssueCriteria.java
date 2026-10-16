@@ -116,6 +116,13 @@ final class LinkedIssueCriteria {
   private static final Pattern META =
       Pattern.compile("(?i)\\b(?:wording|walkthrough|summary|mention|phrasing|docs?)\\b");
 
+  /** Negations that turn a following {@link #UNMET} word into praise: "never fails". */
+  private static final Set<String> PRAISING_NEGATIONS =
+      Set.of("never", "no", "not", "nothing", "none", "cannot", "longer", "without");
+
+  /** Words, at most, between a {@link #PRAISING_NEGATIONS} word and the word it negates. */
+  static final int PRAISE_REACH = 2;
+
   /** What turns a negation into an affirmation: "not only", "not just", "not merely". */
   private static final Pattern AFFIRMING =
       Pattern.compile("(?i)\\s++(?:only|just|merely|simply)\\b");
@@ -338,14 +345,34 @@ final class LinkedIssueCriteria {
    * Whether {@code clause} says the criterion of {@code criterionWords} is not met: an {@link
    * #UNMET} word anywhere, or a {@link #NEGATORS} negation that binds it.
    */
+  /**
+   * Whether one of the last {@value #PRAISE_REACH} words of {@code lead} negates what follows:
+   * "never fails", "nothing is missing", "no longer drops".
+   */
+  private static boolean negatedBefore(String lead) {
+    var words = NON_ALPHANUMERIC.split(lead.strip().toLowerCase(Locale.ROOT));
+    for (var i = Math.max(0, words.length - PRAISE_REACH); i < words.length; i++) {
+      if (PRAISING_NEGATIONS.contains(words[i])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private static boolean saysUnmet(String clause, Set<String> criterionWords) {
     // A clause about the summary's own text ("the '…' wording is missing from the walkthrough")
     // says nothing about the change.
     if (META.matcher(clause).find()) {
       return false;
     }
-    if (UNMET.stream().anyMatch(p -> p.matcher(clause).find())) {
-      return true;
+    for (var pattern : UNMET) {
+      var unmet = pattern.matcher(clause);
+      while (unmet.find()) {
+        // "never fails", "nothing is missing" praise the change.
+        if (!negatedBefore(clause.substring(0, unmet.start()))) {
+          return true;
+        }
+      }
     }
     for (var pattern : NEGATORS) {
       var negation = pattern.matcher(clause);

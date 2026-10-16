@@ -187,6 +187,9 @@ class LinkedIssueCriteriaTest {
     var instead = "The issue's 'declines two offers' rule was instead implemented as a queue.";
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), notOnly, Map.of()));
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), instead, Map.of()));
+    // An unmet word a negation turns into praise.
+    var praise = "The issue's 'declines two offers' rule never fails and nothing is missing.";
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), praise, Map.of()));
     var notSimply =
         "The issue's 'declines two offers' rule is not simply implemented, it is improved.";
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), notSimply, Map.of()));
