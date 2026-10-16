@@ -429,19 +429,24 @@ final class DescriptionGapScreen {
               "(?i)\\b(?:matches|matched|consistent\\s++with)\\s++the\\s++(?:description|diff)\\b"));
 
   /**
-   * A closing "(disclosed)" or "(disclosed, …)": the bullet's verdict that the description already
-   * says so. A bare "disclosed" is not one: "every limit is disclosed; `README.md` omits one"
-   * states a gap.
+   * A closing "(disclosed)" or "(disclosed, not contradicted)": the bullet's verdict that the
+   * description already says so. A bare "disclosed" is not one: "every limit is disclosed;
+   * `README.md` omits one" states a gap, and neither is one naming where else it was disclosed:
+   * "(disclosed in the CHANGELOG only)".
    */
   private static final Pattern DISCLOSED_VERDICT =
-      Pattern.compile("(?i)\\(\\s*+disclosed\\b[^)]*+\\)\\s*+\\.?\\s*+$");
+      Pattern.compile(
+          "(?i)\\(\\s*+disclosed(?:\\s*+[,;]\\s*+not\\s++contradicted)?\\s*+\\)\\s*+\\.?\\s*+$");
 
   /**
    * A negation at most two words before a concession, which turns it into the mismatch: "is not
-   * consistent with", "isn't consistent with", "is not at all consistent with", "never matches".
+   * consistent with", "isn't consistent with", "is not at all consistent with", "never matches",
+   * "cannot be consistent with", "fails to match".
    */
   private static final Pattern NEGATED_LEAD =
-      Pattern.compile("(?i)(?:\\b(?:not|never)|n['’]t)(?:\\s++[\\p{L}-]++){0,2}\\s++$");
+      Pattern.compile(
+          "(?i)(?:\\b(?:not|never|cannot|hardly|without|no\\s++longer|fail(?:s|ed)?)|n['’]t)"
+              + "(?:\\s++[\\p{L}-]++){0,2}\\s++$");
 
   /** Whether {@code gap} names the description, its title, the author or a linked issue. */
   static boolean cites(String gap) {
