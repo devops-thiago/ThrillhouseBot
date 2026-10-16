@@ -243,9 +243,7 @@ final class DescriptionGapCarryover {
      * issue and rid of guesses with no PR text known.
      */
     private List<String> screened(List<String> list) {
-      var claimed =
-          DescriptionGapScreen.normalize(
-              Objects.requireNonNullElse(prText, "") + "\n" + linkedIssues);
+      var claimed = Objects.requireNonNullElse(prText, "") + "\n" + linkedIssues;
       var held =
           LinkedIssueCitations.screenGaps(list, linkedIssues).stream()
               .filter(gap -> !DescriptionGapScreen.speculative(gap, claimed))

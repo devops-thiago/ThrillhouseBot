@@ -20,6 +20,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Drops a Description vs. Implementation bullet that does not hold up against the text it claims to
@@ -207,9 +208,6 @@ final class DescriptionGapScreen {
 
   private static final Pattern NON_ALPHANUMERIC = Pattern.compile("[^\\p{L}\\p{N}]+");
 
-  /** A run of letters and digits. */
-  private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}]++");
-
   /** Full stops ending a name, which end its sentence rather than the name. */
   private static final Pattern TRAILING_DOTS = Pattern.compile("\\.++$");
 
@@ -271,13 +269,17 @@ final class DescriptionGapScreen {
 
   /**
    * The hedges that make a gap a guess rather than a mismatch the change shows (#1127), one pattern
-   * per shape: "may be", "could not be", "might". After a {@link #CONSEQUENCE} in its sentence such
-   * a hedge only weighs what a stated gap leads to.
+   * per shape: the modal verbs ("may be", "could skip", "might", "couldn't"), and the hedging
+   * adverbs. After a {@link #CONSEQUENCE} in its sentence such a hedge only weighs what a stated
+   * gap leads to.
    */
   private static final List<Pattern> SPECULATION =
       List.of(
-          Pattern.compile("(?i)\\b(?:may|could)\\s++(?:not\\s++)?be\\b"),
-          Pattern.compile("(?i)\\bmight\\b"));
+          Pattern.compile("(?i)\\b(?:may|might|could)(?:n'?t)?+\\b"),
+          Pattern.compile("(?i)\\b(?:possibly|perhaps|presumably)\\b"));
+
+  /** Where the PR text splits into sentences before a hedge's context is looked up in it. */
+  private static final Pattern SOURCE_SENTENCE = Pattern.compile("[.!?;:](?=\\s|$)|\n");
 
   /** A condition the claim rests on: always a guess, wherever it sits. */
   private static final Pattern CONDITIONAL = Pattern.compile("(?i)\\bin\\s++which\\s++case\\b");
@@ -415,13 +417,13 @@ final class DescriptionGapScreen {
    * criterion "may be" a stricter one, "in which case" a save would fail, is a guess about a fact
    * the change does not show, not a mismatch. Only the bullet's own words are read: quoted passages
    * are the description's or the issue's; of a {@code Linked issue #N: <criterion> — <evidence>}
-   * gap only the evidence is, since the criterion is the issue's; a hedge whose words with the one
-   * after it are in {@code normalizedSource} (the PR text and linked issues, {@linkplain #normalize
-   * normalised}) paraphrases that text; and a hedge after a {@link #CONSEQUENCE} in its sentence
+   * gap only the evidence is, since the criterion is the issue's; a hedge that one sentence of
+   * {@code source} (the PR text and linked issues) holds with the word before it and the two after
+   * it paraphrases that text; and a hedge after a {@link #CONSEQUENCE} in its sentence
    * ("`File.java` drops it, so callers might crash") weighs what a stated gap causes. "In which
    * case" always makes the claim conditional.
    */
-  static boolean speculative(String gap, String normalizedSource) {
+  static boolean speculative(String gap, String source) {
     var linked = DescriptionGapCarryover.linkedIssueGap(gap);
     var own = gap;
     if (linked != null) {
@@ -432,19 +434,43 @@ final class DescriptionGapScreen {
     if (CONDITIONAL.matcher(unquoted).find()) {
       return true;
     }
-    var haystack = " " + normalizedSource + " ";
+    // One sentence per piece: a hedge's context never runs from one sentence into the next.
+    var haystack =
+        Arrays.stream(SOURCE_SENTENCE.split(source))
+            .map(DescriptionGapScreen::normalize)
+            .collect(Collectors.joining(" | ", " ", " "));
     for (var pattern : SPECULATION) {
       var hedge = pattern.matcher(unquoted);
       while (hedge.find()) {
-        var next = firstWord(unquoted.substring(hedge.end()));
-        var paraphrased =
-            !next.isEmpty() && haystack.contains(" " + normalize(hedge.group() + " " + next) + " ");
-        if (!paraphrased && !followsStatedMismatch(sentenceBefore(unquoted, hedge.start()))) {
+        var lead = sentenceBefore(unquoted, hedge.start());
+        var context = hedgeInContext(lead, hedge.group(), unquoted.substring(hedge.end()));
+        var paraphrased = context != null && haystack.contains(" " + context + " ");
+        if (!paraphrased && !followsStatedMismatch(lead)) {
           return true;
         }
       }
     }
     return false;
+  }
+
+  /**
+   * The hedge with the word before it in its sentence and the two after it, {@linkplain #normalize
+   * normalised}; {@code null} when its sentence lacks any of them, since a hedge alone matches any
+   * text that hedges.
+   */
+  private static String hedgeInContext(String lead, String hedge, String rest) {
+    var before = normalize(lead);
+    var after = normalize(rest).split(" ");
+    if (before.isEmpty() || after.length < 2) {
+      return null;
+    }
+    return before.substring(before.lastIndexOf(' ') + 1)
+        + " "
+        + normalize(hedge)
+        + " "
+        + after[0]
+        + " "
+        + after[1];
   }
 
   /**
@@ -474,12 +500,6 @@ final class DescriptionGapScreen {
       start = ends.end();
     }
     return text.substring(start, at);
-  }
-
-  /** The first run of letters or digits in {@code text}; {@code ""} without one. */
-  private static String firstWord(String text) {
-    var word = WORD.matcher(text);
-    return word.find() ? word.group() : "";
   }
 
   /**

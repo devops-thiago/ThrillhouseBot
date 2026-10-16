@@ -434,9 +434,7 @@ class DescriptionGapScreenTest {
 
   @Test
   void theSpeculativeEntryOf1124IsAGuess() {
-    assertTrue(
-        DescriptionGapScreen.speculative(
-            SPECULATIVE_1124, DescriptionGapScreen.normalize(PR_1124)));
+    assertTrue(DescriptionGapScreen.speculative(SPECULATIVE_1124, PR_1124));
     assertTrue(DescriptionGapScreen.creditsReview(SPECULATIVE_1124));
   }
 
@@ -452,10 +450,17 @@ class DescriptionGapScreenTest {
         // A condition is a guess even after a consequence word.
         "The description says the cap holds, so the save is rejected in which case it fails.",
         // A consequence word after no stated mismatch does not make the guess a gap.
-        "The description says the API is stable, so clients might break."
+        "The description says the API is stable, so clients might break.",
+        // Modal verbs over another verb, contracted, and the hedging adverbs.
+        "The description says retries are capped, but the cap may expire.",
+        "The description says the DCO check runs on every push; the workflow could skip forks.",
+        "The description says the limit holds; it couldn't be enforced on a retry.",
+        "The description says the export is atomic; it is possibly written in place.",
+        // A hedge opening its sentence.
+        "The description says the export is atomic. Perhaps the rename is skipped."
       })
   void aHedgeInTheBulletsOwnWordsIsAGuess(String gap) {
-    assertTrue(DescriptionGapScreen.speculative(gap, DescriptionGapScreen.normalize(RUST_159)));
+    assertTrue(DescriptionGapScreen.speculative(gap, RUST_159));
   }
 
   @ParameterizedTest
@@ -476,22 +481,31 @@ class DescriptionGapScreenTest {
         "The description says the mighty README moves; maybe-tagged files are left out."
       })
   void aStatedGapIsNotAGuess(String gap) {
-    assertFalse(DescriptionGapScreen.speculative(gap, DescriptionGapScreen.normalize(RUST_159)));
+    assertFalse(DescriptionGapScreen.speculative(gap, RUST_159));
   }
 
   @Test
   void aHedgeTheDescriptionItselfMakesIsNotTheBulletsGuess() {
     var paraphrased =
         "The description says answers that may be stale are edited, but none are listed.";
-    var source = DescriptionGapScreen.normalize(PR_1124 + "Answers that may be stale are kept.");
+    var source = PR_1124 + "Answers that may be stale are kept.";
 
     assertFalse(DescriptionGapScreen.speculative(paraphrased, source));
-    assertTrue(
-        DescriptionGapScreen.speculative(paraphrased, DescriptionGapScreen.normalize(PR_1124)));
+    assertTrue(DescriptionGapScreen.speculative(paraphrased, PR_1124));
     // A hedge with no word after it paraphrases nothing, whatever the source holds.
     assertTrue(
         DescriptionGapScreen.speculative(
             "The description says the cache is bounded, and the bound may be.", source));
+    // The same hedge and verb about another subject is the bullet's own guess.
+    assertTrue(
+        DescriptionGapScreen.speculative(
+            "The description says the cache is bounded; the retry loop might collapse the pool.",
+            "The rate limiter might collapse under sustained load."));
+    // A hedge's context is read within one sentence of the source.
+    assertTrue(
+        DescriptionGapScreen.speculative(
+            "The description says entries that may be stale are dropped, but none are.",
+            "Old answers that may. Be stale entries are dropped."));
   }
 
   @ParameterizedTest
