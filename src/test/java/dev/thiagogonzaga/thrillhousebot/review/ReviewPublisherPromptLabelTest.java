@@ -141,7 +141,8 @@ class ReviewPublisherPromptLabelTest {
             new DiffLineResolver(Map.of()),
             false,
             previous,
-            delta));
+            delta,
+            List.of()));
 
     var posted = postedText();
     assertTrue(
