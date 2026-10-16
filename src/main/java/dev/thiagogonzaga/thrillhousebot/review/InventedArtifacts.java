@@ -202,7 +202,8 @@ final class InventedArtifacts {
     var from = 0;
     var open = -1;
     String marker = null;
-    for (var lineStart = 0; lineStart <= text.length(); ) {
+    var lineStart = 0;
+    while (lineStart <= text.length()) {
       var lineEnd = text.indexOf('\n', lineStart);
       lineEnd = lineEnd < 0 ? text.length() : lineEnd;
       if (fence.region(lineStart, lineEnd).lookingAt()) {
