@@ -135,7 +135,7 @@ final class PriorOverviewCarryover {
   private static final Pattern SIZE_TOKEN =
       Pattern.compile("[+-]?\\d++(?:[,.]\\d++)*+|\\p{L}[\\p{L}'-]*+");
 
-  /** What marks a sentence as being about size: a number, or a "-sized" word. */
+  /** What marks a sentence as being about size: a number, the word "size", or a "-sized" word. */
   private static final Pattern SIZE_MARK = Pattern.compile("\\d|-sized\\b|\\bsized?\\b");
 
   /**
@@ -231,8 +231,8 @@ final class PriorOverviewCarryover {
   }
 
   /**
-   * Whether {@code sentence} is a size statement: it holds a number or a "-sized" word, and every
-   * other word is one of {@link #SIZE_WORDS}, the "-sized" adjectives included.
+   * Whether {@code sentence} is a size statement: it holds a number, the word "size" or a "-sized"
+   * word, and every other word is one of {@link #SIZE_WORDS}, the "-sized" adjectives included.
    */
   private static boolean sizeSentence(String sentence) {
     if (!SIZE_MARK.matcher(sentence).find()) {

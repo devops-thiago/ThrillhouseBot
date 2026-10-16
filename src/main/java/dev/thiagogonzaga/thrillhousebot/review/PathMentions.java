@@ -209,10 +209,6 @@ final class PathMentions {
 
   private static final Pattern BLANK_RUN = Pattern.compile(" {2,}");
 
-  /** A comma or semicolon a sentence opens with, and the letter after it. */
-  private static final Pattern ORPHANED_SEPARATOR =
-      Pattern.compile("(^\\s*+|[.!?] ?+)[,;] ?(\\p{Ll})");
-
   private static final Pattern BLANK_BEFORE_PUNCTUATION = Pattern.compile(" ([.,;:!?])");
 
   private final PathIndex changed;
@@ -463,8 +459,13 @@ final class PathMentions {
         // parenthetical goes, with the parenthetical.
         continue;
       }
-      int[] cut = mentionBounds(sb, start, end);
+      int[] bounds = mentionBounds(sb, start, end);
+      int[] cut = withOpeningSeparator(sb, bounds);
       sb.delete(cut[0], cut[1]);
+      if (cut[1] != bounds[1]) {
+        // The clause the mention opened now opens with the word after its separator.
+        capitalizeSentenceStart(sb, cut[0]);
+      }
     }
     var tidy = tidyOutsideFences(sb.toString());
     return tidy.isBlank() ? text : tidy;
@@ -482,16 +483,9 @@ final class PathMentions {
   }
 
   private static String tidy(String prose) {
-    var tidied =
-        BLANK_BEFORE_PUNCTUATION.matcher(BLANK_RUN.matcher(prose).replaceAll(" ")).replaceAll("$1");
-    // A mention cut from the start of a sentence leaves the comma that set it off ("docs/x.md,
-    // then …"); the sentence opens with the word after it.
-    return ORPHANED_SEPARATOR
-        .matcher(tidied)
-        .replaceAll(
-            m ->
-                (m.group(1).isBlank() ? "" : m.group(1).strip() + " ")
-                    + m.group(2).toUpperCase(Locale.ROOT));
+    return BLANK_BEFORE_PUNCTUATION
+        .matcher(BLANK_RUN.matcher(prose).replaceAll(" "))
+        .replaceAll("$1");
   }
 
   /**
@@ -560,6 +554,46 @@ final class PathMentions {
       }
     }
     return false;
+  }
+
+  /**
+   * {@code cut} widened over the comma or semicolon after it, with its blank, when the cut opens a
+   * clause: the text start, a sentence end or a colon before it ("docs/x.md, then …" would leave ",
+   * then …"). Any other cut keeps the separator, which then belongs to the words before it.
+   */
+  private static int[] withOpeningSeparator(CharSequence s, int[] cut) {
+    int to = cut[1];
+    if (to >= s.length() || ",;".indexOf(s.charAt(to)) < 0 || !opensClause(s, cut[0])) {
+      return cut;
+    }
+    // At the text start the blank after the separator goes too; elsewhere the cut took the blank
+    // before the mention, and the one after the separator stays between the two clauses.
+    to++;
+    if (cut[0] == 0 && to < s.length() && s.charAt(to) == ' ') {
+      to++;
+    }
+    return new int[] {cut[0], to};
+  }
+
+  /**
+   * Whether {@code at} is where a clause opens: the text start, or right after {@code .!?:} (a cut
+   * takes the blanks before the mention).
+   */
+  private static boolean opensClause(CharSequence s, int at) {
+    return at == 0 || ".!?:".indexOf(s.charAt(at - 1)) >= 0;
+  }
+
+  /**
+   * The lower-case letter at {@code at}, or after the one blank there, capitalized when it now
+   * opens a sentence: at the text start or after {@code .!?}. After a colon it stays as written.
+   */
+  private static void capitalizeSentenceStart(StringBuilder s, int at) {
+    int i = at < s.length() && s.charAt(at) == ' ' ? at + 1 : at;
+    if (i < s.length()
+        && Character.isLowerCase(s.charAt(i))
+        && (at == 0 || ".!?".indexOf(s.charAt(at - 1)) >= 0)) {
+      s.setCharAt(i, Character.toUpperCase(s.charAt(i)));
+    }
   }
 
   private static boolean wraps(CharSequence s, int start, int end, char open, char close) {

@@ -405,6 +405,15 @@ class PathMentionsTest {
           `a` and `b` cite docs/NOPE.md. | `a` and `b` cite.
           docs/NOPE.md, then `a` and `b`. | Then `a` and `b`.
           It is new. docs/NOPE.md; then `a`. | It is new. Then `a`.
+          docs/NOPE.md, `npm ci` and `npm install` are named. | `npm ci` and `npm install` are named.
+          docs/NOPE.md, 2 call sites remain. | 2 call sites remain.
+          It is cited: docs/NOPE.md, then x. | It is cited: then x.
+          Add retries, e.g., a backoff, as docs/NOPE.md says. | Add retries, e.g., a backoff, as says.
+          See docs/NOPE.md, then x. | See, then x.
+          It is new. docs/NOPE.md; | It is new.
+          docs/NOPE.md, Then x. | Then x.
+          docs/NOPE.md,then x. | Then x.
+          docs/NOPE.md; | docs/NOPE.md;
           `a` cites docs/NOPE.md and `b`. | `a` cites and `b`.
           """)
   void aMentionIsStrippedWhereverItStands(String text, String stripped) {
