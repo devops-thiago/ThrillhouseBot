@@ -133,6 +133,14 @@ class InventedArtifactsTest {
 
     assertTrue(InventedArtifacts.invents("It adds a settings page.", change));
     assertFalse(InventedArtifacts.invents("It removes a settings page.", change));
+    // A removal elsewhere in the sentence does not cover an added artifact.
+    assertTrue(
+        InventedArtifacts.invents("It adds a settings page and removes the old one.", change));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It adds a settings page for data dropped from the flow.", change));
+    assertFalse(
+        InventedArtifacts.invents("It drops the old flow and deletes a settings page.", change));
     assertTrue(InventedArtifacts.invents("It adds an audit screen.", change));
     assertTrue(InventedArtifacts.invents("It adds a metrics endpoint.", change));
     assertTrue(

@@ -98,6 +98,9 @@ final class InventedArtifacts {
   /** A sentence about taking something out: "removes", "deleted", "drops", "retires". */
   private static final Pattern REMOVAL = Pattern.compile("(?i)\\b(?:remov|delet|drop|retir)\\w*+");
 
+  /** Where a sentence's clauses split, for {@link #REMOVAL}: punctuation, "and", "but". */
+  private static final Pattern CLAUSE_BREAK = Pattern.compile("(?i)[,;:]|\\b(?:and|but|while)\\b");
+
   /**
    * {@code summary} with every sentence of its purpose and assessment that introduces an artifact
    * {@code files} do not back cut; the same instance when nothing is cut, {@code null} stays {@code
@@ -141,17 +144,19 @@ final class InventedArtifacts {
   }
 
   /**
-   * Whether {@code sentence} introduces an artifact {@code change} does not back. A sentence about
-   * taking something out ("removes a settings page") is not judged: what backs it is a deleted
-   * file, which never backs an addition. Camel humps are split first, so "a SettingsScreen" reads
-   * as "a Settings Screen".
+   * Whether {@code sentence} introduces an artifact {@code change} does not back. An artifact a
+   * removal verb governs, earlier in its clause ("removes a settings page"), is not judged: what
+   * backs it is a deleted file, which never backs an addition; "adds a settings page and removes
+   * the old one" is still judged. Camel humps are split first, so "a SettingsScreen" reads as "a
+   * Settings Screen".
    */
   static boolean invents(String sentence, Change change) {
-    if (REMOVAL.matcher(sentence).find()) {
-      return false;
-    }
-    var introduced = INTRODUCED.matcher(CAMEL_HUMP.matcher(sentence).replaceAll(" "));
+    var text = CAMEL_HUMP.matcher(sentence).replaceAll(" ");
+    var introduced = INTRODUCED.matcher(text);
     while (introduced.find()) {
+      if (removedInClause(text.substring(0, introduced.start()))) {
+        continue;
+      }
       var qualifier =
           words(introduced.group(1)).stream().filter(word -> !VAGUE.contains(word)).toList();
       var kind = introduced.group(2).toLowerCase(Locale.ROOT);
@@ -160,6 +165,16 @@ final class InventedArtifacts {
       }
     }
     return false;
+  }
+
+  /** Whether the clause {@code lead} ends in holds a {@link #REMOVAL} verb. */
+  private static boolean removedInClause(String lead) {
+    var breaks = CLAUSE_BREAK.matcher(lead);
+    var start = 0;
+    while (breaks.find()) {
+      start = breaks.end();
+    }
+    return REMOVAL.matcher(lead.substring(start)).find();
   }
 
   /**
