@@ -715,8 +715,8 @@ final class DescriptionGapScreen {
             && !attributedBefore(clauseOf(lead))
             && NEGATED_LEAD.stream().noneMatch(negation -> negation.matcher(lead).find())
             && !CLAUSE_BREAK.matcher(own.substring(concession.end())).find()
-            && !EXCEPTION.matcher(sentenceBefore(own, concession.start())).find()
-            && !EXCEPTION.matcher(own.substring(concession.end())).find()) {
+            && !anyFinds(EXCEPTIONS, sentenceBefore(own, concession.start()))
+            && !anyFinds(EXCEPTIONS, own.substring(concession.end()))) {
           return true;
         }
       }
@@ -736,14 +736,18 @@ final class DescriptionGapScreen {
   }
 
   /**
-   * An exception to a concession, before it or after it in its sentence: "other than the timeout
-   * key, the change matches the description", "matches the description except that it omits the
-   * timeout key".
+   * An exception to a concession, before it or after it in its sentence, one pattern per shape:
+   * "other than the timeout key, the change matches the description", "matches the description
+   * except that it omits the timeout key", "omits the timeout key and otherwise matches the
+   * description".
    */
-  private static final Pattern EXCEPTION =
-      Pattern.compile(
-          "(?i)\\b(?:except|unless|excluding|(?:apart|aside)\\s++from|other\\s++than|save\\s++that"
-              + "|but\\s++for)\\b");
+  private static final List<Pattern> EXCEPTIONS =
+      Stream.of(
+              "\\b(?:except|unless|excluding|otherwise|elsewhere)\\b",
+              "\\b(?:(?:apart|aside)\\s++from|other\\s++than|save\\s++that|but\\s++for)\\b",
+              "\\b(?:for\\s++the\\s++rest|in\\s++other\\s++respects)\\b")
+          .map(shape -> Pattern.compile("(?i)" + shape))
+          .toList();
 
   /**
    * Whether {@code gap} asserts no mismatch: its last clause says, in the bullet's own words and
@@ -770,8 +774,23 @@ final class DescriptionGapScreen {
     }
     // An earlier clause of the bullet's own stating a mismatch makes it a gap, whatever it ends
     // with: "the change sets the cap to 16, not the described 8; the tests cannot confirm it".
-    return clauses.stream()
-        .noneMatch(clause -> !anyFinds(NON_ASSERTIONS, clause) && ownMismatch(clause));
+    return clauses.stream().noneMatch(clause -> ownMismatch(beforeNonAssertion(clause)));
+  }
+
+  /**
+   * {@code clause} up to its first non-assertion: what the material cannot confirm is not stated,
+   * but what comes before it is ("the change omits the timeout key which the material cannot
+   * confirm"). The whole clause when it holds none.
+   */
+  private static String beforeNonAssertion(String clause) {
+    var end = clause.length();
+    for (var shape : NON_ASSERTIONS) {
+      var found = shape.matcher(clause);
+      if (found.find()) {
+        end = Math.min(end, found.start());
+      }
+    }
+    return clause.substring(0, end);
   }
 
   /**

@@ -512,7 +512,10 @@ class DescriptionGapScreenTest {
         "Other than the timeout key, the change matches the description.",
         "Except for the timeout key, the change matches the description.",
         "Aside from the timeout key, the change matches the description.",
-        "The change matches the description excluding the timeout key."
+        "The change matches the description excluding the timeout key.",
+        // "Otherwise" says there is an exception to the concession.
+        "The change omits the timeout key and otherwise matches the description.",
+        "The change matches the description for the rest but drops the cap."
       })
   void aStatedGapOrAnUnmetLinkedIssueCriterionIsNotAConcession(String gap) {
     assertFalse(DescriptionGapScreen.concedesNoGap(gap));
@@ -740,6 +743,8 @@ class DescriptionGapScreenTest {
         "The corpus-round criterion, e.g. the run with #1078 enabled, cannot be confirmed from the"
             + " material.",
         "The corpus-round criterion, i.e. the run with #1078 enabled, cannot be confirmed.",
+        // What the material cannot confirm is not a mismatch the bullet states.
+        "The description says the key is kept; the material cannot confirm the key is omitted.",
         // A passive "verified" is read as well as "verify".
         "The description says retries are capped; the cap cannot be verified from the material."
       })
@@ -770,6 +775,8 @@ class DescriptionGapScreenTest {
             + " they skip the path.",
         "The change omits the timeout key, and the material cannot confirm the rest.",
         "The change dropped the timeout key; the material cannot confirm why.",
+        // A mismatch before the non-assertion in the same clause.
+        "The change omits the timeout key which the material cannot confirm.",
         // The description's claim, then the bullet's own mismatch past a contrast.
         "The description says the cap holds but the change drops it; the material cannot confirm"
             + " why.",
