@@ -414,6 +414,9 @@ class PathMentionsTest {
           docs/NOPE.md, Then x. | Then x.
           docs/NOPE.md,then x. | Then x.
           It is new. docs/NOPE.md,then x. | It is new. Then x.
+          Back off, e.g. docs/NOPE.md, and retry. | Back off, e.g., and retry.
+          It ships to the U.S. docs/NOPE.md, then x. | It ships to the U.S., then x.
+          e.g. docs/NOPE.md, then x. | e.g., then x.
           It is cited: docs/NOPE.md;then x. | It is cited: then x.
           docs/NOPE.md; | docs/NOPE.md;
           `a` cites docs/NOPE.md and `b`. | `a` cites and `b`.

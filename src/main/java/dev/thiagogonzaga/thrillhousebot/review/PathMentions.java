@@ -692,10 +692,29 @@ final class PathMentions {
 
   /**
    * Whether {@code at} is where a clause opens: the text start, or right after {@code .!?:} (a cut
-   * takes the blanks before the mention).
+   * takes the blanks before the mention). The period of an abbreviation ("e.g.", "Dr.", "U.S.",
+   * {@link OverviewScreen#abbreviation}) opens nothing: "Back off, e.g. docs/x.md, and retry" goes
+   * on after it.
    */
   private static boolean opensClause(CharSequence s, int at) {
-    return at == 0 || ".!?:".indexOf(s.charAt(at - 1)) >= 0;
+    if (at == 0) {
+      return true;
+    }
+    char before = s.charAt(at - 1);
+    return before == '.' ? !endsAbbreviation(s, at - 1) : "!?:".indexOf(before) >= 0;
+  }
+
+  /**
+   * Whether the period at {@code period} ends an abbreviation: the word it closes, without the
+   * brackets or quotes that open it, is one {@link OverviewScreen#abbreviation} knows.
+   */
+  private static boolean endsAbbreviation(CharSequence s, int period) {
+    int from = period;
+    while (from > 0 && (Character.isLetter(s.charAt(from - 1)) || s.charAt(from - 1) == '.')) {
+      from--;
+    }
+    return OverviewScreen.abbreviation(
+        s.subSequence(from, period + 1).toString().toLowerCase(Locale.ROOT));
   }
 
   /**
