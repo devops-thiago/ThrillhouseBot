@@ -114,6 +114,9 @@ public final class DescriptionGapLabels {
   private static final Pattern CITED_LABEL =
       Pattern.compile("(?:(?:" + POINTERS + ")\\s+)?(" + LABELS + ")" + NOT_A_NAME);
 
+  /** What divides a parenthetical into parts: a comma, a semicolon or a spaced dash. */
+  private static final Pattern PART_SEPARATOR = Pattern.compile("\\s*+[,;]\\s*+|\\s++[—–-]\\s++");
+
   /** What a parenthetical keeps at its start once its labels are gone: separators only. */
   private static final Pattern LEADING_SEPARATORS = Pattern.compile("^[\\s,;:—–-]+");
 
@@ -259,22 +262,41 @@ public final class DescriptionGapLabels {
 
   /**
    * A parenthetical without the issued labels it cites: gone when nothing else was in it ("(see
-   * G1)") or when a label was part of a phrase that needs it ("(carried from the earlier review as
-   * G1)", #1095), otherwise kept with the rest of its words ("(G1, still not addressed)" → "(still
-   * not addressed)"). One that cites no issued label is returned as it was.
+   * G1)"), otherwise kept with the rest of its words ("(G1, still not addressed)" → "(still not
+   * addressed)"). Its parts are read one by one, between separators, and a part whose label
+   * finishes or starts a phrase goes whole, so "(carried from the earlier review as G1, still
+   * open)" keeps "(still open)" instead of leaving "as" dangling (#1095). One that cites no issued
+   * label is returned as it was.
    */
   private static String withoutCitedLabels(MatchResult parenthetical, int issued) {
     var content = parenthetical.group(2);
-    var rest = replace(CITED_LABEL, content, issued, m -> "");
-    if (rest.equals(content)) {
+    if (replace(CITED_LABEL, content, issued, m -> "").equals(content)) {
       return parenthetical.group();
     }
-    if (labelInAPhrase(content, issued)) {
-      return "";
+    var parts = new ArrayList<String>();
+    var separators = new ArrayList<String>();
+    var divider = PART_SEPARATOR.matcher(content);
+    int at = 0;
+    while (divider.find()) {
+      parts.add(content.substring(at, divider.start()));
+      separators.add(divider.group());
+      at = divider.end();
     }
-    rest = LEADING_SEPARATORS.matcher(rest).replaceFirst("");
-    rest = TRAILING_SEPARATORS.matcher(rest).replaceFirst("");
-    return rest.isEmpty() ? "" : parenthetical.group(1) + "(" + rest + ")";
+    parts.add(content.substring(at));
+    var kept = new StringBuilder();
+    for (int i = 0; i < parts.size(); i++) {
+      var part = parts.get(i);
+      if (labelInAPhrase(part, issued)) {
+        continue;
+      }
+      part = replace(CITED_LABEL, part, issued, m -> "").strip();
+      if (!part.isEmpty()) {
+        kept.append(kept.isEmpty() ? "" : separators.get(i - 1)).append(part);
+      }
+    }
+    var rest = TRAILING_SEPARATORS.matcher(LEADING_SEPARATORS.matcher(kept).replaceFirst(""));
+    var text = rest.replaceFirst("");
+    return text.isEmpty() ? "" : parenthetical.group(1) + "(" + text + ")";
   }
 
   /**

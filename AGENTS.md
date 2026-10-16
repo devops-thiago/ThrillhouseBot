@@ -479,9 +479,9 @@ live `fence(...)` (#604).
   preserves real file roles using the same numbers, and treats "cf." as an abbreviation before a
   ticket key (#1105, #1106). `DescriptionGapScreen` matches a quoted compound identifier to
   possessive prose such as "server's URL" while still rejecting unsupported quotes (#1108).
-  A carried-gap label joined to a word inside a parenthetical takes the parenthetical with it
-  (`DescriptionGapLabels.labelInAPhrase`); one set off by a separator leaves its remark (#974,
-  #1095). `PathMentions` never cuts a name out of a code span in a finding's description, only a
+  A carried-gap label joined to a word inside a parenthetical takes its part of the
+  parenthetical with it (`DescriptionGapLabels.labelInAPhrase`, parts split at commas, semicolons
+  and spaced dashes); a part set off by a separator stays (#974, #1095). `PathMentions` never cuts a name out of a code span in a finding's description, only a
   span that fills a parenthetical. `PriorOverviewCarryover` replaces a size-only purpose paragraph
   (`sizeOnly`) on an unchanged head (#1095).
 - **Text the bot posts to GitHub** goes through `review/MarkdownSafe`, not `LogSafe`.

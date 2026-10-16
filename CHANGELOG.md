@@ -10,7 +10,7 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
-- **Removing prompt labels and invented paths no longer leaves broken sentences** (#1095): a carried-gap label that finished a phrase in a parenthetical ("(carried from the earlier review as G2)") now takes the whole parenthetical with it instead of leaving "(carried from the earlier review as)". A name in a code span in a finding's description stays even when no file resolves it, since such a name is usually quoted because it is missing ("no `package-lock.json` is added"); cutting it left "no is added". On a re-review of the same commit, a "What this PR does" paragraph that only states the change's size gives way to the previous round's.
+- **Removing prompt labels and invented paths no longer leaves broken sentences** (#1095): a carried-gap label that finished a phrase in a parenthetical ("(carried from the earlier review as G2)") now takes that phrase with it instead of leaving "(carried from the earlier review as)"; a remark set off by a comma or a dash stays. A name in a code span in a finding's description stays even when no file resolves it, since such a name is usually quoted because it is missing ("no `package-lock.json` is added"); cutting it left "no is added". On a re-review of the same commit, a "What this PR does" paragraph that only states the change's size gives way to the previous round's.
 
 ## [0.7.1] — 2026-10-13
 

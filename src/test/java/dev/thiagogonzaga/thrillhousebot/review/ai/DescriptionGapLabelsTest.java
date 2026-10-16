@@ -202,9 +202,31 @@ class DescriptionGapLabelsTest {
     assertEquals(
         List.of("The TTL is never read."),
         DescriptionGapLabels.stripIssued(List.of("The TTL is never read (G1 still open)."), 1));
-    // Set off by a separator, the remark is not part of the label's phrase and stays (#974).
+    // Set off by a separator, the remark is not part of the label's phrase and stays (#974),
+    // also beside a part the label finishes, which goes alone.
+    for (var parenthetical :
+        List.of(
+            "(G1 — still open)",
+            "(carried from the earlier review as G2, still open)",
+            "(G1 — still open, as G2)",
+            "(G1,still open)",
+            "(G1, G2; still open)",
+            "( G1 — still open)",
+            "(still open — G1 )")) {
+      assertEquals(
+          List.of("The TTL is never read (still open)."),
+          DescriptionGapLabels.stripIssued(
+              List.of("The TTL is never read " + parenthetical + "."), 2),
+          parenthetical);
+    }
+    // A quote after the label is no word the label joins.
     assertEquals(
-        List.of("The TTL is never read (still open)."),
-        DescriptionGapLabels.stripIssued(List.of("The TTL is never read (G1 — still open)."), 1));
+        List.of("The TTL is never read (\"still open\")."),
+        DescriptionGapLabels.stripIssued(List.of("The TTL is never read (G1 \"still open\")."), 1));
+    // Two remarks keep the separator between them.
+    assertEquals(
+        List.of("The TTL is never read (still open; see the CI half)."),
+        DescriptionGapLabels.stripIssued(
+            List.of("The TTL is never read (G1, still open; see the CI half)."), 1));
   }
 }

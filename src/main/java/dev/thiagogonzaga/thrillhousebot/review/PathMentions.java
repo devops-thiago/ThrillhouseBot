@@ -517,13 +517,7 @@ final class PathMentions {
    * of a parenthetical: {@code (`docs/x.md:4`)}, which goes without leaving a gap in the sentence.
    */
   private static boolean spanFillsParenthetical(CharSequence s, int start, int end) {
-    int from = start;
-    int to = end;
-    while (wraps(s, from, to, '*', '*')) {
-      from--;
-      to++;
-    }
-    return wraps(s, from, to, '`', '`') && wraps(s, from - 1, to + 1, '(', ')');
+    return wraps(s, start, end, '`', '`') && wraps(s, start - 1, end + 1, '(', ')');
   }
 
   /** The inline code spans of {@code text}, outside its fences: one-line runs between backticks. */
