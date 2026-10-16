@@ -809,6 +809,8 @@ class PathMentionsTest {
         "ENTRYPOINT [\"java\", \"-cp\", \"/app/target/*\", \"cowork.invoicing.MainKt\"]",
         "ENTRYPOINT [\"java\", \"-jar\", \"/app/invoicer.jar\", \"--trace\"]",
         "ENTRYPOINT [\"java\", \"-jar\", \"/app/invoicer.jar\"] # see https://x.example/a/b.md",
+        "ENTRYPOINT [\"java\", \"-jar\", \"/app/invoicer.jar\"] # see https://registry.example/r/*",
+        "ENTRYPOINT [\"java\", \"-jar\", \"/app/invoicer.jar\"] # see file:///srv/releases/*",
         ""
       })
   void aSuggestionNamingWhatExistsIsKept(String suggestion) {
@@ -976,7 +978,7 @@ class PathMentionsTest {
           COPY lib/ /app/lib/ | true
           RUN bash -c 'mkdir -p /app/lib && java -cp /app/lib/* Main' | true
           ENTRYPOINT ["sh", "-c", "mkdir -p /app/lib && java -cp '/app/lib/*' Main"] | true
-          RUN ls /* && ls /app/lib/* | false
+          RUN ls /* /opt* && ls /app/lib/* | false
           RUN ls /app/lib/* ; mkdir /app/lib | true
           RUN ls /app/lib && cp /app/lib/* /out/ | false
           RUN cp /app/lib/* /out/; cp /app/lib/* /out2/ | false

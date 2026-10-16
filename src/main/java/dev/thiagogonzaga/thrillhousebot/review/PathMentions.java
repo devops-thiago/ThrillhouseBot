@@ -226,10 +226,11 @@ final class PathMentions {
 
   /**
    * A glob over the files of an absolute directory ({@code /app/lib/*}, {@code
-   * /app/lib/serv*.jar}), up to its first star; the directory is what precedes its last slash.
+   * /app/lib/serv*.jar}), up to its first star; the directory is what precedes its last slash. A
+   * name follows the first slash, so the {@code //} of a URL never opens one.
    */
   private static final Pattern ABSOLUTE_GLOB =
-      Pattern.compile("(?<![\\w.~/\\\\+-])/[\\w.+/-]*+\\*");
+      Pattern.compile("(?<![\\w.~/\\\\+-])/[\\w.+-][\\w.+/-]*+\\*");
 
   /** A Dockerfile instruction that copies into the image. */
   private static final Pattern COPY_INSTRUCTION =
@@ -782,7 +783,7 @@ final class PathMentions {
     while (globs.find()) {
       int slash = globs.group().lastIndexOf('/');
       if (slash <= 0) {
-        // A glob over the root, "/*", names no directory to look for.
+        // A top-level glob ("/app*") names no directory to look for.
         continue;
       }
       var directory =
