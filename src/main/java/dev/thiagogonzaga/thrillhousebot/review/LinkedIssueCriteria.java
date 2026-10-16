@@ -515,6 +515,25 @@ final class LinkedIssueCriteria {
     return false;
   }
 
+  /**
+   * Whether {@code clause} holds an {@link #UNMET} word that is not one of the criterion's own and
+   * no negation right before it turns into praise.
+   */
+  private static boolean holdsUnmetWord(String clause, Set<String> criterionWords) {
+    for (var pattern : UNMET) {
+      var unmet = pattern.matcher(clause);
+      while (unmet.find()) {
+        // "never fails", "nothing is missing" praise the change; "dropped" in "the bullets
+        // dropped" restates a criterion that asks for them to be dropped.
+        if (!negatedBefore(clause.substring(0, unmet.start()))
+            && !ownWord(unmet.group(), criterionWords)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   /** Whether {@code clause} holds a {@link #PRAISE} word no negation right before it reaches. */
   private static boolean praisesChange(String clause) {
     var praise = PRAISE.matcher(clause);
@@ -551,16 +570,8 @@ final class LinkedIssueCriteria {
     if (META.matcher(clause).find() || praisesChange(clause)) {
       return false;
     }
-    for (var pattern : UNMET) {
-      var unmet = pattern.matcher(clause);
-      while (unmet.find()) {
-        // "never fails", "nothing is missing" praise the change; "dropped" in "the bullets
-        // dropped" restates a criterion that asks for them to be dropped.
-        if (!negatedBefore(clause.substring(0, unmet.start()))
-            && !ownWord(unmet.group(), criterionWords)) {
-          return true;
-        }
-      }
+    if (holdsUnmetWord(clause, criterionWords)) {
+      return true;
     }
     for (var pattern : NEGATORS) {
       var negation = pattern.matcher(clause);
