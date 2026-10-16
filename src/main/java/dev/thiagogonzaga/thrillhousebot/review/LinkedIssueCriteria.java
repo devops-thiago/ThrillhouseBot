@@ -193,9 +193,13 @@ final class LinkedIssueCriteria {
           Pattern.compile("(?i)\\b(?:won['’]t|can['’]t|cannot|never|no\\s++longer)\\b"),
           Pattern.compile("(?i)\\b(?:lacks?|fails?\\s++to|refus\\w*+\\s++to|unable\\s++to)\\b"));
 
-  /** A quoted passage, in double or single quotes (curly quotes folded). */
+  /**
+   * A quoted passage, in double or single quotes (curly quotes folded). An apostrophe between two
+   * letters is part of a single-quoted passage: 'the council's yearly export'.
+   */
   private static final Pattern QUOTED =
-      Pattern.compile("\"([^\"\n]++)\"|(?<![\\p{L}\\p{N}])'([^'\n]++)'(?![\\p{L}\\p{N}])");
+      Pattern.compile(
+          "\"([^\"\n]++)\"|(?<![\\p{L}\\p{N}])'((?:[^'\n]|(?<=\\p{L})'(?=\\p{L}))++)'(?![\\p{L}\\p{N}])");
 
   private static final Pattern NON_ALPHANUMERIC = Pattern.compile("[^\\p{L}\\p{N}]+");
 
@@ -392,6 +396,25 @@ final class LinkedIssueCriteria {
   }
 
   /**
+   * Whether {@code negation}, a {@link #PRAISING_NEGATIONS} word, turns an {@link #UNMET} word
+   * among the first {@value #PRAISE_REACH} words of {@code rest} into praise: "never fails to
+   * honor", "no longer missing".
+   */
+  private static boolean praises(String negation, String rest) {
+    if (!PRAISING_NEGATIONS.contains(negation.toLowerCase(Locale.ROOT))) {
+      return false;
+    }
+    var words = NON_ALPHANUMERIC.split(rest.strip());
+    for (var i = 0; i < Math.min(PRAISE_REACH, words.length); i++) {
+      var from = String.join(" ", Arrays.asList(words).subList(i, words.length));
+      if (UNMET.stream().anyMatch(pattern -> pattern.matcher(from).lookingAt())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Whether one of the last {@value #PRAISE_REACH} words of {@code lead} negates what follows:
    * "never fails", "nothing is missing", "no longer drops".
    */
@@ -428,8 +451,10 @@ final class LinkedIssueCriteria {
       var negation = pattern.matcher(clause);
       while (negation.find()) {
         var rest = clause.substring(negation.end());
-        // "not only implemented" affirms what follows.
+        // "not only implemented" affirms what follows; "never fails to honor" is the praise the
+        // UNMET reading above already pardoned.
         if (!AFFIRMING.matcher(rest).lookingAt()
+            && !praises(negation.group(), rest)
             && bindsCriterion(rest, criterionWords, NEGATION_REACH, true)) {
           return true;
         }

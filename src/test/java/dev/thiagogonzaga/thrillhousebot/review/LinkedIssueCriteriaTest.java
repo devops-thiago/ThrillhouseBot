@@ -263,6 +263,23 @@ class LinkedIssueCriteriaTest {
   }
 
   @Test
+  void aSingleQuotedPassageMayHoldAnApostrophe() {
+    var quoted = "The issue's 'the council's yearly export' ask is not met.";
+
+    var lines = unmet(ISSUE_256, List.of(), quoted, Map.of()).lines();
+
+    assertEquals(1, lines.size(), lines.toString());
+    assertTrue(lines.getFirst().startsWith("Linked issue #256: Bulk import"), lines.toString());
+  }
+
+  @Test
+  void aNegationPraisingTheUnmetWordAfterItIsNoUnmetCriterion() {
+    var praise = "The issue's 'declines two offers' rule never fails to honor the waitlist.";
+
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), praise, Map.of()));
+  }
+
+  @Test
   void aSeparatorOutsideTheQuoteStillSplitsTheClause() {
     // The comma outside the quote still keeps the contrast in its own clause.
     var contrast =
