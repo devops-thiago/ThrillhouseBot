@@ -134,7 +134,8 @@ class FollowUpReviewNoiseTest {
         new DiffLineResolver(Map.of("src/New.java", "@@ -0,0 +1 @@\n+newCode\n")),
         summaryCommandPosted,
         List.of(CLOSED),
-        section);
+        section,
+        List.of());
   }
 
   private GitHubReviewClient.CreateReviewRequest postedReview() {

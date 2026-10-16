@@ -517,9 +517,11 @@ public class SecurityScan {
    * all assigned an interpolation or a placeholder ({@link SecretScanner#assignsOnlyStandIns}),
    * such as {@code ENV API_TOKEN=${API_TOKEN}} or {@code FLEET_API_TOKEN=changeme} (#926). The
    * finding reports a secret when its title uses one of {@link SecurityRule#GENERIC_SECRET}'s topic
-   * words; the line is the finding's own line on the new side of the diff, and a finding whose line
-   * is not in the diff is kept. Runs whether or not the scan is on: the scan is opt-in because it
-   * adds findings, and this only removes a model claim the line itself contradicts.
+   * words, or when its title names a key the line assigns and its description uses two of those
+   * words ("BOOKING_API_TOKEN is baked into the image via ARG/ENV", #952); the line is the
+   * finding's own line on the new side of the diff, and a finding whose line is not in the diff is
+   * kept. Runs whether or not the scan is on: the scan is opt-in because it adds findings, and this
+   * only removes a model claim the line itself contradicts.
    */
   public ReviewResponse withoutStandInSecrets(
       ReviewResponse response, DiffLineResolver lineResolver) {
@@ -542,11 +544,22 @@ public class SecurityScan {
 
   private boolean reportsStandInSecret(
       ReviewResponse.Finding finding, DiffLineResolver lineResolver) {
-    if (topicWords(words(finding.title()), SecurityRule.GENERIC_SECRET) == 0) {
+    boolean titled = topicWords(words(finding.title()), SecurityRule.GENERIC_SECRET) > 0;
+    if (!titled && topicWords(words(finding.description()), SecurityRule.GENERIC_SECRET) < 2) {
       return false;
     }
     var line = lineResolver.getLineText(finding.file(), finding.line());
-    return line != null && SecretScanner.assignsOnlyStandIns(line, entropyThreshold);
+    if (line == null || !SecretScanner.assignsOnlyStandIns(line, entropyThreshold)) {
+      return false;
+    }
+    return titled || namesAssignedKey(finding.title(), line);
+  }
+
+  /** Whether {@code title} names, as a whole identifier in any case, a key {@code line} assigns. */
+  private static boolean namesAssignedKey(String title, String line) {
+    // Set.copyOf, not Set.of: a title repeats a word, or splits into empty tokens, often.
+    var named = Set.copyOf(Arrays.asList(NON_IDENTIFIER.split(title.toLowerCase(Locale.ROOT))));
+    return SecretScanner.assignedCredentialKeys(line).stream().anyMatch(named::contains);
   }
 
   /**
@@ -1592,6 +1605,11 @@ public class SecurityScan {
    * can name a neighbouring defect too: "Root filesystem is writable" beside a final-stage {@code
    * USER root}, or "Public subnet assigns public IPs" beside a public bucket ACL, are different
    * findings, and their own words say so.
+   *
+   * <p>A finding whose suggestion is the scan's fix is the same defect whatever its title says
+   * (#952): it replaces the detected line and its new lines no longer hold it. On c
+   * ThrillhouseBot-test#277, "Comment claims serial-board access that no daemon source performs"
+   * suggested {@code USER locker} over the {@code USER root} the scan reported a line away.
    */
   private static boolean nearbyIacDefect(
       ReviewResponse.Finding finding,
@@ -1599,8 +1617,27 @@ public class SecurityScan {
       Set<String> titleWords,
       SecurityRule rule) {
     return Math.abs(finding.line() - scanned.line()) <= FindingDeduplicator.LINE_TOLERANCE
-        && titleWords.stream().anyMatch(rule.defectWords()::contains)
-        && titleWords.stream().noneMatch(OTHER_IAC_DEFECT_WORDS::contains);
+        && titleWords.stream().noneMatch(OTHER_IAC_DEFECT_WORDS::contains)
+        && (titleWords.stream().anyMatch(rule.defectWords()::contains)
+            || removesDetectedLine(finding, scanned));
+  }
+
+  /**
+   * Whether {@code finding}'s suggestion replaces the line the IaC detection {@code scanned} quotes
+   * in its {@code suggestion_old}, whole after stripping, and writes no line equal to it.
+   */
+  static boolean removesDetectedLine(
+      ReviewResponse.Finding finding, ReviewResponse.Finding scanned) {
+    var detected = scanned.suggestionOld();
+    if (detected == null
+        || detected.isBlank()
+        || finding.suggestionOld() == null
+        || finding.suggestionNew() == null) {
+      return false;
+    }
+    var line = detected.strip();
+    return finding.suggestionOld().lines().anyMatch(old -> old.strip().equals(line))
+        && finding.suggestionNew().lines().noneMatch(fixed -> fixed.strip().equals(line));
   }
 
   private static long topicWords(Set<String> titleWords, SecurityRule rule) {
