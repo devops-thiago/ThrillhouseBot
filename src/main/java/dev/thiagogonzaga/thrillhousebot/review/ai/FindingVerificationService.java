@@ -1265,45 +1265,58 @@ public class FindingVerificationService {
     var adjusted = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     var changed = false;
     for (ReviewResponse.Finding finding : response.findings()) {
-      boolean ciCited = evidence.failingChecks().cites(finding);
-      String risk = ciCited ? restoredRisk(finding, raisedRisk.get(identity(finding))) : null;
-      boolean lift =
-          Confidence.fromString(finding.confidence()) == Confidence.LOW
-              && (ciCited || taintPathInDiff(finding, diffLines));
-      if (!lift && risk == null) {
-        adjusted.add(finding);
-        continue;
-      }
-      boolean auditLowered = lift && raisedAboveLow.contains(identity(finding));
-      if (lift) {
-        Log.infof(
-            "Raising %s finding '%s' from low to medium confidence: its evidence is established%s",
-            LogSafe.oneLine(finding.risk()),
-            LogSafe.oneLine(finding.title()),
-            auditLowered ? "; the audit lowered it, so its suggested fix is dropped" : "");
-      }
-      if (risk != null) {
-        Log.infof(
-            "Restoring %s finding '%s' to the %s risk it was raised at: a failing CI check confirms"
-                + " it",
-            LogSafe.oneLine(finding.risk()), LogSafe.oneLine(finding.title()), risk);
-      }
-      adjusted.add(
-          new ReviewResponse.Finding(
-              risk == null ? finding.risk() : risk,
-              lift ? MEDIUM_LABEL : finding.confidence(),
-              finding.file(),
-              finding.line(),
-              finding.title(),
-              finding.description(),
-              finding.suggestionOld(),
-              auditLowered ? null : finding.suggestionNew()));
-      changed = true;
+      var floored = established(finding, raisedAboveLow, raisedRisk, diffLines, evidence);
+      adjusted.add(floored);
+      changed |= floored != finding;
     }
     if (!changed) {
       return response;
     }
     return new ReviewResponse(adjusted, response.previousFindingsStatus(), response.summary());
+  }
+
+  /**
+   * {@code finding} with the floors of {@link #floorEstablishedConfidence} applied: confidence
+   * lifted from low to medium on established evidence, and the raised risk restored on a CI
+   * citation. The same instance when neither applies.
+   */
+  private static ReviewResponse.Finding established(
+      ReviewResponse.Finding finding,
+      Set<String> raisedAboveLow,
+      Map<String, String> raisedRisk,
+      List<String> diffLines,
+      FindingEvidence evidence) {
+    boolean ciCited = evidence.failingChecks().cites(finding);
+    String risk = ciCited ? restoredRisk(finding, raisedRisk.get(identity(finding))) : null;
+    boolean lift =
+        Confidence.fromString(finding.confidence()) == Confidence.LOW
+            && (ciCited || taintPathInDiff(finding, diffLines));
+    if (!lift && risk == null) {
+      return finding;
+    }
+    boolean auditLowered = lift && raisedAboveLow.contains(identity(finding));
+    if (lift) {
+      Log.infof(
+          "Raising %s finding '%s' from low to medium confidence: its evidence is established%s",
+          LogSafe.oneLine(finding.risk()),
+          LogSafe.oneLine(finding.title()),
+          auditLowered ? "; the audit lowered it, so its suggested fix is dropped" : "");
+    }
+    if (risk != null) {
+      Log.infof(
+          "Restoring %s finding '%s' to the %s risk it was raised at: a failing CI check confirms"
+              + " it",
+          LogSafe.oneLine(finding.risk()), LogSafe.oneLine(finding.title()), risk);
+    }
+    return new ReviewResponse.Finding(
+        risk == null ? finding.risk() : risk,
+        lift ? MEDIUM_LABEL : finding.confidence(),
+        finding.file(),
+        finding.line(),
+        finding.title(),
+        finding.description(),
+        finding.suggestionOld(),
+        auditLowered ? null : finding.suggestionNew());
   }
 
   /**
