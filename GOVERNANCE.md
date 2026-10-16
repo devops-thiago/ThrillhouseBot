@@ -50,8 +50,8 @@ gets write access to the repository.
 The project must be able to keep handling issues, merging pull requests and
 publishing releases if the maintainer can no longer do so.
 
-- A successor is designated in the maintainer's GitHub account settings, using
-  GitHub's
+- [@geliop](https://github.com/geliop) is the designated successor, set in the
+  maintainer's GitHub account settings using GitHub's
   [successor feature](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/repository-access-and-collaboration/maintaining-ownership-continuity-of-your-personal-accounts-repositories).
   GitHub lets a successor archive the maintainer's public repositories or
   transfer them to their own account or to an organization. Once the repository
