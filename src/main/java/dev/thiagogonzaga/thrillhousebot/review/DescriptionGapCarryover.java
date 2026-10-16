@@ -447,9 +447,11 @@ final class DescriptionGapCarryover {
       if (line.startsWith("- ")) {
         addGap(gaps, open);
         var bullet = line.substring(2).strip();
-        // A bullet naming a finding is that finding's, carried by the finding itself (#964).
+        // A bullet naming a finding is that finding's, carried by the finding itself (#964), and
+        // so is a criterion line pointing at one (#1093).
         open =
             bullet.startsWith(PrSummaryGenerator.GAP_FINDING_PREFIX)
+                    || LinkedIssueCriteria.pointsAtFinding(bullet)
                 ? null
                 : new StringBuilder(bullet);
       } else if (line.isEmpty()) {
