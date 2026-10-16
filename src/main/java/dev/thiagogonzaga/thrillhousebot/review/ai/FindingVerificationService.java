@@ -1232,7 +1232,14 @@ public class FindingVerificationService {
    *
    * <p>Only "low" moves, and only to "medium": blocking under the default strictness needs "high",
    * so a floored finding still informs the verdict without deciding it, and every hedge, verifier
-   * demotion or unverified cap that left a finding at "medium" stands. Risk is never touched.
+   * demotion or unverified cap that left a finding at "medium" stands.
+   *
+   * <p>Risk moves for the CI-cited finding alone, and only back up: when the audit lowered its risk
+   * below what the review raised it at, the raised risk is restored (#952, #156: the two HIGH
+   * defects the failing test confirmed were posted as MEDIUM). The failure measures the defect the
+   * review graded, so a demotion the audit argued from reasoning does not stand against it. The
+   * finding is paired with its raised copy by file, line and title; one the audit retitled or moved
+   * keeps the audit's grade.
    *
    * <p>The audit also answers "low" when the defect is real but the suggested fix is not, and a
    * floored finding posts inline with its suggestion. So when it was the audit that took the
@@ -1252,25 +1259,39 @@ public class FindingVerificationService {
             .filter(finding -> Confidence.fromString(finding.confidence()) != Confidence.LOW)
             .map(FindingVerificationService::identity)
             .collect(Collectors.toSet());
+    Map<String, String> raisedRisk = new HashMap<>();
+    raised.findings().forEach(finding -> raisedRisk.putIfAbsent(identity(finding), finding.risk()));
     List<String> diffLines = codeLines(diff);
     var adjusted = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     var changed = false;
     for (ReviewResponse.Finding finding : response.findings()) {
-      if (Confidence.fromString(finding.confidence()) != Confidence.LOW
-          || !(evidence.failingChecks().cites(finding) || taintPathInDiff(finding, diffLines))) {
+      boolean ciCited = evidence.failingChecks().cites(finding);
+      String risk = ciCited ? restoredRisk(finding, raisedRisk.get(identity(finding))) : null;
+      boolean lift =
+          Confidence.fromString(finding.confidence()) == Confidence.LOW
+              && (ciCited || taintPathInDiff(finding, diffLines));
+      if (!lift && risk == null) {
         adjusted.add(finding);
         continue;
       }
-      boolean auditLowered = raisedAboveLow.contains(identity(finding));
-      Log.infof(
-          "Raising %s finding '%s' from low to medium confidence: its evidence is established%s",
-          LogSafe.oneLine(finding.risk()),
-          LogSafe.oneLine(finding.title()),
-          auditLowered ? "; the audit lowered it, so its suggested fix is dropped" : "");
+      boolean auditLowered = lift && raisedAboveLow.contains(identity(finding));
+      if (lift) {
+        Log.infof(
+            "Raising %s finding '%s' from low to medium confidence: its evidence is established%s",
+            LogSafe.oneLine(finding.risk()),
+            LogSafe.oneLine(finding.title()),
+            auditLowered ? "; the audit lowered it, so its suggested fix is dropped" : "");
+      }
+      if (risk != null) {
+        Log.infof(
+            "Restoring %s finding '%s' to the %s risk it was raised at: a failing CI check confirms"
+                + " it",
+            LogSafe.oneLine(finding.risk()), LogSafe.oneLine(finding.title()), risk);
+      }
       adjusted.add(
           new ReviewResponse.Finding(
-              finding.risk(),
-              MEDIUM_LABEL,
+              risk == null ? finding.risk() : risk,
+              lift ? MEDIUM_LABEL : finding.confidence(),
               finding.file(),
               finding.line(),
               finding.title(),
@@ -1350,6 +1371,20 @@ public class FindingVerificationService {
   }
 
   /** A finding's location and title, which the audit never rewrites. */
+  /**
+   * The risk the review raised {@code finding} at, lower-cased, when the audit graded it lower;
+   * {@code null} when there is no raised copy or the audit kept or raised the grade.
+   */
+  private static String restoredRisk(ReviewResponse.Finding finding, String raised) {
+    if (raised == null) {
+      return null;
+    }
+    RiskLevel before = RiskLevel.fromString(raised);
+    return before.compareTo(RiskLevel.fromString(finding.risk())) < 0
+        ? before.name().toLowerCase(Locale.ROOT)
+        : null;
+  }
+
   private static String identity(ReviewResponse.Finding finding) {
     return finding.file() + "\u0000" + finding.line() + "\u0000" + finding.title();
   }

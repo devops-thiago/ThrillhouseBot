@@ -2681,4 +2681,115 @@ class SecurityScanTest {
     assertFalse(SecurityScan.raisedByScan(title, null));
     assertFalse(SecurityScan.raisedByScan("Hardcoded token", SecurityScan.PROVENANCE));
   }
+
+  /** #952, c ThrillhouseBot-test#277: the runtime stage the scan reads as running as root. */
+  private static FileDiff lockerDockerfile() {
+    var lines = new ArrayList<String>();
+    for (int i = 1; i <= 18; i++) {
+      lines.add("RUN step" + i);
+    }
+    lines.add("# The locker controller board is driven over /dev/ttyUSB0, which needs root.");
+    lines.add("USER root");
+    lines.add("ENTRYPOINT [\"/usr/local/bin/locker-pind\"]");
+    return added("c/Dockerfile", lines.toArray(String[]::new));
+  }
+
+  private static ReviewResponse.Finding commentFinding(String file, String suggestionNew) {
+    return new ReviewResponse.Finding(
+        "medium",
+        "medium",
+        file,
+        20,
+        "Comment claims serial-board access that no daemon source performs",
+        "Nothing opens /dev/ttyUSB0, so the comment justifying `USER root` is false.",
+        "# The locker controller board is driven over /dev/ttyUSB0, which needs root.\nUSER root",
+        suggestionNew);
+  }
+
+  /**
+   * #952, round 18: a finding whose title names another defect, but whose suggestion is the scan's
+   * fix ({@code USER locker} over {@code USER root}), collapses into the scan finding.
+   */
+  @Test
+  void aModelFindingSuggestingTheScansFixCollapsesIntoIt() {
+    var model =
+        commentFinding(
+            "c/Dockerfile",
+            "# The daemon only talks to the carrier API and sms-send; run unprivileged.\n"
+                + "USER locker");
+
+    var merged = merge(scan(false, true), response(model), List.of(lockerDockerfile()));
+
+    assertEquals(1, merged.findings().size());
+    assertEquals(SecurityRule.ROOT_USER.iacTitle(), merged.findings().getFirst().title());
+  }
+
+  /** A suggestion that keeps the detected line, or one in another file, is a separate finding. */
+  @Test
+  void aSuggestionThatKeepsTheDetectedLineStaysBesideTheScan() {
+    var keeps =
+        commentFinding(
+            "c/Dockerfile",
+            "# The board is driven over /dev/ttyACM0, which needs root.\nUSER root");
+    var elsewhere = commentFinding("c/other/Dockerfile", "USER locker");
+    var noSuggestion = commentFinding("c/Dockerfile", null);
+
+    var merged =
+        merge(
+            scan(false, true),
+            response(keeps, elsewhere, noSuggestion),
+            List.of(lockerDockerfile(), added("c/other/Dockerfile", "FROM alpine:3.20")));
+
+    assertEquals(4, merged.findings().size());
+    assertFalse(
+        SecurityScan.removesDetectedLine(keeps, modelFinding("c/Dockerfile", 20, "t", "d")));
+    assertFalse(
+        SecurityScan.removesDetectedLine(
+            keeps, new ReviewResponse.Finding("medium", "high", "f", 1, "t", "d", " ", null)));
+    assertFalse(
+        SecurityScan.removesDetectedLine(
+            new ReviewResponse.Finding("medium", "high", "f", 1, "t", "d", null, "USER app"),
+            new ReviewResponse.Finding("medium", "high", "f", 1, "t", "d", "USER root", null)));
+  }
+
+  /**
+   * #952, kotlin ThrillhouseBot-test#276: the finding names the secret only by the key the line
+   * assigns an interpolation, and its description says it is a secret; it is the stand-in false
+   * positive and goes. A finding naming the key that is not a secret claim stays.
+   */
+  @Test
+  void aSecretClaimNamingTheStandInKeyGoes() {
+    var dockerfile =
+        added(
+            "kotlin/Dockerfile",
+            "FROM eclipse-temurin:21-jre",
+            "ARG BOOKING_API_TOKEN",
+            "ENV BOOKING_API_TOKEN=${BOOKING_API_TOKEN}");
+    var baked =
+        modelFinding(
+            "kotlin/Dockerfile",
+            3,
+            "BOOKING_API_TOKEN is baked into the image via ARG/ENV",
+            "Whatever token was present in the build environment is readable from the image, and"
+                + " this build-secret passthrough adds only exposure.");
+    var unread =
+        modelFinding(
+            "kotlin/Dockerfile",
+            3,
+            "BOOKING_API_TOKEN is never read",
+            "The service reads BOOKING_TOKEN, so the configured token is ignored.");
+    var otherKey =
+        modelFinding(
+            "kotlin/Dockerfile",
+            3,
+            "PAYMENT_API_TOKEN is baked into the image",
+            "Whatever token was present is readable; the secret leaks.");
+
+    var kept =
+        scan(true, false)
+            .withoutStandInSecrets(response(baked, unread, otherKey), resolver(dockerfile));
+
+    assertEquals(List.of(unread, otherKey), kept.findings());
+    assertTrue(SecretScanner.assignedCredentialKeys("x".repeat(1001)).isEmpty());
+  }
 }
