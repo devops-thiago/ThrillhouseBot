@@ -185,4 +185,53 @@ class DescriptionGapLabelsTest {
         List.of(gap.replace("G1", "G2")),
         DescriptionGapLabels.stripIssued(List.of(gap.replace("G1", "G2")), 1));
   }
+
+  /**
+   * #1095, go ThrillhouseBot-test#271 round 2: the label finished a phrase in the parenthetical, so
+   * the parenthetical goes whole instead of leaving "(carried from the earlier review as)".
+   */
+  @Test
+  void aParentheticalWhoseLabelFinishesAPhraseGoesWhole() {
+    assertEquals(
+        List.of("The service exposes no metrics, and nothing adds any metrics instrumentation."),
+        DescriptionGapLabels.stripIssued(
+            List.of(
+                "The service exposes no metrics, and nothing adds any metrics instrumentation"
+                    + " (carried from the earlier review as G2)."),
+            2));
+    assertEquals(
+        List.of("The TTL is never read."),
+        DescriptionGapLabels.stripIssued(List.of("The TTL is never read (G1 still open)."), 1));
+    // A tab joins the label to its phrase as a blank does.
+    assertEquals(
+        List.of("The TTL is never read."),
+        DescriptionGapLabels.stripIssued(
+            List.of("The TTL is never read (carried from the earlier review as\tG2)."), 2));
+    // Set off by a separator, the remark is not part of the label's phrase and stays (#974),
+    // also beside a part the label finishes, which goes alone.
+    for (var parenthetical :
+        List.of(
+            "(G1 — still open)",
+            "(carried from the earlier review as G2, still open)",
+            "(G1 — still open, as G2)",
+            "(G1,still open)",
+            "(G1, G2; still open)",
+            "( G1 — still open)",
+            "(still open — G1 )")) {
+      assertEquals(
+          List.of("The TTL is never read (still open)."),
+          DescriptionGapLabels.stripIssued(
+              List.of("The TTL is never read " + parenthetical + "."), 2),
+          parenthetical);
+    }
+    // A quote after the label is no word the label joins.
+    assertEquals(
+        List.of("The TTL is never read (\"still open\")."),
+        DescriptionGapLabels.stripIssued(List.of("The TTL is never read (G1 \"still open\")."), 1));
+    // Two remarks keep the separator between them.
+    assertEquals(
+        List.of("The TTL is never read (still open; see the CI half)."),
+        DescriptionGapLabels.stripIssued(
+            List.of("The TTL is never read (G1, still open; see the CI half)."), 1));
+  }
 }

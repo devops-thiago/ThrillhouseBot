@@ -15,11 +15,14 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -47,6 +50,14 @@ import java.util.stream.Stream;
  *   <li><b>An omission must be one.</b> A bullet saying the description leaves out files or
  *       components it then names ("the description … not … the python-ci workflow, Dockerfile,
  *       config docs") is dropped when most of what it names is in the PR text (#1074).
+ *   <li><b>A gap must be stated, not guessed.</b> A bullet whose own words hedge its claim ("may
+ *       be", "might", "could be", "in which case") is dropped ({@link #speculative}, #1127): on
+ *       #1124 a bullet said two criteria "may be" silver-MUST ones, "in which case" the answers
+ *       would be rejected, and the description was right. Quoted text, an issue's criterion and a
+ *       hedge the PR text itself makes are not the bullet's own words.
+ *   <li><b>A gap credited to the review needs a finding.</b> A bullet that says a review pass or a
+ *       finding flags its claim ({@link #creditsReview}) is kept by the summary only while an open
+ *       finding states it ({@link PrSummaryGenerator}); the screen here cannot see the findings.
  * </ul>
  *
  * <p>The screen runs on the summary call's own gaps and on the gaps carried from the previous round
@@ -259,6 +270,134 @@ final class DescriptionGapScreen {
           Pattern.compile("(?i)\\b(?:beyond|besides)\\b"),
           Pattern.compile("(?i)\\balso\\s++adds\\b"));
 
+  /**
+   * The hedges that make a gap a guess rather than a mismatch the change shows (#1127), exactly
+   * these words, one pattern per shape: "may", "might" and "could", with or without "n't"; and
+   * "possibly", "perhaps", "presumably", "maybe", "likely", "probably", "potentially" and
+   * "seemingly". After a {@link #CONSEQUENCE} in its sentence such a hedge only weighs what a
+   * stated gap leads to. A word joined to another by a hyphen is part of a name ("may-retry"), not
+   * a hedge.
+   */
+  private static final List<Pattern> SPECULATION =
+      List.of(
+          Pattern.compile("(?i)(?<![\\w-])(?:may|might|could)(?:n'?t)?+(?![\\w-])"),
+          Pattern.compile("(?i)(?<![\\w-])(?:possibly|perhaps|presumably|maybe)(?![\\w-])"),
+          Pattern.compile("(?i)(?<![\\w-])(?:likely|probably|potentially|seemingly)(?![\\w-])"));
+
+  /**
+   * Where the PR text splits into blocks before a hedge's context is looked up in it: a line break
+   * before a blank line or a new list item. Each block then splits at the sentence ends a bullet's
+   * hedge is bounded by ({@link #SENTENCE_END}). A line wrapped inside a sentence does not split
+   * it.
+   */
+  private static final Pattern SOURCE_BLOCK =
+      Pattern.compile("\n(?=[ \t\r]*+(?:\n|[-*+][ \t]|\\d++[.)][ \t]))");
+
+  /**
+   * The month, not the modal verb: "May" capitalised inside its sentence ("cut in May"), or before
+   * a day or a year ("May 3 is the cut-off").
+   */
+  private static final String MONTH = "May";
+
+  /** A day or a year opening the text after a hedge: what makes a "May" the month. */
+  private static final Pattern DATE_NEXT = Pattern.compile("^\\s++\\d");
+
+  /** A condition the claim rests on: always a guess, wherever it sits. */
+  private static final Pattern CONDITIONAL = Pattern.compile("(?i)\\bin\\s++which\\s++case\\b");
+
+  /**
+   * A word leading from a stated mismatch to what it causes: "`File.java` drops it, so callers
+   * might crash".
+   */
+  private static final Pattern CONSEQUENCE =
+      Pattern.compile("(?i)\\b(?:so|which\\s++means|meaning|causing|hence|therefore|thus)\\b");
+
+  /** A backticked span: code the bullet names as what the change does. */
+  private static final Pattern STATED_EVIDENCE = Pattern.compile("`[^`\n]++`");
+
+  /** Where a sentence or clause list ends, for {@link #CONSEQUENCE}. */
+  private static final Pattern SENTENCE_END = Pattern.compile("[.;!?](?=\\s|$)");
+
+  /**
+   * The words naming the review as a claim's source (#1127), exactly: "review", "reviews",
+   * "reviewer", "reviewers", "finding", "findings".
+   */
+  private static final Set<String> REVIEW_NOUNS =
+      Set.of("review", "reviews", "reviewer", "reviewers", "finding", "findings");
+
+  /**
+   * The verbs crediting a claim to the review, in every form a tense or voice gives them and no
+   * other word: "flags", "flagged", "noted", "found", "caught"… A word that only starts like one
+   * ("notebook", "pointer", "spotless", "sayings") is not one.
+   */
+  private static final Set<String> CREDIT_VERBS =
+      Set.of(
+          "flag",
+          "flags",
+          "flagged",
+          "flagging",
+          "note",
+          "notes",
+          "noted",
+          "noting",
+          "raise",
+          "raises",
+          "raised",
+          "raising",
+          "report",
+          "reports",
+          "reported",
+          "reporting",
+          "find",
+          "finds",
+          "found",
+          "warn",
+          "warns",
+          "warned",
+          "warning",
+          "suggest",
+          "suggests",
+          "suggested",
+          "suggesting",
+          "say",
+          "says",
+          "said",
+          "saying",
+          "point",
+          "points",
+          "pointed",
+          "pointing",
+          "spot",
+          "spots",
+          "spotted",
+          "spotting",
+          "catch",
+          "catches",
+          "caught",
+          "catching",
+          "highlight",
+          "highlights",
+          "highlighted",
+          "highlighting");
+
+  /**
+   * Word positions, at most, from a {@link #REVIEW_NOUNS} word to its {@link #CREDIT_VERBS} verb:
+   * five apart is four words between them.
+   */
+  static final int CREDIT_REACH = 5;
+
+  /**
+   * Words that make the word after them a noun: "a report", "the notes", "its warnings" name
+   * things, they do not credit a claim.
+   */
+  private static final Set<String> DETERMINERS =
+      Set.of(
+          "a", "an", "the", "this", "that", "these", "those", "its", "their", "his", "her", "our",
+          "your", "no", "any", "each", "every", "some");
+
+  /** A run of letters and digits: one word of a clause. */
+  private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}]++");
+
   /** Content words a PR-text sentence needs before a finding can paraphrase it. */
   static final int MIN_PARAPHRASED_WORDS = 5;
 
@@ -355,6 +494,170 @@ final class DescriptionGapScreen {
   private static String lastSegment(String name) {
     var trimmed = name.endsWith("/") ? name.substring(0, name.length() - 1) : name;
     return trimmed.substring(trimmed.lastIndexOf('/') + 1);
+  }
+
+  /**
+   * Whether {@code gap} hedges its own claim ({@link #SPECULATION}, #1127): a bullet saying a
+   * criterion "may be" a stricter one, "in which case" a save would fail, is a guess about a fact
+   * the change does not show, not a mismatch. Only the bullet's own words are read: quoted passages
+   * are the description's or the issue's, and a code span names a symbol; of a {@code Linked issue
+   * #N: <criterion> — <evidence>} gap only the evidence is, since the criterion is the issue's; a
+   * hedge that one sentence of {@code source} (the PR text and linked issues) holds with the word
+   * before it and the two after it paraphrases that text; and a hedge after a {@link #CONSEQUENCE}
+   * in its sentence ("`File.java` drops it, so callers might crash") weighs what a stated gap
+   * causes. "In which case" always makes the claim conditional.
+   */
+  static boolean speculative(String gap, String source) {
+    var unquoted = ownWords(gap);
+    if (CONDITIONAL.matcher(unquoted).find()) {
+      return true;
+    }
+    // One sentence per piece: a hedge's context never runs from one sentence into the next.
+    var haystack =
+        Arrays.stream(SOURCE_BLOCK.split(source))
+            .flatMap(SENTENCE_END::splitAsStream)
+            .map(DescriptionGapScreen::normalize)
+            .collect(Collectors.joining(" | ", " ", " "));
+    for (var pattern : SPECULATION) {
+      var hedge = pattern.matcher(unquoted);
+      while (hedge.find()) {
+        var lead = sentenceBefore(unquoted, hedge.start());
+        if (hedge.group().equals(MONTH)
+            && (!lead.isBlank()
+                || DATE_NEXT.matcher(unquoted).region(hedge.end(), unquoted.length()).find())) {
+          continue;
+        }
+        var context = hedgeInContext(lead, hedge.group(), unquoted.substring(hedge.end()));
+        var paraphrased = context != null && haystack.contains(" " + context + " ");
+        if (!paraphrased && !followsStatedMismatch(lead)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The hedge with the word before it in its sentence and the two after it, {@linkplain #normalize
+   * normalised}; {@code null} when its sentence lacks any of them, since a hedge alone matches any
+   * text that hedges.
+   */
+  private static String hedgeInContext(String lead, String hedge, String rest) {
+    var before = normalize(lead);
+    var end = SENTENCE_END.matcher(rest);
+    var after = normalize(end.find() ? rest.substring(0, end.start()) : rest).split(" ");
+    if (before.isEmpty() || after.length < 2) {
+      return null;
+    }
+    return before.substring(before.lastIndexOf(' ') + 1)
+        + " "
+        + normalize(hedge)
+        + " "
+        + after[0]
+        + " "
+        + after[1];
+  }
+
+  /**
+   * Whether {@code lead}, a sentence up to a hedge, ends in a {@link #CONSEQUENCE} of a mismatch
+   * the bullet states: the text before the consequence word names the code ({@link
+   * #STATED_EVIDENCE}), as "`Client.java` retries forever, so" does. "The description says the API
+   * is stable, so" states no mismatch, so a hedge after it is still a guess.
+   */
+  private static boolean followsStatedMismatch(String lead) {
+    var consequence = CONSEQUENCE.matcher(lead);
+    var at = -1;
+    while (consequence.find()) {
+      at = consequence.start();
+    }
+    if (at < 0) {
+      return false;
+    }
+    var stated = lead.substring(0, at);
+    return STATED_EVIDENCE.matcher(stated).find() || anyFinds(NAMED_FILES, stated);
+  }
+
+  /** The part of {@code text}'s sentence that comes before {@code at}. */
+  private static String sentenceBefore(String text, int at) {
+    var ends = SENTENCE_END.matcher(text).region(0, at);
+    var start = 0;
+    while (ends.find()) {
+      start = ends.end();
+    }
+    return text.substring(start, at);
+  }
+
+  /**
+   * Whether {@code gap} credits its claim to a review pass or a finding (#1127): "a review pass
+   * flags that …". Such a bullet is the review's claim, not the description's, and stands only
+   * while an open finding states it; on #1124 none did. A credit is a {@link #REVIEW_NOUNS} word
+   * and a {@link #CREDIT_VERBS} verb at most {@value #CREDIT_REACH} words apart, in either order,
+   * in one clause: "the earlier review had flagged", "reported during the review", "flagged by one
+   * of the reviewers". Quoted passages, and a clause the description is said to state ("the
+   * description says one reviewer reported downtime"), are the PR text's words, not the bullet's.
+   */
+  static boolean creditsReview(String gap) {
+    var own = ownWords(gap);
+    var clauses = new ArrayList<int[]>();
+    var start = 0;
+    var breaks = CLAUSE_BREAK.matcher(own);
+    while (breaks.find()) {
+      clauses.add(new int[] {start, breaks.start()});
+      start = breaks.end();
+    }
+    clauses.add(new int[] {start, own.length()});
+    for (var clause : clauses) {
+      for (var noun : creditsIn(own, clause[0], clause[1])) {
+        if (!attributedBefore(clauseOf(own.substring(0, noun)))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Where the review noun of each credit ({@link #creditsReview}) starts in {@code text} between
+   * {@code from} and {@code to}, in order. What precedes a noun in its clause says whose words the
+   * credit is: "the description says the review step …" is the description's.
+   */
+  private static List<Integer> creditsIn(String text, int from, int to) {
+    var words = WORD.matcher(text).region(from, to);
+    var nouns = new ArrayList<int[]>();
+    var verbs = new ArrayList<int[]>();
+    var previous = "";
+    for (var index = 0; words.find(); index++) {
+      var word = words.group().toLowerCase(Locale.ROOT);
+      if (REVIEW_NOUNS.contains(word)) {
+        nouns.add(new int[] {index, words.start()});
+      } else if (CREDIT_VERBS.contains(word) && !DETERMINERS.contains(previous)) {
+        verbs.add(new int[] {index, words.start()});
+      }
+      previous = word;
+    }
+    return nouns.stream()
+        .filter(
+            noun -> verbs.stream().anyMatch(verb -> Math.abs(noun[0] - verb[0]) <= CREDIT_REACH))
+        .map(noun -> noun[1])
+        .toList();
+  }
+
+  /**
+   * {@code gap} as the bullet's own words: of a {@code Linked issue #N: <criterion> — <evidence>}
+   * gap only the evidence, since the criterion is the issue's; quoted passages blanked, curly
+   * apostrophes folded to straight ones; and each code span, which names a symbol ("`may-retry`"),
+   * reduced to a placeholder that keeps its backticks as the evidence of a stated mismatch.
+   */
+  private static String ownWords(String gap) {
+    var linked = DescriptionGapCarryover.linkedIssueGap(gap);
+    var own = gap;
+    if (linked != null) {
+      var rest = linked.group(2);
+      own = rest.substring(DescriptionGapCarryover.criterionOf(rest).length());
+    }
+    return STATED_EVIDENCE
+        .matcher(QUOTED.matcher(foldQuotes(own)).replaceAll(" "))
+        .replaceAll("`code`");
   }
 
   /**

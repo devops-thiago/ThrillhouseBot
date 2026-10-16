@@ -436,4 +436,88 @@ class PriorOverviewCarryoverTest {
     }
     assertEquals(expected, kept.fileSummaries());
   }
+
+  private static ReviewResponse.Summary withPurpose(String purpose) {
+    return new ReviewResponse.Summary(
+        1,
+        0,
+        1,
+        0,
+        0,
+        "ok",
+        purpose,
+        List.of(),
+        List.of(),
+        FILES,
+        "flowchart TD\n  A --> B",
+        List.of());
+  }
+
+  /**
+   * #1095, node ThrillhouseBot-test#278 round 2: the purpose paragraph came back holding only the
+   * change's size, so the previous round's account of what the change does is kept.
+   */
+  @Test
+  void aPurposeThatOnlyStatesTheSizeGivesWayToThePreviousOne() {
+    // The paragraph node #278 posted, its computed CI sentence included.
+    var sizeOnly =
+        withPurpose(
+            "It is a feature-sized change (+555 lines across 6 directories) that also ships the"
+                + " container image and CI pipeline described in issue #262. CI on this commit"
+                + " fails the check \"test\" (failing tests \"accepts a team of exactly maxTeamSize"
+                + " members\"), which the finding \"Team of exactly MAX_TEAM_SIZE members is"
+                + " rejected (off-by-one)\" explains.");
+
+    var kept = PriorOverviewCarryover.fill(sizeOnly, context(List.of(round(PRIOR)), true));
+
+    assertEquals(PRIOR.prPurpose(), kept.prPurpose());
+    assertSame(
+        sizeOnly, PriorOverviewCarryover.fill(sizeOnly, context(List.of(round(PRIOR)), false)));
+  }
+
+  /** A purpose that says what the change does, even with its size, is the round's own. */
+  @Test
+  void aPurposeThatSaysWhatTheChangeDoesIsKept() {
+    var own = withPurpose("Adds a carrier poller (+555 lines across 6 directories).");
+
+    assertSame(own, PriorOverviewCarryover.fill(own, context(List.of(round(PRIOR)), true)));
+    var priorSizeOnly = withPurpose("A large change touching 12 files.");
+    var current = withPurpose("It is a small change of 40 lines.");
+    assertSame(
+        current,
+        PriorOverviewCarryover.fill(current, context(List.of(round(priorSizeOnly)), true)));
+  }
+
+  @Test
+  void aSizeStatementIsReadSentenceBySentence() {
+    assertTrue(
+        PriorOverviewCarryover.sizeOnly(
+            "It is a feature-sized change (+555 lines across 6 directories)."));
+    assertTrue(PriorOverviewCarryover.sizeOnly("A 1,204-line PR. It's 9 files across 3 modules."));
+    assertTrue(PriorOverviewCarryover.sizeOnly("Medium-sized diff."));
+    assertFalse(PriorOverviewCarryover.sizeOnly("A large PR. It adds a poller."));
+    assertFalse(PriorOverviewCarryover.sizeOnly("It is a large change."));
+    assertFalse(PriorOverviewCarryover.sizeOnly("Bumps 3 dependencies."));
+    assertFalse(PriorOverviewCarryover.sizeOnly(" "));
+    assertFalse(PriorOverviewCarryover.sizeOnly(null));
+    // A size statement may lead the first sentence with a side note after it, an addition or
+    // something the change also does; a clause saying what it does makes the purpose its own.
+    assertTrue(
+        PriorOverviewCarryover.sizeOnly(
+            "This is a large change (12 files; 900 lines), with a new CI job."));
+    assertTrue(
+        PriorOverviewCarryover.sizeOnly(
+            "It is a 900-line change, and it also bumps the base image."));
+    assertFalse(
+        PriorOverviewCarryover.sizeOnly(
+            "It is a feature-sized change that adds a team signup service."));
+    assertFalse(PriorOverviewCarryover.sizeOnly("It is a 900-line change, and it adds a poller."));
+    assertFalse(
+        PriorOverviewCarryover.sizeOnly(
+            "It is a feature-sized change (+555 lines). It adds a team signup service."));
+    // A paragraph that held only the CI sentence has no size statement.
+    assertFalse(
+        PriorOverviewCarryover.sizeOnly(
+            CiFailureCitations.SENTENCE_OPENING + "\"test\", which no finding explains."));
+  }
 }

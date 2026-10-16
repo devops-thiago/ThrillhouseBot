@@ -1005,4 +1005,107 @@ class DescriptionGapCarryoverTest {
             .apply(summary(List.of(), List.of()))
             .descriptionGaps());
   }
+
+  /**
+   * A gap that guesses, or credits its claim to a review no finding backs, is not listed, fresh or
+   * carried (#1127, PR #1124 summary comment 6200091800).
+   */
+  @Nested
+  class GuessesAndUnbackedCredits {
+
+    private static final String SPECULATIVE = DescriptionGapScreenTest.SPECULATIVE_1124;
+
+    private static final String PR_TEXT = DescriptionGapScreenTest.PR_1124;
+
+    /** A definite gap the diff shows. */
+    private static final String DEFINITE =
+        "The description says \"Every MUST is Met or N/A\"; `.bestpractices.json` answers"
+            + " `dco_signoff` as Unmet.";
+
+    private final PrSummaryGenerator generator = new PrSummaryGenerator(false);
+
+    /** An approving round with no findings open, as the 19:10 `/review` of #1124 was. */
+    private String renderApproved(ReviewResponse.Summary aiSummary) {
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              RiskLevel.LOW,
+              ReviewState.APPROVE,
+              false,
+              "",
+              List.of(),
+              List.of(),
+              0);
+      return generator.generate(10, 489, 5, List.of(), aiSummary, result);
+    }
+
+    /** The #1124 summary comment's section, as the push review posted it. */
+    private static List<IssueComment> postedRoundOne() {
+      return List.of(
+          summaryComment(
+              DescriptionGapCarryover.prTextMarker(PR_TEXT)
+                  + "\n## ThrillhouseBot PR Summary\n\n"
+                  + PrSummaryGenerator.GAPS_HEADING
+                  + "\nThe PR description does not fully match the change:\n- "
+                  + SPECULATIVE
+                  + "\n\n### Changes Overview\n"));
+    }
+
+    @Test
+    void theEntryOf1124IsRemoved() {
+      var carry = DescriptionGapCarryover.of(List.of(), BOT, "", PR_TEXT, false);
+
+      assertEquals(
+          List.of(), carry.apply(summary(List.of(SPECULATIVE), List.of())).descriptionGaps());
+      // With no PR text known the guess is still judged.
+      assertEquals(
+          List.of(),
+          DescriptionGapCarryover.Carry.NONE
+              .apply(summary(List.of(SPECULATIVE), List.of()))
+              .descriptionGaps());
+    }
+
+    @Test
+    void aDefiniteDiffBackedGapIsKept() {
+      var carry = DescriptionGapCarryover.of(List.of(), BOT, "", PR_TEXT, false);
+
+      var applied = carry.apply(summary(List.of(SPECULATIVE, DEFINITE), List.of()));
+
+      assertEquals(List.of(DEFINITE), applied.descriptionGaps());
+      assertTrue(renderApproved(applied).contains("- " + DEFINITE + "\n"));
+    }
+
+    @Test
+    void aSpeculativeEntryFromRoundOneIsNotShownAfterAnApprovingRoundTwoOnTheSameCommit() {
+      var carry = DescriptionGapCarryover.of(postedRoundOne(), BOT, "", PR_TEXT, true);
+      assertEquals(List.of(SPECULATIVE), carry.gaps());
+
+      var round2 = renderApproved(carry.apply(summary(List.of(), List.of())));
+
+      assertFalse(round2.contains(PrSummaryGenerator.GAPS_HEADING), round2);
+      assertFalse(round2.contains("crypto_used_network"), round2);
+      // A round whose summary call failed, and one with no PR text known, drop it as well.
+      assertNull(carry.apply(null));
+      var unscreened = DescriptionGapCarryover.of(postedRoundOne(), BOT, "");
+      assertFalse(
+          renderApproved(unscreened.apply(summary(List.of(), List.of())))
+              .contains(PrSummaryGenerator.GAPS_HEADING));
+    }
+
+    @Test
+    void aCarriedGapCreditingTheReviewLeavesWhenNoFindingBacksIt() {
+      var credited =
+          "The description says the DCO check covers every commit; a review pass flags that"
+              + " `dco.yml` skips merge commits.";
+      var carry = new DescriptionGapCarryover.Carry(List.of(credited), "");
+
+      var round2 = renderApproved(carry.apply(summary(List.of(), List.of())));
+
+      assertFalse(round2.contains(PrSummaryGenerator.GAPS_HEADING), round2);
+    }
+  }
 }

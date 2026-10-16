@@ -30,6 +30,7 @@ import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
@@ -63,7 +64,8 @@ import java.util.stream.IntStream;
  *       DescriptionGapScreen#omissionCovered});
  *   <li>it fails the {@link DescriptionGapScreen}: it quotes as the description's claim a passage
  *       the description does not contain, or cites neither the description nor a linked issue
- *       (#946, #964). The call's own gaps go through the same screen;
+ *       (#946, #964), or only guesses at a mismatch ("may be", "in which case", #1127), which is
+ *       judged even with no PR text known. The call's own gaps go through the same screen;
  *   <li>it is a {@code Linked issue #N} gap and the pull request's linked issues, read this round,
  *       no longer include {@code #N}. With no linked issues read at all (the feature off, or the
  *       read failed) nothing is dropped on that ground, since nothing can be judged;
@@ -235,14 +237,18 @@ final class DescriptionGapCarryover {
     }
 
     /**
-     * {@code list} held to the linked issue ({@link LinkedIssueCitations#screenGaps}), then through
-     * the {@link DescriptionGapScreen}, less the omission gaps an edited PR text now covers; only
-     * held to the issue with no PR text known.
+     * {@code list} held to the linked issue ({@link LinkedIssueCitations#screenGaps}) less the gaps
+     * that say there is no gap ({@link DescriptionGapScreen#concedesNoGap}, #1146) or only guess
+     * ({@link DescriptionGapScreen#speculative}, #1127), then through the {@link
+     * DescriptionGapScreen}, less the omission gaps an edited PR text now covers; only held to the
+     * issue and rid of concessions and guesses with no PR text known.
      */
     private List<String> screened(List<String> list) {
+      var claimed = Objects.requireNonNullElse(prText, "") + "\n" + linkedIssues;
       var held =
           LinkedIssueCitations.screenGaps(list, linkedIssues).stream()
               .filter(gap -> !DescriptionGapScreen.concedesNoGap(gap))
+              .filter(gap -> !DescriptionGapScreen.speculative(gap, claimed))
               .toList();
       if (prText == null) {
         return held;

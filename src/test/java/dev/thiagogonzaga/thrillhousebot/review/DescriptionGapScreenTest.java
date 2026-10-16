@@ -491,4 +491,198 @@ class DescriptionGapScreenTest {
   void aStatedGapOrAnUnmetLinkedIssueCriterionIsNotAConcession(String gap) {
     assertFalse(DescriptionGapScreen.concedesNoGap(gap));
   }
+
+  /** The #1124 Description vs. Implementation bullet (summary comment 6200091800). */
+  static final String SPECULATIVE_1124 =
+      "The description says \"Every MUST is Met or N/A\" with the Unmet ones all SHOULD or"
+          + " SUGGESTED; a review pass flags that crypto_used_network and version_tags_signed may"
+          + " be silver-MUST criteria, in which case the .bestpractices.json answers (Unmet) would"
+          + " be rejected by the bestpractices.dev save step the post-merge checklist describes.";
+
+  /** What #1124's description said, as the summary call read it. */
+  static final String PR_1124 =
+      """
+      Title: docs: prepare for the OpenSSF Best Practices silver level
+      Description:
+      `.bestpractices.json`: proposed status and justification for all 55 silver criteria.
+      Every MUST is Met or N/A. The Unmet ones are SHOULD or SUGGESTED.
+      Criteria that already have an answer may need editing by hand.
+      """;
+
+  @Test
+  void theSpeculativeEntryOf1124IsAGuess() {
+    assertTrue(DescriptionGapScreen.speculative(SPECULATIVE_1124, PR_1124));
+    assertTrue(DescriptionGapScreen.creditsReview(SPECULATIVE_1124));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The description says retries are capped, but the cap might never apply.",
+        "The description says the cache is bounded; the TTL could be ignored by `Cache.java`.",
+        "The description says the export is stable; the format may not be what clients parse.",
+        "Linked issue #113: at most 8 listings per seller — the cap may be enforced elsewhere.",
+        // A hedge ending the bullet.
+        "The description says the cap is enforced, and it might.",
+        // A condition is a guess even after a consequence word.
+        "The description says the cap holds, so the save is rejected in which case it fails.",
+        // A consequence word after no stated mismatch does not make the guess a gap.
+        "The description says the API is stable, so clients might break.",
+        // Modal verbs over another verb, contracted, and the hedging adverbs.
+        "The description says retries are capped, but the cap may expire.",
+        "The description says the DCO check runs on every push; the workflow could skip forks.",
+        "The description says the limit holds; it couldn't be enforced on a retry.",
+        "The description says the limit holds; it couldn’t be enforced on a retry.",
+        "The description says the export is atomic; it is possibly written in place.",
+        "The description says the cap holds; maybe the next retry drops it.",
+        "The description says the cache is bounded; it is likely unbounded.",
+        "The description says the export is atomic; the rename probably happens late.",
+        "The description says the token is checked; it is potentially reused.",
+        "The description says the queue drains; it seemingly stalls.",
+        // A hedge opening its sentence, the capitalised modal verb included.
+        "The description says the export is atomic. Perhaps the rename is skipped.",
+        "The description says the export is atomic. May be written in place."
+      })
+  void aHedgeInTheBulletsOwnWordsIsAGuess(String gap) {
+    assertTrue(DescriptionGapScreen.speculative(gap, RUST_159));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // A definite, diff-backed gap.
+        "The description says the README moves unchanged; `docs/RUST-V10.md` rewrites it.",
+        // A definite gap weighing what it causes.
+        "The description says retries are capped; `Client.java` retries forever, so callers"
+            + " might hang. Queue.java is unbounded, which means data may be dropped.",
+        // The hedge is the description's own, quoted.
+        "The description says \"tokens may be reused once\", but `Auth.java` rejects a reuse.",
+        // The month is not the modal verb.
+        "The description says the release is cut in May, but `release.yml` hard-codes June.",
+        "The description says the cut-off moved. May 3 is still in `release.yml`.",
+        // A symbol a code span names is not a hedge, nor is a hyphenated name.
+        "The description says the `may-retry` flag is respected, but `Client.java` ignores it.",
+        "The description says the may-retry flag is respected, but Client.java ignores it.",
+        "The description says perhaps-tagged files ship; the release-could list drops them.",
+        // The hedge is the issue's criterion, not the bullet's evidence.
+        "Linked issue #113: the cache may be bypassed with a header — no changed file reads one.",
+        // Nothing follows a dash, so the whole text is the criterion.
+        "Linked issue #113: listings might expire past a TTL",
+        // "Mighty" is not a hedge, nor is the hyphenated name "maybe-tagged".
+        "The description says the mighty README moves; maybe-tagged files are left out."
+      })
+  void aStatedGapIsNotAGuess(String gap) {
+    assertFalse(DescriptionGapScreen.speculative(gap, RUST_159));
+  }
+
+  @Test
+  void aHedgeTheDescriptionItselfMakesIsNotTheBulletsGuess() {
+    var paraphrased =
+        "The description says answers that may be stale are edited, but none are listed.";
+    var source = PR_1124 + "Answers that may be stale are kept.";
+
+    assertFalse(DescriptionGapScreen.speculative(paraphrased, source));
+    assertTrue(DescriptionGapScreen.speculative(paraphrased, PR_1124));
+    // Punctuation around the hedge does not break its context: normalising strips it.
+    assertFalse(
+        DescriptionGapScreen.speculative(
+            "The description says answers may, however, be edited by hand, but none are.",
+            "Answers may, however, be edited by hand."));
+    // A hedge with no word after it paraphrases nothing, whatever the source holds.
+    assertTrue(
+        DescriptionGapScreen.speculative(
+            "The description says the cache is bounded, and the bound may be.", source));
+    // The same hedge and verb about another subject is the bullet's own guess.
+    assertTrue(
+        DescriptionGapScreen.speculative(
+            "The description says the cache is bounded; the retry loop might collapse the pool.",
+            "The rate limiter might collapse under sustained load."));
+    // A bullet with no full stop is one sentence.
+    assertFalse(
+        DescriptionGapScreen.speculative(
+            "The description says answers that may be stale are edited, but none are", source));
+    // A hedge ending its sentence takes no context from the next one.
+    assertTrue(
+        DescriptionGapScreen.speculative(
+            "The description says the cap holds, and the bound might. Be checked against it.",
+            "The bound might be checked against the source in the old format."));
+    // A sentence the source wraps across lines is still one sentence; list items are not.
+    assertFalse(
+        DescriptionGapScreen.speculative(
+            "The description says answers that may be stale are kept verbatim, but no file does.",
+            "Answers that may\nbe stale are kept."));
+    assertTrue(
+        DescriptionGapScreen.speculative(
+            "The description says answers that may be stale are kept verbatim, but no file does.",
+            "- Answers that may\n- be stale entries are dropped"));
+    assertTrue(
+        DescriptionGapScreen.speculative(
+            "The description says answers that may be stale are kept verbatim, but no file does.",
+            "Answers that may\n  \nbe stale entries are dropped"));
+    // A CRLF blank line splits the same way.
+    assertTrue(
+        DescriptionGapScreen.speculative(
+            "The description says answers that may be stale are kept verbatim, but no file does.",
+            "Answers that may\r\n\r\nbe stale entries are dropped"));
+    // A hedge's context is read within one sentence of the source.
+    assertTrue(
+        DescriptionGapScreen.speculative(
+            "The description says entries that may be stale are dropped, but none are.",
+            "Old answers that may. Be stale entries are dropped."));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "A review pass flags that the DCO check skips merge commits.",
+        "The earlier review noted the workflow is unpinned.",
+        "The description says the job is pinned, as flagged by the review.",
+        "One finding reports the description's claim is wrong.",
+        "One finding raises the DCO question; nothing in the diff adds a sign-off.",
+        "A finding found that `dco.yml` skips merges.",
+        "The review says the description overstates the cap.",
+        "The description says every commit is signed; the gap was found by the review.",
+        "The description says X; the reviewer found `dco.yml` does Y.",
+        // An auxiliary between the review and its verb, and passives with any preposition.
+        "The earlier review had flagged the workflow is unpinned.",
+        "One finding has reported the description's claim is wrong.",
+        "The description says every commit is signed; the gap was reported during the review.",
+        "The description says every commit is signed; it was flagged by one of the reviewers.",
+        // A later credit in the clause counts when the first is the description's.
+        "The description says one reviewer reported it without the earlier review flagging it."
+      })
+  void aBulletCreditingTheReviewIsRecognised(String gap) {
+    assertTrue(DescriptionGapScreen.creditsReview(gap));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The description says the README moves unchanged; `docs/RUST-V10.md` rewrites it.",
+        "The description promises a review step for releases, but no workflow runs one.",
+        "The description says findings are posted inline, but `Publisher.java` lists them.",
+        // The credit is the description's own words: stated, or quoted.
+        "The description says one reviewer reported downtime; `health.sh` reports healthy.",
+        "The description says \"a review pass flags every commit\", but `dco.yml` skips merges.",
+        "The checklist is done, but `a review pass flags every commit` is not backed here.",
+        "The description says one finding reports downtime; `health.sh` passes.",
+        "The description says the job was flagged by the review, but `ci.yml` passes.",
+        // The criterion of a linked-issue gap is the issue's words.
+        "Linked issue #113: a reviewer flags every listing over the cap — no changed file does.",
+        // A reviewer named without a verb crediting the claim.
+        "The description says a review step gates releases, but no workflow runs one.",
+        // A crediting stem used as a noun.
+        "The description says findings are posted inline, `Publisher.java` shows a report the"
+            + " review filters out.",
+        "The description says alerts fire; `Alerts.java` drops every warning the reviewers see.",
+        // A review noun with no crediting verb near it.
+        "The description says the job is pinned; no workflow runs a review step.",
+        "The release notes are long; the description never mentions where review happens.",
+        // Words that only start like a crediting verb or a review noun.
+        "The description says the review notebook pointer is spotless; `Doc.java` drops it.",
+        "The description says reviewed sayings are kept; `Log.java` drops them."
+      })
+  void aBulletNotCreditingTheReviewIsNotRecognised(String gap) {
+    assertFalse(DescriptionGapScreen.creditsReview(gap));
+  }
 }
