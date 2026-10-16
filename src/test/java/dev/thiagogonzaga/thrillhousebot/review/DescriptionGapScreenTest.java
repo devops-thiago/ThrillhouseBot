@@ -473,8 +473,10 @@ class DescriptionGapScreenTest {
             + " might hang. Queue.java is unbounded, which means data may be dropped.",
         // The hedge is the description's own, quoted.
         "The description says \"tokens may be reused once\", but `Auth.java` rejects a reuse.",
-        // A symbol a code span names is not a hedge.
+        // A symbol a code span names is not a hedge, nor is a hyphenated name.
         "The description says the `may-retry` flag is respected, but `Client.java` ignores it.",
+        "The description says the may-retry flag is respected, but Client.java ignores it.",
+        "The description says perhaps-tagged files ship; the release-could list drops them.",
         // The hedge is the issue's criterion, not the bullet's evidence.
         "Linked issue #113: the cache may be bypassed with a header — no changed file reads one.",
         // Nothing follows a dash, so the whole text is the criterion.

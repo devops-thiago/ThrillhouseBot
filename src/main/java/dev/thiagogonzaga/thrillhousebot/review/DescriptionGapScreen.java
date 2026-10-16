@@ -271,12 +271,13 @@ final class DescriptionGapScreen {
    * The hedges that make a gap a guess rather than a mismatch the change shows (#1127), one pattern
    * per shape: the modal verbs ("may be", "could skip", "might", "couldn't"), and the hedging
    * adverbs. After a {@link #CONSEQUENCE} in its sentence such a hedge only weighs what a stated
-   * gap leads to.
+   * gap leads to. A word joined to another by a hyphen is part of a name ("may-retry"), not a
+   * hedge.
    */
   private static final List<Pattern> SPECULATION =
       List.of(
-          Pattern.compile("(?i)\\b(?:may|might|could)(?:n'?t)?+\\b"),
-          Pattern.compile("(?i)\\b(?:possibly|perhaps|presumably)\\b"));
+          Pattern.compile("(?i)(?<![\\w-])(?:may|might|could)(?:n'?t)?+(?![\\w-])"),
+          Pattern.compile("(?i)(?<![\\w-])(?:possibly|perhaps|presumably)(?![\\w-])"));
 
   /** Where the PR text splits into sentences before a hedge's context is looked up in it. */
   private static final Pattern SOURCE_SENTENCE = Pattern.compile("[.!?;:](?=\\s|$)|\n");
