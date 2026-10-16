@@ -106,7 +106,12 @@ final class InventedArtifacts {
       Pattern.compile("(?i)\\.(?:png|jpe?g|gif|ico|webp|pdf|woff2?|ttf|jar|zip|gz)$");
 
   /** A sentence about taking something out: "removes", "deleted", "drops", "retires". */
-  private static final Pattern REMOVAL = Pattern.compile("(?i)\\b(?:remov|delet|drop|retir)\\w*+");
+  /** A negation in an artifact's clause: "does not add", "never ships", "without". */
+  private static final Pattern NEGATION =
+      Pattern.compile("(?i)\\b(?:not|never|without|no\\s++longer)\\b|n['’]t\\b");
+
+  private static final Pattern REMOVAL =
+      Pattern.compile("(?i)\\b(?:remov|delet|drop|retir)\\w*+(?!-)");
 
   /** A verb of addition, which takes the artifact after it away from an earlier removal verb. */
   private static final Pattern ADDITION =
@@ -194,7 +199,9 @@ final class InventedArtifacts {
     var text = CAMEL_HUMP.matcher(sentence.replace("`", "")).replaceAll(" ");
     var introduced = INTRODUCED.matcher(text);
     while (introduced.find()) {
-      if (removedInClause(text.substring(0, introduced.start()))) {
+      var lead = text.substring(0, introduced.start());
+      // "does not add a settings page" says there is none, which is no invention.
+      if (removedInClause(lead) || NEGATION.matcher(clauseOf(lead)).find()) {
         continue;
       }
       var qualifier =
@@ -214,18 +221,23 @@ final class InventedArtifacts {
    * adds a …" and "removes cruft, a … is added" are not.
    */
   private static boolean removedInClause(String lead) {
-    var breaks = CLAUSE_END.matcher(lead);
-    var start = 0;
-    while (breaks.find()) {
-      start = breaks.end();
-    }
-    var clause = lead.substring(start);
+    var clause = clauseOf(lead);
     var removal = REMOVAL.matcher(clause);
     var last = -1;
     while (removal.find()) {
       last = removal.end();
     }
     return last >= 0 && !ADDITION.matcher(clause.substring(last)).find();
+  }
+
+  /** The clause {@code lead} ends in: what follows its last punctuation or dash. */
+  private static String clauseOf(String lead) {
+    var breaks = CLAUSE_END.matcher(lead);
+    var start = 0;
+    while (breaks.find()) {
+      start = breaks.end();
+    }
+    return lead.substring(start);
   }
 
   /**

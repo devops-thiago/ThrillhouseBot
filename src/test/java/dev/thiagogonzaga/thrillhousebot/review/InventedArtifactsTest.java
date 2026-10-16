@@ -145,6 +145,10 @@ class InventedArtifactsTest {
     assertFalse(InventedArtifacts.invents("It has removed a settings page.", change));
     assertFalse(InventedArtifacts.invents("It deletes the old flow and a settings page.", change));
     assertTrue(InventedArtifacts.invents("It removes cruft, a settings page is added.", change));
+    // A hyphenated word is not a removal verb, and a negated artifact is no invention.
+    assertTrue(InventedArtifacts.invents("It adds a drop-down, a settings page too.", change));
+    assertFalse(InventedArtifacts.invents("It does not add a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It doesn't ship a settings page.", change));
     // A removal that does not govern the artifact leaves it judged.
     assertTrue(
         InventedArtifacts.invents("It drops the old flow then adds a settings page.", change));
