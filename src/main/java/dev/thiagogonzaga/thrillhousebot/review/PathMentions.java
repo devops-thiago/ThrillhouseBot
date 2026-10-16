@@ -235,7 +235,7 @@ final class PathMentions {
 
   /** Where a shell command starts on a line: after {@code RUN}, a separator or a pipe. */
   private static final Pattern COMMAND_START =
-      Pattern.compile("(?:^\\s*+RUN\\s|&&|\\|\\||[;|(])\\s*+", Pattern.CASE_INSENSITIVE);
+      Pattern.compile("(?:(?:^\\s*+RUN\\s)|&&|\\|\\||[;|(])\\s*+", Pattern.CASE_INSENSITIVE);
 
   /** A shell command whose last argument is a path it writes, with its options and arguments. */
   private static final Pattern WRITING_COMMAND =
@@ -707,20 +707,26 @@ final class PathMentions {
           || lines.stream().anyMatch(line -> line.contains(path))) {
         continue;
       }
-      var fits = new LinkedHashSet<String>();
-      for (String line : lines) {
-        var candidates = ABSOLUTE_PATH.matcher(line);
-        while (candidates.find()) {
-          if (line.contains(before + candidates.group() + after)) {
-            fits.add(candidates.group());
-          }
-        }
-      }
+      var fits = pathsBetween(before, after, lines);
       if (fits.size() == 1) {
         return before + fits.getFirst() + after;
       }
     }
     return quote;
+  }
+
+  /** The absolute paths of {@code lines} that {@code before} and {@code after} surround. */
+  private static List<String> pathsBetween(String before, String after, List<String> lines) {
+    var fits = new LinkedHashSet<String>();
+    for (String line : lines) {
+      var candidates = ABSOLUTE_PATH.matcher(line);
+      while (candidates.find()) {
+        if (line.contains(before + candidates.group() + after)) {
+          fits.add(candidates.group());
+        }
+      }
+    }
+    return List.copyOf(fits);
   }
 
   /**
@@ -806,13 +812,11 @@ final class PathMentions {
 
   /** A patch's code lines: hunk headers and "no newline" notes left out, diff markers removed. */
   private static List<String> codeLines(String patch) {
-    var lines = new ArrayList<String>();
-    for (String line : patch.split("\n", -1)) {
-      if (!line.isEmpty() && !line.startsWith("@@") && !line.startsWith("\\")) {
-        lines.add(line.substring(1));
-      }
-    }
-    return List.copyOf(lines);
+    return patch
+        .lines()
+        .filter(line -> !line.isEmpty() && !line.startsWith("@@") && !line.startsWith("\\"))
+        .map(line -> line.substring(1))
+        .toList();
   }
 
   /**
