@@ -24,7 +24,6 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -43,7 +42,7 @@ import java.util.stream.Stream;
  *       "docs/settings.md"), or an added line naming the qualifier and the kind together ("settings
  *       page", "SettingsScreen");
  *   <li>a migration: a changed path or an added line naming a migration;
- *   <li>an endpoint: an added line holding a qualifier word, where routes are declared.
+ *   <li>an endpoint: an added line holding a qualifier word.
  * </ul>
  *
  * <p>A word of the qualifier matches a word of at least {@value #MIN_FAMILY_CHARS} letters it
@@ -192,10 +191,10 @@ final class InventedArtifacts {
                                 && qualifier.stream().anyMatch(q -> holdsFamily(words, q)));
       };
     }
-  }
 
-  private static boolean holdsFamily(List<String> words, String wanted) {
-    return words.stream().anyMatch(word -> family(word, wanted));
+    private static boolean holdsFamily(List<String> words, String wanted) {
+      return words.stream().anyMatch(word -> family(word, wanted));
+    }
   }
 
   /** Whether two lower-case words are one, or one of them starts the other. */
@@ -214,6 +213,6 @@ final class InventedArtifacts {
     return Arrays.stream(WORD_SPLIT.split(CAMEL_HUMP.matcher(text).replaceAll(" ")))
         .filter(word -> !word.isEmpty())
         .map(word -> word.toLowerCase(Locale.ROOT))
-        .collect(Collectors.toList());
+        .toList();
   }
 }
