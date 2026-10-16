@@ -318,33 +318,66 @@ final class DescriptionGapScreen {
   private static final Pattern SENTENCE_END = Pattern.compile("[.;!?](?=\\s|$)");
 
   /**
-   * The words naming the review as a claim's source (#1127), matched as word prefixes: "review",
+   * The words naming the review as a claim's source (#1127), exactly: "review", "reviews",
    * "reviewer", "reviewers", "finding", "findings".
    */
-  private static final List<String> REVIEW_NOUNS = List.of("review", "finding");
+  private static final Set<String> REVIEW_NOUNS =
+      Set.of("review", "reviews", "reviewer", "reviewers", "finding", "findings");
 
   /**
-   * The verbs crediting a claim to the review, matched as word prefixes so every tense and voice
-   * reads alike: flag, note, raise, report, find, found, warn, suggest, say, said, point, spot,
-   * catch, caught, highlight.
+   * The verbs crediting a claim to the review, in every form a tense or voice gives them and no
+   * other word: "flags", "flagged", "noted", "found", "caught"… A word that only starts like one
+   * ("notebook", "pointer", "spotless", "sayings") is not one.
    */
-  private static final List<String> CREDIT_VERBS =
-      List.of(
+  private static final Set<String> CREDIT_VERBS =
+      Set.of(
           "flag",
+          "flags",
+          "flagged",
+          "flagging",
           "note",
+          "notes",
+          "noted",
+          "noting",
           "raise",
+          "raises",
+          "raised",
+          "raising",
           "report",
+          "reports",
+          "reported",
+          "reporting",
           "find",
+          "finds",
           "found",
           "warn",
+          "warns",
+          "warned",
+          "warning",
           "suggest",
+          "suggests",
+          "suggested",
+          "suggesting",
           "say",
+          "says",
           "said",
+          "saying",
           "point",
+          "points",
+          "pointed",
+          "pointing",
           "spot",
+          "spots",
+          "spotted",
+          "spotting",
           "catch",
+          "catches",
           "caught",
-          "highlight");
+          "catching",
+          "highlight",
+          "highlights",
+          "highlighted",
+          "highlighting");
 
   /**
    * Word positions, at most, from a {@link #REVIEW_NOUNS} word to its {@link #CREDIT_VERBS} verb:
@@ -594,9 +627,9 @@ final class DescriptionGapScreen {
     var previous = "";
     for (var index = 0; words.find(); index++) {
       var word = words.group().toLowerCase(Locale.ROOT);
-      if (startsWithAny(word, REVIEW_NOUNS)) {
+      if (REVIEW_NOUNS.contains(word)) {
         nouns.add(new int[] {index, words.start()});
-      } else if (startsWithAny(word, CREDIT_VERBS) && !DETERMINERS.contains(previous)) {
+      } else if (CREDIT_VERBS.contains(word) && !DETERMINERS.contains(previous)) {
         verbs.add(new int[] {index, words.start()});
       }
       previous = word;
@@ -606,10 +639,6 @@ final class DescriptionGapScreen {
             noun -> verbs.stream().anyMatch(verb -> Math.abs(noun[0] - verb[0]) <= CREDIT_REACH))
         .map(noun -> noun[1])
         .toList();
-  }
-
-  private static boolean startsWithAny(String word, List<String> stems) {
-    return stems.stream().anyMatch(word::startsWith);
   }
 
   /**

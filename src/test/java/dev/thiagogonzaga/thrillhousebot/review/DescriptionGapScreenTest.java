@@ -595,7 +595,10 @@ class DescriptionGapScreenTest {
         "The description says alerts fire; `Alerts.java` drops every warning the reviewers see.",
         // A review noun with no crediting verb near it.
         "The description says the job is pinned; no workflow runs a review step.",
-        "The release notes are long; the description never mentions where review happens."
+        "The release notes are long; the description never mentions where review happens.",
+        // Words that only start like a crediting verb or a review noun.
+        "The description says the review notebook pointer is spotless; `Doc.java` drops it.",
+        "The description says reviewed sayings are kept; `Log.java` drops them."
       })
   void aBulletNotCreditingTheReviewIsNotRecognised(String gap) {
     assertFalse(DescriptionGapScreen.creditsReview(gap));
