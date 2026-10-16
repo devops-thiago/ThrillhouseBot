@@ -1420,7 +1420,10 @@ public class FindingVerificationService {
         : null;
   }
 
-  /** A finding's location and title, which the audit never rewrites. */
+  /**
+   * A finding's location and title, the key a finding is paired with its raised copy on. A finding
+   * the audit retitled or moved has no raised copy under it.
+   */
   private static String identity(ReviewResponse.Finding finding) {
     return finding.file() + "\u0000" + finding.line() + "\u0000" + finding.title();
   }
