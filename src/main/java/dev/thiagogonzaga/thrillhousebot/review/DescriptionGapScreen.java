@@ -298,30 +298,26 @@ final class DescriptionGapScreen {
   private static final Pattern SENTENCE_END = Pattern.compile("[.;!?](?=\\s|$)");
 
   /**
-   * A review pass or a reviewer as a clause's subject, "a review pass", "the earlier review", "one
-   * reviewer": a credit when a {@link #REVIEW_VERB} follows it.
+   * A review pass, a reviewer or a finding as a clause's subject, "a review pass", "the earlier
+   * review", "one reviewer", "a finding": a credit when a {@link #REVIEW_VERB} follows it. One
+   * pattern per shape.
    */
-  private static final Pattern REVIEW_SUBJECT =
-      Pattern.compile(
-          "(?i)\\b(?:an?|the|one|another)\\s++(?:(?:earlier|previous|prior)\\s++)?"
-              + "review(?:er)?+(?:\\s++(?:pass|round|call))?+");
-
-  /** What a {@link #REVIEW_SUBJECT} does when it credits a claim: flags, noted, found… */
-  private static final Pattern REVIEW_VERB =
-      Pattern.compile("(?i)\\s++(?:flag|note|raise|report|find|found|warn|suggest)");
-
-  /**
-   * A review pass or a finding named as what flags a gap's claim (#1127), besides a {@link
-   * #REVIEW_SUBJECT} with its verb: "flagged by the review", "a finding reports". One pattern per
-   * shape.
-   */
-  private static final List<Pattern> REVIEW_CREDIT =
+  private static final List<Pattern> REVIEW_SUBJECTS =
       List.of(
           Pattern.compile(
-              "(?i)\\b(?:flagged|noted|raised|reported)\\s++(?:by|in)\\s++"
-                  + "(?:an?|the)\\s++(?:(?:earlier|previous|prior)\\s++)?review"),
-          Pattern.compile(
-              "(?i)\\b(?:an?|the|one)\\s++finding\\s++(?:flag|note|say|report|warn|suggest)\\w*+"));
+              "(?i)\\b(?:an?|the|one|another)\\s++(?:(?:earlier|previous|prior)\\s++)?"
+                  + "review(?:er)?+(?:\\s++(?:pass|round|call))?+"),
+          Pattern.compile("(?i)\\b(?:an?|the|one|another)\\s++finding"));
+
+  /** What a {@link #REVIEW_SUBJECTS} subject does when it credits a claim: flags, noted, found… */
+  private static final Pattern REVIEW_VERB =
+      Pattern.compile("(?i)\\s++(?:flag|note|raise|report|find|found|warn|suggest|say)");
+
+  /** A claim credited to the review in the passive (#1127): "flagged by the review". */
+  private static final Pattern REVIEW_PASSIVE =
+      Pattern.compile(
+          "(?i)\\b(?:flagged|noted|raised|reported)\\s++(?:by|in)\\s++"
+              + "(?:an?|the)\\s++(?:(?:earlier|previous|prior)\\s++)?review");
 
   /** Content words a PR-text sentence needs before a finding can paraphrase it. */
   static final int MIN_PARAPHRASED_WORDS = 5;
@@ -512,27 +508,27 @@ final class DescriptionGapScreen {
   }
 
   /**
-   * Whether {@code gap} credits its claim to a review pass or a finding ({@link #REVIEW_CREDIT},
-   * #1127): "a review pass flags that …". Such a bullet is the review's claim, not the
-   * description's, and stands only while an open finding states it; on #1124 none did. Quoted
-   * passages, and a clause the description is said to state ("the description says one reviewer
-   * reported downtime"), are the PR text's words, not the bullet's.
+   * Whether {@code gap} credits its claim to a review pass or a finding ({@link #REVIEW_SUBJECTS},
+   * {@link #REVIEW_PASSIVE}, #1127): "a review pass flags that …". Such a bullet is the review's
+   * claim, not the description's, and stands only while an open finding states it; on #1124 none
+   * did. Quoted passages, and a clause the description is said to state ("the description says one
+   * reviewer reported downtime"), are the PR text's words, not the bullet's.
    */
   static boolean creditsReview(String gap) {
     var own = ownWords(gap);
-    var subject = REVIEW_SUBJECT.matcher(own);
-    while (subject.find()) {
-      if (REVIEW_VERB.matcher(own).region(subject.end(), own.length()).lookingAt()
-          && !attributedBefore(clauseOf(own.substring(0, subject.start())))) {
-        return true;
-      }
-    }
-    for (var pattern : REVIEW_CREDIT) {
-      var credit = pattern.matcher(own);
-      while (credit.find()) {
-        if (!attributedBefore(clauseOf(own.substring(0, credit.start())))) {
+    for (var pattern : REVIEW_SUBJECTS) {
+      var subject = pattern.matcher(own);
+      while (subject.find()) {
+        if (REVIEW_VERB.matcher(own).region(subject.end(), own.length()).lookingAt()
+            && !attributedBefore(clauseOf(own.substring(0, subject.start())))) {
           return true;
         }
+      }
+    }
+    var passive = REVIEW_PASSIVE.matcher(own);
+    while (passive.find()) {
+      if (!attributedBefore(clauseOf(own.substring(0, passive.start())))) {
+        return true;
       }
     }
     return false;

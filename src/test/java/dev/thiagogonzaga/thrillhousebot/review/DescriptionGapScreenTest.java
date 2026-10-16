@@ -522,6 +522,9 @@ class DescriptionGapScreenTest {
         "The earlier review noted the workflow is unpinned.",
         "The description says the job is pinned, as flagged by the review.",
         "One finding reports the description's claim is wrong.",
+        "One finding raises the DCO question; nothing in the diff adds a sign-off.",
+        "A finding found that `dco.yml` skips merges.",
+        "The review says the description overstates the cap.",
         "The description says X; the reviewer found `dco.yml` does Y."
       })
   void aBulletCreditingTheReviewIsRecognised(String gap) {
