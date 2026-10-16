@@ -701,6 +701,67 @@ class LinkedIssueCriteriaTest {
         rendered);
   }
 
+  /** ThrillhouseBot#1146, whose criteria hold the word "dropped" themselves. */
+  private static final String ISSUE_1146 =
+      """
+      Issues this pull request is linked to: #1146
+
+      ### Issue #1146: Drop gap entries that concede there is no gap
+      Linked by: a closing keyword in the PR body
+      Acceptance criteria (from the issue):
+      - [ ] Tests from the #1134 and #1142 bullets: dropped.
+      - [ ] Test from the #1141 bullet: kept.
+      """;
+
+  /** The two overview sentences of the #1147 summary on server rc5, word for word. */
+  private static final String OVERVIEW_1147 =
+      "This pull request fixes description-gap filtering in ThrillhouseBot's review pipeline:"
+          + " DescriptionGapScreen gains new recognition rules for bullets whose own words concede"
+          + " there is no mismatch (e.g. \"(disclosed, not contradicted)\", \"matches the diff —"
+          + " no gap\") or that only say the material cannot confirm a claim, while"
+          + " DescriptionGapCarryover's screened step drops such bullets both fresh and carried,"
+          + " never dropping a \"Linked issue #N:\" gap. The change spans the review main code and"
+          + " its test suite across three directories, plus one-line updates to AGENTS.md and"
+          + " CHANGELOG.md, matching the acceptance criteria in #1146 (the #1134 and #1142 bullets"
+          + " dropped, the #1141 linked-issue bullet kept).";
+
+  @Test
+  void anOverviewMatchingTheCriteriaIsNoUnmetCriterion() {
+    // #1147 on rc5: "dropped" is the criterion's own word and the sentence says the change
+    // matches the criteria; neither is a not-met signal.
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_1146, List.of(), OVERVIEW_1147, Map.of()));
+    for (var praise :
+        List.of(
+            "The change meets the acceptance criteria of #1146: the #1134 and #1142 bullets are"
+                + " dropped.",
+            "The #1134 and #1142 bullets are dropped, satisfying the issue's acceptance criteria.")) {
+      assertEquals(
+          LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_1146, List.of(), praise, Map.of()), praise);
+    }
+  }
+
+  @Test
+  void aCriterionStatedUnmetStillGetsALineWhenItsOwnWordsAppear() {
+    for (var overview :
+        List.of(
+            "The change does not meet the acceptance criteria in #1146: the #1134 and #1142"
+                + " bullets are not dropped.",
+            "The change doesn't match the acceptance criteria in #1146: the #1134 and #1142"
+                + " bullets are not dropped.",
+            "The issue's 'Tests from the #1134 and #1142 bullets' criterion is not met.",
+            "Contrary to the acceptance criteria, the #1134 and #1142 bullets are not dropped in"
+                + " the tests.")) {
+      var lines = unmet(ISSUE_1146, List.of(), overview, Map.of()).lines();
+      assertEquals(
+          List.of(
+              "Linked issue #1146: Tests from the #1134 and #1142 bullets: dropped. — the overview"
+                  + " above reports it unmet"),
+          lines,
+          overview);
+    }
+  }
+
   /** The summary renders the lines in place of the finding bullets they point at. */
   @Test
   void theSectionNamesTheIssueAndItsCriterionAndTheLineIsNotCarried() {
