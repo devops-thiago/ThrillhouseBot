@@ -117,7 +117,8 @@ final class LinkedIssueCriteria {
       Pattern.compile("(?i)\\b(?:wording|walkthrough|summary|mention|phrasing|docs?)\\b");
 
   /** What turns a negation into an affirmation: "not only", "not just", "not merely". */
-  private static final Pattern AFFIRMING = Pattern.compile("(?i)\\s++(?:only|just|merely)\\b");
+  private static final Pattern AFFIRMING =
+      Pattern.compile("(?i)\\s++(?:only|just|merely|simply)\\b");
 
   /** Words, from the start, that say an ask is fulfilled: "met", "implemented", "satisfied"… */
   private static final List<String> FULFILMENT =
@@ -252,25 +253,33 @@ final class LinkedIssueCriteria {
     }
 
     /**
-     * Places criterion {@code at}'s line, ending in {@code evidence}, when it still wants one
-     * ({@link #open}); whether it did.
+     * Places criterion {@code at}'s line, ending in {@code evidence}, when it still wants one: it
+     * was found, none is placed yet, and no {@code Linked issue} gap names it. Whether it did.
      */
     boolean place(int at, String evidence) {
-      if (!open(at, lines, criteria, gaps)) {
+      if (at < 0 || lines.containsKey(at) || named(criteria.get(at))) {
         return false;
       }
-      lines.put(at, line(key, criteria.get(at)) + evidence);
+      lines.put(
+          at, "Linked issue " + key + ": " + MarkdownSafe.oneLine(criteria.get(at)) + evidence);
       return true;
     }
-  }
 
-  /**
-   * Whether criterion {@code at} still wants a line: one was found, none is placed yet, and no
-   * {@code Linked issue} gap names it.
-   */
-  private static boolean open(
-      int at, Map<Integer, String> lines, List<String> criteria, List<String> gaps) {
-    return at >= 0 && !lines.containsKey(at) && !named(criteria.get(at), gaps);
+    /** Whether a {@code Linked issue} gap of {@link #gaps} names {@code criterion}. */
+    private boolean named(String criterion) {
+      var wanted = words(criterion);
+      for (var gap : gaps) {
+        var linked = DescriptionGapCarryover.linkedIssueGap(gap);
+        if (linked != null) {
+          var stated = words(DescriptionGapCarryover.criterionOf(linked.group(2)));
+          var shared = shared(stated, wanted);
+          if (shared * 2 >= Math.min(stated.size(), wanted.size()) && shared > 0) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
   }
 
   /**
@@ -297,26 +306,6 @@ final class LinkedIssueCriteria {
       }
     }
     return criteria;
-  }
-
-  private static String line(String key, String criterion) {
-    return "Linked issue " + key + ": " + MarkdownSafe.oneLine(criterion);
-  }
-
-  /** Whether a {@code Linked issue} gap of {@code gaps} names {@code criterion}. */
-  private static boolean named(String criterion, List<String> gaps) {
-    var wanted = words(criterion);
-    for (var gap : gaps) {
-      var linked = DescriptionGapCarryover.linkedIssueGap(gap);
-      if (linked != null) {
-        var stated = words(DescriptionGapCarryover.criterionOf(linked.group(2)));
-        var shared = shared(stated, wanted);
-        if (shared * 2 >= Math.min(stated.size(), wanted.size()) && shared > 0) {
-          return true;
-        }
-      }
-    }
-    return false;
   }
 
   /** The criterion sharing the most words with {@code words}, at least {@value #MIN_SHARED}. */
@@ -352,7 +341,10 @@ final class LinkedIssueCriteria {
   private static boolean saysUnmet(String clause, Set<String> criterionWords) {
     // A clause about the summary's own text ("the '…' wording is missing from the walkthrough")
     // says nothing about the change.
-    if (!META.matcher(clause).find() && UNMET.stream().anyMatch(p -> p.matcher(clause).find())) {
+    if (META.matcher(clause).find()) {
+      return false;
+    }
+    if (UNMET.stream().anyMatch(p -> p.matcher(clause).find())) {
       return true;
     }
     for (var pattern : NEGATORS) {

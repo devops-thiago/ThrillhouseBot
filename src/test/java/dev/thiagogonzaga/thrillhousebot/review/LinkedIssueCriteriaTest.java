@@ -187,6 +187,14 @@ class LinkedIssueCriteriaTest {
     var instead = "The issue's 'declines two offers' rule was instead implemented as a queue.";
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), notOnly, Map.of()));
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), instead, Map.of()));
+    var notSimply =
+        "The issue's 'declines two offers' rule is not simply implemented, it is improved.";
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), notSimply, Map.of()));
+    // A negation in a clause about the summary's own text says nothing about the change.
+    var notCovered =
+        "The issue's 'next in-borough applicant' requirement is not covered by this walkthrough"
+            + " section.";
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), notCovered, Map.of()));
   }
 
   @Test
