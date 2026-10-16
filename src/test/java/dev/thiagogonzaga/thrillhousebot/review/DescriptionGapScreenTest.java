@@ -728,7 +728,9 @@ class DescriptionGapScreenTest {
         UNCONFIRMED_1137,
         "The description says the cache is bounded; this is not independently verifiable.",
         "The description says retries are capped; the criteria appear to be addressed.",
-        "The description says retries are capped; the material can't verify it."
+        "The description says retries are capped; the material can't verify it.",
+        // A trailing clause break leaves the last clause with words as the verdict.
+        "The description says retries are capped; the material cannot confirm it; "
       })
   void aBulletThatOnlySaysItCannotConfirmAssertsNothing(String gap) {
     assertTrue(DescriptionGapScreen.assertsNothing(gap));
@@ -749,7 +751,9 @@ class DescriptionGapScreenTest {
             + " confirm it.",
         // The non-assertion is the description's own words, quoted.
         "The description says \"the cap cannot be verified\", but the change adds a check.",
-        "The description says the README moves unchanged; `docs/RUST-V10.md` rewrites it."
+        "The description says the README moves unchanged; `docs/RUST-V10.md` rewrites it.",
+        // Nothing but clause breaks.
+        "; , —"
       })
   void aBulletStatingAMismatchAssertsSomething(String gap) {
     assertFalse(DescriptionGapScreen.assertsNothing(gap));

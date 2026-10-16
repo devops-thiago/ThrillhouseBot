@@ -758,14 +758,12 @@ final class DescriptionGapScreen {
     if (NAMES_CODE.matcher(own).find()) {
       return false;
     }
-    var clauses = CLAUSE_BREAK.split(own.strip());
-    for (var at = clauses.length - 1; at >= 0; at--) {
-      if (!clauses[at].isBlank()) {
-        var clause = clauses[at];
-        return NON_ASSERTIONS.stream().anyMatch(shape -> shape.matcher(clause).find());
-      }
-    }
-    return false;
+    var last =
+        Arrays.stream(CLAUSE_BREAK.split(own))
+            .filter(clause -> !clause.isBlank())
+            .reduce((earlier, later) -> later)
+            .orElse("");
+    return NON_ASSERTIONS.stream().anyMatch(shape -> shape.matcher(last).find());
   }
 
   /**
