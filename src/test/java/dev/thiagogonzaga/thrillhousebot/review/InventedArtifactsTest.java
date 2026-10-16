@@ -387,12 +387,25 @@ class InventedArtifactsTest {
             "It adds a settings page. Done.\n~~~\n```\nIt adds a settings page.\n~~~\nKept.",
             change));
     // A longer fence is closed only by a run at least as long, with nothing after it.
+    var longer =
+        """
+        It adds a settings page. Done.
+        ````
+        ```
+        It adds a settings page.
+        ```java
+        ````
+        Kept.""";
     assertEquals(
-        "Done.\n````\n```\nIt adds a settings page.\n```java\n````\nKept.",
-        InventedArtifacts.withoutInvented(
-            "It adds a settings page. Done.\n````\n```\nIt adds a settings page.\n```java\n````\n"
-                + "Kept.",
-            change));
+        """
+        Done.
+        ````
+        ```
+        It adds a settings page.
+        ```java
+        ````
+        Kept.""",
+        InventedArtifacts.withoutInvented(longer, change));
     assertEquals(
         "```\nIt adds a settings page.\n```java\nStill inside.\n```  \nKept.",
         InventedArtifacts.withoutInvented(

@@ -153,9 +153,11 @@ final class InventedArtifacts {
    * "implementation", "wireframe") is not one.
    */
   private static final Pattern ADDITION =
-      Pattern.compile(
-          "(?i)\\b(?:add(?!ress|ition)|introduc(?!tion)|creat(?!ion|or)|implement(?!ation)"
-              + "|ship|build|wire(?!less|frame))\\w*+");
+      Pattern.compile("(?i)\\b(?:add|introduc|creat|implement|ship|build|wire)\\w*+");
+
+  /** A word {@link #ADDITION} reads that is a noun or adjective, not the verb. */
+  private static final Pattern ADDITION_NOUN =
+      Pattern.compile("(?i)(?:addr|additi|introducti|creati|creato|implementati|wirel|wiref)\\w*+");
 
   /** A contrast that ends a negation's reach: "does not touch billing but adds …". */
   private static final Pattern CONTRAST =
@@ -335,7 +337,7 @@ final class InventedArtifacts {
     while (removal.find()) {
       last = removal.end();
     }
-    return last >= 0 && !ADDITION.matcher(clause.substring(last)).find();
+    return last >= 0 && additionAt(clause.substring(last)) < 0;
   }
 
   /**
@@ -358,14 +360,27 @@ final class InventedArtifacts {
       return false;
     }
     var rest = clause.substring(last);
-    var addition = ADDITION.matcher(rest);
-    if (!addition.find()) {
+    var addition = additionAt(rest);
+    if (addition < 0) {
       return true;
     }
-    var between = rest.substring(0, addition.start());
+    var between = rest.substring(0, addition);
     return !CONTRAST.matcher(rest).find()
         && !CONJUNCTION.matcher(between).find()
         && (words(between).size() <= NEGATED_REACH || OR_BEFORE.matcher(between).find());
+  }
+
+  /**
+   * Where the first {@link #ADDITION} verb in {@code text} starts, skipping nouns; -1 with none.
+   */
+  private static int additionAt(String text) {
+    var addition = ADDITION.matcher(text);
+    while (addition.find()) {
+      if (!ADDITION_NOUN.matcher(addition.group()).matches()) {
+        return addition.start();
+      }
+    }
+    return -1;
   }
 
   /**
