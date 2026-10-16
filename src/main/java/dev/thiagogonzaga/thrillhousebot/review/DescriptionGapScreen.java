@@ -20,6 +20,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /**
  * Drops a Description vs. Implementation bullet that does not hold up against the text it claims to
@@ -408,7 +409,7 @@ final class DescriptionGapScreen {
         // …"), the words are the claim being reported, not the bullet's verdict.
         var lead = own.substring(0, concession.start());
         if (!attributedBefore(clauseOf(lead))
-            && !NEGATED_LEAD.matcher(lead).find()
+            && NEGATED_LEAD.stream().noneMatch(negation -> negation.matcher(lead).find())
             && !CLAUSE_BREAK.matcher(own.substring(concession.end())).find()) {
           return true;
         }
@@ -439,14 +440,19 @@ final class DescriptionGapScreen {
           "(?i)\\(\\s*+disclosed(?:\\s*+[,;]\\s*+not\\s++contradicted)?\\s*+\\)\\s*+\\.?\\s*+$");
 
   /**
-   * A negation at most two words before a concession, which turns it into the mismatch: "is not
-   * consistent with", "isn't consistent with", "is not at all consistent with", "never matches",
-   * "cannot be consistent with", "fails to match".
+   * A negation at most two words before a concession, which turns it into the mismatch, one pattern
+   * per shape: "is not consistent with", "isn't consistent with", "is not at all consistent with",
+   * "never matches", "cannot be consistent with", "fails to match".
    */
-  private static final Pattern NEGATED_LEAD =
-      Pattern.compile(
-          "(?i)(?:\\b(?:not|never|cannot|hardly|without|no\\s++longer|fail(?:s|ed)?)|n['’]t)"
-              + "(?:\\s++[\\p{L}-]++){0,2}\\s++$");
+  private static final List<Pattern> NEGATED_LEAD =
+      Stream.of(
+              "\\b(?:not|never|cannot)",
+              "\\b(?:without|hardly|fail\\w*+)",
+              "\\bno\\s++longer|n['’]t")
+          .map(
+              negation ->
+                  Pattern.compile("(?i)(?:" + negation + ")(?:\\s++[\\p{L}-]++){0,2}\\s++$"))
+          .toList();
 
   /** Whether {@code gap} names the description, its title, the author or a linked issue. */
   static boolean cites(String gap) {
