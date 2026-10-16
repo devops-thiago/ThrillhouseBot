@@ -313,13 +313,79 @@ class InventedArtifactsTest {
         InventedArtifacts.invents("It removes the creation flow and a settings page.", change));
     assertFalse(
         InventedArtifacts.invents("It removes the introduction and a settings page.", change));
-    // The verbs still take it.
+    // Nouns and adjectives that share a stem with an addition verb, whatever the stem.
+    for (var noun :
+        List.of(
+            "build",
+            "builds",
+            "builder",
+            "building",
+            "shipment",
+            "ship",
+            "creator",
+            "adder",
+            "wires",
+            "implementer",
+            "introducer")) {
+      assertFalse(
+          InventedArtifacts.invents(
+              "It removes the old " + noun + " script and a settings page.", change),
+          noun);
+    }
+    assertFalse(
+        InventedArtifacts.invents("It removes the nightly builds and a settings page.", change));
+    // A bare form after "and" is read as a noun: "and build files".
+    assertFalse(
+        InventedArtifacts.invents(
+            "It removes the cache and build files and a settings page.", change));
+    // The verbs still take it, in any inflection, wherever a verb stands.
     assertTrue(
         InventedArtifacts.invents("It removes the old flow and adds a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It removes the old flow and is building a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents("It drops the old flow and ships a settings page.", change));
+    assertTrue(InventedArtifacts.invents("It drops the old flow, built a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents("It drops the old flow and then wires a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It drops the old flow and added tests with a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents("It drops the old flow to build a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It removes the flow and introduced a new settings page.", change));
     assertTrue(
         InventedArtifacts.invents("It drops the old flow and creates a settings page.", change));
     assertTrue(
         InventedArtifacts.invents("It drops the flow and implements a settings page.", change));
+  }
+
+  @Test
+  void aParentheticalAfterTheNegationKeepsItInTheClause() {
+    var change = InventedArtifacts.Change.of(List.of(added("web/src/App.tsx", "const app = 1;")));
+
+    assertFalse(InventedArtifacts.invents("It does not, however, add a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It does not, in fact, add a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It will not, presumably, add a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It does not (yet) add a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It does not — as noted — add a settings page.", change));
+    // A removal reaches past one too.
+    assertFalse(
+        InventedArtifacts.invents(
+            "It removes, as planned, a settings page.",
+            InventedArtifacts.Change.of(
+                List.of(
+                    new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                    added("web/src/App.tsx", "const app = 1;")))));
+    // A clause with its own verb after a single comma is still a new clause.
+    assertTrue(
+        InventedArtifacts.invents("It does not touch billing, it adds a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It does not touch billing, and as a result it adds a settings page.", change));
   }
 
   @Test

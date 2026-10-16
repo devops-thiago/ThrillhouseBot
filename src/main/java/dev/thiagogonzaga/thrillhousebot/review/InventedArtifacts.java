@@ -148,16 +148,73 @@ final class InventedArtifacts {
       Pattern.compile("(?<![\\p{L}\\p{N}])_++|_++(?![\\p{L}\\p{N}])");
 
   /**
-   * A verb of addition, which takes the artifact after it away from an earlier removal verb. A noun
-   * or adjective sharing its stem ("address", "additional", "introduction", "creation",
-   * "implementation", "wireframe") is not one.
+   * The forms of a verb of addition, which takes the artifact after it away from an earlier removal
+   * verb. A word is one only in one of these forms and where a verb stands ({@link #inVerbPlace}),
+   * so a noun or adjective sharing a stem ("the build script", "a shipment", "the creator",
+   * "additional") never is.
    */
-  private static final Pattern ADDITION =
-      Pattern.compile("(?i)\\b(?:add|introduc|creat|implement|ship|build|wire)\\w*+");
+  private static final Set<String> ADDITION =
+      Set.of(
+          "add",
+          "adds",
+          "added",
+          "adding",
+          "introduce",
+          "introduces",
+          "introduced",
+          "introducing",
+          "create",
+          "creates",
+          "created",
+          "creating",
+          "implement",
+          "implements",
+          "implemented",
+          "implementing",
+          "ship",
+          "ships",
+          "shipped",
+          "shipping",
+          "build",
+          "builds",
+          "built",
+          "building",
+          "wire",
+          "wires",
+          "wired",
+          "wiring");
 
-  /** A word {@link #ADDITION} reads that is a noun or adjective, not the verb. */
-  private static final Pattern ADDITION_NOUN =
-      Pattern.compile("(?i)(?:addr|additi|introducti|creati|creato|implementati|wirel|wiref)\\w*+");
+  /** The bare forms of {@link #ADDITION}, which read as a noun as often as a verb after "and". */
+  private static final Set<String> ADDITION_BARE =
+      Set.of("add", "introduce", "create", "implement", "ship", "build", "wire");
+
+  /** A word that opens a verb's object: an article, a determiner or a pronoun. */
+  private static final Set<String> OBJECT_LEAD =
+      Set.of(
+          "a", "an", "the", "new", "its", "their", "his", "her", "our", "your", "this", "these",
+          "that", "those", "some", "any", "one", "two", "three", "several", "more", "it", "them");
+
+  /** A word a verb follows: a subject, an auxiliary, a modal, a negation or "to". */
+  private static final Set<String> VERB_LEAD =
+      Set.of(
+          "it", "this", "that", "which", "who", "they", "we", "he", "she", "change", "to", "will",
+          "would", "can", "could", "should", "may", "might", "must", "shall", "does", "do", "did",
+          "doesn", "don", "didn", "t", "is", "are", "was", "were", "be", "been", "being", "has",
+          "have", "had", "not", "never", "cannot", "nor", "also", "now", "yet", "still", "just",
+          "only", "finally", "then");
+
+  /** A word joining a second verb, which an inflected {@link #ADDITION} form follows as one. */
+  private static final Set<String> COORDINATOR = Set.of("and", "or", "then", "plus", "but");
+
+  /** A word, for reading where a verb stands. */
+  private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}]++");
+
+  /**
+   * A parenthetical of at most three words set off by a pair of commas or dashes ("does not,
+   * however, add", "does not — in fact — add"), which does not end the clause around it.
+   */
+  private static final Pattern PARENTHETICAL =
+      Pattern.compile("([,—–])\\s*+(?:[\\p{L}']++\\s++){0,2}[\\p{L}']++\\s*+\\1");
 
   /** A contrast that ends a negation's reach: "does not touch billing but adds …". */
   private static final Pattern CONTRAST =
@@ -337,7 +394,7 @@ final class InventedArtifacts {
     while (removal.find()) {
       last = removal.end();
     }
-    return last >= 0 && additionAt(clause.substring(last)) < 0;
+    return last >= 0 && additionAt(clause, last) < 0;
   }
 
   /**
@@ -359,35 +416,61 @@ final class InventedArtifacts {
     if (last < 0) {
       return false;
     }
-    var rest = clause.substring(last);
-    var addition = additionAt(rest);
+    var addition = additionAt(clause, last);
     if (addition < 0) {
       return true;
     }
-    var between = rest.substring(0, addition);
+    var rest = clause.substring(last);
+    var between = clause.substring(last, addition);
     return !CONTRAST.matcher(rest).find()
         && !CONJUNCTION.matcher(between).find()
         && (words(between).size() <= NEGATED_REACH || OR_BEFORE.matcher(between).find());
   }
 
   /**
-   * Where the first {@link #ADDITION} verb in {@code text} starts, skipping nouns; -1 with none.
+   * Where the first {@link #ADDITION} verb in {@code text} at or after {@code from} starts; -1 with
+   * none. The words before {@code from} still tell where a verb stands. Callers start after a
+   * removal or negation word, so the first word of the text is never read as the verb.
    */
-  private static int additionAt(String text) {
-    var addition = ADDITION.matcher(text);
-    while (addition.find()) {
-      if (!ADDITION_NOUN.matcher(addition.group()).matches()) {
-        return addition.start();
+  private static int additionAt(String text, int from) {
+    var words = new ArrayList<String>();
+    var starts = new ArrayList<Integer>();
+    var word = WORD.matcher(text);
+    while (word.find()) {
+      words.add(word.group().toLowerCase(Locale.ROOT));
+      starts.add(word.start());
+    }
+    for (var i = 1; i < words.size(); i++) {
+      if (starts.get(i) >= from && ADDITION.contains(words.get(i)) && inVerbPlace(words, i)) {
+        return starts.get(i);
       }
     }
     return -1;
   }
 
   /**
+   * Whether the {@link #ADDITION} form at {@code i} stands where a verb does: before its object
+   * ("adds a", "ships the"; the artifact itself follows the last word), after a subject, an
+   * auxiliary, a modal, a negation or "to" ("it adds", "is building", "to build"), or inflected
+   * after a coordinator ("and added tests"). "the old build script" and "nightly builds and" are
+   * nouns.
+   */
+  private static boolean inVerbPlace(List<String> words, int i) {
+    // i is at least 1: additionAt never reads the first word.
+    if (i == words.size() - 1 || OBJECT_LEAD.contains(words.get(i + 1))) {
+      return true;
+    }
+    var before = words.get(i - 1);
+    return VERB_LEAD.contains(before)
+        || (COORDINATOR.contains(before) && !ADDITION_BARE.contains(words.get(i)));
+  }
+
+  /**
    * The clause {@code lead} ends in: what follows its last punctuation or dash. A break that leads
    * into examples of what came before ("removes legacy pages, e.g. a …") does not end the clause.
    */
-  private static String clauseOf(String lead) {
+  private static String clauseOf(String text) {
+    var lead = PARENTHETICAL.matcher(text).replaceAll(" ");
     var breaks = CLAUSE_END.matcher(lead);
     var example = EXAMPLE_LEAD.matcher(lead);
     var abbreviation = ABBREVIATION.matcher(lead).useTransparentBounds(true);
