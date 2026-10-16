@@ -10,7 +10,7 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
-- **A check that fails while the review runs is in that review's summary** (#1092): with `REVIEW_CI_CONTEXT_ENABLED=true`, the head's check runs are read once more after the model call when a check was still running at review start, and a check that has failed since is added to the CI-failure context the summary's sentence on each failing check is computed from. On the first review of a pull request the test job usually fails a few minutes before the review posts, and the summary used to say nothing about it. Nothing is read again when no check was pending, and a failed read keeps the review-start reading.
+- **A check that fails while the review runs counts in that review** (#1092, #952): with `REVIEW_CI_CONTEXT_ENABLED=true`, the head's check runs are read once more after the model call when a check was still running at review start. A check that has failed since is added to the CI-failure context the summary's sentence on each failing check is computed from, and a finding that cites it is raised from low to medium confidence, as one citing an earlier failure already is. On the first review of a pull request the test job usually fails a few minutes before the review posts, and the summary used to say nothing about it. Nothing is read again when no check was pending, and a failed read keeps the review-start reading.
 
 ## [0.7.1] — 2026-10-13
 

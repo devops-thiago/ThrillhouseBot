@@ -1016,9 +1016,9 @@ usually starts before CI finishes, so the review call often sees no failure.
 When a check was still running at the start, the head's check runs are read
 once more after the model call (one request), and a check that has failed by
 then is added before the summary is rendered: the overview's sentence names it
-and the open findings that cite it. Findings are not re-graded against it. A
-CI failure after the review is posted does not start a new one; comment
-`/review` to get a review whose findings see it.
+and the open findings that cite it, and a finding that cites it is raised from
+low to medium confidence. A CI failure after the review is posted does not start
+a new one; comment `/review` to get a review whose findings see it.
 
 ### Linked-issue context
 

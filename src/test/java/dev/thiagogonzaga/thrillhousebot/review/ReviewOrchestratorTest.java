@@ -8017,6 +8017,62 @@ class ReviewOrchestratorTest {
       verify(checkRunClient, times(2)).getAllCheckRuns(any(), any(), any(), any(), any());
     }
 
+    /**
+     * #1092, #952 (round 18, rust #279): the round-1 finding the failing test confirms was posted
+     * at low confidence because the test failed after review start. The refreshed CI section floors
+     * it at medium, and the round is stored with the floored grade.
+     */
+    @Test
+    void aFindingCitingACheckThatFailedWhileTheReviewRanIsFlooredAndStored() {
+      stubCommonReviewMocks(buildCheck("completed", "success"));
+      when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(
+              buildPassedTest("in_progress", null), buildPassedTest("completed", "failure"));
+      when(prClient.getPullRequestFiles(
+              anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(
+              List.of(
+                  new GitHubPullRequestClient.FileDiff(
+                      "src/ingest.rs",
+                      "added",
+                      3,
+                      0,
+                      3,
+                      "@@ -0,0 +1,3 @@\n+fn rms(v: &[f64]) -> f64 {\n+    v[1..].len() as f64\n+}")));
+      var offByOne =
+          new ReviewResponse.Finding(
+              "high",
+              "low",
+              "src/ingest.rs",
+              2,
+              "Window arithmetic is off by one",
+              "The window drops a sample, and the failing \"test\" check fails on exactly this.",
+              null,
+              null);
+      when(aiReviewService.review(any(ReviewSession.class), any()))
+          .thenReturn(new ReviewResponse(List.of(offByOne), List.of(), null));
+      ciFailureContext =
+          new CiFailureContextResolver(checkRunClient, null, null, true, false, 4000);
+      orchestrator = newOrchestrator();
+
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        orchestrator.review(request());
+
+        var stored = ArgumentCaptor.forClass(String.class);
+        verify(session, atLeastOnce()).setAiResponseJson(stored.capture());
+        assertTrue(stored.getValue().contains("\"confidence\":\"medium\""), stored.getValue());
+      }
+      var result = ArgumentCaptor.forClass(ReviewResult.class);
+      verify(summaryGenerator)
+          .generate(anyInt(), anyInt(), anyInt(), any(), any(), result.capture(), any());
+      assertEquals(Confidence.MEDIUM, result.getValue().findings().getFirst().confidence());
+    }
+
     @Test
     void aFailedReReadKeepsTheReviewStartReading() {
       stubCommonReviewMocks(buildCheck("completed", "success"));
