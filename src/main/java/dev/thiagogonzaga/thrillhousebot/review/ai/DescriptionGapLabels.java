@@ -115,7 +115,7 @@ public final class DescriptionGapLabels {
       Pattern.compile("(?:(?:" + POINTERS + ")\\s+)?(" + LABELS + ")" + NOT_A_NAME);
 
   /** What divides a parenthetical into parts: a comma, a semicolon or a spaced dash. */
-  private static final Pattern PART_SEPARATOR = Pattern.compile("\\s*+[,;]\\s*+|\\s++[—–-]\\s++");
+  private static final Pattern PART_SEPARATOR = Pattern.compile("[,;]|(?<=\\s)[—–-](?=\\s)");
 
   /** What a parenthetical keeps at its start once its labels are gone: separators only. */
   private static final Pattern LEADING_SEPARATORS = Pattern.compile("^[\\s,;:—–-]+");
@@ -279,7 +279,9 @@ public final class DescriptionGapLabels {
     int at = 0;
     while (divider.find()) {
       parts.add(content.substring(at, divider.start()));
-      separators.add(divider.group());
+      // Rejoined in the shape it was written: "a, b", "a — b".
+      var mark = divider.group();
+      separators.add(",;".contains(mark) ? mark + " " : " " + mark + " ");
       at = divider.end();
     }
     parts.add(content.substring(at));

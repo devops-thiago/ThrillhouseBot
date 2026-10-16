@@ -209,6 +209,10 @@ final class PathMentions {
 
   private static final Pattern BLANK_RUN = Pattern.compile(" {2,}");
 
+  /** A comma or semicolon a sentence opens with, and the letter after it. */
+  private static final Pattern ORPHANED_SEPARATOR =
+      Pattern.compile("(^\\s*+|[.!?] ?+)[,;] ?(\\p{Ll})");
+
   private static final Pattern BLANK_BEFORE_PUNCTUATION = Pattern.compile(" ([.,;:!?])");
 
   private final PathIndex changed;
@@ -478,9 +482,16 @@ final class PathMentions {
   }
 
   private static String tidy(String prose) {
-    return BLANK_BEFORE_PUNCTUATION
-        .matcher(BLANK_RUN.matcher(prose).replaceAll(" "))
-        .replaceAll("$1");
+    var tidied =
+        BLANK_BEFORE_PUNCTUATION.matcher(BLANK_RUN.matcher(prose).replaceAll(" ")).replaceAll("$1");
+    // A mention cut from the start of a sentence leaves the comma that set it off ("docs/x.md,
+    // then …"); the sentence opens with the word after it.
+    return ORPHANED_SEPARATOR
+        .matcher(tidied)
+        .replaceAll(
+            m ->
+                (m.group(1).isBlank() ? "" : m.group(1).strip() + " ")
+                    + m.group(2).toUpperCase(Locale.ROOT));
   }
 
   /**

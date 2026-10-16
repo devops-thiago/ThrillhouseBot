@@ -403,7 +403,8 @@ class PathMentionsTest {
           *docs/NOPE.md* is cited. | is cited.
           It is cited: *docs/NOPE.md* | It is cited:
           `a` and `b` cite docs/NOPE.md. | `a` and `b` cite.
-          docs/NOPE.md, then `a` and `b`. | , then `a` and `b`.
+          docs/NOPE.md, then `a` and `b`. | Then `a` and `b`.
+          It is new. docs/NOPE.md; then `a`. | It is new. Then `a`.
           `a` cites docs/NOPE.md and `b`. | `a` cites and `b`.
           """)
   void aMentionIsStrippedWhereverItStands(String text, String stripped) {
