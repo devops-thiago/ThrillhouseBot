@@ -355,7 +355,7 @@ public class ReviewPublisher {
       List<GitHubReviewClient.ReviewResponse> priorReviews) {
     PostReviewRequest {
       followUpDeltaSection = java.util.Objects.requireNonNullElse(followUpDeltaSection, "");
-      priorReviews = priorReviews == null ? List.of() : List.copyOf(priorReviews);
+      priorReviews = List.copyOf(java.util.Objects.requireNonNullElse(priorReviews, List.of()));
     }
 
     // Direct callers retain the default closed-finding report without opt-in enrichment. They
