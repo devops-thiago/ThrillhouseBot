@@ -123,6 +123,8 @@ class InventedArtifactsTest {
     // A camel-hump name in the sentence reads as its words.
     assertTrue(InventedArtifacts.invents("It adds a ProfilePage for admins.", change));
     assertFalse(InventedArtifacts.invents("It adds a SettingsScreen for admins.", change));
+    // An acronym's last capital starts the next word: "a SAMLPage" is a SAML page.
+    assertTrue(InventedArtifacts.invents("It adds a SAMLPage for admins.", change));
   }
 
   @Test
@@ -150,6 +152,20 @@ class InventedArtifactsTest {
     assertTrue(InventedArtifacts.invents("It adds a drop-down, a settings page too.", change));
     assertFalse(InventedArtifacts.invents("It does not add a settings page.", change));
     assertFalse(InventedArtifacts.invents("It doesn't ship a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It does not yet add a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It ships without a settings page.", change));
+    assertFalse(
+        InventedArtifacts.invents("It does not add an audit screen or a settings page.", change));
+    // A negation of something else leaves the added artifact judged.
+    assertTrue(
+        InventedArtifacts.invents("It does not touch billing but adds a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents("It does not touch billing and adds a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It doesn't add tests, instead it adds a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents("It never adds tests though it adds a settings page.", change));
     // A removal that does not govern the artifact leaves it judged.
     assertTrue(
         InventedArtifacts.invents("It drops the old flow then adds a settings page.", change));
@@ -226,6 +242,8 @@ class InventedArtifactsTest {
   @Test
   void wordsSplitCamelHumpsAndFamiliesNeedFourLetters() {
     assertEquals(List.of("settings", "page", "tsx"), InventedArtifacts.words("SettingsPage.tsx"));
+    assertEquals(List.of("saml", "page"), InventedArtifacts.words("SAMLPage"));
+    assertEquals(List.of("html", "settings", "page"), InventedArtifacts.words("HTMLSettingsPage"));
     assertTrue(InventedArtifacts.family("config", "configuration"));
     assertTrue(InventedArtifacts.family("configuration", "config"));
     assertFalse(InventedArtifacts.family("api", "apiary"));

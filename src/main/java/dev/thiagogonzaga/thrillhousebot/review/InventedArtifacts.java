@@ -96,7 +96,12 @@ final class InventedArtifacts {
 
   private static final Pattern WORD_SPLIT = Pattern.compile("[^\\p{L}\\p{N}]+");
 
-  private static final Pattern CAMEL_HUMP = Pattern.compile("(?<=\\p{Ll})(?=\\p{Lu})");
+  /**
+   * A camel hump: a capital after a lower-case letter ("Settings|Page"), or the last capital of an
+   * acronym before a lower-case letter ("SAML|Page", "HTML|Settings").
+   */
+  private static final Pattern CAMEL_HUMP =
+      Pattern.compile("(?<=\\p{Ll})(?=\\p{Lu})|(?<=\\p{Lu})(?=\\p{Lu}\\p{Ll})");
 
   /**
    * A fenced block, closed by the marker that opened it; an unclosed one runs to the end of the
@@ -122,6 +127,13 @@ final class InventedArtifacts {
   /** A verb of addition, which takes the artifact after it away from an earlier removal verb. */
   private static final Pattern ADDITION =
       Pattern.compile("(?i)\\b(?:add|introduc|creat|implement|ship|build|wire)\\w*+");
+
+  /** A contrast that ends a negation's reach: "does not touch billing but adds …". */
+  private static final Pattern CONTRAST =
+      Pattern.compile("(?i)\\b(?:but|however|instead|while|whereas|although|though)\\b");
+
+  /** Words at most between a negation and the addition verb it negates: "does not yet add". */
+  static final int NEGATED_REACH = 2;
 
   /** Where an artifact's clause starts, for {@link #REMOVAL}: punctuation or a dash. */
   private static final Pattern CLAUSE_END = Pattern.compile("[,;:.!?—–]");
@@ -223,7 +235,7 @@ final class InventedArtifacts {
     while (introduced.find()) {
       var lead = text.substring(0, introduced.start());
       // "does not add a settings page" says there is none, which is no invention.
-      if (removedInClause(lead) || NEGATION.matcher(clauseOf(lead)).find()) {
+      if (removedInClause(lead) || negatedInClause(lead)) {
         continue;
       }
       var qualifier =
@@ -250,6 +262,32 @@ final class InventedArtifacts {
       last = removal.end();
     }
     return last >= 0 && !ADDITION.matcher(clause.substring(last)).find();
+  }
+
+  /**
+   * Whether a {@link #NEGATION} governs the artifact {@code lead} leads to: the negation is in the
+   * artifact's clause and either no {@link #ADDITION} verb follows it ("ships without a …"), or the
+   * first one follows within {@value #NEGATED_REACH} words with no contrast between ("does not add
+   * a …", "doesn't yet ship a … or a …"). "does not touch billing but adds a …" and "does not touch
+   * billing and adds a …" are judged.
+   */
+  private static boolean negatedInClause(String lead) {
+    var clause = clauseOf(lead);
+    var negation = NEGATION.matcher(clause);
+    var last = -1;
+    while (negation.find()) {
+      last = negation.end();
+    }
+    if (last < 0) {
+      return false;
+    }
+    var rest = clause.substring(last);
+    var addition = ADDITION.matcher(rest);
+    if (!addition.find()) {
+      return true;
+    }
+    return !CONTRAST.matcher(rest).find()
+        && words(rest.substring(0, addition.start())).size() <= NEGATED_REACH;
   }
 
   /** The clause {@code lead} ends in: what follows its last punctuation or dash. */
