@@ -219,6 +219,17 @@ class LinkedIssueCriteriaTest {
     assertEquals(1, negated.lines().size(), negated.lines().toString());
     assertTrue(negated.lines().getFirst().startsWith("Linked issue #260: Shifts that start"));
     assertEquals(LinkedIssueCriteria.Lines.NONE, state);
+    assertEquals(
+        1,
+        unmet(
+                ISSUE_260,
+                List.of(),
+                null,
+                Map.of(
+                    "react/src/components/ShiftBoard.tsx",
+                    "The board won't lock shifts that start within 2 hours."))
+            .lines()
+            .size());
   }
 
   @Test

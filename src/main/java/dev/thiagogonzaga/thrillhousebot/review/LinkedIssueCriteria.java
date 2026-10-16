@@ -117,12 +117,14 @@ final class LinkedIssueCriteria {
       Pattern.compile("(?i)^\\s*+(?:no|not|never|without|missing|lacks?)\\s");
 
   /**
-   * A verb negated inside a clause: "the board does not lock …", "never locks", "cannot limit". A
-   * state ("shifts that are not yet started") is not one.
+   * A verb negated inside a clause: "the board does not lock …", "won't lock", "never locks",
+   * "cannot limit". A negated "is", "are", "was" or "were" states a condition ("shifts that are not
+   * yet started"), not a missing behaviour, so it is not one. One pattern per shape.
    */
-  private static final Pattern NEGATED_VERB =
-      Pattern.compile(
-          "(?i)\\b(?:(?:does|do|did|can|will|has|have)(?:\\s++not|n['’]t)|cannot|never)\\b");
+  private static final List<Pattern> NEGATED_VERB =
+      List.of(
+          Pattern.compile("(?i)\\b(?:does|do|did|can|will|has|have)(?:\\s++not|n['’]t)\\b"),
+          Pattern.compile("(?i)\\b(?:won['’]t|cannot|never)\\b"));
 
   /** A quoted passage, in double or single quotes (curly quotes folded). */
   private static final Pattern QUOTED =
@@ -312,7 +314,8 @@ final class LinkedIssueCriteria {
    * are the criterion's.
    */
   private static int clauseMatch(String clause, List<String> criteria) {
-    if (!NEGATED_CLAUSE.matcher(clause).find() && !NEGATED_VERB.matcher(clause).find()) {
+    if (!NEGATED_CLAUSE.matcher(clause).find()
+        && NEGATED_VERB.stream().noneMatch(p -> p.matcher(clause).find())) {
       return -1;
     }
     var words = words(clause);
