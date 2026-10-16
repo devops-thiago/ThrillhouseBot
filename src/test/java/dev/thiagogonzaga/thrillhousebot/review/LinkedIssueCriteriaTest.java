@@ -565,6 +565,127 @@ class LinkedIssueCriteriaTest {
     assertFalse(LinkedIssueCriteria.family("cancel", "control"));
   }
 
+  @Test
+  void anIntensifierBetweenTheNegationAndTheUnmetWordStillPraises() {
+    for (var praise :
+        List.of(
+            "The issue's 'declines two offers' rule is not at all missing.",
+            "The issue's 'declines two offers' rule never really fails.",
+            "The issue's 'declines two offers' rule is not even slightly missing.")) {
+      assertEquals(
+          LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), praise, Map.of()), praise);
+    }
+  }
+
+  @Test
+  void aNotMetWordReachesOnlyTheQuotesItsPartOfTheClauseSpeaksOf() {
+    // The listing is missing, the quoted card renders: the card's criterion is not reported.
+    var renders =
+        "The issue's current-week listing rule is missing and the 'Sign-ups closed' card renders.";
+    var reverse =
+        "The issue's 'Sign-ups closed' card renders and the current-week listing is missing.";
+    for (var overview : List.of(renders, reverse)) {
+      var lines = unmet(ISSUE_260, List.of(), overview, Map.of()).lines();
+      assertFalse(
+          lines.stream().anyMatch(l -> l.startsWith("Linked issue #260: Shifts that start")),
+          overview + " -> " + lines);
+    }
+    // Two quoted subjects of one verb are both reported.
+    var both =
+        "The issue's \"Sign-ups closed\" card and \"Sign up button disabled\" state are missing.";
+    var lines = unmet(ISSUE_260, List.of(), both, Map.of()).lines();
+    assertEquals(2, lines.size(), lines.toString());
+    assertTrue(lines.get(0).startsWith("Linked issue #260: The board lists"), lines.toString());
+    assertTrue(lines.get(1).startsWith("Linked issue #260: Shifts that start"), lines.toString());
+    // A subject of one word with no quote reads on as well; a longer part stops the reading.
+    var three =
+        "The issue's \"Sign-ups closed\" card and lockout and \"Sign up button disabled\" state"
+            + " are missing.";
+    assertEquals(2, unmet(ISSUE_260, List.of(), three, Map.of()).lines().size(), three);
+    var stopped =
+        "The issue's \"Sign-ups closed\" card and the board listing and the import are missing.";
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_260, List.of(), stopped, Map.of()));
+  }
+
+  @Test
+  void lackingAndYetToBeImplementedSayACriterionIsUnmet() {
+    for (var overview :
+        List.of(
+            "The issue's 'Sign-ups closed' card for imminent shifts is lacking.",
+            "The issue's 'Sign-ups closed' card has yet to be implemented.")) {
+      var lines = unmet(ISSUE_260, List.of(), overview, Map.of()).lines();
+      assertEquals(1, lines.size(), overview + " -> " + lines);
+      assertTrue(lines.getFirst().startsWith("Linked issue #260: Shifts that start"), overview);
+    }
+  }
+
+  @Test
+  void aQuotedPassageHoldingAFullStopStaysInOneSentence() {
+    // "Sign-ups closed. " inside the quote is no sentence end, so the clause keeps the quote.
+    var issue =
+        ISSUE_260.replace(
+            "the card shows \"Sign-ups closed\".",
+            "the card reads: Sign-ups closed. Try another shift.");
+    var overview = "The issue's 'Sign-ups closed. Try another shift' card is missing.";
+
+    var lines = unmet(issue, List.of(), overview, Map.of()).lines();
+
+    assertEquals(1, lines.size(), lines.toString());
+    assertTrue(
+        lines.getFirst().startsWith("Linked issue #260: Shifts that start"), lines.toString());
+  }
+
+  /** A gap the section does not render holds back no criterion line (#1127 with #1093). */
+  @Test
+  void aGapCreditingTheReviewThatNoFindingBacksDoesNotHoldBackTheCriterionLine() {
+    var credited =
+        "Linked issue #256: An applicant who declines two offers is moved to the back of the"
+            + " waitlist — a review pass flags that the code keeps them in place.";
+    assertTrue(DescriptionGapScreen.creditsReview(credited));
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            RiskLevel.LOW,
+            ReviewState.APPROVE,
+            false,
+            "",
+            List.of(),
+            List.of(),
+            0);
+    var summary =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            "ok",
+            "The issue's 'declines two offers' rule is not honored.",
+            List.of(credited));
+
+    var rendered =
+        new PrSummaryGenerator(false)
+            .generate(
+                4,
+                50,
+                0,
+                List.of(),
+                summary,
+                result,
+                new PrSummaryGenerator.DescriptionSources("", Set.of(), ISSUE_256));
+
+    assertFalse(rendered.contains("a review pass flags"), rendered);
+    assertTrue(
+        rendered.contains(
+            "- Linked issue #256: An applicant who declines two offers is moved to the back of the"
+                + " waitlist — the overview above reports it unmet"),
+        rendered);
+  }
+
   /** The summary renders the lines in place of the finding bullets they point at. */
   @Test
   void theSectionNamesTheIssueAndItsCriterionAndTheLineIsNotCarried() {

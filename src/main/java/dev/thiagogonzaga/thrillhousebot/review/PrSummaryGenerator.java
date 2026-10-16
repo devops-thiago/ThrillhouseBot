@@ -296,14 +296,15 @@ public class PrSummaryGenerator {
     appendPrPurpose(sb, aiSummary);
     // #1093: every criterion of the one linked issue the round states unmet gets its own line; a
     // line pointing at a finding takes the place of that finding's bullet.
+    var rendered = backedByFindings(surfaces.descriptionGaps(), result.findings());
     var criteria =
         LinkedIssueCriteria.unmet(
             sources.linkedIssues(),
-            surfaces.descriptionGaps(),
+            rendered,
             result.findings(),
             aiSummary == null ? null : aiSummary.prPurpose(),
             summariesByPath(aiSummary));
-    var gaps = new ArrayList<>(backedByFindings(surfaces.descriptionGaps(), result.findings()));
+    var gaps = new ArrayList<>(rendered);
     gaps.addAll(criteria.lines());
     appendDescriptionGaps(
         sb,

@@ -90,14 +90,15 @@ final class LinkedIssueCriteria {
   /**
    * What says, wherever it sits in an overview clause, that the issue's ask is not met: "missing",
    * "unmet", "unimplemented", "dropped", "opposite", "contrary", "contradicts", "violates",
-   * "lacks", "fails", "falls short". One pattern per shape.
+   * "lacks", "lacking", "fails", "falls short", "has yet to be implemented". One pattern per shape.
    */
   private static final List<Pattern> UNMET =
       List.of(
           Pattern.compile("(?i)\\b(?:missing|unmet|unimplemented|dropped)\\b"),
-          Pattern.compile(
-              "(?i)\\b(?:opposite|contrar\\w*+|contradict\\w*+|violat\\w*+|lacks?|fails?)\\b"),
-          Pattern.compile("(?i)\\bfalls?\\s++short\\b"));
+          Pattern.compile("(?i)\\b(?:opposite|contrar\\w*+|contradict\\w*+|violat\\w*+|fails?)\\b"),
+          Pattern.compile("(?i)\\black(?:s|ing)?+\\b"),
+          Pattern.compile("(?i)\\bfalls?\\s++short\\b"),
+          Pattern.compile("(?i)\\byet\\s++to\\b"));
 
   /**
    * A bare negation in an overview clause: "not", "never", "no", "cannot", "n't", "without". It
@@ -124,6 +125,12 @@ final class LinkedIssueCriteria {
 
   /** Words, at most, between a {@link #PRAISING_NEGATIONS} word and the word it negates. */
   static final int PRAISE_REACH = 2;
+
+  /**
+   * Words that only strengthen a negation and are skipped when measuring its reach, besides the
+   * adverbs ending in "-ly": "not at all missing", "never really fails".
+   */
+  private static final Set<String> INTENSIFIERS = Set.of("at", "all", "even", "ever", "quite");
 
   /** What turns a negation into an affirmation: "not only", "not just", "not merely". */
   private static final Pattern AFFIRMING =
@@ -175,6 +182,9 @@ final class LinkedIssueCriteria {
    */
   private static final Pattern OVERVIEW_CLAUSE =
       Pattern.compile("(?i)[,;—–]|\\b(?:but|however|while|whereas|although|though)\\b");
+
+  /** The "and" an overview clause's quoted criteria are each read on their own side of. */
+  private static final Pattern AND = Pattern.compile("(?i)\\band\\b");
 
   /** Where a walkthrough row's clauses split. */
   private static final Pattern CLAUSE_SPLIT = Pattern.compile("[;.(),]|\\s(?:and|or|but)\\s");
@@ -366,13 +376,73 @@ final class LinkedIssueCriteria {
     }
     var found = new ArrayList<Integer>();
     for (var clause : overviewClauses(foldQuotes(sentence))) {
-      for (var at : stated(clause, criteria)) {
-        if (saysUnmet(clause, words(criteria.get(at)))) {
-          found.add(at);
+      var scopes = quotedScopes(clause, criteria);
+      if (scopes.isEmpty()) {
+        var at = sharedHalf(words(clause), criteria);
+        scopes = at < 0 ? Map.of() : Map.of(at, clause);
+      }
+      for (var scope : scopes.entrySet()) {
+        if (saysUnmet(scope.getValue(), words(criteria.get(scope.getKey())))) {
+          found.add(scope.getKey());
         }
       }
     }
     return found;
+  }
+
+  /**
+   * The criteria {@code clause} quotes a passage of, in order, each with the part of the clause
+   * that speaks of it: the clause is cut at each "and" outside a quote, and a part whose last quote
+   * is followed by one word at most is a subject of the next part's verb ("the 'A' card and the 'B'
+   * state are missing"), so it reads on into it. A part never reads back: "the listing is missing
+   * and the 'Sign-ups closed' card renders" does not report the card unmet.
+   */
+  private static Map<Integer, String> quotedScopes(String clause, List<String> criteria) {
+    var quotes = quotes(clause);
+    var parts = new ArrayList<int[]>();
+    var from = 0;
+    var and = AND.matcher(clause);
+    while (and.find()) {
+      var at = and.start();
+      if (quotes.stream().noneMatch(q -> q.start() < at && at < q.end())) {
+        parts.add(new int[] {from, at});
+        from = and.end();
+      }
+    }
+    parts.add(new int[] {from, clause.length()});
+    var scopes = new LinkedHashMap<Integer, String>();
+    var words = words(clause);
+    for (var match : quotes) {
+      var at = quotedCriterion(match, words, criteria);
+      if (at < 0 || scopes.containsKey(at)) {
+        continue;
+      }
+      var part = 0;
+      while (parts.get(part)[1] <= match.start()) {
+        part++;
+      }
+      var end = part;
+      while (end + 1 < parts.size() && subjectOnly(clause, parts.get(end), quotes)) {
+        end++;
+      }
+      scopes.put(at, clause.substring(parts.get(part)[0], parts.get(end)[1]));
+    }
+    return scopes;
+  }
+
+  /**
+   * Whether one word at most follows the last quote of the {@code part} of {@code clause}, or makes
+   * up the part when it quotes nothing: the part names a subject ("the 'A' card") and says nothing
+   * of it.
+   */
+  private static boolean subjectOnly(String clause, int[] part, List<MatchResult> quotes) {
+    var last =
+        quotes.stream()
+            .filter(q -> q.start() >= part[0] && q.end() <= part[1])
+            .mapToInt(MatchResult::end)
+            .max()
+            .orElse(part[0]);
+    return normalize(clause.substring(last, part[1])).indexOf(' ') < 0;
   }
 
   /**
@@ -404,9 +474,9 @@ final class LinkedIssueCriteria {
     if (!PRAISING_NEGATIONS.contains(negation.toLowerCase(Locale.ROOT))) {
       return false;
     }
-    var words = NON_ALPHANUMERIC.split(rest.strip());
-    for (var i = 0; i < Math.min(PRAISE_REACH, words.length); i++) {
-      var from = String.join(" ", Arrays.asList(words).subList(i, words.length));
+    var words = withoutIntensifiers(NON_ALPHANUMERIC.split(rest.strip()));
+    for (var i = 0; i < Math.min(PRAISE_REACH, words.size()); i++) {
+      var from = String.join(" ", words.subList(i, words.size()));
       if (UNMET.stream().anyMatch(pattern -> pattern.matcher(from).lookingAt())) {
         return true;
       }
@@ -415,17 +485,25 @@ final class LinkedIssueCriteria {
   }
 
   /**
-   * Whether one of the last {@value #PRAISE_REACH} words of {@code lead} negates what follows:
-   * "never fails", "nothing is missing", "no longer drops".
+   * Whether one of the last {@value #PRAISE_REACH} words of {@code lead}, {@link #INTENSIFIERS}
+   * aside, negates what follows: "never fails", "nothing is missing", "not at all missing".
    */
   private static boolean negatedBefore(String lead) {
-    var words = NON_ALPHANUMERIC.split(lead.strip().toLowerCase(Locale.ROOT));
-    for (var i = Math.max(0, words.length - PRAISE_REACH); i < words.length; i++) {
-      if (PRAISING_NEGATIONS.contains(words[i])) {
+    var words = withoutIntensifiers(NON_ALPHANUMERIC.split(lead.strip().toLowerCase(Locale.ROOT)));
+    for (var i = Math.max(0, words.size() - PRAISE_REACH); i < words.size(); i++) {
+      if (PRAISING_NEGATIONS.contains(words.get(i))) {
         return true;
       }
     }
     return false;
+  }
+
+  /** {@code words} less the {@link #INTENSIFIERS} and the adverbs ending in "-ly". */
+  private static List<String> withoutIntensifiers(String[] words) {
+    return Arrays.stream(words)
+        .filter(word -> !INTENSIFIERS.contains(word.toLowerCase(Locale.ROOT)))
+        .filter(word -> !word.toLowerCase(Locale.ROOT).endsWith("ly"))
+        .toList();
   }
 
   /**
@@ -508,35 +586,29 @@ final class LinkedIssueCriteria {
   }
 
   /**
-   * The criteria {@code clause} quotes a passage of, in order; or else the one it shares half the
-   * words of; or none.
+   * The criterion holding the passage {@code match} quotes, of two words or more, or -1. A phrase
+   * several criteria hold ("the Sign up button") goes to the one the clause's other {@code words}
+   * share most with; with no clear one it names none of them.
    */
-  private static List<Integer> stated(String clause, List<String> criteria) {
-    var words = words(clause);
-    var quoted = new LinkedHashSet<Integer>();
-    for (var match : quotes(clause)) {
-      var quote = normalize(match.group(1));
-      if (quote.indexOf(' ') < 0) {
-        continue;
-      }
-      // A phrase several criteria hold ("the Sign up button") goes to the one the clause's other
-      // words share most with; with no clear one it names none of them.
-      var holding =
-          criteria.stream()
-              .filter(c -> (" " + normalize(c) + " ").contains(" " + quote + " "))
-              .toList();
-      var best = clearBest(words, holding);
-      if (best >= 0) {
-        quoted.add(criteria.indexOf(holding.get(best)));
-      }
+  private static int quotedCriterion(MatchResult match, Set<String> words, List<String> criteria) {
+    var quote = normalize(match.group(1));
+    if (quote.indexOf(' ') < 0) {
+      return -1;
     }
-    if (!quoted.isEmpty()) {
-      return List.copyOf(quoted);
-    }
+    var holding =
+        criteria.stream()
+            .filter(c -> (" " + normalize(c) + " ").contains(" " + quote + " "))
+            .toList();
+    var best = clearBest(words, holding);
+    return best >= 0 ? criteria.indexOf(holding.get(best)) : -1;
+  }
+
+  /** The criterion {@code words} share half the words of, or -1. */
+  private static int sharedHalf(Set<String> words, List<String> criteria) {
     var at = bestMatch(words, criteria);
     return at >= 0 && shared(words, words(criteria.get(at))) * 2 >= words(criteria.get(at)).size()
-        ? List.of(at)
-        : List.of();
+        ? at
+        : -1;
   }
 
   /**
@@ -595,8 +667,25 @@ final class LinkedIssueCriteria {
         + Objects.requireNonNullElse(finding.description(), "");
   }
 
+  /** The sentences of {@code overview}, never ending inside a {@link #QUOTED} passage. */
   private static List<String> sentences(String overview) {
-    return overview == null ? List.of() : Arrays.asList(SENTENCE_END.split(overview));
+    if (overview == null) {
+      return List.of();
+    }
+    var text = foldQuotes(overview);
+    var quotes = quotes(text);
+    var sentences = new ArrayList<String>();
+    var from = 0;
+    var end = SENTENCE_END.matcher(text);
+    while (end.find()) {
+      var at = end.start();
+      if (quotes.stream().noneMatch(q -> q.start() < at && at < q.end())) {
+        sentences.add(text.substring(from, at));
+        from = end.end();
+      }
+    }
+    sentences.add(text.substring(from));
+    return sentences;
   }
 
   /** The {@link #QUOTED} passages of {@code text}, in the order they start. */
