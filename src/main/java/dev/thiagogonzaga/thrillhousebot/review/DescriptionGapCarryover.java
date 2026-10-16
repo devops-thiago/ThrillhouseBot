@@ -238,16 +238,18 @@ final class DescriptionGapCarryover {
 
     /**
      * {@code list} held to the linked issue ({@link LinkedIssueCitations#screenGaps}) less the gaps
-     * that say there is no gap ({@link DescriptionGapScreen#concedesNoGap}, #1146) or only guess
-     * ({@link DescriptionGapScreen#speculative}, #1127), then through the {@link
-     * DescriptionGapScreen}, less the omission gaps an edited PR text now covers; only held to the
-     * issue and rid of concessions and guesses with no PR text known.
+     * that say there is no gap ({@link DescriptionGapScreen#concedesNoGap}, #1146), assert nothing
+     * ({@link DescriptionGapScreen#assertsNothing}, #1146) or only guess ({@link
+     * DescriptionGapScreen#speculative}, #1127), then through the {@link DescriptionGapScreen},
+     * less the omission gaps an edited PR text now covers; only held to the issue and rid of
+     * concessions and guesses with no PR text known.
      */
     private List<String> screened(List<String> list) {
       var claimed = Objects.requireNonNullElse(prText, "") + "\n" + linkedIssues;
       var held =
           LinkedIssueCitations.screenGaps(list, linkedIssues).stream()
               .filter(gap -> !DescriptionGapScreen.concedesNoGap(gap))
+              .filter(gap -> !DescriptionGapScreen.assertsNothing(gap))
               .filter(gap -> !DescriptionGapScreen.speculative(gap, claimed))
               .toList();
       if (prText == null) {

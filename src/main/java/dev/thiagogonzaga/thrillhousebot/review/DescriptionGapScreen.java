@@ -711,9 +711,10 @@ final class DescriptionGapScreen {
         // In a clause the description is said to state ("the description says no gap remains
         // …"), the words are the claim being reported, not the bullet's verdict.
         var lead = own.substring(0, concession.start());
-        if (!attributedBefore(clauseOf(lead))
+        if (!(pattern == CONCESSIONS.getFirst() && modifiesNoun(own.substring(concession.end())))
+            && !attributedBefore(clauseOf(lead))
             && NEGATED_LEAD.stream().noneMatch(negation -> negation.matcher(lead).find())
-            && !CLAUSE_BREAK.matcher(own.substring(concession.end())).find()) {
+            && !CONCESSION_GOES_ON.matcher(own.substring(concession.end())).find()) {
           return true;
         }
       }
@@ -722,25 +723,131 @@ final class DescriptionGapScreen {
   }
 
   /**
+   * Whether the "no gap" concession ending where {@code rest} starts modifies the noun after it:
+   * "no gap handling", "no gap-handling code".
+   */
+  private static boolean modifiesNoun(String rest) {
+    var next = NEXT_WORD.matcher(rest);
+    return next.find()
+        && (next.group(1) == null
+            || !AFTER_CONCESSION.contains(next.group(1).toLowerCase(Locale.ROOT)));
+  }
+
+  /**
+   * What, after a concession, goes on to state a gap: a clause break, or an exception to it ("the
+   * change matches the description except that it omits the timeout key").
+   */
+  private static final Pattern CONCESSION_GOES_ON =
+      Pattern.compile(
+          CLAUSE_BREAK.pattern()
+              + "|\\b(?:except|unless|apart\\s++from|other\\s++than|save\\s++that)\\b");
+
+  /**
+   * Whether {@code gap} asserts no mismatch: its last clause says only that the material cannot
+   * confirm a claim, or that a criterion appears addressed ("the changed-file list and findings
+   * cannot confirm this parsing behavior", "so no firm unmet criterion is asserted"). A gap naming
+   * code (a code span or a file name) states what that code does, so it is kept even when it adds
+   * that something is unconfirmed, as is every {@code Linked issue #N:} gap. Quoted passages are
+   * the PR text's words, not the bullet's.
+   */
+  static boolean assertsNothing(String gap) {
+    if (DescriptionGapCarryover.linkedIssueGap(gap) != null) {
+      return false;
+    }
+    var own = QUOTED.matcher(foldQuotes(gap)).replaceAll(" ");
+    if (NAMES_CODE.matcher(own).find()) {
+      return false;
+    }
+    var clauses = CLAUSE_BREAK.split(own.strip());
+    for (var at = clauses.length - 1; at >= 0; at--) {
+      if (!clauses[at].isBlank()) {
+        var clause = clauses[at];
+        return NON_ASSERTIONS.stream().anyMatch(shape -> shape.matcher(clause).find());
+      }
+    }
+    return false;
+  }
+
+  /**
+   * A clause saying only that a claim cannot be confirmed or appears met, one pattern per shape:
+   * "cannot confirm", "not independently verifiable", "appear addressed", "no firm unmet
+   * criterion".
+   */
+  private static final List<Pattern> NON_ASSERTIONS =
+      Stream.of(
+              "\\b(?:cannot|can['’]t|could\\s++not|couldn['’]t|unable\\s++to)(?:\\s++be)?"
+                  + "(?:\\s++independently)?\\s++(?:confirm|verify|establish)",
+              "\\bnot\\s++(?:independently\\s++)?(?:verifiable|confirmable|confirmed|verified)\\b",
+              "\\bappears?\\s++(?:to\\s++be\\s++)?(?:addressed|met|satisfied)\\b",
+              "\\bno\\s++firm\\s++(?:unmet|gap|mismatch)\\b")
+          .map(shape -> Pattern.compile("(?i)" + shape))
+          .toList();
+
+  /** A code span, or a file name with an extension. */
+  private static final Pattern NAMES_CODE =
+      Pattern.compile("`[^`\\n]++`|\\b[\\w./-]+\\.[A-Za-z]{1,10}\\b");
+
+  /**
+   * Words that may follow a concession noun that ends its phrase ("no gap beyond the noted scope",
+   * "no gaps between them"); any other word after it is the noun it modifies ("no gap handling").
+   */
+  private static final Set<String> AFTER_CONCESSION =
+      Set.of(
+          "beyond",
+          "between",
+          "in",
+          "here",
+          "there",
+          "remain",
+          "remains",
+          "remaining",
+          "left",
+          "is",
+          "are",
+          "was",
+          "were",
+          "exist",
+          "exists",
+          "found",
+          "from",
+          "against",
+          "with",
+          "to",
+          "at",
+          "on",
+          "versus",
+          "vs",
+          "and",
+          "or",
+          "that",
+          "for",
+          "of");
+
+  /** The word after a concession noun, or a hyphen joining it to one. */
+  private static final Pattern NEXT_WORD = Pattern.compile("^(?:-\\p{L}|\\s++([\\p{L}\\p{N}]++))");
+
+  /**
    * A bullet's own concession that there is no mismatch, one pattern per shape: "no gap", "not
    * contradicted", "matches the description".
    */
   private static final List<Pattern> CONCESSIONS =
       List.of(
-          Pattern.compile("(?i)\\bno\\s++(?:gap|mismatch|contradiction|discrepancy)\\b"),
+          Pattern.compile(
+              "(?i)\\bno\\s++(?:gaps?|mismatch(?:es)?|contradictions?|discrepanc(?:y|ies))\\b"),
           Pattern.compile("(?i)\\bnot\\s++(?:contradicted|a\\s++(?:gap|mismatch))\\b"),
           Pattern.compile(
               "(?i)\\b(?:matches|matched|consistent\\s++with)\\s++the\\s++(?:description|diff)\\b"));
 
   /**
-   * A closing "(disclosed)" or "(disclosed, not contradicted)": the bullet's verdict that the
-   * description already says so. A bare "disclosed" is not one: "every limit is disclosed;
-   * `README.md` omits one" states a gap, and neither is one naming where else it was disclosed:
-   * "(disclosed in the CHANGELOG only)".
+   * A closing "(disclosed)", "(already disclosed)", "(disclosed, not contradicted)" or "(not
+   * contradicted)": the bullet's verdict that the description already says so. A bare "disclosed"
+   * is not one: "every limit is disclosed; `README.md` omits one" states a gap, and neither is one
+   * naming where else it was disclosed: "(disclosed in the CHANGELOG only)".
    */
   private static final Pattern DISCLOSED_VERDICT =
       Pattern.compile(
-          "(?i)\\(\\s*+disclosed(?:\\s*+[,;]\\s*+not\\s++contradicted)?\\s*+\\)\\s*+\\.?\\s*+$");
+          "(?i)\\(\\s*+(?:(?:already|previously)\\s++)?(?:disclosed(?:\\s*+[,;]\\s*+not\\s++"
+              + "contradicted)?|not\\s++contradicted)\\s*+\\)\\s*+\\.?\\s*+$");
 
   /**
    * A negation at most two words before a concession, which turns it into the mismatch, one pattern

@@ -441,7 +441,16 @@ class DescriptionGapScreenTest {
         "The description says the cache is bounded, which is consistent with the description.",
         // A closing "(disclosed)" is the bullet's verdict on what the description says.
         "The description says the live eval was not run (disclosed).",
-        "The description says the live eval was not run (disclosed; not contradicted)"
+        "The description says the live eval was not run (disclosed; not contradicted)",
+        // Plurals, an adverb before "disclosed", and a closing "(not contradicted)".
+        "The description covers it; there are no gaps between the description and the change.",
+        "The description says the export is atomic; the change has no discrepancies.",
+        "The description says the live eval was not run (already disclosed).",
+        "The description says the eval was untested (not contradicted).",
+        // A concession noun ending its phrase before a preposition.
+        "The description says retries are capped; there is no gap between it and `Client.java`.",
+        // Only "no gap" can modify a noun; the other shapes take any word after them.
+        "The description says retries are capped; the change matches the diff exactly."
       })
   void aBulletConcedingThereIsNoMismatchIsRecognised(String gap) {
     assertTrue(DescriptionGapScreen.concedesNoGap(gap));
@@ -486,7 +495,19 @@ class DescriptionGapScreenTest {
         "The description says the parser is unchanged; there is no mismatch in the parser, but"
             + " `Cache.java` drops entries.",
         // The description as the one disclosing.
-        "The description disclosed the burst limit; `README.md` omits it."
+        "The description disclosed the burst limit; `README.md` omits it.",
+        // An exception after the concession states the gap.
+        "The description covers the retry cap; the change matches the description except that it"
+            + " omits the timeout key.",
+        "The description covers the retry cap; the change matches the description though"
+            + " `Client.java` omits the timeout key.",
+        "The description covers the retry cap; the change matches the description unless the"
+            + " timeout key is set.",
+        // "No gap" modifying a noun after it is no verdict.
+        "The description says the retry path is covered; `Client.java` has no gap handling for the"
+            + " timeout case.",
+        "The description says the retry path is covered; `Client.java` has no gap-handling code.",
+        "The description says the export is atomic; it runs no mismatch analysis."
       })
   void aStatedGapOrAnUnmetLinkedIssueCriterionIsNotAConcession(String gap) {
     assertFalse(DescriptionGapScreen.concedesNoGap(gap));
@@ -684,5 +705,53 @@ class DescriptionGapScreenTest {
       })
   void aBulletNotCreditingTheReviewIsNotRecognised(String gap) {
     assertFalse(DescriptionGapScreen.creditsReview(gap));
+  }
+
+  /** #1147's entry (summary comment 6215068789): it says the material cannot confirm a claim. */
+  static final String UNCONFIRMED_1147 =
+      "The description links acceptance criteria from issue #1146 (\"Tests from the #1134 and"
+          + " #1142 bullets: dropped\", \"Test from the #1141 bullet: kept\"); tests for exactly"
+          + " these cases are described and the changed-file list shows additions to"
+          + " DescriptionGapScreenTest and DescriptionGapCarryoverTest, but the material alone cannot"
+          + " confirm each assertion holds as claimed — these criteria appear addressed rather than"
+          + " disproven, so no firm unmet criterion is asserted beyond this note's uncertainty.";
+
+  /** #1137's entry (summary comment 6209544027). */
+  static final String UNCONFIRMED_1137 =
+      "The description says the task-list mark is dropped and the '(N more not shown)' line is not"
+          + " a criterion; the changed-file list and findings cannot confirm this parsing behavior.";
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        UNCONFIRMED_1147,
+        UNCONFIRMED_1137,
+        "The description says the cache is bounded; this is not independently verifiable.",
+        "The description says retries are capped; the criteria appear to be addressed.",
+        "The description says retries are capped; the material can't verify it."
+      })
+  void aBulletThatOnlySaysItCannotConfirmAssertsNothing(String gap) {
+    assertTrue(DescriptionGapScreen.assertsNothing(gap));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // A definite gap naming the code, even with an unconfirmed part.
+        "The description says retries are capped; `Client.java` retries forever, which the tests"
+            + " cannot confirm.",
+        "The description says retries are capped; the tests cannot confirm the cap, and"
+            + " Client.java retries forever.",
+        // A stated mismatch in the last clause.
+        "The description says the cap cannot be verified; the change hard-codes it to 8.",
+        // An unmet criterion of a linked issue.
+        "Linked issue #952: The IaC scan drops a model finding on the same line — the change cannot"
+            + " confirm it.",
+        // The non-assertion is the description's own words, quoted.
+        "The description says \"the cap cannot be verified\", but the change adds a check.",
+        "The description says the README moves unchanged; `docs/RUST-V10.md` rewrites it."
+      })
+  void aBulletStatingAMismatchAssertsSomething(String gap) {
+    assertFalse(DescriptionGapScreen.assertsNothing(gap));
   }
 }

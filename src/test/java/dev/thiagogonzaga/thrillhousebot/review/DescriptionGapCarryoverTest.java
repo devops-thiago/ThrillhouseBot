@@ -1006,6 +1006,28 @@ class DescriptionGapCarryoverTest {
             .descriptionGaps());
   }
 
+  @Test
+  void aGapAssertingNothingIsNotListedFreshOrCarried() {
+    // #1147 and #1137 summaries: each entry says only that the material cannot confirm a claim.
+    var definite =
+        "The description says retries are capped; `Client.java` retries forever, which the tests"
+            + " cannot confirm.";
+    var gaps =
+        List.of(
+            DescriptionGapScreenTest.UNCONFIRMED_1147,
+            DescriptionGapScreenTest.UNCONFIRMED_1137,
+            definite);
+
+    assertEquals(
+        List.of(definite),
+        DescriptionGapCarryover.Carry.NONE.apply(summary(gaps, List.of())).descriptionGaps());
+    assertEquals(
+        List.of(definite),
+        new DescriptionGapCarryover.Carry(gaps, "")
+            .apply(summary(List.of(), List.of()))
+            .descriptionGaps());
+  }
+
   /**
    * A gap that guesses, or credits its claim to a review no finding backs, is not listed, fresh or
    * carried (#1127, PR #1124 summary comment 6200091800).
