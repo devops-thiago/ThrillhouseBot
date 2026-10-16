@@ -2791,5 +2791,8 @@ class SecurityScanTest {
 
     assertEquals(List.of(unread, otherKey), kept.findings());
     assertTrue(SecretScanner.assignedCredentialKeys("x".repeat(1001)).isEmpty());
+    assertEquals(
+        List.of("api_token"),
+        SecretScanner.assignedCredentialKeys("ENV PORT=8080 API_TOKEN=${API_TOKEN}"));
   }
 }
