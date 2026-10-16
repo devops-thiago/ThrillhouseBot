@@ -311,6 +311,12 @@ class InventedArtifactsTest {
           ```
         Done.""",
         InventedArtifacts.withoutInvented(text, change));
+    // The other marker inside a block does not close it.
+    assertEquals(
+        "Done.\n~~~\n```\nIt adds a settings page.\n~~~\nKept.",
+        InventedArtifacts.withoutInvented(
+            "It adds a settings page. Done.\n~~~\n```\nIt adds a settings page.\n~~~\nKept.",
+            change));
     // The blank between paragraphs before a fence stays.
     assertEquals(
         "Done.\r\n```\na settings page\n```",

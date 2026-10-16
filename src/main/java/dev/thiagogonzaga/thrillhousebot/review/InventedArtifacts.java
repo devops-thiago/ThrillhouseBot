@@ -104,14 +104,11 @@ final class InventedArtifacts {
       Pattern.compile("(?<=\\p{Ll})(?=\\p{Lu})|(?<=\\p{Lu})(?=\\p{Lu}\\p{Ll})");
 
   /**
-   * A fenced block: a line opening with a marker (after at most three blanks), closed by the next
-   * line opening with the same marker; an unclosed one runs to the end of the text. A marker inside
-   * a line opens nothing.
+   * A fence marker opening a line, after at most three blanks. A block runs from such a line to the
+   * next line opening with the same marker, or to the end of the text; a marker inside a line opens
+   * nothing.
    */
-  private static final Pattern FENCED =
-      Pattern.compile(
-          "(?m)^[ \t]{0,3}+(```|~~~)[^\n]*+(?:\n(?![ \t]{0,3}+\\1)[^\n]*+)*+"
-              + "(?:\n[ \t]{0,3}+\\1[^\n]*+|\\z)");
+  private static final Pattern FENCE_LINE = Pattern.compile("[ \t]{0,3}+(```|~~~)");
 
   /** A blank line between paragraphs, with the blanks around it; LF or CRLF line ends. */
   private static final Pattern PARAGRAPH_BREAK = Pattern.compile("\r?+\n[ \t]*+\r?+\n\\s*+");
@@ -201,14 +198,31 @@ final class InventedArtifacts {
     }
     // A fenced block is kept as it is; only the prose around it is screened.
     var out = new StringBuilder();
-    var fences = FENCED.matcher(text);
+    var fence = FENCE_LINE.matcher(text);
     var from = 0;
-    while (fences.find()) {
-      out.append(withoutInventedProse(text.substring(from, fences.start()), change))
-          .append(fences.group());
-      from = fences.end();
+    var open = -1;
+    String marker = null;
+    for (var lineStart = 0; lineStart <= text.length(); ) {
+      var lineEnd = text.indexOf('\n', lineStart);
+      lineEnd = lineEnd < 0 ? text.length() : lineEnd;
+      if (fence.region(lineStart, lineEnd).lookingAt()) {
+        if (marker == null) {
+          out.append(withoutInventedProse(text.substring(from, lineStart), change));
+          open = lineStart;
+          marker = fence.group(1);
+        } else if (marker.equals(fence.group(1))) {
+          out.append(text, open, lineEnd);
+          from = lineEnd;
+          marker = null;
+        }
+      }
+      lineStart = lineEnd + 1;
     }
-    out.append(withoutInventedProse(text.substring(from), change));
+    if (marker == null) {
+      out.append(withoutInventedProse(text.substring(from), change));
+    } else {
+      out.append(text, open, text.length());
+    }
     var result = out.toString();
     return result.equals(text) ? text : result;
   }
