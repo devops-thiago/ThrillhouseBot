@@ -104,25 +104,49 @@ final class InventedArtifacts {
       Pattern.compile("(?<=\\p{Ll})(?=\\p{Lu})|(?<=\\p{Lu})(?=\\p{Lu}\\p{Ll})");
 
   /**
-   * A fenced block, closed by the marker that opened it; an unclosed one runs to the end of the
-   * text.
+   * A fenced block: a line opening with a marker (after at most three blanks), closed by the next
+   * line opening with the same marker; an unclosed one runs to the end of the text. A marker inside
+   * a line opens nothing.
    */
-  private static final Pattern FENCED = Pattern.compile("(?s)(```|~~~)(?:(?!\\1).)*+(?:\\1|\\z)");
+  private static final Pattern FENCED =
+      Pattern.compile(
+          "(?m)^[ \t]{0,3}+(```|~~~)[^\n]*+(?:\n(?![ \t]{0,3}+\\1)[^\n]*+)*+"
+              + "(?:\n[ \t]{0,3}+\\1[^\n]*+|\\z)");
 
-  /** A blank line between paragraphs, with the blanks around it. */
-  private static final Pattern PARAGRAPH_BREAK = Pattern.compile("\n[ \t]*+\n\\s*+");
+  /** A blank line between paragraphs, with the blanks around it; LF or CRLF line ends. */
+  private static final Pattern PARAGRAPH_BREAK = Pattern.compile("\r?+\n[ \t]*+\r?+\n\\s*+");
 
   /** A file GitHub sends without a patch because it is binary: images, fonts, archives. */
   private static final Pattern BINARY =
       Pattern.compile("(?i)\\.(?:png|jpe?g|gif|ico|webp|pdf|woff2?|ttf|jar|zip|gz)$");
 
-  /** A negation in an artifact's clause: "does not add", "never ships", "without". */
+  /**
+   * A negation in an artifact's clause: "does not add", "never ships", "without", "nor does it
+   * add", "neither a … nor a …".
+   */
   private static final Pattern NEGATION =
-      Pattern.compile("(?i)\\b(?:not|never|without|no\\s++longer)\\b|n['’]t\\b");
+      Pattern.compile("(?i)\\b(?:not|never|without|nor|neither|no\\s++longer)\\b|n['’]t\\b");
 
-  /** A sentence about taking something out: "removes", "deleted", "drops", "retires". */
+  /**
+   * A verb of taking something out: "removes", "deleted", "drops", "retires". A noun or adjective
+   * made from one ("removal", "deletion", "dropout", "retirement", "dropdown", "removable") is not
+   * a verb, and governs nothing.
+   */
   private static final Pattern REMOVAL =
-      Pattern.compile("(?i)\\b(?:remov|delet|drop|retir)\\w*+(?!-)");
+      Pattern.compile(
+          "(?i)\\b(?:remov|delet|drop|retir)(?!(?:al|ion|out|e?ment|down|able|er)s?\\b)\\w*+(?!-)");
+
+  /**
+   * A conjunction that starts a new statement after a negated one: "ships without config and adds".
+   */
+  private static final Pattern CONJUNCTION = Pattern.compile("(?i)\\b(?:and|or|then|plus)\\b");
+
+  /**
+   * An underscore that opens or closes emphasis ("a _settings page_"): one with no letter or digit
+   * on one side. An underscore inside a word ("a settings_page") stays.
+   */
+  private static final Pattern UNDERSCORE_EMPHASIS =
+      Pattern.compile("(?<![\\p{L}\\p{N}])_++|_++(?![\\p{L}\\p{N}])");
 
   /** A verb of addition, which takes the artifact after it away from an earlier removal verb. */
   private static final Pattern ADDITION =
@@ -229,9 +253,11 @@ final class InventedArtifacts {
    * Settings Screen".
    */
   static boolean invents(String sentence, Change change) {
-    // A qualifier in a code span ("a `settings` page") or in asterisk emphasis ("a **settings
-    // page**") is read as its words.
-    var text = CAMEL_HUMP.matcher(sentence.replace("`", "").replace("*", "")).replaceAll(" ");
+    // A qualifier in a code span ("a `settings` page") or in asterisk or underscore emphasis ("a
+    // **settings page**", "a _settings page_") is read as its words.
+    var plain =
+        UNDERSCORE_EMPHASIS.matcher(sentence.replace("`", "").replace("*", "")).replaceAll("");
+    var text = CAMEL_HUMP.matcher(plain).replaceAll(" ");
     var introduced = INTRODUCED.matcher(text);
     while (introduced.find()) {
       var lead = text.substring(0, introduced.start());
@@ -268,9 +294,10 @@ final class InventedArtifacts {
   /**
    * Whether a {@link #NEGATION} governs the artifact {@code lead} leads to: the negation is in the
    * artifact's clause and either no {@link #ADDITION} verb follows it ("ships without a …"), or the
-   * first one follows within {@value #NEGATED_REACH} words with no contrast between ("does not add
-   * a …", "doesn't yet ship a … or a …"). "does not touch billing but adds a …" and "does not touch
-   * billing and adds a …" are judged.
+   * first one follows within {@value #NEGATED_REACH} words with no contrast or conjunction between
+   * ("does not add a …", "doesn't yet ship a … or a …", "nor does it add a …"). "does not touch
+   * billing but adds a …", "does not touch billing and adds a …" and "ships without config and adds
+   * a …" are judged: the conjunction starts a statement the negation does not reach.
    */
   private static boolean negatedInClause(String lead) {
     var clause = clauseOf(lead);
@@ -287,8 +314,10 @@ final class InventedArtifacts {
     if (!addition.find()) {
       return true;
     }
+    var between = rest.substring(0, addition.start());
     return !CONTRAST.matcher(rest).find()
-        && words(rest.substring(0, addition.start())).size() <= NEGATED_REACH;
+        && !CONJUNCTION.matcher(between).find()
+        && words(between).size() <= NEGATED_REACH;
   }
 
   /** The clause {@code lead} ends in: what follows its last punctuation or dash. */

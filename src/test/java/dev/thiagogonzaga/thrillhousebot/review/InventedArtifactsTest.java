@@ -190,6 +190,66 @@ class InventedArtifactsTest {
   }
 
   @Test
+  void norAndNeitherNegateTheArtifactTheyGovern() {
+    var change = InventedArtifacts.Change.of(List.of(added("web/src/App.tsx", "const app = 1;")));
+
+    assertFalse(
+        InventedArtifacts.invents(
+            "It does not add tests, nor does it add a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It adds neither a screen nor a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It adds neither an audit screen nor tests.", change));
+  }
+
+  @Test
+  void anAdditionJoinedByAConjunctionAfterANegatedObjectIsJudged() {
+    var change = InventedArtifacts.Change.of(List.of(added("web/src/App.tsx", "const app = 1;")));
+
+    // The negation governs "config" or the verb before "and"; "adds" starts a new statement.
+    assertTrue(
+        InventedArtifacts.invents("It ships without config and adds a settings page.", change));
+    assertTrue(InventedArtifacts.invents("It does not bill and adds a settings page.", change));
+    assertTrue(InventedArtifacts.invents("It never fails, then adds a settings page.", change));
+    assertTrue(InventedArtifacts.invents("It does not bill or ships a settings page.", change));
+    // A negation over two coordinated verbs still covers the artifact.
+    assertFalse(InventedArtifacts.invents("It does not add or ship a settings page.", change));
+  }
+
+  @Test
+  void underscoreEmphasisIsReadAsItsWordsButAJoinedNameStaysOneArtifact() {
+    var change = InventedArtifacts.Change.of(List.of(added("web/src/App.tsx", "const app = 1;")));
+
+    assertTrue(InventedArtifacts.invents("It adds a _settings page_ for admins.", change));
+    assertTrue(InventedArtifacts.invents("It adds a __settings page__ for admins.", change));
+    assertTrue(InventedArtifacts.invents("It adds _a_ settings page.", change));
+    assertTrue(InventedArtifacts.invents("It adds a settings_page.", change));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It adds a _settings page_.",
+            InventedArtifacts.Change.of(List.of(added("web/src/SettingsPage.tsx", "x")))));
+  }
+
+  @Test
+  void aNounOfRemovalDoesNotGovernTheArtifact() {
+    var change = InventedArtifacts.Change.of(List.of(added("web/src/App.tsx", "const app = 1;")));
+
+    assertTrue(
+        InventedArtifacts.invents(
+            "It completes the removal of the legacy flow with a settings page.", change));
+    assertTrue(InventedArtifacts.invents("It handles a dropout with a settings page.", change));
+    assertTrue(InventedArtifacts.invents("It speeds up deletion with a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It plans the retirement of the flow via a settings page.", change));
+    assertTrue(InventedArtifacts.invents("It adds a removable settings page.", change));
+    assertTrue(InventedArtifacts.invents("It adds a dropdown with a settings page.", change));
+    // The verbs still govern it.
+    assertFalse(InventedArtifacts.invents("It removes a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It retires a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It is deleting a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It dropped a settings page.", change));
+  }
+
+  @Test
   void nothingToJudgeLeavesTheSummaryAsItIs() {
     var fenced = "Adds the queue.\n```\na settings page\n```";
     var original = summary(fenced, null);
@@ -207,6 +267,51 @@ class InventedArtifactsTest {
     assertEquals(
         "Adds the queue.\n\nIt also adds a build script.",
         InventedArtifacts.withoutInvented(text, InventedArtifacts.Change.of(ZIG_250)));
+  }
+
+  @Test
+  void aCutKeepsACrlfParagraphBreak() {
+    var text = "Adds the queue. It adds a settings page.\r\n\r\nIt also adds a build script.";
+
+    assertEquals(
+        "Adds the queue.\r\n\r\nIt also adds a build script.",
+        InventedArtifacts.withoutInvented(text, InventedArtifacts.Change.of(ZIG_250)));
+  }
+
+  @Test
+  void onlyAMarkerOpeningALineIsAFence() {
+    var change = InventedArtifacts.Change.of(ZIG_250);
+
+    // A marker inside a sentence opens no block: the prose after it is still screened.
+    assertEquals(
+        "The notes quote ``` inline. Done.",
+        InventedArtifacts.withoutInvented(
+            "The notes quote ``` inline. It adds a settings page. Done.", change));
+    assertEquals(
+        "Use ~~~ for blocks. Done.",
+        InventedArtifacts.withoutInvented(
+            "Use ~~~ for blocks.\nIt adds a settings page. Done.", change));
+    // A block closes only at a line opening with its marker.
+    var text =
+        """
+        Adds the queue.
+          ```
+        It adds a settings page. Keep ``` here.
+          ```
+        It adds a settings page. Done.""";
+    assertEquals(
+        """
+        Adds the queue.
+          ```
+        It adds a settings page. Keep ``` here.
+          ```
+        Done.""",
+        InventedArtifacts.withoutInvented(text, change));
+    // The blank between paragraphs before a fence stays.
+    assertEquals(
+        "Done.\r\n```\na settings page\n```",
+        InventedArtifacts.withoutInvented(
+            "It adds a settings page. Done.\r\n```\na settings page\n```", change));
   }
 
   @Test
