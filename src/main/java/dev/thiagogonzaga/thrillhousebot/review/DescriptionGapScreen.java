@@ -702,7 +702,7 @@ final class DescriptionGapScreen {
     var own = QUOTED.matcher(foldQuotes(gap)).replaceAll(" ");
     // A closing "(disclosed)" is set apart from the sentence before it, so it is the verdict even
     // after "the description says" or a negation.
-    if (DISCLOSED_VERDICT.matcher(own).find()) {
+    if (DISCLOSED_VERDICTS.stream().anyMatch(verdict -> verdict.matcher(own).find())) {
       return true;
     }
     for (var pattern : CONCESSIONS) {
@@ -842,10 +842,12 @@ final class DescriptionGapScreen {
    * is not one: "every limit is disclosed; `README.md` omits one" states a gap, and neither is one
    * naming where else it was disclosed: "(disclosed in the CHANGELOG only)".
    */
-  private static final Pattern DISCLOSED_VERDICT =
-      Pattern.compile(
-          "(?i)\\(\\s*+(?:(?:already|previously)\\s++)?(?:disclosed(?:\\s*+[,;]\\s*+not\\s++"
-              + "contradicted)?|not\\s++contradicted)\\s*+\\)\\s*+\\.?\\s*+$");
+  private static final List<Pattern> DISCLOSED_VERDICTS =
+      Stream.of(
+              "(?:(?:already|previously)\\s++)?disclosed(?:\\s*+[,;]\\s*+not\\s++contradicted)?",
+              "not\\s++contradicted")
+          .map(verdict -> Pattern.compile("(?i)\\(\\s*+" + verdict + "\\s*+\\)\\s*+\\.?\\s*+$"))
+          .toList();
 
   /**
    * A negation at most two words before a concession, which turns it into the mismatch, one pattern
