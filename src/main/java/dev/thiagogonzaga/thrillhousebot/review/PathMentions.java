@@ -58,9 +58,11 @@ import java.util.regex.Pattern;
  * </ol>
  *
  * <p>A token none of these resolves is invented: its sentence leaves the summary text, and the
- * mention (with a parenthetical holding only it) leaves a finding's description. A finding is never
- * dropped, and its title and file are never touched. When the repository could not be listed, or
- * the listing was truncated, a token the earlier steps do not resolve is left as written: it may
+ * mention (with a parenthetical holding only it) leaves a finding's description, unless the model
+ * put it in a code span: a name quoted that way is usually missing on purpose ("no {@code
+ * package-lock.json} is added"), and cutting it left the sentence without it (#1095). A finding is
+ * never dropped, and its title and file are never touched. When the repository could not be listed,
+ * or the listing was truncated, a token the earlier steps do not resolve is left as written: it may
  * exist.
  *
  * <p>Two more checks on findings (#1094). A code span in a finding's description that quotes a line
@@ -540,8 +542,9 @@ final class PathMentions {
 
   /**
    * {@code text} without its mentions of paths nothing resolves, mapped paths replaced: a mention
-   * goes with the code span around it, and with the parenthetical when that holds only the mention.
-   * Text that would be left blank is returned as it was.
+   * goes with the parenthetical when that holds only the mention. A mention inside a code span
+   * stays unless the span fills such a parenthetical (#1095). Text that would be left blank is
+   * returned as it was.
    */
   String withoutUnresolvedMentions(String text) {
     if (text == null || text.isBlank()) {
@@ -553,9 +556,28 @@ final class PathMentions {
     }
     var sb = new StringBuilder(rewritten.text());
     var spans = rewritten.unresolved();
+    var code = codeSpans(rewritten.text());
     for (int i = spans.size() - 1; i >= 0; i--) {
-      int[] cut = mentionBounds(sb, spans.get(i)[0], spans.get(i)[1]);
+      int start = spans.get(i)[0];
+      int end = spans.get(i)[1];
+      if (inCodeSpan(code, start) && !spanFillsParenthetical(sb, start, end)) {
+        // #1095: a name the model put in a code span is quoted on purpose ("no
+        // `package-lock.json` is added"); cutting it left "no is added". Only a span that fills a
+        // parenthetical goes, with the parenthetical.
+        continue;
+      }
+      int[] bounds = mentionBounds(sb, start, end);
+      int[] cut = withOpeningSeparator(sb, bounds);
       sb.delete(cut[0], cut[1]);
+      if (cut[1] != bounds[1]) {
+        if (cut[0] > 0 && cut[0] < sb.length() && !Character.isWhitespace(sb.charAt(cut[0]))) {
+          // "It is new. docs/x.md,then …": the cut took the blank before the mention and no blank
+          // followed the separator, so one goes back between the two clauses.
+          sb.insert(cut[0], ' ');
+        }
+        // The clause the mention opened now opens with the word after its separator.
+        capitalizeSentenceStart(sb, cut[0]);
+      }
     }
     var tidy = tidyOutsideFences(sb.toString());
     return tidy.isBlank() ? text : tidy;
@@ -605,6 +627,107 @@ final class PathMentions {
       from--;
     }
     return new int[] {from, to};
+  }
+
+  /**
+   * Whether the mention at {@code start}..{@code end} is the whole of a code span that is the whole
+   * of a parenthetical: {@code (`docs/x.md:4`)}, which goes without leaving a gap in the sentence.
+   */
+  private static boolean spanFillsParenthetical(CharSequence s, int start, int end) {
+    return wraps(s, start, end, '`', '`') && wraps(s, start - 1, end + 1, '(', ')');
+  }
+
+  /**
+   * The inline code spans of {@code text}, outside its fences: runs between backticks, which may
+   * wrap onto the next line ({@link #CODE_SPAN}).
+   */
+  private static List<int[]> codeSpans(String text) {
+    var fenced = new SpanCursor(fences(text));
+    var spans = new ArrayList<int[]>();
+    var matcher = CODE_SPAN.matcher(text);
+    while (matcher.find()) {
+      if (!fenced.covers(matcher.start())) {
+        spans.add(new int[] {matcher.start(), matcher.end()});
+      }
+    }
+    return spans;
+  }
+
+  /** Whether {@code at} is inside one of {@code spans}, which are in text order and disjoint. */
+  private static boolean inCodeSpan(List<int[]> spans, int at) {
+    int low = 0;
+    int high = spans.size() - 1;
+    while (low <= high) {
+      int mid = (low + high) >>> 1;
+      int[] span = spans.get(mid);
+      if (at <= span[0]) {
+        high = mid - 1;
+      } else if (at >= span[1]) {
+        low = mid + 1;
+      } else {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * {@code cut} widened over the comma or semicolon after it, with its blank, when the cut opens a
+   * clause: the text start, a sentence end or a colon before it ("docs/x.md, then …" would leave ",
+   * then …"). Any other cut keeps the separator, which then belongs to the words before it.
+   */
+  private static int[] withOpeningSeparator(CharSequence s, int[] cut) {
+    int to = cut[1];
+    if (to >= s.length() || ",;".indexOf(s.charAt(to)) < 0 || !opensClause(s, cut[0])) {
+      return cut;
+    }
+    // At the text start the blank after the separator goes too; elsewhere the cut took the blank
+    // before the mention, and the one after the separator stays between the two clauses.
+    to++;
+    if (cut[0] == 0 && to < s.length() && s.charAt(to) == ' ') {
+      to++;
+    }
+    return new int[] {cut[0], to};
+  }
+
+  /**
+   * Whether {@code at} is where a clause opens: the text start, or right after {@code .!?:} (a cut
+   * takes the blanks before the mention). The period of an abbreviation ("e.g.", "Dr.", "U.S.",
+   * {@link OverviewScreen#abbreviation}) opens nothing: "Back off, e.g. docs/x.md, and retry" goes
+   * on after it.
+   */
+  private static boolean opensClause(CharSequence s, int at) {
+    if (at == 0) {
+      return true;
+    }
+    char before = s.charAt(at - 1);
+    return before == '.' ? !endsAbbreviation(s, at - 1) : "!?:".indexOf(before) >= 0;
+  }
+
+  /**
+   * Whether the period at {@code period} ends an abbreviation: the word it closes, without the
+   * brackets or quotes that open it, is one {@link OverviewScreen#abbreviation} knows.
+   */
+  private static boolean endsAbbreviation(CharSequence s, int period) {
+    int from = period;
+    while (from > 0 && (Character.isLetter(s.charAt(from - 1)) || s.charAt(from - 1) == '.')) {
+      from--;
+    }
+    return OverviewScreen.abbreviation(
+        s.subSequence(from, period + 1).toString().toLowerCase(Locale.ROOT));
+  }
+
+  /**
+   * The lower-case letter at {@code at}, or after the one blank there, capitalized when it now
+   * opens a sentence: at the text start or after {@code .!?}. After a colon it stays as written.
+   */
+  private static void capitalizeSentenceStart(StringBuilder s, int at) {
+    int i = at < s.length() && s.charAt(at) == ' ' ? at + 1 : at;
+    if (i < s.length()
+        && Character.isLowerCase(s.charAt(i))
+        && (at == 0 || ".!?".indexOf(s.charAt(at - 1)) >= 0)) {
+      s.setCharAt(i, Character.toUpperCase(s.charAt(i)));
+    }
   }
 
   private static boolean wraps(CharSequence s, int start, int end, char open, char close) {

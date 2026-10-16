@@ -114,6 +114,9 @@ public final class DescriptionGapLabels {
   private static final Pattern CITED_LABEL =
       Pattern.compile("(?:(?:" + POINTERS + ")\\s+)?(" + LABELS + ")" + NOT_A_NAME);
 
+  /** What divides a parenthetical into parts: a comma, a semicolon or a spaced dash. */
+  private static final Pattern PART_SEPARATOR = Pattern.compile("[,;]|(?<=\\s)[—–-](?=\\s)");
+
   /** What a parenthetical keeps at its start once its labels are gone: separators only. */
   private static final Pattern LEADING_SEPARATORS = Pattern.compile("^[\\s,;:—–-]+");
 
@@ -260,17 +263,71 @@ public final class DescriptionGapLabels {
   /**
    * A parenthetical without the issued labels it cites: gone when nothing else was in it ("(see
    * G1)"), otherwise kept with the rest of its words ("(G1, still not addressed)" → "(still not
-   * addressed)"). One that cites no issued label is returned as it was.
+   * addressed)"). Its parts are read one by one, between separators, and a part whose label
+   * finishes or starts a phrase goes whole, so "(carried from the earlier review as G1, still
+   * open)" keeps "(still open)" instead of leaving "as" dangling (#1095). One that cites no issued
+   * label is returned as it was.
    */
   private static String withoutCitedLabels(MatchResult parenthetical, int issued) {
     var content = parenthetical.group(2);
-    var rest = replace(CITED_LABEL, content, issued, m -> "");
-    if (rest.equals(content)) {
+    if (replace(CITED_LABEL, content, issued, m -> "").equals(content)) {
       return parenthetical.group();
     }
-    rest = LEADING_SEPARATORS.matcher(rest).replaceFirst("");
-    rest = TRAILING_SEPARATORS.matcher(rest).replaceFirst("");
-    return rest.isEmpty() ? "" : parenthetical.group(1) + "(" + rest + ")";
+    var parts = new ArrayList<String>();
+    var separators = new ArrayList<String>();
+    var divider = PART_SEPARATOR.matcher(content);
+    int at = 0;
+    while (divider.find()) {
+      parts.add(content.substring(at, divider.start()));
+      // Rejoined in the shape it was written: "a, b", "a — b".
+      var mark = divider.group();
+      separators.add(",;".contains(mark) ? mark + " " : " " + mark + " ");
+      at = divider.end();
+    }
+    parts.add(content.substring(at));
+    var kept = new StringBuilder();
+    for (int i = 0; i < parts.size(); i++) {
+      var part = parts.get(i);
+      if (labelInAPhrase(part, issued)) {
+        continue;
+      }
+      part = replace(CITED_LABEL, part, issued, m -> "").strip();
+      if (!part.isEmpty()) {
+        kept.append(kept.isEmpty() ? "" : separators.get(i - 1)).append(part);
+      }
+    }
+    var rest = TRAILING_SEPARATORS.matcher(LEADING_SEPARATORS.matcher(kept).replaceFirst(""));
+    var text = rest.replaceFirst("");
+    return text.isEmpty() ? "" : parenthetical.group(1) + "(" + text + ")";
+  }
+
+  /**
+   * Whether an issued label in a parenthetical's {@code content} is joined to a word by a blank
+   * alone, on either side: the label finishes a phrase ("as G1") or starts one, which its removal
+   * would leave dangling. A label set off by a separator or the parenthesis is not.
+   */
+  private static boolean labelInAPhrase(String content, int issued) {
+    var labels = CITED_LABEL.matcher(content);
+    while (labels.find()) {
+      if (allIssued(labels.group(1), issued)
+          && (wordBeside(content, labels.start() - 1, -1)
+              || wordBeside(content, labels.end(), 1))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether the first character from {@code at}, stepping by {@code step} past blanks and tabs, is
+   * a word.
+   */
+  private static boolean wordBeside(String text, int at, int step) {
+    var i = at;
+    while (i >= 0 && i < text.length() && Character.isWhitespace(text.charAt(i))) {
+      i += step;
+    }
+    return i != at && i >= 0 && i < text.length() && Character.isLetterOrDigit(text.charAt(i));
   }
 
   /** {@code text} without the reference phrases that cite issued labels and close a clause. */
