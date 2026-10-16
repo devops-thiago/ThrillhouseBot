@@ -287,7 +287,7 @@ public class PrSummaryGenerator {
     appendPrPurpose(sb, aiSummary);
     appendDescriptionGaps(
         sb,
-        surfaces.descriptionGaps(),
+        backedByFindings(surfaces.descriptionGaps(), result.findings()),
         descriptionFindings(surfaces.gapFindings(), result.findings(), sources));
     appendWalkthroughDiagram(sb, aiSummary);
 
@@ -725,6 +725,31 @@ public class PrSummaryGenerator {
     }
     // List.copyOf in the Summary constructor guarantees no null elements
     return aiSummary.descriptionGaps().stream().filter(g -> !g.isBlank()).toList();
+  }
+
+  /**
+   * {@code gaps} less every gap that credits its claim to a review pass or a finding ({@link
+   * DescriptionGapScreen#creditsReview}) while none of {@code findings}, the pull request's open
+   * set, states it (#1127). On #1124 a bullet said "a review pass flags" a claim no posted finding
+   * made, and an approving re-review of the same commit kept it. The next round carries only what
+   * is rendered, so a gap dropped here is not carried either.
+   */
+  static List<String> backedByFindings(List<String> gaps, List<Finding> findings) {
+    // The findings' claims are built once, on the first credited gap, for every credited gap.
+    List<SummarySurfaceDeduplicator.Claim> claims = null;
+    var kept = new ArrayList<String>(gaps.size());
+    for (var gap : gaps) {
+      if (DescriptionGapScreen.creditsReview(gap)) {
+        if (claims == null) {
+          claims = SummarySurfaceDeduplicator.claimsOf(findings);
+        }
+        if (!SummarySurfaceDeduplicator.restatesAny(gap, claims)) {
+          continue;
+        }
+      }
+      kept.add(gap);
+    }
+    return kept.size() == gaps.size() ? gaps : kept;
   }
 
   /**

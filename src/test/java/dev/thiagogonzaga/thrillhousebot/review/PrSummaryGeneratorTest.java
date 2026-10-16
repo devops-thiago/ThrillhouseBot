@@ -2364,4 +2364,48 @@ class PrSummaryGeneratorTest {
 
     assertEquals(List.of(cache), named);
   }
+
+  @Test
+  void aGapCreditingTheReviewStandsOnlyWhileAnOpenFindingStatesIt() {
+    // #1127: on #1124 "a review pass flags …" named a claim no posted finding made.
+    var credited =
+        "The description says the DCO check covers every commit; a review pass flags that the"
+            + " dco workflow skips merge commits without a sign-off.";
+    var plain = "The description says the DCO check is required, but no ruleset requires it.";
+    var listed =
+        new Finding(
+            RiskLevel.MEDIUM,
+            Confidence.LOW,
+            ".github/workflows/dco.yml",
+            12,
+            "The dco workflow skips merge commits without a sign-off",
+            "Merge commits are filtered out before the sign-off check.",
+            null,
+            null);
+    var unrelated =
+        new Finding(RiskLevel.LOW, "pom.xml", 3, "Timestamp is fixed", "desc", null, null);
+
+    assertEquals(
+        List.of(plain),
+        PrSummaryGenerator.backedByFindings(List.of(credited, plain), List.of(unrelated)));
+    // A finding listed only under "Things to double-check" still backs it.
+    assertEquals(
+        List.of(credited, plain),
+        PrSummaryGenerator.backedByFindings(List.of(credited, plain), List.of(listed)));
+    // Of two credited gaps, only the one a finding states stays; without any, the list is kept.
+    var unbacked = "A review pass flags that the pom timestamp is not reproducible.";
+    assertEquals(
+        List.of(credited),
+        PrSummaryGenerator.backedByFindings(List.of(credited, unbacked), List.of(listed)));
+    var none = List.of(plain);
+    assertSame(none, PrSummaryGenerator.backedByFindings(none, List.of()));
+
+    var result =
+        new ReviewResult(
+            List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, false, "", List.of(), List.of(), 0);
+    var rendered =
+        new PrSummaryGenerator(false)
+            .generate(1, 5, 0, List.of(), summaryWithGaps(List.of(credited)), result);
+    assertFalse(rendered.contains(PrSummaryGenerator.GAPS_HEADING), rendered);
+  }
 }
