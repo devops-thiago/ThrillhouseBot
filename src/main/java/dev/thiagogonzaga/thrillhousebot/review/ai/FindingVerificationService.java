@@ -1251,6 +1251,30 @@ public class FindingVerificationService {
    */
   static ReviewResponse floorEstablishedConfidence(
       ReviewResponse response, ReviewResponse raised, String diff, FindingEvidence evidence) {
+    return floorEstablishedConfidence(response, raised, codeLines(diff), evidence);
+  }
+
+  /**
+   * The CI half of {@link #floorEstablishedConfidence}, applied to findings already verified: each
+   * one at low confidence that cites a check {@code failing} records is lifted to medium, its
+   * suggestion kept. The orchestrator applies it over the CI section it refreshed after the model
+   * call, to a check that failed while the review ran (#1092, #952). The same instance when nothing
+   * is lifted.
+   */
+  public static ReviewResponse floorCiCitedConfidence(
+      ReviewResponse response, FailingChecks failing) {
+    return floorEstablishedConfidence(
+        response,
+        response,
+        List.of(),
+        new FindingEvidence(CitedLocations.NONE, ContextEvidence.NONE, failing));
+  }
+
+  private static ReviewResponse floorEstablishedConfidence(
+      ReviewResponse response,
+      ReviewResponse raised,
+      List<String> diffLines,
+      FindingEvidence evidence) {
     if (response.findings().isEmpty()) {
       return response;
     }
@@ -1261,7 +1285,6 @@ public class FindingVerificationService {
             .collect(Collectors.toSet());
     Map<String, String> raisedRisk = new HashMap<>();
     raised.findings().forEach(finding -> raisedRisk.putIfAbsent(identity(finding), finding.risk()));
-    List<String> diffLines = codeLines(diff);
     var adjusted = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     var changed = false;
     for (ReviewResponse.Finding finding : response.findings()) {

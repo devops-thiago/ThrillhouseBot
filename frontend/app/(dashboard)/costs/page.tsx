@@ -114,6 +114,7 @@ function CostsContent({
       >
         <h1>Cost Analytics</h1>
         <select
+          aria-label="Period"
           value={period}
           onChange={(e) => setPeriod(e.target.value)}
           style={styles.select}
@@ -164,7 +165,7 @@ function ChartCard({
 }) {
   return (
     <div style={styles.chartCard}>
-      <h3 style={{ marginBottom: "1rem" }}>{title}</h3>
+      <h2 style={styles.chartTitle}>{title}</h2>
       {children}
     </div>
   );
@@ -186,6 +187,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   chartFrame: {
     height: 300,
+  },
+  chartTitle: {
+    fontSize: "1.17em",
+    marginBottom: "1rem",
   },
   select: {
     padding: "0.4rem 0.8rem",

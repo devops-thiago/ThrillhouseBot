@@ -42,7 +42,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   retryBtn: {
     padding: '0.5rem 1rem',
-    background: 'var(--accent)',
+    background: 'var(--accent-emphasis)',
     color: '#fff',
     border: 'none',
     borderRadius: 6,
