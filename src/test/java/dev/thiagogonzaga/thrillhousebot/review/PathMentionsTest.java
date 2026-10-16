@@ -890,7 +890,13 @@ class PathMentionsTest {
     var image =
         List.of(
             new FileDiff(
-                "Dockerfile", "added", 1, 0, 1, "+RUN /usr/local/bin/gcompact-server --check"));
+                "Dockerfile",
+                "added",
+                2,
+                0,
+                2,
+                // A blank line, as a hand-edited patch can carry, is no code line.
+                "+FROM alpine:3.20\n\n+RUN /usr/local/bin/gcompact-server --check"));
 
     assertEquals(
         "`/usr/local/bin/gcompact-server --check` fails.",
