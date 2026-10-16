@@ -739,6 +739,8 @@ class PathMentionsTest {
     assertSame(description, mentions.withQuotedPathsCorrected(description, "zig/Dockerfile"));
     assertSame(description, mentions.withQuotedPathsCorrected(description, "zig/build.zig"));
     assertNull(mentions.withQuotedPathsCorrected(null, "zig/Dockerfile"));
+    // A finding with no file, which a model can raise, is left as written.
+    assertSame(description, mentions.withQuotedPathsCorrected(description, null));
   }
 
   /** A misquote that two paths of the file would fit is left as written: neither is known. */

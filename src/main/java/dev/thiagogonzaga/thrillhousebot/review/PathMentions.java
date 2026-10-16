@@ -50,7 +50,8 @@ import java.util.regex.Pattern;
  *       for {@code c/docs/CONFIG-C.md}, even where a patch quotes the shorter form (#1094);
  *   <li>text the review was given verbatim: a patch, the PR title and description, the linked
  *       issues. A path that is missing on purpose ("the description promises docs/FOO.md, which no
- *       file adds", a {@code COPY} source the build cannot find) is quoted from there;
+ *       file adds", a {@code COPY} source the build cannot find) is quoted from there. A quoted
+ *       path that one changed file ends with is not missing, so the step above completes it first;
  *   <li>the one changed file {@link DiffLineResolver#diffPathFor} maps it onto, which replaces it;
  *   <li>a repository file at the head, from one recursive listing read only when a token reaches
  *       this step.
@@ -686,7 +687,7 @@ final class PathMentions {
    * lines; anything else is left as written.
    */
   String withQuotedPathsCorrected(String description, String file) {
-    if (description == null || description.indexOf('`') < 0) {
+    if (description == null || file == null || description.indexOf('`') < 0) {
       return description;
     }
     var lines = patchLines.get(resolver.diffPathFor(file));
