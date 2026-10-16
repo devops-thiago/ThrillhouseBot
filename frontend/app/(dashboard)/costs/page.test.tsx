@@ -62,4 +62,31 @@ describe('CostsPage', () => {
     });
     expect(costs.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('names the period select and reloads costs for the chosen period', async () => {
+    const costs = vi.fn().mockResolvedValue(mockCostData);
+    vi.mocked(api).mockReturnValue({ costs } as unknown as ReturnType<typeof api>);
+
+    render(<CostsPage />);
+
+    const select = await screen.findByRole('combobox', { name: 'Period' });
+    await userEvent.selectOptions(select, 'week');
+
+    await waitFor(() => {
+      expect(costs).toHaveBeenLastCalledWith('week');
+    });
+  });
+
+  it('puts the chart titles one level below the page heading', async () => {
+    render(<CostsPage />);
+
+    await screen.findByRole('heading', { level: 1, name: 'Cost Analytics' });
+
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
+      'Total Cost (month)',
+      'Cost by Model',
+      'Model Distribution',
+    ]);
+    expect(screen.queryByRole('heading', { level: 3 })).not.toBeInTheDocument();
+  });
 });
