@@ -99,17 +99,17 @@ final class InventedArtifacts {
    * A fenced block, closed by the marker that opened it; an unclosed one runs to the end of the
    * text.
    */
-  private static final Pattern FENCED = Pattern.compile("(?s)(```|~~~).*?(?:\\1|\\z)");
+  private static final Pattern FENCED = Pattern.compile("(?s)(```|~~~)(?:(?!\\1).)*+(?:\\1|\\z)");
 
   /** A file GitHub sends without a patch because it is binary: images, fonts, archives. */
   private static final Pattern BINARY =
       Pattern.compile("(?i)\\.(?:png|jpe?g|gif|ico|webp|pdf|woff2?|ttf|jar|zip|gz)$");
 
-  /** A sentence about taking something out: "removes", "deleted", "drops", "retires". */
   /** A negation in an artifact's clause: "does not add", "never ships", "without". */
   private static final Pattern NEGATION =
       Pattern.compile("(?i)\\b(?:not|never|without|no\\s++longer)\\b|n['’]t\\b");
 
+  /** A sentence about taking something out: "removes", "deleted", "drops", "retires". */
   private static final Pattern REMOVAL =
       Pattern.compile("(?i)\\b(?:remov|delet|drop|retir)\\w*+(?!-)");
 

@@ -179,11 +179,24 @@ class InventedArtifactsTest {
   void aFenceKeepsItsBlockButNotTheProseAroundIt() {
     var change = InventedArtifacts.Change.of(ZIG_250);
     var text =
-        "Adds the queue. It adds a settings page.\n~~~\nIt adds a settings page.\n~~~\n"
-            + "It adds a settings page. Done.\n```\nunclosed";
+        """
+        Adds the queue. It adds a settings page.
+        ~~~
+        It adds a settings page.
+        ~~~
+        It adds a settings page. Done.
+        ```
+        unclosed""";
 
     assertEquals(
-        "Adds the queue.\n~~~\nIt adds a settings page.\n~~~\nDone.\n```\nunclosed",
+        """
+        Adds the queue.
+        ~~~
+        It adds a settings page.
+        ~~~
+        Done.
+        ```
+        unclosed""",
         InventedArtifacts.withoutInvented(text, change));
   }
 
