@@ -242,9 +242,13 @@ final class SummarySurfaceDeduplicator {
    * #collapse} weighs a gap on, demoted findings included: a gap that credits its claim to the
    * review stands while some open finding says it, threaded or listed (#1127).
    */
-  static boolean restatesAny(String text, List<Finding> findings) {
-    var claims = findings.stream().flatMap(finding -> claimsOf(finding).stream()).toList();
-    return restates(claim(text), claims);
+  static boolean restatesAny(String text, List<Claim> findingClaims) {
+    return restates(claim(text), findingClaims);
+  }
+
+  /** The claims of every one of {@code findings}, built once for {@link #restatesAny}. */
+  static List<Claim> claimsOf(List<Finding> findings) {
+    return findings.stream().flatMap(finding -> claimsOf(finding).stream()).toList();
   }
 
   /** Fraction of the shorter title's content words two restating titles share. */

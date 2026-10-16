@@ -455,6 +455,7 @@ class DescriptionGapScreenTest {
         "The description says retries are capped, but the cap may expire.",
         "The description says the DCO check runs on every push; the workflow could skip forks.",
         "The description says the limit holds; it couldn't be enforced on a retry.",
+        "The description says the limit holds; it couldn’t be enforced on a retry.",
         "The description says the export is atomic; it is possibly written in place.",
         // A hedge opening its sentence.
         "The description says the export is atomic. Perhaps the rename is skipped."
@@ -555,6 +556,8 @@ class DescriptionGapScreenTest {
         "The checklist is done, but `a review pass flags every commit` is not backed here.",
         "The description says one finding reports downtime; `health.sh` passes.",
         "The description says the job was flagged by the review, but `ci.yml` passes.",
+        // The criterion of a linked-issue gap is the issue's words.
+        "Linked issue #113: a reviewer flags every listing over the cap — no changed file does.",
         // A reviewer named without a verb crediting the claim.
         "The description says a review step gates releases, but no workflow runs one."
       })

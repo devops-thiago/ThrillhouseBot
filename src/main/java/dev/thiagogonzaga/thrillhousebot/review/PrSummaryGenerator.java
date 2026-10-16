@@ -735,12 +735,19 @@ public class PrSummaryGenerator {
    * is rendered, so a gap dropped here is not carried either.
    */
   static List<String> backedByFindings(List<String> gaps, List<Finding> findings) {
-    return gaps.stream()
-        .filter(
-            gap ->
-                !DescriptionGapScreen.creditsReview(gap)
-                    || SummarySurfaceDeduplicator.restatesAny(gap, findings))
-        .toList();
+    var credited = gaps.stream().map(DescriptionGapScreen::creditsReview).toList();
+    if (!credited.contains(true)) {
+      return gaps;
+    }
+    // The findings' claims are built once for every credited gap.
+    var claims = SummarySurfaceDeduplicator.claimsOf(findings);
+    var kept = new ArrayList<String>(gaps.size());
+    for (var i = 0; i < gaps.size(); i++) {
+      if (!credited.get(i) || SummarySurfaceDeduplicator.restatesAny(gaps.get(i), claims)) {
+        kept.add(gaps.get(i));
+      }
+    }
+    return kept;
   }
 
   /**

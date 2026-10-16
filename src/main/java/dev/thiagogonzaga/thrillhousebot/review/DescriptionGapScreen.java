@@ -430,13 +430,7 @@ final class DescriptionGapScreen {
    * causes. "In which case" always makes the claim conditional.
    */
   static boolean speculative(String gap, String source) {
-    var linked = DescriptionGapCarryover.linkedIssueGap(gap);
-    var own = gap;
-    if (linked != null) {
-      var rest = linked.group(2);
-      own = rest.substring(DescriptionGapCarryover.criterionOf(rest).length());
-    }
-    var unquoted = ownWords(own);
+    var unquoted = ownWords(gap);
     if (CONDITIONAL.matcher(unquoted).find()) {
       return true;
     }
@@ -537,13 +531,20 @@ final class DescriptionGapScreen {
   }
 
   /**
-   * {@code text} as the bullet's own words: quoted passages blanked, and each code span, which
-   * names a symbol ("`may-retry`"), reduced to a placeholder that keeps its backticks as the
-   * evidence of a stated mismatch.
+   * {@code gap} as the bullet's own words: of a {@code Linked issue #N: <criterion> — <evidence>}
+   * gap only the evidence, since the criterion is the issue's; quoted passages blanked, curly
+   * apostrophes folded to straight ones; and each code span, which names a symbol ("`may-retry`"),
+   * reduced to a placeholder that keeps its backticks as the evidence of a stated mismatch.
    */
-  private static String ownWords(String text) {
+  private static String ownWords(String gap) {
+    var linked = DescriptionGapCarryover.linkedIssueGap(gap);
+    var own = gap;
+    if (linked != null) {
+      var rest = linked.group(2);
+      own = rest.substring(DescriptionGapCarryover.criterionOf(rest).length());
+    }
     return STATED_EVIDENCE
-        .matcher(QUOTED.matcher(foldQuotes(text)).replaceAll(" "))
+        .matcher(QUOTED.matcher(foldQuotes(own)).replaceAll(" "))
         .replaceAll("`code`");
   }
 
