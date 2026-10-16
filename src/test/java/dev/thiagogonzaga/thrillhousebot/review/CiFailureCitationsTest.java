@@ -945,4 +945,40 @@ class CiFailureCitationsTest {
 
     assertFalse(sentences.contains("explains"), sentences);
   }
+
+  /**
+   * #952, round 18: python ThrillhouseBot-test#268's round-1 finding was posted at low confidence
+   * because `test` failed after round 1 read CI. Read against the section the CI re-read gives
+   * (#1092), its own words cite the failing test, so the CI-cited floor lifts it.
+   */
+  @Test
+  void theRound18PythonFindingCitesTheTestThatFailedAfterReviewStart() {
+    var citations =
+        CiFailureCitations.parse(
+            """
+            ### test (conclusion: failure)
+            Failing tests named in the job log:
+            - FAIL: test_first_applicant_is_position_one (tests.test_waitlist.WaitlistTest)
+            """);
+    var finding =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            "python/garden_waitlist/waitlist.py",
+            57,
+            "position_of returns a 0-based index, so the first applicant is told they are number 0",
+            "position_of returns the enumerate index from `for index, entry in"
+                + " enumerate(self.store.all_entries()):`, which is 0 for the first entry. join"
+                + " returns this value directly and /signup renders it as `\"You are number"
+                + " {position} on the waitlist.\"`, so the first resident to sign up is told they"
+                + " are number 0. The test test_first_applicant_is_position_one asserts"
+                + " `waitlist.join(\"Ana\", ...) == 1` and `== 2` for the second applicant, i.e."
+                + " 1-based places in line; with the code as written the CI unittest run is"
+                + " expected to fail — the test run will show whether Ana's expected 1 or the"
+                + " returned 0 is right. If 1-based is intended, use enumerate(..., start=1).",
+            null,
+            null);
+
+    assertTrue(citations.cites(finding));
+  }
 }

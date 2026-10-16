@@ -356,4 +356,88 @@ class EstablishedConfidenceFloorTest {
       assertEquals("low", floored(raw, diff), boundary);
     }
   }
+
+  /** Cites the failing check whenever the finding's title is the off-by-one's. */
+  private static FindingEvidence citingTheOffByOne() {
+    return new FindingEvidence(
+        CitedLocations.NONE,
+        ContextEvidence.NONE,
+        finding -> finding.title().equals("Capacity check off by one"));
+  }
+
+  private static ReviewResponse.Finding offByOne(String risk, String confidence, String title) {
+    return new ReviewResponse.Finding(
+        risk,
+        confidence,
+        "go/store.go",
+        45,
+        title,
+        "The guard is `if (shift.signups.length > shift.capacity)`; the failing test confirms it.",
+        "if (shift.signups.length > shift.capacity) {",
+        "if (shift.signups.length >= shift.capacity) {");
+  }
+
+  /**
+   * #952, #156: the audit took a HIGH the failing test confirms down to MEDIUM at low confidence.
+   * The failing check restores the HIGH and lifts the confidence; the fix the audit doubted goes.
+   */
+  @Test
+  void aCiCitedFindingTheAuditDemotedGetsItsRaisedRiskBack() {
+    var raised = offByOne("high", "high", "Capacity check off by one");
+    var audited = offByOne("medium", "low", "Capacity check off by one");
+
+    var floored =
+        FindingVerificationService.floorEstablishedConfidence(
+                response(audited), response(raised), "", citingTheOffByOne())
+            .findings()
+            .getFirst();
+
+    assertEquals("high", floored.risk());
+    assertEquals("medium", floored.confidence());
+    assertNull(floored.suggestionNew());
+  }
+
+  /** A demotion of the risk alone is undone too, and the confidence the audit left stands. */
+  @Test
+  void aCiCitedFindingKeepsItsConfidenceWhenOnlyTheRiskIsRestored() {
+    var raised = offByOne("critical", "medium", "Capacity check off by one");
+    var audited = offByOne("medium", "medium", "Capacity check off by one");
+
+    var floored =
+        FindingVerificationService.floorEstablishedConfidence(
+                response(audited), response(raised), "", citingTheOffByOne())
+            .findings()
+            .getFirst();
+
+    assertEquals("critical", floored.risk());
+    assertEquals("medium", floored.confidence());
+    assertEquals(audited.suggestionNew(), floored.suggestionNew());
+  }
+
+  /**
+   * The audit's grade stands when no failing check is cited, when it kept or raised the risk, and
+   * when it retitled the finding, which then has no raised copy to pair with.
+   */
+  @Test
+  void theAuditsRiskStandsWithoutACiCitationOrARaisedCopy() {
+    var uncited = new FindingEvidence(CitedLocations.NONE, ContextEvidence.NONE, finding -> false);
+    var demoted = response(offByOne("medium", "medium", "Capacity check off by one"));
+    var raisedHigh = response(offByOne("high", "high", "Capacity check off by one"));
+    assertSame(
+        demoted,
+        FindingVerificationService.floorEstablishedConfidence(demoted, raisedHigh, "", uncited));
+
+    var raisedByAudit = response(offByOne("high", "medium", "Capacity check off by one"));
+    var raisedMedium = response(offByOne("medium", "medium", "Capacity check off by one"));
+    assertSame(
+        raisedByAudit,
+        FindingVerificationService.floorEstablishedConfidence(
+            raisedByAudit, raisedMedium, "", citingTheOffByOne()));
+
+    var retitled = new FindingEvidence(CitedLocations.NONE, ContextEvidence.NONE, finding -> true);
+    var renamed = response(offByOne("medium", "medium", "Guard admits one signup too many"));
+    assertSame(
+        renamed,
+        FindingVerificationService.floorEstablishedConfidence(renamed, raisedHigh, "", retitled));
+  }
 }
