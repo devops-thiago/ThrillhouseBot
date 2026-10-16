@@ -152,15 +152,15 @@ final class LinkedIssueCriteria {
       Pattern.compile("(?i)^\\s*+(?:no|not|never|without|missing|lacks?)\\s");
 
   /**
-   * A verb negated inside a clause: "the board does not lock …", "won't lock", "never locks",
-   * "cannot limit", "fails to lock", "lacks a store check", "is unable to". A negated "is", "are",
-   * "was" or "were" states a condition ("shifts that are not yet started"), not a missing
+   * A verb negated inside a clause: "the board does not lock …", "won't lock", "can't lock", "never
+   * locks", "cannot limit", "fails to lock", "lacks a store check", "is unable to". A negated "is",
+   * "are", "was" or "were" states a condition ("shifts that are not yet started"), not a missing
    * behaviour, so it is not one. One pattern per shape.
    */
   private static final List<Pattern> NEGATED_VERB =
       List.of(
           Pattern.compile("(?i)\\b(?:does|do|did|can|will|has|have)(?:\\s++not|n['’]t)\\b"),
-          Pattern.compile("(?i)\\b(?:won['’]t|cannot|never|no\\s++longer)\\b"),
+          Pattern.compile("(?i)\\b(?:won['’]t|can['’]t|cannot|never|no\\s++longer)\\b"),
           Pattern.compile("(?i)\\b(?:lacks?|fails?\\s++to|refus\\w*+\\s++to|unable\\s++to)\\b"));
 
   /** A quoted passage, in double or single quotes (curly quotes folded). */

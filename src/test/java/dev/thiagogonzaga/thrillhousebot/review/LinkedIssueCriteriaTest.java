@@ -307,17 +307,18 @@ class LinkedIssueCriteriaTest {
                 "react/src/components/ShiftBoard.tsx",
                 "Renders Sign-ups closed cards; the board does not allow sign-ups for locked"
                     + " shifts.")));
-    assertEquals(
-        1,
-        unmet(
-                ISSUE_260,
-                List.of(),
-                null,
-                Map.of(
-                    "react/src/components/ShiftBoard.tsx",
-                    "The board won't lock shifts that start within 2 hours."))
-            .lines()
-            .size());
+    for (var row :
+        List.of(
+            "The board won't lock shifts that start within 2 hours.",
+            "The board can't lock shifts that start within 2 hours.",
+            "The board can’t lock shifts that start within 2 hours.")) {
+      assertEquals(
+          1,
+          unmet(ISSUE_260, List.of(), null, Map.of("react/src/components/ShiftBoard.tsx", row))
+              .lines()
+              .size(),
+          row);
+    }
     assertEquals(
         1,
         unmet(
