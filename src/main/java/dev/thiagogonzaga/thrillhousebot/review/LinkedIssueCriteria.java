@@ -204,49 +204,64 @@ final class LinkedIssueCriteria {
     if (keys.size() != 1) {
       return Lines.NONE;
     }
-    var key = keys.getFirst();
-    var criteria = criteria(linkedIssues);
-    var lines = new LinkedHashMap<Integer, String>();
-    var pointed = new LinkedHashSet<Finding>();
+    var placed = new Placed(keys.getFirst(), criteria(linkedIssues), gaps);
     for (var finding : findings) {
       var text = findingText(finding);
-      if (!citesIssue(text)) {
-        continue;
-      }
-      var at = bestMatch(words(text), criteria);
-      if (open(at, lines, criteria, gaps)) {
-        lines.put(
-            at,
-            line(key, criteria.get(at))
-                + FINDING_SEPARATOR
-                + PrSummaryGenerator.findingBullet(finding)
-                    .substring(PrSummaryGenerator.GAP_FINDING_PREFIX.length()));
-        pointed.add(finding);
+      if (citesIssue(text)
+          && placed.place(
+              bestMatch(words(text), placed.criteria()),
+              FINDING_SEPARATOR
+                  + PrSummaryGenerator.findingBullet(finding)
+                      .substring(PrSummaryGenerator.GAP_FINDING_PREFIX.length()))) {
+        placed.pointed().add(finding);
       }
     }
     for (var sentence : sentences(overview)) {
-      for (var at : overviewMatches(sentence, criteria)) {
-        if (open(at, lines, criteria, gaps)) {
-          lines.put(at, line(key, criteria.get(at)) + " — the overview above reports it unmet");
-        }
+      for (var at : overviewMatches(sentence, placed.criteria())) {
+        placed.place(at, " — the overview above reports it unmet");
       }
     }
     for (var row : new TreeMap<>(fileSummaries).entrySet()) {
       for (var clause : CLAUSE_SPLIT.split(row.getValue())) {
-        var at = clauseMatch(clause, criteria);
-        if (open(at, lines, criteria, gaps)) {
-          lines.put(
-              at,
-              line(key, criteria.get(at))
-                  + " — `"
-                  + MarkdownSafe.inlineCode(row.getKey())
-                  + "`: "
-                  + clause.strip());
-        }
+        placed.place(
+            clauseMatch(clause, placed.criteria()),
+            " — `" + MarkdownSafe.inlineCode(row.getKey()) + "`: " + clause.strip());
       }
     }
-    var ordered = new TreeMap<>(lines);
-    return new Lines(List.copyOf(ordered.values()), pointed);
+    return new Lines(List.copyOf(new TreeMap<>(placed.lines()).values()), placed.pointed());
+  }
+
+  /**
+   * The lines placed so far, by criterion position, and the findings they point at.
+   *
+   * @param key the linked issue's key
+   * @param criteria its criteria
+   * @param gaps the section's gaps, a criterion one names gets no line
+   * @param lines the line of each criterion placed
+   * @param pointed the findings a line points at
+   */
+  private record Placed(
+      String key,
+      List<String> criteria,
+      List<String> gaps,
+      Map<Integer, String> lines,
+      Set<Finding> pointed) {
+
+    Placed(String key, List<String> criteria, List<String> gaps) {
+      this(key, criteria, gaps, new LinkedHashMap<>(), new LinkedHashSet<>());
+    }
+
+    /**
+     * Places criterion {@code at}'s line, ending in {@code evidence}, when it still wants one
+     * ({@link #open}); whether it did.
+     */
+    boolean place(int at, String evidence) {
+      if (!open(at, lines, criteria, gaps)) {
+        return false;
+      }
+      lines.put(at, line(key, criteria.get(at)) + evidence);
+      return true;
+    }
   }
 
   /**
