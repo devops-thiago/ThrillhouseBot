@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -25,6 +26,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.regex.MatchResult;
 import java.util.regex.Pattern;
 
 /**
@@ -194,12 +196,14 @@ final class LinkedIssueCriteria {
           Pattern.compile("(?i)\\b(?:lacks?|fails?\\s++to|refus\\w*+\\s++to|unable\\s++to)\\b"));
 
   /**
-   * A quoted passage, in double or single quotes (curly quotes folded). An apostrophe between two
-   * letters is part of a single-quoted passage: 'the council's yearly export'.
+   * A quoted passage, in double or single quotes (curly quotes folded), one pattern per quote. A
+   * single-quoted passage ends at the first quote no letter or digit follows, so an apostrophe
+   * inside it stays: 'the council's yearly export'.
    */
-  private static final Pattern QUOTED =
-      Pattern.compile(
-          "\"([^\"\n]++)\"|(?<![\\p{L}\\p{N}])'((?:[^'\n]|(?<=\\p{L})'(?=\\p{L}))++)'(?![\\p{L}\\p{N}])");
+  private static final List<Pattern> QUOTED =
+      List.of(
+          Pattern.compile("\"([^\"\n]++)\""),
+          Pattern.compile("(?<![\\p{L}\\p{N}])'([^\n]+?)'(?![\\p{L}\\p{N}])"));
 
   private static final Pattern NON_ALPHANUMERIC = Pattern.compile("[^\\p{L}\\p{N}]+");
 
@@ -376,17 +380,13 @@ final class LinkedIssueCriteria {
    * {@link #QUOTED} passage, so a quote holding a comma or a dash stays whole in one clause.
    */
   private static List<String> overviewClauses(String sentence) {
-    var quotes = new ArrayList<int[]>();
-    var quote = QUOTED.matcher(sentence);
-    while (quote.find()) {
-      quotes.add(new int[] {quote.start(), quote.end()});
-    }
+    var quotes = quotes(sentence);
     var clauses = new ArrayList<String>();
     var from = 0;
     var separator = OVERVIEW_CLAUSE.matcher(sentence);
     while (separator.find()) {
       var at = separator.start();
-      if (quotes.stream().noneMatch(q -> q[0] < at && at < q[1])) {
+      if (quotes.stream().noneMatch(q -> q.start() < at && at < q.end())) {
         clauses.add(sentence.substring(from, at));
         from = separator.end();
       }
@@ -514,9 +514,8 @@ final class LinkedIssueCriteria {
   private static List<Integer> stated(String clause, List<String> criteria) {
     var words = words(clause);
     var quoted = new LinkedHashSet<Integer>();
-    var quotes = QUOTED.matcher(clause);
-    while (quotes.find()) {
-      var quote = normalize(quotes.group(quotes.group(1) != null ? 1 : 2));
+    for (var match : quotes(clause)) {
+      var quote = normalize(match.group(1));
       if (quote.indexOf(' ') < 0) {
         continue;
       }
@@ -598,6 +597,14 @@ final class LinkedIssueCriteria {
 
   private static List<String> sentences(String overview) {
     return overview == null ? List.of() : Arrays.asList(SENTENCE_END.split(overview));
+  }
+
+  /** The {@link #QUOTED} passages of {@code text}, in the order they start. */
+  private static List<MatchResult> quotes(String text) {
+    return QUOTED.stream()
+        .flatMap(pattern -> pattern.matcher(text).results())
+        .sorted(Comparator.comparingInt(MatchResult::start))
+        .toList();
   }
 
   private static String foldQuotes(String text) {
