@@ -17,8 +17,11 @@ package dev.thiagogonzaga.thrillhousebot.review.eval;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ChangeSymbols;
 import dev.thiagogonzaga.thrillhousebot.review.Confidence;
@@ -32,8 +35,13 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewer;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrSummarizer;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ResponseCaps;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponseParser;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
+import dev.thiagogonzaga.thrillhousebot.review.ai.SummaryVerificationService;
+import dev.thiagogonzaga.thrillhousebot.review.ai.SummaryVerifier;
+import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import io.quarkus.logging.Log;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -72,6 +80,10 @@ import org.junit.jupiter.api.Test;
  *     ./mvnw test -Peval -Dtest=PromptEvalTest
  * }</pre>
  *
+ * <p>{@code -Deval.only=<name>,<name>} runs only the cases whose name contains one of the given
+ * parts, for a change that touches one prompt alone (the summary verification prompt, #1078, has
+ * its own cases and reaches neither the review nor the verifier prompt).
+ *
  * <p>LLM nondeterminism is absorbed two ways: each case is sampled {@code -Deval.samples} times
  * (default 3) and judged by majority, and the suite tolerates {@code -Deval.tolerated} failing
  * cases (default 0) so a known-unfixed corpus label (an open prompt-hardening issue) can be carried
@@ -89,6 +101,7 @@ class PromptEvalTest {
   private static final int TOLERATED = Integer.getInteger("eval.tolerated", 0);
   private static final long SAMPLE_TIMEOUT_MINUTES = 10;
   private static final int PARSE_ATTEMPTS = 3;
+  private static final String ONLY = System.getProperty("eval.only", "");
 
   /** A generator sample with no parseable review: it matches no expectation, so it fails. */
   private static final String UNPARSED = "unparsed";
@@ -98,6 +111,11 @@ class PromptEvalTest {
   @Inject PrSummarizer prSummarizer;
   @Inject ReviewResponseParser reviewResponseParser;
   @Inject ReviewDimensionRouter dimensionRouter;
+  @Inject SummaryVerifier summaryVerifier;
+  @Inject ObjectMapper mapper;
+  @Inject ReviewTokenLedger tokenLedger;
+  @Inject ResponseCaps responseCaps;
+  @Inject TokenCounter tokenCounter;
 
   @Test
   void promptsReproduceLabeledDogfoodOutcomes() throws Exception {
@@ -108,6 +126,9 @@ class PromptEvalTest {
     var report = new StringBuilder();
     var failed = 0;
     for (EvalCase evalCase : EvalCorpus.load()) {
+      if (!selected(evalCase)) {
+        continue;
+      }
       var passes = 0;
       var outcomes = new StringBuilder();
       for (var sample = 0; sample < SAMPLES; sample++) {
@@ -146,9 +167,20 @@ class PromptEvalTest {
             + report);
   }
 
+  /** Whether {@code -Deval.only} selects the case; with it unset, every case runs. */
+  private static boolean selected(EvalCase evalCase) {
+    return ONLY.isBlank()
+        || Arrays.stream(ONLY.split(","))
+            .map(String::strip)
+            .anyMatch(part -> !part.isEmpty() && evalCase.name().contains(part));
+  }
+
   private String outcomeOf(EvalCase evalCase) throws Exception {
     if (evalCase.isVerifierCase()) {
       return verifierOutcome(evalCase);
+    }
+    if (evalCase.isSummaryVerificationCase()) {
+      return summaryVerificationOutcome(evalCase);
     }
     return evalCase.isSummaryCase() ? summaryOutcome(evalCase) : generatorOutcome(evalCase);
   }
@@ -209,6 +241,59 @@ class PromptEvalTest {
     return mentionsAny(spec.keywords(), String.join("\n", summary.descriptionGaps()))
         ? EvalCase.CLAIM_GAPPED
         : "claim-dropped";
+  }
+
+  /**
+   * Runs the production summary verification step, switched on, over the case's written summary,
+   * diff, PR text and findings, and reports "contradicted-kept" when a statement naming a keyword
+   * is still there, "true-statement-cut" when a kept keyword is gone, and otherwise
+   * "contradicted-cut", or "nothing-cut" for a case that names nothing to cut (#1078). The step
+   * fails open, so a provider failure surfaces as "contradicted-kept".
+   */
+  private String summaryVerificationOutcome(EvalCase evalCase) throws Exception {
+    var spec = evalCase.spec();
+    var config = mock(ThrillhouseConfig.class);
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    var diagram = mock(ThrillhouseConfig.DiagramConfig.class);
+    when(config.review()).thenReturn(review);
+    when(review.summaryVerificationEnabled()).thenReturn(true);
+    when(review.diagram()).thenReturn(diagram);
+    when(diagram.enabled()).thenReturn(true);
+    var service =
+        new SummaryVerificationService(
+            summaryVerifier, config, mapper, tokenLedger, responseCaps, tokenCounter);
+    var findings =
+        spec.findings().stream()
+            .map(
+                f ->
+                    new ReviewResponse.Finding(
+                        f.risk(),
+                        f.confidence(),
+                        f.file(),
+                        f.line(),
+                        f.title(),
+                        f.description(),
+                        f.suggestionOld(),
+                        f.suggestionNew()))
+            .toList();
+    var material =
+        new SummaryVerificationService.Material(
+            PromptTemplateEscaper.fence(
+                PromptSections.prContext(orEmpty(spec.prTitle()), orEmpty(spec.prDescription()))),
+            List.of(evalCase.diff()),
+            "",
+            findings,
+            Integer.MAX_VALUE);
+    // No review session: the unopened sentinel key means no ceiling gates the call.
+    var verified = service.verify(Long.MIN_VALUE, spec.summary(), material);
+    var text = EvalCorpusTest.summaryText(verified);
+    if (spec.keywords().stream().anyMatch(text::contains)) {
+      return "contradicted-kept";
+    }
+    if (!spec.keptKeywords().stream().allMatch(text::contains)) {
+      return "true-statement-cut";
+    }
+    return spec.keywords().isEmpty() ? EvalCase.NOTHING_CUT : EvalCase.CONTRADICTED_CUT;
   }
 
   /**

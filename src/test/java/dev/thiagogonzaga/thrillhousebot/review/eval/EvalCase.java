@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review.eval;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewDimension;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -25,16 +26,20 @@ import java.util.regex.Pattern;
 /**
  * One labeled regression case from the prompt eval corpus: a real dogfood outcome pinned as {@code
  * (diff, candidate finding, expected verdict)} for verifier cases, {@code (diff, expected finding
- * presence)} for generator cases, or {@code (PR text, changed files, findings, a description
- * claim)} for summary cases. Loaded from {@code src/test/resources/evalcorpus/<name>/} by {@link
- * EvalCorpus}: {@code case.json} carries the spec, {@code diff.txt} the diff exactly as the review
- * pipeline formats it ("### path (status, +A -D)" sections with fenced patches).
+ * presence)} for generator cases, {@code (PR text, changed files, findings, a description claim)}
+ * for summary cases, or {@code (diff, findings, a written summary, the statements it must lose and
+ * keep)} for summary verification cases. Loaded from {@code src/test/resources/evalcorpus/<name>/}
+ * by {@link EvalCorpus}: {@code case.json} carries the spec, {@code diff.txt} the diff exactly as
+ * the review pipeline formats it ("### path (status, +A -D)" sections with fenced patches).
  */
 public record EvalCase(String name, String diff, Spec spec) {
 
   static final String KIND_VERIFIER = "verifier";
   static final String KIND_GENERATOR = "generator";
   static final String KIND_SUMMARY = "summary";
+  static final String KIND_SUMMARY_VERIFICATION = "summary-verification";
+  static final String CONTRADICTED_CUT = "contradicted-cut";
+  static final String NOTHING_CUT = "nothing-cut";
   static final String CLAIM_GAPPED = "claim-gapped";
   static final String CLAIM_NOT_GAPPED = "claim-not-gapped";
   static final String MUST_FIND = "must-find";
@@ -58,7 +63,9 @@ public record EvalCase(String name, String diff, Spec spec) {
       List<String> dimensions,
       String learnings,
       String changedFiles,
-      List<CandidateFinding> findings) {}
+      List<CandidateFinding> findings,
+      ReviewResponse.Summary summary,
+      List<String> keptKeywords) {}
 
   /** The candidate finding a verifier case feeds to the second-pass audit. */
   public record CandidateFinding(
@@ -126,5 +133,16 @@ public record EvalCase(String name, String diff, Spec spec) {
    */
   boolean isSummaryCase() {
     return KIND_SUMMARY.equals(spec.kind());
+  }
+
+  /**
+   * A summary verification case (#1078): the written {@code summary}, the diff and the findings go
+   * to the summary verification call, and every statement naming a {@code keywords} entry must be
+   * gone from what comes back while every {@code keptKeywords} entry is still there ({@code
+   * contradicted-cut}), or, for a summary whose every statement is true, nothing may be cut ({@code
+   * nothing-cut}, with no keywords).
+   */
+  boolean isSummaryVerificationCase() {
+    return KIND_SUMMARY_VERIFICATION.equals(spec.kind());
   }
 }

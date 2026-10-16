@@ -47,6 +47,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.PrSummarizer;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponseParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
+import dev.thiagogonzaga.thrillhousebot.review.ai.SummaryVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TestResponseCaps;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager;
@@ -193,7 +194,8 @@ class RetriedFollowUpRoundTest {
             pipelineLedger,
             new TruncatedResponseSalvager(mapper),
             ReviewDimensionRouter.disabled(),
-            scan);
+            scan,
+            SummaryVerificationService.disabled());
     verdictBuilder =
         new VerdictBuilder(
             new PrSummaryGenerator(false), analyzer, BOT, BlockingStrictness.BALANCED);

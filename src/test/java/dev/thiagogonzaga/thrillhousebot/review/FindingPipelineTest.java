@@ -52,6 +52,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningStepDown;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
+import dev.thiagogonzaga.thrillhousebot.review.ai.SummaryVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenSpendCeilingExceededException;
 import java.nio.charset.StandardCharsets;
@@ -104,7 +105,8 @@ class FindingPipelineTest {
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
                 new ObjectMapper()),
             ReviewDimensionRouter.disabled(),
-            SecurityScan.disabled());
+            SecurityScan.disabled(),
+            SummaryVerificationService.disabled());
     when(quoteValidator.validate(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(frameworkFilter.filter(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(deduplicator.dedupe(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -2827,7 +2829,8 @@ class FindingPipelineTest {
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
                 new ObjectMapper()),
             ReviewDimensionRouter.disabled(),
-            SecurityScan.disabled());
+            SecurityScan.disabled(),
+            SummaryVerificationService.disabled());
     var session = persistedSession();
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
@@ -2890,7 +2893,8 @@ class FindingPipelineTest {
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
                 new ObjectMapper()),
             ReviewDimensionRouter.disabled(),
-            SecurityScan.disabled());
+            SecurityScan.disabled(),
+            SummaryVerificationService.disabled());
     var session = persistedSession();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
@@ -3039,7 +3043,8 @@ class FindingPipelineTest {
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
                 new ObjectMapper()),
             ReviewDimensionRouter.disabled(),
-            SecurityScan.disabled());
+            SecurityScan.disabled(),
+            SummaryVerificationService.disabled());
     var session = ReviewSession.create("owner/repo", 1, "PR", "sha");
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
@@ -3133,7 +3138,8 @@ class FindingPipelineTest {
         new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
             new ObjectMapper()),
         new ReviewDimensionRouter(true),
-        SecurityScan.disabled());
+        SecurityScan.disabled(),
+        SummaryVerificationService.disabled());
   }
 
   private static String routedPromptFor(DiffBudgetPlanner.DiffBatch batch) {
@@ -4398,5 +4404,152 @@ class FindingPipelineTest {
             new ReviewResponse.FileSummary("a.java", "renders the row table"),
             new ReviewResponse.FileSummary("b.java", "evicts stale rows")),
         partial.fileSummaries());
+  }
+
+  /**
+   * The pipeline of {@link #setUp} with {@code summaryVerification} in place of the disabled one.
+   */
+  private FindingPipeline pipelineWith(SummaryVerificationService summaryVerification) {
+    return new FindingPipeline(
+        aiReviewService,
+        FindingScreens.of(
+            quoteValidator,
+            frameworkFilter,
+            deduplicator,
+            findingVerificationService,
+            new VerifierRejectionMemory(),
+            budgetPlanner,
+            new TokenCounter()),
+        deduplicator,
+        followUpAnalyzer,
+        new ObjectMapper(),
+        BotIdentity.from(List.of("thrillhousebot[bot]")),
+        budgetPlanner,
+        new TokenCounter(),
+        tokenLedger,
+        new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(
+            new ObjectMapper()),
+        ReviewDimensionRouter.disabled(),
+        SecurityScan.disabled(),
+        summaryVerification);
+  }
+
+  private static ReviewResponse.Summary summaryWithPurpose(String purpose) {
+    return new ReviewResponse.Summary(1, 0, 0, 1, 0, "ok", purpose, List.of());
+  }
+
+  /**
+   * #1078: with the step on, the summary the round persists is the one the verification returns,
+   * checked against the text each batch call read and the findings the round posts.
+   */
+  @Test
+  void theVerifiedSummaryIsPersistedAndCheckedAgainstTheBatchesAndTheFindings() {
+    var summaryVerification = mock(SummaryVerificationService.class);
+    when(summaryVerification.enabled()).thenReturn(true);
+    var verified = summaryWithPurpose("totals usage");
+    when(summaryVerification.verify(anyLong(), any(), any())).thenReturn(verified);
+    var session = persistedSession();
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    var written = summaryWithPurpose("totals usage. writes a billing_runs row");
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), written));
+    when(budgetPlanner.perCallInputBudget()).thenReturn(90_000);
+
+    var result =
+        pipelineWith(summaryVerification)
+            .run(
+                session,
+                new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", ""),
+                reviewContext(),
+                multiBatchPlan(),
+                new DiffLineResolver(Map.of()),
+                ReviewEvidence.NONE);
+
+    var checked = ArgumentCaptor.forClass(ReviewResponse.Summary.class);
+    var material = ArgumentCaptor.forClass(SummaryVerificationService.Material.class);
+    verify(summaryVerification).verify(eq(42L), checked.capture(), material.capture());
+    assertEquals("totals usage. writes a billing_runs row", checked.getValue().prPurpose());
+    assertEquals(List.of("### a.java\n", "### b.java\n"), material.getValue().diffParts());
+    assertEquals(result.findings(), material.getValue().findings());
+    assertEquals("ctx", material.getValue().prContext());
+    assertEquals("stack", material.getValue().projectStack());
+    assertEquals(90_000, material.getValue().inputBudget());
+    assertEquals("totals usage", result.summary().prPurpose());
+    assertTrue(session.getAiResponseJson().contains("\"pr_purpose\":\"totals usage\""));
+  }
+
+  /** #1078: with budgeting off the single call read the whole diff, and so does the check. */
+  @Test
+  void anUnbudgetedReviewIsCheckedAgainstTheWholeDiff() {
+    var summaryVerification = mock(SummaryVerificationService.class);
+    when(summaryVerification.enabled()).thenReturn(true);
+    when(summaryVerification.verify(anyLong(), any(), any())).thenAnswer(inv -> inv.getArgument(1));
+    var session = persistedSession();
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summaryWithPurpose("p")));
+
+    pipelineWith(summaryVerification)
+        .run(
+            session,
+            new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", ""),
+            reviewContext(),
+            new DiffBudgetPlanner.BudgetPlan(
+                List.of(), List.of(), List.of(), false, null, null, null, null),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    var material = ArgumentCaptor.forClass(SummaryVerificationService.Material.class);
+    verify(summaryVerification).verify(anyLong(), any(), material.capture());
+    assertEquals(List.of("raw legacy diff"), material.getValue().diffParts());
+  }
+
+  /** #1078: off (the default), the step is never called and the summary is persisted as written. */
+  @Test
+  void withTheStepOffTheSummaryIsPersistedAsWritten() {
+    var summaryVerification = mock(SummaryVerificationService.class);
+    var session = persistedSession();
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summaryWithPurpose("as written")));
+
+    var result =
+        pipelineWith(summaryVerification)
+            .run(
+                session,
+                new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", ""),
+                reviewContext(),
+                multiBatchPlan(),
+                new DiffLineResolver(Map.of()),
+                ReviewEvidence.NONE);
+
+    verify(summaryVerification, never()).verify(anyLong(), any(), any());
+    assertEquals("as written", result.summary().prPurpose());
+  }
+
+  /** #1078: a degraded summary has no fresh statements to check, so no check is made. */
+  @Test
+  void aDegradedSummaryIsNotChecked() {
+    var summaryVerification = mock(SummaryVerificationService.class);
+    when(summaryVerification.enabled()).thenReturn(true);
+    var session = persistedSession();
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenThrow(new AiReviewException("summary failed", 3, null));
+
+    pipelineWith(summaryVerification)
+        .run(
+            session,
+            new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", ""),
+            reviewContext(),
+            multiBatchPlan(),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    verify(summaryVerification, never()).verify(anyLong(), any(), any());
   }
 }

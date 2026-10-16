@@ -28,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
+import dev.thiagogonzaga.thrillhousebot.review.ai.SummaryVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.Throwables;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenSpendCeilingExceededException;
@@ -211,6 +212,7 @@ public class FindingPipeline {
   private final TruncatedResponseSalvager salvager;
   private final ReviewDimensionRouter dimensionRouter;
   private final SecurityScan securityScan;
+  private final SummaryVerificationService summaryVerification;
 
   @Inject
   public FindingPipeline(
@@ -225,7 +227,8 @@ public class FindingPipeline {
       ReviewTokenLedger tokenLedger,
       TruncatedResponseSalvager salvager,
       ReviewDimensionRouter dimensionRouter,
-      SecurityScan securityScan) {
+      SecurityScan securityScan,
+      SummaryVerificationService summaryVerification) {
     this.aiReviewService = aiReviewService;
     this.findingScreen = findingScreen;
     this.deduplicator = deduplicator;
@@ -238,6 +241,7 @@ public class FindingPipeline {
     this.salvager = salvager;
     this.dimensionRouter = dimensionRouter;
     this.securityScan = securityScan;
+    this.summaryVerification = summaryVerification;
   }
 
   /**
@@ -679,7 +683,40 @@ public class FindingPipeline {
                     + "\n"
                     + findingsText(refined)));
     // #944: an answer with no overview on the head the previous round reviewed keeps that round's.
-    return persistWithSummary(session, refined, PriorOverviewCarryover.fill(screened, ctx), carry);
+    var filled = PriorOverviewCarryover.fill(screened, ctx);
+    // #1078 (opt-in): the statements the diff or an open finding contradicts leave the summary.
+    var verified =
+        summaryVerification.enabled()
+            ? summaryVerification.verify(
+                ledgerSessionId(session),
+                filled,
+                summaryVerificationMaterial(refined, inputs, ctx, plan))
+            : filled;
+    return persistWithSummary(session, refined, verified, carry);
+  }
+
+  /**
+   * What the summary verification call checks the summary against (#1078): the material the finding
+   * verifier reads, at the PR level. The diff is the text the review calls read, one part per
+   * batch, or the whole diff when budgeting is off; the PR text is bounded as on the finding
+   * verifier (#736); the findings are the ones this round posts.
+   */
+  private SummaryVerificationService.Material summaryVerificationMaterial(
+      ReviewResponse refined,
+      AiReviewService.PromptInputs inputs,
+      ReviewContextLoader.ReviewContext ctx,
+      DiffBudgetPlanner.BudgetPlan plan) {
+    var budget = budgetPlanner.perCallInputBudget();
+    var diff =
+        plan.budgeted()
+            ? plan.batches().stream().map(DiffBudgetPlanner.DiffBatch::text).toList()
+            : List.of(Objects.requireNonNullElse(ctx.diff(), ""));
+    return new SummaryVerificationService.Material(
+        PrContextBudget.bound(inputs.prContext(), budget, tokenCounter),
+        diff,
+        inputs.projectStack(),
+        refined.findings(),
+        budget);
   }
 
   /** The titles and descriptions of {@code response}'s findings, one per line. */
