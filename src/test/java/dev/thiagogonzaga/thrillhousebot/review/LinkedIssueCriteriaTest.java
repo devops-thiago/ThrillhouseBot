@@ -635,6 +635,21 @@ class LinkedIssueCriteriaTest {
         lines.getFirst().startsWith("Linked issue #260: Shifts that start"), lines.toString());
   }
 
+  @Test
+  void aQuoteNoCriterionHoldsOrOneRepeatedAddsNoSecondLineAcrossSentences() {
+    // A full stop before and after the quotes ends a sentence; a quote no criterion holds and the
+    // same quote again add nothing.
+    var overview =
+        "Adds the shift board. The issue's 'Sign-ups closed' card is missing and 'no such passage'"
+            + " and the 'Sign-ups closed' card is missing. It also adds 'a footer note'. Done.";
+
+    var lines = unmet(ISSUE_260, List.of(), overview, Map.of()).lines();
+
+    assertEquals(1, lines.size(), lines.toString());
+    assertTrue(
+        lines.getFirst().startsWith("Linked issue #260: Shifts that start"), lines.toString());
+  }
+
   /** A gap the section does not render holds back no criterion line (#1127 with #1093). */
   @Test
   void aGapCreditingTheReviewThatNoFindingBacksDoesNotHoldBackTheCriterionLine() {
