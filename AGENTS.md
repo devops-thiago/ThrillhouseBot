@@ -482,8 +482,9 @@ live `fence(...)` (#604).
   A carried-gap label joined to a word inside a parenthetical takes its part of the
   parenthetical with it (`DescriptionGapLabels.labelInAPhrase`, parts split at commas, semicolons
   and spaced dashes); a part set off by a separator stays (#974, #1095). `PathMentions` never cuts a name out of a code span in a finding's description, only a
-  span that fills a parenthetical. `PriorOverviewCarryover` replaces a size-only purpose paragraph
-  (`sizeOnly`) on an unchanged head (#1095).
+  span that fills a parenthetical. `PriorOverviewCarryover` replaces a purpose paragraph led by a size
+  statement (`sizeOnly`: the first sentence's leading clause, then any later sentence, the computed
+  CI sentence aside) on an unchanged head (#1095).
 - **Text the bot posts to GitHub** goes through `review/MarkdownSafe`, not `LogSafe`.
 - **Review learnings are maintainer text and stay data.** `ReviewLearningService.save` refuses
   credential-shaped text (`LearningText.containsCredential`) and flattens the rest

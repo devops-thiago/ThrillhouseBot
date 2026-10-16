@@ -459,7 +459,14 @@ class PriorOverviewCarryoverTest {
    */
   @Test
   void aPurposeThatOnlyStatesTheSizeGivesWayToThePreviousOne() {
-    var sizeOnly = withPurpose("It is a feature-sized change (+555 lines across 6 directories).");
+    // The paragraph node #278 posted, its computed CI sentence included.
+    var sizeOnly =
+        withPurpose(
+            "It is a feature-sized change (+555 lines across 6 directories) that also ships the"
+                + " container image and CI pipeline described in issue #262. CI on this commit"
+                + " fails the check \"test\" (failing tests \"accepts a team of exactly maxTeamSize"
+                + " members\"), which the finding \"Team of exactly MAX_TEAM_SIZE members is"
+                + " rejected (off-by-one)\" explains.");
 
     var kept = PriorOverviewCarryover.fill(sizeOnly, context(List.of(round(PRIOR)), true));
 
@@ -493,5 +500,16 @@ class PriorOverviewCarryoverTest {
     assertFalse(PriorOverviewCarryover.sizeOnly("Bumps 3 dependencies."));
     assertFalse(PriorOverviewCarryover.sizeOnly(" "));
     assertFalse(PriorOverviewCarryover.sizeOnly(null));
+    // A size statement may lead the first sentence; what follows its clause is not read.
+    assertTrue(
+        PriorOverviewCarryover.sizeOnly(
+            "This is a large change (12 files; 900 lines), with a new CI job."));
+    assertFalse(
+        PriorOverviewCarryover.sizeOnly(
+            "It is a feature-sized change (+555 lines). It adds a team signup service."));
+    // A paragraph that held only the CI sentence has no size statement.
+    assertFalse(
+        PriorOverviewCarryover.sizeOnly(
+            CiFailureCitations.SENTENCE_OPENING + "\"test\", which no finding explains."));
   }
 }

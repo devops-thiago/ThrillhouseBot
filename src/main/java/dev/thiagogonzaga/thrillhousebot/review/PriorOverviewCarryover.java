@@ -135,6 +135,15 @@ final class PriorOverviewCarryover {
   private static final Pattern SIZE_TOKEN =
       Pattern.compile("[+-]?\\d++(?:[,.]\\d++)*+|\\p{L}[\\p{L}'-]*+");
 
+  /** A one-level parenthetical, which a size statement's figures sit in. */
+  private static final Pattern PARENTHETICAL = Pattern.compile("\\([^()]*+\\)");
+
+  /** Where a sentence's leading clause ends. */
+  private static final Pattern CLAUSE_BOUNDARY =
+      Pattern.compile(
+          "[,;:—–]|\\b(?:that|which|and|but|so|while|whereas|to|for|because)\\b",
+          Pattern.CASE_INSENSITIVE);
+
   /** What marks a sentence as being about size: a number, the word "size", or a "-sized" word. */
   private static final Pattern SIZE_MARK = Pattern.compile("\\d|-sized\\b|\\bsized?\\b");
 
@@ -218,16 +227,35 @@ final class PriorOverviewCarryover {
   }
 
   /**
-   * Whether {@code purpose} says only how big the change is: every sentence a size statement, as
-   * {@link #sizeSentence} reads it. The {@link OverviewScreen} can take the sentences on what the
-   * change does out and leave only that (#1095).
+   * Whether {@code purpose} says only how big the change is: its first sentence opens with a size
+   * statement, as {@link #sizeSentence} reads it, and every later sentence is one. A sentence on
+   * the failing CI checks is not counted, since the summary computes it ({@link
+   * CiFailureOverview}). Node ThrillhouseBot-test#278 round 2 wrote only "It is a feature-sized
+   * change (+555 lines across 6 directories) that also ships the container image and CI pipeline
+   * described in issue #262": what the service does was gone, and only a side note followed the
+   * size (#1095).
    */
   static boolean sizeOnly(String purpose) {
     if (isBlank(purpose)) {
       return false;
     }
-    return OverviewScreen.sentences(purpose).stream()
-        .allMatch(PriorOverviewCarryover::sizeSentence);
+    var stated = CiFailureOverview.withoutCiVerdicts(purpose);
+    if (isBlank(stated)) {
+      return false;
+    }
+    var sentences = OverviewScreen.sentences(stated);
+    return sizeSentence(leadingClause(sentences.getFirst()))
+        && sentences.stream().skip(1).allMatch(PriorOverviewCarryover::sizeSentence);
+  }
+
+  /**
+   * {@code sentence} up to its first clause boundary outside parentheses: a comma, semicolon, colon
+   * or dash, or a word that opens another clause ({@code that}, {@code which}, {@code and}).
+   */
+  private static String leadingClause(String sentence) {
+    var flat = PARENTHETICAL.matcher(sentence).replaceAll(m -> " ".repeat(m.group().length()));
+    var boundary = CLAUSE_BOUNDARY.matcher(flat);
+    return boundary.find() ? sentence.substring(0, boundary.start()) : sentence;
   }
 
   /**
