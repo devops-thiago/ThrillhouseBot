@@ -300,7 +300,8 @@ final class InventedArtifacts {
 
     /**
      * Whether the change backs an artifact of {@code kind} that {@code qualifier} names. With an
-     * added file whose lines are unknown, whatever only added lines could show counts as backed.
+     * added file whose lines are unknown, a page, screen or endpoint counts as backed; a migration
+     * is still judged, since a changed path names it as often as a line does.
      */
     boolean backs(List<String> qualifier, String kind) {
       if (!linesComplete && !"migration".equals(kind)) {
