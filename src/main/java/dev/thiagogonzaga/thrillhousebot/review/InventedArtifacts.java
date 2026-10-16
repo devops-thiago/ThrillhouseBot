@@ -95,6 +95,16 @@ final class InventedArtifacts {
 
   private static final Pattern CAMEL_HUMP = Pattern.compile("(?<=\\p{Ll})(?=\\p{Lu})");
 
+  /**
+   * A fenced block, closed by the marker that opened it; an unclosed one runs to the end of the
+   * text.
+   */
+  private static final Pattern FENCED = Pattern.compile("(?s)(```|~~~).*?(?:\\1|\\z)");
+
+  /** A file GitHub sends without a patch because it is binary: images, fonts, archives. */
+  private static final Pattern BINARY =
+      Pattern.compile("(?i)\\.(?:png|jpe?g|gif|ico|webp|pdf|woff2?|ttf|jar|zip|gz)$");
+
   /** A sentence about taking something out: "removes", "deleted", "drops", "retires". */
   private static final Pattern REMOVAL = Pattern.compile("(?i)\\b(?:remov|delet|drop|retir)\\w*+");
 
@@ -139,12 +149,37 @@ final class InventedArtifacts {
 
   /** {@code text} without its sentences introducing an artifact {@code change} does not back. */
   static String withoutInvented(String text, Change change) {
-    if (text == null || text.isBlank() || text.contains("```") || text.contains("~~~")) {
+    if (text == null || text.isBlank()) {
       return text;
     }
-    var sentences = OverviewScreen.sentences(text);
+    // A fenced block is kept as it is; only the prose around it is screened.
+    var out = new StringBuilder();
+    var fences = FENCED.matcher(text);
+    var from = 0;
+    while (fences.find()) {
+      out.append(withoutInventedProse(text.substring(from, fences.start()), change))
+          .append(fences.group());
+      from = fences.end();
+    }
+    out.append(withoutInventedProse(text.substring(from), change));
+    var result = out.toString();
+    return result.equals(text) ? text : result;
+  }
+
+  /** {@code prose}, holding no fence, without its sentences that invent an artifact. */
+  private static String withoutInventedProse(String prose, Change change) {
+    if (prose.isBlank()) {
+      return prose;
+    }
+    var sentences = OverviewScreen.sentences(prose);
     var kept = sentences.stream().filter(sentence -> !invents(sentence, change)).toList();
-    return kept.size() == sentences.size() ? text : String.join(" ", kept);
+    if (kept.size() == sentences.size()) {
+      return prose;
+    }
+    // Keep the blanks that separated the prose from a fence around it.
+    var lead = prose.substring(0, prose.length() - prose.stripLeading().length());
+    var tail = prose.substring(prose.stripTrailing().length());
+    return lead + String.join(" ", kept) + tail;
   }
 
   /**
@@ -155,7 +190,8 @@ final class InventedArtifacts {
    * Settings Screen".
    */
   static boolean invents(String sentence, Change change) {
-    var text = CAMEL_HUMP.matcher(sentence).replaceAll(" ");
+    // A qualifier in a code span ("a `settings` page") is read as its words.
+    var text = CAMEL_HUMP.matcher(sentence.replace("`", "")).replaceAll(" ");
     var introduced = INTRODUCED.matcher(text);
     while (introduced.find()) {
       if (removedInClause(text.substring(0, introduced.start()))) {
@@ -197,16 +233,26 @@ final class InventedArtifacts {
    *
    * @param pathWords the words of each changed path, camel humps split
    * @param addedLines the words of each added line, camel humps split, in order
+   * @param linesComplete whether every added file's lines are known: false when GitHub sent no
+   *     patch for a text file that adds lines
    */
-  record Change(List<List<String>> pathWords, List<List<String>> addedLines) {
+  record Change(
+      List<List<String>> pathWords, List<List<String>> addedLines, boolean linesComplete) {
 
     static Change of(List<GitHubPullRequestClient.FileDiff> files) {
       var paths = new ArrayList<List<String>>();
       var added = new ArrayList<List<String>>();
+      var complete = true;
       for (var file : files) {
         // A deleted file is not something the change adds.
         if (!"removed".equals(file.status())) {
           paths.add(words(file.filename()));
+          // GitHub sends no patch for an oversized file: its added lines are unknown. A binary
+          // file has none to know.
+          complete &=
+              file.patch() != null
+                  || file.additions() == 0
+                  || BINARY.matcher(file.filename()).find();
         }
         var patch = Objects.requireNonNullElse(file.patch(), "");
         for (var line : patch.split("\n", -1)) {
@@ -215,11 +261,17 @@ final class InventedArtifacts {
           }
         }
       }
-      return new Change(paths, added);
+      return new Change(paths, added, complete);
     }
 
-    /** Whether the change backs an artifact of {@code kind} that {@code qualifier} names. */
+    /**
+     * Whether the change backs an artifact of {@code kind} that {@code qualifier} names. With an
+     * added file whose lines are unknown, whatever only added lines could show counts as backed.
+     */
     boolean backs(List<String> qualifier, String kind) {
+      if (!linesComplete && !"migration".equals(kind)) {
+        return true;
+      }
       return switch (kind) {
         case "migration" ->
             Stream.concat(pathWords.stream(), addedLines.stream())

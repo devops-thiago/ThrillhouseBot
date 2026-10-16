@@ -47,7 +47,8 @@ class InventedArtifactsTest {
           added("zig/build.zig", "const std = @import(\"std\");"),
           added("zig/src/main.zig", "if (std.mem.eql(u8, path, \"/scan\")) return scan(req);"),
           added("zig/src/manifest.zig", "pub fn write(rack: []const u8) !void {}"),
-          new FileDiff("zig/src/queue.zig", "added", 1, 0, 1, null));
+          new FileDiff("zig/assets/logo.png", "added", 1, 0, 1, null),
+          new FileDiff("zig/src/empty.zig", "added", 0, 0, 0, null));
 
   /** The #250 overview's second sentence (summary comment 6126003362). */
   private static final String INVENTED =
@@ -161,16 +162,38 @@ class InventedArtifactsTest {
 
   @Test
   void nothingToJudgeLeavesTheSummaryAsItIs() {
-    var fenced = "It adds a settings page:\n```\ncode\n```";
+    var fenced = "Adds the queue.\n```\na settings page\n```";
     var original = summary(fenced, null);
 
     assertNull(InventedArtifacts.screen(null, ZIG_250));
     assertSame(original, InventedArtifacts.screen(original, List.of()));
     assertSame(original, InventedArtifacts.screen(original, ZIG_250));
-    var tilde = "It adds a settings page:\n~~~\ncode\n~~~";
-    assertEquals(
-        tilde, InventedArtifacts.withoutInvented(tilde, InventedArtifacts.Change.of(ZIG_250)));
     assertEquals("", InventedArtifacts.withoutInvented("", InventedArtifacts.Change.of(ZIG_250)));
+  }
+
+  @Test
+  void aFenceKeepsItsBlockButNotTheProseAroundIt() {
+    var change = InventedArtifacts.Change.of(ZIG_250);
+    var text =
+        "Adds the queue. It adds a settings page.\n~~~\nIt adds a settings page.\n~~~\n"
+            + "It adds a settings page. Done.\n```\nunclosed";
+
+    assertEquals(
+        "Adds the queue.\n~~~\nIt adds a settings page.\n~~~\nDone.\n```\nunclosed",
+        InventedArtifacts.withoutInvented(text, change));
+  }
+
+  @Test
+  void aQualifierInACodeSpanIsReadAndUnknownAddedLinesBackWhatOnlyTheyCouldShow() {
+    var change = InventedArtifacts.Change.of(ZIG_250);
+    assertTrue(InventedArtifacts.invents("It adds a `profile` page.", change));
+
+    // An oversized file's patch is not sent: its added lines might declare the endpoint.
+    var oversized =
+        InventedArtifacts.Change.of(
+            List.of(new FileDiff("api/routes.go", "modified", 4000, 0, 4000, null)));
+    assertFalse(InventedArtifacts.invents("It adds a metrics endpoint.", oversized));
+    assertTrue(InventedArtifacts.invents("It adds a users migration.", oversized));
   }
 
   @Test
