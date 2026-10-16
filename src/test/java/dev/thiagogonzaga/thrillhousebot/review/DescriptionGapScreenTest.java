@@ -450,7 +450,9 @@ class DescriptionGapScreenTest {
         // A hedge ending the bullet.
         "The description says the cap is enforced, and it might.",
         // A condition is a guess even after a consequence word.
-        "The description says the cap holds, so the save is rejected in which case it fails."
+        "The description says the cap holds, so the save is rejected in which case it fails.",
+        // A consequence word after no stated mismatch does not make the guess a gap.
+        "The description says the API is stable, so clients might break."
       })
   void aHedgeInTheBulletsOwnWordsIsAGuess(String gap) {
     assertTrue(DescriptionGapScreen.speculative(gap, DescriptionGapScreen.normalize(RUST_159)));
@@ -463,7 +465,7 @@ class DescriptionGapScreenTest {
         "The description says the README moves unchanged; `docs/RUST-V10.md` rewrites it.",
         // A definite gap weighing what it causes.
         "The description says retries are capped; `Client.java` retries forever, so callers"
-            + " might hang. Its queue is unbounded, which means data may be dropped.",
+            + " might hang. Queue.java is unbounded, which means data may be dropped.",
         // The hedge is the description's own, quoted.
         "The description says \"tokens may be reused once\", but `Auth.java` rejects a reuse.",
         // The hedge is the issue's criterion, not the bullet's evidence.
@@ -486,6 +488,10 @@ class DescriptionGapScreenTest {
     assertFalse(DescriptionGapScreen.speculative(paraphrased, source));
     assertTrue(
         DescriptionGapScreen.speculative(paraphrased, DescriptionGapScreen.normalize(PR_1124)));
+    // A hedge with no word after it paraphrases nothing, whatever the source holds.
+    assertTrue(
+        DescriptionGapScreen.speculative(
+            "The description says the cache is bounded, and the bound may be.", source));
   }
 
   @ParameterizedTest
@@ -506,7 +512,10 @@ class DescriptionGapScreenTest {
       strings = {
         "The description says the README moves unchanged; `docs/RUST-V10.md` rewrites it.",
         "The description promises a review step for releases, but no workflow runs one.",
-        "The description says findings are posted inline, but `Publisher.java` lists them."
+        "The description says findings are posted inline, but `Publisher.java` lists them.",
+        // The credit is the description's own words: stated, or quoted.
+        "The description says one reviewer reported downtime; `health.sh` reports healthy.",
+        "The description says \"a review pass flags every commit\", but `dco.yml` skips merges."
       })
   void aBulletNotCreditingTheReviewIsNotRecognised(String gap) {
     assertFalse(DescriptionGapScreen.creditsReview(gap));

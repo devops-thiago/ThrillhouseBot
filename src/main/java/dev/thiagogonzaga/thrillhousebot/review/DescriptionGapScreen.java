@@ -289,6 +289,9 @@ final class DescriptionGapScreen {
   private static final Pattern CONSEQUENCE =
       Pattern.compile("(?i)\\b(?:so|which\\s++means|meaning|causing|hence|therefore|thus)\\b");
 
+  /** A backticked span: code the bullet names as what the change does. */
+  private static final Pattern STATED_EVIDENCE = Pattern.compile("`[^`\n]++`");
+
   /** Where a sentence or clause list ends, for {@link #CONSEQUENCE}. */
   private static final Pattern SENTENCE_END = Pattern.compile("[.;!?](?=\\s|$)");
 
@@ -433,14 +436,34 @@ final class DescriptionGapScreen {
     for (var pattern : SPECULATION) {
       var hedge = pattern.matcher(unquoted);
       while (hedge.find()) {
-        var phrase = normalize(hedge.group() + " " + firstWord(unquoted.substring(hedge.end())));
-        if (!haystack.contains(" " + phrase + " ")
-            && !CONSEQUENCE.matcher(sentenceBefore(unquoted, hedge.start())).find()) {
+        var next = firstWord(unquoted.substring(hedge.end()));
+        var paraphrased =
+            !next.isEmpty() && haystack.contains(" " + normalize(hedge.group() + " " + next) + " ");
+        if (!paraphrased && !followsStatedMismatch(sentenceBefore(unquoted, hedge.start()))) {
           return true;
         }
       }
     }
     return false;
+  }
+
+  /**
+   * Whether {@code lead}, a sentence up to a hedge, ends in a {@link #CONSEQUENCE} of a mismatch
+   * the bullet states: the text before the consequence word names the code ({@link
+   * #STATED_EVIDENCE}), as "`Client.java` retries forever, so" does. "The description says the API
+   * is stable, so" states no mismatch, so a hedge after it is still a guess.
+   */
+  private static boolean followsStatedMismatch(String lead) {
+    var consequence = CONSEQUENCE.matcher(lead);
+    var at = -1;
+    while (consequence.find()) {
+      at = consequence.start();
+    }
+    if (at < 0) {
+      return false;
+    }
+    var stated = lead.substring(0, at);
+    return STATED_EVIDENCE.matcher(stated).find() || anyFinds(NAMED_FILES, stated);
   }
 
   /** The part of {@code text}'s sentence that comes before {@code at}. */
@@ -462,10 +485,21 @@ final class DescriptionGapScreen {
   /**
    * Whether {@code gap} credits its claim to a review pass or a finding ({@link #REVIEW_CREDIT},
    * #1127): "a review pass flags that …". Such a bullet is the review's claim, not the
-   * description's, and stands only while an open finding states it; on #1124 none did.
+   * description's, and stands only while an open finding states it; on #1124 none did. Quoted
+   * passages, and a clause the description is said to state ("the description says one reviewer
+   * reported downtime"), are the PR text's words, not the bullet's.
    */
   static boolean creditsReview(String gap) {
-    return anyFinds(REVIEW_CREDIT, foldQuotes(gap));
+    var unquoted = QUOTED.matcher(foldQuotes(gap)).replaceAll(" ");
+    for (var pattern : REVIEW_CREDIT) {
+      var credit = pattern.matcher(unquoted);
+      while (credit.find()) {
+        if (!attributedBefore(clauseOf(unquoted.substring(0, credit.start())))) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**
