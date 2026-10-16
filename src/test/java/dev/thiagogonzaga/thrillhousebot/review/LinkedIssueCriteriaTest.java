@@ -277,6 +277,11 @@ class LinkedIssueCriteriaTest {
     var praise = "The issue's 'declines two offers' rule never fails to honor the waitlist.";
 
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), praise, Map.of()));
+    // "n't" is no praising negation: it still says the rule is not honored.
+    var contracted = "The issue's 'declines two offers' rule isn't honored.";
+    var lines = unmet(ISSUE_256, List.of(), contracted, Map.of()).lines();
+    assertEquals(1, lines.size(), lines.toString());
+    assertTrue(lines.getFirst().startsWith("Linked issue #256: An applicant"), lines.toString());
   }
 
   @Test
