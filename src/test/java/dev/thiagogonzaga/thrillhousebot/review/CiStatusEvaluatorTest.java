@@ -865,6 +865,36 @@ class CiStatusEvaluatorTest {
     }
 
     @Test
+    void theCheckRunReReadReadsOnlyTheCheckRuns() {
+      var runs =
+          List.of(
+              run(1L, "build", "completed", "success", "github-actions", null),
+              run(2L, "test", "completed", "failure", "github-actions", "1 test failed"),
+              run(3L, "e2e", "queued", null, "github-actions", null));
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(runs.size(), runs));
+
+      var failures = evaluator.checkRunFailures("auth", "owner", "repo", "sha").orElseThrow();
+
+      assertEquals(
+          List.of("test"),
+          failures.failed().stream().map(CiStatusEvaluator.FailedCheck::name).toList());
+      assertEquals("1 test failed", failures.failed().get(0).title());
+      assertEquals(1, failures.pending());
+      verify(checkRunClient, never())
+          .getCombinedStatus(any(), any(), any(), any(), any(), anyInt(), anyInt());
+      verify(checkRunClient, never()).getBranchRules(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void anUnreadableCheckRunReReadIsEmpty() {
+      when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
+          .thenThrow(new RuntimeException("503"));
+
+      assertTrue(evaluator.checkRunFailures("auth", "owner", "repo", "sha").isEmpty());
+    }
+
+    @Test
     void anEvaluationBuiltWithoutDetailCarriesNone() {
       var evaluation = new CiStatusEvaluator.CiEvaluation(List.of(), false, true, null);
 
