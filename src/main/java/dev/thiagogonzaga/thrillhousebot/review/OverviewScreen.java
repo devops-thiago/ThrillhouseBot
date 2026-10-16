@@ -924,9 +924,7 @@ final class OverviewScreen {
       var next = text.charAt(ends.end());
       var midSentence =
           Character.isLowerCase(next)
-              || MID_SENTENCE_ABBREVIATIONS.contains(lastWord)
-              || TITLE_ABBREVIATIONS.contains(lastWord)
-              || INITIALISM.matcher(lastWord).matches()
+              || abbreviation(lastWord)
               || (REFERENCE_ABBREVIATIONS.contains(lastWord) && Character.isDigit(next));
       if (!midSentence) {
         result.add(before);
@@ -935,6 +933,17 @@ final class OverviewScreen {
     }
     result.add(text.substring(start));
     return result;
+  }
+
+  /**
+   * Whether {@code word}, lower-cased and with its period, is an abbreviation whose period ends no
+   * sentence whatever follows: "e.g.", "i.e.", "vs." ({@link #MID_SENTENCE_ABBREVIATIONS}), a title
+   * ({@link #TITLE_ABBREVIATIONS}: "dr.") or an initialism ("u.s.").
+   */
+  static boolean abbreviation(String word) {
+    return MID_SENTENCE_ABBREVIATIONS.contains(word)
+        || TITLE_ABBREVIATIONS.contains(word)
+        || INITIALISM.matcher(word).matches();
   }
 
   /**
