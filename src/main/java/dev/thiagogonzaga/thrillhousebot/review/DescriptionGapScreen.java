@@ -396,12 +396,19 @@ final class DescriptionGapScreen {
       return false;
     }
     var own = QUOTED.matcher(foldQuotes(gap)).replaceAll(" ");
+    // A closing "(disclosed)" is set apart from the sentence before it, so it is the verdict even
+    // after "the description says" or a negation.
+    if (DISCLOSED_VERDICT.matcher(own).find()) {
+      return true;
+    }
     for (var pattern : CONCESSIONS) {
       var concession = pattern.matcher(own);
       while (concession.find()) {
         // In a clause the description is said to state ("the description says no gap remains
         // …"), the words are the claim being reported, not the bullet's verdict.
-        if (!attributedBefore(clauseOf(own.substring(0, concession.start())))
+        var lead = own.substring(0, concession.start());
+        if (!attributedBefore(clauseOf(lead))
+            && !NEGATED_LEAD.matcher(lead).find()
             && !CLAUSE_BREAK.matcher(own.substring(concession.end())).find()) {
           return true;
         }
@@ -419,8 +426,22 @@ final class DescriptionGapScreen {
           Pattern.compile("(?i)\\bno\\s++(?:gap|mismatch|contradiction|discrepancy)\\b"),
           Pattern.compile("(?i)\\bnot\\s++(?:contradicted|a\\s++(?:gap|mismatch))\\b"),
           Pattern.compile(
-              "(?i)(?<!\\bnot\\s)(?<!\\bnever\\s)\\b(?:matches|matched|consistent\\s++with)"
-                  + "\\s++the\\s++(?:description|diff)\\b"));
+              "(?i)\\b(?:matches|matched|consistent\\s++with)\\s++the\\s++(?:description|diff)\\b"));
+
+  /**
+   * A closing "(disclosed)" or "(disclosed, …)": the bullet's verdict that the description already
+   * says so. A bare "disclosed" is not one: "every limit is disclosed; `README.md` omits one"
+   * states a gap.
+   */
+  private static final Pattern DISCLOSED_VERDICT =
+      Pattern.compile("(?i)\\(\\s*+disclosed\\b[^)]*+\\)\\s*+\\.?\\s*+$");
+
+  /**
+   * A negation at most two words before a concession, which turns it into the mismatch: "is not
+   * consistent with", "isn't consistent with", "is not at all consistent with", "never matches".
+   */
+  private static final Pattern NEGATED_LEAD =
+      Pattern.compile("(?i)(?:\\b(?:not|never)|n['’]t)(?:\\s++[\\p{L}-]++){0,2}\\s++$");
 
   /** Whether {@code gap} names the description, its title, the author or a linked issue. */
   static boolean cites(String gap) {

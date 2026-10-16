@@ -438,7 +438,10 @@ class DescriptionGapScreenTest {
         DISCLOSED_1134,
         NO_GAP_1142,
         "The description says retries are capped; `Client.java` caps them, so there is no mismatch.",
-        "The description says the cache is bounded, which is consistent with the description."
+        "The description says the cache is bounded, which is consistent with the description.",
+        // A closing "(disclosed)" is the bullet's verdict on what the description says.
+        "The description says the live eval was not run (disclosed).",
+        "The description says the live eval was not run (disclosed by the author)"
       })
   void aBulletConcedingThereIsNoMismatchIsRecognised(String gap) {
     assertTrue(DescriptionGapScreen.concedesNoGap(gap));
@@ -463,6 +466,15 @@ class DescriptionGapScreenTest {
         "The description says retries are capped; `Client.java` is not consistent with the"
             + " description.",
         "The description says the cap is 8; the change never matches the description.",
+        "The description says retries are capped; `Client.java` isn't consistent with the"
+            + " description.",
+        "The description says the cap is 8; the change is not at all consistent with the"
+            + " description.",
+        "The description says the cap is 8; the change doesn't really match the description.",
+        // "Disclosed" outside a closing parenthesis, or negated inside one, is no verdict.
+        "The description says the eval ran; the skipped eval is disclosed (in the CHANGELOG only)"
+            + " and `ci.yml` drops it.",
+        "The description says the export is atomic; the rename is (not disclosed).",
         "The description says the export is atomic; the rename is not disclosed.",
         // A concession the bullet goes on past states a gap after it.
         "The description says the parser is unchanged; there is no mismatch in the parser, but"
