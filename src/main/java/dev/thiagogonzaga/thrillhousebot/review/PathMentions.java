@@ -570,10 +570,7 @@ final class PathMentions {
       int[] cut = withOpeningSeparator(sb, bounds);
       sb.delete(cut[0], cut[1]);
       if (cut[1] != bounds[1]) {
-        if (cut[0] > 0
-            && cut[0] < sb.length()
-            && !Character.isWhitespace(sb.charAt(cut[0] - 1))
-            && !Character.isWhitespace(sb.charAt(cut[0]))) {
+        if (cut[0] > 0 && cut[0] < sb.length() && !Character.isWhitespace(sb.charAt(cut[0]))) {
           // "It is new. docs/x.md,then …": the cut took the blank before the mention and no blank
           // followed the separator, so one goes back between the two clauses.
           sb.insert(cut[0], ' ');

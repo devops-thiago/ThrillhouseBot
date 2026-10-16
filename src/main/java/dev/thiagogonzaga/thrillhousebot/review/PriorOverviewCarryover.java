@@ -138,24 +138,29 @@ final class PriorOverviewCarryover {
   /** A one-level parenthetical, which a size statement's figures sit in. */
   private static final Pattern PARENTHETICAL = Pattern.compile("\\([^()]*+\\)");
 
-  /**
-   * Where a sentence's leading clause ends. A comma between digits groups a number ("1,204") and
-   * ends nothing.
-   */
+  /** Where a sentence's leading clause ends. */
   private static final Pattern CLAUSE_BOUNDARY =
       Pattern.compile(
-          "(?<!\\d),|,(?!\\d)|[;:—–]|\\b(?:that|which|and|but|so|while|whereas|to|for|because)\\b",
+          "[,;:—–]|\\b(?:that|which|and|but|so|while|whereas|to|for|because)\\b",
           Pattern.CASE_INSENSITIVE);
 
+  /** A comma that groups a number's digits ("1,204"), which ends no clause. */
+  private static final Pattern DIGIT_GROUP = Pattern.compile("(?<=\\d),(?=\\d)");
+
   /**
-   * How the rest of a size-led first sentence opens when it is only a side note: an addition ("with
-   * a new CI job", "plus a README") or something the change "also" does. Anything else there says
-   * what the change does ("… that adds a team signup service").
+   * How the rest of a size-led first sentence opens when it is an addition, a side note: "with a
+   * new CI job", "plus a README".
    */
-  private static final Pattern SIDE_NOTE =
+  private static final Pattern ADDITION_NOTE =
+      Pattern.compile("[\\s,;:—–]*+(?:with|plus|including)\\b", Pattern.CASE_INSENSITIVE);
+
+  /**
+   * How the rest of a size-led first sentence opens when it says what the change "also" does, a
+   * side note: "that also ships the container image".
+   */
+  private static final Pattern ALSO_NOTE =
       Pattern.compile(
-          "[\\s,;:—–]*+(?:(?:with|plus|including)\\b"
-              + "|(?:(?:that|which|and|while|but)\\s++)?(?:it\\s++)?also\\b)",
+          "[\\s,;:—–]*+(?:(?:that|which|and|while|but)\\s++)?(?:it\\s++)?also\\b",
           Pattern.CASE_INSENSITIVE);
 
   /** What marks a sentence as being about size: a number, the word "size", or a "-sized" word. */
@@ -242,12 +247,12 @@ final class PriorOverviewCarryover {
 
   /**
    * Whether {@code purpose} says only how big the change is: its first sentence opens with a size
-   * statement, as {@link #sizeSentence} reads it, followed by nothing or by a {@link #SIDE_NOTE},
-   * and every later sentence is one. A sentence on the failing CI checks is not counted, since the
-   * summary computes it ({@link CiFailureOverview}). Node ThrillhouseBot-test#278 round 2 wrote
-   * only "It is a feature-sized change (+555 lines across 6 directories) that also ships the
-   * container image and CI pipeline described in issue #262": what the service does was gone, and
-   * only a side note followed the size (#1095).
+   * statement, as {@link #sizeSentence} reads it, followed by nothing or by a side note ({@link
+   * #sideNote}), and every later sentence is one. A sentence on the failing CI checks is not
+   * counted, since the summary computes it ({@link CiFailureOverview}). Node
+   * ThrillhouseBot-test#278 round 2 wrote only "It is a feature-sized change (+555 lines across 6
+   * directories) that also ships the container image and CI pipeline described in issue #262": what
+   * the service does was gone, and only a side note followed the size (#1095).
    */
   static boolean sizeOnly(String purpose) {
     if (isBlank(purpose)) {
@@ -262,8 +267,20 @@ final class PriorOverviewCarryover {
     var lead = leadingClause(first);
     var rest = first.substring(lead.length());
     return sizeSentence(lead)
-        && (rest.isBlank() || SIDE_NOTE.matcher(rest).lookingAt())
+        && sideNote(rest)
         && sentences.stream().skip(1).allMatch(PriorOverviewCarryover::sizeSentence);
+  }
+
+  /**
+   * Whether {@code rest}, what follows a size statement in its sentence, adds nothing on what the
+   * change does: it is blank, an addition ({@link #ADDITION_NOTE}) or something the change also
+   * does ({@link #ALSO_NOTE}). Anything else there says what the change does ("… that adds a team
+   * signup service").
+   */
+  private static boolean sideNote(String rest) {
+    return rest.isBlank()
+        || ADDITION_NOTE.matcher(rest).lookingAt()
+        || ALSO_NOTE.matcher(rest).lookingAt();
   }
 
   /**
@@ -272,6 +289,7 @@ final class PriorOverviewCarryover {
    */
   private static String leadingClause(String sentence) {
     var flat = PARENTHETICAL.matcher(sentence).replaceAll(m -> " ".repeat(m.group().length()));
+    flat = DIGIT_GROUP.matcher(flat).replaceAll(" ");
     var boundary = CLAUSE_BOUNDARY.matcher(flat);
     return boundary.find() ? sentence.substring(0, boundary.start()) : sentence;
   }
