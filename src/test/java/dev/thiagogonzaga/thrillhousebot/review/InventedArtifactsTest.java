@@ -89,7 +89,8 @@ class InventedArtifactsTest {
         "It serves a new /scan endpoint.",
         // No qualifier, or only a vague one: nothing to judge.
         "It writes results to a page.",
-        "It adds a separate docs page."
+        "It adds a separate docs page.",
+        "It serves a new HTTPS endpoint."
       })
   void aSentenceTheChangeBacksIsKept(String sentence) {
     var original = summary(sentence, sentence);

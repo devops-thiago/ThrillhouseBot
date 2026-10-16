@@ -88,6 +88,9 @@ final class InventedArtifacts {
           "documentation",
           "api",
           "http",
+          "https",
+          "grpc",
+          "graphql",
           "rest",
           "web");
 
