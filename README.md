@@ -276,7 +276,7 @@ uppercase, with `.` and `-` replaced by `_` (`thrillhousebot.review.ignored-file
 Every optional feature added in 0.7.0 is off by default. Each one validates its
 bounds at boot while it is on.
 
-#### AI provider
+### AI provider
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -290,7 +290,7 @@ bounds at boot while it is on.
 | `AI_REASONING_EFFORT` | Effort for the review and the on-demand commands: `none`, `low`, `medium`, `high`, `xhigh` or `max`. Reasoning tokens are billed as output. See **Reading a cut response** under [Per-model AI settings](#per-model-ai-settings) | `low` |
 | `AI_REASONING_EFFORT_CONCISE` | Effort for the calls on the `concise` model (summary, verifier, replies), which do not follow `AI_REASONING_EFFORT`. Same values. Unset means `low`, or `AI_REASONING_EFFORT` when that is lower | `low` |
 
-#### GitHub and webhooks
+### GitHub and webhooks
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -306,7 +306,7 @@ bounds at boot while it is on.
 | `MANUAL_TRIGGER_AUTH_TIMEOUT` | Time limit on the write-access check for a command. Slower answers from GitHub deny the command | `5s` |
 | `ACK_REACTION_TIMEOUT` | Time limit on posting the 👀 reaction; the reaction may land late | `3s` |
 
-#### Automatic review triggers
+### Automatic review triggers
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -317,7 +317,7 @@ bounds at boot while it is on.
 | `WEBHOOK_BASE_BRANCHES` | Comma-separated globs; auto-review only PRs whose base branch matches one (`main,release/*`). `*` does not cross `/`; use `**` for that | _(empty, all branches)_ |
 | `WEBHOOK_IGNORED_BASE_BRANCHES` | Comma-separated globs; skip PRs whose base branch matches one (`dependabot/**`). Wins over the allowlist | _(empty)_ |
 
-#### Review behaviour
+### Review behaviour
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -344,7 +344,7 @@ bounds at boot while it is on.
 | `REVIEW_LABELS_ALLOW_CREATE` | Allow creating a suggested label that does not exist yet | `false` |
 | `REVIEW_LABELS_MAX` | Most labels applied or suggested per PR | `3` |
 
-#### Token and call budget
+### Token and call budget
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -359,7 +359,7 @@ bounds at boot while it is on.
 | `THRILLHOUSEBOT_REVIEW_AI_RETRY_BASE_DELAY_MS` | Base delay of the exponential retry backoff, in milliseconds | `2000` |
 | `THRILLHOUSEBOT_REVIEW_AI_TIMEOUT_SECONDS` | Client-side wait per streaming attempt. Keep it at or above `AI_TIMEOUT` so a timed-out attempt does not leave a stream open at the provider. A second timeout fails the call | `300` |
 
-#### Optional review context
+### Optional review context
 
 All off by default. The CI, linked-issue and learnings sections are fenced as
 untrusted data in the prompt and counted in the per-call token budget.
@@ -380,7 +380,7 @@ untrusted data in the prompt and counted in the per-call token budget.
 | `REVIEW_LEARNINGS_PROMPT_MAX_ITEMS` | Most learnings in one review prompt (1–50) | `10` |
 | `REVIEW_LEARNINGS_PROMPT_MAX_CHARS` | Character cap on the learnings section (500–20000) | `3000` |
 
-#### Security scan
+### Security scan
 
 | Variable | Purpose | Default |
 |---|---|---|
@@ -389,7 +389,7 @@ untrusted data in the prompt and counted in the per-call token budget.
 | `REVIEW_SECRET_SCAN_ENTROPY_THRESHOLD` | Minimum Shannon entropy (bits per character) for the generic credential-assignment rule; the known token formats ignore it. Must be in (0, 8] | `3.5` |
 | `REVIEW_SECURITY_SCAN_SKIPPED_FILES` | Comma-separated globs the scan skips on top of the review's ignore list, for fixtures and snapshots | `**/fixtures/**,**/__fixtures__/**,**/testdata/**,**/test-data/**,**/__snapshots__/**,**/*.snap` |
 
-#### Outgoing notifications
+### Outgoing notifications
 
 See [Outgoing notifications](#outgoing-notifications).
 
@@ -404,7 +404,7 @@ See [Outgoing notifications](#outgoing-notifications).
 | `NOTIFICATIONS_WEBHOOK_TIMEOUT` | Per-attempt timeout (at most `60s`) | `10s` |
 | `NOTIFICATIONS_WEBHOOK_MAX_ATTEMPTS` | Attempts per notification (1–5). A timeout, connection failure, `429` or `5xx` is retried after 1, 2, 4 and 8 seconds, then dropped with a WARN | `3` |
 
-#### Dashboard, database and runtime
+### Dashboard, database and runtime
 
 | Variable | Purpose | Default |
 |---|---|---|

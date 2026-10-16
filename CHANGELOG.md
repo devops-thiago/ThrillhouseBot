@@ -10,6 +10,7 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **Accessibility fixes on the dashboard and the docs site** (#1123): the period selects on the Costs and Tokens pages had no accessible name, and their chart titles were `<h3>` directly under the page `<h1>`. The selects are now labelled "Period" and the titles are `<h2>` at the same size. White button text on the light accent blue had a contrast ratio of 2.5:1; solid buttons (sign in, Retry) now use a darker blue. On the docs site, the Configuration page jumped from the page title to `<h4>` and the logo's alt text repeated the site title next to it. Lighthouse now scores 100 for accessibility on every dashboard page and on the docs Configuration page.
 - **The dashboard login page no longer fails in mock mode** (#1128): the page sent a signed-in user to the overview by setting `window.location.href` while rendering. Mock mode starts signed in, so the server render threw `window is not defined`: `npm run dev:mock` answered `/dashboard/` with a 500 and a mock-mode `next build` failed. The redirect now runs after render. The normal production build was not affected, because its server render stops at "Loading...".
 
 ## [0.7.1] — 2026-10-13
