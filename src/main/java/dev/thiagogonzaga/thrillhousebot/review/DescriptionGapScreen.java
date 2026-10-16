@@ -316,7 +316,7 @@ final class DescriptionGapScreen {
   /** A claim credited to the review in the passive (#1127): "flagged by the review". */
   private static final Pattern REVIEW_PASSIVE =
       Pattern.compile(
-          "(?i)\\b(?:flagged|noted|raised|reported)\\s++(?:by|in)\\s++"
+          "(?i)\\b(?:flagged|noted|raised|reported|found|warned|suggested|said)\\s++(?:by|in)\\s++"
               + "(?:an?|the)\\s++(?:(?:earlier|previous|prior)\\s++)?review");
 
   /** Content words a PR-text sentence needs before a finding can paraphrase it. */
@@ -465,7 +465,8 @@ final class DescriptionGapScreen {
    */
   private static String hedgeInContext(String lead, String hedge, String rest) {
     var before = normalize(lead);
-    var after = normalize(rest).split(" ");
+    var end = SENTENCE_END.matcher(rest);
+    var after = normalize(end.find() ? rest.substring(0, end.start()) : rest).split(" ");
     if (before.isEmpty() || after.length < 2) {
       return null;
     }

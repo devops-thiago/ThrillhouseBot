@@ -508,6 +508,15 @@ class DescriptionGapScreenTest {
         DescriptionGapScreen.speculative(
             "The description says the cache is bounded; the retry loop might collapse the pool.",
             "The rate limiter might collapse under sustained load."));
+    // A bullet with no full stop is one sentence.
+    assertFalse(
+        DescriptionGapScreen.speculative(
+            "The description says answers that may be stale are edited, but none are", source));
+    // A hedge ending its sentence takes no context from the next one.
+    assertTrue(
+        DescriptionGapScreen.speculative(
+            "The description says the cap holds, and the bound might. Be checked against it.",
+            "The bound might be checked against the source in the old format."));
     // A hedge's context is read within one sentence of the source.
     assertTrue(
         DescriptionGapScreen.speculative(
@@ -525,6 +534,7 @@ class DescriptionGapScreenTest {
         "One finding raises the DCO question; nothing in the diff adds a sign-off.",
         "A finding found that `dco.yml` skips merges.",
         "The review says the description overstates the cap.",
+        "The description says every commit is signed; the gap was found by the review.",
         "The description says X; the reviewer found `dco.yml` does Y."
       })
   void aBulletCreditingTheReviewIsRecognised(String gap) {
@@ -542,6 +552,7 @@ class DescriptionGapScreenTest {
         "The description says \"a review pass flags every commit\", but `dco.yml` skips merges.",
         "The checklist is done, but `a review pass flags every commit` is not backed here.",
         "The description says one finding reports downtime; `health.sh` passes.",
+        "The description says the job was flagged by the review, but `ci.yml` passes.",
         // A reviewer named without a verb crediting the claim.
         "The description says a review step gates releases, but no workflow runs one."
       })
