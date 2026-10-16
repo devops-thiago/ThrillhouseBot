@@ -210,6 +210,10 @@ class InventedArtifactsTest {
     assertTrue(InventedArtifacts.invents("It does not bill and adds a settings page.", change));
     assertTrue(InventedArtifacts.invents("It never fails, then adds a settings page.", change));
     assertTrue(InventedArtifacts.invents("It does not bill or ships a settings page.", change));
+    // More than two words between the negation and the addition verb, with no conjunction.
+    assertTrue(
+        InventedArtifacts.invents(
+            "It does not touch billing code yet adds a settings page.", change));
     // A negation over two coordinated verbs still covers the artifact.
     assertFalse(InventedArtifacts.invents("It does not add or ship a settings page.", change));
   }
