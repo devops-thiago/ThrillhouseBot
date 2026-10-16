@@ -975,6 +975,59 @@ class DescriptionGapCarryoverTest {
     }
   }
 
+  @Test
+  void aGapConcedingThereIsNoMismatchIsNotListedButAnUnmetLinkedCriterionIs() {
+    // #1134, #1142 and #1141 summaries: the first two bullets say they are no gap; the third
+    // reports an unmet criterion of linked issue #952 and stays, carried or fresh.
+    var linked952 =
+        """
+        Issues this pull request is linked to: #952
+
+        ### Issue #952: Findings backed by the diff or by CI
+        Linked by: a reference in the PR body
+        Acceptance criteria (from the issue):
+        - [ ] The IaC scan drops a model finding on the same line and same rule
+        """;
+    var gaps =
+        List.of(
+            DescriptionGapScreenTest.DISCLOSED_1134,
+            DescriptionGapScreenTest.NO_GAP_1142,
+            DescriptionGapScreenTest.LINKED_1141);
+
+    assertEquals(
+        List.of(DescriptionGapScreenTest.LINKED_1141),
+        new DescriptionGapCarryover.Carry(List.of(), linked952)
+            .apply(summary(gaps, List.of()))
+            .descriptionGaps());
+    assertEquals(
+        List.of(DescriptionGapScreenTest.LINKED_1141),
+        new DescriptionGapCarryover.Carry(gaps, linked952)
+            .apply(summary(List.of(), List.of()))
+            .descriptionGaps());
+  }
+
+  @Test
+  void aGapAssertingNothingIsNotListedFreshOrCarried() {
+    // #1147 and #1137 summaries: each entry says only that the material cannot confirm a claim.
+    var definite =
+        "The description says retries are capped; `Client.java` retries forever, which the tests"
+            + " cannot confirm.";
+    var gaps =
+        List.of(
+            DescriptionGapScreenTest.UNCONFIRMED_1147,
+            DescriptionGapScreenTest.UNCONFIRMED_1137,
+            definite);
+
+    assertEquals(
+        List.of(definite),
+        DescriptionGapCarryover.Carry.NONE.apply(summary(gaps, List.of())).descriptionGaps());
+    assertEquals(
+        List.of(definite),
+        new DescriptionGapCarryover.Carry(gaps, "")
+            .apply(summary(List.of(), List.of()))
+            .descriptionGaps());
+  }
+
   /**
    * A gap that guesses, or credits its claim to a review no finding backs, is not listed, fresh or
    * carried (#1127, PR #1124 summary comment 6200091800).
