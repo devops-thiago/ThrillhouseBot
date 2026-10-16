@@ -283,8 +283,16 @@ final class DescriptionGapScreen {
           Pattern.compile("(?i)(?<![\\w-])(?:possibly|perhaps|presumably|maybe)(?![\\w-])"),
           Pattern.compile("(?i)(?<![\\w-])(?:likely|probably|potentially|seemingly)(?![\\w-])"));
 
-  /** Where the PR text splits into sentences before a hedge's context is looked up in it. */
-  private static final Pattern SOURCE_SENTENCE = Pattern.compile("[.!?;:](?=\\s|$)|\n");
+  /**
+   * Where the PR text splits into sentences before a hedge's context is looked up in it: the
+   * sentence ends a bullet's hedge is bounded by ({@link #SENTENCE_END}), a blank line, and a new
+   * list item. A line wrapped inside a sentence does not split it.
+   */
+  private static final Pattern SOURCE_SENTENCE =
+      Pattern.compile("[.;!?](?=\\s|$)|\n\\s*+\n|\n(?=\\s*+(?:[-*+]|\\d++[.)])\\s)");
+
+  /** The month, capitalised inside its sentence: "cut in May", not the modal verb. */
+  private static final String MONTH = "May";
 
   /** A condition the claim rests on: always a guess, wherever it sits. */
   private static final Pattern CONDITIONAL = Pattern.compile("(?i)\\bin\\s++which\\s++case\\b");
@@ -472,6 +480,9 @@ final class DescriptionGapScreen {
       var hedge = pattern.matcher(unquoted);
       while (hedge.find()) {
         var lead = sentenceBefore(unquoted, hedge.start());
+        if (hedge.group().equals(MONTH) && !lead.isBlank()) {
+          continue;
+        }
         var context = hedgeInContext(lead, hedge.group(), unquoted.substring(hedge.end()));
         var paraphrased = context != null && haystack.contains(" " + context + " ");
         if (!paraphrased && !followsStatedMismatch(lead)) {

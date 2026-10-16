@@ -462,8 +462,9 @@ class DescriptionGapScreenTest {
         "The description says the export is atomic; the rename probably happens late.",
         "The description says the token is checked; it is potentially reused.",
         "The description says the queue drains; it seemingly stalls.",
-        // A hedge opening its sentence.
-        "The description says the export is atomic. Perhaps the rename is skipped."
+        // A hedge opening its sentence, the capitalised modal verb included.
+        "The description says the export is atomic. Perhaps the rename is skipped.",
+        "The description says the export is atomic. May be written in place."
       })
   void aHedgeInTheBulletsOwnWordsIsAGuess(String gap) {
     assertTrue(DescriptionGapScreen.speculative(gap, RUST_159));
@@ -479,6 +480,8 @@ class DescriptionGapScreenTest {
             + " might hang. Queue.java is unbounded, which means data may be dropped.",
         // The hedge is the description's own, quoted.
         "The description says \"tokens may be reused once\", but `Auth.java` rejects a reuse.",
+        // The month is not the modal verb.
+        "The description says the release is cut in May, but `release.yml` hard-codes June.",
         // A symbol a code span names is not a hedge, nor is a hyphenated name.
         "The description says the `may-retry` flag is respected, but `Client.java` ignores it.",
         "The description says the may-retry flag is respected, but Client.java ignores it.",
@@ -525,6 +528,15 @@ class DescriptionGapScreenTest {
         DescriptionGapScreen.speculative(
             "The description says the cap holds, and the bound might. Be checked against it.",
             "The bound might be checked against the source in the old format."));
+    // A sentence the source wraps across lines is still one sentence; list items are not.
+    assertFalse(
+        DescriptionGapScreen.speculative(
+            "The description says answers that may be stale are kept verbatim, but no file does.",
+            "Answers that may\nbe stale are kept."));
+    assertTrue(
+        DescriptionGapScreen.speculative(
+            "The description says answers that may be stale are kept verbatim, but no file does.",
+            "- Answers that may\n- be stale entries are dropped"));
     // A hedge's context is read within one sentence of the source.
     assertTrue(
         DescriptionGapScreen.speculative(
