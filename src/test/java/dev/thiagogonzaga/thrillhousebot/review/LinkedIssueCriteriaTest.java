@@ -182,6 +182,34 @@ class LinkedIssueCriteriaTest {
     var qualified =
         "The issue's 'declines two offers' rule is now implemented with no regressions.";
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), qualified, Map.of()));
+    // "Not only" affirms, and "instead" is a contrast.
+    var notOnly = "The issue's 'declines two offers' rule is not only implemented, it is exceeded.";
+    var instead = "The issue's 'declines two offers' rule was instead implemented as a queue.";
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), notOnly, Map.of()));
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), instead, Map.of()));
+  }
+
+  @Test
+  void aQuoteSeveralCriteriaHoldGoesToTheClearBestOrToNone() {
+    // Criteria 1 and 3 of #260 both hold "the Sign up button".
+    var locked =
+        "The issue's \"the Sign up button\" is not disabled for shifts that start in less than 2"
+            + " hours.";
+    var ambiguous = "The issue's \"the Sign up button\" requirement is not met.";
+
+    var lines = unmet(ISSUE_260, List.of(), locked, Map.of()).lines();
+    assertEquals(1, lines.size(), lines.toString());
+    assertTrue(
+        lines.getFirst().startsWith("Linked issue #260: Shifts that start"), lines.toString());
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_260, List.of(), ambiguous, Map.of()));
+    var full =
+        "The issue's \"the Sign up button\" is not disabled when a shift of the current week has no"
+            + " remaining spots left.";
+    var fullLines = unmet(ISSUE_260, List.of(), full, Map.of()).lines();
+    assertEquals(1, fullLines.size(), fullLines.toString());
+    assertTrue(
+        fullLines.getFirst().startsWith("Linked issue #260: The board lists"),
+        fullLines.toString());
   }
 
   @Test

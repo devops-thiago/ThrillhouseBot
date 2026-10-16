@@ -98,15 +98,19 @@ final class LinkedIssueCriteria {
           Pattern.compile("(?i)\\bfalls?\\s++short\\b"));
 
   /**
-   * A bare negation in an overview clause: "not", "never", "no", "cannot", "n't", "without",
-   * "instead". It says the ask is not met only when it binds the criterion ({@link
-   * #bindsCriterion}): "is not met", "cannot limit the board"; "implemented with no regressions"
-   * negates something else. A contrast word such as "but" is never one. One pattern per shape.
+   * A bare negation in an overview clause: "not", "never", "no", "cannot", "n't", "without". It
+   * says the ask is not met only when it binds the criterion ({@link #bindsCriterion}): "is not
+   * met", "cannot limit the board"; "implemented with no regressions" negates something else, and
+   * "not only implemented" ({@link #AFFIRMING}) affirms. A contrast word such as "but" or "instead"
+   * is never one. One pattern per shape.
    */
   private static final List<Pattern> NEGATORS =
       List.of(
-          Pattern.compile("(?i)\\b(?:not|never|no|cannot|without|instead)\\b"),
+          Pattern.compile("(?i)\\b(?:not|never|no|cannot|without)\\b"),
           Pattern.compile("(?i)n['’]t\\b"));
+
+  /** What turns a negation into an affirmation: "not only", "not just", "not merely". */
+  private static final Pattern AFFIRMING = Pattern.compile("(?i)\\s++(?:only|just|merely)\\b");
 
   /** Words, from the start, that say an ask is fulfilled: "met", "implemented", "satisfied"… */
   private static final List<String> FULFILMENT =
@@ -327,8 +331,10 @@ final class LinkedIssueCriteria {
     for (var pattern : NEGATORS) {
       var negation = pattern.matcher(clause);
       while (negation.find()) {
-        if (bindsCriterion(
-            clause.substring(negation.end()), criterionWords, NEGATION_REACH, true)) {
+        var rest = clause.substring(negation.end());
+        // "not only implemented" affirms what follows.
+        if (!AFFIRMING.matcher(rest).lookingAt()
+            && bindsCriterion(rest, criterionWords, NEGATION_REACH, true)) {
           return true;
         }
       }
@@ -359,18 +365,47 @@ final class LinkedIssueCriteria {
     return false;
   }
 
+  /**
+   * The one of {@code candidates} sharing strictly the most words with {@code words}: the only one,
+   * or -1 when none is given or two share the most.
+   */
+  private static int clearBest(Set<String> words, List<String> candidates) {
+    var best = -1;
+    var bestShared = -1;
+    var tied = false;
+    for (var i = 0; i < candidates.size(); i++) {
+      var shared = shared(words, words(candidates.get(i)));
+      if (shared > bestShared) {
+        best = i;
+        bestShared = shared;
+        tied = false;
+      } else if (shared == bestShared) {
+        tied = true;
+      }
+    }
+    return tied ? -1 : best;
+  }
+
   /** The criterion {@code clause} quotes a passage of, or else shares half the words of; or -1. */
   private static int stated(String clause, List<String> criteria) {
+    var words = words(clause);
     var quotes = QUOTED.matcher(clause);
     while (quotes.find()) {
       var quote = normalize(quotes.group(quotes.group(1) != null ? 1 : 2));
-      for (var i = 0; quote.indexOf(' ') > 0 && i < criteria.size(); i++) {
-        if ((" " + normalize(criteria.get(i)) + " ").contains(" " + quote + " ")) {
-          return i;
-        }
+      if (quote.indexOf(' ') < 0) {
+        continue;
+      }
+      // A phrase several criteria hold ("the Sign up button") goes to the one the clause's other
+      // words share most with; with no clear one it names none of them.
+      var holding =
+          criteria.stream()
+              .filter(c -> (" " + normalize(c) + " ").contains(" " + quote + " "))
+              .toList();
+      var best = clearBest(words, holding);
+      if (best >= 0) {
+        return criteria.indexOf(holding.get(best));
       }
     }
-    var words = words(clause);
     var at = bestMatch(words, criteria);
     return at >= 0 && shared(words, words(criteria.get(at))) * 2 >= words(criteria.get(at)).size()
         ? at
