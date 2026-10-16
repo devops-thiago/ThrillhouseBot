@@ -178,6 +178,10 @@ class LinkedIssueCriteriaTest {
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), met, Map.of()));
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), uncited, Map.of()));
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), contrast, Map.of()));
+    // A negation about something else in the clause does not make it unmet.
+    var qualified =
+        "The issue's 'declines two offers' rule is now implemented with no regressions.";
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), qualified, Map.of()));
   }
 
   @Test
@@ -219,6 +223,17 @@ class LinkedIssueCriteriaTest {
     assertEquals(1, negated.lines().size(), negated.lines().toString());
     assertTrue(negated.lines().getFirst().startsWith("Linked issue #260: Shifts that start"));
     assertEquals(LinkedIssueCriteria.Lines.NONE, state);
+    // A negated verb the criterion does not use describes the criterion met.
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE,
+        unmet(
+            ISSUE_260,
+            List.of(),
+            null,
+            Map.of(
+                "react/src/components/ShiftBoard.tsx",
+                "Renders Sign-ups closed cards; the board does not allow sign-ups for locked"
+                    + " shifts.")));
     assertEquals(
         1,
         unmet(

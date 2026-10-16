@@ -83,20 +83,35 @@ final class LinkedIssueCriteria {
           Pattern.compile("(?i)\\bthe\\s++issue['’]s\\b"));
 
   /**
-   * What says, in an overview clause, that the issue's ask is not met: a negation ("not", "never",
-   * "no", "cannot", "n't", "without", "missing", "unmet", "unimplemented", "dropped", "instead"),
-   * or a word of contradiction or failure ("opposite", "contrary", "contradicts", "violates",
-   * "lacks", "fails", "falls short"). A contrast word such as "but" is not one: "implements the
-   * issue's '…' round, but the import is slow" meets the criterion. One pattern per shape.
+   * What says, wherever it sits in an overview clause, that the issue's ask is not met: "missing",
+   * "unmet", "unimplemented", "dropped", "opposite", "contrary", "contradicts", "violates",
+   * "lacks", "fails", "falls short". One pattern per shape.
    */
   private static final List<Pattern> UNMET =
       List.of(
-          Pattern.compile(
-              "(?i)\\b(?:not|never|no|cannot|without|missing|unmet|unimplemented|dropped|instead)\\b"),
-          Pattern.compile("(?i)n['’]t\\b"),
+          Pattern.compile("(?i)\\b(?:missing|unmet|unimplemented|dropped)\\b"),
           Pattern.compile(
               "(?i)\\b(?:opposite|contrar\\w*+|contradict\\w*+|violat\\w*+|lacks?|fails?)\\b"),
           Pattern.compile("(?i)\\bfalls?\\s++short\\b"));
+
+  /**
+   * A bare negation in an overview clause: "not", "never", "no", "cannot", "n't", "without",
+   * "instead". It says the ask is not met only when it binds the criterion ({@link
+   * #bindsCriterion}): "is not met", "cannot limit the board"; "implemented with no regressions"
+   * negates something else. A contrast word such as "but" is never one. One pattern per shape.
+   */
+  private static final List<Pattern> NEGATORS =
+      List.of(
+          Pattern.compile("(?i)\\b(?:not|never|no|cannot|without|instead)\\b"),
+          Pattern.compile("(?i)n['’]t\\b"));
+
+  /** Words, from the start, that say an ask is fulfilled: "met", "implemented", "satisfied"… */
+  private static final List<String> FULFILMENT =
+      List.of(
+          "met", "implement", "satisf", "handl", "address", "cover", "done", "support", "enforc");
+
+  /** Content words after an overview negation it may bind, at most. */
+  static final int NEGATION_REACH = 3;
 
   /** Where an overview sentence ends. */
   private static final Pattern SENTENCE_END = Pattern.compile("(?<=[.!?])\\s++");
@@ -283,13 +298,51 @@ final class LinkedIssueCriteria {
       return -1;
     }
     for (var clause : OVERVIEW_CLAUSE.split(foldQuotes(sentence))) {
-      var at =
-          UNMET.stream().anyMatch(p -> p.matcher(clause).find()) ? stated(clause, criteria) : -1;
-      if (at >= 0) {
+      var at = stated(clause, criteria);
+      if (at >= 0 && saysUnmet(clause, words(criteria.get(at)))) {
         return at;
       }
     }
     return -1;
+  }
+
+  /**
+   * Whether {@code clause} says the criterion of {@code criterionWords} is not met: an {@link
+   * #UNMET} word anywhere, or a {@link #NEGATORS} negation that binds it.
+   */
+  private static boolean saysUnmet(String clause, Set<String> criterionWords) {
+    if (UNMET.stream().anyMatch(p -> p.matcher(clause).find())) {
+      return true;
+    }
+    for (var pattern : NEGATORS) {
+      var negation = pattern.matcher(clause);
+      while (negation.find()) {
+        if (bindsCriterion(
+            clause.substring(negation.end()), criterionWords, NEGATION_REACH, true)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether one of the first {@code reach} content words of {@code rest}, what follows a negation,
+   * is a word of the criterion's family, or with {@code fulfilment} a {@link #FULFILMENT} word: the
+   * negation is then about the criterion, as in "does not lock" or "is not met", not about
+   * something else, as in "does not allow sign-ups for locked shifts".
+   */
+  private static boolean bindsCriterion(
+      String rest, Set<String> criterionWords, int reach, boolean fulfilment) {
+    var next = SummarySurfaceDeduplicator.claim(rest).words();
+    for (var i = 0; i < Math.min(reach, next.size()); i++) {
+      var word = next.get(i);
+      if ((fulfilment && FULFILMENT.stream().anyMatch(word::startsWith))
+          || criterionWords.stream().anyMatch(c -> family(word, c))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** The criterion {@code clause} quotes a passage of, or else shares half the words of; or -1. */
@@ -311,18 +364,29 @@ final class LinkedIssueCriteria {
   }
 
   /**
-   * The criterion a negated walkthrough clause states unmet: one opening with a negation or
-   * negating its verb, at least {@value #MIN_SHARED} of whose words, and more than half of them,
-   * are the criterion's.
+   * The criterion a negated walkthrough clause states unmet: at least {@value #MIN_SHARED} of the
+   * clause's words, and more than half of them, are the criterion's, and the clause opens with a
+   * negation or negates a verb whose first content word after it is the criterion's ("no lockout",
+   * "doesn't lock"; not "does not allow sign-ups for locked shifts").
    */
   private static int clauseMatch(String clause, List<String> criteria) {
-    if (!NEGATED_CLAUSE.matcher(clause).find()
-        && NEGATED_VERB.stream().noneMatch(p -> p.matcher(clause).find())) {
-      return -1;
-    }
     var words = words(clause);
     var at = bestMatch(words, criteria);
-    return at >= 0 && shared(words, words(criteria.get(at))) * 2 > words.size() ? at : -1;
+    if (at < 0 || shared(words, words(criteria.get(at))) * 2 <= words.size()) {
+      return -1;
+    }
+    var criterionWords = words(criteria.get(at));
+    var negations = new ArrayList<Pattern>(NEGATED_VERB);
+    negations.add(NEGATED_CLAUSE);
+    for (var pattern : negations) {
+      var negation = pattern.matcher(clause);
+      while (negation.find()) {
+        if (bindsCriterion(clause.substring(negation.end()), criterionWords, 1, false)) {
+          return at;
+        }
+      }
+    }
+    return -1;
   }
 
   /** How many of {@code words} have a word of {@code other} in their family. */
