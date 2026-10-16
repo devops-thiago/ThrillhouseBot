@@ -416,12 +416,12 @@ final class DescriptionGapScreen {
    * Whether {@code gap} hedges its own claim ({@link #SPECULATION}, #1127): a bullet saying a
    * criterion "may be" a stricter one, "in which case" a save would fail, is a guess about a fact
    * the change does not show, not a mismatch. Only the bullet's own words are read: quoted passages
-   * are the description's or the issue's; of a {@code Linked issue #N: <criterion> — <evidence>}
-   * gap only the evidence is, since the criterion is the issue's; a hedge that one sentence of
-   * {@code source} (the PR text and linked issues) holds with the word before it and the two after
-   * it paraphrases that text; and a hedge after a {@link #CONSEQUENCE} in its sentence
-   * ("`File.java` drops it, so callers might crash") weighs what a stated gap causes. "In which
-   * case" always makes the claim conditional.
+   * are the description's or the issue's, and a code span names a symbol; of a {@code Linked issue
+   * #N: <criterion> — <evidence>} gap only the evidence is, since the criterion is the issue's; a
+   * hedge that one sentence of {@code source} (the PR text and linked issues) holds with the word
+   * before it and the two after it paraphrases that text; and a hedge after a {@link #CONSEQUENCE}
+   * in its sentence ("`File.java` drops it, so callers might crash") weighs what a stated gap
+   * causes. "In which case" always makes the claim conditional.
    */
   static boolean speculative(String gap, String source) {
     var linked = DescriptionGapCarryover.linkedIssueGap(gap);
@@ -430,7 +430,12 @@ final class DescriptionGapScreen {
       var rest = linked.group(2);
       own = rest.substring(DescriptionGapCarryover.criterionOf(rest).length());
     }
-    var unquoted = QUOTED.matcher(foldQuotes(own)).replaceAll(" ");
+    // A code span names a symbol ("`may-retry`"): it keeps its backticks, as the evidence of a
+    // stated mismatch, but not its words.
+    var unquoted =
+        STATED_EVIDENCE
+            .matcher(QUOTED.matcher(foldQuotes(own)).replaceAll(" "))
+            .replaceAll("`code`");
     if (CONDITIONAL.matcher(unquoted).find()) {
       return true;
     }

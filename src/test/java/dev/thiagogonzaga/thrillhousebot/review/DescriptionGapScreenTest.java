@@ -473,6 +473,8 @@ class DescriptionGapScreenTest {
             + " might hang. Queue.java is unbounded, which means data may be dropped.",
         // The hedge is the description's own, quoted.
         "The description says \"tokens may be reused once\", but `Auth.java` rejects a reuse.",
+        // A symbol a code span names is not a hedge.
+        "The description says the `may-retry` flag is respected, but `Client.java` ignores it.",
         // The hedge is the issue's criterion, not the bullet's evidence.
         "Linked issue #113: the cache may be bypassed with a header — no changed file reads one.",
         // Nothing follows a dash, so the whole text is the criterion.
@@ -492,6 +494,11 @@ class DescriptionGapScreenTest {
 
     assertFalse(DescriptionGapScreen.speculative(paraphrased, source));
     assertTrue(DescriptionGapScreen.speculative(paraphrased, PR_1124));
+    // Punctuation around the hedge does not break its context: normalising strips it.
+    assertFalse(
+        DescriptionGapScreen.speculative(
+            "The description says answers may, however, be edited by hand, but none are.",
+            "Answers may, however, be edited by hand."));
     // A hedge with no word after it paraphrases nothing, whatever the source holds.
     assertTrue(
         DescriptionGapScreen.speculative(
