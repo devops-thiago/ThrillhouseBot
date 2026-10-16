@@ -357,7 +357,7 @@ final class LinkedIssueCriteria {
       return List.of();
     }
     var found = new ArrayList<Integer>();
-    for (var clause : OVERVIEW_CLAUSE.split(foldQuotes(sentence))) {
+    for (var clause : overviewClauses(foldQuotes(sentence))) {
       for (var at : stated(clause, criteria)) {
         if (saysUnmet(clause, words(criteria.get(at)))) {
           found.add(at);
@@ -365,6 +365,30 @@ final class LinkedIssueCriteria {
       }
     }
     return found;
+  }
+
+  /**
+   * The clauses of {@code sentence} split at each {@link #OVERVIEW_CLAUSE} separator outside a
+   * {@link #QUOTED} passage, so a quote holding a comma or a dash stays whole in one clause.
+   */
+  private static List<String> overviewClauses(String sentence) {
+    var quotes = new ArrayList<int[]>();
+    var quote = QUOTED.matcher(sentence);
+    while (quote.find()) {
+      quotes.add(new int[] {quote.start(), quote.end()});
+    }
+    var clauses = new ArrayList<String>();
+    var from = 0;
+    var separator = OVERVIEW_CLAUSE.matcher(sentence);
+    while (separator.find()) {
+      var at = separator.start();
+      if (quotes.stream().noneMatch(q -> q[0] < at && at < q[1])) {
+        clauses.add(sentence.substring(from, at));
+        from = separator.end();
+      }
+    }
+    clauses.add(sentence.substring(from));
+    return clauses;
   }
 
   /**

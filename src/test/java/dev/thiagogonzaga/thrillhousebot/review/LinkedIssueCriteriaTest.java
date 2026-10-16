@@ -246,6 +246,33 @@ class LinkedIssueCriteriaTest {
   }
 
   @Test
+  void aQuotedPassageKeepsItsSeparatorsInOneClause() {
+    // Both quotes hold a comma; split inside the quote, neither half names the criterion.
+    var quoted =
+        "The issue's 'remaining spots, and a shift with no spots left' requirement is not met.";
+    var full =
+        "The issue's 'remaining spots, and a shift with no spots left shows \"Full\" with the Sign"
+            + " up button disabled' requirement is not met.";
+
+    for (var overview : List.of(quoted, full)) {
+      var lines = unmet(ISSUE_260, List.of(), overview, Map.of()).lines();
+      assertEquals(1, lines.size(), overview + " -> " + lines);
+      assertTrue(
+          lines.getFirst().startsWith("Linked issue #260: The board lists"), lines.toString());
+    }
+  }
+
+  @Test
+  void aSeparatorOutsideTheQuoteStillSplitsTheClause() {
+    // The comma outside the quote still keeps the contrast in its own clause.
+    var contrast =
+        "The issue's 'remaining spots, and a shift with no spots left' wording is implemented, but"
+            + " nothing else is met.";
+
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_260, List.of(), contrast, Map.of()));
+  }
+
+  @Test
   void aQuoteSeveralCriteriaHoldGoesToTheClearBestOrToNone() {
     // Criteria 1 and 3 of #260 both hold "the Sign up button".
     var locked =
