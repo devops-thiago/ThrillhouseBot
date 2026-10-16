@@ -1052,4 +1052,35 @@ class PathMentionsTest {
 
     assertNull(screened.findings().getFirst().suggestionNew());
   }
+
+  /**
+   * An absolute file the suggestion relies on, in a directory the change populates, must be named
+   * somewhere; one in a directory nothing names (the base image's) cannot be judged and is kept.
+   */
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          ENTRYPOINT ["java", "-jar", "/app/missing.jar"] | false
+          ENTRYPOINT ["java", "-jar", "/app/target/desk-invoicer-1.0.0.jar"] | true
+          CMD ["java", "-jar", "/opt/tool/run.jar"] | true
+          COPY nginx.conf /app/nginx.conf | true
+          RUN java -jar /app/invoicer.jar --check | true
+          RUN /app/bin/start | true
+          """)
+  void anAbsoluteFileInADirectoryTheChangePopulatesMustBeNamed(String suggestion, boolean kept) {
+    var raised =
+        findingOn(
+            "kotlin/Dockerfile",
+            "The image starts the wrong jar.",
+            "ENTRYPOINT [\"java\", \"-jar\", \"/app/invoicer.jar\"]",
+            suggestion);
+
+    var screened =
+        mentions(KOTLIN_IMAGE, "", Set.of("kotlin/nginx.conf"))
+            .screen(new ReviewResponse(List.of(raised), List.of(), null));
+
+    assertEquals(kept ? suggestion : null, screened.findings().getFirst().suggestionNew());
+  }
 }

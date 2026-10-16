@@ -68,8 +68,10 @@ import java.util.regex.Pattern;
  * /src/zig-out/bin/app /usr/local/bin/ap}) gets the path the line holds, when exactly one fits. A
  * suggestion that introduces a repository file nothing resolves, or a glob over an absolute
  * directory ({@code /app/lib/*}) that no patch, the PR text or the replaced lines name, is dropped;
- * the finding stays. A path the suggestion itself writes (a {@code COPY} destination, a {@code cp}
- * or {@code mkdir} target) is not held to that.
+ * the finding stays; so is one relying on an absolute file nothing names in a directory the change
+ * populates ({@code /app/missing.jar} beside {@code COPY … /app/app.jar}). A path the suggestion
+ * itself writes (a {@code COPY} destination, a {@code cp} or {@code mkdir} target) is not held to
+ * that.
  *
  * <p>Not paths: URLs, a route ({@code /scan}, {@code /triage/run}), a package name ({@code
  * com.example.x}), a scoped package ({@code @angular/core}), an image reference ({@code
@@ -268,6 +270,9 @@ final class PathMentions {
 
   /** A redirection right before a token: {@code > out.log}, {@code >>conf/app.conf}. */
   private static final Pattern REDIRECTED = Pattern.compile(">\\s*+[\"']?$");
+
+  /** A file name with an extension: {@code app.jar}, {@code nginx.conf}. */
+  private static final Pattern FILE_NAME = Pattern.compile("[\\w+-][\\w.+-]*\\.[A-Za-z0-9]{1,10}");
 
   /**
    * An inline code span, which may wrap onto the next line of a paragraph but not across a blank
@@ -771,7 +776,8 @@ final class PathMentions {
    * (#1094): a file named in the new lines and not in the replaced ones that no step of {@link
    * #resolve} settles, unless the suggestion writes it ({@link #createdBySuggestion}), or a glob
    * over an absolute directory that no patch, PR text or the replaced lines name, unless the
-   * suggestion's own new lines make the directory ({@link #createsDirectory}).
+   * suggestion's own new lines make the directory ({@link #createsDirectory}), or an absolute file
+   * in a directory the change populates that nothing names ({@link #absentProjectFile}).
    */
   private String unresolvedInSuggestion(ReviewResponse.Finding finding) {
     String suggested = finding.suggestionNew();
@@ -786,16 +792,16 @@ final class PathMentions {
         // A top-level glob ("/app*") names no directory to look for.
         continue;
       }
-      var directory =
-          Pattern.compile(
-              "(?<![\\w.~/\\\\+-])"
-                  + Pattern.quote(globs.group().substring(0, slash))
-                  + "(?![\\w.+-])");
+      var directory = pathPattern(globs.group().substring(0, slash));
       if (!directory.matcher(replaced).find()
           && !directory.matcher(verbatim).find()
           && !createsDirectory(suggested, directory)) {
         return globs.group();
       }
+    }
+    String absent = absentProjectFile(suggested, replaced);
+    if (absent != null) {
+      return absent;
     }
     var urls = new SpanCursor(spans(URL, suggested));
     var tokens = TOKEN.matcher(suggested);
@@ -848,6 +854,36 @@ final class PathMentions {
     }
     return WRITING_COMMAND.matcher(before.substring(from)).find()
         && COMMAND_END.matcher(after).lookingAt();
+  }
+
+  /**
+   * The first absolute file the suggestion relies on that nothing provides, or {@code null}: a path
+   * whose last segment is a file name with an extension, that the replaced lines, the patches and
+   * the PR text do not name and the suggestion does not write, in a directory the patches or the PR
+   * text name ({@code /app/missing.jar} beside {@code COPY … /app/app.jar}). A file in a directory
+   * nothing names, such as the base image's {@code /etc/nginx/nginx.conf}, cannot be judged from
+   * the review and is left alone.
+   */
+  private String absentProjectFile(String suggested, String replaced) {
+    var paths = ABSOLUTE_PATH.matcher(suggested);
+    while (paths.find()) {
+      String path = paths.group();
+      int slash = path.lastIndexOf('/');
+      if (!FILE_NAME.matcher(path.substring(slash + 1)).matches() || replaced.contains(path)) {
+        continue;
+      }
+      if (!pathPattern(path).matcher(verbatim).find()
+          && pathPattern(path.substring(0, slash)).matcher(verbatim).find()
+          && !createdBySuggestion(suggested, paths.start(), paths.end())) {
+        return path;
+      }
+    }
+    return null;
+  }
+
+  /** {@code path} as a whole path: not the tail or the head of a longer name. */
+  private static Pattern pathPattern(String path) {
+    return Pattern.compile("(?<![\\w.~/\\\\+-])" + Pattern.quote(path) + "(?![\\w.+-])");
   }
 
   /**
