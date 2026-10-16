@@ -233,6 +233,21 @@ final class PathMentions {
   /** What may follow a line's last argument: the close of an exec-form array, and blanks. */
   private static final Pattern LINE_END = Pattern.compile("[\"\\]\\s]*+");
 
+  /** Where a shell command starts on a line: after {@code RUN}, a separator or a pipe. */
+  private static final Pattern COMMAND_START =
+      Pattern.compile("(?:^\\s*+RUN\\s|&&|\\|\\||[;|(])\\s*+", Pattern.CASE_INSENSITIVE);
+
+  /** A shell command whose last argument is a path it writes, with its options and arguments. */
+  private static final Pattern WRITING_COMMAND =
+      Pattern.compile("\\s*+(?:sudo\\s++)?(?:cp|mv|install|ln|touch|mkdir|tee)\\s");
+
+  /** What may follow a command's last argument: the next command, a continuation, or the end. */
+  private static final Pattern COMMAND_END =
+      Pattern.compile("[\"']?\\s*+(?:&&|\\|\\||[;|)\\\\]|$)");
+
+  /** A redirection right before a token: {@code > out.log}, {@code >>conf/app.conf}. */
+  private static final Pattern REDIRECTED = Pattern.compile(">\\s*+[\"']?$");
+
   /** An inline code span on one line. */
   private static final Pattern CODE_SPAN = Pattern.compile("`([^`\\n]++)`");
 
@@ -723,7 +738,11 @@ final class PathMentions {
     var globs = ABSOLUTE_GLOB.matcher(suggested);
     while (globs.find()) {
       var directory = Pattern.compile(Pattern.quote(globs.group(1)) + "(?![\\w.+-])");
-      if (!directory.matcher(replaced).find() && !directory.matcher(verbatim).find()) {
+      // Named once more in the new lines than the glob itself ("RUN mkdir -p /app/lib"), the
+      // suggestion makes the directory.
+      if (!directory.matcher(replaced).find()
+          && !directory.matcher(verbatim).find()
+          && directory.matcher(suggested).results().count() < 2) {
         return globs.group();
       }
     }
@@ -736,7 +755,7 @@ final class PathMentions {
           && namesAFile(token)
           && !replaced.contains(token)
           && !partOfSomethingElse(suggested, start, start + token.length())
-          && !copyDestination(suggested, start + token.length())
+          && !createdBySuggestion(suggested, start, start + token.length())
           && resolve(token) == null) {
         return token;
       }
@@ -745,16 +764,34 @@ final class PathMentions {
   }
 
   /**
-   * Whether the token ending at {@code end} is the destination of a Dockerfile {@code COPY} or
-   * {@code ADD}: the last argument on a line those open. The suggestion creates that path in the
-   * image; it is not a repository file the suggestion relies on.
+   * Whether the token at {@code start}..{@code end} is a path the suggestion creates rather than
+   * one it relies on: the destination of a Dockerfile {@code COPY} or {@code ADD} (the last
+   * argument on a line those open), the last argument of a shell command that writes it ({@code
+   * cp}, {@code mv}, {@code install}, {@code ln}, {@code touch}, {@code mkdir}, {@code tee}), or
+   * the target of a {@code >} redirection.
    */
-  private static boolean copyDestination(String text, int end) {
-    int lineStart = text.lastIndexOf('\n', end - 1) + 1;
+  private static boolean createdBySuggestion(String text, int start, int end) {
+    int lineStart = text.lastIndexOf('\n', start) + 1;
     int lineEnd = text.indexOf('\n', end);
-    String line = text.substring(lineStart, lineEnd < 0 ? text.length() : lineEnd);
-    return COPY_INSTRUCTION.matcher(line).lookingAt()
-        && LINE_END.matcher(text.substring(end, lineEnd < 0 ? text.length() : lineEnd)).matches();
+    if (lineEnd < 0) {
+      lineEnd = text.length();
+    }
+    String line = text.substring(lineStart, lineEnd);
+    String before = text.substring(lineStart, start);
+    String after = text.substring(end, lineEnd);
+    if (COPY_INSTRUCTION.matcher(line).lookingAt() && LINE_END.matcher(after).matches()) {
+      return true;
+    }
+    if (REDIRECTED.matcher(before).find()) {
+      return true;
+    }
+    var command = COMMAND_START.matcher(before);
+    int from = 0;
+    while (command.find()) {
+      from = command.end();
+    }
+    return WRITING_COMMAND.matcher(before.substring(from)).lookingAt()
+        && COMMAND_END.matcher(after).lookingAt();
   }
 
   /** Whether a path-shaped token ends in a file name: an extension or a dotless file name. */

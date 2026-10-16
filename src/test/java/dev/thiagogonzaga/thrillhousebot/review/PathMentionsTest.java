@@ -863,8 +863,16 @@ class PathMentionsTest {
           COPY --from=build /app/target/service.war /usr/local/tomcat/webapps/ROOT.war | true
           COPY src/ /app/src/ | true
           volumes: [conf/app.yml:/etc/app.yml] | true
+          RUN cp nginx.conf conf/app.conf | true
+          RUN mkdir -p conf && cp nginx.conf conf/app.conf && echo ok | true
+          RUN sudo install -m 644 nginx.conf "conf/app.conf"; true | true
+          echo listen > conf/app.conf | true
+          RUN ln -s conf/site.conf | true
+          RUN java -jar lib/a/b/run.war --serve bin/x/y/run | true
           RUN docker build -f ops/Dockerfile . | false
           COPY conf/site.conf nginx.conf | false
+          RUN cp conf/site.conf /etc/x | false
+          RUN cat conf/site.conf && cp nginx.conf conf/app.conf | false
           """)
   void aSuggestionIsJudgedOnlyByWhatItReliesOn(String suggestion, boolean kept) {
     var raised = findingOn("angular/Dockerfile", "No config is copied.", null, suggestion);
@@ -899,5 +907,31 @@ class PathMentionsTest {
     assertSame(
         description,
         mentions(ZIG_IMAGE, "", Set.of()).withQuotedPathsCorrected(description, "zig/Dockerfile"));
+  }
+
+  /**
+   * A suggestion over several lines is judged line by line, and a glob over a directory its own new
+   * lines make keeps the suggestion.
+   */
+  @Test
+  void aSuggestionOverSeveralLinesIsJudgedLineByLine() {
+    var made =
+        findingOn(
+            "kotlin/Dockerfile",
+            "The jar bundles no dependencies.",
+            "ENTRYPOINT [\"java\", \"-jar\", \"/app/invoicer.jar\"]",
+            "RUN mkdir -p /app/lib\nENTRYPOINT [\"java\", \"-cp\", \"/app/lib/*\", \"Main\"]");
+    var copied =
+        findingOn(
+            "kotlin/Dockerfile",
+            "No config is copied.",
+            null,
+            "COPY nginx.conf conf/site.conf\nRUN cat conf/missing.conf\nUSER app");
+    var response = new ReviewResponse(List.of(made, copied), List.of(), null);
+
+    var screened = mentions(KOTLIN_IMAGE, "", Set.of("kotlin/nginx.conf")).screen(response);
+
+    assertEquals(made.suggestionNew(), screened.findings().get(0).suggestionNew());
+    assertNull(screened.findings().get(1).suggestionNew());
   }
 }
