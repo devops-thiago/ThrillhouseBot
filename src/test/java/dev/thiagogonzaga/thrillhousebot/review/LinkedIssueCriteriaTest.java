@@ -170,9 +170,55 @@ class LinkedIssueCriteriaTest {
   void anOverviewSentenceThatDoesNotSayTheCriterionIsUnmetAddsNothing() {
     var met = "Implements the issue's 'next in-borough applicant' offer round.";
     var uncited = "The round does not offer plots to the next in-borough applicant in line.";
+    // A contrast about something else, in another clause, does not reach the quote.
+    var contrast =
+        "Implements the issue's 'next in-borough applicant' offer round, but the import step is"
+            + " not fast.";
 
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), met, Map.of()));
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), uncited, Map.of()));
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), contrast, Map.of()));
+  }
+
+  @Test
+  void anOverviewClauseSayingCannotOrContradictingCounts() {
+    var cannot =
+        "Coordinators cannot limit the board to a set of roles through configuration, despite the"
+            + " issue's ask.";
+    var contradicting =
+        "The round, contradicting the issue's 'next in-borough applicant' rule, offers anyone.";
+
+    assertEquals(1, unmet(ISSUE_260, List.of(), cannot, Map.of()).lines().size());
+    assertTrue(
+        unmet(ISSUE_260, List.of(), cannot, Map.of())
+            .lines()
+            .getFirst()
+            .startsWith("Linked issue #260: Coordinators can limit the board"));
+    assertEquals(1, unmet(ISSUE_256, List.of(), contradicting, Map.of()).lines().size());
+  }
+
+  @Test
+  void aWalkthroughClauseNegatingItsVerbCountsButAStateDoesNot() {
+    var negated =
+        unmet(
+            ISSUE_260,
+            List.of(),
+            null,
+            Map.of(
+                "react/src/components/ShiftBoard.tsx",
+                "The board doesn't lock shifts that start within 2 hours."));
+    var state =
+        unmet(
+            ISSUE_260,
+            List.of(),
+            null,
+            Map.of(
+                "react/src/components/ShiftBoard.tsx",
+                "Locks the sign-up of shifts that are not yet started within 2 hours."));
+
+    assertEquals(1, negated.lines().size(), negated.lines().toString());
+    assertTrue(negated.lines().getFirst().startsWith("Linked issue #260: Shifts that start"));
+    assertEquals(LinkedIssueCriteria.Lines.NONE, state);
   }
 
   @Test

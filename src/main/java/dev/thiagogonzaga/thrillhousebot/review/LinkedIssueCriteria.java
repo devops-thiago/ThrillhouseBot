@@ -43,10 +43,11 @@ import java.util.regex.Pattern;
  *       #MIN_SHARED} content words with the criterion, the most of any criterion. The line points
  *       at the finding and takes the place of the finding's own bullet; it is never carried as a
  *       gap ({@link #pointsAtFinding}), since the finding is carried on its own;
- *   <li>a sentence of the overview that cites the issue, says it is not met ({@link #UNMET}) and
- *       quotes a passage of the criterion, or shares half its content words;
- *   <li>a negated clause of a walkthrough row ("no lockout for imminent shifts") whose content
- *       words, at least {@value #MIN_SHARED} and more than half of them, are the criterion's.
+ *   <li>a sentence of the overview that cites the issue, with a clause that says it is not met
+ *       ({@link #UNMET}) and quotes a passage of the criterion or shares half its content words;
+ *   <li>a negated clause of a walkthrough row ("no lockout for imminent shifts", "the board does
+ *       not lock shifts …") whose content words, at least {@value #MIN_SHARED} and more than half
+ *       of them, are the criterion's.
  * </ul>
  *
  * <p>Words match when equal after {@link SummarySurfaceDeduplicator#claim}'s crude stem, or when
@@ -81,14 +82,31 @@ final class LinkedIssueCriteria {
           Pattern.compile("(?i)\\bthe\\s++issue(?:['’]s)?+\\s++(?:requirement|criteri)\\w*+"),
           Pattern.compile("(?i)\\bthe\\s++issue['’]s\\b"));
 
-  /** An overview sentence saying the issue's ask is not met. */
-  private static final Pattern UNMET =
-      Pattern.compile(
-          "(?i)\\b(?:not|never|no|opposite|contrary|contradicts?|violates?|unmet|missing|instead"
-              + "|however|but|without|lacks?|fails?)\\b");
+  /**
+   * What says, in an overview clause, that the issue's ask is not met: a negation ("not", "never",
+   * "no", "cannot", "n't", "without", "missing", "unmet", "unimplemented", "dropped", "instead"),
+   * or a word of contradiction or failure ("opposite", "contrary", "contradicts", "violates",
+   * "lacks", "fails", "falls short"). A contrast word such as "but" is not one: "implements the
+   * issue's '…' round, but the import is slow" meets the criterion. One pattern per shape.
+   */
+  private static final List<Pattern> UNMET =
+      List.of(
+          Pattern.compile(
+              "(?i)\\b(?:not|never|no|cannot|without|missing|unmet|unimplemented|dropped|instead)\\b"),
+          Pattern.compile("(?i)n['’]t\\b"),
+          Pattern.compile(
+              "(?i)\\b(?:opposite|contrar\\w*+|contradict\\w*+|violat\\w*+|lacks?|fails?)\\b"),
+          Pattern.compile("(?i)\\bfalls?\\s++short\\b"));
 
   /** Where an overview sentence ends. */
   private static final Pattern SENTENCE_END = Pattern.compile("(?<=[.!?])\\s++");
+
+  /**
+   * Where an overview sentence's clauses split: the not-met word, the quote and the criterion's
+   * words must share one clause, so a contrast about something else does not reach the quote.
+   */
+  private static final Pattern OVERVIEW_CLAUSE =
+      Pattern.compile("(?i)[,;—–]|\\b(?:but|however|while|whereas|although|though)\\b");
 
   /** Where a walkthrough row's clauses split. */
   private static final Pattern CLAUSE_SPLIT =
@@ -97,6 +115,14 @@ final class LinkedIssueCriteria {
   /** A clause opening with a negation: "no lockout for …", "without a cancel path". */
   private static final Pattern NEGATED_CLAUSE =
       Pattern.compile("(?i)^\\s*+(?:no|not|never|without|missing|lacks?)\\s");
+
+  /**
+   * A verb negated inside a clause: "the board does not lock …", "never locks", "cannot limit". A
+   * state ("shifts that are not yet started") is not one.
+   */
+  private static final Pattern NEGATED_VERB =
+      Pattern.compile(
+          "(?i)\\b(?:(?:does|do|did|can|will|has|have)(?:\\s++not|n['’]t)|cannot|never)\\b");
 
   /** A quoted passage, in double or single quotes (curly quotes folded). */
   private static final Pattern QUOTED =
@@ -244,14 +270,27 @@ final class LinkedIssueCriteria {
   }
 
   /**
-   * The criterion an overview sentence states unmet: the sentence cites the issue and says it is
-   * not met, then quotes a passage of the criterion or shares half its words.
+   * The criterion an overview sentence states unmet: the sentence cites the issue, and one of its
+   * clauses says it is not met ({@link #UNMET}) and quotes a passage of the criterion or shares
+   * half its words.
    */
   private static int overviewMatch(String sentence, List<String> criteria) {
-    if (!citesIssue(sentence) || !UNMET.matcher(sentence).find()) {
+    if (!citesIssue(sentence)) {
       return -1;
     }
-    var quotes = QUOTED.matcher(foldQuotes(sentence));
+    for (var clause : OVERVIEW_CLAUSE.split(foldQuotes(sentence))) {
+      var at =
+          UNMET.stream().anyMatch(p -> p.matcher(clause).find()) ? stated(clause, criteria) : -1;
+      if (at >= 0) {
+        return at;
+      }
+    }
+    return -1;
+  }
+
+  /** The criterion {@code clause} quotes a passage of, or else shares half the words of; or -1. */
+  private static int stated(String clause, List<String> criteria) {
+    var quotes = QUOTED.matcher(clause);
     while (quotes.find()) {
       var quote = normalize(quotes.group(quotes.group(1) != null ? 1 : 2));
       for (var i = 0; quote.indexOf(' ') > 0 && i < criteria.size(); i++) {
@@ -260,7 +299,7 @@ final class LinkedIssueCriteria {
         }
       }
     }
-    var words = words(sentence);
+    var words = words(clause);
     var at = bestMatch(words, criteria);
     return at >= 0 && shared(words, words(criteria.get(at))) * 2 >= words(criteria.get(at)).size()
         ? at
@@ -268,11 +307,12 @@ final class LinkedIssueCriteria {
   }
 
   /**
-   * The criterion a negated walkthrough clause states unmet: at least {@value #MIN_SHARED} of the
-   * clause's words, and more than half of them, are the criterion's.
+   * The criterion a negated walkthrough clause states unmet: one opening with a negation or
+   * negating its verb, at least {@value #MIN_SHARED} of whose words, and more than half of them,
+   * are the criterion's.
    */
   private static int clauseMatch(String clause, List<String> criteria) {
-    if (!NEGATED_CLAUSE.matcher(clause).find()) {
+    if (!NEGATED_CLAUSE.matcher(clause).find() && !NEGATED_VERB.matcher(clause).find()) {
       return -1;
     }
     var words = words(clause);
