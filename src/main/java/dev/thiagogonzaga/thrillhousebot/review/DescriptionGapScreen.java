@@ -20,6 +20,7 @@ import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -330,8 +331,20 @@ final class DescriptionGapScreen {
           "caught",
           "highlight");
 
-  /** Words, at most, between a {@link #REVIEW_NOUNS} word and its {@link #CREDIT_VERBS} verb. */
+  /**
+   * Word positions, at most, from a {@link #REVIEW_NOUNS} word to its {@link #CREDIT_VERBS} verb:
+   * five apart is four words between them.
+   */
   static final int CREDIT_REACH = 5;
+
+  /**
+   * Words that make the word after them a noun: "a report", "the notes", "its warnings" name
+   * things, they do not credit a claim.
+   */
+  private static final Set<String> DETERMINERS =
+      Set.of(
+          "a", "an", "the", "this", "that", "these", "those", "its", "their", "his", "her", "our",
+          "your", "no", "any", "each", "every", "some");
 
   /** A run of letters and digits: one word of a clause. */
   private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}]++");
@@ -556,13 +569,15 @@ final class DescriptionGapScreen {
     var words = WORD.matcher(text).region(from, to);
     var nouns = new ArrayList<int[]>();
     var verbs = new ArrayList<int[]>();
+    var previous = "";
     for (var index = 0; words.find(); index++) {
       var word = words.group().toLowerCase(Locale.ROOT);
       if (startsWithAny(word, REVIEW_NOUNS)) {
         nouns.add(new int[] {index, words.start()});
-      } else if (startsWithAny(word, CREDIT_VERBS)) {
+      } else if (startsWithAny(word, CREDIT_VERBS) && !DETERMINERS.contains(previous)) {
         verbs.add(new int[] {index, words.start()});
       }
+      previous = word;
     }
     for (var noun : nouns) {
       for (var verb : verbs) {

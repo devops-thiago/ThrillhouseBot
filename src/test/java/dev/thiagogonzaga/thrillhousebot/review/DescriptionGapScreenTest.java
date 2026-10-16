@@ -570,6 +570,10 @@ class DescriptionGapScreenTest {
         "Linked issue #113: a reviewer flags every listing over the cap — no changed file does.",
         // A reviewer named without a verb crediting the claim.
         "The description says a review step gates releases, but no workflow runs one.",
+        // A crediting stem used as a noun.
+        "The description says findings are posted inline, `Publisher.java` shows a report the"
+            + " review filters out.",
+        "The description says alerts fire; `Alerts.java` drops every warning the reviewers see.",
         // A review noun with no crediting verb near it.
         "The description says the job is pinned; no workflow runs a review step.",
         "The release notes are long; the description never mentions where review happens."
