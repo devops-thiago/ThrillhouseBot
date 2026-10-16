@@ -866,6 +866,8 @@ class PathMentionsTest {
           COPY src/ /app/src/ | true
           volumes: [conf/app.yml:/etc/app.yml] | true
           RUN cp nginx.conf conf/app.conf | true
+          RUN cp nginx.conf conf/app.conf # place the config next to the jar | true
+          RUN cat mkdir.txt conf/site.conf | false
           RUN mkdir -p conf && cp nginx.conf conf/app.conf && echo ok | true
           RUN sudo install -m 644 nginx.conf "conf/app.conf"; true | true
           echo listen > conf/app.conf | true
@@ -972,6 +974,9 @@ class PathMentionsTest {
           """
           RUN mkdir -p /app/lib && cp /app/*.jar /app/lib/ && java -cp '/app/lib/*' Main | true
           COPY lib/ /app/lib/ | true
+          RUN bash -c 'mkdir -p /app/lib && java -cp /app/lib/* Main' | true
+          ENTRYPOINT ["sh", "-c", "mkdir -p /app/lib && java -cp '/app/lib/*' Main"] | true
+          RUN ls /* && ls /app/lib/* | false
           RUN ls /app/lib/* ; mkdir /app/lib | true
           RUN ls /app/lib && cp /app/lib/* /out/ | false
           RUN cp /app/lib/* /out/; cp /app/lib/* /out2/ | false

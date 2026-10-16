@@ -226,10 +226,10 @@ final class PathMentions {
 
   /**
    * A glob over the files of an absolute directory ({@code /app/lib/*}, {@code
-   * /app/lib/serv*.jar}): the directory, without its slash.
+   * /app/lib/serv*.jar}), up to its first star; the directory is what precedes its last slash.
    */
   private static final Pattern ABSOLUTE_GLOB =
-      Pattern.compile("(?<![\\w.~/\\\\+-])(/[\\w.+-]++(?:/[\\w.+-]++)*)/[\\w.+-]*+\\*");
+      Pattern.compile("(?<![\\w.~/\\\\+-])/[\\w.+/-]*+\\*");
 
   /** A Dockerfile instruction that copies into the image. */
   private static final Pattern COPY_INSTRUCTION =
@@ -245,13 +245,19 @@ final class PathMentions {
   private static final Pattern COMMAND_START =
       Pattern.compile("(?:^|&&|\\|\\||[;|(])\\s*+(?:RUN\\s++)?", Pattern.CASE_INSENSITIVE);
 
-  /** A shell command whose last argument is a path it writes, with its options and arguments. */
+  /**
+   * A shell command whose last argument is a path it writes, anywhere in the command before the
+   * token: also inside a wrapper such as {@code bash -c 'mkdir -p /app/lib'}.
+   */
   private static final Pattern WRITING_COMMAND =
-      Pattern.compile("\\s*+(?:sudo\\s++)?(?:cp|mv|install|ln|touch|mkdir|tee)\\s");
+      Pattern.compile("(?<![\\w./-])(?:cp|mv|install|ln|touch|mkdir|tee)\\s");
 
-  /** What may follow a command's last argument: the next command, a continuation, or the end. */
+  /**
+   * What may follow a command's last argument: the next command, a continuation, a shell comment,
+   * or the end.
+   */
   private static final Pattern COMMAND_END =
-      Pattern.compile("[\"']?\\s*+(?:&&|\\|\\||[;|)\\\\]|$)");
+      Pattern.compile("[\"']?\\s*+(?:&&|\\|\\||[;|)\\\\#]|$)");
 
   /** A line that ends with a continuation backslash, read at the end of the text before it. */
   private static final Pattern CONTINUED = Pattern.compile("\\\\[ \\t]*+$");
@@ -774,8 +780,16 @@ final class PathMentions {
     String replaced = finding.suggestionOld() == null ? "" : finding.suggestionOld();
     var globs = ABSOLUTE_GLOB.matcher(suggested);
     while (globs.find()) {
+      int slash = globs.group().lastIndexOf('/');
+      if (slash <= 0) {
+        // A glob over the root, "/*", names no directory to look for.
+        continue;
+      }
       var directory =
-          Pattern.compile("(?<![\\w.~/\\\\+-])" + Pattern.quote(globs.group(1)) + "(?![\\w.+-])");
+          Pattern.compile(
+              "(?<![\\w.~/\\\\+-])"
+                  + Pattern.quote(globs.group().substring(0, slash))
+                  + "(?![\\w.+-])");
       if (!directory.matcher(replaced).find()
           && !directory.matcher(verbatim).find()
           && !createsDirectory(suggested, directory)) {
@@ -831,7 +845,7 @@ final class PathMentions {
     while (command.find()) {
       from = command.end();
     }
-    return WRITING_COMMAND.matcher(before.substring(from)).lookingAt()
+    return WRITING_COMMAND.matcher(before.substring(from)).find()
         && COMMAND_END.matcher(after).lookingAt();
   }
 
