@@ -127,10 +127,33 @@ final class LinkedIssueCriteria {
   private static final Pattern AFFIRMING =
       Pattern.compile("(?i)\\s++(?:only|just|merely|simply)\\b");
 
-  /** Words, from the start, that say an ask is fulfilled: "met", "implemented", "satisfied"… */
+  /**
+   * Word starts that say an ask is fulfilled: "met", "implemented", "satisfied", "honored",
+   * "respected", "applied", "followed", "delivered", "provided", "included", "present"…
+   */
   private static final List<String> FULFILMENT =
       List.of(
-          "met", "implement", "satisf", "handl", "address", "cover", "done", "support", "enforc");
+          "met",
+          "implement",
+          "satisf",
+          "handl",
+          "address",
+          "cover",
+          "done",
+          "support",
+          "enforc",
+          "honor",
+          "honour",
+          "respect",
+          "appli",
+          "follow",
+          "deliver",
+          "provid",
+          "includ",
+          "present",
+          "fulfil",
+          "achiev",
+          "complet");
 
   /**
    * Words between a negation and what it negates that are skipped when binding it, besides the

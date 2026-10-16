@@ -154,6 +154,14 @@ class LinkedIssueCriteriaTest {
   }
 
   @Test
+  void anOverviewSentenceNegatingAnyFulfilmentVerbCounts() {
+    for (var verb : List.of("honored", "respected", "applied", "followed", "delivered")) {
+      var overview = "The issue's 'declines two offers' rule is not " + verb + " by the code.";
+      assertEquals(1, unmet(ISSUE_256, List.of(), overview, Map.of()).lines().size(), verb);
+    }
+  }
+
+  @Test
   void anOverviewSentenceSharingHalfACriterionsWordsWithoutAQuoteCounts() {
     var overview =
         "The issue's criterion is not met: an applicant who declines two offers stays in place"
