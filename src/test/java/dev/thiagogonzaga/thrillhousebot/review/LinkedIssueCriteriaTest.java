@@ -230,6 +230,17 @@ class LinkedIssueCriteriaTest {
                     "The board won't lock shifts that start within 2 hours."))
             .lines()
             .size());
+    assertEquals(
+        1,
+        unmet(
+                ISSUE_260,
+                List.of(),
+                null,
+                Map.of(
+                    "react/src/components/ShiftBoard.tsx",
+                    "The board fails to lock shifts that start within 2 hours."))
+            .lines()
+            .size());
   }
 
   @Test
