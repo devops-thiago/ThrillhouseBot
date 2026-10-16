@@ -622,6 +622,24 @@ final class SecretScanner {
     return isInterpolation(value) || isPlaceholder(value);
   }
 
+  /**
+   * The credential-named keys {@code line} assigns, lower-cased, in line order: {@code
+   * booking_api_token} for {@code ENV BOOKING_API_TOKEN=${BOOKING_API_TOKEN}}.
+   */
+  static List<String> assignedCredentialKeys(String line) {
+    var keys = new ArrayList<String>();
+    if (line.length() > MAX_GENERIC_LINE_LENGTH) {
+      return keys;
+    }
+    Matcher assigned = ASSIGNED_VALUE.matcher(line);
+    while (assigned.find()) {
+      if (CREDENTIAL_KEY.matcher(assigned.group(1)).find()) {
+        keys.add(assigned.group(1).toLowerCase(Locale.ROOT));
+      }
+    }
+    return keys;
+  }
+
   /** Whether a key or identifier names a credential, by the generic rule's credential words. */
   static boolean namesCredential(String key) {
     return CREDENTIAL_KEY.matcher(key).find();
