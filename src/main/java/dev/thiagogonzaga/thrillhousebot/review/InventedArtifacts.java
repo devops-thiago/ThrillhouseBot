@@ -98,8 +98,12 @@ final class InventedArtifacts {
   /** A sentence about taking something out: "removes", "deleted", "drops", "retires". */
   private static final Pattern REMOVAL = Pattern.compile("(?i)\\b(?:remov|delet|drop|retir)\\w*+");
 
-  /** Words, at most, between a {@link #REMOVAL} verb and the artifact it governs. */
-  static final int REMOVAL_REACH = 2;
+  /** A verb of addition, which takes the artifact after it away from an earlier removal verb. */
+  private static final Pattern ADDITION =
+      Pattern.compile("(?i)\\b(?:add|introduc|creat|implement|ship|build|wire)\\w*+");
+
+  /** Where an artifact's clause starts, for {@link #REMOVAL}: punctuation or a dash. */
+  private static final Pattern CLAUSE_END = Pattern.compile("[,;:.!?—–]");
 
   /**
    * {@code summary} with every sentence of its purpose and assessment that introduces an artifact
@@ -168,13 +172,24 @@ final class InventedArtifacts {
   }
 
   /**
-   * Whether one of the last {@value #REMOVAL_REACH} words of {@code lead}, those right before the
-   * artifact, is a {@link #REMOVAL} verb: "removes a …", "has deleted the old … and a …" is not.
+   * Whether a {@link #REMOVAL} verb governs the artifact {@code lead} leads to: the verb is in the
+   * artifact's clause, which punctuation or a dash ends, and no {@link #ADDITION} verb follows it
+   * there. "removes a …" and "deletes the old flow and a …" are removals; "drops the old flow then
+   * adds a …" and "removes cruft, a … is added" are not.
    */
   private static boolean removedInClause(String lead) {
-    var words = words(lead);
-    return words.subList(Math.max(0, words.size() - REMOVAL_REACH), words.size()).stream()
-        .anyMatch(word -> REMOVAL.matcher(word).lookingAt());
+    var breaks = CLAUSE_END.matcher(lead);
+    var start = 0;
+    while (breaks.find()) {
+      start = breaks.end();
+    }
+    var clause = lead.substring(start);
+    var removal = REMOVAL.matcher(clause);
+    var last = -1;
+    while (removal.find()) {
+      last = removal.end();
+    }
+    return last >= 0 && !ADDITION.matcher(clause.substring(last)).find();
   }
 
   /**

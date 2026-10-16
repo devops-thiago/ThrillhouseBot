@@ -142,6 +142,8 @@ class InventedArtifactsTest {
     assertFalse(
         InventedArtifacts.invents("It drops the old flow and deletes a settings page.", change));
     assertFalse(InventedArtifacts.invents("It has removed a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It deletes the old flow and a settings page.", change));
+    assertTrue(InventedArtifacts.invents("It removes cruft, a settings page is added.", change));
     // A removal that does not govern the artifact leaves it judged.
     assertTrue(
         InventedArtifacts.invents("It drops the old flow then adds a settings page.", change));
