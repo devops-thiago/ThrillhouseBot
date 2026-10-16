@@ -5,10 +5,16 @@ how the version bump after it works.
 
 ## Preparing a release
 
-A release is prepared on its own branch, `release/vX.Y.Z`, cut from `main`.
+A minor or major release is prepared on its own branch, `release/vX.Y.Z`, cut
+from `main`. A patch release does not need one: its pull requests are
+squash-merged straight into `main`.
+
+Pull requests are squash-merged into `main` and into release branches. The only
+rebase merge is the release pull request from `release/vX.Y.Z` into `main`, so
+that each change keeps its own commit on `main`.
 
 1. Create `release/vX.Y.Z` from `main`. The `release` ruleset protects every
-   `release/**` branch: changes go in through pull requests, merged by rebase,
+   `release/**` branch: changes go in through pull requests, squash-merged,
    with signed commits, and the branch cannot be deleted or force-pushed.
 2. Open the milestone's pull requests against `release/vX.Y.Z`. CI and
    Dependency Review run on them as they do for `main`. The ruleset has no
@@ -22,19 +28,18 @@ A release is prepared on its own branch, `release/vX.Y.Z`, cut from `main`.
 4. Documentation updates for the release also go into the release branch,
    before the release pull request is opened.
 5. Open the release pull request from `release/vX.Y.Z` into `main`. `main`
-   requires `format`, `test`, `frontend`, `trivy` and `dependency-review` to
-   pass, one approving review from a code owner, and every review thread
+   requires `format`, `test`, `frontend`, `trivy`, `dependency-review` and
+   `dco` to pass, one approving review from a code owner, and every review thread
    resolved.
-6. Merge it. The repository and the `main` ruleset currently allow squash
-   merges only, which puts the whole release on `main` as one commit. To keep
-   each pull request's commit on `main`, enable merge commits for this merge.
+6. Merge it with a rebase merge, which puts each squashed pull request from
+   the release branch on `main` as its own commit.
 7. Wait for CI on `main` to finish. It publishes the images that the release
    workflow promotes, tagged with the commit SHA.
-8. Tag the merge commit on `main` as `vX.Y.Z` with a signed tag and push it.
-   That starts the release workflow.
+8. Tag the last commit the rebase put on `main` as `vX.Y.Z` with a signed
+   tag and push it. That starts the release workflow.
 
    ```bash
-   git tag -s vX.Y.Z -m vX.Y.Z <merge-commit>
+   git tag -s vX.Y.Z -m vX.Y.Z <last-release-commit>
    git tag -v vX.Y.Z
    git push origin vX.Y.Z
    ```

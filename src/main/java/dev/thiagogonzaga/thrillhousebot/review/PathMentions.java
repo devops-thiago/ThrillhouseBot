@@ -15,11 +15,15 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import io.quarkus.logging.Log;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -42,9 +46,12 @@ import java.util.regex.Pattern;
  * <ol>
  *   <li>a file the pull request changes (its current or, for a rename, its earlier path), or a
  *       directory holding one; a bare file name by the name of one;
+ *   <li>the one changed file whose path ends with it, which replaces it: {@code docs/CONFIG-C.md}
+ *       for {@code c/docs/CONFIG-C.md}, even where a patch quotes the shorter form (#1094);
  *   <li>text the review was given verbatim: a patch, the PR title and description, the linked
  *       issues. A path that is missing on purpose ("the description promises docs/FOO.md, which no
- *       file adds", a {@code COPY} source the build cannot find) is quoted from there;
+ *       file adds", a {@code COPY} source the build cannot find) is quoted from there. A quoted
+ *       path that one changed file ends with is not missing, so the step above completes it first;
  *   <li>the one changed file {@link DiffLineResolver#diffPathFor} maps it onto, which replaces it;
  *   <li>a repository file at the head, from one recursive listing read only when a token reaches
  *       this step.
@@ -54,9 +61,19 @@ import java.util.regex.Pattern;
  * mention (with a parenthetical holding only it) leaves a finding's description, unless the model
  * put it in a code span: a name quoted that way is usually missing on purpose ("no {@code
  * package-lock.json} is added"), and cutting it left the sentence without it (#1095). A finding is
- * never dropped, and its title, file and suggestions are never touched. When the repository could
- * not be listed, or the listing was truncated, a token the earlier steps do not resolve is left as
- * written: it may exist.
+ * never dropped, and its title and file are never touched. When the repository could not be listed,
+ * or the listing was truncated, a token the earlier steps do not resolve is left as written: it may
+ * exist.
+ *
+ * <p>Two more checks on findings (#1094). A code span in a finding's description that quotes a line
+ * of the finding's file with an absolute path the line does not hold ({@code COPY --from=build
+ * /src/zig-out/bin/app /usr/local/bin/ap}) gets the path the line holds, when exactly one fits. A
+ * suggestion that introduces a repository file nothing resolves, or a glob over an absolute
+ * directory ({@code /app/lib/*}) that no patch, the PR text or the replaced lines name, is dropped;
+ * the finding stays; so is one relying on an absolute file nothing names in a directory the change
+ * populates ({@code /app/missing.jar} beside {@code COPY … /app/app.jar}). A path the suggestion
+ * itself writes (a {@code COPY} destination, a {@code cp} or {@code mkdir} target) is not held to
+ * that.
  *
  * <p>Not paths: URLs, a route ({@code /scan}, {@code /triage/run}), a package name ({@code
  * com.example.x}), a scoped package ({@code @angular/core}), an image reference ({@code
@@ -204,14 +221,80 @@ final class PathMentions {
           "brewfile",
           "justfile");
 
-  /** An inline code span on one line. */
-  private static final Pattern INLINE_CODE = Pattern.compile("`[^`\\n]++`");
+  /**
+   * An absolute path of two segments or more ({@code /usr/local/bin/app}), never the tail of a
+   * longer token; a route-like single segment is not one.
+   */
+  private static final Pattern ABSOLUTE_PATH =
+      Pattern.compile("(?<![\\w.~/\\\\+-])/[\\w.+-]++(?:/[\\w.+-]++)++");
+
+  /**
+   * A glob over the files of an absolute directory ({@code /app/lib/*}, {@code
+   * /app/lib/serv*.jar}), up to its first star; the directory is what precedes its last slash. A
+   * name follows the first slash, so the {@code //} of a URL never opens one.
+   */
+  private static final Pattern ABSOLUTE_GLOB =
+      Pattern.compile("(?<![\\w.~/\\\\+-])/[\\w.+-][\\w.+/-]*+\\*");
+
+  /** A Dockerfile instruction that copies into the image. */
+  private static final Pattern COPY_INSTRUCTION =
+      Pattern.compile("\\s*+(?:COPY|ADD)\\s", Pattern.CASE_INSENSITIVE);
+
+  /** What may follow a line's last argument: the close of an exec-form array, and blanks. */
+  private static final Pattern LINE_END = Pattern.compile("[\"\\]\\s]*+");
+
+  /**
+   * Where a shell command starts on a line: at its start or after a separator or a pipe, past a
+   * Dockerfile {@code RUN}.
+   */
+  private static final Pattern COMMAND_START =
+      Pattern.compile("(?:^|&&|\\|\\||[;|(])\\s*+(?:RUN\\s++)?", Pattern.CASE_INSENSITIVE);
+
+  /**
+   * A shell command whose last argument is a path it writes, anywhere in the command before the
+   * token: also inside a wrapper such as {@code bash -c 'mkdir -p /app/lib'}.
+   */
+  private static final Pattern WRITING_COMMAND =
+      Pattern.compile("(?<![\\w./-])(?:cp|mv|install|ln|touch|mkdir|tee)\\s");
+
+  /**
+   * What may follow a command's last argument: the next command, a continuation, a shell comment,
+   * or the end.
+   */
+  private static final Pattern COMMAND_END =
+      Pattern.compile("[\"']?\\s*+(?:&&|\\|\\||[;|)\\\\#]|$)");
+
+  /** A line that ends with a continuation backslash, read at the end of the text before it. */
+  private static final Pattern CONTINUED = Pattern.compile("\\\\[ \\t]*+$");
+
+  /** A continuation backslash and the line break after it. */
+  private static final Pattern CONTINUATION = Pattern.compile("\\\\[ \\t]*+\\n");
+
+  /** A redirection right before a token: {@code > out.log}, {@code >>conf/app.conf}. */
+  private static final Pattern REDIRECTED = Pattern.compile(">\\s*+[\"']?$");
+
+  /** A file name with an extension: {@code app.jar}, {@code nginx.conf}. */
+  private static final Pattern FILE_NAME = Pattern.compile("[\\w+-][\\w.+-]*\\.[A-Za-z0-9]{1,10}");
+
+  /**
+   * An inline code span, which may wrap onto the next line of a paragraph but not across a blank
+   * line.
+   */
+  private static final Pattern CODE_SPAN = Pattern.compile("`((?:[^`\\n]|\\n(?!\\n))++)`");
+
+  /** A line break and the indentation after it, inside a wrapped code span. */
+  private static final Pattern WRAP = Pattern.compile("[ \\t]*+\\n[ \\t]*+");
 
   private static final Pattern BLANK_RUN = Pattern.compile(" {2,}");
 
   private static final Pattern BLANK_BEFORE_PUNCTUATION = Pattern.compile(" ([.,;:!?])");
 
   private final PathIndex changed;
+  private final Set<String> currentFiles;
+
+  /** Each changed file's patch lines, without their diff markers, for the quote check. */
+  private final Map<String, List<String>> patchLines;
+
   private final DiffLineResolver resolver;
   private final String verbatim;
   private final Supplier<Optional<PathIndex>> repository;
@@ -264,6 +347,7 @@ final class PathMentions {
     var paths = new HashSet<String>();
     var current = new HashSet<String>();
     var text = new StringBuilder(known == null ? "" : known);
+    var lines = new HashMap<String, List<String>>();
     for (var file : files) {
       paths.add(file.filename());
       current.add(file.filename());
@@ -272,9 +356,17 @@ final class PathMentions {
       }
       if (file.patch() != null) {
         text.append('\n').append(file.patch());
+        var code = codeLines(file.patch());
+        lines.put(file.filename(), code);
+        if (file.previousFilename() != null) {
+          // A finding may name a renamed file by its earlier path, which diffPathFor can leave.
+          lines.putIfAbsent(file.previousFilename(), code);
+        }
       }
     }
     this.changed = PathIndex.of(paths);
+    this.currentFiles = Set.copyOf(current);
+    this.patchLines = Map.copyOf(lines);
     this.resolver = new DiffLineResolver(Map.of(), current);
     this.verbatim = text.toString();
     // A truncated listing may lack a path that exists, so it judges nothing, like no listing.
@@ -310,8 +402,23 @@ final class PathMentions {
     var changedAny = false;
     var findings = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     for (var finding : response.findings()) {
-      var description = withoutUnresolvedMentions(finding.description());
-      if (Objects.equals(description, finding.description())) {
+      var description =
+          withQuotedPathsCorrected(
+              withoutUnresolvedMentions(finding.description()), finding.file());
+      var suggestionNew = finding.suggestionNew();
+      var unresolved = unresolvedInSuggestion(finding);
+      if (unresolved != null) {
+        Log.infof(
+            "Finding '%s' (%s:%d) suggests %s, which nothing resolves; dropping its suggestion and"
+                + " keeping the finding",
+            LogSafe.oneLine(finding.title()),
+            LogSafe.oneLine(finding.file()),
+            finding.line(),
+            LogSafe.oneLine(unresolved));
+        suggestionNew = null;
+      }
+      if (Objects.equals(description, finding.description())
+          && Objects.equals(suggestionNew, finding.suggestionNew())) {
         findings.add(finding);
       } else {
         changedAny = true;
@@ -324,7 +431,7 @@ final class PathMentions {
                 finding.title(),
                 description,
                 finding.suggestionOld(),
-                finding.suggestionNew()));
+                suggestionNew));
       }
     }
     return changedAny
@@ -525,11 +632,14 @@ final class PathMentions {
     return wraps(s, start, end, '`', '`') && wraps(s, start - 1, end + 1, '(', ')');
   }
 
-  /** The inline code spans of {@code text}, outside its fences: one-line runs between backticks. */
+  /**
+   * The inline code spans of {@code text}, outside its fences: runs between backticks, which may
+   * wrap onto the next line ({@link #CODE_SPAN}).
+   */
   private static List<int[]> codeSpans(String text) {
     var fenced = new SpanCursor(fences(text));
     var spans = new ArrayList<int[]>();
-    var matcher = INLINE_CODE.matcher(text);
+    var matcher = CODE_SPAN.matcher(text);
     while (matcher.find()) {
       if (!fenced.covers(matcher.start())) {
         spans.add(new int[] {matcher.start(), matcher.end()});
@@ -647,7 +757,14 @@ final class PathMentions {
 
   /** {@link #resolve} for a token not judged before in this review. */
   private String judge(String token) {
-    if (verbatim.contains(token) || changed.names(token)) {
+    if (changed.names(token)) {
+      return token;
+    }
+    String completed = changedFileEndingWith(token);
+    if (completed != null) {
+      return completed;
+    }
+    if (verbatim.contains(token)) {
       return token;
     }
     if (token.contains("/") && !token.endsWith("/")) {
@@ -659,6 +776,250 @@ final class PathMentions {
     }
     var index = repository.get();
     return index.isEmpty() || index.get().names(token) ? token : null;
+  }
+
+  /**
+   * The one changed file whose path ends with {@code token} after a slash, or {@code null} for a
+   * bare name, a directory, or none or several: {@code c/docs/CONFIG-C.md} for {@code
+   * docs/CONFIG-C.md} (#1094).
+   */
+  private String changedFileEndingWith(String token) {
+    if (token.indexOf('/') < 0 || token.endsWith("/")) {
+      return null;
+    }
+    String tail = "/" + token;
+    String match = null;
+    for (String file : currentFiles) {
+      if (file.endsWith(tail)) {
+        if (match != null) {
+          return null;
+        }
+        match = file;
+      }
+    }
+    return match;
+  }
+
+  /**
+   * {@code description} with each code span that quotes a line of {@code file}'s patch, but with an
+   * absolute path the line does not hold, given the path the line holds (#1094). A span is a quote
+   * when the text around the path in it surrounds exactly one other absolute path in the patch's
+   * lines; anything else is left as written.
+   */
+  String withQuotedPathsCorrected(String description, String file) {
+    if (description == null || file == null || description.indexOf('`') < 0) {
+      return description;
+    }
+    var lines = patchLines.get(resolver.diffPathFor(file));
+    if (lines == null) {
+      return description;
+    }
+    var fenced = new SpanCursor(fences(description));
+    var out = new StringBuilder(description.length());
+    var spans = CODE_SPAN.matcher(description);
+    int at = 0;
+    while (spans.find()) {
+      if (!fenced.covers(spans.start())) {
+        out.append(description, at, spans.start(1)).append(correctedQuote(spans.group(1), lines));
+        at = spans.end(1);
+      }
+    }
+    out.append(description, at, description.length());
+    String result = out.toString();
+    return result.equals(description) ? description : result;
+  }
+
+  /**
+   * {@code written} with an absolute path the patch lines do not hold replaced, where one fits, and
+   * then on one line; {@code written} itself when nothing is replaced.
+   */
+  private static String correctedQuote(String written, List<String> lines) {
+    // A span the description wrapped quotes one line: its break reads as the blank it replaced.
+    String quote = WRAP.matcher(written).replaceAll(" ");
+    if (lines.stream().anyMatch(line -> line.contains(quote))) {
+      return written;
+    }
+    var paths = ABSOLUTE_PATH.matcher(quote);
+    while (paths.find()) {
+      String path = paths.group();
+      String before = quote.substring(0, paths.start());
+      String after = quote.substring(paths.end());
+      if ((before.isBlank() && after.isBlank())
+          || lines.stream().anyMatch(line -> line.contains(path))) {
+        continue;
+      }
+      var fits = pathsBetween(before, after, lines);
+      if (fits.size() == 1) {
+        return before + fits.getFirst() + after;
+      }
+    }
+    return written;
+  }
+
+  /** The absolute paths of {@code lines} that {@code before} and {@code after} surround. */
+  private static List<String> pathsBetween(String before, String after, List<String> lines) {
+    var fits = new LinkedHashSet<String>();
+    for (String line : lines) {
+      var candidates = ABSOLUTE_PATH.matcher(line);
+      while (candidates.find()) {
+        if (line.contains(before + candidates.group() + after)) {
+          fits.add(candidates.group());
+        }
+      }
+    }
+    return List.copyOf(fits);
+  }
+
+  /**
+   * The first path {@code finding}'s suggestion introduces that nothing resolves, or {@code null}
+   * (#1094): a file named in the new lines and not in the replaced ones that no step of {@link
+   * #resolve} settles, unless the suggestion writes it ({@link #createdBySuggestion}), or a glob
+   * over an absolute directory that no patch, PR text or the replaced lines name, unless the
+   * suggestion's own new lines make the directory ({@link #createsDirectory}), or an absolute file
+   * in a directory the change populates that nothing names ({@link #absentProjectFile}).
+   */
+  private String unresolvedInSuggestion(ReviewResponse.Finding finding) {
+    String suggested = finding.suggestionNew();
+    if (suggested == null || suggested.isBlank()) {
+      return null;
+    }
+    String replaced = finding.suggestionOld() == null ? "" : finding.suggestionOld();
+    var globs = ABSOLUTE_GLOB.matcher(suggested);
+    while (globs.find()) {
+      int slash = globs.group().lastIndexOf('/');
+      if (slash <= 0) {
+        // A top-level glob ("/app*") names no directory to look for.
+        continue;
+      }
+      var directory = pathPattern(globs.group().substring(0, slash));
+      if (!directory.matcher(replaced).find()
+          && !directory.matcher(verbatim).find()
+          && !createsDirectory(suggested, directory)) {
+        return globs.group();
+      }
+    }
+    String absent = absentProjectFile(suggested, replaced);
+    if (absent != null) {
+      return absent;
+    }
+    var urls = new SpanCursor(spans(URL, suggested));
+    var tokens = TOKEN.matcher(suggested);
+    while (tokens.find()) {
+      String token = stripTrailingDots(tokens.group(1));
+      int start = tokens.start(1);
+      if (!urls.covers(start)
+          && namesAFile(token)
+          && !replaced.contains(token)
+          && !partOfSomethingElse(suggested, start, start + token.length())
+          && !createdBySuggestion(suggested, start, start + token.length())
+          && resolve(token) == null) {
+        return token;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Whether the token at {@code start}..{@code end} is a path the suggestion creates rather than
+   * one it relies on: the destination of a Dockerfile {@code COPY} or {@code ADD} (the last
+   * argument on a line those open), the last argument of a shell command that writes it ({@code
+   * cp}, {@code mv}, {@code install}, {@code ln}, {@code touch}, {@code mkdir}, {@code tee}), or
+   * the target of a {@code >} redirection.
+   */
+  private static boolean createdBySuggestion(String text, int start, int end) {
+    int lineStart = text.lastIndexOf('\n', start) + 1;
+    // A Dockerfile or shell line that ends with a backslash continues on the next one, so the
+    // instruction a token belongs to may open lines above it.
+    while (lineStart > 1 && CONTINUED.matcher(text.substring(0, lineStart - 1)).find()) {
+      lineStart = text.lastIndexOf('\n', lineStart - 2) + 1;
+    }
+    int lineEnd = text.indexOf('\n', end);
+    if (lineEnd < 0) {
+      lineEnd = text.length();
+    }
+    String before = CONTINUATION.matcher(text.substring(lineStart, start)).replaceAll(" ");
+    String line = before + text.substring(start, lineEnd);
+    String after = text.substring(end, lineEnd);
+    if (COPY_INSTRUCTION.matcher(line).lookingAt() && LINE_END.matcher(after).matches()) {
+      return true;
+    }
+    if (REDIRECTED.matcher(before).find()) {
+      return true;
+    }
+    var command = COMMAND_START.matcher(before);
+    int from = 0;
+    while (command.find()) {
+      from = command.end();
+    }
+    return WRITING_COMMAND.matcher(before.substring(from)).find()
+        && COMMAND_END.matcher(after).lookingAt();
+  }
+
+  /**
+   * The first absolute file the suggestion relies on that nothing provides, or {@code null}: a path
+   * whose last segment is a file name with an extension, that the replaced lines, the patches and
+   * the PR text do not name and the suggestion does not write, in a directory the patches or the PR
+   * text name ({@code /app/missing.jar} beside {@code COPY … /app/app.jar}). A file in a directory
+   * nothing names, such as the base image's {@code /etc/nginx/nginx.conf}, cannot be judged from
+   * the review and is left alone.
+   */
+  private String absentProjectFile(String suggested, String replaced) {
+    var paths = ABSOLUTE_PATH.matcher(suggested);
+    while (paths.find()) {
+      String path = paths.group();
+      int slash = path.lastIndexOf('/');
+      if (!FILE_NAME.matcher(path.substring(slash + 1)).matches() || replaced.contains(path)) {
+        continue;
+      }
+      if (!pathPattern(path).matcher(verbatim).find()
+          && pathPattern(path.substring(0, slash)).matcher(verbatim).find()
+          && !createdBySuggestion(suggested, paths.start(), paths.end())) {
+        return path;
+      }
+    }
+    return null;
+  }
+
+  /** {@code path} as a whole path: not the tail or the head of a longer name. */
+  private static Pattern pathPattern(String path) {
+    return Pattern.compile("(?<![\\w.~/\\\\+-])" + Pattern.quote(path) + "(?![\\w.+-])");
+  }
+
+  /**
+   * Whether {@code suggested} makes the directory {@code directory} matches: a mention of it, with
+   * or without a closing slash, that {@link #createdBySuggestion} reads as written ({@code RUN
+   * mkdir -p /app/lib}, {@code COPY lib/ /app/lib/}). A glob over it or a command reading it does
+   * not count.
+   */
+  private static boolean createsDirectory(String suggested, Pattern directory) {
+    var mentions = directory.matcher(suggested);
+    while (mentions.find()) {
+      int end = mentions.end();
+      boolean slash = end < suggested.length() && suggested.charAt(end) == '/';
+      if (createdBySuggestion(suggested, mentions.start(), slash ? end + 1 : end)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether a path-shaped token ends in a file name: an extension or a dotless file name. */
+  private static boolean namesAFile(String token) {
+    if (!pathShaped(token) || token.endsWith("/")) {
+      return false;
+    }
+    String last = fileName(token);
+    return (last.lastIndexOf('.') > 0 && EXTENSIONS.contains(extension(last)))
+        || DOTLESS_FILE_NAMES.contains(last.toLowerCase(Locale.ROOT));
+  }
+
+  /** A patch's code lines: hunk headers and "no newline" notes left out, diff markers removed. */
+  private static List<String> codeLines(String patch) {
+    return patch
+        .lines()
+        .filter(line -> !line.isEmpty() && !line.startsWith("@@") && !line.startsWith("\\"))
+        .map(line -> line.substring(1))
+        .toList();
   }
 
   /**

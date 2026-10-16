@@ -61,7 +61,9 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  *
  * <p>Pending checks contribute one line, and only alongside a failure: a review that starts while
  * CI is still running — the usual case for an automatic review — gets no section at all rather than
- * a paragraph saying nothing is known yet. Best-effort throughout: nothing here can fail a review.
+ * a paragraph saying nothing is known yet. Such a check is read again after the model call, and the
+ * summary is rendered from a section that includes it if it has failed since ({@link #refresh},
+ * #1092). Best-effort throughout: nothing here can fail a review.
  */
 @ApplicationScoped
 public class CiFailureContextResolver {
@@ -120,6 +122,14 @@ public class CiFailureContextResolver {
    * prefix; {@link CiFailureCitations} reads them back by it.
    */
   static final String FAILING_TESTS = "Failing tests named in the job log:";
+
+  /** The line the section opens with, before the number of failed checks. */
+  private static final String FAILED_AT_START =
+      "Checks on this commit that had completed without passing when this review started: ";
+
+  /** The line the block a later reading appends opens with (#1092). */
+  private static final String FAILED_SINCE_START =
+      "Checks on this commit that completed without passing after this review started: ";
 
   /** Appended when the whole section had to be cut to {@code max-chars}. */
   static final String TRUNCATION_NOTE = "[CI context truncated to its character budget]";
@@ -320,20 +330,67 @@ public class CiFailureContextResolver {
       return "";
     }
     try {
-      return cap(render(auth, owner, repo, evaluation.failures()), maxChars);
+      return cap(render(auth, owner, repo, evaluation.failures(), FAILED_AT_START), maxChars);
     } catch (RuntimeException e) {
       Log.warn("CI-failure context could not be built, continuing without it", e);
       return "";
     }
   }
 
+  /**
+   * The section the summary is rendered with, after a second reading of the head's checks taken
+   * once the model call is done (#1092). A test check commonly fails minutes after an automatic
+   * review starts and before it posts; the review-start reading saw it running, so without this the
+   * summary said nothing of the failure and its findings said CI would confirm them.
+   *
+   * <p>{@code section} is returned unchanged when {@code fresh} names no failed check {@code early}
+   * did not. Otherwise only the new checks are rendered, as a block of their own appended to the
+   * section, so the checks it already describes are not fetched again and the new ones get the
+   * whole log and character budget. The text is read back by {@link CiFailureCitations} and never
+   * reaches a model, so the two parts are capped separately.
+   */
+  String refresh(
+      String auth,
+      String owner,
+      String repo,
+      String section,
+      CiStatusEvaluator.CiFailures early,
+      CiStatusEvaluator.CiFailures fresh) {
+    var known = new LinkedHashSet<String>();
+    early.failed().forEach(check -> known.add(check.name()));
+    var added = fresh.failed().stream().filter(check -> !known.contains(check.name())).toList();
+    if (!enabled || added.isEmpty()) {
+      return section;
+    }
+    Log.infof(
+        "CI-failure context: %d check(s) failed on %s/%s while the review ran",
+        added.size(), owner, repo);
+    try {
+      var block =
+          cap(
+              render(
+                  auth,
+                  owner,
+                  repo,
+                  new CiStatusEvaluator.CiFailures(added, fresh.pending()),
+                  FAILED_SINCE_START),
+              maxChars);
+      return section.isEmpty() ? block : section + "\n" + block;
+    } catch (RuntimeException e) {
+      Log.warn("CI-failure context could not be rebuilt, keeping the review-start reading", e);
+      return section;
+    }
+  }
+
   private String render(
-      String auth, String owner, String repo, CiStatusEvaluator.CiFailures failures) {
+      String auth,
+      String owner,
+      String repo,
+      CiStatusEvaluator.CiFailures failures,
+      String opening) {
     var failed = failures.failed();
     var sb = new StringBuilder();
-    sb.append("Checks on this commit that had completed without passing when this review started: ")
-        .append(failed.size())
-        .append('\n');
+    sb.append(opening).append(failed.size()).append('\n');
     if (failures.pending() > 0) {
       sb.append(failures.pending())
           .append(" other check(s) had not finished; their outcome is unknown to this review.\n");

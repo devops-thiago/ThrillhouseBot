@@ -659,4 +659,474 @@ class PathMentionsTest {
         mentions(REACT, null, REACT_TREE)
             .withoutUnresolvedMentions("```\n`x`\n```\nSee docs/NOPE.md."));
   }
+
+  private static ReviewResponse.Finding findingOn(
+      String file, String description, String suggestionOld, String suggestionNew) {
+    return new ReviewResponse.Finding(
+        "high",
+        "medium",
+        file,
+        14,
+        "Image never builds",
+        description,
+        suggestionOld,
+        suggestionNew);
+  }
+
+  /** The c pull request (ThrillhouseBot-test#277): its README links the docs relatively. */
+  private static final List<FileDiff> C =
+      List.of(
+          new FileDiff("c/docs/CONFIG-C.md", "added", 9, 0, 9, "+# Configuration"),
+          new FileDiff("c/src/config.c", "added", 40, 0, 40, "+int parse_sites(void)"),
+          new FileDiff("c/README.md", "modified", 1, 0, 1, "+See docs/CONFIG-C.md for settings."));
+
+  /**
+   * #1094, c #277 and node #278: a path missing its language folder is mapped onto the one changed
+   * file that ends with it, even though a patch quotes the short form.
+   */
+  @Test
+  void aSuffixOnlyPathIsMappedOntoTheOneChangedFileEndingWithIt() {
+    var node =
+        List.of(
+            new FileDiff("node/src/config.ts", "added", 30, 0, 30, "+export function load()"),
+            new FileDiff(
+                "node/README.md", "modified", 1, 0, 1, "+Settings live in src/config.ts."));
+    var c =
+        findingOn(
+            "c/src/config.c",
+            "docs/CONFIG-C.md documents the key only as a comma-separated list.",
+            null,
+            null);
+    var n =
+        findingOn(
+            "node/src/config.ts", "The binding in src/config.ts splits on commas.", null, null);
+
+    var screenedC =
+        mentions(C, "", Set.of()).screen(new ReviewResponse(List.of(c), List.of(), null));
+    var screenedNode =
+        mentions(node, "", Set.of()).screen(new ReviewResponse(List.of(n), List.of(), null));
+
+    assertEquals(
+        "c/docs/CONFIG-C.md documents the key only as a comma-separated list.",
+        screenedC.findings().getFirst().description());
+    assertEquals(
+        "The binding in node/src/config.ts splits on commas.",
+        screenedNode.findings().getFirst().description());
+  }
+
+  /** A suffix two changed files end with names neither, so it is judged as before. */
+  @Test
+  void aSuffixOfSeveralChangedFilesIsNotMapped() {
+    var both =
+        List.of(
+            new FileDiff("c/docs/CONFIG.md", "added", 1, 0, 1, "+# C"),
+            new FileDiff("go/docs/CONFIG.md", "added", 1, 0, 1, "+# Go"),
+            new FileDiff("README.md", "modified", 1, 0, 1, "+See docs/CONFIG.md."));
+    var text = "docs/CONFIG.md lists the key.";
+
+    assertSame(text, mentions(both, "", Set.of()).withoutUnresolvedMentions(text));
+  }
+
+  /** The zig pull request (#274): the Dockerfile copies the artifact under its own name. */
+  private static final List<FileDiff> ZIG_IMAGE =
+      List.of(
+          new FileDiff(
+              "zig/Dockerfile",
+              "added",
+              3,
+              0,
+              3,
+              """
+              @@ -0,0 +1,3 @@
+              +FROM alpine:3.20
+              +COPY --from=build /src/zig-out/bin/gcompact-server /usr/local/bin/gcompact-server
+              +ENTRYPOINT ["/usr/local/bin/gcompact-server"]
+              \\ No newline at end of file"""));
+
+  /**
+   * #1094, zig #274: a quoted Dockerfile line with a destination the line does not hold gets the
+   * one the line holds; the finding and its suggestion stay.
+   */
+  @Test
+  void aQuotedLineWithAPathItDoesNotHoldGetsTheLinesPath() {
+    var raised =
+        findingOn(
+            "zig/Dockerfile",
+            "`COPY --from=build /src/zig-out/bin/gcompact-server"
+                + " /usr/local/bin/gcompressed-server` therefore fails at build time.",
+            "COPY --from=build /src/zig-out/bin/gcompact-server /usr/local/bin/gcompact-server",
+            "COPY --from=build /src/zig-out/bin/gcompact /usr/local/bin/gcompact");
+
+    var screened =
+        mentions(ZIG_IMAGE, "", Set.of())
+            .screen(new ReviewResponse(List.of(raised), List.of(), null));
+
+    var kept = screened.findings().getFirst();
+    assertEquals(
+        "`COPY --from=build /src/zig-out/bin/gcompact-server /usr/local/bin/gcompact-server`"
+            + " therefore fails at build time.",
+        kept.description());
+    assertEquals(raised.suggestionNew(), kept.suggestionNew(), "a new destination is not checked");
+  }
+
+  /** Spans that are not quotes of the file, or quote it exactly, are left as written. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The binary lands in `/usr/local/bin/gcompressed-server` instead.",
+        "`COPY --from=build /src/zig-out/bin/gcompact-server /usr/local/bin/gcompact-server` fails.",
+        "`ADD /opt/app/server /srv/server` is not in the file.",
+        "No span at all names /usr/local/bin/gcompressed-server.",
+        "```\nCOPY --from=build /src/zig-out/bin/gcompact-server /usr/local/bin/x\n```"
+      })
+  void aSpanThatIsNotAMisquoteIsLeftAlone(String description) {
+    var mentions = mentions(ZIG_IMAGE, "", Set.of());
+
+    assertSame(description, mentions.withQuotedPathsCorrected(description, "zig/Dockerfile"));
+    assertSame(description, mentions.withQuotedPathsCorrected(description, "zig/build.zig"));
+    assertNull(mentions.withQuotedPathsCorrected(null, "zig/Dockerfile"));
+    // A finding with no file, which a model can raise, is left as written.
+    assertSame(description, mentions.withQuotedPathsCorrected(description, null));
+  }
+
+  /** A misquote that two paths of the file would fit is left as written: neither is known. */
+  @Test
+  void aMisquoteTwoPathsFitIsLeftAlone() {
+    var twice =
+        List.of(
+            new FileDiff(
+                "Dockerfile",
+                "added",
+                2,
+                0,
+                2,
+                "+RUN install /opt/a/bin/tool\n+RUN install /opt/b/bin/tool"));
+    var description = "`RUN install /opt/c/bin/tool` fails.";
+
+    assertSame(
+        description,
+        mentions(twice, "", Set.of()).withQuotedPathsCorrected(description, "Dockerfile"));
+  }
+
+  /** The kotlin pull request (#276): the image holds one jar under /app. */
+  private static final List<FileDiff> KOTLIN_IMAGE =
+      List.of(
+          new FileDiff(
+              "kotlin/Dockerfile",
+              "added",
+              2,
+              0,
+              2,
+              """
+              +COPY --from=build /app/target/desk-invoicer-1.0.0.jar /app/invoicer.jar
+              +ENTRYPOINT ["java", "-jar", "/app/invoicer.jar"]"""));
+
+  /**
+   * #1094, kotlin #276: a suggestion putting /app/lib/* on the classpath, which nothing creates,
+   * loses its suggestion; the finding stays with its anchor quote.
+   */
+  @Test
+  void aSuggestionGlobbingADirectoryNothingNamesIsDropped() {
+    var raised =
+        findingOn(
+            "kotlin/Dockerfile",
+            "The jar bundles no dependencies, so the container fails at start.",
+            "ENTRYPOINT [\"java\", \"-jar\", \"/app/invoicer.jar\"]",
+            "ENTRYPOINT [\"java\", \"-cp\", \"/app/invoicer.jar:/app/lib/*\","
+                + " \"cowork.invoicing.MainKt\"]");
+
+    var screened =
+        mentions(KOTLIN_IMAGE, "", Set.of())
+            .screen(new ReviewResponse(List.of(raised), List.of(), null));
+
+    assertEquals(1, screened.findings().size());
+    var kept = screened.findings().getFirst();
+    assertNull(kept.suggestionNew());
+    assertEquals(raised.suggestionOld(), kept.suggestionOld());
+    assertEquals(raised.description(), kept.description());
+    assertEquals(raised.title(), kept.title());
+  }
+
+  /** A glob over a directory the patch or the replaced lines name keeps its suggestion. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "ENTRYPOINT [\"java\", \"-cp\", \"/app/*\", \"cowork.invoicing.MainKt\"]",
+        "ENTRYPOINT [\"java\", \"-cp\", \"/app/target/*\", \"cowork.invoicing.MainKt\"]",
+        "ENTRYPOINT [\"java\", \"-jar\", \"/app/invoicer.jar\", \"--trace\"]",
+        "ENTRYPOINT [\"java\", \"-jar\", \"/app/invoicer.jar\"] # see https://x.example/a/b.md",
+        "ENTRYPOINT [\"java\", \"-jar\", \"/app/invoicer.jar\"] # see https://registry.example/r/*",
+        "ENTRYPOINT [\"java\", \"-jar\", \"/app/invoicer.jar\"] # see file:///srv/releases/*",
+        ""
+      })
+  void aSuggestionNamingWhatExistsIsKept(String suggestion) {
+    var raised =
+        findingOn(
+            "kotlin/Dockerfile",
+            "The jar bundles no dependencies.",
+            "ENTRYPOINT [\"java\", \"-jar\", \"/app/invoicer.jar\"]",
+            suggestion);
+    var response = new ReviewResponse(List.of(raised), List.of(), null);
+
+    assertSame(response, mentions(KOTLIN_IMAGE, "", Set.of()).screen(response));
+  }
+
+  /**
+   * A suggestion naming a repository file nothing resolves loses its suggestion; one naming a file
+   * of the repository, or the file it replaces, keeps it.
+   */
+  @Test
+  void aSuggestionNamingAFileNothingResolvesIsDropped() {
+    var mentions = mentions(ANGULAR, "", Set.of("angular/nginx.conf"));
+    var invented =
+        findingOn("angular/Dockerfile", "No config is copied.", null, "COPY ops/site.conf /etc/x/");
+    var existing =
+        findingOn("angular/Dockerfile", "No config is copied.", null, "COPY nginx.conf /etc/x/");
+    var replaced =
+        findingOn(
+            "angular/Dockerfile",
+            "Wrong destination.",
+            "COPY ops/site.conf /etc/y/",
+            "COPY ops/site.conf /etc/x/");
+
+    var screened =
+        mentions.screen(new ReviewResponse(List.of(invented, existing, replaced), List.of(), null));
+
+    assertEquals(3, screened.findings().size());
+    assertNull(screened.findings().get(0).suggestionNew());
+    assertEquals("COPY nginx.conf /etc/x/", screened.findings().get(1).suggestionNew());
+    assertEquals("COPY ops/site.conf /etc/x/", screened.findings().get(2).suggestionNew());
+  }
+
+  /**
+   * What a suggestion creates or does not name as a file is not judged: a COPY or ADD destination,
+   * relative or absolute, a directory, a volume mapping. A dotless file name it relies on is.
+   */
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          COPY nginx.conf conf/site.conf | true
+          COPY ["nginx.conf", "conf/site.conf"] | true
+          add nginx.conf conf/site.conf | true
+          COPY --from=build /app/target/service.war /usr/local/tomcat/webapps/ROOT.war | true
+          COPY src/ /app/src/ | true
+          volumes: [conf/app.yml:/etc/app.yml] | true
+          RUN cp nginx.conf conf/app.conf | true
+          RUN cp nginx.conf conf/app.conf # place the config next to the jar | true
+          RUN cat mkdir.txt conf/site.conf | false
+          RUN mkdir -p conf && cp nginx.conf conf/app.conf && echo ok | true
+          RUN sudo install -m 644 nginx.conf "conf/app.conf"; true | true
+          echo listen > conf/app.conf | true
+          RUN ln -s conf/site.conf | true
+          RUN java -jar lib/a/b/run.war --serve bin/x/y/run | true
+          RUN docker build -f ops/Dockerfile . | false
+          COPY conf/site.conf nginx.conf | false
+          RUN cp conf/site.conf /etc/x | false
+          RUN cat conf/site.conf && cp nginx.conf conf/app.conf | false
+          """)
+  void aSuggestionIsJudgedOnlyByWhatItReliesOn(String suggestion, boolean kept) {
+    var raised = findingOn("angular/Dockerfile", "No config is copied.", null, suggestion);
+
+    var screened =
+        mentions(ANGULAR, "", Set.of("angular/nginx.conf"))
+            .screen(new ReviewResponse(List.of(raised), List.of(), null));
+
+    assertEquals(kept ? suggestion : null, screened.findings().getFirst().suggestionNew());
+  }
+
+  /** A misquote is corrected whichever side of the path the quoted code is on. */
+  @Test
+  void aMisquoteIsCorrectedWithTheCodeAfterThePath() {
+    var image =
+        List.of(
+            new FileDiff(
+                "Dockerfile",
+                "added",
+                2,
+                0,
+                2,
+                // A blank line, as a hand-edited patch can carry, is no code line.
+                "+FROM alpine:3.20\n\n+RUN /usr/local/bin/gcompact-server --check"));
+
+    assertEquals(
+        "`/usr/local/bin/gcompact-server --check` fails.",
+        mentions(image, "", Set.of())
+            .withQuotedPathsCorrected("`/usr/local/bin/gcompressed --check` fails.", "Dockerfile"));
+  }
+
+  /** A span inside a fenced block is the block's code, not a quote to correct. */
+  @Test
+  void aSpanInAFenceIsLeftAlone() {
+    var description =
+        "```\n`COPY --from=build /src/zig-out/bin/gcompact-server /usr/local/bin/x`\n```";
+
+    assertSame(
+        description,
+        mentions(ZIG_IMAGE, "", Set.of()).withQuotedPathsCorrected(description, "zig/Dockerfile"));
+  }
+
+  /**
+   * A suggestion over several lines is judged line by line, and a glob over a directory its own new
+   * lines make keeps the suggestion.
+   */
+  @Test
+  void aSuggestionOverSeveralLinesIsJudgedLineByLine() {
+    var made =
+        findingOn(
+            "kotlin/Dockerfile",
+            "The jar bundles no dependencies.",
+            "ENTRYPOINT [\"java\", \"-jar\", \"/app/invoicer.jar\"]",
+            "RUN mkdir -p /app/lib\nENTRYPOINT [\"java\", \"-cp\", \"/app/lib/*\", \"Main\"]");
+    var copied =
+        findingOn(
+            "kotlin/Dockerfile",
+            "No config is copied.",
+            null,
+            "COPY nginx.conf conf/site.conf\nRUN cat conf/missing.conf\nUSER app");
+    var response = new ReviewResponse(List.of(made, copied), List.of(), null);
+
+    var screened = mentions(KOTLIN_IMAGE, "", Set.of("kotlin/nginx.conf")).screen(response);
+
+    assertEquals(made.suggestionNew(), screened.findings().get(0).suggestionNew());
+    assertNull(screened.findings().get(1).suggestionNew());
+  }
+
+  /** A destination on a continuation line belongs to the instruction the lines above open. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "RUN cp nginx.conf \\\n    conf/app.conf",
+        "COPY nginx.conf \\\n  conf/site.conf",
+        "RUN apt-get update && \\\n  mkdir -p conf && \\\n  cp nginx.conf conf/app.conf"
+      })
+  void aDestinationOnAContinuationLineKeepsTheSuggestion(String suggestion) {
+    var raised = findingOn("angular/Dockerfile", "No config is copied.", null, suggestion);
+
+    var screened =
+        mentions(ANGULAR, "", Set.of("angular/nginx.conf"))
+            .screen(new ReviewResponse(List.of(raised), List.of(), null));
+
+    assertEquals(suggestion, screened.findings().getFirst().suggestionNew());
+  }
+
+  /**
+   * A glob over a directory only the suggestion names is kept when the suggestion writes the
+   * directory, not when it only reads it or repeats the glob.
+   */
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          RUN mkdir -p /app/lib && cp /app/*.jar /app/lib/ && java -cp '/app/lib/*' Main | true
+          COPY lib/ /app/lib/ | true
+          RUN bash -c 'mkdir -p /app/lib && java -cp /app/lib/* Main' | true
+          ENTRYPOINT ["sh", "-c", "mkdir -p /app/lib && java -cp '/app/lib/*' Main"] | true
+          RUN ls /* /opt* && ls /app/lib/* | false
+          RUN ls /app/lib/* ; mkdir /app/lib | true
+          RUN ls /app/lib && cp /app/lib/* /out/ | false
+          RUN cp /app/lib/* /out/; cp /app/lib/* /out2/ | false
+          RUN mkdir -p /srv/app/lib && cp /app/lib/* /out/ | false
+          """)
+  void aGlobKeepsItsSuggestionOnlyWhenTheSuggestionWritesItsDirectory(
+      String suggestion, boolean kept) {
+    var raised =
+        findingOn("kotlin/Dockerfile", "The jar bundles no dependencies.", null, suggestion);
+
+    var screened =
+        mentions(KOTLIN_IMAGE, "", Set.of())
+            .screen(new ReviewResponse(List.of(raised), List.of(), null));
+
+    assertEquals(kept ? suggestion : null, screened.findings().getFirst().suggestionNew());
+  }
+
+  /** A finding that names a renamed file by its earlier path is checked against its patch. */
+  @Test
+  void aQuoteOnARenamedFilesEarlierPathIsCorrected() {
+    var renamed =
+        List.of(
+            new FileDiff(
+                "ops/server.Dockerfile",
+                "renamed",
+                1,
+                0,
+                1,
+                "+COPY --from=build /out/app /usr/local/bin/app-server",
+                "Dockerfile"));
+
+    assertEquals(
+        "`COPY --from=build /out/app /usr/local/bin/app-server` fails.",
+        mentions(renamed, "", Set.of())
+            .withQuotedPathsCorrected(
+                "`COPY --from=build /out/app /usr/local/bin/app-srv` fails.", "Dockerfile"));
+  }
+
+  /** A quote the description wrapped onto a second line is the same quote. */
+  @Test
+  void aWrappedMisquoteIsCorrected() {
+    var mentions = mentions(ZIG_IMAGE, "", Set.of());
+
+    assertEquals(
+        "`COPY --from=build /src/zig-out/bin/gcompact-server /usr/local/bin/gcompact-server`"
+            + " therefore fails.",
+        mentions.withQuotedPathsCorrected(
+            "`COPY --from=build /src/zig-out/bin/gcompact-server\n"
+                + "  /usr/local/bin/gcompressed-server` therefore fails.",
+            "zig/Dockerfile"));
+    var wrappedExact =
+        "`COPY --from=build /src/zig-out/bin/gcompact-server\n/usr/local/bin/gcompact-server` ok.";
+    assertSame(wrappedExact, mentions.withQuotedPathsCorrected(wrappedExact, "zig/Dockerfile"));
+    var paragraphs = "`COPY --from=build\n\n/usr/local/bin/gcompressed-server` fails.";
+    assertSame(paragraphs, mentions.withQuotedPathsCorrected(paragraphs, "zig/Dockerfile"));
+  }
+
+  /** A glob with a name pattern after the directory reads the same directory. */
+  @Test
+  void aNamePatternGlobIsJudgedByItsDirectory() {
+    var raised =
+        findingOn(
+            "kotlin/Dockerfile",
+            "The jar bundles no dependencies.",
+            null,
+            "RUN cp /app/lib/serv*.jar /out/");
+
+    var screened =
+        mentions(KOTLIN_IMAGE, "", Set.of())
+            .screen(new ReviewResponse(List.of(raised), List.of(), null));
+
+    assertNull(screened.findings().getFirst().suggestionNew());
+  }
+
+  /**
+   * An absolute file the suggestion relies on, in a directory the change populates, must be named
+   * somewhere; one in a directory nothing names (the base image's) cannot be judged and is kept.
+   */
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          ENTRYPOINT ["java", "-jar", "/app/missing.jar"] | false
+          ENTRYPOINT ["java", "-jar", "/app/target/desk-invoicer-1.0.0.jar"] | true
+          CMD ["java", "-jar", "/opt/tool/run.jar"] | true
+          COPY nginx.conf /app/nginx.conf | true
+          RUN java -jar /app/invoicer.jar --check | true
+          RUN /app/bin/start | true
+          """)
+  void anAbsoluteFileInADirectoryTheChangePopulatesMustBeNamed(String suggestion, boolean kept) {
+    var raised =
+        findingOn(
+            "kotlin/Dockerfile",
+            "The image starts the wrong jar.",
+            "ENTRYPOINT [\"java\", \"-jar\", \"/app/invoicer.jar\"]",
+            suggestion);
+
+    var screened =
+        mentions(KOTLIN_IMAGE, "", Set.of("kotlin/nginx.conf"))
+            .screen(new ReviewResponse(List.of(raised), List.of(), null));
+
+    assertEquals(kept ? suggestion : null, screened.findings().getFirst().suggestionNew());
+  }
 }
