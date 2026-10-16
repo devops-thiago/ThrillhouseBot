@@ -191,14 +191,23 @@ public class PrSummaryGenerator {
    *     as rendered, when this round reviews the head that round reviewed; empty otherwise. A
    *     finding still open that one of them names is named again, so a re-review of the same commit
    *     does not drop it
+   * @param linkedIssues the unfenced linked-issue section alone, {@code ""} when none; with one
+   *     issue linked, each criterion the round states unmet gets its own line ({@link
+   *     LinkedIssueCriteria}, #1093)
    */
-  record DescriptionSources(String claimText, Set<String> previouslyNamed) {
+  record DescriptionSources(String claimText, Set<String> previouslyNamed, String linkedIssues) {
 
     static final DescriptionSources NONE = new DescriptionSources("", Set.of());
 
     DescriptionSources {
       claimText = claimText == null ? "" : claimText;
       previouslyNamed = Set.copyOf(previouslyNamed);
+      linkedIssues = Objects.requireNonNullElse(linkedIssues, "");
+    }
+
+    /** Sources with no linked-issue section known. */
+    DescriptionSources(String claimText, Set<String> previouslyNamed) {
+      this(claimText, previouslyNamed, "");
     }
 
     /** Whether {@code finding} quotes or paraphrases the claim text; always with none known. */
@@ -285,10 +294,24 @@ public class PrSummaryGenerator {
             descriptionGaps(aiSummary), summariesByPath(aiSummary), result.findings());
 
     appendPrPurpose(sb, aiSummary);
+    // #1093: every criterion of the one linked issue the round states unmet gets its own line; a
+    // line pointing at a finding takes the place of that finding's bullet.
+    var rendered = backedByFindings(surfaces.descriptionGaps(), result.findings());
+    var criteria =
+        LinkedIssueCriteria.unmet(
+            sources.linkedIssues(),
+            rendered,
+            result.findings(),
+            aiSummary == null ? null : aiSummary.prPurpose(),
+            summariesByPath(aiSummary));
+    var gaps = new ArrayList<>(rendered);
+    gaps.addAll(criteria.lines());
     appendDescriptionGaps(
         sb,
-        backedByFindings(surfaces.descriptionGaps(), result.findings()),
-        descriptionFindings(surfaces.gapFindings(), result.findings(), sources));
+        gaps,
+        descriptionFindings(surfaces.gapFindings(), result.findings(), sources).stream()
+            .filter(f -> !criteria.pointed().contains(f))
+            .toList());
     appendWalkthroughDiagram(sb, aiSummary);
 
     sb.append("### Changes Overview\n");

@@ -163,6 +163,25 @@ class VerdictBuilderTest {
       new CiStatusEvaluator.CiEvaluation(List.of(), false);
 
   @Test
+  void theLinkedIssueSectionReachesTheSummaryOnItsOwn() {
+    // #1093: the section's criteria are read from the linked-issue text alone, never from the
+    // claim text, which the PR body is part of.
+    var ctx = contextWithLineCapOmissions(0);
+    var plan =
+        new DiffBudgetPlanner.BudgetPlan(
+            List.of(), List.of(), List.of(), true, null, null, null, null);
+    var linked = "Issues this pull request is linked to: #7\n";
+
+    builder.build(ctx, CLEAN_RESPONSE, CI_CLEAR, plan, "claims", CiFailureCitations.NONE, linked);
+
+    var sources = ArgumentCaptor.forClass(PrSummaryGenerator.DescriptionSources.class);
+    verify(summaryGenerator)
+        .generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), sources.capture());
+    assertEquals(linked, sources.getValue().linkedIssues());
+    assertEquals("claims", sources.getValue().claimText());
+  }
+
+  @Test
   void budgetedReviewDisclosesOnlyThePlanOmissions() {
     var ctx = contextWithLineCapOmissions(3);
     var plan =
