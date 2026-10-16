@@ -8,6 +8,10 @@ All notable changes to ThrillhouseBot.
 
 - **Pull request commits need a DCO sign-off, and the JVM build is reproducible** (#1124): the new `dco` check fails a pull request with a commit whose `Signed-off-by` line does not match its author; `git commit -s` adds one (see CONTRIBUTING). `pom.xml` now fixes archive timestamps, so two builds of the same commit produce identical jars. GOVERNANCE.md documents the decision process, roles and continuity plan, and docs/SECURITY_MODEL.md the security model.
 
+### Fixed
+
+- **A check that fails while the review runs is in that review's summary** (#1092): with `REVIEW_CI_CONTEXT_ENABLED=true`, the head's check runs are read once more after the model call when a check was still running at review start, and a check that has failed since is added to the CI-failure context the summary's sentence on each failing check is computed from. On the first review of a pull request the test job usually fails a few minutes before the review posts, and the summary used to say nothing about it. Nothing is read again when no check was pending, and a failed read keeps the review-start reading.
+
 ## [0.7.1] — 2026-10-13
 
 A bug-fix release. Most of the fixes are in follow-up rounds and the summary comment: findings from earlier rounds now get a status and have their threads resolved once fixed, the summary and its Description vs. Implementation section keep to what the change and its description contain, and a finding is placed, counted and matched to its duplicates the same way on every review.

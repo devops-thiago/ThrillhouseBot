@@ -32,6 +32,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
@@ -362,7 +363,9 @@ public class ReviewOrchestrator {
       var aiResponse =
           findingPipeline.run(session, promptInputs, ctx, plan, lineResolver, evidence);
 
-      CiStatusEvaluator.CiEvaluation ciEvaluation = rereadCiIfHeld(auth, ciReq, ciFuture.join());
+      var earlyCi = ciFuture.join();
+      CiStatusEvaluator.CiEvaluation ciEvaluation = rereadCiIfHeld(auth, ciReq, earlyCi);
+      var renderedCiFailures = refreshCiFailures(auth, ciReq, ciFailures, earlyCi, ciEvaluation);
 
       // #1074: the description findings the summary names must quote or paraphrase this text.
       var result =
@@ -372,7 +375,7 @@ public class ReviewOrchestrator {
               ciEvaluation,
               plan,
               PromptSections.prContext(req.prTitle(), req.prDescription()) + "\n" + linkedIssues,
-              CiFailureCitations.parse(ciFailures));
+              CiFailureCitations.parse(renderedCiFailures));
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);
@@ -652,6 +655,36 @@ public class ReviewOrchestrator {
           req.owner(), req.repo(), req.prNumber(), heldByNames(early));
     }
     return fresh;
+  }
+
+  /**
+   * The CI-failure section the summary is rendered with (#1092). The section the review call read
+   * was built from the review-start reading, and a check still running then often fails before the
+   * review posts. The re-read {@link #rereadCiIfHeld} took is used when there is one (a required
+   * check not yet reported at review start holds approval without counting as pending); otherwise,
+   * when the early reading counted a pending check, the check runs are read with one call. Nothing
+   * is read when nothing was pending, and a failed read keeps the review-start section.
+   */
+  private String refreshCiFailures(
+      String auth,
+      ReviewRequest req,
+      String section,
+      CiStatusEvaluator.CiEvaluation early,
+      CiStatusEvaluator.CiEvaluation verdictReading) {
+    if (!ciFailureContext.enabled()
+        || (verdictReading == early && early.failures().pending() == 0)) {
+      return section;
+    }
+    var fresh =
+        verdictReading == early
+            ? ciStatusEvaluator.checkRunFailures(auth, req.owner(), req.repo(), req.commitSha())
+            : Optional.of(verdictReading.failures());
+    return fresh
+        .map(
+            failures ->
+                ciFailureContext.refresh(
+                    auth, req.owner(), req.repo(), section, early.failures(), failures))
+        .orElse(section);
   }
 
   /** The check names an early CI reading held approval on, flattened for one log line. */

@@ -1012,9 +1012,13 @@ a check when it names the check or one of the failing tests listed for it, and
 findings still open from earlier reviews count.
 
 Checks still running add only a count next to a failure. An automatic review
-usually starts before CI finishes, so in practice the section shows up on a
-`/review` after CI has failed. A CI failure after the review does not start a
-new one; comment `/review` to get a review that sees it.
+usually starts before CI finishes, so the review call often sees no failure.
+When a check was still running at the start, the head's check runs are read
+once more after the model call (one request), and a check that has failed by
+then is added before the summary is rendered: the overview's sentence names it
+and the open findings that cite it. Findings are not re-graded against it. A
+CI failure after the review is posted does not start a new one; comment
+`/review` to get a review whose findings see it.
 
 ### Linked-issue context
 
