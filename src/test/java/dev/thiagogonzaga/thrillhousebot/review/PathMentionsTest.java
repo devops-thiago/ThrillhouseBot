@@ -940,4 +940,71 @@ class PathMentionsTest {
     assertEquals(made.suggestionNew(), screened.findings().get(0).suggestionNew());
     assertNull(screened.findings().get(1).suggestionNew());
   }
+
+  /** A destination on a continuation line belongs to the instruction the lines above open. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "RUN cp nginx.conf \\\n    conf/app.conf",
+        "COPY nginx.conf \\\n  conf/site.conf",
+        "RUN apt-get update && \\\n  mkdir -p conf && \\\n  cp nginx.conf conf/app.conf"
+      })
+  void aDestinationOnAContinuationLineKeepsTheSuggestion(String suggestion) {
+    var raised = findingOn("angular/Dockerfile", "No config is copied.", null, suggestion);
+
+    var screened =
+        mentions(ANGULAR, "", Set.of("angular/nginx.conf"))
+            .screen(new ReviewResponse(List.of(raised), List.of(), null));
+
+    assertEquals(suggestion, screened.findings().getFirst().suggestionNew());
+  }
+
+  /**
+   * A glob over a directory only the suggestion names is kept when the suggestion writes the
+   * directory, not when it only reads it or repeats the glob.
+   */
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          RUN mkdir -p /app/lib && cp /app/*.jar /app/lib/ && java -cp '/app/lib/*' Main | true
+          COPY lib/ /app/lib/ | true
+          RUN ls /app/lib/* ; mkdir /app/lib | true
+          RUN ls /app/lib && cp /app/lib/* /out/ | false
+          RUN cp /app/lib/* /out/; cp /app/lib/* /out2/ | false
+          RUN mkdir -p /srv/app/lib && cp /app/lib/* /out/ | false
+          """)
+  void aGlobKeepsItsSuggestionOnlyWhenTheSuggestionWritesItsDirectory(
+      String suggestion, boolean kept) {
+    var raised =
+        findingOn("kotlin/Dockerfile", "The jar bundles no dependencies.", null, suggestion);
+
+    var screened =
+        mentions(KOTLIN_IMAGE, "", Set.of())
+            .screen(new ReviewResponse(List.of(raised), List.of(), null));
+
+    assertEquals(kept ? suggestion : null, screened.findings().getFirst().suggestionNew());
+  }
+
+  /** A finding that names a renamed file by its earlier path is checked against its patch. */
+  @Test
+  void aQuoteOnARenamedFilesEarlierPathIsCorrected() {
+    var renamed =
+        List.of(
+            new FileDiff(
+                "ops/server.Dockerfile",
+                "renamed",
+                1,
+                0,
+                1,
+                "+COPY --from=build /out/app /usr/local/bin/app-server",
+                "Dockerfile"));
+
+    assertEquals(
+        "`COPY --from=build /out/app /usr/local/bin/app-server` fails.",
+        mentions(renamed, "", Set.of())
+            .withQuotedPathsCorrected(
+                "`COPY --from=build /out/app /usr/local/bin/app-srv` fails.", "Dockerfile"));
+  }
 }

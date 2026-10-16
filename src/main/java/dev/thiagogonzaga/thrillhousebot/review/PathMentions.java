@@ -248,6 +248,12 @@ final class PathMentions {
   private static final Pattern COMMAND_END =
       Pattern.compile("[\"']?\\s*+(?:&&|\\|\\||[;|)\\\\]|$)");
 
+  /** A line that ends with a continuation backslash, read at the end of the text before it. */
+  private static final Pattern CONTINUED = Pattern.compile("\\\\[ \\t]*+$");
+
+  /** A continuation backslash and the line break after it. */
+  private static final Pattern CONTINUATION = Pattern.compile("\\\\[ \\t]*+\\n");
+
   /** A redirection right before a token: {@code > out.log}, {@code >>conf/app.conf}. */
   private static final Pattern REDIRECTED = Pattern.compile(">\\s*+[\"']?$");
 
@@ -325,7 +331,12 @@ final class PathMentions {
       }
       if (file.patch() != null) {
         text.append('\n').append(file.patch());
-        lines.put(file.filename(), codeLines(file.patch()));
+        var code = codeLines(file.patch());
+        lines.put(file.filename(), code);
+        if (file.previousFilename() != null) {
+          // A finding may name a renamed file by its earlier path, which diffPathFor can leave.
+          lines.putIfAbsent(file.previousFilename(), code);
+        }
       }
     }
     this.changed = PathIndex.of(paths);
@@ -746,12 +757,11 @@ final class PathMentions {
     String replaced = finding.suggestionOld() == null ? "" : finding.suggestionOld();
     var globs = ABSOLUTE_GLOB.matcher(suggested);
     while (globs.find()) {
-      var directory = Pattern.compile(Pattern.quote(globs.group(1)) + "(?![\\w.+-])");
-      // Named once more in the new lines than the glob itself ("RUN mkdir -p /app/lib"), the
-      // suggestion makes the directory.
+      var directory =
+          Pattern.compile("(?<![\\w.~/\\\\+-])" + Pattern.quote(globs.group(1)) + "(?![\\w.+-])");
       if (!directory.matcher(replaced).find()
           && !directory.matcher(verbatim).find()
-          && directory.matcher(suggested).results().count() < 2) {
+          && !createsDirectory(suggested, directory)) {
         return globs.group();
       }
     }
@@ -781,12 +791,17 @@ final class PathMentions {
    */
   private static boolean createdBySuggestion(String text, int start, int end) {
     int lineStart = text.lastIndexOf('\n', start) + 1;
+    // A Dockerfile or shell line that ends with a backslash continues on the next one, so the
+    // instruction a token belongs to may open lines above it.
+    while (lineStart > 1 && CONTINUED.matcher(text.substring(0, lineStart - 1)).find()) {
+      lineStart = text.lastIndexOf('\n', lineStart - 2) + 1;
+    }
     int lineEnd = text.indexOf('\n', end);
     if (lineEnd < 0) {
       lineEnd = text.length();
     }
-    String line = text.substring(lineStart, lineEnd);
-    String before = text.substring(lineStart, start);
+    String before = CONTINUATION.matcher(text.substring(lineStart, start)).replaceAll(" ");
+    String line = before + text.substring(start, lineEnd);
     String after = text.substring(end, lineEnd);
     if (COPY_INSTRUCTION.matcher(line).lookingAt() && LINE_END.matcher(after).matches()) {
       return true;
@@ -801,6 +816,24 @@ final class PathMentions {
     }
     return WRITING_COMMAND.matcher(before.substring(from)).lookingAt()
         && COMMAND_END.matcher(after).lookingAt();
+  }
+
+  /**
+   * Whether {@code suggested} makes the directory {@code directory} matches: a mention of it, with
+   * or without a closing slash, that {@link #createdBySuggestion} reads as written ({@code RUN
+   * mkdir -p /app/lib}, {@code COPY lib/ /app/lib/}). A glob over it or a command reading it does
+   * not count.
+   */
+  private static boolean createsDirectory(String suggested, Pattern directory) {
+    var mentions = directory.matcher(suggested);
+    while (mentions.find()) {
+      int end = mentions.end();
+      boolean slash = end < suggested.length() && suggested.charAt(end) == '/';
+      if (createdBySuggestion(suggested, mentions.start(), slash ? end + 1 : end)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Whether a path-shaped token ends in a file name: an extension or a dotless file name. */
