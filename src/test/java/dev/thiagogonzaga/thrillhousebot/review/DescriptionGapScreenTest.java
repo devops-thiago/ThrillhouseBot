@@ -458,6 +458,10 @@ class DescriptionGapScreenTest {
         "The description says the limit holds; it couldn’t be enforced on a retry.",
         "The description says the export is atomic; it is possibly written in place.",
         "The description says the cap holds; maybe the next retry drops it.",
+        "The description says the cache is bounded; it is likely unbounded.",
+        "The description says the export is atomic; the rename probably happens late.",
+        "The description says the token is checked; it is potentially reused.",
+        "The description says the queue drains; it seemingly stalls.",
         // A hedge opening its sentence.
         "The description says the export is atomic. Perhaps the rename is skipped."
       })
@@ -539,7 +543,12 @@ class DescriptionGapScreenTest {
         "A finding found that `dco.yml` skips merges.",
         "The review says the description overstates the cap.",
         "The description says every commit is signed; the gap was found by the review.",
-        "The description says X; the reviewer found `dco.yml` does Y."
+        "The description says X; the reviewer found `dco.yml` does Y.",
+        // An auxiliary between the review and its verb, and passives with any preposition.
+        "The earlier review had flagged the workflow is unpinned.",
+        "One finding has reported the description's claim is wrong.",
+        "The description says every commit is signed; the gap was reported during the review.",
+        "The description says every commit is signed; it was flagged by one of the reviewers."
       })
   void aBulletCreditingTheReviewIsRecognised(String gap) {
     assertTrue(DescriptionGapScreen.creditsReview(gap));
@@ -560,7 +569,10 @@ class DescriptionGapScreenTest {
         // The criterion of a linked-issue gap is the issue's words.
         "Linked issue #113: a reviewer flags every listing over the cap — no changed file does.",
         // A reviewer named without a verb crediting the claim.
-        "The description says a review step gates releases, but no workflow runs one."
+        "The description says a review step gates releases, but no workflow runs one.",
+        // A review noun with no crediting verb near it.
+        "The description says the job is pinned; no workflow runs a review step.",
+        "The release notes are long; the description never mentions where review happens."
       })
   void aBulletNotCreditingTheReviewIsNotRecognised(String gap) {
     assertFalse(DescriptionGapScreen.creditsReview(gap));

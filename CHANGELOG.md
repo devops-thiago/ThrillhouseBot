@@ -10,7 +10,7 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
-- **Description vs. Implementation no longer lists guesses or claims no finding makes** (#1127): on #1124 the section said two criteria "may be" stricter ones, "in which case" the answers would be rejected, and credited the claim to "a review pass" that no posted finding matched; an approving re-review of the same commit kept it. A gap that hedges its own claim ("may", "might", "could", "possibly", "in which case") is now dropped, fresh or carried, unless the hedge repeats the description or follows a stated mismatch ("`Client.java` retries forever, so callers might hang"), and a gap that credits a review pass or a finding is shown only while an open finding states it.
+- **Description vs. Implementation no longer lists guesses or claims no finding makes** (#1127): on #1124 the section said two criteria "may be" stricter ones, "in which case" the answers would be rejected, and credited the claim to "a review pass" that no posted finding matched; an approving re-review of the same commit kept it. A gap that hedges its own claim ("may", "might", "could", "possibly", "perhaps", "maybe", "likely", "probably", "in which case" and a few more) is now dropped, fresh or carried, unless the hedge repeats the description or follows a stated mismatch ("`Client.java` retries forever, so callers might hang"), and a gap that credits a review pass or a finding is shown only while an open finding states it.
 
 ## [0.7.1] — 2026-10-13
 

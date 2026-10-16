@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -268,16 +269,18 @@ final class DescriptionGapScreen {
           Pattern.compile("(?i)\\balso\\s++adds\\b"));
 
   /**
-   * The hedges that make a gap a guess rather than a mismatch the change shows (#1127), one pattern
-   * per shape: the modal verbs ("may be", "could skip", "might", "couldn't"), and the hedging
-   * adverbs. After a {@link #CONSEQUENCE} in its sentence such a hedge only weighs what a stated
-   * gap leads to. A word joined to another by a hyphen is part of a name ("may-retry"), not a
-   * hedge.
+   * The hedges that make a gap a guess rather than a mismatch the change shows (#1127), exactly
+   * these words, one pattern per shape: "may", "might" and "could", with or without "n't"; and
+   * "possibly", "perhaps", "presumably", "maybe", "likely", "probably", "potentially" and
+   * "seemingly". After a {@link #CONSEQUENCE} in its sentence such a hedge only weighs what a
+   * stated gap leads to. A word joined to another by a hyphen is part of a name ("may-retry"), not
+   * a hedge.
    */
   private static final List<Pattern> SPECULATION =
       List.of(
           Pattern.compile("(?i)(?<![\\w-])(?:may|might|could)(?:n'?t)?+(?![\\w-])"),
-          Pattern.compile("(?i)(?<![\\w-])(?:possibly|perhaps|presumably|maybe)(?![\\w-])"));
+          Pattern.compile("(?i)(?<![\\w-])(?:possibly|perhaps|presumably|maybe)(?![\\w-])"),
+          Pattern.compile("(?i)(?<![\\w-])(?:likely|probably|potentially|seemingly)(?![\\w-])"));
 
   /** Where the PR text splits into sentences before a hedge's context is looked up in it. */
   private static final Pattern SOURCE_SENTENCE = Pattern.compile("[.!?;:](?=\\s|$)|\n");
@@ -299,26 +302,39 @@ final class DescriptionGapScreen {
   private static final Pattern SENTENCE_END = Pattern.compile("[.;!?](?=\\s|$)");
 
   /**
-   * A review pass, a reviewer or a finding as a clause's subject, "a review pass", "the earlier
-   * review", "one reviewer", "a finding": a credit when a {@link #REVIEW_VERB} follows it. One
-   * pattern per shape.
+   * The words naming the review as a claim's source (#1127), matched as word prefixes: "review",
+   * "reviewer", "reviewers", "finding", "findings".
    */
-  private static final List<Pattern> REVIEW_SUBJECTS =
+  private static final List<String> REVIEW_NOUNS = List.of("review", "finding");
+
+  /**
+   * The verbs crediting a claim to the review, matched as word prefixes so every tense and voice
+   * reads alike: flag, note, raise, report, find, found, warn, suggest, say, said, point, spot,
+   * catch, caught, highlight.
+   */
+  private static final List<String> CREDIT_VERBS =
       List.of(
-          Pattern.compile(
-              "(?i)\\b(?:an?|the|one|another)\\s++(?:(?:earlier|previous|prior)\\s++)?"
-                  + "review(?:er)?+(?:\\s++(?:pass|round|call))?+"),
-          Pattern.compile("(?i)\\b(?:an?|the|one|another)\\s++finding"));
+          "flag",
+          "note",
+          "raise",
+          "report",
+          "find",
+          "found",
+          "warn",
+          "suggest",
+          "say",
+          "said",
+          "point",
+          "spot",
+          "catch",
+          "caught",
+          "highlight");
 
-  /** What a {@link #REVIEW_SUBJECTS} subject does when it credits a claim: flags, noted, found… */
-  private static final Pattern REVIEW_VERB =
-      Pattern.compile("(?i)\\s++(?:flag|note|raise|report|find|found|warn|suggest|say)");
+  /** Words, at most, between a {@link #REVIEW_NOUNS} word and its {@link #CREDIT_VERBS} verb. */
+  static final int CREDIT_REACH = 5;
 
-  /** A claim credited to the review in the passive (#1127): "flagged by the review". */
-  private static final Pattern REVIEW_PASSIVE =
-      Pattern.compile(
-          "(?i)\\b(?:flagged|noted|raised|reported|found|warned|suggested|said)\\s++(?:by|in)\\s++"
-              + "(?:an?|the)\\s++(?:(?:earlier|previous|prior)\\s++)?review");
+  /** A run of letters and digits: one word of a clause. */
+  private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}]++");
 
   /** Content words a PR-text sentence needs before a finding can paraphrase it. */
   static final int MIN_PARAPHRASED_WORDS = 5;
@@ -504,30 +520,62 @@ final class DescriptionGapScreen {
   }
 
   /**
-   * Whether {@code gap} credits its claim to a review pass or a finding ({@link #REVIEW_SUBJECTS},
-   * {@link #REVIEW_PASSIVE}, #1127): "a review pass flags that …". Such a bullet is the review's
-   * claim, not the description's, and stands only while an open finding states it; on #1124 none
-   * did. Quoted passages, and a clause the description is said to state ("the description says one
-   * reviewer reported downtime"), are the PR text's words, not the bullet's.
+   * Whether {@code gap} credits its claim to a review pass or a finding (#1127): "a review pass
+   * flags that …". Such a bullet is the review's claim, not the description's, and stands only
+   * while an open finding states it; on #1124 none did. A credit is a {@link #REVIEW_NOUNS} word
+   * and a {@link #CREDIT_VERBS} verb at most {@value #CREDIT_REACH} words apart, in either order,
+   * in one clause: "the earlier review had flagged", "reported during the review", "flagged by one
+   * of the reviewers". Quoted passages, and a clause the description is said to state ("the
+   * description says one reviewer reported downtime"), are the PR text's words, not the bullet's.
    */
   static boolean creditsReview(String gap) {
     var own = ownWords(gap);
-    for (var pattern : REVIEW_SUBJECTS) {
-      var subject = pattern.matcher(own);
-      while (subject.find()) {
-        if (REVIEW_VERB.matcher(own).region(subject.end(), own.length()).lookingAt()
-            && !attributedBefore(clauseOf(own.substring(0, subject.start())))) {
-          return true;
-        }
-      }
+    var clauses = new ArrayList<int[]>();
+    var start = 0;
+    var breaks = CLAUSE_BREAK.matcher(own);
+    while (breaks.find()) {
+      clauses.add(new int[] {start, breaks.start()});
+      start = breaks.end();
     }
-    var passive = REVIEW_PASSIVE.matcher(own);
-    while (passive.find()) {
-      if (!attributedBefore(clauseOf(own.substring(0, passive.start())))) {
+    clauses.add(new int[] {start, own.length()});
+    for (var clause : clauses) {
+      var noun = creditIn(own, clause[0], clause[1]);
+      if (noun >= 0 && !attributedBefore(clauseOf(own.substring(0, noun)))) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Where the review noun of a credit ({@link #creditsReview}) starts in {@code text} between
+   * {@code from} and {@code to}; -1 without one. What precedes the noun in its clause says whose
+   * words the credit is: "the description says the review step …" is the description's.
+   */
+  private static int creditIn(String text, int from, int to) {
+    var words = WORD.matcher(text).region(from, to);
+    var nouns = new ArrayList<int[]>();
+    var verbs = new ArrayList<int[]>();
+    for (var index = 0; words.find(); index++) {
+      var word = words.group().toLowerCase(Locale.ROOT);
+      if (startsWithAny(word, REVIEW_NOUNS)) {
+        nouns.add(new int[] {index, words.start()});
+      } else if (startsWithAny(word, CREDIT_VERBS)) {
+        verbs.add(new int[] {index, words.start()});
+      }
+    }
+    for (var noun : nouns) {
+      for (var verb : verbs) {
+        if (Math.abs(noun[0] - verb[0]) <= CREDIT_REACH) {
+          return noun[1];
+        }
+      }
+    }
+    return -1;
+  }
+
+  private static boolean startsWithAny(String word, List<String> stems) {
+    return stems.stream().anyMatch(word::startsWith);
   }
 
   /**
