@@ -233,9 +233,12 @@ final class PathMentions {
   /** What may follow a line's last argument: the close of an exec-form array, and blanks. */
   private static final Pattern LINE_END = Pattern.compile("[\"\\]\\s]*+");
 
-  /** Where a shell command starts on a line: after {@code RUN}, a separator or a pipe. */
+  /**
+   * Where a shell command starts on a line: at its start or after a separator or a pipe, past a
+   * Dockerfile {@code RUN}.
+   */
   private static final Pattern COMMAND_START =
-      Pattern.compile("(?:(?:^\\s*+RUN\\s)|&&|\\|\\||[;|(])\\s*+", Pattern.CASE_INSENSITIVE);
+      Pattern.compile("(?:^|&&|\\|\\||[;|(])\\s*+(?:RUN\\s++)?", Pattern.CASE_INSENSITIVE);
 
   /** A shell command whose last argument is a path it writes, with its options and arguments. */
   private static final Pattern WRITING_COMMAND =
