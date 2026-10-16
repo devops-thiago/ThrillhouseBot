@@ -250,7 +250,7 @@ class PromptEvalTest {
    * "contradicted-cut", or "nothing-cut" for a case that names nothing to cut (#1078). The step
    * fails open, so a provider failure surfaces as "contradicted-kept".
    */
-  private String summaryVerificationOutcome(EvalCase evalCase) throws Exception {
+  private String summaryVerificationOutcome(EvalCase evalCase) {
     var spec = evalCase.spec();
     var config = mock(ThrillhouseConfig.class);
     var review = mock(ThrillhouseConfig.ReviewConfig.class);

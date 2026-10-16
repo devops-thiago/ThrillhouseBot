@@ -50,9 +50,10 @@ final class SummaryStatements {
    * Where one sentence of the purpose paragraph ends: a line break, or a space after a full stop,
    * question or exclamation mark (and any closing quote or bracket) when the next word does not
    * start in lower case or with a digit. "e.g. the cache" and "version 1.5" stay one sentence.
+   * Spaces before a line break stay with the sentence and are stripped from its text.
    */
   private static final Pattern SENTENCE_BREAK =
-      Pattern.compile("[ \\t]*\\R\\s*|(?<=[.!?][\"'”’)\\]]?)[ \\t]+(?=[^\\p{Ll}\\p{N}\\s])");
+      Pattern.compile("\\R\\s*+|(?<=[.!?][\"'”’)\\]]?)[ \\t]++(?=[^\\p{Ll}\\p{N}\\s])");
 
   /**
    * First words of diagram lines that only name the diagram type or declare layout or style: they

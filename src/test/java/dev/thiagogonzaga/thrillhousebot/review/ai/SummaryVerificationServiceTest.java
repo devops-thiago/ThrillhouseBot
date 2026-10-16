@@ -169,8 +169,12 @@ class SummaryVerificationServiceTest {
   @Test
   void theAnswerIsReadAfterAnyDeliberation() {
     answer(
-        "Checking S2 against the diff.\n```json\n{\"contradicted\": [{\"id\": \"S2\","
-            + " \"evidence\": \"nothing writes billing_runs\"}]}\n```");
+        """
+        Checking S2 against the diff.
+        ```json
+        {"contradicted": [{"id": "S2", "evidence": "nothing writes billing_runs"}]}
+        ```
+        """);
 
     var verified = service.verify(SESSION, SUMMARY_252, material());
 

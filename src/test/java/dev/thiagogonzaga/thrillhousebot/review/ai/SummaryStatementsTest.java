@@ -18,8 +18,10 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -328,5 +330,20 @@ class SummaryStatementsTest {
     assertEquals("[D1] [*] --> Billing\n[D2] Billing --> [*]\n", statements.render());
     assertTrue(
         SummaryStatements.of(summary("One.", List.of(), null), true).render().startsWith("[S1]"));
+  }
+
+  @Test
+  void longRunsOfSpacesAndBreaksAreSplitInLinearTime() {
+    var purpose = "One." + " ".repeat(200_000) + "two" + " \n".repeat(50_000) + "Three.";
+
+    var statements =
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(5),
+            () -> SummaryStatements.of(summary(purpose, List.of(), null), false));
+
+    // "two" starts in lower case, so the spaces do not end the first sentence.
+    assertEquals(2, statements.statements().size());
+    assertTrue(statements.statements().get(0).text().startsWith("One. "));
+    assertEquals("Three.", statements.statements().get(1).text());
   }
 }
