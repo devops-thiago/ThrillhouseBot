@@ -318,6 +318,29 @@ public class CiStatusEvaluator {
   }
 
   /**
+   * The failing and still-pending check runs on {@code commitSha} now, read with one call and
+   * nothing else: no required contexts, no commit statuses (#1092). The review's CI-failure section
+   * is re-read through here after the model call, when a check was still running at review start.
+   * Empty when the call fails, so the caller keeps the reading it already has.
+   */
+  Optional<CiFailures> checkRunFailures(String auth, String owner, String repo, String commitSha) {
+    var tracker =
+        new OffendingTracker(
+            null,
+            new HashSet<>(),
+            new HashSet<>(),
+            new ArrayList<>(),
+            new LinkedHashMap<>(),
+            new HashSet<>());
+    var readable =
+        collectReadable(
+            () -> checkRunClient.getAllCheckRuns(auth, ACCEPT, owner, repo, commitSha),
+            run -> addOffendingCheckRun(run, tracker),
+            "check runs for commit " + commitSha);
+    return readable ? Optional.of(tracker.failures()) : Optional.empty();
+  }
+
+  /**
    * Applies {@code consume} to every row from {@code fetchAll} (the client's paging helper) and
    * reports whether the fetch was actually readable. Returns {@code false} when the call throws —
    * including the client's null-body-means-unreadable signal — so the caller can tell "no checks"
