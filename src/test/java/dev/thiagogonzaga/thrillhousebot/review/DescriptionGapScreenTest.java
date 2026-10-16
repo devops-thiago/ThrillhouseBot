@@ -507,7 +507,12 @@ class DescriptionGapScreenTest {
         "The description says the retry path is covered; `Client.java` has no gap handling for the"
             + " timeout case.",
         "The description says the retry path is covered; `Client.java` has no gap-handling code.",
-        "The description says the export is atomic; it runs no mismatch analysis."
+        "The description says the export is atomic; it runs no mismatch analysis.",
+        // An exception before the concession, or one with no clause break before it.
+        "Other than the timeout key, the change matches the description.",
+        "Except for the timeout key, the change matches the description.",
+        "Aside from the timeout key, the change matches the description.",
+        "The change matches the description excluding the timeout key."
       })
   void aStatedGapOrAnUnmetLinkedIssueCriterionIsNotAConcession(String gap) {
     assertFalse(DescriptionGapScreen.concedesNoGap(gap));
@@ -730,7 +735,13 @@ class DescriptionGapScreenTest {
         "The description says retries are capped; the criteria appear to be addressed.",
         "The description says retries are capped; the material can't verify it.",
         // A trailing clause break leaves the last clause with words as the verdict.
-        "The description says retries are capped; the material cannot confirm it; "
+        "The description says retries are capped; the material cannot confirm it; ",
+        // An abbreviation is not a file name.
+        "The corpus-round criterion, e.g. the run with #1078 enabled, cannot be confirmed from the"
+            + " material.",
+        "The corpus-round criterion, i.e. the run with #1078 enabled, cannot be confirmed.",
+        // A passive "verified" is read as well as "verify".
+        "The description says retries are capped; the cap cannot be verified from the material."
       })
   void aBulletThatOnlySaysItCannotConfirmAssertsNothing(String gap) {
     assertTrue(DescriptionGapScreen.assertsNothing(gap));
@@ -753,7 +764,20 @@ class DescriptionGapScreenTest {
         "The description says \"the cap cannot be verified\", but the change adds a check.",
         "The description says the README moves unchanged; `docs/RUST-V10.md` rewrites it.",
         // Nothing but clause breaks.
-        "; , —"
+        "; , —",
+        // A mismatch stated in an earlier clause of the bullet's own.
+        "The change sets the cap to 16, not the described 8; the tests cannot confirm it because"
+            + " they skip the path.",
+        "The change omits the timeout key, and the material cannot confirm the rest.",
+        "The change dropped the timeout key; the material cannot confirm why.",
+        // The description's claim, then the bullet's own mismatch past a contrast.
+        "The description says the cap holds but the change drops it; the material cannot confirm"
+            + " why.",
+        // The non-assertion is the description's claim, as the bullet reports it.
+        "The cap is unmet; the description says the criteria cannot be verified.",
+        "The description says the criteria cannot be verified.",
+        // "Not verified" states what the change lacks.
+        "The description says retries are tested; the cap is not verified by any test."
       })
   void aBulletStatingAMismatchAssertsSomething(String gap) {
     assertFalse(DescriptionGapScreen.assertsNothing(gap));
