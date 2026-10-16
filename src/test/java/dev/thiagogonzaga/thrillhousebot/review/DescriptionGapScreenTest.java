@@ -414,4 +414,48 @@ class DescriptionGapScreenTest {
             ""));
     assertFalse(DescriptionGapScreen.misquotes(gap, DescriptionGapScreen.normalize(description)));
   }
+
+  /** #1134's bullet: the description disclosed what it did not do. */
+  static final String DISCLOSED_1134 =
+      "The description says the live eval was not run, so effectiveness of the new checks beyond"
+          + " unit tests is unconfirmed (disclosed, not contradicted).";
+
+  /** #1142's bullet: it says the change matches the diff and there is no gap. */
+  static final String NO_GAP_1142 =
+      "The description says the issue's third acceptance criterion, measuring on a corpus round"
+          + " with #1078 enabled, is unmet; the change only states the deterministic check, which"
+          + " matches the diff — no gap beyond the noted scope";
+
+  /** #1141's bullet: an unmet criterion of linked issue #952, though it matches the description. */
+  static final String LINKED_1141 =
+      "Linked issue #952: The IaC scan drops a model finding on the same line and same rule — the"
+          + " description instead adds a suggestion-based merge (removesDetectedLine); the change"
+          + " matches the description but is broader or different than this criterion as written.";
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        DISCLOSED_1134,
+        NO_GAP_1142,
+        "The description says retries are capped; `Client.java` caps them, so there is no mismatch.",
+        "The description says the cache is bounded, which is consistent with the description."
+      })
+  void aBulletConcedingThereIsNoMismatchIsRecognised(String gap) {
+    assertTrue(DescriptionGapScreen.concedesNoGap(gap));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        LINKED_1141,
+        "Linked issue #952: The check-run title reports the open total — no changed file touches"
+            + " check-run title construction, and the description does not claim it here.",
+        "The description says the README moves unchanged; `docs/RUST-V10.md` rewrites it.",
+        // The concession is the description's own words, quoted.
+        "The description says \"no gap remains in the retry logic\", but `Client.java` retries"
+            + " forever."
+      })
+  void aStatedGapOrAnUnmetLinkedIssueCriterionIsNotAConcession(String gap) {
+    assertFalse(DescriptionGapScreen.concedesNoGap(gap));
+  }
 }

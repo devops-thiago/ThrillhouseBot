@@ -381,6 +381,33 @@ final class DescriptionGapScreen {
                     >= PARAPHRASE_SHARE * sentence.size());
   }
 
+  /**
+   * Whether {@code gap} says in its own words that it is not a mismatch: "(disclosed, not
+   * contradicted)", "which matches the diff — no gap beyond the noted scope". Such a bullet listed
+   * under the section's "does not fully match" intro contradicts itself. Quoted passages are the PR
+   * text's words, not the bullet's. A {@code Linked issue #N:} gap reports an unmet criterion of
+   * the issue and is never one, even when it adds that "the change matches the description".
+   */
+  static boolean concedesNoGap(String gap) {
+    if (DescriptionGapCarryover.linkedIssueGap(gap) != null) {
+      return false;
+    }
+    var own = QUOTED.matcher(foldQuotes(gap)).replaceAll(" ");
+    return anyFinds(CONCESSIONS, own);
+  }
+
+  /**
+   * A bullet's own concession that there is no mismatch, one pattern per shape: "no gap", "not
+   * contradicted", "matches the description", "disclosed".
+   */
+  private static final List<Pattern> CONCESSIONS =
+      List.of(
+          Pattern.compile("(?i)\\bno\\s++(?:gap|mismatch|contradiction|discrepancy)\\b"),
+          Pattern.compile("(?i)\\bnot\\s++(?:contradicted|a\\s++(?:gap|mismatch))\\b"),
+          Pattern.compile(
+              "(?i)\\b(?:matches|matched|consistent\\s++with)\\s++the\\s++(?:description|diff)\\b"),
+          Pattern.compile("(?i)\\bdisclosed\\b"));
+
   /** Whether {@code gap} names the description, its title, the author or a linked issue. */
   static boolean cites(String gap) {
     return DescriptionGapCarryover.linkedIssueGap(gap) != null || anyFinds(CITATIONS, gap);

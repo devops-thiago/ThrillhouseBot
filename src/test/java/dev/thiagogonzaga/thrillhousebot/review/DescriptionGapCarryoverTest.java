@@ -974,4 +974,35 @@ class DescriptionGapCarryoverTest {
       assertNull(carry.apply(null));
     }
   }
+
+  @Test
+  void aGapConcedingThereIsNoMismatchIsNotListedButAnUnmetLinkedCriterionIs() {
+    // #1134, #1142 and #1141 summaries: the first two bullets say they are no gap; the third
+    // reports an unmet criterion of linked issue #952 and stays, carried or fresh.
+    var linked952 =
+        """
+        Issues this pull request is linked to: #952
+
+        ### Issue #952: Findings backed by the diff or by CI
+        Linked by: a reference in the PR body
+        Acceptance criteria (from the issue):
+        - [ ] The IaC scan drops a model finding on the same line and same rule
+        """;
+    var gaps =
+        List.of(
+            DescriptionGapScreenTest.DISCLOSED_1134,
+            DescriptionGapScreenTest.NO_GAP_1142,
+            DescriptionGapScreenTest.LINKED_1141);
+
+    assertEquals(
+        List.of(DescriptionGapScreenTest.LINKED_1141),
+        new DescriptionGapCarryover.Carry(List.of(), linked952)
+            .apply(summary(gaps, List.of()))
+            .descriptionGaps());
+    assertEquals(
+        List.of(DescriptionGapScreenTest.LINKED_1141),
+        new DescriptionGapCarryover.Carry(gaps, linked952)
+            .apply(summary(List.of(), List.of()))
+            .descriptionGaps());
+  }
 }

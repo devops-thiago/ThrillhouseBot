@@ -240,7 +240,10 @@ final class DescriptionGapCarryover {
      * held to the issue with no PR text known.
      */
     private List<String> screened(List<String> list) {
-      var held = LinkedIssueCitations.screenGaps(list, linkedIssues);
+      var held =
+          LinkedIssueCitations.screenGaps(list, linkedIssues).stream()
+              .filter(gap -> !DescriptionGapScreen.concedesNoGap(gap))
+              .toList();
       if (prText == null) {
         return held;
       }
