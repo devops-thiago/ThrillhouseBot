@@ -284,12 +284,13 @@ final class DescriptionGapScreen {
           Pattern.compile("(?i)(?<![\\w-])(?:likely|probably|potentially|seemingly)(?![\\w-])"));
 
   /**
-   * Where the PR text splits into sentences before a hedge's context is looked up in it: the
-   * sentence ends a bullet's hedge is bounded by ({@link #SENTENCE_END}), a blank line, and a new
-   * list item. A line wrapped inside a sentence does not split it.
+   * Where the PR text splits into blocks before a hedge's context is looked up in it: a line break
+   * before a blank line or a new list item. Each block then splits at the sentence ends a bullet's
+   * hedge is bounded by ({@link #SENTENCE_END}). A line wrapped inside a sentence does not split
+   * it.
    */
-  private static final Pattern SOURCE_SENTENCE =
-      Pattern.compile("[.;!?](?=\\s|$)|\n\\s*+\n|\n(?=\\s*+(?:[-*+]|\\d++[.)])\\s)");
+  private static final Pattern SOURCE_BLOCK =
+      Pattern.compile("\n(?=[ \t]*+(?:\n|[-*+][ \t]|\\d++[.)][ \t]))");
 
   /** The month, capitalised inside its sentence: "cut in May", not the modal verb. */
   private static final String MONTH = "May";
@@ -473,7 +474,8 @@ final class DescriptionGapScreen {
     }
     // One sentence per piece: a hedge's context never runs from one sentence into the next.
     var haystack =
-        Arrays.stream(SOURCE_SENTENCE.split(source))
+        Arrays.stream(SOURCE_BLOCK.split(source))
+            .flatMap(SENTENCE_END::splitAsStream)
             .map(DescriptionGapScreen::normalize)
             .collect(Collectors.joining(" | ", " ", " "));
     for (var pattern : SPECULATION) {
