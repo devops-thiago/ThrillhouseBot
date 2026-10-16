@@ -96,6 +96,7 @@ function TokensContent({
       >
         <h1>Token Analytics</h1>
         <select
+          aria-label="Period"
           value={period}
           onChange={(e) => setPeriod(e.target.value)}
           style={styles.select}
@@ -116,16 +117,16 @@ function TokensContent({
       </div>
 
       <div style={styles.chartCard}>
-        <h3 style={{ marginBottom: "1rem" }}>
+        <h2 style={styles.chartTitle}>
           Tokens by Model (Input vs Output)
-        </h3>
+        </h2>
         <div style={styles.chartFrame}>
           <Bar data={chartData} options={chartOptions} />
         </div>
       </div>
 
       <div style={styles.chartCard}>
-        <h3 style={{ marginBottom: "1rem" }}>Model Breakdown</h3>
+        <h2 style={styles.chartTitle}>Model Breakdown</h2>
         <table style={styles.table}>
           <thead>
             <tr>
@@ -169,6 +170,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   chartFrame: {
     height: 300,
+  },
+  chartTitle: {
+    fontSize: "1.17em",
+    marginBottom: "1rem",
   },
   cardLabel: {
     fontSize: "0.8rem",
