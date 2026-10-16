@@ -150,8 +150,27 @@ class InventedArtifactsTest {
     assertFalse(InventedArtifacts.invents("It has removed a settings page.", change));
     assertFalse(InventedArtifacts.invents("It deletes the old flow and a settings page.", change));
     assertTrue(InventedArtifacts.invents("It removes cruft, a settings page is added.", change));
-    // A hyphenated word is not a removal verb, and a negated artifact is no invention.
+    // A hyphenated word is not a removal verb.
     assertTrue(InventedArtifacts.invents("It adds a drop-down, a settings page too.", change));
+    // A removal that does not govern the artifact leaves it judged.
+    assertTrue(
+        InventedArtifacts.invents("It drops the old flow then adds a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents("It drops the legacy flow — a settings page is added.", change));
+    assertTrue(InventedArtifacts.invents("It adds an audit screen.", change));
+    assertTrue(InventedArtifacts.invents("It adds a metrics endpoint.", change));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It adds a users migration.",
+            InventedArtifacts.Change.of(List.of(added("api/routes.go", "users := 1")))));
+    // "invoices" is in an added line, but not beside "page".
+    assertTrue(InventedArtifacts.invents("It adds an invoices page.", change));
+  }
+
+  @Test
+  void aNegatedArtifactIsNoInventionButANegationOfSomethingElseLeavesItJudged() {
+    var change = InventedArtifacts.Change.of(List.of(added("web/src/App.tsx", "const app = 1;")));
+
     assertFalse(InventedArtifacts.invents("It does not add a settings page.", change));
     assertFalse(InventedArtifacts.invents("It doesn't ship a settings page.", change));
     assertFalse(InventedArtifacts.invents("It does not yet add a settings page.", change));
@@ -168,19 +187,6 @@ class InventedArtifactsTest {
             "It doesn't add tests, instead it adds a settings page.", change));
     assertTrue(
         InventedArtifacts.invents("It never adds tests though it adds a settings page.", change));
-    // A removal that does not govern the artifact leaves it judged.
-    assertTrue(
-        InventedArtifacts.invents("It drops the old flow then adds a settings page.", change));
-    assertTrue(
-        InventedArtifacts.invents("It drops the legacy flow — a settings page is added.", change));
-    assertTrue(InventedArtifacts.invents("It adds an audit screen.", change));
-    assertTrue(InventedArtifacts.invents("It adds a metrics endpoint.", change));
-    assertTrue(
-        InventedArtifacts.invents(
-            "It adds a users migration.",
-            InventedArtifacts.Change.of(List.of(added("api/routes.go", "users := 1")))));
-    // "invoices" is in an added line, but not beside "page".
-    assertTrue(InventedArtifacts.invents("It adds an invoices page.", change));
   }
 
   @Test
