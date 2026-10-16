@@ -283,8 +283,9 @@ class PathMentionsTest {
   }
 
   /**
-   * In a finding, an invented path leaves its description: with the parenthetical holding only it,
-   * or with its code span. The finding itself stays, title and location unchanged.
+   * In a finding, an invented path leaves its description, with the parenthetical holding only it.
+   * One in a code span stays (#1095): the span quotes a name on purpose, and cutting it left a gap.
+   * The finding itself stays, title and location unchanged.
    */
   @Test
   void anInventedPathLeavesAFindingsDescriptionButNotTheFinding() {
@@ -302,7 +303,7 @@ class PathMentionsTest {
     assertEquals(
         List.of(
             "The key is documented as a hold timer.",
-            "The key is documented in, and nothing reads it.",
+            "The key is documented in `angular/docs/HOLD.md`, and nothing reads it.",
             "See for the claim.",
             "angular/docs/HOLD.md"),
         screened.findings().stream().map(ReviewResponse.Finding::description).toList());
@@ -391,7 +392,7 @@ class PathMentionsTest {
           """
           docs/NOPE.md is cited as the source. | is cited as the source.
           The source is cited: docs/NOPE.md | The source is cited:
-          The source is `docs/NOPE.md and more` here. | The source is `and more` here.
+          The source is `docs/NOPE.md and more` here. | The source is `docs/NOPE.md and more` here.
           The source (docs/NOPE.md and more) is cited. | The source (and more) is cited.
           The source is docs/NOPE.md:12. | The source is.
           The source is docs/NOPE.md: | The source is:
@@ -401,6 +402,9 @@ class PathMentionsTest {
           See **docs/NOPE.md** now. | See now.
           *docs/NOPE.md* is cited. | is cited.
           It is cited: *docs/NOPE.md* | It is cited:
+          `a` and `b` cite docs/NOPE.md. | `a` and `b` cite.
+          docs/NOPE.md, then `a` and `b`. | , then `a` and `b`.
+          `a` cites docs/NOPE.md and `b`. | `a` cites and `b`.
           """)
   void aMentionIsStrippedWhereverItStands(String text, String stripped) {
     assertEquals(stripped, mentions(REACT, null, REACT_TREE).withoutUnresolvedMentions(text));
@@ -612,5 +616,37 @@ class PathMentionsTest {
     var text = span.repeat(160_000);
     assertTimeout(
         Duration.ofSeconds(2), () -> assertEquals(160_000, MarkdownFences.spans(text).size()));
+  }
+
+  /**
+   * #1095, react ThrillhouseBot-test findings 4253757630 and 4253703799, scala 4253758247: a name
+   * the finding put in a code span is quoted on purpose, often because it is missing, so it stays
+   * where cutting it left "no is added anywhere" or "lists `dist/`, not.".
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "No `package-lock.json` is added anywhere under react/. Commit a `package-lock.json` and"
+            + " switch both installs to `npm ci`.",
+        "The diff's own react/.gitignore confirms this: it lists `dist/`, not `build/`.",
+        "Neither collection is synchronized anywhere in `HoldRegister.scala`."
+      })
+  void aNameInACodeSpanStaysInAFindingsDescription(String description) {
+    var react =
+        List.of(
+            new FileDiff("react/Dockerfile", "added", 1, 0, 1, "+RUN npm install"),
+            new FileDiff("react/.gitignore", "added", 1, 0, 1, "+dist/"));
+    var response = new ReviewResponse(List.of(finding(description)), List.of(), null);
+
+    assertSame(response, mentions(react, "", Set.of("react/Dockerfile")).screen(response));
+  }
+
+  /** Backticks inside a fenced block open no code span: a mention after the block is judged. */
+  @Test
+  void backticksInAFenceDoNotShieldAMentionAfterIt() {
+    assertEquals(
+        "```\n`x`\n```\nSee.",
+        mentions(REACT, null, REACT_TREE)
+            .withoutUnresolvedMentions("```\n`x`\n```\nSee docs/NOPE.md."));
   }
 }

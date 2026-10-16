@@ -19,7 +19,10 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Keeps the previous round's overview on a follow-up round of the same head (#944, #965).
@@ -55,6 +58,85 @@ import java.util.Objects;
 final class PriorOverviewCarryover {
 
   private PriorOverviewCarryover() {}
+
+  /**
+   * The words a purpose paragraph about the change's size is made of: "It is a feature-sized change
+   * (+555 lines across 6 directories)." A sentence of these alone says nothing of what the change
+   * does (#1095).
+   */
+  private static final Set<String> SIZE_WORDS =
+      Set.of(
+          "it",
+          "it's",
+          "is",
+          "this",
+          "that",
+          "the",
+          "a",
+          "an",
+          "pr",
+          "pull",
+          "request",
+          "change",
+          "changes",
+          "changeset",
+          "diff",
+          "patch",
+          "small",
+          "medium",
+          "large",
+          "big",
+          "sizable",
+          "sizeable",
+          "moderate",
+          "moderately",
+          "very",
+          "fairly",
+          "size",
+          "sized",
+          "line",
+          "lines",
+          "file",
+          "files",
+          "directory",
+          "directories",
+          "folder",
+          "folders",
+          "module",
+          "modules",
+          "across",
+          "over",
+          "in",
+          "of",
+          "and",
+          "with",
+          "touching",
+          "touches",
+          "spanning",
+          "spans",
+          "adds",
+          "adding",
+          "added",
+          "additions",
+          "deletions",
+          "removes",
+          "removed",
+          "changed",
+          "net",
+          "roughly",
+          "about",
+          "around",
+          "approximately",
+          "total",
+          "overall",
+          "new");
+
+  /** A word of a size sentence: letters and hyphens ("feature-sized"), or a signed number. */
+  private static final Pattern SIZE_TOKEN =
+      Pattern.compile("[+-]?\\d++(?:[,.]\\d++)*+|\\p{L}[\\p{L}'-]*+");
+
+  /** What marks a sentence as being about size: a number, or a "-sized" word. */
+  private static final Pattern SIZE_MARK = Pattern.compile("\\d|-sized\\b|\\bsized?\\b");
 
   /**
    * {@code current} with the previous round's overview filled in where it has none, on the head
@@ -99,9 +181,10 @@ final class PriorOverviewCarryover {
 
   /**
    * {@code current} plus the previous round's summary for each file {@code current} has no
-   * non-blank summary for, the previous purpose paragraph when {@code current}'s is blank (the
-   * {@link OverviewScreen} may have taken every sentence out), and the previous diagram when {@code
-   * current} has none; {@code current} itself when it lacks none of them.
+   * non-blank summary for, the previous purpose paragraph when {@code current}'s is blank or says
+   * only how big the change is (the {@link OverviewScreen} may have taken every other sentence out,
+   * #1095), and the previous diagram when {@code current} has none; {@code current} itself when it
+   * lacks none of them.
    */
   private static ReviewResponse.Summary supplemented(
       ReviewResponse.Summary current, ReviewResponse.Summary prior) {
@@ -116,7 +199,10 @@ final class PriorOverviewCarryover {
     files.addAll(earlier);
     var added = earlier.size();
     var keepDiagram = isBlank(current.walkthroughDiagram()) && !isBlank(prior.walkthroughDiagram());
-    var keepPurpose = isBlank(current.prPurpose()) && !isBlank(prior.prPurpose());
+    var keepPurpose =
+        (isBlank(current.prPurpose()) || sizeOnly(current.prPurpose()))
+            && !isBlank(prior.prPurpose())
+            && !sizeOnly(prior.prPurpose());
     if (added == 0 && !keepDiagram && !keepPurpose) {
       return current;
     }
@@ -129,6 +215,39 @@ final class PriorOverviewCarryover {
         keepPurpose ? prior.prPurpose() : current.prPurpose(),
         files,
         keepDiagram ? prior.walkthroughDiagram() : current.walkthroughDiagram());
+  }
+
+  /**
+   * Whether {@code purpose} says only how big the change is: every sentence a size statement, as
+   * {@link #sizeSentence} reads it. The {@link OverviewScreen} can take the sentences on what the
+   * change does out and leave only that (#1095).
+   */
+  static boolean sizeOnly(String purpose) {
+    if (isBlank(purpose)) {
+      return false;
+    }
+    return OverviewScreen.sentences(purpose).stream()
+        .allMatch(PriorOverviewCarryover::sizeSentence);
+  }
+
+  /**
+   * Whether {@code sentence} is a size statement: it holds a number or a "-sized" word, and every
+   * other word is one of {@link #SIZE_WORDS}, the "-sized" adjectives included.
+   */
+  private static boolean sizeSentence(String sentence) {
+    if (!SIZE_MARK.matcher(sentence).find()) {
+      return false;
+    }
+    var words = SIZE_TOKEN.matcher(sentence);
+    while (words.find()) {
+      var word = words.group().toLowerCase(Locale.ROOT);
+      if (!Character.isDigit(word.charAt(word.length() - 1))
+          && !word.endsWith("-sized")
+          && !SIZE_WORDS.contains(word)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**

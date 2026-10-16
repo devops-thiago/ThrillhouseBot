@@ -51,9 +51,11 @@ import java.util.regex.Pattern;
  * </ol>
  *
  * <p>A token none of these resolves is invented: its sentence leaves the summary text, and the
- * mention (with a parenthetical holding only it) leaves a finding's description. A finding is never
- * dropped, and its title, file and suggestions are never touched. When the repository could not be
- * listed, or the listing was truncated, a token the earlier steps do not resolve is left as
+ * mention (with a parenthetical holding only it) leaves a finding's description, unless the model
+ * put it in a code span: a name quoted that way is usually missing on purpose ("no {@code
+ * package-lock.json} is added"), and cutting it left the sentence without it (#1095). A finding is
+ * never dropped, and its title, file and suggestions are never touched. When the repository could
+ * not be listed, or the listing was truncated, a token the earlier steps do not resolve is left as
  * written: it may exist.
  *
  * <p>Not paths: URLs, a route ({@code /scan}, {@code /triage/run}), a package name ({@code
@@ -201,6 +203,9 @@ final class PathMentions {
           "vagrantfile",
           "brewfile",
           "justfile");
+
+  /** An inline code span on one line. */
+  private static final Pattern INLINE_CODE = Pattern.compile("`[^`\\n]++`");
 
   private static final Pattern BLANK_RUN = Pattern.compile(" {2,}");
 
@@ -430,8 +435,9 @@ final class PathMentions {
 
   /**
    * {@code text} without its mentions of paths nothing resolves, mapped paths replaced: a mention
-   * goes with the code span around it, and with the parenthetical when that holds only the mention.
-   * Text that would be left blank is returned as it was.
+   * goes with the parenthetical when that holds only the mention. A mention inside a code span
+   * stays unless the span fills such a parenthetical (#1095). Text that would be left blank is
+   * returned as it was.
    */
   String withoutUnresolvedMentions(String text) {
     if (text == null || text.isBlank()) {
@@ -443,8 +449,17 @@ final class PathMentions {
     }
     var sb = new StringBuilder(rewritten.text());
     var spans = rewritten.unresolved();
+    var code = codeSpans(rewritten.text());
     for (int i = spans.size() - 1; i >= 0; i--) {
-      int[] cut = mentionBounds(sb, spans.get(i)[0], spans.get(i)[1]);
+      int start = spans.get(i)[0];
+      int end = spans.get(i)[1];
+      if (inCodeSpan(code, start) && !spanFillsParenthetical(sb, start, end)) {
+        // #1095: a name the model put in a code span is quoted on purpose ("no
+        // `package-lock.json` is added"); cutting it left "no is added". Only a span that fills a
+        // parenthetical goes, with the parenthetical.
+        continue;
+      }
+      int[] cut = mentionBounds(sb, start, end);
       sb.delete(cut[0], cut[1]);
     }
     var tidy = tidyOutsideFences(sb.toString());
@@ -495,6 +510,51 @@ final class PathMentions {
       from--;
     }
     return new int[] {from, to};
+  }
+
+  /**
+   * Whether the mention at {@code start}..{@code end} is the whole of a code span that is the whole
+   * of a parenthetical: {@code (`docs/x.md:4`)}, which goes without leaving a gap in the sentence.
+   */
+  private static boolean spanFillsParenthetical(CharSequence s, int start, int end) {
+    int from = start;
+    int to = end;
+    while (wraps(s, from, to, '*', '*')) {
+      from--;
+      to++;
+    }
+    return wraps(s, from, to, '`', '`') && wraps(s, from - 1, to + 1, '(', ')');
+  }
+
+  /** The inline code spans of {@code text}, outside its fences: one-line runs between backticks. */
+  private static List<int[]> codeSpans(String text) {
+    var fenced = new SpanCursor(fences(text));
+    var spans = new ArrayList<int[]>();
+    var matcher = INLINE_CODE.matcher(text);
+    while (matcher.find()) {
+      if (!fenced.covers(matcher.start())) {
+        spans.add(new int[] {matcher.start(), matcher.end()});
+      }
+    }
+    return spans;
+  }
+
+  /** Whether {@code at} is inside one of {@code spans}, which are in text order and disjoint. */
+  private static boolean inCodeSpan(List<int[]> spans, int at) {
+    int low = 0;
+    int high = spans.size() - 1;
+    while (low <= high) {
+      int mid = (low + high) >>> 1;
+      int[] span = spans.get(mid);
+      if (at <= span[0]) {
+        high = mid - 1;
+      } else if (at >= span[1]) {
+        low = mid + 1;
+      } else {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static boolean wraps(CharSequence s, int start, int end, char open, char close) {

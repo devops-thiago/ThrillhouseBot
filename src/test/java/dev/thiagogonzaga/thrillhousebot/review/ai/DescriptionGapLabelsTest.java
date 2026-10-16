@@ -185,4 +185,26 @@ class DescriptionGapLabelsTest {
         List.of(gap.replace("G1", "G2")),
         DescriptionGapLabels.stripIssued(List.of(gap.replace("G1", "G2")), 1));
   }
+
+  /**
+   * #1095, go ThrillhouseBot-test#271 round 2: the label finished a phrase in the parenthetical, so
+   * the parenthetical goes whole instead of leaving "(carried from the earlier review as)".
+   */
+  @Test
+  void aParentheticalWhoseLabelFinishesAPhraseGoesWhole() {
+    assertEquals(
+        List.of("The service exposes no metrics, and nothing adds any metrics instrumentation."),
+        DescriptionGapLabels.stripIssued(
+            List.of(
+                "The service exposes no metrics, and nothing adds any metrics instrumentation"
+                    + " (carried from the earlier review as G2)."),
+            2));
+    assertEquals(
+        List.of("The TTL is never read."),
+        DescriptionGapLabels.stripIssued(List.of("The TTL is never read (G1 still open)."), 1));
+    // Set off by a separator, the remark is not part of the label's phrase and stays (#974).
+    assertEquals(
+        List.of("The TTL is never read (still open)."),
+        DescriptionGapLabels.stripIssued(List.of("The TTL is never read (G1 — still open)."), 1));
+  }
 }

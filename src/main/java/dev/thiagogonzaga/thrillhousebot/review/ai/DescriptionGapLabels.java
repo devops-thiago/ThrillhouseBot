@@ -259,8 +259,9 @@ public final class DescriptionGapLabels {
 
   /**
    * A parenthetical without the issued labels it cites: gone when nothing else was in it ("(see
-   * G1)"), otherwise kept with the rest of its words ("(G1, still not addressed)" → "(still not
-   * addressed)"). One that cites no issued label is returned as it was.
+   * G1)") or when a label was part of a phrase that needs it ("(carried from the earlier review as
+   * G1)", #1095), otherwise kept with the rest of its words ("(G1, still not addressed)" → "(still
+   * not addressed)"). One that cites no issued label is returned as it was.
    */
   private static String withoutCitedLabels(MatchResult parenthetical, int issued) {
     var content = parenthetical.group(2);
@@ -268,9 +269,40 @@ public final class DescriptionGapLabels {
     if (rest.equals(content)) {
       return parenthetical.group();
     }
+    if (labelInAPhrase(content, issued)) {
+      return "";
+    }
     rest = LEADING_SEPARATORS.matcher(rest).replaceFirst("");
     rest = TRAILING_SEPARATORS.matcher(rest).replaceFirst("");
     return rest.isEmpty() ? "" : parenthetical.group(1) + "(" + rest + ")";
+  }
+
+  /**
+   * Whether an issued label in a parenthetical's {@code content} is joined to a word by a blank
+   * alone, on either side: the label finishes a phrase ("as G1") or starts one, which its removal
+   * would leave dangling. A label set off by a separator or the parenthesis is not.
+   */
+  private static boolean labelInAPhrase(String content, int issued) {
+    var labels = CITED_LABEL.matcher(content);
+    while (labels.find()) {
+      if (allIssued(labels.group(1), issued)
+          && (wordBeside(content, labels.start() - 1, -1)
+              || wordBeside(content, labels.end(), 1))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether the first character from {@code at}, stepping by {@code step} past blanks, is a word.
+   */
+  private static boolean wordBeside(String text, int at, int step) {
+    var i = at;
+    while (i >= 0 && i < text.length() && text.charAt(i) == ' ') {
+      i += step;
+    }
+    return i != at && i >= 0 && i < text.length() && Character.isLetterOrDigit(text.charAt(i));
   }
 
   /** {@code text} without the reference phrases that cite issued labels and close a clause. */
