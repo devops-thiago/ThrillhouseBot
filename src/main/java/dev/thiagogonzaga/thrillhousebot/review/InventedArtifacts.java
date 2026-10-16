@@ -101,6 +101,9 @@ final class InventedArtifacts {
    */
   private static final Pattern FENCED = Pattern.compile("(?s)(```|~~~)(?:(?!\\1).)*+(?:\\1|\\z)");
 
+  /** A blank line between paragraphs, with the blanks around it. */
+  private static final Pattern PARAGRAPH_BREAK = Pattern.compile("\n[ \t]*+\n\\s*+");
+
   /** A file GitHub sends without a patch because it is binary: images, fonts, archives. */
   private static final Pattern BINARY =
       Pattern.compile("(?i)\\.(?:png|jpe?g|gif|ico|webp|pdf|woff2?|ttf|jar|zip|gz)$");
@@ -173,6 +176,22 @@ final class InventedArtifacts {
 
   /** {@code prose}, holding no fence, without its sentences that invent an artifact. */
   private static String withoutInventedProse(String prose, Change change) {
+    // Each paragraph is screened on its own, so a cut never joins two of them.
+    var out = new StringBuilder();
+    var breaks = PARAGRAPH_BREAK.matcher(prose);
+    var from = 0;
+    while (breaks.find()) {
+      out.append(withoutInventedParagraph(prose.substring(from, breaks.start()), change))
+          .append(breaks.group());
+      from = breaks.end();
+    }
+    out.append(withoutInventedParagraph(prose.substring(from), change));
+    return out.toString();
+  }
+
+  /** {@code paragraph} without its sentences that invent an artifact. */
+  private static String withoutInventedParagraph(String paragraph, Change change) {
+    var prose = paragraph;
     if (prose.isBlank()) {
       return prose;
     }

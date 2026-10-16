@@ -176,6 +176,15 @@ class InventedArtifactsTest {
   }
 
   @Test
+  void aCutKeepsTheParagraphBreaks() {
+    var text = "Adds the queue. It adds a settings page.\n\nIt also adds a build script.";
+
+    assertEquals(
+        "Adds the queue.\n\nIt also adds a build script.",
+        InventedArtifacts.withoutInvented(text, InventedArtifacts.Change.of(ZIG_250)));
+  }
+
+  @Test
   void aFenceKeepsItsBlockButNotTheProseAroundIt() {
     var change = InventedArtifacts.Change.of(ZIG_250);
     var text =
