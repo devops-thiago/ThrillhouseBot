@@ -237,6 +237,16 @@ final class SummarySurfaceDeduplicator {
         && overlap(claim.wordSet(), other.wordSet()) >= RESTATEMENT_OVERLAP;
   }
 
+  /**
+   * Whether {@code text} states a claim one of {@code findings} states, on the arms {@link
+   * #collapse} weighs a gap on, demoted findings included: a gap that credits its claim to the
+   * review stands while some open finding says it, threaded or listed (#1127).
+   */
+  static boolean restatesAny(String text, List<Finding> findings) {
+    var claims = findings.stream().flatMap(finding -> claimsOf(finding).stream()).toList();
+    return restates(claim(text), claims);
+  }
+
   /** Fraction of the shorter title's content words two restating titles share. */
   static final double RESTATEMENT_OVERLAP = 0.75;
 

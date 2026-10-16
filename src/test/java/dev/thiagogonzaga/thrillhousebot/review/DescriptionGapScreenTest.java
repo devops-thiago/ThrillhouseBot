@@ -414,4 +414,101 @@ class DescriptionGapScreenTest {
             ""));
     assertFalse(DescriptionGapScreen.misquotes(gap, DescriptionGapScreen.normalize(description)));
   }
+
+  /** The #1124 Description vs. Implementation bullet (summary comment 6200091800). */
+  static final String SPECULATIVE_1124 =
+      "The description says \"Every MUST is Met or N/A\" with the Unmet ones all SHOULD or"
+          + " SUGGESTED; a review pass flags that crypto_used_network and version_tags_signed may"
+          + " be silver-MUST criteria, in which case the .bestpractices.json answers (Unmet) would"
+          + " be rejected by the bestpractices.dev save step the post-merge checklist describes.";
+
+  /** What #1124's description said, as the summary call read it. */
+  static final String PR_1124 =
+      """
+      Title: docs: prepare for the OpenSSF Best Practices silver level
+      Description:
+      `.bestpractices.json`: proposed status and justification for all 55 silver criteria.
+      Every MUST is Met or N/A. The Unmet ones are SHOULD or SUGGESTED.
+      Criteria that already have an answer may need editing by hand.
+      """;
+
+  @Test
+  void theSpeculativeEntryOf1124IsAGuess() {
+    assertTrue(
+        DescriptionGapScreen.speculative(
+            SPECULATIVE_1124, DescriptionGapScreen.normalize(PR_1124)));
+    assertTrue(DescriptionGapScreen.creditsReview(SPECULATIVE_1124));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The description says retries are capped, but the cap might never apply.",
+        "The description says the cache is bounded; the TTL could be ignored by `Cache.java`.",
+        "The description says the export is stable; the format may not be what clients parse.",
+        "Linked issue #113: at most 8 listings per seller — the cap may be enforced elsewhere.",
+        // A hedge ending the bullet.
+        "The description says the cap is enforced, and it might.",
+        // A condition is a guess even after a consequence word.
+        "The description says the cap holds, so the save is rejected in which case it fails."
+      })
+  void aHedgeInTheBulletsOwnWordsIsAGuess(String gap) {
+    assertTrue(DescriptionGapScreen.speculative(gap, DescriptionGapScreen.normalize(RUST_159)));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // A definite, diff-backed gap.
+        "The description says the README moves unchanged; `docs/RUST-V10.md` rewrites it.",
+        // A definite gap weighing what it causes.
+        "The description says retries are capped; `Client.java` retries forever, so callers"
+            + " might hang. Its queue is unbounded, which means data may be dropped.",
+        // The hedge is the description's own, quoted.
+        "The description says \"tokens may be reused once\", but `Auth.java` rejects a reuse.",
+        // The hedge is the issue's criterion, not the bullet's evidence.
+        "Linked issue #113: the cache may be bypassed with a header — no changed file reads one.",
+        // Nothing follows a dash, so the whole text is the criterion.
+        "Linked issue #113: listings might expire past a TTL",
+        // "Mighty" and "maybe" are not hedges.
+        "The description says the mighty README moves; maybe-tagged files are left out."
+      })
+  void aStatedGapIsNotAGuess(String gap) {
+    assertFalse(DescriptionGapScreen.speculative(gap, DescriptionGapScreen.normalize(RUST_159)));
+  }
+
+  @Test
+  void aHedgeTheDescriptionItselfMakesIsNotTheBulletsGuess() {
+    var paraphrased =
+        "The description says answers that may be stale are edited, but none are listed.";
+    var source = DescriptionGapScreen.normalize(PR_1124 + "Answers that may be stale are kept.");
+
+    assertFalse(DescriptionGapScreen.speculative(paraphrased, source));
+    assertTrue(
+        DescriptionGapScreen.speculative(paraphrased, DescriptionGapScreen.normalize(PR_1124)));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "A review pass flags that the DCO check skips merge commits.",
+        "The earlier review noted the workflow is unpinned.",
+        "The description says the job is pinned, as flagged by the review.",
+        "One finding reports the description's claim is wrong.",
+        "The description says X; the reviewer found `dco.yml` does Y."
+      })
+  void aBulletCreditingTheReviewIsRecognised(String gap) {
+    assertTrue(DescriptionGapScreen.creditsReview(gap));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The description says the README moves unchanged; `docs/RUST-V10.md` rewrites it.",
+        "The description promises a review step for releases, but no workflow runs one.",
+        "The description says findings are posted inline, but `Publisher.java` lists them."
+      })
+  void aBulletNotCreditingTheReviewIsNotRecognised(String gap) {
+    assertFalse(DescriptionGapScreen.creditsReview(gap));
+  }
 }

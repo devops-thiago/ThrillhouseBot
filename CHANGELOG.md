@@ -8,6 +8,10 @@ All notable changes to ThrillhouseBot.
 
 - **Pull request commits need a DCO sign-off, and the JVM build is reproducible** (#1124): the new `dco` check fails a pull request with a commit whose `Signed-off-by` line does not match its author; `git commit -s` adds one (see CONTRIBUTING). `pom.xml` now fixes archive timestamps, so two builds of the same commit produce identical jars. GOVERNANCE.md documents the decision process, roles and continuity plan, and docs/SECURITY_MODEL.md the security model.
 
+### Fixed
+
+- **Description vs. Implementation no longer lists guesses or claims no finding makes** (#1127): on #1124 the section said two criteria "may be" stricter ones, "in which case" the answers would be rejected, and credited the claim to "a review pass" that no posted finding matched; an approving re-review of the same commit kept it. A gap that hedges its own claim ("may be", "might", "could be", "in which case") is now dropped, fresh or carried, and a gap that credits a review pass or a finding is shown only while an open finding states it.
+
 ## [0.7.1] — 2026-10-13
 
 A bug-fix release. Most of the fixes are in follow-up rounds and the summary comment: findings from earlier rounds now get a status and have their threads resolved once fixed, the summary and its Description vs. Implementation section keep to what the change and its description contain, and a finding is placed, counted and matched to its duplicates the same way on every review.

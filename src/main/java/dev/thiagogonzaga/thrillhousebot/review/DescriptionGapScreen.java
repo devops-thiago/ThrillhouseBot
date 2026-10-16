@@ -46,6 +46,14 @@ import java.util.regex.Pattern;
  *   <li><b>An omission must be one.</b> A bullet saying the description leaves out files or
  *       components it then names ("the description … not … the python-ci workflow, Dockerfile,
  *       config docs") is dropped when most of what it names is in the PR text (#1074).
+ *   <li><b>A gap must be stated, not guessed.</b> A bullet whose own words hedge its claim ("may
+ *       be", "might", "could be", "in which case") is dropped ({@link #speculative}, #1127): on
+ *       #1124 a bullet said two criteria "may be" silver-MUST ones, "in which case" the answers
+ *       would be rejected, and the description was right. Quoted text, an issue's criterion and a
+ *       hedge the PR text itself makes are not the bullet's own words.
+ *   <li><b>A gap credited to the review needs a finding.</b> A bullet that says a review pass or a
+ *       finding flags its claim ({@link #creditsReview}) is kept by the summary only while an open
+ *       finding states it ({@link PrSummaryGenerator}); the screen here cannot see the findings.
  * </ul>
  *
  * <p>The screen runs on the summary call's own gaps and on the gaps carried from the previous round
@@ -199,6 +207,9 @@ final class DescriptionGapScreen {
 
   private static final Pattern NON_ALPHANUMERIC = Pattern.compile("[^\\p{L}\\p{N}]+");
 
+  /** A run of letters and digits. */
+  private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}]++");
+
   /** Full stops ending a name, which end its sentence rather than the name. */
   private static final Pattern TRAILING_DOTS = Pattern.compile("\\.++$");
 
@@ -257,6 +268,46 @@ final class DescriptionGapScreen {
       List.of(
           Pattern.compile("(?i)\\b(?:beyond|besides)\\b"),
           Pattern.compile("(?i)\\balso\\s++adds\\b"));
+
+  /**
+   * The hedges that make a gap a guess rather than a mismatch the change shows (#1127), one pattern
+   * per shape: "may be", "could not be", "might". After a {@link #CONSEQUENCE} in its sentence such
+   * a hedge only weighs what a stated gap leads to.
+   */
+  private static final List<Pattern> SPECULATION =
+      List.of(
+          Pattern.compile("(?i)\\b(?:may|could)\\s++(?:not\\s++)?be\\b"),
+          Pattern.compile("(?i)\\bmight\\b"));
+
+  /** A condition the claim rests on: always a guess, wherever it sits. */
+  private static final Pattern CONDITIONAL = Pattern.compile("(?i)\\bin\\s++which\\s++case\\b");
+
+  /**
+   * A word leading from a stated mismatch to what it causes: "`File.java` drops it, so callers
+   * might crash".
+   */
+  private static final Pattern CONSEQUENCE =
+      Pattern.compile("(?i)\\b(?:so|which\\s++means|meaning|causing|hence|therefore|thus)\\b");
+
+  /** Where a sentence or clause list ends, for {@link #CONSEQUENCE}. */
+  private static final Pattern SENTENCE_END = Pattern.compile("[.;!?](?=\\s|$)");
+
+  /**
+   * A review pass or a finding named as what flags a gap's claim (#1127): "a review pass flags",
+   * "the earlier review noted", "flagged by the review", "a finding reports". One pattern per
+   * shape.
+   */
+  private static final List<Pattern> REVIEW_CREDIT =
+      List.of(
+          Pattern.compile(
+              "(?i)\\b(?:an?|the|one|another)\\s++(?:(?:earlier|previous|prior)\\s++)?"
+                  + "review(?:er)?+(?:\\s++(?:pass|round|call))?+"
+                  + "\\s++(?:flag|note|raise|report|find|found|warn|suggest)\\w*+"),
+          Pattern.compile(
+              "(?i)\\b(?:flagged|noted|raised|reported)\\s++(?:by|in)\\s++"
+                  + "(?:an?|the)\\s++(?:(?:earlier|previous|prior)\\s++)?review"),
+          Pattern.compile(
+              "(?i)\\b(?:an?|the|one)\\s++finding\\s++(?:flag|note|say|report|warn|suggest)\\w*+"));
 
   /** Content words a PR-text sentence needs before a finding can paraphrase it. */
   static final int MIN_PARAPHRASED_WORDS = 5;
@@ -354,6 +405,67 @@ final class DescriptionGapScreen {
   private static String lastSegment(String name) {
     var trimmed = name.endsWith("/") ? name.substring(0, name.length() - 1) : name;
     return trimmed.substring(trimmed.lastIndexOf('/') + 1);
+  }
+
+  /**
+   * Whether {@code gap} hedges its own claim ({@link #SPECULATION}, #1127): a bullet saying a
+   * criterion "may be" a stricter one, "in which case" a save would fail, is a guess about a fact
+   * the change does not show, not a mismatch. Only the bullet's own words are read: quoted passages
+   * are the description's or the issue's; of a {@code Linked issue #N: <criterion> — <evidence>}
+   * gap only the evidence is, since the criterion is the issue's; a hedge whose words with the one
+   * after it are in {@code normalizedSource} (the PR text and linked issues, {@linkplain #normalize
+   * normalised}) paraphrases that text; and a hedge after a {@link #CONSEQUENCE} in its sentence
+   * ("`File.java` drops it, so callers might crash") weighs what a stated gap causes. "In which
+   * case" always makes the claim conditional.
+   */
+  static boolean speculative(String gap, String normalizedSource) {
+    var linked = DescriptionGapCarryover.linkedIssueGap(gap);
+    var own = gap;
+    if (linked != null) {
+      var rest = linked.group(2);
+      own = rest.substring(DescriptionGapCarryover.criterionOf(rest).length());
+    }
+    var unquoted = QUOTED.matcher(foldQuotes(own)).replaceAll(" ");
+    if (CONDITIONAL.matcher(unquoted).find()) {
+      return true;
+    }
+    var haystack = " " + normalizedSource + " ";
+    for (var pattern : SPECULATION) {
+      var hedge = pattern.matcher(unquoted);
+      while (hedge.find()) {
+        var phrase = normalize(hedge.group() + " " + firstWord(unquoted.substring(hedge.end())));
+        if (!haystack.contains(" " + phrase + " ")
+            && !CONSEQUENCE.matcher(sentenceBefore(unquoted, hedge.start())).find()) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** The part of {@code text}'s sentence that comes before {@code at}. */
+  private static String sentenceBefore(String text, int at) {
+    var ends = SENTENCE_END.matcher(text).region(0, at);
+    var start = 0;
+    while (ends.find()) {
+      start = ends.end();
+    }
+    return text.substring(start, at);
+  }
+
+  /** The first run of letters or digits in {@code text}; {@code ""} without one. */
+  private static String firstWord(String text) {
+    var word = WORD.matcher(text);
+    return word.find() ? word.group() : "";
+  }
+
+  /**
+   * Whether {@code gap} credits its claim to a review pass or a finding ({@link #REVIEW_CREDIT},
+   * #1127): "a review pass flags that …". Such a bullet is the review's claim, not the
+   * description's, and stands only while an open finding states it; on #1124 none did.
+   */
+  static boolean creditsReview(String gap) {
+    return anyFinds(REVIEW_CREDIT, foldQuotes(gap));
   }
 
   /**
