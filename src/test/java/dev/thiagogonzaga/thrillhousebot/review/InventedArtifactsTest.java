@@ -113,6 +113,11 @@ class InventedArtifactsTest {
     assertFalse(InventedArtifacts.invents("It adds a health endpoint.", change));
 
     assertTrue(InventedArtifacts.invents("It adds a profile page.", change));
+    // A kind joined to its qualifier by a hyphen or an underscore, and a hyphenated qualifier.
+    assertTrue(InventedArtifacts.invents("It adds a profile-page.", change));
+    assertTrue(InventedArtifacts.invents("It adds a profile_page.", change));
+    assertTrue(InventedArtifacts.invents("It adds a self-service page.", change));
+    assertFalse(InventedArtifacts.invents("It adds a settings-screen.", change));
     assertTrue(InventedArtifacts.invents("It adds an audit screen.", change));
     assertTrue(InventedArtifacts.invents("It adds a metrics endpoint.", change));
     assertTrue(

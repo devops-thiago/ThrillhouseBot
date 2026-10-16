@@ -59,12 +59,14 @@ final class InventedArtifacts {
 
   /**
    * An introduced artifact: an article or "new", then one or two qualifier words (group 1) and the
-   * kind (group 2). The qualifier words are matched possessively one at a time, so a long run of
-   * words is not retried.
+   * kind (group 2). A word ends at a blank, a hyphen or an underscore, so "a settings-page", "a
+   * settings_page" and "a self-service page" are read too. The qualifier words are matched
+   * possessively one at a time, so a long run of words is not retried.
    */
   private static final Pattern INTRODUCED =
       Pattern.compile(
-          "(?i)\\b(?:an?|new)\\s++((?:[\\w/.-]++\\s++){1,2}?)(page|screen|migration|endpoint)s?\\b");
+          "(?i)\\b(?:an?|new)\\s++((?:[\\p{L}\\p{N}/.]++[\\s_-]++){1,2}?)"
+              + "(page|screen|migration|endpoint)s?\\b");
 
   /** Qualifier words that say nothing about what the artifact is. */
   private static final Set<String> VAGUE =
