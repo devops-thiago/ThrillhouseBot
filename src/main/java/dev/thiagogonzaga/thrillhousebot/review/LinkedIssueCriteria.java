@@ -73,6 +73,9 @@ final class LinkedIssueCriteria {
   /** The section's line counting the criteria it left out. */
   private static final Pattern MORE_NOT_SHOWN = Pattern.compile("^- \\(\\d++ more not shown\\)$");
 
+  /** The task-list mark the section keeps before a criterion: "[ ] " or "[x] ". */
+  private static final Pattern TASK_MARK = Pattern.compile("^\\[[ xX]]\\s*+");
+
   /** The linked issue or its criteria named in a text. One pattern per shape. */
   private static final List<Pattern> CITES_ISSUE =
       List.of(
@@ -110,6 +113,12 @@ final class LinkedIssueCriteria {
       List.of(
           "met", "implement", "satisf", "handl", "address", "cover", "done", "support", "enforc");
 
+  /**
+   * Words between a negation and what it negates that are skipped when binding it, besides the
+   * adverbs ending in "-ly": "does not yet lock", "does not even lock".
+   */
+  private static final Set<String> QUALIFIERS = Set.of("yet", "even", "always", "ever", "longer");
+
   /** Content words after an overview negation it may bind, at most. */
   static final int NEGATION_REACH = 3;
 
@@ -140,7 +149,7 @@ final class LinkedIssueCriteria {
   private static final List<Pattern> NEGATED_VERB =
       List.of(
           Pattern.compile("(?i)\\b(?:does|do|did|can|will|has|have)(?:\\s++not|n['’]t)\\b"),
-          Pattern.compile("(?i)\\b(?:won['’]t|cannot|never)\\b"),
+          Pattern.compile("(?i)\\b(?:won['’]t|cannot|never|no\\s++longer)\\b"),
           Pattern.compile("(?i)\\b(?:lacks?|fails?\\s++to|refus\\w*+\\s++to|unable\\s++to)\\b"));
 
   /** A quoted passage, in double or single quotes (curly quotes folded). */
@@ -246,7 +255,8 @@ final class LinkedIssueCriteria {
       if (line.equals(CRITERIA_HEADING)) {
         listing = true;
       } else if (listing && line.startsWith("- ") && !MORE_NOT_SHOWN.matcher(line).matches()) {
-        criteria.add(line.substring(2).strip());
+        // The section keeps the issue's task-list mark ("[ ] "); the criterion is what follows.
+        criteria.add(TASK_MARK.matcher(line.substring(2).strip()).replaceFirst(""));
       } else if (listing) {
         listing = false;
       }
@@ -330,11 +340,15 @@ final class LinkedIssueCriteria {
    * Whether one of the first {@code reach} content words of {@code rest}, what follows a negation,
    * is a word of the criterion's family, or with {@code fulfilment} a {@link #FULFILMENT} word: the
    * negation is then about the criterion, as in "does not lock" or "is not met", not about
-   * something else, as in "does not allow sign-ups for locked shifts".
+   * something else, as in "does not allow sign-ups for locked shifts". An adverb ending in "-ly"
+   * and a {@link #QUALIFIERS} word ("does not actually lock", "does not yet lock") are skipped.
    */
   private static boolean bindsCriterion(
       String rest, Set<String> criterionWords, int reach, boolean fulfilment) {
-    var next = SummarySurfaceDeduplicator.claim(rest).words();
+    var next =
+        SummarySurfaceDeduplicator.claim(rest).words().stream()
+            .filter(word -> !word.endsWith("ly") && !QUALIFIERS.contains(word))
+            .toList();
     for (var i = 0; i < Math.min(reach, next.size()); i++) {
       var word = next.get(i);
       if ((fulfilment && FULFILMENT.stream().anyMatch(word::startsWith))

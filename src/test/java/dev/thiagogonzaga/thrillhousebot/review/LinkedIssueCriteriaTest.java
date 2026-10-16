@@ -39,10 +39,10 @@ class LinkedIssueCriteriaTest {
       ### Issue #267: Pharmacy prescription refill queue service
       Linked by: a closing keyword in the PR body
       Acceptance criteria (from the issue):
-      - `POST /refills` queues a refill request and responds 409 when the same Rx number is already pending
-      - Prescriptions enrolled via `POST /auto-refill` are queued by a scheduled job once they come due, on the interval configured by `AUTO_REFILL_INTERVAL`
-      - `GET /history` rejects stores this instance is not configured for with 400
-      - `GET /refills/next` rejects a `limit` above 100 with 413
+      - [ ] `POST /refills` queues a refill request and responds 409 when the same Rx number is already pending
+      - [ ] Prescriptions enrolled via `POST /auto-refill` are queued by a scheduled job once they come due, on the interval configured by `AUTO_REFILL_INTERVAL`
+      - [ ] `GET /history` rejects stores this instance is not configured for with 400
+      - [ ] `GET /refills/next` rejects a `limit` above 100 with 413
       """;
 
   private static final String CRITERION_267_4 =
@@ -56,10 +56,10 @@ class LinkedIssueCriteriaTest {
       ### Issue #256: Community garden plot waitlist
       Linked by: a closing keyword in the PR body
       Acceptance criteria (from the issue):
-      - `POST /signup` adds an applicant and returns their place in line
-      - Bulk import of the council's yearly export skips repeat sign-ups with the same email
-      - An offer round offers each vacant plot to the next in-borough applicant in line and records when the offer expires
-      - An applicant who declines two offers is moved to the back of the waitlist
+      - [ ] `POST /signup` adds an applicant and returns their place in line
+      - [ ] Bulk import of the council's yearly export skips repeat sign-ups with the same email
+      - [ ] An offer round offers each vacant plot to the next in-borough applicant in line and records when the offer expires
+      - [ ] An applicant who declines two offers is moved to the back of the waitlist
       - (2 more not shown)
       """;
 
@@ -71,10 +71,10 @@ class LinkedIssueCriteriaTest {
       ### Issue #260: Volunteer shift board
       Linked by: a closing keyword in the PR body
       Acceptance criteria (from the issue):
-      - The board lists every shift for the current week with its remaining spots, and a shift with no spots left shows "Full" with the Sign up button disabled.
-      - Coordinators can limit the board to a set of roles through configuration.
-      - Shifts that start in less than 2 hours are locked: the Sign up button is disabled and the card shows "Sign-ups closed".
-      - After signing up, the volunteer sees a confirmation that says whether an SMS reminder was scheduled.
+      - [ ] The board lists every shift for the current week with its remaining spots, and a shift with no spots left shows "Full" with the Sign up button disabled.
+      - [ ] Coordinators can limit the board to a set of roles through configuration.
+      - [ ] Shifts that start in less than 2 hours are locked: the Sign up button is disabled and the card shows "Sign-ups closed".
+      - [x] After signing up, the volunteer sees a confirmation that says whether an SMS reminder was scheduled.
       Issue body:
       Volunteers sign up on paper today.
       """;
@@ -369,6 +369,30 @@ class LinkedIssueCriteriaTest {
 
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(two, List.of(LIMIT), null, Map.of()));
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet("", List.of(LIMIT), null, Map.of()));
+  }
+
+  @Test
+  void theTaskListMarkIsNotPartOfACriterion() {
+    var criteria = LinkedIssueCriteria.criteria(ISSUE_260);
+
+    assertTrue(criteria.getFirst().startsWith("The board lists"), criteria.toString());
+    assertTrue(criteria.getLast().startsWith("After signing up"), criteria.toString());
+  }
+
+  @Test
+  void anAdverbOrNoLongerBetweenTheNegationAndTheVerbStillBindsIt() {
+    for (var row :
+        List.of(
+            "The board does not actually lock shifts that start within 2 hours.",
+            "The board no longer locks shifts that start within 2 hours.",
+            "The board does not yet lock shifts that start within 2 hours.")) {
+      assertEquals(
+          1,
+          unmet(ISSUE_260, List.of(), null, Map.of("react/src/components/ShiftBoard.tsx", row))
+              .lines()
+              .size(),
+          row);
+    }
   }
 
   @Test
