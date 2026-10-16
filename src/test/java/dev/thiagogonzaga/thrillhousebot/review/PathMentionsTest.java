@@ -1009,4 +1009,40 @@ class PathMentionsTest {
             .withQuotedPathsCorrected(
                 "`COPY --from=build /out/app /usr/local/bin/app-srv` fails.", "Dockerfile"));
   }
+
+  /** A quote the description wrapped onto a second line is the same quote. */
+  @Test
+  void aWrappedMisquoteIsCorrected() {
+    var mentions = mentions(ZIG_IMAGE, "", Set.of());
+
+    assertEquals(
+        "`COPY --from=build /src/zig-out/bin/gcompact-server /usr/local/bin/gcompact-server`"
+            + " therefore fails.",
+        mentions.withQuotedPathsCorrected(
+            "`COPY --from=build /src/zig-out/bin/gcompact-server\n"
+                + "  /usr/local/bin/gcompressed-server` therefore fails.",
+            "zig/Dockerfile"));
+    var wrappedExact =
+        "`COPY --from=build /src/zig-out/bin/gcompact-server\n/usr/local/bin/gcompact-server` ok.";
+    assertSame(wrappedExact, mentions.withQuotedPathsCorrected(wrappedExact, "zig/Dockerfile"));
+    var paragraphs = "`COPY --from=build\n\n/usr/local/bin/gcompressed-server` fails.";
+    assertSame(paragraphs, mentions.withQuotedPathsCorrected(paragraphs, "zig/Dockerfile"));
+  }
+
+  /** A glob with a name pattern after the directory reads the same directory. */
+  @Test
+  void aNamePatternGlobIsJudgedByItsDirectory() {
+    var raised =
+        findingOn(
+            "kotlin/Dockerfile",
+            "The jar bundles no dependencies.",
+            null,
+            "RUN cp /app/lib/serv*.jar /out/");
+
+    var screened =
+        mentions(KOTLIN_IMAGE, "", Set.of())
+            .screen(new ReviewResponse(List.of(raised), List.of(), null));
+
+    assertNull(screened.findings().getFirst().suggestionNew());
+  }
 }

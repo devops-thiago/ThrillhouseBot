@@ -224,9 +224,12 @@ final class PathMentions {
   private static final Pattern ABSOLUTE_PATH =
       Pattern.compile("(?<![\\w.~/\\\\+-])/[\\w.+-]++(?:/[\\w.+-]++)++");
 
-  /** A glob over an absolute directory ({@code /app/lib/*}): the directory, without its slash. */
+  /**
+   * A glob over the files of an absolute directory ({@code /app/lib/*}, {@code
+   * /app/lib/serv*.jar}): the directory, without its slash.
+   */
   private static final Pattern ABSOLUTE_GLOB =
-      Pattern.compile("(?<![\\w.~/\\\\+-])(/[\\w.+-]++(?:/[\\w.+-]++)*+)/\\*");
+      Pattern.compile("(?<![\\w.~/\\\\+-])(/[\\w.+-]++(?:/[\\w.+-]++)*)/[\\w.+-]*+\\*");
 
   /** A Dockerfile instruction that copies into the image. */
   private static final Pattern COPY_INSTRUCTION =
@@ -259,8 +262,14 @@ final class PathMentions {
   /** A redirection right before a token: {@code > out.log}, {@code >>conf/app.conf}. */
   private static final Pattern REDIRECTED = Pattern.compile(">\\s*+[\"']?$");
 
-  /** An inline code span on one line. */
-  private static final Pattern CODE_SPAN = Pattern.compile("`([^`\\n]++)`");
+  /**
+   * An inline code span, which may wrap onto the next line of a paragraph but not across a blank
+   * line.
+   */
+  private static final Pattern CODE_SPAN = Pattern.compile("`((?:[^`\\n]|\\n(?!\\n))++)`");
+
+  /** A line break and the indentation after it, inside a wrapped code span. */
+  private static final Pattern WRAP = Pattern.compile("[ \\t]*+\\n[ \\t]*+");
 
   private static final Pattern BLANK_RUN = Pattern.compile(" {2,}");
 
@@ -709,10 +718,15 @@ final class PathMentions {
     return result.equals(description) ? description : result;
   }
 
-  /** {@code quote} with an absolute path the patch lines do not hold replaced, where one fits. */
-  private static String correctedQuote(String quote, List<String> lines) {
+  /**
+   * {@code written} with an absolute path the patch lines do not hold replaced, where one fits, and
+   * then on one line; {@code written} itself when nothing is replaced.
+   */
+  private static String correctedQuote(String written, List<String> lines) {
+    // A span the description wrapped quotes one line: its break reads as the blank it replaced.
+    String quote = WRAP.matcher(written).replaceAll(" ");
     if (lines.stream().anyMatch(line -> line.contains(quote))) {
-      return quote;
+      return written;
     }
     var paths = ABSOLUTE_PATH.matcher(quote);
     while (paths.find()) {
@@ -728,7 +742,7 @@ final class PathMentions {
         return before + fits.getFirst() + after;
       }
     }
-    return quote;
+    return written;
   }
 
   /** The absolute paths of {@code lines} that {@code before} and {@code after} surround. */
