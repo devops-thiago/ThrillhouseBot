@@ -564,7 +564,9 @@ class DescriptionGapScreenTest {
         "The earlier review had flagged the workflow is unpinned.",
         "One finding has reported the description's claim is wrong.",
         "The description says every commit is signed; the gap was reported during the review.",
-        "The description says every commit is signed; it was flagged by one of the reviewers."
+        "The description says every commit is signed; it was flagged by one of the reviewers.",
+        // A later credit in the clause counts when the first is the description's.
+        "The description says one reviewer reported it without the earlier review flagging it."
       })
   void aBulletCreditingTheReviewIsRecognised(String gap) {
     assertTrue(DescriptionGapScreen.creditsReview(gap));

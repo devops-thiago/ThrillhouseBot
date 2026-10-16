@@ -565,20 +565,21 @@ final class DescriptionGapScreen {
     }
     clauses.add(new int[] {start, own.length()});
     for (var clause : clauses) {
-      var noun = creditIn(own, clause[0], clause[1]);
-      if (noun >= 0 && !attributedBefore(clauseOf(own.substring(0, noun)))) {
-        return true;
+      for (var noun : creditsIn(own, clause[0], clause[1])) {
+        if (!attributedBefore(clauseOf(own.substring(0, noun)))) {
+          return true;
+        }
       }
     }
     return false;
   }
 
   /**
-   * Where the review noun of a credit ({@link #creditsReview}) starts in {@code text} between
-   * {@code from} and {@code to}; -1 without one. What precedes the noun in its clause says whose
-   * words the credit is: "the description says the review step …" is the description's.
+   * Where the review noun of each credit ({@link #creditsReview}) starts in {@code text} between
+   * {@code from} and {@code to}, in order. What precedes a noun in its clause says whose words the
+   * credit is: "the description says the review step …" is the description's.
    */
-  private static int creditIn(String text, int from, int to) {
+  private static List<Integer> creditsIn(String text, int from, int to) {
     var words = WORD.matcher(text).region(from, to);
     var nouns = new ArrayList<int[]>();
     var verbs = new ArrayList<int[]>();
@@ -592,14 +593,11 @@ final class DescriptionGapScreen {
       }
       previous = word;
     }
-    for (var noun : nouns) {
-      for (var verb : verbs) {
-        if (Math.abs(noun[0] - verb[0]) <= CREDIT_REACH) {
-          return noun[1];
-        }
-      }
-    }
-    return -1;
+    return nouns.stream()
+        .filter(
+            noun -> verbs.stream().anyMatch(verb -> Math.abs(noun[0] - verb[0]) <= CREDIT_REACH))
+        .map(noun -> noun[1])
+        .toList();
   }
 
   private static boolean startsWithAny(String word, List<String> stems) {
