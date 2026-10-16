@@ -95,6 +95,9 @@ final class InventedArtifacts {
 
   private static final Pattern CAMEL_HUMP = Pattern.compile("(?<=\\p{Ll})(?=\\p{Lu})");
 
+  /** A sentence about taking something out: "removes", "deleted", "drops", "retires". */
+  private static final Pattern REMOVAL = Pattern.compile("(?i)\\b(?:remov|delet|drop|retir)\\w*+");
+
   /**
    * {@code summary} with every sentence of its purpose and assessment that introduces an artifact
    * {@code files} do not back cut; the same instance when nothing is cut, {@code null} stays {@code
@@ -137,9 +140,17 @@ final class InventedArtifacts {
     return kept.size() == sentences.size() ? text : String.join(" ", kept);
   }
 
-  /** Whether {@code sentence} introduces an artifact {@code change} does not back. */
+  /**
+   * Whether {@code sentence} introduces an artifact {@code change} does not back. A sentence about
+   * taking something out ("removes a settings page") is not judged: what backs it is a deleted
+   * file, which never backs an addition. Camel humps are split first, so "a SettingsScreen" reads
+   * as "a Settings Screen".
+   */
   static boolean invents(String sentence, Change change) {
-    var introduced = INTRODUCED.matcher(sentence);
+    if (REMOVAL.matcher(sentence).find()) {
+      return false;
+    }
+    var introduced = INTRODUCED.matcher(CAMEL_HUMP.matcher(sentence).replaceAll(" "));
     while (introduced.find()) {
       var qualifier =
           words(introduced.group(1)).stream().filter(word -> !VAGUE.contains(word)).toList();
@@ -163,7 +174,10 @@ final class InventedArtifacts {
       var paths = new ArrayList<List<String>>();
       var added = new ArrayList<List<String>>();
       for (var file : files) {
-        paths.add(words(file.filename()));
+        // A deleted file is not something the change adds.
+        if (!"removed".equals(file.status())) {
+          paths.add(words(file.filename()));
+        }
         var patch = Objects.requireNonNullElse(file.patch(), "");
         for (var line : patch.split("\n", -1)) {
           if (line.startsWith("+")) {

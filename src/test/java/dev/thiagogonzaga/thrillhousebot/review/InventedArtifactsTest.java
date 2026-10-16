@@ -118,6 +118,21 @@ class InventedArtifactsTest {
     assertTrue(InventedArtifacts.invents("It adds a profile_page.", change));
     assertTrue(InventedArtifacts.invents("It adds a self-service page.", change));
     assertFalse(InventedArtifacts.invents("It adds a settings-screen.", change));
+    // A camel-hump name in the sentence reads as its words.
+    assertTrue(InventedArtifacts.invents("It adds a ProfilePage for admins.", change));
+    assertFalse(InventedArtifacts.invents("It adds a SettingsScreen for admins.", change));
+  }
+
+  @Test
+  void aDeletedFileBacksNoAdditionAndARemovalIsNotJudged() {
+    var change =
+        InventedArtifacts.Change.of(
+            List.of(
+                new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                added("web/src/App.tsx", "const app = 1;")));
+
+    assertTrue(InventedArtifacts.invents("It adds a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It removes a settings page.", change));
     assertTrue(InventedArtifacts.invents("It adds an audit screen.", change));
     assertTrue(InventedArtifacts.invents("It adds a metrics endpoint.", change));
     assertTrue(
