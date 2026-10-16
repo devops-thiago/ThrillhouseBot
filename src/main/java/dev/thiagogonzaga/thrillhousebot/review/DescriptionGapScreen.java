@@ -292,8 +292,14 @@ final class DescriptionGapScreen {
   private static final Pattern SOURCE_BLOCK =
       Pattern.compile("\n(?=[ \t]*+(?:\n|[-*+][ \t]|\\d++[.)][ \t]))");
 
-  /** The month, capitalised inside its sentence: "cut in May", not the modal verb. */
+  /**
+   * The month, not the modal verb: "May" capitalised inside its sentence ("cut in May"), or before
+   * a day or a year ("May 3 is the cut-off").
+   */
   private static final String MONTH = "May";
+
+  /** A day or a year opening the text after a hedge: what makes a "May" the month. */
+  private static final Pattern DATE_NEXT = Pattern.compile("^\\s++\\d");
 
   /** A condition the claim rests on: always a guess, wherever it sits. */
   private static final Pattern CONDITIONAL = Pattern.compile("(?i)\\bin\\s++which\\s++case\\b");
@@ -482,7 +488,9 @@ final class DescriptionGapScreen {
       var hedge = pattern.matcher(unquoted);
       while (hedge.find()) {
         var lead = sentenceBefore(unquoted, hedge.start());
-        if (hedge.group().equals(MONTH) && !lead.isBlank()) {
+        if (hedge.group().equals(MONTH)
+            && (!lead.isBlank()
+                || DATE_NEXT.matcher(unquoted).region(hedge.end(), unquoted.length()).find())) {
           continue;
         }
         var context = hedgeInContext(lead, hedge.group(), unquoted.substring(hedge.end()));

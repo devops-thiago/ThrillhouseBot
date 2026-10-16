@@ -482,6 +482,7 @@ class DescriptionGapScreenTest {
         "The description says \"tokens may be reused once\", but `Auth.java` rejects a reuse.",
         // The month is not the modal verb.
         "The description says the release is cut in May, but `release.yml` hard-codes June.",
+        "The description says the cut-off moved. May 3 is still in `release.yml`.",
         // A symbol a code span names is not a hedge, nor is a hyphenated name.
         "The description says the `may-retry` flag is respected, but `Client.java` ignores it.",
         "The description says the may-retry flag is respected, but Client.java ignores it.",
