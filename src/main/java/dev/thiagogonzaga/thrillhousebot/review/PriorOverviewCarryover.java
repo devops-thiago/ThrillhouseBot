@@ -19,7 +19,10 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Keeps the previous round's overview on a follow-up round of the same head (#944, #965).
@@ -55,6 +58,113 @@ import java.util.Objects;
 final class PriorOverviewCarryover {
 
   private PriorOverviewCarryover() {}
+
+  /**
+   * The words a purpose paragraph about the change's size is made of: "It is a feature-sized change
+   * (+555 lines across 6 directories)." A sentence of these alone says nothing of what the change
+   * does (#1095).
+   */
+  private static final Set<String> SIZE_WORDS =
+      Set.of(
+          "it",
+          "it's",
+          "is",
+          "this",
+          "that",
+          "the",
+          "a",
+          "an",
+          "pr",
+          "pull",
+          "request",
+          "change",
+          "changes",
+          "changeset",
+          "diff",
+          "patch",
+          "small",
+          "medium",
+          "large",
+          "big",
+          "sizable",
+          "sizeable",
+          "moderate",
+          "moderately",
+          "very",
+          "fairly",
+          "size",
+          "sized",
+          "line",
+          "lines",
+          "file",
+          "files",
+          "directory",
+          "directories",
+          "folder",
+          "folders",
+          "module",
+          "modules",
+          "across",
+          "over",
+          "in",
+          "of",
+          "and",
+          "with",
+          "touching",
+          "touches",
+          "spanning",
+          "spans",
+          "adds",
+          "adding",
+          "added",
+          "additions",
+          "deletions",
+          "removes",
+          "removed",
+          "changed",
+          "net",
+          "roughly",
+          "about",
+          "around",
+          "approximately",
+          "total",
+          "overall",
+          "new");
+
+  /** A word of a size sentence: letters and hyphens ("feature-sized"), or a signed number. */
+  private static final Pattern SIZE_TOKEN =
+      Pattern.compile("[+-]?\\d++(?:[,.]\\d++)*+|\\p{L}[\\p{L}'-]*+");
+
+  /** A one-level parenthetical, which a size statement's figures sit in. */
+  private static final Pattern PARENTHETICAL = Pattern.compile("\\([^()]*+\\)");
+
+  /** Where a sentence's leading clause ends. */
+  private static final Pattern CLAUSE_BOUNDARY =
+      Pattern.compile(
+          "[,;:—–]|\\b(?:that|which|and|but|so|while|whereas|to|for|because)\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /** A comma that groups a number's digits ("1,204"), which ends no clause. */
+  private static final Pattern DIGIT_GROUP = Pattern.compile("(?<=\\d),(?=\\d)");
+
+  /**
+   * How the rest of a size-led first sentence opens when it is an addition, a side note: "with a
+   * new CI job", "plus a README".
+   */
+  private static final Pattern ADDITION_NOTE =
+      Pattern.compile("[\\s,;:—–]*+(?:with|plus|including)\\b", Pattern.CASE_INSENSITIVE);
+
+  /**
+   * How the rest of a size-led first sentence opens when it says what the change "also" does, a
+   * side note: "that also ships the container image".
+   */
+  private static final Pattern ALSO_NOTE =
+      Pattern.compile(
+          "[\\s,;:—–]*+(?:(?:that|which|and|while|but)\\s++)?(?:it\\s++)?also\\b",
+          Pattern.CASE_INSENSITIVE);
+
+  /** What marks a sentence as being about size: a number, the word "size", or a "-sized" word. */
+  private static final Pattern SIZE_MARK = Pattern.compile("\\d|-sized\\b|\\bsized?\\b");
 
   /**
    * {@code current} with the previous round's overview filled in where it has none, on the head
@@ -99,9 +209,10 @@ final class PriorOverviewCarryover {
 
   /**
    * {@code current} plus the previous round's summary for each file {@code current} has no
-   * non-blank summary for, the previous purpose paragraph when {@code current}'s is blank (the
-   * {@link OverviewScreen} may have taken every sentence out), and the previous diagram when {@code
-   * current} has none; {@code current} itself when it lacks none of them.
+   * non-blank summary for, the previous purpose paragraph when {@code current}'s is blank or says
+   * only how big the change is (the {@link OverviewScreen} may have taken every other sentence out,
+   * #1095), and the previous diagram when {@code current} has none; {@code current} itself when it
+   * lacks none of them.
    */
   private static ReviewResponse.Summary supplemented(
       ReviewResponse.Summary current, ReviewResponse.Summary prior) {
@@ -116,7 +227,10 @@ final class PriorOverviewCarryover {
     files.addAll(earlier);
     var added = earlier.size();
     var keepDiagram = isBlank(current.walkthroughDiagram()) && !isBlank(prior.walkthroughDiagram());
-    var keepPurpose = isBlank(current.prPurpose()) && !isBlank(prior.prPurpose());
+    var keepPurpose =
+        (isBlank(current.prPurpose()) || sizeOnly(current.prPurpose()))
+            && !isBlank(prior.prPurpose())
+            && !sizeOnly(prior.prPurpose());
     if (added == 0 && !keepDiagram && !keepPurpose) {
       return current;
     }
@@ -129,6 +243,75 @@ final class PriorOverviewCarryover {
         keepPurpose ? prior.prPurpose() : current.prPurpose(),
         files,
         keepDiagram ? prior.walkthroughDiagram() : current.walkthroughDiagram());
+  }
+
+  /**
+   * Whether {@code purpose} says only how big the change is: its first sentence opens with a size
+   * statement, as {@link #sizeSentence} reads it, followed by nothing or by a side note ({@link
+   * #sideNote}), and every later sentence is one. A sentence on the failing CI checks is not
+   * counted, since the summary computes it ({@link CiFailureOverview}). Node
+   * ThrillhouseBot-test#278 round 2 wrote only "It is a feature-sized change (+555 lines across 6
+   * directories) that also ships the container image and CI pipeline described in issue #262": what
+   * the service does was gone, and only a side note followed the size (#1095).
+   */
+  static boolean sizeOnly(String purpose) {
+    if (isBlank(purpose)) {
+      return false;
+    }
+    var stated = CiFailureOverview.withoutCiVerdicts(purpose);
+    if (isBlank(stated)) {
+      return false;
+    }
+    var sentences = OverviewScreen.sentences(stated);
+    var first = sentences.getFirst();
+    var lead = leadingClause(first);
+    var rest = first.substring(lead.length());
+    return sizeSentence(lead)
+        && sideNote(rest)
+        && sentences.stream().skip(1).allMatch(PriorOverviewCarryover::sizeSentence);
+  }
+
+  /**
+   * Whether {@code rest}, what follows a size statement in its sentence, adds nothing on what the
+   * change does: it is blank, an addition ({@link #ADDITION_NOTE}) or something the change also
+   * does ({@link #ALSO_NOTE}). Anything else there says what the change does ("… that adds a team
+   * signup service").
+   */
+  private static boolean sideNote(String rest) {
+    return rest.isBlank()
+        || ADDITION_NOTE.matcher(rest).lookingAt()
+        || ALSO_NOTE.matcher(rest).lookingAt();
+  }
+
+  /**
+   * {@code sentence} up to its first clause boundary outside parentheses: a comma, semicolon, colon
+   * or dash, or a word that opens another clause ({@code that}, {@code which}, {@code and}).
+   */
+  private static String leadingClause(String sentence) {
+    var flat = PARENTHETICAL.matcher(sentence).replaceAll(m -> " ".repeat(m.group().length()));
+    flat = DIGIT_GROUP.matcher(flat).replaceAll(" ");
+    var boundary = CLAUSE_BOUNDARY.matcher(flat);
+    return boundary.find() ? sentence.substring(0, boundary.start()) : sentence;
+  }
+
+  /**
+   * Whether {@code sentence} is a size statement: it holds a number, the word "size" or a "-sized"
+   * word, and every other word is one of {@link #SIZE_WORDS}, the "-sized" adjectives included.
+   */
+  private static boolean sizeSentence(String sentence) {
+    if (!SIZE_MARK.matcher(sentence).find()) {
+      return false;
+    }
+    var words = SIZE_TOKEN.matcher(sentence);
+    while (words.find()) {
+      var word = words.group().toLowerCase(Locale.ROOT);
+      if (!Character.isDigit(word.charAt(word.length() - 1))
+          && !word.endsWith("-sized")
+          && !SIZE_WORDS.contains(word)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**
