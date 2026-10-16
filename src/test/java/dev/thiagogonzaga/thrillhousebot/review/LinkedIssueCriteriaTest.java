@@ -449,6 +449,24 @@ class LinkedIssueCriteriaTest {
   }
 
   @Test
+  void aWalkthroughClauseIsEscapedInTheLine() {
+    var lines =
+        unmet(
+                ISSUE_260,
+                List.of(),
+                null,
+                Map.of(
+                    "react/src/components/ShiftBoard.tsx",
+                    "no lockout for imminent <b>shifts</b> | `x`"))
+            .lines();
+
+    assertEquals(1, lines.size(), lines.toString());
+    assertTrue(
+        lines.getFirst().endsWith("no lockout for imminent &lt;b>shifts&lt;/b> \\| &#96;x&#96;"),
+        lines.toString());
+  }
+
+  @Test
   void theTaskListMarkIsNotPartOfACriterion() {
     var criteria = LinkedIssueCriteria.criteria(ISSUE_260);
 

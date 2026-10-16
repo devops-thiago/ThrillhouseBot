@@ -233,7 +233,10 @@ final class LinkedIssueCriteria {
       for (var clause : CLAUSE_SPLIT.split(row.getValue())) {
         placed.place(
             clauseMatch(clause, placed.criteria()),
-            " — `" + MarkdownSafe.inlineCode(row.getKey()) + "`: " + clause.strip());
+            " — `"
+                + MarkdownSafe.inlineCode(row.getKey())
+                + "`: "
+                + MarkdownSafe.inline(clause.strip()));
       }
     }
     return new Lines(List.copyOf(new TreeMap<>(placed.lines()).values()), placed.pointed());
