@@ -3363,6 +3363,106 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void cleanReviewCommandOnAHeadTheBotNeverApprovedLeavesAnApproval() {
+      // #1144, the #1131 run: /review re-posted the summary, the round was clean, and the bot's
+      // last review was COMMENTED on the commit before, so the skip left the head unapproved.
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session =
+            reviewCleanFollowUpCommand(
+                mockedStatic,
+                new GitHubReviewClient.ReviewResponse(
+                    1L,
+                    "",
+                    "COMMENTED",
+                    "abc12345",
+                    new GitHubReviewClient.ReviewResponse.User(BOT_LOGIN)));
+
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> "APPROVE".equals(req.event()) && "abcdefgh".equals(req.commitId())));
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
+    @Test
+    void cleanReviewCommandOnAHeadTheBotAlreadyApprovedKeepsThatApproval() {
+      // The head already carries the bot's approval, which is the visible outcome; a second one
+      // would only repeat it.
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session =
+            reviewCleanFollowUpCommand(
+                mockedStatic,
+                new GitHubReviewClient.ReviewResponse(
+                    1L,
+                    "",
+                    "APPROVED",
+                    "abcdefgh",
+                    new GitHubReviewClient.ReviewResponse.User(BOT_LOGIN)));
+
+        verify(reviewClient, never())
+            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
+    /** A clean {@code /review} follow-up on head {@code abcdefgh} with one earlier bot review. */
+    private ReviewSession reviewCleanFollowUpCommand(
+        org.mockito.MockedStatic<ReviewSession> mockedStatic,
+        GitHubReviewClient.ReviewResponse priorBotReview) {
+      when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
+          .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
+      var session = mock(ReviewSession.class);
+      session.id = 1L;
+      when(session.getRepository()).thenReturn("owner/repo");
+      when(session.getPrNumber()).thenReturn(42);
+      when(session.getPrTitle()).thenReturn("Test PR");
+      when(session.getCommitSha()).thenReturn("abcdefgh");
+      when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+      mockedStatic
+          .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+          .thenReturn(session);
+
+      when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+      when(checkRunClient.createCheckRun(anyString(), anyString(), anyString(), anyString(), any()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+      doNothing()
+          .when(checkRunClient)
+          .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
+      when(prClient.getPullRequestFiles(
+              anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(List.of());
+      when(prClient.compareCommits(
+              anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+      when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(List.of(priorBotReview));
+      when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+          .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
+      when(aiReviewService.review(any(ReviewSession.class), any()))
+          .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+      orchestrator.review(
+          new ReviewOrchestrator.ReviewRequest(
+              "owner",
+              "repo",
+              42,
+              "abcdefgh",
+              "Test PR",
+              "",
+              "base1234567",
+              "main",
+              123L,
+              true,
+              "main",
+              true));
+      return session;
+    }
+
+    @Test
     void shouldPostConsolidatedReviewWithoutNeedingTheDeltaCommentService() {
       // The review must not need an additional conversation write for its follow-up counts.
       when(followUpSummaryConfig.enabled()).thenReturn(true);
@@ -3490,7 +3590,8 @@ class ReviewOrchestratorTest {
                         1L,
                         "",
                         "APPROVED",
-                        "abc12345",
+                        // The bot already approved this head, so the clean review is not restated.
+                        "abcdefgh",
                         new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"))));
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
             .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
@@ -6840,22 +6941,101 @@ class ReviewOrchestratorTest {
       assertTrue(captor.getValue().body().contains("**build**"));
     }
 
-    @Test
-    void postReviewShouldSkipNoIssuesReviewOnSummaryOnlyRerun() {
+    private static GitHubReviewClient.ReviewResponse priorReview(
+        long id, String state, String commitSha, String login) {
+      return new GitHubReviewClient.ReviewResponse(
+          id, "", state, commitSha, new GitHubReviewClient.ReviewResponse.User(login));
+    }
+
+    private void postCleanFollowUp(List<GitHubReviewClient.ReviewResponse> priorReviews) {
       var result =
           new ReviewResult(
               List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, false, "", List.of(), List.of(), 0);
-
       reviewPublisher.postReview(
           new ReviewPublisher.PostReviewRequest(
-              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true, List.of()));
+              "auth",
+              "owner",
+              "repo",
+              5,
+              "head-sha",
+              result,
+              resolverFor(),
+              true,
+              List.of(),
+              "",
+              priorReviews));
+    }
+
+    private GitHubReviewClient.CreateReviewRequest postedReview() {
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      return captor.getValue();
+    }
+
+    @Test
+    void cleanFollowUpWhoseLastBotReviewCommentedOnAnOlderCommitApprovesTheHead() {
+      // #1144: the #1131 shape. The last bot review is COMMENTED on the commit before; skipping
+      // left the head with no approval although the round found nothing.
+      postCleanFollowUp(List.of(priorReview(1L, "COMMENTED", "old-sha", BOT_LOGIN)));
+
+      var posted = postedReview();
+      assertEquals("APPROVE", posted.event());
+      assertEquals("head-sha", posted.commitId());
+    }
+
+    @Test
+    void cleanFollowUpWhoseLastBotApprovalIsOnAnOlderCommitApprovesTheHead() {
+      postCleanFollowUp(List.of(priorReview(1L, "APPROVED", "old-sha", BOT_LOGIN)));
+
+      assertEquals("APPROVE", postedReview().event());
+    }
+
+    @Test
+    void cleanFollowUpWithNoEarlierBotReviewApprovesTheHead() {
+      // An empty list is also what a failed review fetch leaves, so the skip fails open.
+      postCleanFollowUp(List.of());
+
+      assertEquals("APPROVE", postedReview().event());
+    }
+
+    @Test
+    void cleanFollowUpApprovesWhenOnlyAnotherUserApprovedTheHead() {
+      postCleanFollowUp(List.of(priorReview(1L, "APPROVED", "head-sha", "maintainer")));
+
+      assertEquals("APPROVE", postedReview().event());
+    }
+
+    @Test
+    void cleanFollowUpApprovesWhenALaterBotReviewReplacedTheHeadApproval() {
+      postCleanFollowUp(
+          List.of(
+              priorReview(1L, "APPROVED", "head-sha", BOT_LOGIN),
+              priorReview(2L, "CHANGES_REQUESTED", "head-sha", BOT_LOGIN)));
+
+      assertEquals("APPROVE", postedReview().event());
+    }
+
+    @Test
+    void cleanReRunOnAHeadTheBotAlreadyApprovedStillSkips() {
+      // No duplicate approvals: the latest bot review already approves this head. A pending bot
+      // review after it is the one this run dismisses, and a review from a deleted account
+      // (user:null) is nobody's, so neither counts as the latest.
+      postCleanFollowUp(
+          List.of(
+              priorReview(1L, "COMMENTED", "old-sha", BOT_LOGIN),
+              priorReview(2L, "APPROVED", "head-sha", BOT_LOGIN),
+              new GitHubReviewClient.ReviewResponse(3L, "", "COMMENTED", "head-sha", null),
+              priorReview(4L, "PENDING", "head-sha", BOT_LOGIN)));
 
       verify(reviewClient, never())
           .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
     }
 
     @Test
-    void postReviewShouldSkipCiPendingCommentReviewOnSummaryOnlyRerun() {
+    void ciPendingSummaryOnlyRerunStillPostsTheCiHoldComment() {
+      // A round held back from APPROVE is not the verdict the earlier approval stated, so it posts
+      // and says why it does not approve, even over a bot approval of the same head (#1144).
       var result =
           new ReviewResult(
               List.of(),
@@ -6873,10 +7053,21 @@ class ReviewOrchestratorTest {
 
       reviewPublisher.postReview(
           new ReviewPublisher.PostReviewRequest(
-              "auth", "owner", "repo", 5, "sha", result, resolverFor(), true, List.of()));
+              "auth",
+              "owner",
+              "repo",
+              5,
+              "head-sha",
+              result,
+              resolverFor(),
+              true,
+              List.of(),
+              "",
+              List.of(priorReview(1L, "APPROVED", "head-sha", BOT_LOGIN))));
 
-      verify(reviewClient, never())
-          .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+      var posted = postedReview();
+      assertEquals("COMMENT", posted.event());
+      assertTrue(posted.body().contains("**build**"), posted.body());
     }
 
     @Test

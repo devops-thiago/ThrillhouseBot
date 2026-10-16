@@ -337,6 +337,9 @@ public class ReviewPublisher {
    *     review too and leave the run with no visible outcome at all.
    * @param previousFindings the previous round's findings, in prompt-id order, so the body can name
    *     the ones this round closed instead of leaving the closure unattributed (#737)
+   * @param priorReviews the PR's reviews as this run's context load fetched them, oldest first; the
+   *     summary-only skip reads the bot's latest one to tell whether this head is already approved
+   *     (#1144). Empty when the fetch failed, which reads as "not approved", so the review posts.
    */
   record PostReviewRequest(
       String auth,
@@ -348,9 +351,11 @@ public class ReviewPublisher {
       DiffLineResolver lineResolver,
       boolean summaryPosted,
       List<ReviewResponse.Finding> previousFindings,
-      String followUpDeltaSection) {
+      String followUpDeltaSection,
+      List<GitHubReviewClient.ReviewResponse> priorReviews) {
     PostReviewRequest {
       followUpDeltaSection = java.util.Objects.requireNonNullElse(followUpDeltaSection, "");
+      priorReviews = priorReviews == null ? List.of() : List.copyOf(priorReviews);
     }
 
     // Direct callers retain the default closed-finding report without opt-in enrichment.
@@ -374,7 +379,8 @@ public class ReviewPublisher {
           lineResolver,
           summaryPosted,
           previousFindings,
-          "");
+          "",
+          List.of());
     }
   }
 
@@ -423,8 +429,9 @@ public class ReviewPublisher {
     var result = PromptLabelScrubber.scrub(post.result());
     var lineResolver = post.lineResolver();
     if (!result.hasIssues()) {
-      // Summary-only re-run: skip restating a clean verdict when the summary re-posted; first
-      // review, unresolved previous, and truncation still post.
+      // Summary-only re-run: skip restating a clean verdict when the summary re-posted and the
+      // bot's latest review already approved this head (#1144); first review, unresolved
+      // previous, truncation, and a head the bot never approved still post.
       // resolvedPreviousCount is part of the skip test because this body is now the surface that
       // names what the round closed (#737): a re-posted summary states no closure at all, so
       // skipping the review here would leave the closure unattributed on every install again.
@@ -432,10 +439,12 @@ public class ReviewPublisher {
           && !result.isFirstReview()
           && result.unresolvedPreviousCount() == 0
           && result.resolvedPreviousCount() == 0
-          && !result.truncated()) {
+          && !result.truncated()
+          && result.reviewState() == ReviewState.APPROVE
+          && latestBotReviewApproves(post.priorReviews(), commitSha)) {
         Log.infof(
-            "Skipping the no-issues review for %s/%s #%d — summary-only re-run on an"
-                + " already-reviewed PR",
+            "Skipping the no-issues review for %s/%s #%d — summary-only re-run on a head the"
+                + " bot already approved",
             owner, repo, prNumber);
         return;
       }
@@ -491,6 +500,26 @@ public class ReviewPublisher {
           new GitHubReviewClient.CreateReviewRequest(
               commitSha, String.join("\n\n", bodyParts), event, List.of()));
     }
+  }
+
+  /**
+   * Whether the bot's latest submitted review on the PR is an approval of {@code commitSha}. GitHub
+   * lists reviews oldest first. A pending review is left out, since this run dismisses it; a
+   * dismissed or commented latest review, or an approval of an older commit, is not one (#1144).
+   */
+  private boolean latestBotReviewApproves(
+      List<GitHubReviewClient.ReviewResponse> priorReviews, String commitSha) {
+    GitHubReviewClient.ReviewResponse latest = null;
+    for (var review : priorReviews) {
+      if (review.user() != null
+          && botIdentity.matches(review.user().login())
+          && !"PENDING".equals(review.state())) {
+        latest = review;
+      }
+    }
+    return latest != null
+        && "APPROVED".equals(latest.state())
+        && java.util.Objects.equals(commitSha, latest.commitId());
   }
 
   /** One coverage notice for the outcome, including verification-only delta disclosures. */

@@ -410,7 +410,8 @@ public class ReviewOrchestrator {
               lineResolver,
               summaryPosted,
               previousFindings,
-              followUpDelta));
+              followUpDelta,
+              priorReviews));
 
       resultSurfaced = true;
       final var doneReq = req;
