@@ -211,10 +211,11 @@ final class InventedArtifacts {
 
   /**
    * A parenthetical of at most three words set off by a pair of commas or dashes ("does not,
-   * however, add", "does not — in fact — add"), which does not end the clause around it.
+   * however, add", "does not — in fact — add", "does not, in v2.0, add"), which does not end the
+   * clause around it.
    */
   private static final Pattern PARENTHETICAL =
-      Pattern.compile("([,—–])\\s*+(?:[\\p{L}']++\\s++){0,2}[\\p{L}']++\\s*+\\1");
+      Pattern.compile("([,—–])\\s*+(?:[\\p{L}\\p{N}'.]++\\s++){0,2}[\\p{L}\\p{N}'.]++\\s*+\\1");
 
   /** A contrast that ends a negation's reach: "does not touch billing but adds …". */
   private static final Pattern CONTRAST =
@@ -237,6 +238,32 @@ final class InventedArtifacts {
    */
   private static final Pattern CLAUSE_END =
       Pattern.compile("[;!?—–]|(?<!\\d)[,:]|[,:](?!\\d)|\\.(?=\\s|\\z)");
+
+  /** A break that may separate the items of a list rather than two clauses. */
+  private static final String LIST_BREAKS = ",:—–";
+
+  /** A form of "be" or "get" that opens a passive: "a … is added", "a … gets built". */
+  private static final Set<String> PASSIVE_LEAD =
+      Set.of(
+          "is", "are", "was", "were", "be", "been", "being", "gets", "get", "got", "isn", "aren",
+          "wasn", "weren");
+
+  /** The past participles of {@link #ADDITION}, read after a {@link #PASSIVE_LEAD}. */
+  private static final Set<String> ADDITION_PARTICIPLE =
+      Set.of("added", "introduced", "created", "implemented", "shipped", "built", "wired");
+
+  /** A word that negates a passive between its lead and its participle: "is not", "isn't". */
+  private static final Set<String> PASSIVE_NEGATION = Set.of("not", "never", "t", "no");
+
+  /** Words at most between a {@link #PASSIVE_LEAD} and its participle: "is now added". */
+  private static final int PASSIVE_REACH = 2;
+
+  /** What an artifact's own clause says after it: an addition, a denial of one, or neither. */
+  private enum Passive {
+    NONE,
+    ADDED,
+    DENIED
+  }
 
   /** A common abbreviation a period closes, read just before that period's end. */
   private static final Pattern ABBREVIATION =
@@ -355,8 +382,19 @@ final class InventedArtifacts {
    * Whether {@code sentence} introduces an artifact {@code change} does not back. An artifact a
    * removal verb governs, earlier in its clause ("removes a settings page"), is not judged: what
    * backs it is a deleted file, which never backs an addition; "adds a settings page and removes
-   * the old one" is still judged. Camel humps are split first, so "a SettingsScreen" reads as "a
-   * Settings Screen".
+   * the old one" is still judged. Nor is one a negation governs ("does not add a …"). A passive in
+   * the artifact's own clause decides first: "… and a settings page is added" is judged whatever
+   * came before, "a settings page is not added" never is. Camel humps are split first, so "a
+   * SettingsScreen" reads as "a Settings Screen".
+   *
+   * <p>Scope: this reads one sentence at a time, in English, by word shapes rather than a parse. A
+   * clause runs back from the artifact to the last break ({@link #CLAUSE_END}) that starts a new
+   * clause; a comma, colon or dash before list items or bare coordinated verbs ("does not add: a …,
+   * a …", "does not add, ship or modify a …") does not, and a parenthetical of at most three words
+   * between a pair of them is skipped. A semicolon, a sentence end, "!" and "?" always end the
+   * clause. It does not follow a relative clause ("a page that is added later"), a pronoun back to
+   * an earlier sentence, a verb outside {@link #ADDITION} ("updates the docs, a …" continues the
+   * clause), or a passive more than {@value #PASSIVE_REACH} words past its "is" or "gets".
    */
   static boolean invents(String sentence, Change change) {
     // A qualifier in a code span ("a `settings` page") or in asterisk or underscore emphasis ("a
@@ -367,8 +405,10 @@ final class InventedArtifacts {
     var introduced = INTRODUCED.matcher(text);
     while (introduced.find()) {
       var lead = text.substring(0, introduced.start());
+      var passive = passiveAfter(text.substring(introduced.end()));
       // "does not add a settings page" says there is none, which is no invention.
-      if (removedInClause(lead) || negatedInClause(lead)) {
+      if (passive == Passive.DENIED
+          || (passive == Passive.NONE && (removedInClause(lead) || negatedInClause(lead)))) {
         continue;
       }
       var qualifier =
@@ -466,23 +506,96 @@ final class InventedArtifacts {
   }
 
   /**
-   * The clause {@code lead} ends in: what follows its last punctuation or dash. A break that leads
-   * into examples of what came before ("removes legacy pages, e.g. a …") does not end the clause.
+   * The clause {@code text} ends in: what follows its last break that starts a new clause. A break
+   * that leads into examples of what came before ("removes legacy pages, e.g. a …") does not, nor
+   * does a comma, colon or dash whose segment, up to the next break, holds no clause of its own
+   * ({@link #opensClause}): list items and bare coordinated verbs continue the clause before them.
    */
   private static String clauseOf(String text) {
     var lead = PARENTHETICAL.matcher(text).replaceAll(" ");
     var breaks = CLAUSE_END.matcher(lead);
+    var ends = new ArrayList<Integer>();
+    var listBreak = new ArrayList<Boolean>();
+    while (breaks.find()) {
+      ends.add(breaks.end());
+      listBreak.add(LIST_BREAKS.indexOf(breaks.group().charAt(0)) >= 0);
+    }
     var example = EXAMPLE_LEAD.matcher(lead);
     var abbreviation = ABBREVIATION.matcher(lead).useTransparentBounds(true);
     var start = 0;
-    while (breaks.find()) {
-      var end = breaks.end();
+    for (var i = 0; i < ends.size(); i++) {
+      var end = ends.get(i);
+      var segmentEnd = i + 1 < ends.size() ? ends.get(i + 1) - 1 : lead.length();
       var abbreviated = abbreviation.region(Math.max(0, end - ABBREVIATION_CHARS - 1), end).find();
-      if (!abbreviated && !example.region(end, lead.length()).lookingAt()) {
+      var continues =
+          abbreviated
+              || example.region(end, lead.length()).lookingAt()
+              || (listBreak.get(i) && !opensClause(lead, end, segmentEnd));
+      if (!continues) {
         start = end;
       }
     }
     return lead.substring(start);
+  }
+
+  /**
+   * Whether {@code text} between {@code from} and {@code to} holds a clause of its own: a negation,
+   * a removal verb, an {@link #ADDITION} verb where a verb stands, or a subject or auxiliary word
+   * ({@link #VERB_LEAD}, "it", "is", "then").
+   */
+  private static boolean opensClause(String text, int from, int to) {
+    var segment = text.substring(from, to);
+    if (NEGATION.matcher(segment).find() || REMOVAL.matcher(segment).find()) {
+      return true;
+    }
+    var addition = additionAt(text, from);
+    if (addition >= 0 && addition < to) {
+      return true;
+    }
+    var word = WORD.matcher(segment);
+    while (word.find()) {
+      if (VERB_LEAD.contains(word.group().toLowerCase(Locale.ROOT))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * What the artifact's own clause, {@code trail} up to its first break, says about it: {@link
+   * Passive#ADDED} for a passive addition ("is added", "gets built", "is now introduced"), {@link
+   * Passive#DENIED} for a negated one ("is not added", "isn't built", "was never shipped").
+   */
+  private static Passive passiveAfter(String trail) {
+    var breaks = CLAUSE_END.matcher(trail);
+    var clause = breaks.find() ? trail.substring(0, breaks.start()) : trail;
+    var words = new ArrayList<String>();
+    var word = WORD.matcher(clause);
+    while (word.find()) {
+      words.add(word.group().toLowerCase(Locale.ROOT));
+    }
+    for (var i = 0; i < words.size(); i++) {
+      var passive = PASSIVE_LEAD.contains(words.get(i)) ? passiveFrom(words, i) : Passive.NONE;
+      if (passive != Passive.NONE) {
+        return passive;
+      }
+    }
+    return Passive.NONE;
+  }
+
+  /**
+   * The passive the {@link #PASSIVE_LEAD} at {@code lead} opens, within {@value #PASSIVE_REACH}.
+   */
+  private static Passive passiveFrom(List<String> words, int lead) {
+    var last = Math.min(words.size() - 1, lead + PASSIVE_REACH + 1);
+    for (var j = lead + 1; j <= last; j++) {
+      if (ADDITION_PARTICIPLE.contains(words.get(j))) {
+        return words.subList(lead + 1, j).stream().anyMatch(PASSIVE_NEGATION::contains)
+            ? Passive.DENIED
+            : Passive.ADDED;
+      }
+    }
+    return Passive.NONE;
   }
 
   /**

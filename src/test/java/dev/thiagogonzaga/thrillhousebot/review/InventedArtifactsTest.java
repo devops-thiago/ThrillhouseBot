@@ -371,6 +371,7 @@ class InventedArtifactsTest {
     assertFalse(InventedArtifacts.invents("It does not, in fact, add a settings page.", change));
     assertFalse(InventedArtifacts.invents("It will not, presumably, add a settings page.", change));
     assertFalse(InventedArtifacts.invents("It does not (yet) add a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It does not, in v2, add a settings page.", change));
     assertFalse(InventedArtifacts.invents("It does not — as noted — add a settings page.", change));
     // A removal reaches past one too.
     assertFalse(
@@ -386,6 +387,86 @@ class InventedArtifactsTest {
     assertTrue(
         InventedArtifacts.invents(
             "It does not touch billing, and as a result it adds a settings page.", change));
+  }
+
+  @Test
+  void aListAfterAColonCommaOrDashStaysInTheDenialsClause() {
+    var change = InventedArtifacts.Change.of(List.of(added("web/src/App.tsx", "const app = 1;")));
+
+    assertFalse(
+        InventedArtifacts.invents(
+            "The change does not add: a settings page, a metrics endpoint, or a users migration.",
+            change));
+    assertFalse(
+        InventedArtifacts.invents("It does not add, ship or modify a settings page.", change));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It does not add a screen, a dashboard, or a settings page.", change));
+    assertFalse(InventedArtifacts.invents("It does not add — a settings page.", change));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It deletes the old flow, the docs, and a settings page.",
+            InventedArtifacts.Change.of(
+                List.of(
+                    new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                    added("web/src/App.tsx", "const app = 1;")))));
+    // A segment with its own negation, removal, verb, subject or auxiliary is a new clause.
+    assertFalse(InventedArtifacts.invents("It adds tests, not a settings page.", change));
+    assertFalse(
+        InventedArtifacts.invents("It does not touch billing, removes a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It removes the old flow, the docs, and adds a settings page.", change));
+    // A list item longer than a parenthetical, before a later clause that adds.
+    assertTrue(
+        InventedArtifacts.invents(
+            "It does not touch billing, the old docs and the tests, and adds a settings page.",
+            change));
+    assertTrue(InventedArtifacts.invents("It adds tests, docs, and a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It does not touch billing, docs, or tests, and adds a settings page.", change));
+    assertTrue(
+        InventedArtifacts.invents("It does not touch billing, this is a settings page.", change));
+    assertTrue(InventedArtifacts.invents("It does not touch billing; a settings page.", change));
+  }
+
+  @Test
+  void aPassiveAdditionAfterTheArtifactIsJudgedAndANegatedOneIsNot() {
+    var removed =
+        InventedArtifacts.Change.of(
+            List.of(
+                new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                added("web/src/App.tsx", "const app = 1;")));
+    var change = InventedArtifacts.Change.of(List.of(added("web/src/App.tsx", "const app = 1;")));
+
+    assertTrue(
+        InventedArtifacts.invents(
+            "It removes the old page and a settings page is added.", removed));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It deletes the old flow and a settings page for admins gets added.", removed));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It does not touch billing and a settings page is now introduced.", change));
+    assertTrue(
+        InventedArtifacts.invents("It drops the old flow — a settings page was built.", removed));
+    // A negated passive denies the artifact, whatever came before.
+    assertFalse(
+        InventedArtifacts.invents("It adds tests and a settings page is not added.", change));
+    assertFalse(
+        InventedArtifacts.invents("It adds tests, but a settings page isn't added.", change));
+    assertFalse(
+        InventedArtifacts.invents("It adds tests and a settings page was never built.", change));
+    // With no break after it, the clause runs to the end; a "be" with no participle is no passive.
+    assertTrue(
+        InventedArtifacts.invents("It removes the old page and a settings page is added", removed));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It removes the old page and a settings page that is still around.", removed));
+    // A passive in a later clause is not the artifact's.
+    assertFalse(
+        InventedArtifacts.invents("It removes a settings page; the cache is added.", removed));
   }
 
   @Test
