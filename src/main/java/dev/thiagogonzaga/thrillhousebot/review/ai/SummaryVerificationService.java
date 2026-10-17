@@ -209,30 +209,7 @@ public class SummaryVerificationService {
             ledgerSessionId);
         return summary;
       }
-      var contradicted = contradicted(raw);
-      var cut =
-          statements.statements().stream()
-              .filter(statement -> contradicted.containsKey(statement.id()))
-              .toList();
-      // Only the ids that name a statement are logged: those are this class's own labels, while
-      // anything else the answer put there is model text.
-      var cutIds = String.join(", ", cut.stream().map(SummaryStatements.Statement::id).toList());
-      Log.infof(
-          "Summary verification for review session %d checked %d statement(s); contradicted: %s",
-          ledgerSessionId,
-          statements.statements().size(),
-          cut.isEmpty() ? "none" : LogSafe.oneLine(cutIds));
-      // One line per cut, with the statement and the evidence the answer gave, so whether a cut
-      // was right can be checked from the log; both are model text, flattened to one line.
-      for (var statement : cut) {
-        Log.infof(
-            "Summary verification for review session %d cut %s \"%s\"; evidence: \"%s\"",
-            ledgerSessionId,
-            LogSafe.oneLine(statement.id()),
-            LogSafe.oneLine(statement.text()),
-            LogSafe.oneLine(clipped(contradicted.get(statement.id()))));
-      }
-      return statements.without(contradicted.keySet());
+      return applied(ledgerSessionId, statements, raw);
     } catch (IOException | RuntimeException e) {
       // Only the type is logged: the message can carry provider or model text.
       Log.warnf(
@@ -240,6 +217,48 @@ public class SummaryVerificationService {
           ledgerSessionId, e.getClass().getSimpleName());
       return summary;
     }
+  }
+
+  /**
+   * The summary with the statements the answer {@code raw} contradicts removed, as far as {@link
+   * SummaryStatements#cuttable} lets them go, each named statement logged as cut or kept.
+   */
+  private ReviewResponse.Summary applied(
+      long ledgerSessionId, SummaryStatements statements, String raw) throws IOException {
+    var contradicted = contradicted(raw);
+    var sources = new LinkedHashMap<String, SummaryStatements.Source>();
+    contradicted.forEach((id, verdict) -> sources.put(id, verdict.source()));
+    var allowed = statements.cuttable(sources);
+    var named =
+        statements.statements().stream()
+            .filter(statement -> contradicted.containsKey(statement.id()))
+            .toList();
+    var cut = named.stream().filter(statement -> allowed.contains(statement.id())).toList();
+    // Only the ids that name a statement are logged: those are this class's own labels, while
+    // anything else the answer put there is model text.
+    var cutIds = String.join(", ", cut.stream().map(SummaryStatements.Statement::id).toList());
+    Log.infof(
+        "Summary verification for review session %d checked %d statement(s); contradicted: %s",
+        ledgerSessionId,
+        statements.statements().size(),
+        cut.isEmpty() ? "none" : LogSafe.oneLine(cutIds));
+    // One line per statement the answer named, cut or kept, with the statement, the source and
+    // the evidence the answer gave, so whether a cut was right can be checked from the log; the
+    // statement and evidence are model text, flattened to one line.
+    for (var statement : named) {
+      var verdict = contradicted.get(statement.id());
+      var outcome = allowed.contains(statement.id()) ? "cut" : "kept";
+      var kind = verdict.source() == SummaryStatements.Source.DIFF ? "diff" : "finding";
+      Log.infof(
+          "Summary verification for review session %d %s %s \"%s\"; %s evidence: \"%s\"",
+          ledgerSessionId,
+          outcome,
+          LogSafe.oneLine(statement.id()),
+          LogSafe.oneLine(statement.text()),
+          kind,
+          LogSafe.oneLine(clipped(verdict.evidence())));
+    }
+    return statements.without(allowed);
   }
 
   /**
@@ -294,24 +313,28 @@ public class SummaryVerificationService {
         : evidence;
   }
 
+  /** One entry of the answer: the evidence and where the call says it comes from. */
+  record Verdict(String evidence, SummaryStatements.Source source) {}
+
   /**
-   * The ids the answer lists, upper-cased, each with its evidence (the first, for an id listed
-   * twice). An entry with no id or no evidence is ignored, so an answer that names a statement
-   * without saying what refutes it cuts nothing; an answer that is not the expected JSON throws,
-   * and the caller keeps the summary.
+   * The ids the answer lists, upper-cased, each with its evidence and source (the first, for an id
+   * listed twice); a missing or unknown source reads as a finding. An entry with no id or no
+   * evidence is ignored, so an answer that names a statement without saying what refutes it cuts
+   * nothing; an answer that is not the expected JSON throws, and the caller keeps the summary.
    */
-  Map<String, String> contradicted(String raw) throws IOException {
+  Map<String, Verdict> contradicted(String raw) throws IOException {
     var json = ReviewResponseParser.extractJson(raw, List.of(ROOT_KEY));
     JsonNode root = mapper.readTree(json);
     if (!root.isObject() || !root.path(ROOT_KEY).isArray()) {
       throw new IOException("summary verification answer has no " + ROOT_KEY + " array");
     }
-    var ids = new LinkedHashMap<String, String>();
+    var ids = new LinkedHashMap<String, Verdict>();
     for (var entry : root.path(ROOT_KEY)) {
       var id = entry.path("id").asText("").strip();
       var evidence = entry.path("evidence").asText("").strip();
       if (!id.isEmpty() && !evidence.isEmpty()) {
-        ids.putIfAbsent(id.toUpperCase(Locale.ROOT), evidence);
+        var source = SummaryStatements.Source.of(entry.path("source").asText(null));
+        ids.putIfAbsent(id.toUpperCase(Locale.ROOT), new Verdict(evidence, source));
       }
     }
     return ids;
