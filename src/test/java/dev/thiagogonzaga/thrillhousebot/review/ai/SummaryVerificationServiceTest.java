@@ -135,7 +135,7 @@ class SummaryVerificationServiceTest {
     answer(
         """
         {"contradicted": [
-          {"id": "S2", "evidence": "no added line writes billing_runs"},
+          {"id": "S2", "source": "diff", "evidence": "no added line writes billing_runs"},
           {"id": "r2", "evidence": "finding: No billing_runs row is written"},
           {"id": "D2", "evidence": "no added line writes billing_runs"}
         ]}
@@ -176,7 +176,7 @@ class SummaryVerificationServiceTest {
         """
         Checking S2 against the diff.
         ```json
-        {"contradicted": [{"id": "S2", "evidence": "nothing writes billing_runs"}]}
+        {"contradicted": [{"id": "S2", "source": "diff", "evidence": "nothing writes billing_runs"}]}
         ```
         """);
 
@@ -371,7 +371,8 @@ class SummaryVerificationServiceTest {
 
   @Test
   void withNoDiffPartFittingTheFindingsAloneAreCheckedAgainst() {
-    answer("{\"contradicted\": [{\"id\": \"S2\", \"evidence\": \"finding\"}]}");
+    answer(
+        "{\"contradicted\": [{\"id\": \"R2\", \"source\": \"finding\", \"evidence\": \"finding\"}]}");
     var material =
         new SummaryVerificationService.Material(
             "",
@@ -385,8 +386,7 @@ class SummaryVerificationServiceTest {
     var diff = ArgumentCaptor.forClass(String.class);
     verify(verifier).verify(anyString(), anyString(), anyString(), diff.capture(), anyString());
     assertEquals("", diff.getValue());
-    assertEquals(
-        "Adds a nightly billing job that totals each tenant's usage.", verified.prPurpose());
+    assertEquals(1, verified.fileSummaries().size());
   }
 
   @Test
@@ -431,10 +431,12 @@ class SummaryVerificationServiceTest {
   void contradictedThrowsOnAnAnswerWithoutTheListAndKeepsTheFirstEvidence() throws IOException {
     assertThrows(IOException.class, () -> service.contradicted("{\"other\": 1}"));
     assertEquals(
-        Map.of("S1", "first"),
+        Map.of(
+            "S1", new SummaryVerificationService.Verdict("first", SummaryStatements.Source.DIFF)),
         service.contradicted(
             """
-            {"contradicted": [{"id": " s1 ", "evidence": "first"}, {"id": "S1", "evidence": "x"}]}
+            {"contradicted": [{"id": " s1 ", "source": "diff", "evidence": "first"},
+              {"id": "S1", "evidence": "x"}]}
             """));
   }
 
@@ -443,7 +445,7 @@ class SummaryVerificationServiceTest {
     answer(
         """
         {"contradicted": [
-          {"id": "S2", "evidence": "no added line\u2028writes billing_runs"},
+          {"id": "S2", "source": "diff", "evidence": "no added line\u2028writes billing_runs"},
           {"id": "R9\nforged", "evidence": "x"}
         ]}
         """);
@@ -457,9 +459,101 @@ class SummaryVerificationServiceTest {
     assertTrue(
         lines.contains(
             "Summary verification for review session 42 cut S2 \"It writes a billing_runs summary"
-                + " row for every run.\"; evidence: \"no added line writes billing_runs\""),
+                + " row for every run.\"; diff evidence: \"no added line writes billing_runs\""),
         String.join("\n", lines));
     assertTrue(lines.stream().noneMatch(l -> l.contains("forged")), String.join("\n", lines));
+  }
+
+  /** Session 7451's purpose: one sentence, and an edge-case finding as the only evidence. */
+  private static final ReviewResponse.Summary SUMMARY_7451 =
+      new ReviewResponse.Summary(
+          1,
+          0,
+          0,
+          0,
+          1,
+          "ok",
+          "This PR fixes how LinkedIssueCriteria interprets overview clauses against acceptance"
+              + " criteria, so a criterion's own words or praise are no longer reported as unmet.",
+          List.of(),
+          List.of(),
+          List.of(
+              new ReviewResponse.FileSummary(
+                  "src/main/java/LinkedIssueCriteria.java", "Reads overview clauses by stem")),
+          null);
+
+  /** #1078 rc8, session 7451: a finding alone never removes a purpose sentence. */
+  @Test
+  void aFindingAloneNeverCutsThePurposeSentenceOfSession7451() {
+    answer(
+        """
+        {"contradicted": [{"id": "S1", "source": "finding",
+          "evidence": "Finding 'saysUnmet javadoc states an unmet word must not be the criterion's own, but gap words that are the criterion's own are still reported'"}]}
+        """);
+
+    var lines = logsOf(() -> service.verify(SESSION, SUMMARY_7451, material()));
+
+    assertSame(SUMMARY_7451, service.verify(SESSION, SUMMARY_7451, material()));
+    assertTrue(
+        lines.stream()
+            .anyMatch(
+                l ->
+                    l.startsWith("Summary verification for review session 42 kept S1 ")
+                        && l.contains("; finding evidence: ")),
+        String.join("\n", lines));
+  }
+
+  @Test
+  void aMissingOrUnknownSourceIsReadAsAFinding() {
+    for (var source :
+        List.of("", "\"source\": null, ", "\"source\": \"code\", ", "\"source\": 3, ")) {
+      answer(
+          "{\"contradicted\": [{\"id\": \"S2\", "
+              + source
+              + "\"evidence\": \"no added line writes billing_runs\"}]}");
+
+      assertSame(SUMMARY_252, service.verify(SESSION, SUMMARY_252, material()), source);
+    }
+    // The diff source is read without regard to case or blanks.
+    answer(
+        "{\"contradicted\": [{\"id\": \"S2\", \"source\": \" DIFF \", \"evidence\": \"no line\"}]}");
+    assertEquals(
+        "Adds a nightly billing job that totals each tenant's usage.",
+        service.verify(SESSION, SUMMARY_252, material()).prPurpose());
+  }
+
+  @Test
+  void aFindingStillCutsARowOrADiagramLine() {
+    answer(
+        """
+        {"contradicted": [
+          {"id": "R2", "source": "finding", "evidence": "finding: No billing_runs row is written"},
+          {"id": "D2", "evidence": "finding: No billing_runs row is written"}
+        ]}
+        """);
+
+    var verified = service.verify(SESSION, SUMMARY_252, material());
+
+    assertEquals(1, verified.fileSummaries().size());
+    assertNull(verified.walkthroughDiagram());
+    assertEquals(SUMMARY_252.prPurpose(), verified.prPurpose());
+  }
+
+  @Test
+  void thePurposeIsNeverCutDownToNothingEvenOnDiffEvidence() {
+    answer(
+        """
+        {"contradicted": [
+          {"id": "S1", "source": "diff", "evidence": "line a"},
+          {"id": "S2", "source": "diff", "evidence": "line b"},
+          {"id": "R2", "source": "diff", "evidence": "line c"}
+        ]}
+        """);
+
+    var verified = service.verify(SESSION, SUMMARY_252, material());
+
+    assertEquals(SUMMARY_252.prPurpose(), verified.prPurpose());
+    assertEquals(1, verified.fileSummaries().size());
   }
 
   @Test

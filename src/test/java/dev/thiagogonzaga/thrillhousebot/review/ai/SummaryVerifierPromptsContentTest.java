@@ -34,6 +34,14 @@ class SummaryVerifierPromptsContentTest {
   }
 
   @Test
+  void everyEntryNamesTheSourceOfItsEvidence() {
+    // rc8 session 7451: the apply step only lets diff evidence cut a purpose sentence.
+    assertTrue(SummaryVerifierPrompts.SYSTEM.contains("\"source\": \"diff\""));
+    assertTrue(SummaryVerifierPrompts.SYSTEM.contains("Set \"source\" to \"diff\""));
+    assertTrue(SummaryVerifierPrompts.SYSTEM.contains("only removed\non evidence from the diff."));
+  }
+
+  @Test
   void theIdsNameTheThreeKindsOfStatement() {
     assertTrue(SummaryVerifierPrompts.SYSTEM.contains("S<n> for a sentence"));
     assertTrue(SummaryVerifierPrompts.SYSTEM.contains("R<n>"));
