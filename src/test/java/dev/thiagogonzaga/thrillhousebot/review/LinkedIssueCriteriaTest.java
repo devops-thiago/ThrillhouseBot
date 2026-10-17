@@ -934,6 +934,56 @@ class LinkedIssueCriteriaTest {
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(issue, List.of(), praise, Map.of()));
   }
 
+  /** A word that only starts like a fulfilment word is not one: "metrics", "coverage". */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The issue's 'declines two offers' rule does not change the metrics.",
+        "The issue's 'declines two offers' rule has no coverage report.",
+        "The issue's 'declines two offers' rule does not touch the presentation layer.",
+        "The issue's 'declines two offers' rule needs no donation flow."
+      })
+  void aWordStartingLikeAFulfilmentWordIsNoFulfilment(String overview) {
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), overview, Map.of()), overview);
+  }
+
+  /** Every inflection of a fulfilment word still binds the negation. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "met",
+        "meeting",
+        "matched",
+        "matching",
+        "implementing",
+        "satisfied",
+        "satisfying",
+        "handled",
+        "addressed",
+        "covered",
+        "done",
+        "supported",
+        "enforced",
+        "honored",
+        "honoured",
+        "respected",
+        "applied",
+        "followed",
+        "delivered",
+        "provided",
+        "included",
+        "present",
+        "fulfilled",
+        "achieved",
+        "completed"
+      })
+  void everyInflectionOfAFulfilmentWordBindsTheNegation(String verb) {
+    var overview = "The issue's 'declines two offers' rule is not " + verb + ".";
+
+    assertEquals(1, unmet(ISSUE_256, List.of(), overview, Map.of()).lines().size(), overview);
+  }
+
   /** The summary renders the lines in place of the finding bullets they point at. */
   @Test
   void theSectionNamesTheIssueAndItsCriterionAndTheLineIsNotCarried() {

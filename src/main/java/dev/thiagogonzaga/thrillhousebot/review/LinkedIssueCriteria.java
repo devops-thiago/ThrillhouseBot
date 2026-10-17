@@ -165,41 +165,65 @@ final class LinkedIssueCriteria {
       Pattern.compile("(?i)\\s++(?:only|just|merely|simply)\\b");
 
   /**
-   * Word starts that say an ask is fulfilled: "met", "meets", "matches", "implemented",
-   * "satisfied", "honored", "respected", "applied", "followed", "delivered", "provided",
-   * "included", "present"…
+   * Words that say an ask is fulfilled, in the forms an overview uses: "is not met", "does not
+   * meet", "is not implemented", "not satisfied"… Matched by their whole stem ({@link
+   * #FULFILMENT_STEMS}), never as the start of a longer word: "metrics" and "coverage" are not
+   * "met" and "cover".
    */
   private static final List<String> FULFILMENT =
       List.of(
           "met",
           "meet",
+          "meeting",
           "match",
+          "matching",
           "implement",
-          "satisf",
-          "handl",
+          "implementing",
+          "satisfy",
+          "satisfied",
+          "satisfying",
+          "handle",
+          "handling",
           "address",
+          "addressing",
           "cover",
+          "covering",
           "done",
           "support",
-          "enforc",
+          "supporting",
+          "enforce",
+          "enforcing",
           "honor",
+          "honoring",
           "honour",
+          "honouring",
           "respect",
-          "appli",
+          "respecting",
+          "apply",
+          "applied",
+          "applying",
           "follow",
+          "following",
           "deliver",
-          "provid",
-          "includ",
+          "delivering",
+          "provide",
+          "providing",
+          "include",
+          "including",
           "present",
           "fulfil",
-          "achiev",
-          "complet");
+          "fulfill",
+          "fulfilling",
+          "achieve",
+          "achieving",
+          "complete",
+          "completing");
 
   /**
-   * The {@link #FULFILMENT} starts as stemmed: "done" and "address" lose their last letters to the
-   * stemmer, so a stemmed "addressed" starts only with the stemmed "address".
+   * The stems of the {@link #FULFILMENT} words, as {@link #bindsCriterion} reads the words: the
+   * stemmer drops a final "s", "e" or "d", so "addressed", "addresses" and "address" are one stem.
    */
-  private static final List<String> FULFILMENT_STEMS = List.copyOf(stems(FULFILMENT));
+  private static final Set<String> FULFILMENT_STEMS = Set.copyOf(stems(FULFILMENT));
 
   /**
    * Words between a negation and what it negates that are skipped when binding it, besides the
@@ -663,7 +687,7 @@ final class LinkedIssueCriteria {
             .toList();
     for (var i = 0; i < Math.min(reach, next.size()); i++) {
       var word = next.get(i);
-      if ((fulfilment && FULFILMENT_STEMS.stream().anyMatch(word::startsWith))
+      if ((fulfilment && FULFILMENT_STEMS.contains(word))
           || criterionWords.stream().anyMatch(c -> family(word, c))) {
         return true;
       }
