@@ -28,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.notification.ReviewNotifier;
+import dev.thiagogonzaga.thrillhousebot.observability.ReviewOutcomeMetrics;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
@@ -37,6 +38,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.SummaryVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TicketContextPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.webhook.ReviewTriggerFilter;
+import io.opentelemetry.api.OpenTelemetry;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import java.time.Duration;
@@ -305,6 +307,7 @@ class ReviewOrchestratorTest {
         verdictBuilder,
         findingPipeline,
         new CitedLocationResolver(prClient),
+        new ReviewOutcomeMetrics(OpenTelemetry.noop()),
         mock(FindingFeedbackCaptureService.class),
         new ReviewStandDown(
             new HeadMovedGuard(newContextLoader(), carryover),

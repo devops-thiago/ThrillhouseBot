@@ -23,6 +23,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.notification.ReviewNotifier;
+import dev.thiagogonzaga.thrillhousebot.observability.ReviewOutcomeMetrics;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
@@ -109,6 +110,8 @@ public class ReviewOrchestrator {
 
   private final FindingPipeline findingPipeline;
   private final CitedLocationResolver citedLocationResolver;
+
+  private final ReviewOutcomeMetrics outcomeMetrics;
 
   private final FindingFeedbackCaptureService findingFeedbackCapture;
 
@@ -233,6 +236,7 @@ public class ReviewOrchestrator {
       VerdictBuilder verdictBuilder,
       FindingPipeline findingPipeline,
       CitedLocationResolver citedLocationResolver,
+      ReviewOutcomeMetrics outcomeMetrics,
       FindingFeedbackCaptureService findingFeedbackCapture,
       ReviewStandDown standDown,
       CiHoldRegistry ciHoldRegistry,
@@ -257,6 +261,7 @@ public class ReviewOrchestrator {
     this.verdictBuilder = verdictBuilder;
     this.findingPipeline = findingPipeline;
     this.citedLocationResolver = citedLocationResolver;
+    this.outcomeMetrics = outcomeMetrics;
     this.findingFeedbackCapture = findingFeedbackCapture;
     this.standDown = standDown;
     this.ciHoldRegistry = ciHoldRegistry;
@@ -838,6 +843,7 @@ public class ReviewOrchestrator {
             s.setAiResponseJson(session.getAiResponseJson());
           }
         });
+    outcomeMetrics.recordCompleted();
   }
 
   /**
@@ -862,6 +868,7 @@ public class ReviewOrchestrator {
             s.setAiResponseJson(session.getAiResponseJson());
           }
         });
+    outcomeMetrics.recordFailed();
   }
 
   private void applySessionState(ReviewSession session, Consumer<ReviewSession> mutator) {
