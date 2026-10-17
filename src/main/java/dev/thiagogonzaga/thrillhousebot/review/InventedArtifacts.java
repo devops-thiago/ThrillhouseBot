@@ -19,6 +19,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -53,6 +54,13 @@ import java.util.stream.Stream;
 final class InventedArtifacts {
 
   private InventedArtifacts() {}
+
+  /** The words of {@code first} and {@code second} together. */
+  private static Set<String> union(Set<String> first, Set<String> second) {
+    var all = new HashSet<String>(first);
+    all.addAll(second);
+    return Set.copyOf(all);
+  }
 
   /** Letters a word needs before another word it starts is read as its family. */
   static final int MIN_FAMILY_CHARS = 4;
@@ -126,13 +134,95 @@ final class InventedArtifacts {
       Pattern.compile("(?i)\\b(?:not|cannot|never|without|nor|neither|no\\s++longer)\\b|n['’]t\\b");
 
   /**
-   * A verb of taking something out: "removes", "deleted", "drops", "retires". A noun or adjective
-   * made from one ("removal", "deletion", "dropout", "retirement", "dropdown", "removable") is not
-   * a verb, and governs nothing.
+   * The forms of {@link #REMOVAL} that lead to something new ("replaces the old page with a …",
+   * "renames it to a …", "moves the docs into a …"): an artifact after {@link #NEW_TARGET} is the
+   * new one, and is judged, whether the form is the verb or a participle after it.
    */
-  private static final Pattern REMOVAL =
-      Pattern.compile(
-          "(?i)\\b(?:remov|delet|drop|retir)(?!(?:al|ion|out|e?ment|down|able|er)s?\\b)\\w*+(?!-)");
+  private static final Set<String> REPLACING =
+      Set.of(
+          "replace",
+          "replaces",
+          "replaced",
+          "replacing",
+          "rename",
+          "renames",
+          "renamed",
+          "renaming",
+          "move",
+          "moves",
+          "moved",
+          "moving");
+
+  /**
+   * The forms of a verb of taking something out, the {@link #REPLACING} ones among them. A word is
+   * one only in one of these forms and where a verb stands ({@link #inVerbPlace}), so a noun or
+   * adjective sharing a stem ("removal", "deletion", "dropout", "the move", "a replacement",
+   * "dropdown") governs nothing.
+   */
+  private static final Set<String> REMOVAL =
+      union(
+          Set.of(
+              "remove",
+              "removes",
+              "removed",
+              "removing",
+              "delete",
+              "deletes",
+              "deleted",
+              "deleting",
+              "drop",
+              "drops",
+              "dropped",
+              "dropping",
+              "retire",
+              "retires",
+              "retired",
+              "retiring",
+              "deprecate",
+              "deprecates",
+              "deprecated",
+              "deprecating",
+              "strip",
+              "strips",
+              "stripped",
+              "stripping",
+              "eliminate",
+              "eliminates",
+              "eliminated",
+              "eliminating",
+              "purge",
+              "purges",
+              "purged",
+              "purging",
+              "discard",
+              "discards",
+              "discarded",
+              "discarding",
+              "prune",
+              "prunes",
+              "pruned",
+              "pruning"),
+          REPLACING);
+
+  /** The bare forms of {@link #REMOVAL}, which read as a noun as often as a verb after "and". */
+  private static final Set<String> REMOVAL_BARE =
+      Set.of(
+          "remove",
+          "delete",
+          "drop",
+          "retire",
+          "deprecate",
+          "strip",
+          "eliminate",
+          "replace",
+          "rename",
+          "move",
+          "purge",
+          "discard",
+          "prune");
+
+  /** What leads a replacing verb to the new artifact: "with", "to", "into", "by". */
+  private static final Set<String> NEW_TARGET = Set.of("with", "to", "into", "by");
 
   /**
    * A conjunction that starts a new statement after a negated one: "ships without config and adds".
@@ -202,6 +292,26 @@ final class InventedArtifacts {
           "doesn", "don", "didn", "t", "is", "are", "was", "were", "be", "been", "being", "has",
           "have", "had", "not", "never", "cannot", "nor", "also", "now", "yet", "still", "just",
           "only", "finally", "then");
+
+  /**
+   * A word that is neither a noun of a subject nor an object: a coordinator, a preposition, an
+   * article or determiner, or an auxiliary or subject word.
+   */
+  private static final Set<String> NOT_A_VERB =
+      union(
+          union(
+              Set.of(
+                  "and", "or", "then", "plus", "but", "of", "for", "with", "in", "on", "at", "from",
+                  "into", "by", "about", "as", "via", "than", "to"),
+              OBJECT_LEAD),
+          VERB_LEAD);
+
+  /** Words at most of a noun subject between its determiner and its verb: "the new migration". */
+  private static final int SUBJECT_WORDS = 2;
+
+  /** A modal or "to", after which a bare verb form joined by a coordinator is still a verb. */
+  private static final Set<String> INFINITIVE_LEAD =
+      Set.of("to", "will", "would", "can", "could", "should", "may", "might", "must", "shall");
 
   /** A word joining a second verb, which an inflected {@link #ADDITION} form follows as one. */
   private static final Set<String> COORDINATOR = Set.of("and", "or", "then", "plus", "but");
@@ -425,16 +535,45 @@ final class InventedArtifacts {
    * Whether a {@link #REMOVAL} verb governs the artifact {@code lead} leads to: the verb is in the
    * artifact's clause, which punctuation or a dash ends, and no {@link #ADDITION} verb follows it
    * there. "removes a …" and "deletes the old flow and a …" are removals; "drops the old flow then
-   * adds a …" and "removes cruft, a … is added" are not.
+   * adds a …" and "removes cruft, a … is added" are not, nor is "replaces the old page with a …",
+   * whose artifact is the new one.
    */
   private static boolean removedInClause(String lead) {
     var clause = clauseOf(lead);
-    var removal = REMOVAL.matcher(clause);
-    var last = -1;
-    while (removal.find()) {
-      last = removal.end();
+    var removals = verbs(clause, REMOVAL, REMOVAL_BARE);
+    if (removals.isEmpty()) {
+      return false;
     }
-    return last >= 0 && additionAt(clause, last) < 0;
+    var last = removals.getLast();
+    return !leadsToNew(clause) && additionAt(clause, last.end()) < 0;
+  }
+
+  /**
+   * Whether the artifact {@code clause} leads to is the new thing of a replace, rename or move: the
+   * clause ends in a {@link #NEW_TARGET} word, and the nearest removal word before it is a {@link
+   * #REPLACING} one, as verb or participle ("replaces the old page with a …", "the old page,
+   * replaced by a …", "renames the old screen to a …"). A target word that leads elsewhere
+   * ("deletes the flow renamed to legacy and a …") or follows a plain removal ("removes the link to
+   * a …") leaves the artifact removed.
+   */
+  private static boolean leadsToNew(String clause) {
+    var words = new ArrayList<String>();
+    var word = WORD.matcher(clause);
+    while (word.find()) {
+      words.add(word.group().toLowerCase(Locale.ROOT));
+    }
+    // removedInClause read a removal verb in the clause, so it has words and a removal word stands
+    // before its last one.
+    var target = words.size() - 1;
+    if (!NEW_TARGET.contains(words.get(target))) {
+      return false;
+    }
+    var nearest =
+        words.subList(0, target).reversed().stream()
+            .filter(REMOVAL::contains)
+            .findFirst()
+            .orElse("");
+    return REPLACING.contains(nearest);
   }
 
   /**
@@ -469,40 +608,103 @@ final class InventedArtifacts {
 
   /**
    * Where the first {@link #ADDITION} verb in {@code text} at or after {@code from} starts; -1 with
-   * none. The words before {@code from} still tell where a verb stands. Callers start after a
-   * removal or negation word, so the first word of the text is never read as the verb.
+   * none. The words before {@code from} still tell where a verb stands.
    */
   private static int additionAt(String text, int from) {
+    return verbs(text, ADDITION, ADDITION_BARE).stream()
+        .mapToInt(Verb::start)
+        .filter(start -> start >= from)
+        .findFirst()
+        .orElse(-1);
+  }
+
+  /** A verb read in a text: its lower-case word and where it starts and ends. */
+  private record Verb(String word, int start, int end) {}
+
+  /** Each word of {@code text} in one of {@code forms} that stands where a verb does, in order. */
+  private static List<Verb> verbs(String text, Set<String> forms, Set<String> bare) {
     var words = new ArrayList<String>();
     var starts = new ArrayList<Integer>();
+    var ends = new ArrayList<Integer>();
     var word = WORD.matcher(text);
     while (word.find()) {
       words.add(word.group().toLowerCase(Locale.ROOT));
       starts.add(word.start());
+      ends.add(word.end());
     }
-    for (var i = 1; i < words.size(); i++) {
-      if (starts.get(i) >= from && ADDITION.contains(words.get(i)) && inVerbPlace(words, i)) {
-        return starts.get(i);
+    var verbs = new ArrayList<Verb>();
+    var infinitive = false;
+    for (var i = 0; i < words.size(); i++) {
+      var current = words.get(i);
+      if (forms.contains(current) && inVerbPlace(words, i, bare, infinitive)) {
+        verbs.add(new Verb(current, starts.get(i), ends.get(i)));
       }
+      infinitive = infinitiveAfter(words, i, infinitive);
     }
-    return -1;
+    return verbs;
   }
 
   /**
-   * Whether the {@link #ADDITION} form at {@code i} stands where a verb does: before its object
-   * ("adds a", "ships the"; the artifact itself follows the last word), after a subject, an
-   * auxiliary, a modal, a negation or "to" ("it adds", "is building", "to build"), or inflected
-   * after a coordinator ("and added tests"). "the old build script" and "nightly builds and" are
-   * nouns.
+   * Whether a modal or "to" still governs a bare verb after the word at {@code i}: one opens when
+   * it is followed by a word that can be a verb ("will refactor", "to refactor"; not "to the
+   * docs"), and closes at a finite {@link #ADDITION} or {@link #REMOVAL} form ("… and adds the
+   * cache"), which starts a verb of its own.
    */
-  private static boolean inVerbPlace(List<String> words, int i) {
-    // i is at least 1: additionAt never reads the first word.
-    if (i == words.size() - 1 || OBJECT_LEAD.contains(words.get(i + 1))) {
+  private static boolean infinitiveAfter(List<String> words, int i, boolean open) {
+    var word = words.get(i);
+    if (INFINITIVE_LEAD.contains(word)) {
+      return i + 1 < words.size() && !NOT_A_VERB.contains(words.get(i + 1));
+    }
+    var finite =
+        (ADDITION.contains(word) && !ADDITION_BARE.contains(word))
+            || (REMOVAL.contains(word) && !REMOVAL_BARE.contains(word));
+    return open && !finite;
+  }
+
+  /**
+   * Whether the verb form at {@code i} stands where a verb does: before its object ("adds a",
+   * "ships the"; the artifact itself follows the last word), first in the text ("Deprecates the old
+   * flow and a …", a summary line), after a subject, an auxiliary, a modal, a negation or "to" ("it
+   * adds", "is building", "to build"), or after a coordinator: inflected ("and added tests"), or
+   * bare when an earlier modal or "to" governs both verbs ({@code infinitive}: "will refactor the
+   * router and remove old settings"), or inflected after a noun subject ({@link #afterNounSubject}:
+   * "the script removes cruft"). "the old build script", "nightly builds and" and "the cache and
+   * drop shadows" are nouns.
+   */
+  private static boolean inVerbPlace(
+      List<String> words, int i, Set<String> bare, boolean infinitive) {
+    if (i == 0 || i == words.size() - 1 || OBJECT_LEAD.contains(words.get(i + 1))) {
       return true;
     }
     var before = words.get(i - 1);
     return VERB_LEAD.contains(before)
-        || (COORDINATOR.contains(before) && !ADDITION_BARE.contains(words.get(i)));
+        || (COORDINATOR.contains(before) && (infinitive || !bare.contains(words.get(i))))
+        || (!bare.contains(words.get(i)) && afterNounSubject(words, i));
+  }
+
+  /**
+   * Whether the inflected form at {@code i} follows a noun subject and leads to an object: a
+   * determiner and at most {@value #SUBJECT_WORDS} words before it, or only such words back to the
+   * start ("the script removes cruft", "the new migration drops settings", "Cleanup deletes stale
+   * links"), and a word after it that is no {@link #NOT_A_VERB} word ("the nightly builds and a …",
+   * "builds for admins" stay nouns). Read by shape alone, an adjective before a plural noun used as
+   * a modifier looks the same ("the old builds script" reads as "the old … builds a script"); such
+   * compounds are rare in summary prose, a noun subject is not.
+   */
+  private static boolean afterNounSubject(List<String> words, int i) {
+    if (NOT_A_VERB.contains(words.get(i + 1))) {
+      return false;
+    }
+    for (var j = i - 1; j >= Math.max(0, i - SUBJECT_WORDS - 1); j--) {
+      var word = words.get(j);
+      if (OBJECT_LEAD.contains(word)) {
+        return j < i - 1;
+      }
+      if (NOT_A_VERB.contains(word)) {
+        return false;
+      }
+    }
+    return i <= SUBJECT_WORDS;
   }
 
   /**
@@ -545,11 +747,16 @@ final class InventedArtifacts {
    */
   private static boolean opensClause(String text, int from, int to) {
     var segment = text.substring(from, to);
-    if (NEGATION.matcher(segment).find() || REMOVAL.matcher(segment).find()) {
-      return true;
-    }
-    var addition = additionAt(text, from);
-    if (addition >= 0 && addition < to) {
+    // Read from the break on, so an inflected verb opening the segment opens a clause ("…,
+    // removing old settings", "— drops admin screens") and its last word still sees what follows
+    // it. A bare form opening it continues a list of verbs ("does not add, ship or modify a …").
+    var rest = text.substring(from);
+    var length = to - from;
+    if (NEGATION.matcher(segment).find()
+        || Stream.concat(
+                verbs(rest, REMOVAL, REMOVAL_BARE).stream(),
+                verbs(rest, ADDITION, ADDITION_BARE).stream())
+            .anyMatch(verb -> verb.start() < length && !continuesVerbList(verb, rest))) {
       return true;
     }
     var word = WORD.matcher(segment);
@@ -559,6 +766,12 @@ final class InventedArtifacts {
       }
     }
     return false;
+  }
+
+  /** Whether {@code verb} is a bare form opening {@code segment}, after a list of verbs. */
+  private static boolean continuesVerbList(Verb verb, String segment) {
+    return (REMOVAL_BARE.contains(verb.word()) || ADDITION_BARE.contains(verb.word()))
+        && segment.substring(0, verb.start()).isBlank();
   }
 
   /**
