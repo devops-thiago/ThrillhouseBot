@@ -446,7 +446,8 @@ The summary call does not see the diff, so it can describe something the change
 does not do. This call gets the summary's sentences, walkthrough rows and
 diagram lines with the diff and the findings, and names the statements they
 contradict. A named sentence is cut, a named row shows "Not summarized", and a
-named diagram line drops the diagram. Only text the summary call wrote in that
+named diagram line drops the diagram. A "What this PR does" sentence is cut only
+on evidence from the diff, never on a finding alone, and never all of them. Only text the summary call wrote in that
 round is checked; text carried over from the previous round on the same head is
 not, and a removed statement is not carried back in. Each removal is logged at
 INFO with the statement and the evidence. Findings are never changed. It fails

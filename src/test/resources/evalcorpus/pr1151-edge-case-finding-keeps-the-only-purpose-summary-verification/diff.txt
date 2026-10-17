@@ -1,0 +1,348 @@
+### src/main/java/dev/thiagogonzaga/thrillhousebot/review/LinkedIssueCriteria.java (modified, +152 -59)
+```diff
+@@ -101,16 +101,14 @@ private LinkedIssueCriteria() {}
+           Pattern.compile("(?i)\\byet\\s++to\\b"));
+ 
+   /**
+-   * A bare negation in an overview clause: "not", "never", "no", "cannot", "n't", "without". It
+-   * says the ask is not met only when it binds the criterion ({@link #bindsCriterion}): "is not
+-   * met", "cannot limit the board"; "implemented with no regressions" negates something else, and
+-   * "not only implemented" ({@link #AFFIRMING}) affirms. A contrast word such as "but" or "instead"
+-   * is never one. One pattern per shape.
++   * A bare negation in an overview clause: "not", "never", "no", "cannot", "without" ("n't" is read
++   * as "not" first, {@link #readable}). It says the ask is not met only when it binds the criterion
++   * ({@link #bindsCriterion}): "is not met", "cannot limit the board"; "implemented with no
++   * regressions" negates something else, and "not only implemented" ({@link #AFFIRMING}) affirms. A
++   * contrast word such as "but" or "instead" is never one. One pattern per shape.
+    */
+-  private static final List<Pattern> NEGATORS =
+-      List.of(
+-          Pattern.compile("(?i)\\b(?:not|never|no|cannot|without)\\b"),
+-          Pattern.compile("(?i)n['’]t\\b"));
++  private static final Pattern NEGATORS =
++      Pattern.compile("(?i)\\b(?:not|never|no|cannot|without)\\b");
+ 
+   /**
+    * Words naming text rather than behaviour: an {@link #UNMET} word in a clause holding one is
+@@ -119,6 +117,25 @@ private LinkedIssueCriteria() {}
+   private static final Pattern META =
+       Pattern.compile("(?i)\\b(?:wording|walkthrough|summary|mention|phrasing|docs?)\\b");
+ 
++  /** "can't", read as "cannot" ({@link #readable}). */
++  private static final Pattern CANT = Pattern.compile("(?i)\\bcan't\\b");
++
++  /** "won't", read as "will not" ({@link #readable}). */
++  private static final Pattern WONT = Pattern.compile("(?i)\\bwon't\\b");
++
++  /** Any other contracted negation, read as "not": "isn't missing", "doesn’t fail". */
++  private static final Pattern CONTRACTED = Pattern.compile("(?i)n't\\b");
++
++  /**
++   * What says a criterion's not-met word is the gap it closes, after the word: "an import that
++   * fails on a duplicate: fixed".
++   */
++  private static final Pattern REMEDY =
++      Pattern.compile("(?i)\\b(?:fixed|resolved|prevented|avoided|handled)\\b");
++
++  /** A word of a criterion, for finding where its own words sit. */
++  private static final Pattern WORD = Pattern.compile("\\p{L}[\\p{L}\\p{N}]*+");
++
+   /** Negations that turn a following {@link #UNMET} word into praise: "never fails". */
+   private static final Set<String> PRAISING_NEGATIONS =
+       Set.of("never", "no", "not", "nothing", "none", "cannot", "longer", "without");
+@@ -137,12 +154,15 @@ private LinkedIssueCriteria() {}
+       Pattern.compile("(?i)\\s++(?:only|just|merely|simply)\\b");
+ 
+   /**
+-   * Word starts that say an ask is fulfilled: "met", "implemented", "satisfied", "honored",
+-   * "respected", "applied", "followed", "delivered", "provided", "included", "present"…
++   * Word starts that say an ask is fulfilled: "met", "meets", "matches", "implemented",
++   * "satisfied", "honored", "respected", "applied", "followed", "delivered", "provided",
++   * "included", "present"…
+    */
+   private static final List<String> FULFILMENT =
+       List.of(
+           "met",
++          "meet",
++          "match",
+           "implement",
+           "satisf",
+           "handl",
+@@ -164,11 +184,25 @@ private LinkedIssueCriteria() {}
+           "achiev",
+           "complet");
+ 
++  /**
++   * The {@link #FULFILMENT} starts as stemmed: "done" and "address" lose their last letters to the
++   * stemmer, so a stemmed "addressed" starts only with the stemmed "address".
++   */
++  private static final List<String> FULFILMENT_STEMS = List.copyOf(stems(FULFILMENT));
++
+   /**
+    * Words between a negation and what it negates that are skipped when binding it, besides the
+-   * adverbs ending in "-ly": "does not yet lock", "does not even lock".
++   * adverbs ending in "-ly": "does not yet lock", "does not always lock", and the verbs a negation
++   * passes through: "doesn't think the change will match", "does not seem to lock". Whole words,
++   * matched by their stem ({@link #QUALIFIER_STEMS}), so every inflection is skipped.
+    */
+-  private static final Set<String> QUALIFIERS = Set.of("yet", "even", "always", "ever", "longer");
++  private static final List<String> QUALIFIERS =
++      List.of(
++          "yet", "even", "always", "ever", "longer", "think", "believe", "expect", "seem", "appear",
++          "will");
++
++  /** The stems of the {@link #QUALIFIERS}, as {@link #bindsCriterion} reads the words. */
++  private static final Set<String> QUALIFIER_STEMS = Set.copyOf(stems(QUALIFIERS));
+ 
+   /** Content words after an overview negation it may bind, at most. */
+   static final int NEGATION_REACH = 3;
+@@ -194,15 +228,16 @@ private LinkedIssueCriteria() {}
+       Pattern.compile("(?i)^\\s*+(?:no|not|never|without|missing|lacks?)\\s");
+ 
+   /**
+-   * A verb negated inside a clause: "the board does not lock …", "won't lock", "can't lock", "never
+-   * locks", "cannot limit", "fails to lock", "lacks a store check", "is unable to". A negated "is",
+-   * "are", "was" or "were" states a condition ("shifts that are not yet started"), not a missing
+-   * behaviour, so it is not one. One pattern per shape.
++   * A verb negated inside a clause, contractions read first ({@link #readable}): "the board does
++   * not lock …", "won't lock", "can't lock", "never locks", "cannot limit", "fails to lock", "lacks
++   * a store check", "is unable to". A negated "is", "are", "was" or "were" states a condition
++   * ("shifts that are not yet started"), not a missing behaviour, so it is not one. One pattern per
++   * shape.
+    */
+   private static final List<Pattern> NEGATED_VERB =
+       List.of(
+-          Pattern.compile("(?i)\\b(?:does|do|did|can|will|has|have)(?:\\s++not|n['’]t)\\b"),
+-          Pattern.compile("(?i)\\b(?:won['’]t|can['’]t|cannot|never|no\\s++longer)\\b"),
++          Pattern.compile("(?i)\\b(?:does|do|did|can|will|has|have)\\s++not\\b"),
++          Pattern.compile("(?i)\\b(?:cannot|never|no\\s++longer)\\b"),
+           Pattern.compile("(?i)\\b(?:lacks?|fails?\\s++to|refus\\w*+\\s++to|unable\\s++to)\\b"));
+ 
+   /**
+@@ -375,14 +410,14 @@ private static List<Integer> overviewMatches(String sentence, List<String> crite
+       return List.of();
+     }
+     var found = new ArrayList<Integer>();
+-    for (var clause : overviewClauses(foldQuotes(sentence))) {
++    for (var clause : overviewClauses(sentence)) {
+       var scopes = quotedScopes(clause, criteria);
+       if (scopes.isEmpty()) {
+         var at = sharedHalf(words(clause), criteria);
+         scopes = at < 0 ? Map.of() : Map.of(at, clause);
+       }
+       for (var scope : scopes.entrySet()) {
+-        if (saysUnmet(scope.getValue(), words(criteria.get(scope.getKey())))) {
++        if (saysUnmet(scope.getValue(), criteria.get(scope.getKey()))) {
+           found.add(scope.getKey());
+         }
+       }
+@@ -466,18 +501,18 @@ private static List<String> overviewClauses(String sentence) {
+   }
+ 
+   /**
+-   * Whether {@code negation}, a {@link #PRAISING_NEGATIONS} word, turns an {@link #UNMET} word
+-   * among the first {@value #PRAISE_REACH} words of {@code rest} into praise: "never fails to
+-   * honor", "no longer missing".
++   * Whether a {@link #NEGATORS} negation turns an {@link #UNMET} word among the first {@value
++   * #PRAISE_REACH} words of {@code rest}, what follows it, into praise: "never fails to honor", "no
++   * longer missing", "isn't missing". A word the criterion asks for ({@link #asksFor}) is no such
++   * word: "not dropped" says a criterion asking for the drop is unmet.
+    */
+-  private static boolean praises(String negation, String rest) {
+-    if (!PRAISING_NEGATIONS.contains(negation.toLowerCase(Locale.ROOT))) {
+-      return false;
+-    }
++  private static boolean praises(String rest, String criterion) {
+     var words = withoutIntensifiers(NON_ALPHANUMERIC.split(rest.strip()));
+     for (var i = 0; i < Math.min(PRAISE_REACH, words.size()); i++) {
+       var from = String.join(" ", words.subList(i, words.size()));
+-      if (UNMET.stream().anyMatch(pattern -> pattern.matcher(from).lookingAt())) {
++      // "not dropped" is no praise when the criterion asks for the drop.
++      if (UNMET.stream().anyMatch(pattern -> pattern.matcher(from).lookingAt())
++          && !asksFor(words.get(i), criterion)) {
+         return true;
+       }
+     }
+@@ -486,7 +521,8 @@ private static boolean praises(String negation, String rest) {
+ 
+   /**
+    * Whether one of the last {@value #PRAISE_REACH} words of {@code lead}, {@link #INTENSIFIERS}
+-   * aside, negates what follows: "never fails", "nothing is missing", "not at all missing".
++   * aside, negates what follows: "never fails", "nothing is missing", "not at all missing", "isn't
++   * missing".
+    */
+   private static boolean negatedBefore(String lead) {
+     var words = withoutIntensifiers(NON_ALPHANUMERIC.split(lead.strip().toLowerCase(Locale.ROOT)));
+@@ -498,6 +534,45 @@ private static boolean negatedBefore(String lead) {
+     return false;
+   }
+ 
++  /**
++   * Whether {@code clause} holds an {@link #UNMET} word that the criterion does not ask for ({@link
++   * #asksFor}) and no negation right before it turns into praise.
++   */
++  private static boolean holdsUnmetWord(String clause, String criterion) {
++    for (var pattern : UNMET) {
++      var unmet = pattern.matcher(clause);
++      while (unmet.find()) {
++        // "never fails", "nothing is missing" praise the change; "dropped" in "the bullets
++        // dropped" restates a criterion that asks for them to be dropped.
++        if (!negatedBefore(clause.substring(0, unmet.start()))
++            && !asksFor(unmet.group(), criterion)) {
++          return true;
++        }
++      }
++    }
++    return false;
++  }
++
++  /**
++   * Whether {@code criterion} asks for what the not-met word {@code text} says: it holds a word of
++   * that family neither negated right before it nor followed by a {@link #REMEDY}. "Tests from the
++   * bullets: dropped" asks for the drop; "the parser no longer fails" and "an import that fails on
++   * a duplicate: fixed" name the gap they close, so "fails" there is still the gap.
++   */
++  private static boolean asksFor(String text, String criterion) {
++    var wanted = words(text);
++    var readable = readable(criterion);
++    var word = WORD.matcher(readable);
++    while (word.find()) {
++      if (words(word.group()).stream().anyMatch(c -> wanted.stream().anyMatch(w -> family(w, c)))
++          && !negatedBefore(readable.substring(0, word.start()))
++          && !REMEDY.matcher(readable.substring(word.end())).find()) {
++        return true;
++      }
++    }
++    return false;
++  }
++
+   /** {@code words} less the {@link #INTENSIFIERS} and the adverbs ending in "-ly". */
+   private static List<String> withoutIntensifiers(String[] words) {
+     return Arrays.stream(words)
+@@ -508,34 +583,29 @@ private static List<String> withoutIntensifiers(String[] words) {
+ 
+   /**
+    * Whether {@code clause} says the criterion of {@code criterionWords} is not met: an {@link
+-   * #UNMET} word no negation turns into praise, or a {@link #NEGATORS} negation that binds it.
++   * #UNMET} word that is not one of the criterion's own and no negation turns into praise, or a
++   * {@link #NEGATORS} negation that binds it. A praise word such as "matches the criteria" pardons
++   * neither: "matches the criteria and the bullets are not dropped" still states it unmet.
+    */
+-  private static boolean saysUnmet(String clause, Set<String> criterionWords) {
++  private static boolean saysUnmet(String clause, String criterion) {
++    var criterionWords = words(criterion);
+     // A clause about the summary's own text ("the '…' wording is missing from the walkthrough")
+     // says nothing about the change.
+     if (META.matcher(clause).find()) {
+       return false;
+     }
+-    for (var pattern : UNMET) {
+-      var unmet = pattern.matcher(clause);
+-      while (unmet.find()) {
+-        // "never fails", "nothing is missing" praise the change.
+-        if (!negatedBefore(clause.substring(0, unmet.start()))) {
+-          return true;
+-        }
+-      }
++    if (holdsUnmetWord(clause, criterion)) {
++      return true;
+     }
+-    for (var pattern : NEGATORS) {
+-      var negation = pattern.matcher(clause);
+-      while (negation.find()) {
+-        var rest = clause.substring(negation.end());
+-        // "not only implemented" affirms what follows; "never fails to honor" is the praise the
+-        // UNMET reading above already pardoned.
+-        if (!AFFIRMING.matcher(rest).lookingAt()
+-            && !praises(negation.group(), rest)
+-            && bindsCriterion(rest, criterionWords, NEGATION_REACH, true)) {
+-          return true;
+-        }
++    var negation = NEGATORS.matcher(clause);
++    while (negation.find()) {
++      var rest = clause.substring(negation.end());
++      // "not only implemented" affirms what follows; "never fails to honor" is the praise the
++      // UNMET reading above already pardoned.
++      if (!AFFIRMING.matcher(rest).lookingAt()
++          && !praises(rest, criterion)
++          && bindsCriterion(rest, criterionWords, NEGATION_REACH, true)) {
++        return true;
+       }
+     }
+     return false;
+@@ -552,11 +622,11 @@ private static boolean bindsCriterion(
+       String rest, Set<String> criterionWords, int reach, boolean fulfilment) {
+     var next =
+         SummarySurfaceDeduplicator.claim(rest).words().stream()
+-            .filter(word -> !word.endsWith("ly") && !QUALIFIERS.contains(word))
++            .filter(word -> !word.endsWith("ly") && !QUALIFIER_STEMS.contains(word))
+             .toList();
+     for (var i = 0; i < Math.min(reach, next.size()); i++) {
+       var word = next.get(i);
+-      if ((fulfilment && FULFILMENT.stream().anyMatch(word::startsWith))
++      if ((fulfilment && FULFILMENT_STEMS.stream().anyMatch(word::startsWith))
+           || criterionWords.stream().anyMatch(c -> family(word, c))) {
+         return true;
+       }
+@@ -626,10 +696,13 @@ private static int clauseMatch(String clause, List<String> criteria) {
+     var criterionWords = words(criteria.get(at));
+     var negations = new ArrayList<Pattern>(NEGATED_VERB);
+     negations.add(NEGATED_CLAUSE);
++    // The words are counted on the clause as written; its negations are read with contractions
++    // spelled out, so "won't lock" negates as "will not lock" does.
++    var spelled = readable(clause);
+     for (var pattern : negations) {
+-      var negation = pattern.matcher(clause);
++      var negation = pattern.matcher(spelled);
+       while (negation.find()) {
+-        if (bindsCriterion(clause.substring(negation.end()), criterionWords, 1, false)) {
++        if (bindsCriterion(spelled.substring(negation.end()), criterionWords, 1, false)) {
+           return at;
+         }
+       }
+@@ -672,7 +745,7 @@ private static List<String> sentences(String overview) {
+     if (overview == null) {
+       return List.of();
+     }
+-    var text = foldQuotes(overview);
++    var text = readable(overview);
+     var quotes = quotes(text);
+     var sentences = new ArrayList<String>();
+     var from = 0;
+@@ -696,11 +769,31 @@ private static List<MatchResult> quotes(String text) {
+         .toList();
+   }
+ 
+-  private static String foldQuotes(String text) {
+-    return text.replace('“', '"').replace('”', '"').replace('‘', '\'').replace('’', '\'');
++  /**
++   * {@code text} as every reading here takes it: curly quotes folded, and each contracted negation
++   * spelled out ("can't" as "cannot", "won't" as "will not", "isn't" as "is not"), so the spelled
++   * and the contracted forms read alike in every path.
++   */
++  static String readable(String text) {
++    var folded = text.replace('“', '"').replace('”', '"').replace('‘', '\'').replace('’', '\'');
++    var spelled = CANT.matcher(folded).replaceAll("cannot");
++    spelled = WONT.matcher(spelled).replaceAll("will not");
++    return CONTRACTED.matcher(spelled).replaceAll(" not");
+   }
+ 
+   private static String normalize(String text) {
+-    return NON_ALPHANUMERIC.matcher(text.toLowerCase(Locale.ROOT)).replaceAll(" ").strip();
++    return NON_ALPHANUMERIC
++        .matcher(readable(text).toLowerCase(Locale.ROOT))
++        .replaceAll(" ")
++        .strip();
++  }
++
++  /** The stems of {@code words}, as {@link SummarySurfaceDeduplicator#claim} reads them. */
++  private static Set<String> stems(List<String> words) {
++    var stems = new LinkedHashSet<String>();
++    for (var word : words) {
++      stems.addAll(words(word));
++    }
++    return stems;
+   }
+ }
+```
+

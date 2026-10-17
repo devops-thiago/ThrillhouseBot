@@ -17,8 +17,11 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -218,6 +221,48 @@ final class SummaryStatements {
           .append('\n');
     }
     return sb.toString();
+  }
+
+  /** Where the call says the evidence against a statement comes from. */
+  enum Source {
+    DIFF,
+    FINDING;
+
+    /**
+     * The source an answer names: {@code "diff"}, in any case and with blanks around it, is the
+     * diff; anything else, a missing value included, is read as a finding, the weaker evidence.
+     */
+    static Source of(String value) {
+      return value != null && "diff".equalsIgnoreCase(value.strip()) ? DIFF : FINDING;
+    }
+  }
+
+  /**
+   * The ids of {@code contradicted} (id to the source of its evidence) this class lets the call
+   * cut. A row or diagram line goes on either source. A purpose sentence goes only on evidence from
+   * the diff: on rc8 a single low-confidence finding about one edge case cut the only "What this PR
+   * does" sentence (session 7451), and a finding reports a case the change mishandles, not that the
+   * statement of what it does is false. And the purpose is never cut down to nothing: when every
+   * one of its sentences would go, all of them stay.
+   */
+  Set<String> cuttable(Map<String, Source> contradicted) {
+    var allowed = new LinkedHashSet<String>();
+    var sentencesCut = new HashSet<String>();
+    for (var statement : statements) {
+      var source = contradicted.get(statement.id());
+      if (source == null) {
+        continue;
+      }
+      if (statement.kind() != Kind.SENTENCE) {
+        allowed.add(statement.id());
+      } else if (source == Source.DIFF) {
+        sentencesCut.add(statement.id());
+      }
+    }
+    if (sentencesCut.size() < sentences.size()) {
+      allowed.addAll(sentencesCut);
+    }
+    return allowed;
   }
 
   /**
