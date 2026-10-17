@@ -293,6 +293,22 @@ final class InventedArtifacts {
           "have", "had", "not", "never", "cannot", "nor", "also", "now", "yet", "still", "just",
           "only", "finally", "then");
 
+  /**
+   * A word that is neither a noun of a subject nor an object: a coordinator, a preposition, an
+   * article or determiner, or an auxiliary or subject word.
+   */
+  private static final Set<String> NOT_A_VERB =
+      union(
+          union(
+              Set.of(
+                  "and", "or", "then", "plus", "but", "of", "for", "with", "in", "on", "at", "from",
+                  "into", "by", "about", "as", "via", "than", "to"),
+              OBJECT_LEAD),
+          VERB_LEAD);
+
+  /** Words at most of a noun subject between its determiner and its verb: "the new migration". */
+  private static final int SUBJECT_WORDS = 2;
+
   /** A modal or "to", after which a bare verb form joined by a coordinator is still a verb. */
   private static final Set<String> INFINITIVE_LEAD =
       Set.of("to", "will", "would", "can", "could", "should", "may", "might", "must", "shall");
@@ -607,12 +623,30 @@ final class InventedArtifacts {
     var verbs = new ArrayList<Verb>();
     var infinitive = false;
     for (var i = 0; i < words.size(); i++) {
-      if (forms.contains(words.get(i)) && inVerbPlace(words, i, bare, infinitive)) {
-        verbs.add(new Verb(words.get(i), starts.get(i), ends.get(i)));
+      var current = words.get(i);
+      if (forms.contains(current) && inVerbPlace(words, i, bare, infinitive)) {
+        verbs.add(new Verb(current, starts.get(i), ends.get(i)));
       }
-      infinitive |= INFINITIVE_LEAD.contains(words.get(i));
+      infinitive = infinitiveAfter(words, i, infinitive);
     }
     return verbs;
+  }
+
+  /**
+   * Whether a modal or "to" still governs a bare verb after the word at {@code i}: one opens when
+   * it is followed by a word that can be a verb ("will refactor", "to refactor"; not "to the
+   * docs"), and closes at a finite {@link #ADDITION} or {@link #REMOVAL} form ("… and adds the
+   * cache"), which starts a verb of its own.
+   */
+  private static boolean infinitiveAfter(List<String> words, int i, boolean open) {
+    var word = words.get(i);
+    if (INFINITIVE_LEAD.contains(word)) {
+      return i + 1 < words.size() && !NOT_A_VERB.contains(words.get(i + 1));
+    }
+    var finite =
+        (ADDITION.contains(word) && !ADDITION_BARE.contains(word))
+            || (REMOVAL.contains(word) && !REMOVAL_BARE.contains(word));
+    return open && !finite;
   }
 
   /**
@@ -621,8 +655,9 @@ final class InventedArtifacts {
    * flow and a …", a summary line), after a subject, an auxiliary, a modal, a negation or "to" ("it
    * adds", "is building", "to build"), or after a coordinator: inflected ("and added tests"), or
    * bare when an earlier modal or "to" governs both verbs ({@code infinitive}: "will refactor the
-   * router and remove old settings"). "the old build script", "nightly builds and" and "the cache
-   * and drop shadows" are nouns.
+   * router and remove old settings"), or inflected after a noun subject ({@link #afterNounSubject}:
+   * "the script removes cruft"). "the old build script", "nightly builds and" and "the cache and
+   * drop shadows" are nouns.
    */
   private static boolean inVerbPlace(
       List<String> words, int i, Set<String> bare, boolean infinitive) {
@@ -631,7 +666,33 @@ final class InventedArtifacts {
     }
     var before = words.get(i - 1);
     return VERB_LEAD.contains(before)
-        || (COORDINATOR.contains(before) && (infinitive || !bare.contains(words.get(i))));
+        || (COORDINATOR.contains(before) && (infinitive || !bare.contains(words.get(i))))
+        || (!bare.contains(words.get(i)) && afterNounSubject(words, i));
+  }
+
+  /**
+   * Whether the inflected form at {@code i} follows a noun subject and leads to an object: a
+   * determiner and at most {@value #SUBJECT_WORDS} words before it, or only such words back to the
+   * start ("the script removes cruft", "the new migration drops settings", "Cleanup deletes stale
+   * links"), and a word after it that is no {@link #NOT_A_VERB} word ("the nightly builds and a …",
+   * "builds for admins" stay nouns). Read by shape alone, an adjective before a plural noun used as
+   * a modifier looks the same ("the old builds script" reads as "the old … builds a script"); such
+   * compounds are rare in summary prose, a noun subject is not.
+   */
+  private static boolean afterNounSubject(List<String> words, int i) {
+    if (NOT_A_VERB.contains(words.get(i + 1))) {
+      return false;
+    }
+    for (var j = i - 1; j >= Math.max(0, i - SUBJECT_WORDS - 1); j--) {
+      var word = words.get(j);
+      if (OBJECT_LEAD.contains(word)) {
+        return j < i - 1;
+      }
+      if (NOT_A_VERB.contains(word)) {
+        return false;
+      }
+    }
+    return i <= SUBJECT_WORDS;
   }
 
   /**

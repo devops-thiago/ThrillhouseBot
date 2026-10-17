@@ -329,7 +329,7 @@ class InventedArtifactsTest {
             "introducer")) {
       assertFalse(
           InventedArtifacts.invents(
-              "It removes the old " + noun + " script and a settings page.", change),
+              "It removes the " + noun + " script and a settings page.", change),
           noun);
     }
     assertFalse(
@@ -572,6 +572,72 @@ class InventedArtifactsTest {
     assertTrue(
         InventedArtifacts.invents(
             "It removes the old router, adding new settings and a settings page.", removed));
+  }
+
+  @Test
+  void aVerbAfterANounSubjectGovernsABareNounObject() {
+    var removed =
+        InventedArtifacts.Change.of(
+            List.of(
+                new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                added("web/src/App.tsx", "const app = 1;")));
+
+    assertFalse(
+        InventedArtifacts.invents(
+            "It adds a dashboard; the script removes cruft and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents("The migration drops settings and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents("Cleanup deletes stale links and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It adds a dashboard; the new migration deprecated admin screens and a settings page.",
+            removed));
+    // An addition after a noun subject takes the artifact from an earlier removal.
+    assertTrue(
+        InventedArtifacts.invents(
+            "It removes the old page and the router adds settings and a settings page.", removed));
+    // A plural noun after a preposition, or before a function word, is no verb.
+    assertFalse(
+        InventedArtifacts.invents(
+            "It removes the guide for builds pages and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents("It removes the nightly builds and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It removes the nightly builds for admins and a settings page.", removed));
+  }
+
+  @Test
+  void aModalOrToGovernsOnlyTheVerbPairItOpens() {
+    var removed =
+        InventedArtifacts.Change.of(
+            List.of(
+                new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                added("web/src/App.tsx", "const app = 1;")));
+
+    // A "to" before a noun phrase is a preposition, and governs no verb.
+    assertTrue(
+        InventedArtifacts.invents(
+            "It refers to the docs and adds the cache and drop shadows and a settings page.",
+            removed));
+    // A finite verb after the modal ends its reach.
+    assertTrue(
+        InventedArtifacts.invents(
+            "It will refactor the router, and it adds the cache and drop shadows and a settings page.",
+            removed));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It is meant to refactor the router, adds the cache and drop shadows and a settings page.",
+            removed));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It will refactor the router and adds the cache and drop shadows and a settings page.",
+            removed));
+    // The pair a modal opens still reads as two verbs.
+    assertFalse(
+        InventedArtifacts.invents(
+            "It will refactor the router and remove old settings and a settings page.", removed));
   }
 
   @Test
