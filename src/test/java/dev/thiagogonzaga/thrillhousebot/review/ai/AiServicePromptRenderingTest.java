@@ -67,6 +67,7 @@ class AiServicePromptRenderingTest {
 
   @Inject ReplyAssistant replyAssistant;
   @Inject FindingVerifier findingVerifier;
+  @Inject SummaryVerifier summaryVerifier;
   @Inject PrReviewer prReviewer;
   @Inject PrSummarizer prSummarizer;
   @Inject PrDescribeAssistant describeAssistant;
@@ -284,6 +285,47 @@ class AiServicePromptRenderingTest {
     assertTrue(
         user.contains("PRCONTEXT_SENTINEL"),
         "the PR title and description must reach the verifier prompt");
+  }
+
+  @Test
+  void summaryVerificationPromptIncludesEverySlot() {
+    // #1078: a dropped @V here would check the statements against less than the material.
+    ChatRequest request =
+        captureBlockingRequest(
+            conciseChatModel,
+            () ->
+                summaryVerifier.verify(
+                    PromptTemplateEscaper.fence("[S1] STATEMENTS_SENTINEL"),
+                    PromptTemplateEscaper.escape("[{\"title\":\"FINDINGS_SENTINEL\"}]"),
+                    PromptTemplateEscaper.fence("PRCONTEXT_SENTINEL"),
+                    PromptTemplateEscaper.fence("DIFF_SENTINEL"),
+                    PromptTemplateEscaper.escape("STACK_SENTINEL")));
+    String user = userText(request);
+
+    assertTrue(user.contains("STATEMENTS_SENTINEL"), "statements missing");
+    assertTrue(user.contains("FINDINGS_SENTINEL"), "findings missing");
+    assertTrue(user.contains("PRCONTEXT_SENTINEL"), "prContext missing");
+    assertTrue(user.contains("DIFF_SENTINEL"), "diff missing");
+    assertTrue(user.contains("STACK_SENTINEL"), "projectStack missing");
+    assertTrue(user.contains("## PR Diff"), "the diff section must render when a diff is sent");
+    assertTrue(
+        systemText(request).contains("\"contradicted\""),
+        "the system prompt must state the answer shape");
+  }
+
+  @Test
+  void summaryVerificationPromptLeavesOutTheSectionsItHasNoMaterialFor() {
+    String user =
+        captureBlocking(
+            conciseChatModel,
+            () ->
+                summaryVerifier.verify(
+                    PromptTemplateEscaper.fence("[S1] STATEMENTS_SENTINEL"), "[]", "", "", ""));
+
+    assertTrue(user.contains("STATEMENTS_SENTINEL"), "statements missing");
+    assertFalse(user.contains("## PR Diff"), "no diff, no diff section");
+    assertFalse(user.contains("## PR Title"), "no PR text, no PR text section");
+    assertFalse(user.contains("## Project Stack"), "no stack, no stack section");
   }
 
   @Test

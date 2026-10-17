@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.eval;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -84,5 +85,26 @@ class PromptEvalGradingTest {
     assertFalse(PromptEvalTest.summaryOutcomeMatches(notGapped, PromptEvalTest.CALL_FAILED));
     assertTrue(PromptEvalTest.summaryOutcomeMatches(EvalCase.CLAIM_GAPPED, EvalCase.CLAIM_GAPPED));
     assertFalse(PromptEvalTest.summaryOutcomeMatches(EvalCase.CLAIM_GAPPED, "claim-dropped"));
+  }
+
+  @Test
+  void aSummaryVerificationSampleIsGradedByWhatItsSummaryStillStates() {
+    var keywords = List.of("billing_runs");
+    var kept = List.of("records an invoice");
+
+    assertEquals(
+        EvalCase.CONTRADICTED_CUT,
+        PromptEvalTest.summaryVerificationGrade(
+            keywords, kept, "It records an invoice.\nNo billing_runs row is written."));
+    assertEquals(
+        "contradicted-kept",
+        PromptEvalTest.summaryVerificationGrade(
+            keywords, kept, "It records an invoice.\nIt writes a billing_runs row."));
+    assertEquals(
+        "true-statement-cut",
+        PromptEvalTest.summaryVerificationGrade(keywords, kept, "It totals usage."));
+    assertEquals(
+        EvalCase.NOTHING_CUT,
+        PromptEvalTest.summaryVerificationGrade(List.of(), kept, "It records an invoice."));
   }
 }

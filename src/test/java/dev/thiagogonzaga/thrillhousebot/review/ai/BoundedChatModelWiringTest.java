@@ -56,6 +56,7 @@ class BoundedChatModelWiringTest {
       Set.of(PrReviewer.class, PrSummarizer.class);
 
   @Inject FindingVerifier findingVerifier;
+  @Inject SummaryVerifier summaryVerifier;
   @Inject ReplyAssistant replyAssistant;
   @Inject ChangelogAssistant changelogAssistant;
   @Inject DocGenerator docGenerator;
@@ -75,6 +76,7 @@ class BoundedChatModelWiringTest {
     var calls = new LinkedHashMap<String, Runnable>();
     calls.put(
         "FindingVerifier#verify", () -> findingVerifier.verify("f", "c", "d", "s", "p", "sys"));
+    calls.put("SummaryVerifier#verify", () -> summaryVerifier.verify("st", "[]", "c", "d", "s"));
     calls.put("ReplyAssistant#reply", () -> replyAssistant.reply("q", "c", "f", "d", "t"));
     calls.put("ChangelogAssistant#draft", () -> changelogAssistant.draft("d", "7", "t", "b", "i"));
     calls.put("ChangelogAssistant#merge", () -> changelogAssistant.merge("c", "7", "t", "b", "i"));
@@ -111,7 +113,8 @@ class BoundedChatModelWiringTest {
             .collect(Collectors.toSet());
     assertTrue(
         services.containsAll(STREAMED_THROUGH_REVIEW_SERVICE)
-            && services.contains(FindingVerifier.class),
+            && services.contains(FindingVerifier.class)
+            && services.contains(SummaryVerifier.class),
         "the AI services must be discoverable: " + services);
 
     for (var service : services) {

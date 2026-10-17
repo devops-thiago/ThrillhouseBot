@@ -28,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
+import dev.thiagogonzaga.thrillhousebot.review.ai.SummaryVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.Throwables;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenSpendCeilingExceededException;
@@ -211,6 +212,7 @@ public class FindingPipeline {
   private final TruncatedResponseSalvager salvager;
   private final ReviewDimensionRouter dimensionRouter;
   private final SecurityScan securityScan;
+  private final SummaryVerificationService summaryVerification;
 
   @Inject
   public FindingPipeline(
@@ -225,7 +227,8 @@ public class FindingPipeline {
       ReviewTokenLedger tokenLedger,
       TruncatedResponseSalvager salvager,
       ReviewDimensionRouter dimensionRouter,
-      SecurityScan securityScan) {
+      SecurityScan securityScan,
+      SummaryVerificationService summaryVerification) {
     this.aiReviewService = aiReviewService;
     this.findingScreen = findingScreen;
     this.deduplicator = deduplicator;
@@ -238,6 +241,7 @@ public class FindingPipeline {
     this.salvager = salvager;
     this.dimensionRouter = dimensionRouter;
     this.securityScan = securityScan;
+    this.summaryVerification = summaryVerification;
   }
 
   /**
@@ -682,7 +686,91 @@ public class FindingPipeline {
                         + findingsText(refined))),
             ctx.files());
     // #944: an answer with no overview on the head the previous round reviewed keeps that round's.
-    return persistWithSummary(session, refined, PriorOverviewCarryover.fill(screened, ctx), carry);
+    // #1078 (opt-in): the statements of this answer that the diff or an open finding contradicts
+    // leave it. Only the text this summary call wrote is checked; what the carryover below brings
+    // in from the previous round was written, and checked, on that round.
+    if (!summaryVerification.enabled()) {
+      return persistWithSummary(
+          session, refined, PriorOverviewCarryover.fill(screened, ctx), carry);
+    }
+    var verified =
+        summaryVerification.verify(
+            ledgerSessionId(session),
+            screened,
+            summaryVerificationMaterial(refined, inputs, ctx, plan));
+    return persistWithSummary(
+        session,
+        refined,
+        withoutRefilled(screened, verified, PriorOverviewCarryover.fill(verified, ctx)),
+        carry);
+  }
+
+  /**
+   * {@code filled} less what the summary check removed from {@code checked} and the carryover put
+   * back (#1078): the previous round's purpose where every sentence of this one was cut, its file
+   * summary for a row that was cut, and its diagram where this one was dropped. A statement the
+   * diff contradicts on this head is not shown again because an earlier round wrote it too.
+   */
+  static ReviewResponse.Summary withoutRefilled(
+      ReviewResponse.Summary checked,
+      ReviewResponse.Summary verified,
+      ReviewResponse.Summary filled) {
+    if (checked == null || verified == null || filled == null || checked == verified) {
+      return filled;
+    }
+    var keptPaths =
+        verified.fileSummaries().stream()
+            .map(ReviewResponse.FileSummary::path)
+            .collect(Collectors.toSet());
+    var cutPaths =
+        checked.fileSummaries().stream()
+            .map(ReviewResponse.FileSummary::path)
+            .filter(path -> !keptPaths.contains(path))
+            .collect(Collectors.toSet());
+    boolean purposeCut = !isBlank(checked.prPurpose()) && isBlank(verified.prPurpose());
+    boolean diagramCut =
+        !isBlank(checked.walkthroughDiagram()) && isBlank(verified.walkthroughDiagram());
+    return new ReviewResponse.Summary(
+        filled.totalFindings(),
+        filled.critical(),
+        filled.high(),
+        filled.medium(),
+        filled.low(),
+        filled.overallAssessment(),
+        purposeCut ? null : filled.prPurpose(),
+        filled.descriptionGaps(),
+        filled.suggestedLabels(),
+        filled.fileSummaries().stream().filter(f -> !cutPaths.contains(f.path())).toList(),
+        diagramCut ? null : filled.walkthroughDiagram(),
+        filled.addressedGaps());
+  }
+
+  private static boolean isBlank(String text) {
+    return text == null || text.isBlank();
+  }
+
+  /**
+   * What the summary verification call checks the summary against (#1078): the material the finding
+   * verifier reads, at the PR level. The diff is the text the review calls read, one part per
+   * batch, or the whole diff when budgeting is off; the PR text is bounded as on the finding
+   * verifier (#736); the findings are the ones this round posts.
+   */
+  private SummaryVerificationService.Material summaryVerificationMaterial(
+      ReviewResponse refined,
+      AiReviewService.PromptInputs inputs,
+      ReviewContextLoader.ReviewContext ctx,
+      DiffBudgetPlanner.BudgetPlan plan) {
+    var budget = budgetPlanner.perCallInputBudget();
+    var diff =
+        plan.budgeted()
+            ? plan.batches().stream().map(DiffBudgetPlanner.DiffBatch::text).toList()
+            : List.of(Objects.requireNonNullElse(ctx.diff(), ""));
+    return new SummaryVerificationService.Material(
+        PrContextBudget.bound(inputs.prContext(), budget, tokenCounter),
+        diff,
+        inputs.projectStack(),
+        refined.findings(),
+        budget);
   }
 
   /** The titles and descriptions of {@code response}'s findings, one per line. */
