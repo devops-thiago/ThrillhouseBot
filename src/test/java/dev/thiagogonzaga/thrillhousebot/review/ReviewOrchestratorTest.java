@@ -33,6 +33,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
+import dev.thiagogonzaga.thrillhousebot.review.ai.SummaryVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TicketContextPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.webhook.ReviewTriggerFilter;
@@ -202,7 +203,8 @@ class ReviewOrchestratorTest {
             mock(ReviewTokenLedger.class),
             new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper),
             ReviewDimensionRouter.disabled(),
-            SecurityScan.disabled());
+            SecurityScan.disabled(),
+            SummaryVerificationService.disabled());
     orchestrator = newOrchestrator();
     when(config.review()).thenReturn(reviewConfig);
     // The shipped call allowance, so every review ends with its summary call (#664); a test about
@@ -6442,7 +6444,8 @@ class ReviewOrchestratorTest {
               mock(ReviewTokenLedger.class),
               new dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager(mapper),
               ReviewDimensionRouter.disabled(),
-              SecurityScan.disabled());
+              SecurityScan.disabled(),
+              SummaryVerificationService.disabled());
 
       var response = new ReviewResponse(List.of(), List.of(), null);
       failingPipeline.persistAiResponse(session, response);

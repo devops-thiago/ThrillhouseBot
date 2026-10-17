@@ -173,8 +173,8 @@ lists providers known to work.
 
 ## Prompt eval corpus
 
-Check any change to the review or verifier prompts (`PrReviewPrompts`,
-`FindingVerifierPrompts`) against the labeled corpus in
+Check any change to the review, verifier or summary check prompts
+(`PrReviewPrompts`, `FindingVerifierPrompts`, `SummaryVerifierPrompts`) against the labeled corpus in
 `src/test/resources/evalcorpus/` before it ships. Each case directory holds a
 `case.json` spec and a `diff.txt` in the format the review pipeline sends to the
 model, and pins a real outcome from reviews of this repository:
@@ -184,6 +184,12 @@ model, and pins a real outcome from reviews of this repository:
 - A generator case runs the first-pass review prompt over the diff and expects a
   finding that matches the case's keywords on the target file (`must-find`), or
   no such finding (`must-not-find`).
+- A summary case runs the summary prompt and checks where a description claim
+  ends up (`claim-gapped` or `claim-not-gapped`).
+- A summary verification case sends a written summary through the opt-in
+  summary check with the diff, and expects the statements naming its keywords
+  to be cut while those naming its kept keywords stay (`contradicted-cut`), or
+  nothing to be cut (`nothing-cut`).
 
 `EvalCorpusTest` validates the corpus schema in every build. The live suite calls
 a real model, so it only runs on request:
@@ -198,6 +204,10 @@ Set `AI_BASE_URL` and `AI_MODEL` to a model the provider serves today. Without
 them the suite uses the application defaults, and a retired model name makes
 every case fail. Set `REVIEW_DIMENSION_ROUTING_ENABLED=true` as well to test the
 routed prompts; run that before turning routing on anywhere.
+
+`-Deval.only=<part>,<part>` runs only the cases whose name contains one of the
+parts. A change to the summary check prompt (`SummaryVerifierPrompts`) needs
+only its cases: `-Deval.only=summary-verification`.
 
 Each case runs `-Deval.samples` times (default 3) and passes on a majority.
 `-Deval.tolerated` (default 0) lets that many cases fail, so a known failure that

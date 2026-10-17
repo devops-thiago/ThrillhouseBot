@@ -1,0 +1,33 @@
+{
+  "kind": "summary-verification",
+  "sourcePr": 252,
+  "why": "Corpus round 17, kotlin ThrillhouseBot-test#252: the description promises a billing_runs summary row per run, nothing in the change writes one (the planted description gap), and the summary still said the service writes it, in the purpose paragraph, in BillingService.kt's row and as a diagram node. The summary call does not see the diff, so only a check against the diff can catch it (#1078). The sentence, the row and the diagram line that state the billing_runs row must be cut; the true sentence about invoices and the true repository row must stay.",
+  "expectation": "contradicted-cut",
+  "keywords": ["billing_runs"],
+  "keptKeywords": ["records an invoice", "JDBC store"],
+  "prTitle": "feat(kotlin): add newsletter subscription billing service",
+  "prDescription": "Adds a Kotlin/Maven service under `kotlin/` that bills newsletter subscribers once per period.\n\n- Charges each subscriber through the payment gateway at their plan's price and records an invoice per subscriber per period; subscribers already invoiced for the period are skipped.\n- Declined charges mark the subscriber `past_due`.\n- Each billing run writes a summary row (period, invoiced count, failed count) to the `billing_runs` table for finance reporting.",
+  "findings": [],
+  "summary": {
+    "total_findings": 0,
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "overall_assessment": "Adds the billing service.",
+    "pr_purpose": "Adds a Kotlin service that bills newsletter subscribers once per period. It charges each confirmed subscriber at their plan's price and records an invoice per subscriber per period. Each billing run then writes a billing_runs summary row with the period, the invoiced count and the failed count.",
+    "description_gaps": [],
+    "suggested_labels": [],
+    "file_summaries": [
+      {
+        "path": "kotlin/src/main/kotlin/newsletter/billing/BillingService.kt",
+        "summary": "Runs a billing cycle and records each run's totals in the billing_runs table"
+      },
+      {
+        "path": "kotlin/src/main/kotlin/newsletter/billing/SubscriberRepository.kt",
+        "summary": "JDBC store for subscribers and invoices: saves invoices and marks declined subscribers past_due"
+      }
+    ],
+    "walkthrough_diagram": "flowchart TD\n  A[runBillingCycle] --> B[Charge each confirmed subscriber]\n  B --> C[Save invoice]\n  C --> D[Record billing_runs summary]"
+  }
+}
