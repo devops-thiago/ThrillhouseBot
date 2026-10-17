@@ -119,16 +119,8 @@ final class LinkedIssueCriteria {
   private static final Pattern META =
       Pattern.compile("(?i)\\b(?:wording|walkthrough|summary|mention|phrasing|docs?)\\b");
 
-  /**
-   * What says the change meets the issue's ask: "matching the acceptance criteria", "meets the
-   * issue's criteria", "satisfies them". A clause holding one no negation reaches is praise.
-   */
-  private static final Pattern PRAISE =
-      Pattern.compile("(?i)\\b(?:match(?:es|ing)?+|meets?+|meeting|satisf(?:y|ies|ying))\\b");
-
-  /** A contracted negation ending {@code lead}, a word at most before it: "doesn't (fully)". */
-  private static final Pattern CONTRACTED_BEFORE =
-      Pattern.compile("(?i)n['’]t(?:\\s++[\\p{L}-]++)?+\\s*+$");
+  /** A contracted negation, read as "not": "isn't missing", "doesn’t fail". */
+  private static final Pattern CONTRACTED = Pattern.compile("n['’]t\\b");
 
   /** Negations that turn a following {@link #UNMET} word into praise: "never fails". */
   private static final Set<String> PRAISING_NEGATIONS =
@@ -180,9 +172,13 @@ final class LinkedIssueCriteria {
 
   /**
    * Words between a negation and what it negates that are skipped when binding it, besides the
-   * adverbs ending in "-ly": "does not yet lock", "does not even lock".
+   * adverbs ending in "-ly": "does not yet lock", "does not even lock", and the verbs a negation
+   * passes through, as stemmed: "doesn't think the change will match", "does not seem to lock".
    */
-  private static final Set<String> QUALIFIERS = Set.of("yet", "even", "always", "ever", "longer");
+  private static final Set<String> QUALIFIERS =
+      Set.of(
+          "yet", "even", "always", "ever", "longer", "think", "believ", "expect", "seem", "appear",
+          "will");
 
   /** Content words after an overview negation it may bind, at most. */
   static final int NEGATION_REACH = 3;
@@ -503,10 +499,12 @@ final class LinkedIssueCriteria {
 
   /**
    * Whether one of the last {@value #PRAISE_REACH} words of {@code lead}, {@link #INTENSIFIERS}
-   * aside, negates what follows: "never fails", "nothing is missing", "not at all missing".
+   * aside, negates what follows: "never fails", "nothing is missing", "not at all missing", "isn't
+   * missing".
    */
   private static boolean negatedBefore(String lead) {
-    var words = withoutIntensifiers(NON_ALPHANUMERIC.split(lead.strip().toLowerCase(Locale.ROOT)));
+    var expanded = CONTRACTED.matcher(lead.strip().toLowerCase(Locale.ROOT)).replaceAll(" not");
+    var words = withoutIntensifiers(NON_ALPHANUMERIC.split(expanded));
     for (var i = Math.max(0, words.size() - PRAISE_REACH); i < words.size(); i++) {
       if (PRAISING_NEGATIONS.contains(words.get(i))) {
         return true;
@@ -534,18 +532,6 @@ final class LinkedIssueCriteria {
     return false;
   }
 
-  /** Whether {@code clause} holds a {@link #PRAISE} word no negation right before it reaches. */
-  private static boolean praisesChange(String clause) {
-    var praise = PRAISE.matcher(clause);
-    while (praise.find()) {
-      var lead = clause.substring(0, praise.start());
-      if (!negatedBefore(lead) && !CONTRACTED_BEFORE.matcher(lead).find()) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   /** Whether a word of {@code text} is of the family of one of {@code criterionWords}. */
   private static boolean ownWord(String text, Set<String> criterionWords) {
     return words(text).stream().anyMatch(w -> criterionWords.stream().anyMatch(c -> family(w, c)));
@@ -562,12 +548,13 @@ final class LinkedIssueCriteria {
   /**
    * Whether {@code clause} says the criterion of {@code criterionWords} is not met: an {@link
    * #UNMET} word that is not one of the criterion's own and no negation turns into praise, or a
-   * {@link #NEGATORS} negation that binds it. A clause that {@link #PRAISE}s the change never does.
+   * {@link #NEGATORS} negation that binds it. A praise word such as "matches the criteria" pardons
+   * neither: "matches the criteria and the bullets are not dropped" still states it unmet.
    */
   private static boolean saysUnmet(String clause, Set<String> criterionWords) {
     // A clause about the summary's own text ("the '…' wording is missing from the walkthrough")
-    // says nothing about the change, and "matching the acceptance criteria" praises it.
-    if (META.matcher(clause).find() || praisesChange(clause)) {
+    // says nothing about the change.
+    if (META.matcher(clause).find()) {
       return false;
     }
     if (holdsUnmetWord(clause, criterionWords)) {

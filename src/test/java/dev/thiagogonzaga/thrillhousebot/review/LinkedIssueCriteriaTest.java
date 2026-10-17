@@ -27,6 +27,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** The linked issue and its unmet criterion, always named in the summary (#1093). */
 class LinkedIssueCriteriaTest {
@@ -760,6 +762,43 @@ class LinkedIssueCriteriaTest {
           lines,
           overview);
     }
+  }
+
+  /** A praise word in the clause does not pardon a not-met statement about the criterion. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // Not negated at all, next to a real not-met statement.
+        "The change matches the acceptance criteria in #1146 and the #1134 and #1142 bullets are"
+            + " not dropped.",
+        // Negated across commas, past a second word, or with an adverb between.
+        "The change doesn't, in fact, match the acceptance criteria in #1146: the #1134 and #1142"
+            + " bullets are not dropped.",
+        "The reviewer doesn't think the change will match the issue's 'Tests from the #1134 and"
+            + " #1142 bullets' criterion.",
+        "The change doesn't fully meet the issue's 'Tests from the #1134 and #1142 bullets'"
+            + " criterion.",
+        "The change does not seem to meet the issue's 'Tests from the #1134 and #1142 bullets'"
+            + " criterion."
+      })
+  void aPraiseWordDoesNotPardonANotMetSignalAboutTheCriterion(String overview) {
+    var lines = unmet(ISSUE_1146, List.of(), overview, Map.of()).lines();
+
+    assertEquals(1, lines.size(), overview + " -> " + lines);
+    assertTrue(lines.getFirst().startsWith("Linked issue #1146: Tests from"), overview);
+  }
+
+  /** A contracted negation right before a not-met word praises, as "not" does. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The issue's 'declines two offers' rule isn't missing.",
+        "The issue's 'declines two offers' rule doesn't fail.",
+        "The issue’s ‘declines two offers’ rule doesn’t really fail."
+      })
+  void aContractedNegationBeforeANotMetWordPraises(String praise) {
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), praise, Map.of()), praise);
   }
 
   /** The summary renders the lines in place of the finding bullets they point at. */
