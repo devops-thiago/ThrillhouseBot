@@ -329,7 +329,7 @@ class InventedArtifactsTest {
             "introducer")) {
       assertFalse(
           InventedArtifacts.invents(
-              "It removes the old " + noun + " script and a settings page.", change),
+              "It removes the " + noun + " script and a settings page.", change),
           noun);
     }
     assertFalse(
@@ -467,6 +467,208 @@ class InventedArtifactsTest {
     // A passive in a later clause is not the artifact's.
     assertFalse(
         InventedArtifacts.invents("It removes a settings page; the cache is added.", removed));
+  }
+
+  @Test
+  void everyCommonRemovalVerbGovernsTheArtifactInAnyInflection() {
+    var removed =
+        InventedArtifacts.Change.of(
+            List.of(
+                new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                added("web/src/App.tsx", "const app = 1;")));
+
+    for (var verb :
+        List.of(
+            "removes",
+            "deletes",
+            "drops",
+            "retires",
+            "deprecates",
+            "strips",
+            "eliminates",
+            "replaces",
+            "renames",
+            "moves",
+            "purges",
+            "discards",
+            "prunes")) {
+      assertFalse(
+          InventedArtifacts.invents("It " + verb + " the old flow and a settings page.", removed),
+          verb);
+    }
+    assertFalse(InventedArtifacts.invents("It has deprecated a settings page.", removed));
+    assertFalse(InventedArtifacts.invents("It is stripping a settings page.", removed));
+    assertFalse(InventedArtifacts.invents("It eliminated a settings page.", removed));
+    assertFalse(InventedArtifacts.invents("It will purge a settings page.", removed));
+    // A removal reaches over a list of what it removes.
+    assertFalse(
+        InventedArtifacts.invents(
+            "It removes the old flow, the old docs and the tests, and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It does not touch billing, the old docs and the tests, and removes a settings page.",
+            removed));
+    // A summary line opening with the verb.
+    assertFalse(InventedArtifacts.invents("Deprecates the old flow and a settings page.", removed));
+    assertFalse(InventedArtifacts.invents("Drops support and a settings page.", removed));
+    // A noun sharing a removal stem governs nothing.
+    assertTrue(InventedArtifacts.invents("It plans the move of a settings page.", removed));
+    assertTrue(InventedArtifacts.invents("It adds a replacement for a settings page.", removed));
+    assertTrue(InventedArtifacts.invents("It speeds up the purge with a settings page.", removed));
+    // What a replace, rename or move leads to is the new artifact, and is judged.
+    assertTrue(
+        InventedArtifacts.invents("It replaces the old page with a settings page.", removed));
+    assertTrue(InventedArtifacts.invents("It renames the old screen to a settings page.", removed));
+    assertTrue(InventedArtifacts.invents("It moves the docs into a settings page.", removed));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It deprecates the old page, replaced by a settings page.", removed));
+  }
+
+  @Test
+  void aRemovalOpeningAClauseGovernsABareNounObject() {
+    var removed =
+        InventedArtifacts.Change.of(
+            List.of(
+                new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                added("web/src/App.tsx", "const app = 1;")));
+
+    // After a comma, a dash or a list item, the verb opens its clause whatever its object.
+    assertFalse(
+        InventedArtifacts.invents(
+            "It refactors the router, removing old settings and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It refactors the router — drops admin screens and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It refactors the router, the long docs page, deleting stale links and a settings page.",
+            removed));
+    // After a semicolon.
+    assertFalse(
+        InventedArtifacts.invents(
+            "It refactors the router; removes old settings and a settings page.", removed));
+    // A bare form after "and" is a verb when an earlier modal or "to" governs both.
+    assertFalse(
+        InventedArtifacts.invents(
+            "It will refactor the router and remove old settings and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It is meant to refactor the router and drop old settings and a settings page.",
+            removed));
+    // Without one, it stays a noun.
+    assertTrue(
+        InventedArtifacts.invents(
+            "It removes nothing; it adds the cache and drop shadows and a settings page.",
+            removed));
+    // A bare removal form opening a segment continues a list of negated verbs.
+    var change = InventedArtifacts.Change.of(List.of(added("web/src/App.tsx", "const app = 1;")));
+    assertFalse(
+        InventedArtifacts.invents("It does not ship, remove or modify a settings page.", change));
+    // A bare form inside the segment, after "to", is a verb and opens the clause.
+    assertTrue(
+        InventedArtifacts.invents("It removes the old router, to build a settings page.", removed));
+    // An addition opening a clause after a comma is judged the same way.
+    assertTrue(
+        InventedArtifacts.invents(
+            "It removes the old router, adding new settings and a settings page.", removed));
+  }
+
+  @Test
+  void aVerbAfterANounSubjectGovernsABareNounObject() {
+    var removed =
+        InventedArtifacts.Change.of(
+            List.of(
+                new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                added("web/src/App.tsx", "const app = 1;")));
+
+    assertFalse(
+        InventedArtifacts.invents(
+            "It adds a dashboard; the script removes cruft and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents("The migration drops settings and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents("Cleanup deletes stale links and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It adds a dashboard; the new migration deprecated admin screens and a settings page.",
+            removed));
+    // An addition after a noun subject takes the artifact from an earlier removal.
+    assertTrue(
+        InventedArtifacts.invents(
+            "It removes the old page and the router adds settings and a settings page.", removed));
+    // A plural noun after a preposition, or before a function word, is no verb.
+    assertFalse(
+        InventedArtifacts.invents(
+            "It removes the guide for builds pages and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents("It removes the nightly builds and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It removes the nightly builds for admins and a settings page.", removed));
+  }
+
+  @Test
+  void aModalOrToGovernsOnlyTheVerbPairItOpens() {
+    var removed =
+        InventedArtifacts.Change.of(
+            List.of(
+                new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                added("web/src/App.tsx", "const app = 1;")));
+
+    // A "to" before a noun phrase is a preposition, and governs no verb.
+    assertTrue(
+        InventedArtifacts.invents(
+            "It refers to the docs and adds the cache and drop shadows and a settings page.",
+            removed));
+    // A finite verb after the modal ends its reach.
+    assertTrue(
+        InventedArtifacts.invents(
+            "It will refactor the router, and it adds the cache and drop shadows and a settings page.",
+            removed));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It is meant to refactor the router, adds the cache and drop shadows and a settings page.",
+            removed));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It will refactor the router and adds the cache and drop shadows and a settings page.",
+            removed));
+    // The pair a modal opens still reads as two verbs.
+    assertFalse(
+        InventedArtifacts.invents(
+            "It will refactor the router and remove old settings and a settings page.", removed));
+  }
+
+  @Test
+  void theNewThingOfAReplaceIsOnlyTheArtifactItsTargetWordLeadsTo() {
+    var removed =
+        InventedArtifacts.Change.of(
+            List.of(
+                new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                added("web/src/App.tsx", "const app = 1;")));
+
+    // A removal after the new artifact does not undo its judgement.
+    assertTrue(
+        InventedArtifacts.invents(
+            "It replaces the old page with a settings page and removes the legacy flag.", removed));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It renames the old screen to a settings page and deletes the old flow.", removed));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It moves the docs into a settings page and drops the legacy flag.", removed));
+    // A replace, rename or move earlier in the clause, whose target is something else, leaves
+    // the removal that governs the artifact in charge.
+    assertFalse(
+        InventedArtifacts.invents(
+            "It deletes the flow renamed to legacy and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It replaces the old flag with a toggle and removes a settings page.", removed));
+    assertFalse(InventedArtifacts.invents("It moves the docs to v2 and a settings page.", removed));
+    // A target word after a plain removal is no new thing.
+    assertFalse(InventedArtifacts.invents("It removes the link to a settings page.", removed));
   }
 
   @Test
