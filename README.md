@@ -69,7 +69,17 @@ chat-completions API. Set `AI_BASE_URL` and `AI_MODEL` for your provider:
 | OpenRouter | `https://openrouter.ai/api/v1` | `openai/gpt-4o-mini` |
 | Alibaba Cloud (Model Studio) | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| Hugging Face Inference Providers | `https://router.huggingface.co/v1` | `openai/gpt-oss-120b` |
+| NVIDIA (build.nvidia.com) | `https://integrate.api.nvidia.com/v1` | `meta/llama-3.3-70b-instruct` |
 | Ollama (local) | `http://localhost:11434/v1` | `llama3.2` |
+
+Hugging Face and NVIDIA both have free tiers, useful for trying the bot. For
+Hugging Face, `AI_API_KEY` is an access token
+with the "Make calls to Inference Providers" permission. A free account's
+monthly credits are small, so expect a few reviews before requests are refused.
+For NVIDIA, `AI_API_KEY` is a key from build.nvidia.com. The free tier is
+limited to about 40 requests per minute, so set `AI_MAX_CONCURRENT_CALLS` low
+(for example `2`). Check each provider's current terms; both change them.
 
 Ollama's cloud endpoint (`https://ollama.com/v1`) limits how many requests one
 account has in flight and refuses the rest with `timed out waiting for a
@@ -1455,6 +1465,67 @@ Spans and metrics carry `gen_ai.provider.name`, derived from `AI_BASE_URL`
 endpoints report `unknown`; set `AI_PROVIDER` to name them (a local `ollama` or
 `vllm` server, a proxy, a gateway).
 
+Set `OTEL_SDK_DISABLED=true` to turn telemetry off. Nothing is exported, and
+the bot makes no connection to `OTEL_EXPORTER_ENDPOINT`. The dashboard's cost and
+token figures come from the database, so they still work.
+
+## Restricted-network deployment
+
+To keep code inside your network, run the model yourself and allow only the
+connections the bot needs. The bot is a GitHub App for GitHub.com, so it can
+never be fully offline: it must reach GitHub. GitHub Enterprise Server is not
+supported.
+
+### Outbound connections
+
+| Destination | When | Required |
+|---|---|---|
+| `api.github.com` | Every review: reading the pull request and posting the review | Yes |
+| `AI_BASE_URL` | Every review and command. Diffs and context are sent here | Yes. Point it inside your network to keep code there |
+| `github.com/login/oauth` (`GITHUB_OAUTH_URL`) | Dashboard login | Only with the dashboard (`GITHUB_CLIENT_ID` set) |
+| The Actions artifact and log storage GitHub redirects to | Patch coverage and CI-failure logs | Only with `REVIEW_PATCH_COVERAGE_ENABLED` or `REVIEW_CI_CONTEXT_ENABLED` |
+| `NOTIFICATIONS_WEBHOOK_URL` | After a review | Only when set |
+| `OTEL_EXPORTER_ENDPOINT` | Telemetry export | No. Point it at your own collector, or set `OTEL_SDK_DISABLED=true` |
+
+The database is the only other connection. The bot does not phone home or check
+for updates. GitHub must also be able to send webhooks to the bot, so its
+`/api/webhook` must be reachable from GitHub (directly, or through a relay such
+as Smee).
+
+### Local model
+
+Run [Ollama](https://ollama.com/) (or any OpenAI-compatible server such as vLLM)
+on your network and point the bot at it:
+
+```bash
+AI_BASE_URL=http://ollama.internal:11434/v1
+AI_MODEL=llama3.2
+AI_API_KEY=unused   # required at boot; Ollama ignores it
+AI_PROVIDER=ollama  # label for telemetry; loopback and unknown hosts report "unknown"
+OTEL_SDK_DISABLED=true
+```
+
+From Docker Compose, a server on the host is `http://host.docker.internal:11434/v1`
+(on Linux, add `extra_hosts: ["host.docker.internal:host-gateway"]` to the bot's
+service). Do not use Ollama's cloud endpoint (`https://ollama.com/v1`) here: it
+sends the code off your network. Size `REVIEW_MAX_INPUT_TOKENS` for the local
+model's context window, and raise `AI_TIMEOUT` if it is slow.
+
+### Dashboard
+
+The dashboard is served by the bot itself and loads no fonts, scripts or styles
+from a CDN. In the viewer's browser, two things reach GitHub: the signed-in
+user's avatar (`avatars.githubusercontent.com`) and the links to pull requests.
+Login goes through GitHub OAuth, so leave `GITHUB_CLIENT_ID` and
+`GITHUB_CLIENT_SECRET` unset to run without the dashboard.
+
+### Installing
+
+The [manifest install](#option-a-manifest-install-recommended) can be served
+locally (see **Offline alternative** there). The container images come from
+`ghcr.io`; mirror them into your own registry and set the image in
+`docker-compose.yml` if the host cannot pull from it.
+
 ## Troubleshooting
 
 ### PR opened but no review posted
@@ -1492,7 +1563,8 @@ confirm a finding before acting on it.
 
 Pull request diffs go to the endpoint you configure. Use an HTTPS endpoint with
 an API key, and read the provider's data-retention policy before sending it
-private code.
+private code. To keep code on your network, see
+[Restricted-network deployment](#restricted-network-deployment).
 
 Set `AI_API_KEY`, `GITHUB_PRIVATE_KEY` and the webhook secret through your
 environment or a secret manager, and never commit them. Treat
