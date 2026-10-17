@@ -27,6 +27,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** The linked issue and its unmet criterion, always named in the summary (#1093). */
 class LinkedIssueCriteriaTest {
@@ -699,6 +701,308 @@ class LinkedIssueCriteriaTest {
             "- Linked issue #256: An applicant who declines two offers is moved to the back of the"
                 + " waitlist — the overview above reports it unmet"),
         rendered);
+  }
+
+  /** ThrillhouseBot#1146, whose criteria hold the word "dropped" themselves. */
+  private static final String ISSUE_1146 =
+      """
+      Issues this pull request is linked to: #1146
+
+      ### Issue #1146: Drop gap entries that concede there is no gap
+      Linked by: a closing keyword in the PR body
+      Acceptance criteria (from the issue):
+      - [ ] Tests from the #1134 and #1142 bullets: dropped.
+      - [ ] Test from the #1141 bullet: kept.
+      """;
+
+  /** The two overview sentences of the #1147 summary on server rc5, word for word. */
+  private static final String OVERVIEW_1147 =
+      "This pull request fixes description-gap filtering in ThrillhouseBot's review pipeline:"
+          + " DescriptionGapScreen gains new recognition rules for bullets whose own words concede"
+          + " there is no mismatch (e.g. \"(disclosed, not contradicted)\", \"matches the diff —"
+          + " no gap\") or that only say the material cannot confirm a claim, while"
+          + " DescriptionGapCarryover's screened step drops such bullets both fresh and carried,"
+          + " never dropping a \"Linked issue #N:\" gap. The change spans the review main code and"
+          + " its test suite across three directories, plus one-line updates to AGENTS.md and"
+          + " CHANGELOG.md, matching the acceptance criteria in #1146 (the #1134 and #1142 bullets"
+          + " dropped, the #1141 linked-issue bullet kept).";
+
+  @Test
+  void anOverviewMatchingTheCriteriaIsNoUnmetCriterion() {
+    // #1147 on rc5: "dropped" is the criterion's own word and the sentence says the change
+    // matches the criteria; neither is a not-met signal.
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_1146, List.of(), OVERVIEW_1147, Map.of()));
+    for (var praise :
+        List.of(
+            "The change meets the acceptance criteria of #1146: the #1134 and #1142 bullets are"
+                + " dropped.",
+            "The #1134 and #1142 bullets are dropped, satisfying the issue's acceptance criteria.")) {
+      assertEquals(
+          LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_1146, List.of(), praise, Map.of()), praise);
+    }
+  }
+
+  @Test
+  void aCriterionStatedUnmetStillGetsALineWhenItsOwnWordsAppear() {
+    for (var overview :
+        List.of(
+            "The change does not meet the acceptance criteria in #1146: the #1134 and #1142"
+                + " bullets are not dropped.",
+            "The change doesn't match the acceptance criteria in #1146: the #1134 and #1142"
+                + " bullets are not dropped.",
+            "The issue's 'Tests from the #1134 and #1142 bullets' criterion is not met.",
+            "Contrary to the acceptance criteria, the #1134 and #1142 bullets are not dropped in"
+                + " the tests.")) {
+      var lines = unmet(ISSUE_1146, List.of(), overview, Map.of()).lines();
+      assertEquals(
+          List.of(
+              "Linked issue #1146: Tests from the #1134 and #1142 bullets: dropped. — the overview"
+                  + " above reports it unmet"),
+          lines,
+          overview);
+    }
+  }
+
+  /** A praise word in the clause does not pardon a not-met statement about the criterion. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        // Not negated at all, next to a real not-met statement.
+        "The change matches the acceptance criteria in #1146 and the #1134 and #1142 bullets are"
+            + " not dropped.",
+        // Negated across commas, past a second word, or with an adverb between.
+        "The change doesn't, in fact, match the acceptance criteria in #1146: the #1134 and #1142"
+            + " bullets are not dropped.",
+        "The reviewer doesn't think the change will match the issue's 'Tests from the #1134 and"
+            + " #1142 bullets' criterion.",
+        "The change doesn't fully meet the issue's 'Tests from the #1134 and #1142 bullets'"
+            + " criterion.",
+        "The change does not seem to meet the issue's 'Tests from the #1134 and #1142 bullets'"
+            + " criterion."
+      })
+  void aPraiseWordDoesNotPardonANotMetSignalAboutTheCriterion(String overview) {
+    var lines = unmet(ISSUE_1146, List.of(), overview, Map.of()).lines();
+
+    assertEquals(1, lines.size(), overview + " -> " + lines);
+    assertTrue(lines.getFirst().startsWith("Linked issue #1146: Tests from"), overview);
+  }
+
+  /** A contracted negation right before a not-met word praises, as "not" does. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The issue's 'declines two offers' rule isn't missing.",
+        "The issue's 'declines two offers' rule doesn't fail.",
+        "The issue’s ‘declines two offers’ rule doesn’t really fail."
+      })
+  void aContractedNegationBeforeANotMetWordPraises(String praise) {
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), praise, Map.of()), praise);
+  }
+
+  /** An issue whose criteria name the gap they close, negated or marked fixed. */
+  private static final String ISSUE_PARSER =
+      """
+      Issues this pull request is linked to: #900
+
+      ### Issue #900: Importer hardening
+      Linked by: a closing keyword in the PR body
+      Acceptance criteria (from the issue):
+      - [ ] The parser no longer fails on empty input.
+      - [ ] A duplicate email import fails: fixed.
+      """;
+
+  /** A not-met word the criterion uses for the gap it closes still reads as the gap. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The issue's 'no longer fails on empty input' parser rule: the parser never fails on empty"
+            + " input.",
+        "The issue's 'duplicate email import' rule never fails.",
+        "The issue's 'duplicate email import' rule does not fail any more."
+      })
+  void aNegatedGapTheCriterionNamesIsPraise(String praise) {
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_PARSER, List.of(), praise, Map.of()), praise);
+  }
+
+  @Test
+  void aGapTheCriterionNamesStatedAgainIsUnmet() {
+    var overview = "The issue's 'duplicate email import' still fails.";
+
+    var lines = unmet(ISSUE_PARSER, List.of(), overview, Map.of()).lines();
+
+    assertEquals(1, lines.size(), lines.toString());
+    assertTrue(lines.getFirst().startsWith("Linked issue #900: A duplicate email"), overview);
+  }
+
+  /** A contracted negation reads as the spelled one in every path. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The issue's 'declines two offers' rule isn't missing any offers.",
+        "The issue's 'declines two offers' rule doesn't ever fail on offers."
+      })
+  void aContractedNegationPraisesAsTheSpelledOneDoes(String praise) {
+    var spelled = praise.replace("isn't", "is not").replace("doesn't", "does not");
+    assertEquals(
+        unmet(ISSUE_256, List.of(), spelled, Map.of()),
+        unmet(ISSUE_256, List.of(), praise, Map.of()),
+        praise);
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), praise, Map.of()), praise);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The issue's #1134 and #1142 bullets aren't dropped.",
+        "The issue's 'Tests from the #1134 and #1142 bullets' criterion isn't met.",
+        "The reviewer doesn't believe the change will match the issue's 'Tests from the #1134 and"
+            + " #1142 bullets' criterion.",
+        "The reviewer doesn't expect the change to match the issue's 'Tests from the #1134 and"
+            + " #1142 bullets' criterion.",
+        // Fulfilment words whose stem is shorter than the word.
+        "The issue's 'Tests from the #1134 and #1142 bullets' criterion is not addressed.",
+        "The issue's 'Tests from the #1134 and #1142 bullets' criterion is not done."
+      })
+  void aContractedOrInflectedNegationStillReportsTheCriterion(String overview) {
+    var lines = unmet(ISSUE_1146, List.of(), overview, Map.of()).lines();
+
+    assertEquals(1, lines.size(), overview + " -> " + lines);
+  }
+
+  @Test
+  void aQualifierIsSkippedInEveryInflection() {
+    // "always" stems to "alway"; the qualifier list is matched by stem, so it is skipped.
+    for (var row :
+        List.of(
+            "The board does not always lock shifts that start within 2 hours.",
+            "The board doesn't always lock shifts that start within 2 hours.",
+            "The board won't ever lock shifts that start within 2 hours.")) {
+      assertEquals(
+          1,
+          unmet(ISSUE_260, List.of(), null, Map.of("react/src/components/ShiftBoard.tsx", row))
+              .lines()
+              .size(),
+          row);
+    }
+  }
+
+  /**
+   * Criteria asking for "dropped" with a remedy word or a negation in another clause of their own:
+   * neither reaches the asked-for word.
+   */
+  private static final String ISSUE_CLAUSES =
+      """
+      Issues this pull request is linked to: #901
+
+      ### Issue #901: Summary clean-up
+      Linked by: a closing keyword in the PR body
+      Acceptance criteria (from the issue):
+      - [ ] Conceding bullets are dropped, and the flaky retry in the summary call is fixed.
+      - [ ] Bullets with no gap; dropped from the list, they stay out of the carry-over.
+      - [ ] Duplicate rows of the import are dropped
+      """;
+
+  /** A remedy or a negation in another clause of the criterion leaves its asked-for word asked. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The issue's 'Conceding bullets are dropped' rule holds: the conceding bullets are dropped.",
+        "The issue's 'dropped from the list' rule holds: the bullets are dropped.",
+        // The criterion ends at its asked-for word, with no full stop.
+        "The issue's 'Duplicate rows of the import' rule holds: the duplicate rows are dropped."
+      })
+  void aRemedyOrNegationInAnotherClauseOfTheCriterionDoesNotReachTheAskedWord(String praise) {
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_CLAUSES, List.of(), praise, Map.of()), praise);
+  }
+
+  /** A remedy past a few words of the gap word does not reach it either. */
+  @Test
+  void aRemedyFarAfterTheWordDoesNotMakeItAGap() {
+    var issue =
+        ISSUE_CLAUSES.replace(
+            "Conceding bullets are dropped, and the flaky retry in the summary call is fixed.",
+            "Conceding bullets are dropped from the list the reviewer reads once a gap is fixed.");
+    var praise =
+        "The issue's 'Conceding bullets are dropped from the list' rule holds: the conceding"
+            + " bullets are dropped.";
+
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(issue, List.of(), praise, Map.of()));
+  }
+
+  /** A word that only starts like a fulfilment word is not one: "metrics", "coverage". */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The issue's 'declines two offers' rule does not change the metrics.",
+        "The issue's 'declines two offers' rule has no coverage report.",
+        "The issue's 'declines two offers' rule does not touch the presentation layer.",
+        "The issue's 'declines two offers' rule needs no donation flow."
+      })
+  void aWordStartingLikeAFulfilmentWordIsNoFulfilment(String overview) {
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), overview, Map.of()), overview);
+  }
+
+  /** Every inflection of a fulfilment word still binds the negation. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "met",
+        "meeting",
+        "matched",
+        "matching",
+        "implementing",
+        "satisfied",
+        "satisfying",
+        "handled",
+        "addressed",
+        "covered",
+        "done",
+        "supported",
+        "enforced",
+        "honored",
+        "honoured",
+        "respected",
+        "applied",
+        "followed",
+        "delivered",
+        "provided",
+        "included",
+        "present",
+        "fulfilled",
+        "achieved",
+        "completed"
+      })
+  void everyInflectionOfAFulfilmentWordBindsTheNegation(String verb) {
+    var overview = "The issue's 'declines two offers' rule is not " + verb + ".";
+
+    assertEquals(1, unmet(ISSUE_256, List.of(), overview, Map.of()).lines().size(), overview);
+  }
+
+  /** A punctuation mark opening the text after a word takes no slot of a fixed reach. */
+  @Test
+  void theRemedyReachCountsWordsNotThePunctuationBeforeThem() {
+    // "fixed" is the third word after "fails", past a colon: still within the remedy's reach.
+    var issue =
+        ISSUE_PARSER.replace(
+            "A duplicate email import fails: fixed.",
+            "A duplicate email import fails: on duplicates: fixed.");
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE,
+        unmet(
+            issue, List.of(), "The issue's 'duplicate email import' rule never fails.", Map.of()));
+  }
+
+  @Test
+  void thePraiseReachCountsWordsNotTheQuoteMarkBeforeThem() {
+    // "missing" is the second word after "not", past a quote mark: still within the praise reach.
+    var praise = "The issue's 'declines two offers' rule is not \"now\" missing any offers.";
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), praise, Map.of()));
   }
 
   /** The summary renders the lines in place of the finding bullets they point at. */
