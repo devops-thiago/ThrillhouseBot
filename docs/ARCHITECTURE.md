@@ -280,7 +280,9 @@ purpose sentences, walkthrough rows and diagram lines, each with an id, together
 review calls read, the findings the round posts and the PR text. The answer names the ids the
 material contradicts, each with its evidence, and `SummaryStatements` removes them: a sentence is
 cut, a row loses its file summary, and any named diagram line drops the diagram. An entry with no
-evidence is ignored. The call fails open on an error, an empty, cut or malformed answer, an input
+evidence is ignored. Only the text the summary call wrote in that round is checked, before the
+previous round's overview fills what it lacks, and a removed statement is not filled back in. Each
+removal is logged with its statement and evidence. The call fails open on an error, an empty, cut or malformed answer, an input
 over the per-call budget or the spend ceiling, and it never changes findings.
 
 ### Deterministic security scan

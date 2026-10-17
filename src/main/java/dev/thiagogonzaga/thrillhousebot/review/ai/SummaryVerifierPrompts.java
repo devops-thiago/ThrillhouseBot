@@ -52,6 +52,11 @@ public final class SummaryVerifierPrompts {
               A statement about a file or a line you cannot see is not contradicted.
             - It is vague, incomplete, or worded differently from the code but not false.
             - It restates what the PR description says and the diff does not refute it.
+            - It says what the change is for, or what it does for the cases it names, and a finding
+              reports a different case, input or wording the change gets wrong. A finding
+              contradicts a statement only when the statement names that same case, or claims the
+              change handles every case. A finding about one case is never a reason to cut the
+              statement of what the change does.
             - You would have to rely on remembered framework or library behaviour to call it false.
 
             When no diff section is included, judge the statements against the findings only.

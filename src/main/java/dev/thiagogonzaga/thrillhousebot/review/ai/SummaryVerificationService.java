@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.service.Result;
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import io.quarkus.logging.Log;
@@ -25,12 +26,11 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * The opt-in summary verification step (#1078, {@code REVIEW_SUMMARY_VERIFICATION_ENABLED}, off by
@@ -123,7 +123,7 @@ public class SummaryVerificationService {
       List<ReviewResponse.Finding> findings,
       int inputBudget) {
     public Material {
-      prContext = Objects.requireNonNullElse(prContext, "");
+      prContext = fenced(prContext);
       // copyOf stays inline so SpotBugs sees the defensive copy (EI_EXPOSE_REP).
       diffParts =
           List.copyOf(
@@ -133,6 +133,21 @@ public class SummaryVerificationService {
       projectStack = Objects.requireNonNullElse(projectStack, "");
       findings = findings == null ? List.of() : List.copyOf(findings);
     }
+  }
+
+  /**
+   * The PR text as the template promises it: between two fence lines. Text that already arrives
+   * fenced, as the assembler fences it, is kept as it is; anything else is fenced here, so no path
+   * can hand the call the author's text as instructions. Blank reads as {@code ""}, which leaves
+   * the section out.
+   */
+  static String fenced(String prContext) {
+    if (prContext == null || prContext.isBlank()) {
+      return "";
+    }
+    return PromptTemplateEscaper.unfence(prContext).equals(prContext)
+        ? PromptTemplateEscaper.fence(prContext)
+        : prContext;
   }
 
   /** Whether the step is on ({@code REVIEW_SUMMARY_VERIFICATION_ENABLED}). */
@@ -194,20 +209,30 @@ public class SummaryVerificationService {
             ledgerSessionId);
         return summary;
       }
-      var contradicted = contradictedIds(raw);
+      var contradicted = contradicted(raw);
+      var cut =
+          statements.statements().stream()
+              .filter(statement -> contradicted.containsKey(statement.id()))
+              .toList();
       // Only the ids that name a statement are logged: those are this class's own labels, while
       // anything else the answer put there is model text.
-      var named =
-          statements.statements().stream()
-              .map(SummaryStatements.Statement::id)
-              .filter(contradicted::contains)
-              .toList();
+      var cutIds = String.join(", ", cut.stream().map(SummaryStatements.Statement::id).toList());
       Log.infof(
           "Summary verification for review session %d checked %d statement(s); contradicted: %s",
           ledgerSessionId,
           statements.statements().size(),
-          named.isEmpty() ? "none" : String.join(", ", named));
-      return statements.without(contradicted);
+          cut.isEmpty() ? "none" : LogSafe.oneLine(cutIds));
+      // One line per cut, with the statement and the evidence the answer gave, so whether a cut
+      // was right can be checked from the log; both are model text, flattened to one line.
+      for (var statement : cut) {
+        Log.infof(
+            "Summary verification for review session %d cut %s \"%s\"; evidence: \"%s\"",
+            ledgerSessionId,
+            LogSafe.oneLine(statement.id()),
+            LogSafe.oneLine(statement.text()),
+            LogSafe.oneLine(clipped(contradicted.get(statement.id()))));
+      }
+      return statements.without(contradicted.keySet());
     } catch (IOException | RuntimeException e) {
       // Only the type is logged: the message can carry provider or model text.
       Log.warnf(
@@ -260,23 +285,33 @@ public class SummaryVerificationService {
     return mapper.writeValueAsString(rows);
   }
 
+  /** The longest evidence logged for one cut. */
+  static final int MAX_LOGGED_EVIDENCE = 300;
+
+  private static String clipped(String evidence) {
+    return evidence.length() > MAX_LOGGED_EVIDENCE
+        ? evidence.substring(0, MAX_LOGGED_EVIDENCE) + "…"
+        : evidence;
+  }
+
   /**
-   * The ids the answer lists, upper-cased. An entry with no id or no evidence is ignored, so an
-   * answer that names a statement without saying what refutes it cuts nothing; an answer that is
-   * not the expected JSON throws, and the caller keeps the summary.
+   * The ids the answer lists, upper-cased, each with its evidence (the first, for an id listed
+   * twice). An entry with no id or no evidence is ignored, so an answer that names a statement
+   * without saying what refutes it cuts nothing; an answer that is not the expected JSON throws,
+   * and the caller keeps the summary.
    */
-  Set<String> contradictedIds(String raw) throws IOException {
+  Map<String, String> contradicted(String raw) throws IOException {
     var json = ReviewResponseParser.extractJson(raw, List.of(ROOT_KEY));
     JsonNode root = mapper.readTree(json);
     if (!root.isObject() || !root.path(ROOT_KEY).isArray()) {
       throw new IOException("summary verification answer has no " + ROOT_KEY + " array");
     }
-    var ids = new HashSet<String>();
+    var ids = new LinkedHashMap<String, String>();
     for (var entry : root.path(ROOT_KEY)) {
       var id = entry.path("id").asText("").strip();
       var evidence = entry.path("evidence").asText("").strip();
       if (!id.isEmpty() && !evidence.isEmpty()) {
-        ids.add(id.toUpperCase(Locale.ROOT));
+        ids.putIfAbsent(id.toUpperCase(Locale.ROOT), evidence);
       }
     }
     return ids;

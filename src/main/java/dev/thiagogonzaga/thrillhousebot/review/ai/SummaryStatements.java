@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -98,8 +99,9 @@ final class SummaryStatements {
   /** Every sentence of the purpose paragraph, judged or past the cap, to rebuild it from. */
   private final List<Statement> sentences;
 
-  private SummaryStatements(ReviewResponse.Summary summary, List<Statement> found) {
+  private SummaryStatements(ReviewResponse.Summary summary, List<Statement> unnumbered) {
     this.summary = summary;
+    var found = numbered(unnumbered);
     this.statements =
         List.copyOf(found.size() > MAX_STATEMENTS ? found.subList(0, MAX_STATEMENTS) : found);
     this.sentences = found.stream().filter(s -> s.kind() == Kind.SENTENCE).toList();
@@ -177,11 +179,23 @@ final class SummaryStatements {
         || first.endsWith("diagram-v2");
   }
 
+  /** Adds a statement with no id yet; {@link #numbered} gives every statement its id at once. */
   private static void add(
       List<Statement> found, Kind kind, int index, int start, int end, String text) {
-    var count = found.stream().filter(s -> s.kind() == kind).count();
     var shown = text.length() > MAX_STATEMENT_CHARS ? text.substring(0, MAX_STATEMENT_CHARS) : text;
-    found.add(new Statement(kind.prefix + (count + 1), kind, index, start, end, shown));
+    found.add(new Statement(null, kind, index, start, end, shown));
+  }
+
+  /** {@code found} with each statement's id: its kind's prefix and its place among that kind. */
+  private static List<Statement> numbered(List<Statement> found) {
+    var counts = new EnumMap<Kind, Integer>(Kind.class);
+    var numbered = new ArrayList<Statement>(found.size());
+    for (var s : found) {
+      int n = counts.merge(s.kind(), 1, Integer::sum);
+      numbered.add(
+          new Statement(s.kind().prefix + n, s.kind(), s.index(), s.start(), s.end(), s.text()));
+    }
+    return numbered;
   }
 
   /** The statements, in id order within each kind. */

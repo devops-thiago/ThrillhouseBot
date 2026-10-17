@@ -50,6 +50,17 @@ class SummaryVerifierPromptsContentTest {
   }
 
   @Test
+  void aFindingAboutOneCaseDoesNotContradictWhatTheChangeDoes() {
+    // rc6 sessions 7353 and 7356 cut S1 in the only rounds with an edge-case finding open, and the
+    // #1142 eval case cut a true sentence about "removes" on a finding about "cuts".
+    assertTrue(
+        SummaryVerifierPrompts.SYSTEM.contains("statement names that same case, or claims the"));
+    assertTrue(
+        SummaryVerifierPrompts.SYSTEM.contains(
+            "A finding about one case is never a reason to cut"));
+  }
+
+  @Test
   void theBillingRunsExampleOfTheIssueIsKept() {
     assertTrue(SummaryVerifierPrompts.SYSTEM.contains("writes a billing_runs summary row"));
   }

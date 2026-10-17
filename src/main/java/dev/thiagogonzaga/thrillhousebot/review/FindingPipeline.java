@@ -686,16 +686,67 @@ public class FindingPipeline {
                         + findingsText(refined))),
             ctx.files());
     // #944: an answer with no overview on the head the previous round reviewed keeps that round's.
-    var filled = PriorOverviewCarryover.fill(screened, ctx);
-    // #1078 (opt-in): the statements the diff or an open finding contradicts leave the summary.
+    // #1078 (opt-in): the statements of this answer that the diff or an open finding contradicts
+    // leave it. Only the text this summary call wrote is checked; what the carryover below brings
+    // in from the previous round was written, and checked, on that round.
+    if (!summaryVerification.enabled()) {
+      return persistWithSummary(
+          session, refined, PriorOverviewCarryover.fill(screened, ctx), carry);
+    }
     var verified =
-        summaryVerification.enabled()
-            ? summaryVerification.verify(
-                ledgerSessionId(session),
-                filled,
-                summaryVerificationMaterial(refined, inputs, ctx, plan))
-            : filled;
-    return persistWithSummary(session, refined, verified, carry);
+        summaryVerification.verify(
+            ledgerSessionId(session),
+            screened,
+            summaryVerificationMaterial(refined, inputs, ctx, plan));
+    return persistWithSummary(
+        session,
+        refined,
+        withoutRefilled(screened, verified, PriorOverviewCarryover.fill(verified, ctx)),
+        carry);
+  }
+
+  /**
+   * {@code filled} less what the summary check removed from {@code checked} and the carryover put
+   * back (#1078): the previous round's purpose where every sentence of this one was cut, its file
+   * summary for a row that was cut, and its diagram where this one was dropped. A statement the
+   * diff contradicts on this head is not shown again because an earlier round wrote it too.
+   */
+  static ReviewResponse.Summary withoutRefilled(
+      ReviewResponse.Summary checked,
+      ReviewResponse.Summary verified,
+      ReviewResponse.Summary filled) {
+    if (checked == null || verified == null || filled == null || checked == verified) {
+      return filled;
+    }
+    var keptPaths =
+        verified.fileSummaries().stream()
+            .map(ReviewResponse.FileSummary::path)
+            .collect(Collectors.toSet());
+    var cutPaths =
+        checked.fileSummaries().stream()
+            .map(ReviewResponse.FileSummary::path)
+            .filter(path -> !keptPaths.contains(path))
+            .collect(Collectors.toSet());
+    boolean purposeCut = !isBlank(checked.prPurpose()) && isBlank(verified.prPurpose());
+    boolean diagramCut =
+        !isBlank(checked.walkthroughDiagram()) && isBlank(verified.walkthroughDiagram());
+    return new ReviewResponse.Summary(
+        filled.totalFindings(),
+        filled.critical(),
+        filled.high(),
+        filled.medium(),
+        filled.low(),
+        filled.overallAssessment(),
+        purposeCut ? null : filled.prPurpose(),
+        filled.descriptionGaps(),
+        filled.suggestedLabels(),
+        filled.fileSummaries().stream().filter(f -> !cutPaths.contains(f.path())).toList(),
+        diagramCut ? null : filled.walkthroughDiagram(),
+        filled.addressedGaps());
+  }
+
+  private static boolean isBlank(String text) {
+    return text == null || text.isBlank();
   }
 
   /**

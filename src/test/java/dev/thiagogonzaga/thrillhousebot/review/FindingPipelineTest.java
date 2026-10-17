@@ -4473,7 +4473,7 @@ class FindingPipelineTest {
     assertEquals("totals usage. writes a billing_runs row", checked.getValue().prPurpose());
     assertEquals(List.of("### a.java\n", "### b.java\n"), material.getValue().diffParts());
     assertEquals(result.findings(), material.getValue().findings());
-    assertEquals("ctx", material.getValue().prContext());
+    assertEquals("ctx", PromptTemplateEscaper.unfence(material.getValue().prContext()));
     assertEquals("stack", material.getValue().projectStack());
     assertEquals(90_000, material.getValue().inputBudget());
     assertEquals("totals usage", result.summary().prPurpose());
@@ -4552,5 +4552,188 @@ class FindingPipelineTest {
             ReviewEvidence.NONE);
 
     verify(summaryVerification, never()).verify(anyLong(), any(), any());
+  }
+
+  /**
+   * #1078: on the head the previous round reviewed, only the text this answer wrote is checked; the
+   * row the carryover brings in is not sent, and a row the check cut does not come back from it.
+   */
+  @Test
+  void onTheSameHeadOnlyTheAnswersOwnTextIsCheckedAndACutRowIsNotRefilled() {
+    var summaryVerification = mock(SummaryVerificationService.class);
+    when(summaryVerification.enabled()).thenReturn(true);
+    var answer =
+        new ReviewResponse.Summary(
+            1,
+            0,
+            0,
+            1,
+            0,
+            "ok",
+            "Adds a row cache in front of the store. It sorts the rows.",
+            List.of(),
+            List.of(),
+            List.of(new ReviewResponse.FileSummary("a.java", "caches and sorts rows")),
+            "flowchart TD\n  A --> B",
+            List.of());
+    var checkedSummary = ArgumentCaptor.forClass(ReviewResponse.Summary.class);
+    when(summaryVerification.verify(anyLong(), checkedSummary.capture(), any()))
+        .thenAnswer(
+            inv -> {
+              ReviewResponse.Summary s = inv.getArgument(1);
+              return new ReviewResponse.Summary(
+                  s.totalFindings(),
+                  s.critical(),
+                  s.high(),
+                  s.medium(),
+                  s.low(),
+                  s.overallAssessment(),
+                  s.prPurpose(),
+                  s.descriptionGaps(),
+                  s.suggestedLabels(),
+                  List.of(),
+                  null,
+                  s.addressedGaps());
+            });
+    var session = ReviewSession.create("owner/repo", 1, "Same head", "sha");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), answer));
+    var prior =
+        new ReviewResponse.Summary(
+            1,
+            0,
+            0,
+            1,
+            0,
+            "ok",
+            "Adds a row cache.",
+            List.of(),
+            List.of(),
+            List.of(
+                new ReviewResponse.FileSummary("a.java", "caches rows"),
+                new ReviewResponse.FileSummary("b.java", "evicts stale rows")),
+            "flowchart TD\n  P --> Q",
+            List.of());
+
+    var result =
+        pipelineWith(summaryVerification)
+            .run(
+                session,
+                new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", ""),
+                sameHeadContext(prior),
+                multiBatchPlan(),
+                new DiffLineResolver(Map.of()),
+                ReviewEvidence.NONE);
+
+    assertEquals(
+        List.of("a.java"),
+        checkedSummary.getValue().fileSummaries().stream()
+            .map(ReviewResponse.FileSummary::path)
+            .toList());
+    assertEquals(
+        List.of(new ReviewResponse.FileSummary("b.java", "evicts stale rows")),
+        result.summary().fileSummaries());
+    assertNull(result.summary().walkthroughDiagram());
+    assertEquals(answer.prPurpose(), result.summary().prPurpose());
+  }
+
+  @Test
+  void withoutRefilledKeepsEveryCutAndChangesNothingWhenNothingWasCut() {
+    var checked =
+        new ReviewResponse.Summary(
+            1,
+            0,
+            0,
+            1,
+            0,
+            "ok",
+            "Sorts the rows.",
+            List.of(),
+            List.of(),
+            List.of(
+                new ReviewResponse.FileSummary("a.java", "sorts rows"),
+                new ReviewResponse.FileSummary("c.java", "reads rows")),
+            "flowchart TD\n  A --> B",
+            List.of());
+    var verified =
+        new ReviewResponse.Summary(
+            1,
+            0,
+            0,
+            1,
+            0,
+            "ok",
+            null,
+            List.of(),
+            List.of(),
+            List.of(new ReviewResponse.FileSummary("c.java", "reads rows")),
+            null,
+            List.of());
+    var filled =
+        new ReviewResponse.Summary(
+            1,
+            0,
+            0,
+            1,
+            0,
+            "ok",
+            "Adds a row cache.",
+            List.of("gap"),
+            List.of("cache"),
+            List.of(
+                new ReviewResponse.FileSummary("c.java", "reads rows"),
+                new ReviewResponse.FileSummary("a.java", "caches rows"),
+                new ReviewResponse.FileSummary("b.java", "evicts")),
+            "flowchart TD\n  P --> Q",
+            List.of("G1"));
+
+    var kept = FindingPipeline.withoutRefilled(checked, verified, filled);
+
+    assertNull(kept.prPurpose());
+    assertNull(kept.walkthroughDiagram());
+    assertEquals(
+        List.of("c.java", "b.java"),
+        kept.fileSummaries().stream().map(ReviewResponse.FileSummary::path).toList());
+    assertEquals(List.of("gap"), kept.descriptionGaps());
+    assertEquals(List.of("cache"), kept.suggestedLabels());
+    assertEquals(List.of("G1"), kept.addressedGaps());
+    assertSame(filled, FindingPipeline.withoutRefilled(checked, checked, filled));
+    assertSame(filled, FindingPipeline.withoutRefilled(null, verified, filled));
+    assertSame(filled, FindingPipeline.withoutRefilled(checked, null, filled));
+    assertNull(FindingPipeline.withoutRefilled(checked, verified, null));
+    // A purpose and a diagram the check kept are not touched.
+    var partly =
+        FindingPipeline.withoutRefilled(
+            checked,
+            new ReviewResponse.Summary(
+                1,
+                0,
+                0,
+                1,
+                0,
+                "ok",
+                "Sorts.",
+                List.of(),
+                List.of(),
+                List.of(),
+                "flowchart TD\n  A --> B",
+                List.of()),
+            filled);
+    assertEquals("Adds a row cache.", partly.prPurpose());
+    assertEquals("flowchart TD\n  P --> Q", partly.walkthroughDiagram());
+    // Nothing to cut when the answer had no purpose or diagram to begin with.
+    var bare =
+        new ReviewResponse.Summary(
+            0, 0, 0, 0, 0, "ok", " ", List.of(), List.of(), List.of(), null, List.of());
+    var none =
+        FindingPipeline.withoutRefilled(
+            bare,
+            new ReviewResponse.Summary(
+                0, 0, 0, 0, 0, "ok", null, List.of(), List.of(), List.of(), " ", List.of()),
+            filled);
+    assertEquals("Adds a row cache.", none.prPurpose());
+    assertEquals("flowchart TD\n  P --> Q", none.walkthroughDiagram());
   }
 }

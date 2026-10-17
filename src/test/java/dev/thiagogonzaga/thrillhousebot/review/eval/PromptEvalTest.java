@@ -286,14 +286,22 @@ class PromptEvalTest {
             Integer.MAX_VALUE);
     // No review session: the unopened sentinel key means no ceiling gates the call.
     var verified = service.verify(Long.MIN_VALUE, spec.summary(), material);
-    var text = EvalCorpusTest.summaryText(verified);
-    if (spec.keywords().stream().anyMatch(text::contains)) {
+    return summaryVerificationGrade(
+        spec.keywords(), spec.keptKeywords(), EvalCorpusTest.summaryText(verified));
+  }
+
+  /**
+   * The outcome of a summary verification sample whose summary now reads {@code text}. A sentence
+   * that names a keyword only to refute it is not the contradicted statement kept.
+   */
+  static String summaryVerificationGrade(List<String> keywords, List<String> kept, String text) {
+    if (statesAsImplemented(keywords, text)) {
       return "contradicted-kept";
     }
-    if (!spec.keptKeywords().stream().allMatch(text::contains)) {
+    if (!kept.stream().allMatch(text::contains)) {
       return "true-statement-cut";
     }
-    return spec.keywords().isEmpty() ? EvalCase.NOTHING_CUT : EvalCase.CONTRADICTED_CUT;
+    return keywords.isEmpty() ? EvalCase.NOTHING_CUT : EvalCase.CONTRADICTED_CUT;
   }
 
   /**
@@ -322,6 +330,10 @@ class PromptEvalTest {
           Pattern.compile(
               "(?i)(?:\\bnot|n't) (?:implemented|backed|shown|present|found|evident)\\b"),
           Pattern.compile("(?i)\\b(?:missing|lacks?|absent)\\b"),
+          // "No billing_runs row is written": the thing is said not to exist.
+          Pattern.compile(
+              "(?i)\\bno\\b[^.\\n]{0,60}?\\b(?:is|are|was|were) (?:written|added|created|stored|"
+                  + "recorded|sent|made)\\b"),
           Pattern.compile("(?i)\\bno (?:changed )?(?:files?|code|evidence)\\b"),
           Pattern.compile("(?i)\\b(?:pr|pull request) (?:text|body|title)\\b"),
           Pattern.compile("(?i)\\b(?:stated|according to|only (?:from|in) the)\\b"));
