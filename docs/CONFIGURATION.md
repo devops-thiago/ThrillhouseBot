@@ -24,6 +24,7 @@ These variables set Quarkus and LangChain4j keys rather than a `thrillhousebot.*
 | `DS_INPUT_PRICE` | Price of 1,000 input tokens on `deepseek-chat`, in US dollars. | `0.00014` | `thrillhousebot.ai.pricing.deepseek-chat.input-per-1k` |
 | `DS_OUTPUT_PRICE` | Price of 1,000 output tokens on `deepseek-chat`, in US dollars. | `0.00028` | `thrillhousebot.ai.pricing.deepseek-chat.output-per-1k` |
 | `OTEL_EXPORTER_ENDPOINT` | OTLP endpoint traces are exported to. | `http://localhost:4317` | `quarkus.otel.exporter.otlp.traces.endpoint` |
+| `OTEL_SDK_DISABLED` | Turn telemetry off: nothing is exported over OTLP and the Prometheus endpoint answers 404. | `false` | `quarkus.otel.sdk.disabled` |
 | `PORT` | HTTP port the bot listens on (webhooks, dashboard, health and metrics). | `8080` | `quarkus.http.port` |
 | `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` | Response cap (`max_tokens`) for the calls on the `concise` model: the summary call, the verifier and replies. A summary cut at this cap is salvaged or replaced by a counts-only summary, and the findings are kept. Set it empty to send no cap. | `8192` | `quarkus.langchain4j.openai.concise.chat-model.max-tokens` |
 
