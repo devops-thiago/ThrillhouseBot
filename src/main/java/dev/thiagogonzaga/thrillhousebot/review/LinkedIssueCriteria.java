@@ -133,6 +133,17 @@ final class LinkedIssueCriteria {
   private static final Pattern REMEDY =
       Pattern.compile("(?i)\\b(?:fixed|resolved|prevented|avoided|handled)\\b");
 
+  /** Words after a criterion's not-met word a {@link #REMEDY} may sit within, at most. */
+  static final int REMEDY_REACH = 3;
+
+  /**
+   * Where a criterion's clauses split, for reading what stands before and after one of its words: a
+   * negation or a {@link #REMEDY} in another clause ("…are dropped, and the retry is fixed") is
+   * about something else.
+   */
+  private static final Pattern CRITERION_CLAUSE =
+      Pattern.compile("(?i)[;,.!?()—–]|\\b(?:and|but|or|while)\\b");
+
   /** A word of a criterion, for finding where its own words sit. */
   private static final Pattern WORD = Pattern.compile("\\p{L}[\\p{L}\\p{N}]*+");
 
@@ -555,9 +566,10 @@ final class LinkedIssueCriteria {
 
   /**
    * Whether {@code criterion} asks for what the not-met word {@code text} says: it holds a word of
-   * that family neither negated right before it nor followed by a {@link #REMEDY}. "Tests from the
-   * bullets: dropped" asks for the drop; "the parser no longer fails" and "an import that fails on
-   * a duplicate: fixed" name the gap they close, so "fails" there is still the gap.
+   * that family that, within its own clause ({@link #CRITERION_CLAUSE}), is neither negated right
+   * before it nor followed by a {@link #REMEDY} within {@value #REMEDY_REACH} words. "Tests from
+   * the bullets: dropped" asks for the drop; "the parser no longer fails" and "an import that fails
+   * on a duplicate: fixed" name the gap they close, so "fails" there is still the gap.
    */
   private static boolean asksFor(String text, String criterion) {
     var wanted = words(text);
@@ -565,12 +577,34 @@ final class LinkedIssueCriteria {
     var word = WORD.matcher(readable);
     while (word.find()) {
       if (words(word.group()).stream().anyMatch(c -> wanted.stream().anyMatch(w -> family(w, c)))
-          && !negatedBefore(readable.substring(0, word.start()))
-          && !REMEDY.matcher(readable.substring(word.end())).find()) {
+          && !negatedBefore(readable.substring(clauseStart(readable, word.start()), word.start()))
+          && !remedyFollows(readable.substring(word.end(), clauseEnd(readable, word.end())))) {
         return true;
       }
     }
     return false;
+  }
+
+  /** Where the {@link #CRITERION_CLAUSE} holding position {@code at} of {@code text} starts. */
+  private static int clauseStart(String text, int at) {
+    var start = 0;
+    var split = CRITERION_CLAUSE.matcher(text).region(0, at);
+    while (split.find()) {
+      start = split.end();
+    }
+    return start;
+  }
+
+  /** Where the {@link #CRITERION_CLAUSE} holding position {@code at} of {@code text} ends. */
+  private static int clauseEnd(String text, int at) {
+    var split = CRITERION_CLAUSE.matcher(text).region(at, text.length());
+    return split.find() ? split.start() : text.length();
+  }
+
+  /** Whether a {@link #REMEDY} is among the first {@value #REMEDY_REACH} words of {@code tail}. */
+  private static boolean remedyFollows(String tail) {
+    var words = NON_ALPHANUMERIC.split(tail.strip());
+    return Arrays.stream(words).limit(REMEDY_REACH).anyMatch(w -> REMEDY.matcher(w).matches());
   }
 
   /** {@code words} less the {@link #INTENSIFIERS} and the adverbs ending in "-ly". */
@@ -582,10 +616,13 @@ final class LinkedIssueCriteria {
   }
 
   /**
-   * Whether {@code clause} says the criterion of {@code criterionWords} is not met: an {@link
-   * #UNMET} word that is not one of the criterion's own and no negation turns into praise, or a
-   * {@link #NEGATORS} negation that binds it. A praise word such as "matches the criteria" pardons
-   * neither: "matches the criteria and the bullets are not dropped" still states it unmet.
+   * Whether {@code clause} says {@code criterion} is not met: an {@link #UNMET} word no negation
+   * turns into praise and the criterion does not ask for ({@link #asksFor}), or a {@link #NEGATORS}
+   * negation that binds it. A not-met word the criterion uses for the gap it closes ("A duplicate
+   * email import fails: fixed.", "The parser no longer fails") is still read as the gap, so "the
+   * import still fails" states it unmet; only a word the criterion asks for ("bullets: dropped") is
+   * no signal. A praise word such as "matches the criteria" pardons neither: "matches the criteria
+   * and the bullets are not dropped" still states it unmet.
    */
   private static boolean saysUnmet(String clause, String criterion) {
     var criterionWords = words(criterion);

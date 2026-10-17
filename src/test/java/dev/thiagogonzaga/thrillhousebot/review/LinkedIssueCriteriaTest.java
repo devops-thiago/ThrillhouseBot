@@ -890,6 +890,50 @@ class LinkedIssueCriteriaTest {
     }
   }
 
+  /**
+   * Criteria asking for "dropped" with a remedy word or a negation in another clause of their own:
+   * neither reaches the asked-for word.
+   */
+  private static final String ISSUE_CLAUSES =
+      """
+      Issues this pull request is linked to: #901
+
+      ### Issue #901: Summary clean-up
+      Linked by: a closing keyword in the PR body
+      Acceptance criteria (from the issue):
+      - [ ] Conceding bullets are dropped, and the flaky retry in the summary call is fixed.
+      - [ ] Bullets with no gap; dropped from the list, they stay out of the carry-over.
+      - [ ] Duplicate rows of the import are dropped
+      """;
+
+  /** A remedy or a negation in another clause of the criterion leaves its asked-for word asked. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The issue's 'Conceding bullets are dropped' rule holds: the conceding bullets are dropped.",
+        "The issue's 'dropped from the list' rule holds: the bullets are dropped.",
+        // The criterion ends at its asked-for word, with no full stop.
+        "The issue's 'Duplicate rows of the import' rule holds: the duplicate rows are dropped."
+      })
+  void aRemedyOrNegationInAnotherClauseOfTheCriterionDoesNotReachTheAskedWord(String praise) {
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_CLAUSES, List.of(), praise, Map.of()), praise);
+  }
+
+  /** A remedy past a few words of the gap word does not reach it either. */
+  @Test
+  void aRemedyFarAfterTheWordDoesNotMakeItAGap() {
+    var issue =
+        ISSUE_CLAUSES.replace(
+            "Conceding bullets are dropped, and the flaky retry in the summary call is fixed.",
+            "Conceding bullets are dropped from the list the reviewer reads once a gap is fixed.");
+    var praise =
+        "The issue's 'Conceding bullets are dropped from the list' rule holds: the conceding"
+            + " bullets are dropped.";
+
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(issue, List.of(), praise, Map.of()));
+  }
+
   /** The summary renders the lines in place of the finding bullets they point at. */
   @Test
   void theSectionNamesTheIssueAndItsCriterionAndTheLineIsNotCarried() {
