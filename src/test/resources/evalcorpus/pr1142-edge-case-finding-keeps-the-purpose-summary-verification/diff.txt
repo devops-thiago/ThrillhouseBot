@@ -1,0 +1,117 @@
+### src/main/java/dev/thiagogonzaga/thrillhousebot/review/InventedArtifacts.java (added, +113 -0)
+```diff
+@@ -0,0 +1,113 @@
++/**
++ * Cuts the overview sentences that introduce an artifact the change does not contain (#1090): on
++ * ThrillhouseBot-test#250 the summary said the pull request adds "two docs files (CONFIG-ZIG.md and
++ * a settings page)", and there is no settings page. "A settings page" is not path-shaped, so {@link
++ * PathMentions} cannot reach it.
++ *
++ * <p>Only an artifact a sentence introduces is judged: an indefinite article or "new" before at
++ * most two qualifier words and a kind ("a settings page", "a new /scan endpoint", "an orders
++ * migration"). A changed file described by its role ("the config doc") is never judged. What backs
++ * each kind:
++ *
++ * <ul>
++ *   <li>a page or a screen: a changed file whose path holds a qualifier word ("SettingsPage.tsx",
++ *       "docs/settings.md"), or an added line naming the qualifier and the kind together ("settings
++ *       page", "SettingsScreen");
++ *   <li>a migration: a changed path or an added line naming a migration;
++ *   <li>an endpoint: an added line holding a qualifier word.
++ * </ul>
++ *
++ * <p>A word of the qualifier matches a word of at least {@value #MIN_FAMILY_CHARS} letters it
++ * starts, or that starts it ("config" and "configuration"). An artifact with no qualifier word ("a
++ * page") is not judged. Only summary prose is cut; findings are never touched. This is a
++ * deterministic check against the diff, not the opt-in summary verification call of #1078.
++ */
++final class InventedArtifacts {
++
++  private InventedArtifacts() {}
++
++  /** Letters a word needs before another word it starts is read as its family. */
++  static final int MIN_FAMILY_CHARS = 4;
++
++  /**
++   * An introduced artifact: an article or "new", then one or two qualifier words (group 1) and the
++   * kind (group 2). A word ends at a blank, a hyphen or an underscore, so "a settings-page", "a
++   * settings_page" and "a self-service page" are read too. The qualifier words are matched
++   * possessively one at a time, so a long run of words is not retried.
++   */
++  private static final Pattern INTRODUCED =
++      Pattern.compile(
++          "(?i)\\b(?:an?|new)\\s++((?:[\\p{L}\\p{N}/.]++[\\s_-]++){1,2}?)"
++              + "(page|screen|migration|endpoint)s?\\b");
++
++  /** Qualifier words that say nothing about what the artifact is. */
++  private static final Set<String> VAGUE =
++      Set.of(
++          "new",
++          "small",
++          "single",
++          "separate",
++          "dedicated",
++          "simple",
++          "basic",
++          "extra",
++          "own",
++          "second",
++          "another",
++          "other",
++          "docs",
++          "doc",
++          "documentation",
++          "api",
++          "http",
++          "https",
++          "grpc",
++          "graphql",
++          "rest",
++          "web");
++
++  private static final Pattern WORD_SPLIT = Pattern.compile("[^\\p{L}\\p{N}]+");
++
++  /**
++   * A camel hump: a capital after a lower-case letter ("Settings|Page"), or the last capital of an
++   * acronym before a lower-case letter ("SAML|Page", "HTML|Settings").
++   */
++  private static final Pattern CAMEL_HUMP =
++      Pattern.compile("(?<=\\p{Ll})(?=\\p{Lu})|(?<=\\p{Lu})(?=\\p{Lu}\\p{Ll})");
++
++  /**
++   * A fence opening a line, after at most three blanks: a run of three or more backticks or tildes
++   * (group 1), then the rest of the line (group 2). A block runs from such a line to the next line
++   * holding only a run of the same character at least as long, or to the end of the text; a marker
++   * inside a line opens nothing.
++   */
++  private static final Pattern FENCE_LINE = Pattern.compile("[ \t]{0,3}+(`{3,}+|~{3,}+)(.*+)");
++
++  /** A blank line between paragraphs, with the blanks around it; LF or CRLF line ends. */
++  private static final Pattern PARAGRAPH_BREAK = Pattern.compile("\r?+\n[ \t]*+\r?+\n\\s*+");
++
++  /** A file GitHub sends without a patch because it is binary: images, fonts, archives. */
++  private static final Pattern BINARY =
++      Pattern.compile("(?i)\\.(?:png|jpe?g|gif|ico|webp|pdf|woff2?|ttf|jar|zip|gz)$");
++
++  /**
++   * A negation in an artifact's clause: "does not add", "never ships", "without", "nor does it
++   * add", "neither a … nor a …".
++   */
++  private static final Pattern NEGATION =
++      Pattern.compile("(?i)\\b(?:not|cannot|never|without|nor|neither|no\\s++longer)\\b|n['’]t\\b");
++
++  /**
++   * A verb of taking something out: "removes", "deleted", "drops", "retires". A noun or adjective
++   * made from one ("removal", "deletion", "dropout", "retirement", "dropdown", "removable") is not
++   * a verb, and governs nothing.
++   */
++  private static final Pattern REMOVAL =
++      Pattern.compile(
++          "(?i)\\b(?:remov|delet|drop|retir)(?!(?:al|ion|out|e?ment|down|able|er)s?\\b)\\w*+(?!-)");
++
++  /**
++   * A conjunction that starts a new statement after a negated one: "ships without config and adds".
++   * "Or" is not one: "does not bump v2 or add a …" negates both verbs.
++   */
++  private static final Pattern CONJUNCTION = Pattern.compile("(?i)\\b(?:and|then|plus)\\b");
+```

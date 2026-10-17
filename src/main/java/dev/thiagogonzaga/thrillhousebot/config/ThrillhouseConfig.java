@@ -262,6 +262,16 @@ public interface ThrillhouseConfig {
     boolean verifierEnabled();
 
     /**
+     * Opt-in summary verification call (#1078): after the summary call, one call on the concise
+     * model checks the summary's purpose sentences, walkthrough rows and diagram lines against the
+     * diff and the open findings, and the statements they contradict are removed. Off by default;
+     * it fails open and never changes findings.
+     */
+    @WithDefault("false")
+    @WithName("summary-verification-enabled")
+    boolean summaryVerificationEnabled();
+
+    /**
      * Per-call review dimension routing (#665): each review call's system prompt carries the core
      * plus only the dimension blocks its files can use, instead of all ten, and the verifier's
      * dimension carve-outs follow the files its candidates are anchored in. Off by default while it

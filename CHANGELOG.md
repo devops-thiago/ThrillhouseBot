@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in check of the PR summary against the diff and the findings** (#1078): with `REVIEW_SUMMARY_VERIFICATION_ENABLED=true`, one more call on the concise model reads each sentence of "What this PR does", each walkthrough row and each diagram line against the diff the review read and the findings it posts, and the statements they contradict are removed: the sentence is cut, the row shows "Not summarized", and the diagram is dropped. The summary call never sees the diff, so in corpus round 17 it said a Kotlin service "writes a billing_runs summary row" that nothing writes, and drew a route that did not exist. Only the text the summary call wrote in that round is checked, each removal is logged with its statement and evidence, and a finding about one case never removes the statement of what the change does. The call is off by default, fails open (any error, cut answer or spend-ceiling skip keeps the summary as written), counts toward `REVIEW_MAX_TOKENS_PER_REVIEW`, and never changes findings.
+
 ### Changed
 
 - **Pull request commits need a DCO sign-off, and the JVM build is reproducible** (#1124): the new `dco` check fails a pull request with a commit whose `Signed-off-by` line does not match its author; `git commit -s` adds one (see CONTRIBUTING). `pom.xml` now fixes archive timestamps, so two builds of the same commit produce identical jars. GOVERNANCE.md documents the decision process, roles and continuity plan, and docs/SECURITY_MODEL.md the security model.
