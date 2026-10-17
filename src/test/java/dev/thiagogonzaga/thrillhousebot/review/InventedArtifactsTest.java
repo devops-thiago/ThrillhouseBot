@@ -470,6 +470,62 @@ class InventedArtifactsTest {
   }
 
   @Test
+  void everyCommonRemovalVerbGovernsTheArtifactInAnyInflection() {
+    var removed =
+        InventedArtifacts.Change.of(
+            List.of(
+                new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                added("web/src/App.tsx", "const app = 1;")));
+
+    for (var verb :
+        List.of(
+            "removes",
+            "deletes",
+            "drops",
+            "retires",
+            "deprecates",
+            "strips",
+            "eliminates",
+            "replaces",
+            "renames",
+            "moves",
+            "purges",
+            "discards",
+            "prunes")) {
+      assertFalse(
+          InventedArtifacts.invents("It " + verb + " the old flow and a settings page.", removed),
+          verb);
+    }
+    assertFalse(InventedArtifacts.invents("It has deprecated a settings page.", removed));
+    assertFalse(InventedArtifacts.invents("It is stripping a settings page.", removed));
+    assertFalse(InventedArtifacts.invents("It eliminated a settings page.", removed));
+    assertFalse(InventedArtifacts.invents("It will purge a settings page.", removed));
+    // A removal reaches over a list of what it removes.
+    assertFalse(
+        InventedArtifacts.invents(
+            "It removes the old flow, the old docs and the tests, and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It does not touch billing, the old docs and the tests, and removes a settings page.",
+            removed));
+    // A summary line opening with the verb.
+    assertFalse(InventedArtifacts.invents("Deprecates the old flow and a settings page.", removed));
+    assertFalse(InventedArtifacts.invents("Drops support and a settings page.", removed));
+    // A noun sharing a removal stem governs nothing.
+    assertTrue(InventedArtifacts.invents("It plans the move of a settings page.", removed));
+    assertTrue(InventedArtifacts.invents("It adds a replacement for a settings page.", removed));
+    assertTrue(InventedArtifacts.invents("It speeds up the purge with a settings page.", removed));
+    // What a replace, rename or move leads to is the new artifact, and is judged.
+    assertTrue(
+        InventedArtifacts.invents("It replaces the old page with a settings page.", removed));
+    assertTrue(InventedArtifacts.invents("It renames the old screen to a settings page.", removed));
+    assertTrue(InventedArtifacts.invents("It moves the docs into a settings page.", removed));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It deprecates the old page, replaced by a settings page.", removed));
+  }
+
+  @Test
   void nothingToJudgeLeavesTheSummaryAsItIs() {
     var fenced = "Adds the queue.\n```\na settings page\n```";
     var original = summary(fenced, null);
