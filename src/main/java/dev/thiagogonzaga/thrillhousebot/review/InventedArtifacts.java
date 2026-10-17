@@ -19,6 +19,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -53,6 +54,13 @@ import java.util.stream.Stream;
 final class InventedArtifacts {
 
   private InventedArtifacts() {}
+
+  /** The words of {@code first} and {@code second} together. */
+  private static Set<String> union(Set<String> first, Set<String> second) {
+    var all = new HashSet<String>(first);
+    all.addAll(second);
+    return Set.copyOf(all);
+  }
 
   /** Letters a word needs before another word it starts is read as its family. */
   static final int MIN_FAMILY_CHARS = 4;
@@ -126,83 +134,6 @@ final class InventedArtifacts {
       Pattern.compile("(?i)\\b(?:not|cannot|never|without|nor|neither|no\\s++longer)\\b|n['’]t\\b");
 
   /**
-   * The forms of a verb of taking something out. A word is one only in one of these forms and where
-   * a verb stands ({@link #inVerbPlace}), so a noun or adjective sharing a stem ("removal",
-   * "deletion", "dropout", "the move", "a replacement", "dropdown") governs nothing.
-   */
-  private static final Set<String> REMOVAL =
-      Set.of(
-          "remove",
-          "removes",
-          "removed",
-          "removing",
-          "delete",
-          "deletes",
-          "deleted",
-          "deleting",
-          "drop",
-          "drops",
-          "dropped",
-          "dropping",
-          "retire",
-          "retires",
-          "retired",
-          "retiring",
-          "deprecate",
-          "deprecates",
-          "deprecated",
-          "deprecating",
-          "strip",
-          "strips",
-          "stripped",
-          "stripping",
-          "eliminate",
-          "eliminates",
-          "eliminated",
-          "eliminating",
-          "replace",
-          "replaces",
-          "replaced",
-          "replacing",
-          "rename",
-          "renames",
-          "renamed",
-          "renaming",
-          "move",
-          "moves",
-          "moved",
-          "moving",
-          "purge",
-          "purges",
-          "purged",
-          "purging",
-          "discard",
-          "discards",
-          "discarded",
-          "discarding",
-          "prune",
-          "prunes",
-          "pruned",
-          "pruning");
-
-  /** The bare forms of {@link #REMOVAL}, which read as a noun as often as a verb after "and". */
-  private static final Set<String> REMOVAL_BARE =
-      Set.of(
-          "remove",
-          "delete",
-          "drop",
-          "retire",
-          "deprecate",
-          "strip",
-          "eliminate",
-          "replace",
-          "rename",
-          "move",
-          "purge",
-          "discard",
-          "prune");
-
-  /**
    * The forms of {@link #REMOVAL} that lead to something new ("replaces the old page with a …",
    * "renames it to a …", "moves the docs into a …"): an artifact after {@link #NEW_TARGET} is the
    * new one, and is judged, whether the form is the verb or a participle after it.
@@ -221,6 +152,74 @@ final class InventedArtifacts {
           "moves",
           "moved",
           "moving");
+
+  /**
+   * The forms of a verb of taking something out, the {@link #REPLACING} ones among them. A word is
+   * one only in one of these forms and where a verb stands ({@link #inVerbPlace}), so a noun or
+   * adjective sharing a stem ("removal", "deletion", "dropout", "the move", "a replacement",
+   * "dropdown") governs nothing.
+   */
+  private static final Set<String> REMOVAL =
+      union(
+          Set.of(
+              "remove",
+              "removes",
+              "removed",
+              "removing",
+              "delete",
+              "deletes",
+              "deleted",
+              "deleting",
+              "drop",
+              "drops",
+              "dropped",
+              "dropping",
+              "retire",
+              "retires",
+              "retired",
+              "retiring",
+              "deprecate",
+              "deprecates",
+              "deprecated",
+              "deprecating",
+              "strip",
+              "strips",
+              "stripped",
+              "stripping",
+              "eliminate",
+              "eliminates",
+              "eliminated",
+              "eliminating",
+              "purge",
+              "purges",
+              "purged",
+              "purging",
+              "discard",
+              "discards",
+              "discarded",
+              "discarding",
+              "prune",
+              "prunes",
+              "pruned",
+              "pruning"),
+          REPLACING);
+
+  /** The bare forms of {@link #REMOVAL}, which read as a noun as often as a verb after "and". */
+  private static final Set<String> REMOVAL_BARE =
+      Set.of(
+          "remove",
+          "delete",
+          "drop",
+          "retire",
+          "deprecate",
+          "strip",
+          "eliminate",
+          "replace",
+          "rename",
+          "move",
+          "purge",
+          "discard",
+          "prune");
 
   /** What leads a replacing verb to the new artifact: "with", "to", "into", "by". */
   private static final Pattern NEW_TARGET = Pattern.compile("(?i)\\b(?:with|to|into|by)\\b");
