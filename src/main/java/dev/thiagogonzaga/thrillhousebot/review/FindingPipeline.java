@@ -668,16 +668,19 @@ public class FindingPipeline {
     // #964: file summaries mapped onto the changed files and checked against them first, so an
     // answer the screen empties still takes the previous round's overview below.
     // #1076: then every sentence naming a path no file resolves is cut.
+    // #1090: and every sentence introducing an artifact the change does not hold.
     var screened =
-        mentions.screen(
-            OverviewScreen.screen(
-                summaryResponse.summary(),
-                ctx.files(),
-                Objects.requireNonNullElse(inputs.prContext(), "")
-                    + "\n"
-                    + Objects.requireNonNullElse(inputs.linkedIssues(), "")
-                    + "\n"
-                    + findingsText(refined)));
+        InventedArtifacts.screen(
+            mentions.screen(
+                OverviewScreen.screen(
+                    summaryResponse.summary(),
+                    ctx.files(),
+                    Objects.requireNonNullElse(inputs.prContext(), "")
+                        + "\n"
+                        + Objects.requireNonNullElse(inputs.linkedIssues(), "")
+                        + "\n"
+                        + findingsText(refined))),
+            ctx.files());
     // #944: an answer with no overview on the head the previous round reviewed keeps that round's.
     return persistWithSummary(session, refined, PriorOverviewCarryover.fill(screened, ctx), carry);
   }
