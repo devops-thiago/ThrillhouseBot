@@ -1,0 +1,40 @@
+{
+  "kind": "summary-verification",
+  "sourcePr": 1142,
+  "why": "Server rc6, review session 7356 on ThrillhouseBot#1142: with one open LOW finding (removal-verb stems miss \"cuts\", \"erases\" and \"uninstalls\"), the summary check cut S1, the purpose sentence that says what the change does; the round before it, with no finding open, cut nothing, and on #1151 the same happened with a MEDIUM edge-case finding (session 7353). A finding about a case the change mishandles does not make the statement of what the change is for false. Only a statement that claims that very case is handled is contradicted by it: here the sentence saying any removal verb, \"cuts\" and \"erases\" included, exempts an artifact.",
+  "expectation": "contradicted-cut",
+  "keywords": ["erases or uninstalls"],
+  "keptKeywords": ["Adds InventedArtifacts", "removes a page"],
+  "prTitle": "fix(review): cut summary sentences that introduce artifacts the change lacks",
+  "prDescription": "Adds `InventedArtifacts`, a deterministic check against the diff that cuts summary sentences introducing a page, screen, migration or endpoint the change does not back, such as the \"a settings page\" of ThrillhouseBot-test#250. A sentence that removes such an artifact is not judged.",
+  "findings": [
+    {
+      "risk": "low",
+      "confidence": "medium",
+      "file": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/InventedArtifacts.java",
+      "line": 110,
+      "title": "Removal-verb stems miss common removal verbs, cutting truthful removal sentences",
+      "description": "The rule only recognizes four stems, remov, delet, drop and retir, while its javadoc reads as the general class of verbs of taking something out. \"It cuts the old flow and a settings page.\" is judged, and cut, although the change removed SettingsPage.tsx; \"cuts\", \"erases\", \"uninstalls\", \"excises\" and \"deprecates\" are not covered.",
+      "suggestion_old": null,
+      "suggestion_new": null
+    }
+  ],
+  "summary": {
+    "total_findings": 1,
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 1,
+    "overall_assessment": "Adds the screen; one low finding.",
+    "pr_purpose": "Adds InventedArtifacts, a deterministic screen that cuts summary sentences introducing a page, screen, migration or endpoint the change does not back. A sentence in which the change removes a page is not judged. Any removal verb, such as cuts, erases or uninstalls, exempts the artifact it governs.",
+    "description_gaps": [],
+    "suggested_labels": [],
+    "file_summaries": [
+      {
+        "path": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/InventedArtifacts.java",
+        "summary": "New screen that judges introduced artifacts against changed paths and added lines"
+      }
+    ],
+    "walkthrough_diagram": null
+  }
+}

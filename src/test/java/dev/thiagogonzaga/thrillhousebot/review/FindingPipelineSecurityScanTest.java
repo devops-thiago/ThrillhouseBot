@@ -37,6 +37,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerifier;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
+import dev.thiagogonzaga.thrillhousebot.review.ai.SummaryVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TestResponseCaps;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager;
@@ -118,7 +119,8 @@ class FindingPipelineSecurityScanTest {
             tokenLedger,
             new TruncatedResponseSalvager(new ObjectMapper()),
             ReviewDimensionRouter.disabled(),
-            new SecurityScan(true, true, 3.5, List.of()));
+            new SecurityScan(true, true, 3.5, List.of()),
+            SummaryVerificationService.disabled());
   }
 
   private static ReviewSession session() {

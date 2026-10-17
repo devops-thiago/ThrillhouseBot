@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewDimension;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -48,8 +49,11 @@ class EvalCorpusTest {
   void everyCaseDeclaresKindProvenanceAndDiff() {
     for (EvalCase c : corpus) {
       assertTrue(
-          c.isVerifierCase() || c.isGeneratorCase() || c.isSummaryCase(),
-          c.name() + ": kind must be 'verifier', 'generator' or 'summary'");
+          c.isVerifierCase()
+              || c.isGeneratorCase()
+              || c.isSummaryCase()
+              || c.isSummaryVerificationCase(),
+          c.name() + ": kind must be 'verifier', 'generator', 'summary' or 'summary-verification'");
       assertTrue(c.spec().sourcePr() > 0, c.name() + ": sourcePr must reference the dogfood PR");
       assertNotNull(c.spec().why(), c.name() + ": why must document the resolved outcome");
       assertFalse(c.spec().why().isBlank(), c.name() + ": why must document the resolved outcome");
@@ -130,6 +134,52 @@ class EvalCorpusTest {
             c.name() + ": every diff section must be in the changed-files overview");
       }
     }
+  }
+
+  @Test
+  void summaryVerificationCasesCarryTheSummaryAndTheStatementsToCutAndKeep() {
+    var found = false;
+    for (EvalCase c : corpus) {
+      if (!c.isSummaryVerificationCase()) {
+        continue;
+      }
+      found = true;
+      var expectation = c.spec().expectation();
+      assertTrue(
+          Set.of(EvalCase.CONTRADICTED_CUT, EvalCase.NOTHING_CUT).contains(expectation),
+          c.name() + ": expectation");
+      var summary = c.spec().summary();
+      assertNotNull(summary, c.name() + ": the written summary");
+      assertNotNull(c.spec().findings(), c.name() + ": findings (may be empty)");
+      var written = summaryText(summary);
+      assertNotNull(c.spec().keywords(), c.name() + ": keywords naming what to cut");
+      assertEquals(
+          EvalCase.NOTHING_CUT.equals(expectation),
+          c.spec().keywords().isEmpty(),
+          c.name() + ": only a nothing-cut case names nothing to cut");
+      for (var keyword : c.spec().keywords()) {
+        assertTrue(written.contains(keyword), c.name() + ": the summary must state " + keyword);
+      }
+      assertNotNull(c.spec().keptKeywords(), c.name() + ": keptKeywords naming what to keep");
+      assertFalse(c.spec().keptKeywords().isEmpty(), c.name() + ": keptKeywords must not be empty");
+      for (var keyword : c.spec().keptKeywords()) {
+        assertTrue(written.contains(keyword), c.name() + ": the summary must state " + keyword);
+      }
+      for (var row : summary.fileSummaries()) {
+        assertTrue(
+            c.files().stream().anyMatch(f -> f.filename().equals(row.path())),
+            c.name() + ": every summarized file must be a diff section: " + row.path());
+      }
+    }
+    assertTrue(found, "the corpus needs a summary verification case (#1078)");
+  }
+
+  /** Every statement of {@code summary} the summary verification call reads, one per line. */
+  static String summaryText(ReviewResponse.Summary s) {
+    var text = new StringBuilder(s.prPurpose() == null ? "" : s.prPurpose());
+    s.fileSummaries().forEach(f -> text.append('\n').append(f.summary()));
+    text.append('\n').append(s.walkthroughDiagram() == null ? "" : s.walkthroughDiagram());
+    return text.toString();
   }
 
   @Test

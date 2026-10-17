@@ -1,0 +1,168 @@
+### kotlin/src/main/kotlin/newsletter/billing/BillingService.kt (added, +79 -0)
+```diff
+@@ -0,0 +1,79 @@
++package newsletter.billing
++
++import java.time.LocalDate
++import java.time.YearMonth
++
++data class BillingRunResult(val period: String, val invoiced: Int, val failed: Int, val alreadyRunning: Boolean = false)
++
++class BillingService(
++    private val store: SubscriberStore,
++    private val gateway: PaymentGateway,
++    private val plans: Map<String, Plan>,
++    private val supportedCurrencies: Set<String>,
++    private val confirmedEmails: () -> Set<String>,
++    private val alert: (String) -> Unit,
++) {
++    private val activeRuns = HashSet<String>()
++
++    fun runBillingCycle(period: YearMonth): BillingRunResult {
++        val key = period.toString()
++        if (activeRuns.contains(key)) return BillingRunResult(key, 0, 0, alreadyRunning = true)
++        activeRuns.add(key)
++        try {
++            return bill(period, key)
++        } finally {
++            activeRuns.remove(key)
++        }
++    }
++
++    private fun bill(period: YearMonth, key: String): BillingRunResult {
++        val confirmed = confirmedEmails()
++        // A cycle covers the whole subscriber base: 250k+ active rows and as many
++        // invoices per period in production.
++        val subscribers = store.findBillable()
++        val existing = store.invoicesFor(key)
++        val failedCharges = mutableListOf<ChargeOutcome>()
++        var invoiced = 0
++
++        for (sub in subscribers) {
++            if (sub.email.lowercase() !in confirmed) continue
++            if (existing.any { it.subscriberId == sub.id }) continue
++            val plan = plans[sub.planCode] ?: continue
++            if (plan.cadence == Cadence.ANNUAL && sub.startedOn.month != period.month) continue
++
++            if (sub.currency !in supportedCurrencies) {
++                failedCharges.add(ChargeOutcome(sub.id, false, "unsupported currency ${sub.currency}"))
++                continue
++            }
++            val amount = amountFor(plan, sub.startedOn, period)
++            val receipt = gateway.charge(sub.id, amount, sub.currency)
++            val outcome = if (receipt.status == "succeeded") {
++                store.saveInvoice(Invoice(sub.id, key, amount, sub.currency))
++                invoiced++
++                ChargeOutcome(sub.id, true, receipt.chargeId)
++            } else {
++                store.markPastDue(sub.id)
++                ChargeOutcome(sub.id, false, receipt.status)
++            }
++            failedCharges.add(outcome)
++        }
++
++        if (failedCharges.isNotEmpty()) {
++            alert("billing run $key: ${failedCharges.size} charges need attention")
++        }
++        return BillingRunResult(key, invoiced, failedCharges.count { !it.succeeded })
++    }
++
++    private fun amountFor(plan: Plan, startedOn: LocalDate, period: YearMonth): Long = when {
++        plan.cadence == Cadence.ANNUAL -> annualPrice(plan.priceCents)
++        YearMonth.from(startedOn) == period -> proratedCents(plan.priceCents, startedOn.dayOfMonth, period.lengthOfMonth())
++        else -> plan.priceCents
++    }
++}
++
++/** Applies the annual-plan discount of 15% to twelve months at the monthly list price. */
++internal fun annualPrice(monthlyCents: Long): Long = monthlyCents * 12 * 80 / 100
++
++/** Charge for a subscriber's partial first month, given the day of the month they signed up. */
++internal fun proratedCents(priceCents: Long, startDay: Int, daysInMonth: Int): Long =
++    priceCents * (daysInMonth - startDay) / daysInMonth
+```
+
+### kotlin/src/main/kotlin/newsletter/billing/SubscriberRepository.kt (added, +79 -0)
+```diff
+@@ -0,0 +1,79 @@
++package newsletter.billing
++
++import java.sql.Connection
++import java.sql.ResultSet
++
++interface SubscriberStore {
++    fun findBillable(): List<Subscriber>
++    fun invoicesFor(period: String): List<Invoice>
++    fun saveInvoice(invoice: Invoice)
++    fun markPastDue(subscriberId: String)
++}
++
++class SubscriberRepository(private val connection: () -> Connection) : SubscriberStore {
++
++    /** Escapes single quotes so a value can be embedded in a SQL literal. */
++    private fun escapeLiteral(value: String): String = value.replace("'", "''")
++
++    fun findByPlan(planCode: String, status: String): List<Subscriber> {
++        val safeStatus = escapeLiteral(status)
++        val sql = "SELECT id, email, plan_code, currency, started_on, status FROM subscribers " +
++            "WHERE status = '$safeStatus' AND plan_code = '$planCode' ORDER BY started_on"
++        connection().use { conn ->
++            conn.createStatement().use { stmt ->
++                stmt.executeQuery(sql).use { rs -> return generateSequence { if (rs.next()) rs.toSubscriber() else null }.toList() }
++            }
++        }
++    }
++
++    override fun findBillable(): List<Subscriber> = connection().use { conn ->
++        conn.prepareStatement(
++            "SELECT id, email, plan_code, currency, started_on, status FROM subscribers WHERE status = 'active'",
++        ).use { stmt ->
++            stmt.executeQuery().use { rs -> generateSequence { if (rs.next()) rs.toSubscriber() else null }.toList() }
++        }
++    }
++
++    override fun invoicesFor(period: String): List<Invoice> = connection().use { conn ->
++        conn.prepareStatement("SELECT subscriber_id, period, amount_cents, currency FROM invoices WHERE period = ?").use { stmt ->
++            stmt.setString(1, period)
++            stmt.executeQuery().use { rs ->
++                generateSequence {
++                    if (rs.next()) Invoice(rs.getString(1), rs.getString(2), rs.getLong(3), rs.getString(4)) else null
++                }.toList()
++            }
++        }
++    }
++
++    override fun saveInvoice(invoice: Invoice) {
++        connection().use { conn ->
++            conn.prepareStatement(
++                "INSERT INTO invoices (subscriber_id, period, amount_cents, currency) VALUES (?, ?, ?, ?)",
++            ).use { stmt ->
++                stmt.setString(1, invoice.subscriberId)
++                stmt.setString(2, invoice.period)
++                stmt.setLong(3, invoice.amountCents)
++                stmt.setString(4, invoice.currency)
++                stmt.executeUpdate()
++            }
++        }
++    }
++
++    override fun markPastDue(subscriberId: String) {
++        connection().use { conn ->
++            conn.prepareStatement("UPDATE subscribers SET status = 'past_due' WHERE id = ?").use { stmt ->
++                stmt.setString(1, subscriberId)
++                stmt.executeUpdate()
++            }
++        }
++    }
++
++    private fun ResultSet.toSubscriber() = Subscriber(
++        id = getString("id"),
++        email = getString("email"),
++        planCode = getString("plan_code"),
++        currency = getString("currency"),
++        startedOn = getDate("started_on").toLocalDate(),
++        status = getString("status"),
++    )
++}
+```
+

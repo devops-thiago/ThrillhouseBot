@@ -324,6 +324,7 @@ bounds at boot while it is on.
 | `REVIEW_CI_GATING` | How CI affects approval: `strict` holds approval while required CI is pending, failing or unreadable; `warn` approves and notes the CI state; `off` ignores CI. See [CI gating](#ci-gating) | `strict` |
 | `REVIEW_BLOCKING_STRICTNESS` | Which findings request changes: `balanced`, `strict` or `lenient`. See [Blocking strictness](#blocking-strictness) | `balanced` |
 | `REVIEW_VERIFIER_ENABLED` | Run a second, skeptical pass that re-checks each finding against the diff and drops or downgrades what it cannot confirm. See [AI call budget](#ai-call-budget) | `true` |
+| `REVIEW_SUMMARY_VERIFICATION_ENABLED` | Check the summary's sentences, walkthrough rows and diagram against the diff and the findings, and remove what they contradict. One more call per review. See [AI call budget](#ai-call-budget) | `false` |
 | `REVIEW_DIMENSION_ROUTING_ENABLED` | Give each review call only the review-dimension blocks its files can use, instead of all ten. See [Dimension routing](#dimension-routing) | `false` |
 | `REVIEW_DECLINE_RECHECK_ENABLED` | Check a maintainer's decline against the reviewed code before recording the finding justified. See [Re-checking declines](#re-checking-declines). `false` makes any reply final | `true` |
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads and finding replies | `true` |
@@ -439,6 +440,17 @@ it errors, returns an empty or cut response, or is skipped at
 posted, each with its confidence capped at medium and a line saying it was not
 verified. Under `balanced` strictness such a finding cannot request changes on
 its own. The summary states how many findings went unverified.
+
+`REVIEW_SUMMARY_VERIFICATION_ENABLED=true` adds one call after the summary call.
+The summary call does not see the diff, so it can describe something the change
+does not do. This call gets the summary's sentences, walkthrough rows and
+diagram lines with the diff and the findings, and names the statements they
+contradict. A named sentence is cut, a named row shows "Not summarized", and a
+named diagram line drops the diagram. Only text the summary call wrote in that
+round is checked; text carried over from the previous round on the same head is
+not, and a removed statement is not carried back in. Each removal is logged at
+INFO with the statement and the evidence. Findings are never changed. It fails
+open: an error, a cut answer or the spend ceiling leaves the summary as written.
 
 ### Dimension routing
 

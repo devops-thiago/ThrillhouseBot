@@ -1,0 +1,39 @@
+{
+  "kind": "summary-verification",
+  "sourcePr": 252,
+  "why": "Control for the kotlin ThrillhouseBot-test#252 case (#1078): the same diff with a summary whose every statement the diff bears out, including one about a part of the change the diff shown here does not cover (the scheduler in Main.kt). Nothing may be cut: removing a true statement takes correct text out of the summary, which is the worse failure of this step.",
+  "expectation": "nothing-cut",
+  "keywords": [],
+  "keptKeywords": [
+    "records an invoice",
+    "past_due",
+    "scheduled run",
+    "JDBC store",
+    "Save invoice"
+  ],
+  "prTitle": "feat(kotlin): add newsletter subscription billing service",
+  "prDescription": "Adds a Kotlin/Maven service under `kotlin/` that bills newsletter subscribers once per period.\n\n- Charges each subscriber through the payment gateway at their plan's price and records an invoice per subscriber per period; subscribers already invoiced for the period are skipped.\n- Declined charges mark the subscriber `past_due`.\n- Billing runs on a schedule (`BILLING_RUN_INTERVAL_MINUTES`).",
+  "findings": [],
+  "summary": {
+    "total_findings": 0,
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "overall_assessment": "Adds the billing service.",
+    "pr_purpose": "Adds a Kotlin service that bills newsletter subscribers once per period. It charges each confirmed subscriber at their plan's price and records an invoice per subscriber per period, skipping subscribers already invoiced. A declined charge marks the subscriber past_due. Billing also starts from a scheduled run.",
+    "description_gaps": [],
+    "suggested_labels": [],
+    "file_summaries": [
+      {
+        "path": "kotlin/src/main/kotlin/newsletter/billing/BillingService.kt",
+        "summary": "Runs a billing cycle: charges confirmed subscribers, saves invoices and alerts on failed charges"
+      },
+      {
+        "path": "kotlin/src/main/kotlin/newsletter/billing/SubscriberRepository.kt",
+        "summary": "JDBC store for subscribers and invoices: saves invoices and marks declined subscribers past_due"
+      }
+    ],
+    "walkthrough_diagram": "flowchart TD\n  A[runBillingCycle] --> B[Charge each confirmed subscriber]\n  B --> C[Save invoice]\n  B --> E[Mark past_due on decline]"
+  }
+}

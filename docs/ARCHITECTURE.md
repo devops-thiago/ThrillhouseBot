@@ -272,6 +272,19 @@ ceiling keeps the candidates. Those findings are capped at medium confidence and
 that they were not verified, so under the default blocking strictness they cannot request changes
 on their own. The summary states how much of the round was verified (`VerificationCoverage`).
 
+### Summary verification
+
+With `REVIEW_SUMMARY_VERIFICATION_ENABLED` (off by default), `SummaryVerificationService` makes one
+call on the concise model (`SummaryVerifier`) after the summary call. It sends the summary's
+purpose sentences, walkthrough rows and diagram lines, each with an id, together with the diff the
+review calls read, the findings the round posts and the PR text. The answer names the ids the
+material contradicts, each with its evidence, and `SummaryStatements` removes them: a sentence is
+cut, a row loses its file summary, and any named diagram line drops the diagram. An entry with no
+evidence is ignored. Only the text the summary call wrote in that round is checked, before the
+previous round's overview fills what it lacks, and a removed statement is not filled back in. Each
+removal is logged with its statement and evidence. The call fails open on an error, an empty, cut or malformed answer, an input
+over the per-call budget or the spend ceiling, and it never changes findings.
+
 ### Deterministic security scan
 
 With `REVIEW_SECRET_SCAN_ENABLED` or `REVIEW_IAC_SCAN_ENABLED` (both off by default),

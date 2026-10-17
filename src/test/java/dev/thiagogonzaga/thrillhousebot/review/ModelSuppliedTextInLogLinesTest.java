@@ -36,6 +36,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerifier;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
+import dev.thiagogonzaga.thrillhousebot.review.ai.SummaryVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TestResponseCaps;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager;
@@ -372,7 +373,8 @@ class ModelSuppliedTextInLogLinesTest {
             mock(ReviewTokenLedger.class),
             new TruncatedResponseSalvager(new ObjectMapper()),
             ReviewDimensionRouter.disabled(),
-            SecurityScan.disabled());
+            SecurityScan.disabled(),
+            SummaryVerificationService.disabled());
     var response = response(finding(FORGED_PATH, 1, FORGED_TITLE, null));
     var resolver = new DiffLineResolver(Map.of(FORGED_PATH, "@@ -0,0 +1,1 @@\n+var a = 1;\n"));
 
