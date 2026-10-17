@@ -801,6 +801,95 @@ class LinkedIssueCriteriaTest {
         LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), praise, Map.of()), praise);
   }
 
+  /** An issue whose criteria name the gap they close, negated or marked fixed. */
+  private static final String ISSUE_PARSER =
+      """
+      Issues this pull request is linked to: #900
+
+      ### Issue #900: Importer hardening
+      Linked by: a closing keyword in the PR body
+      Acceptance criteria (from the issue):
+      - [ ] The parser no longer fails on empty input.
+      - [ ] A duplicate email import fails: fixed.
+      """;
+
+  /** A not-met word the criterion uses for the gap it closes still reads as the gap. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The issue's 'no longer fails on empty input' parser rule: the parser never fails on empty"
+            + " input.",
+        "The issue's 'duplicate email import' rule never fails.",
+        "The issue's 'duplicate email import' rule does not fail any more."
+      })
+  void aNegatedGapTheCriterionNamesIsPraise(String praise) {
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_PARSER, List.of(), praise, Map.of()), praise);
+  }
+
+  @Test
+  void aGapTheCriterionNamesStatedAgainIsUnmet() {
+    var overview = "The issue's 'duplicate email import' still fails.";
+
+    var lines = unmet(ISSUE_PARSER, List.of(), overview, Map.of()).lines();
+
+    assertEquals(1, lines.size(), lines.toString());
+    assertTrue(lines.getFirst().startsWith("Linked issue #900: A duplicate email"), overview);
+  }
+
+  /** A contracted negation reads as the spelled one in every path. */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The issue's 'declines two offers' rule isn't missing any offers.",
+        "The issue's 'declines two offers' rule doesn't ever fail on offers."
+      })
+  void aContractedNegationPraisesAsTheSpelledOneDoes(String praise) {
+    var spelled = praise.replace("isn't", "is not").replace("doesn't", "does not");
+    assertEquals(
+        unmet(ISSUE_256, List.of(), spelled, Map.of()),
+        unmet(ISSUE_256, List.of(), praise, Map.of()),
+        praise);
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), praise, Map.of()), praise);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The issue's #1134 and #1142 bullets aren't dropped.",
+        "The issue's 'Tests from the #1134 and #1142 bullets' criterion isn't met.",
+        "The reviewer doesn't believe the change will match the issue's 'Tests from the #1134 and"
+            + " #1142 bullets' criterion.",
+        "The reviewer doesn't expect the change to match the issue's 'Tests from the #1134 and"
+            + " #1142 bullets' criterion.",
+        // Fulfilment words whose stem is shorter than the word.
+        "The issue's 'Tests from the #1134 and #1142 bullets' criterion is not addressed.",
+        "The issue's 'Tests from the #1134 and #1142 bullets' criterion is not done."
+      })
+  void aContractedOrInflectedNegationStillReportsTheCriterion(String overview) {
+    var lines = unmet(ISSUE_1146, List.of(), overview, Map.of()).lines();
+
+    assertEquals(1, lines.size(), overview + " -> " + lines);
+  }
+
+  @Test
+  void aQualifierIsSkippedInEveryInflection() {
+    // "always" stems to "alway"; the qualifier list is matched by stem, so it is skipped.
+    for (var row :
+        List.of(
+            "The board does not always lock shifts that start within 2 hours.",
+            "The board doesn't always lock shifts that start within 2 hours.",
+            "The board won't ever lock shifts that start within 2 hours.")) {
+      assertEquals(
+          1,
+          unmet(ISSUE_260, List.of(), null, Map.of("react/src/components/ShiftBoard.tsx", row))
+              .lines()
+              .size(),
+          row);
+    }
+  }
+
   /** The summary renders the lines in place of the finding bullets they point at. */
   @Test
   void theSectionNamesTheIssueAndItsCriterionAndTheLineIsNotCarried() {
