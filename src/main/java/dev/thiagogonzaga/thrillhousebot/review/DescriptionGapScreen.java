@@ -381,6 +381,28 @@ final class DescriptionGapScreen {
           "highlighting");
 
   /**
+   * Verbs that credit a claim only with the review as their subject, before them ("the
+   * FindingPipeline finding shows …", "an earlier finding indicates …") or after "by" ("shown by
+   * the review"): "`Publisher.java` shows a report the review filters out" names what the code
+   * shows.
+   */
+  private static final Set<String> SUBJECT_CREDIT_VERBS =
+      Set.of(
+          "show",
+          "shows",
+          "showed",
+          "shown",
+          "showing",
+          "indicate",
+          "indicates",
+          "indicated",
+          "indicating",
+          "reveal",
+          "reveals",
+          "revealed",
+          "revealing");
+
+  /**
    * Word positions, at most, from a {@link #REVIEW_NOUNS} word to its {@link #CREDIT_VERBS} verb:
    * five apart is four words between them.
    */
@@ -625,21 +647,44 @@ final class DescriptionGapScreen {
     var words = WORD.matcher(text).region(from, to);
     var nouns = new ArrayList<int[]>();
     var verbs = new ArrayList<int[]>();
+    // A subject-only verb: its index, and the index from which a noun after it counts (after "by").
+    var subjectVerbs = new ArrayList<int[]>();
     var previous = "";
     for (var index = 0; words.find(); index++) {
       var word = words.group().toLowerCase(Locale.ROOT);
+      // After a determiner a verb's form is a noun: "a report", "the show".
+      var verbal = !DETERMINERS.contains(previous);
       if (REVIEW_NOUNS.contains(word)) {
         nouns.add(new int[] {index, words.start()});
-      } else if (CREDIT_VERBS.contains(word) && !DETERMINERS.contains(previous)) {
+      } else if (verbal && CREDIT_VERBS.contains(word)) {
         verbs.add(new int[] {index, words.start()});
+      } else if (verbal && SUBJECT_CREDIT_VERBS.contains(word)) {
+        subjectVerbs.add(new int[] {index, Integer.MAX_VALUE});
+      } else if ("by".equals(word)
+          && !subjectVerbs.isEmpty()
+          && subjectVerbs.getLast()[0] == index - 1) {
+        subjectVerbs.getLast()[1] = index + 1;
       }
       previous = word;
     }
     return nouns.stream()
         .filter(
-            noun -> verbs.stream().anyMatch(verb -> Math.abs(noun[0] - verb[0]) <= CREDIT_REACH))
+            noun ->
+                verbs.stream().anyMatch(verb -> Math.abs(noun[0] - verb[0]) <= CREDIT_REACH)
+                    || subjectVerbs.stream().anyMatch(verb -> creditsAsSubject(noun[0], verb)))
         .map(noun -> noun[1])
         .toList();
+  }
+
+  /**
+   * Whether the review noun at word {@code noun} is the subject of the subject-only verb {@code
+   * verb} (its index, and where an agent after "by" starts): within {@link #CREDIT_REACH} before
+   * it, or after its "by".
+   */
+  private static boolean creditsAsSubject(int noun, int[] verb) {
+    return noun < verb[0]
+        ? verb[0] - noun <= CREDIT_REACH
+        : noun >= verb[1] && noun - verb[0] <= CREDIT_REACH;
   }
 
   /**
