@@ -660,6 +660,15 @@ class DescriptionGapScreenTest {
             "Old answers that may. Be stale entries are dropped."));
   }
 
+  /**
+   * #1150's last Description vs. Implementation entry, crediting a finding fixed on an earlier head
+   * (summary of the final approving review).
+   */
+  static final String CREDITED_1150 =
+      "The description says \"Counts-only, salvaged and carried summaries are not checked\", but"
+          + " the FindingPipeline finding shows carried PriorOverviewCarryover text is verified,"
+          + " contradicting the stated claim.";
+
   @ParameterizedTest
   @ValueSource(
       strings = {
@@ -678,7 +687,15 @@ class DescriptionGapScreenTest {
         "The description says every commit is signed; the gap was reported during the review.",
         "The description says every commit is signed; it was flagged by one of the reviewers.",
         // A later credit in the clause counts when the first is the description's.
-        "The description says one reviewer reported it without the earlier review flagging it."
+        "The description says one reviewer reported it without the earlier review flagging it.",
+        // A finding or review named with a qualifier, and verbs that show or indicate.
+        CREDITED_1150,
+        "The description says the cap holds; an earlier finding indicates `Cap.java` ignores it.",
+        "The description says the cap holds; the review's finding points out the cap is unused.",
+        "The description says the cap holds; the CapCheck finding revealed it is never read.",
+        "The description says the cap holds; it is shown by the earlier review to be unused.",
+        // A "by" that is not the verb's agent does not move the subject.
+        "The description says the cap holds; the finding shows it is set by the loader."
       })
   void aBulletCreditingTheReviewIsRecognised(String gap) {
     assertTrue(DescriptionGapScreen.creditsReview(gap));
@@ -709,7 +726,17 @@ class DescriptionGapScreenTest {
         "The release notes are long; the description never mentions where review happens.",
         // Words that only start like a crediting verb or a review noun.
         "The description says the review notebook pointer is spotless; `Doc.java` drops it.",
-        "The description says reviewed sayings are kept; `Log.java` drops them."
+        "The description says reviewed sayings are kept; `Log.java` drops them.",
+        // A verb that shows, with no review noun near it, or in the description's own clause.
+        "The description says the cap holds; the diff shows `Cap.java` ignores it.",
+        "The description says the cap holds; `Cap.java` shows the value the review reads.",
+        "The description says the cap holds; the show the review lists is `Cap.java`.",
+        // A review noun too far from the verb to be its subject or agent.
+        "The description says the cap holds; the review of the old and slow loader path now shows"
+            + " it unused.",
+        "The description says the cap holds; it is shown by one of the many slow nightly reviews.",
+        "The description says the review shows every commit; `ci.yml` skips merges.",
+        "The description says \"the FindingPipeline finding shows the text\", but none does."
       })
   void aBulletNotCreditingTheReviewIsNotRecognised(String gap) {
     assertFalse(DescriptionGapScreen.creditsReview(gap));
