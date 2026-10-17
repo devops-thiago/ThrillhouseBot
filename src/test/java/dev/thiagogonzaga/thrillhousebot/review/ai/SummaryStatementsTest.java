@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
@@ -345,5 +346,44 @@ class SummaryStatementsTest {
     assertEquals(2, statements.statements().size());
     assertTrue(statements.statements().get(0).text().startsWith("One. "));
     assertEquals("Three.", statements.statements().get(1).text());
+  }
+
+  @Test
+  void onlyDiffEvidenceCutsASentenceAndThePurposeIsNeverEmptied() {
+    var statements = SummaryStatements.of(summary252(), true);
+    var diff = SummaryStatements.Source.DIFF;
+    var finding = SummaryStatements.Source.FINDING;
+
+    assertEquals(
+        Set.of("S2", "R2", "D1"),
+        statements.cuttable(Map.of("S1", finding, "S2", diff, "R2", finding, "D1", finding)));
+    assertEquals(
+        Set.of("R1"), statements.cuttable(Map.of("S1", diff, "S2", diff, "S3", diff, "R1", diff)));
+    assertEquals(Set.of(), statements.cuttable(Map.of("S9", diff, "X1", diff)));
+  }
+
+  @Test
+  void aSentencePastTheCapStillCountsTowardKeepingThePurpose() {
+    var purpose = new StringBuilder();
+    for (int i = 1; i <= SummaryStatements.MAX_STATEMENTS + 1; i++) {
+      purpose.append("Sentence ").append(i).append(". ");
+    }
+    var statements = SummaryStatements.of(summary(purpose.toString(), List.of(), null), false);
+    var all = new java.util.HashMap<String, SummaryStatements.Source>();
+    for (var statement : statements.statements()) {
+      all.put(statement.id(), SummaryStatements.Source.DIFF);
+    }
+
+    // Every judged sentence is named, but one past the cap would be left, so the cuts go ahead.
+    assertEquals(SummaryStatements.MAX_STATEMENTS, statements.cuttable(all).size());
+  }
+
+  @Test
+  void theSourceOfAnAnswerIsDiffOnlyWhenItSaysSo() {
+    assertEquals(SummaryStatements.Source.DIFF, SummaryStatements.Source.of("diff"));
+    assertEquals(SummaryStatements.Source.DIFF, SummaryStatements.Source.of(" Diff "));
+    assertEquals(SummaryStatements.Source.FINDING, SummaryStatements.Source.of("finding"));
+    assertEquals(SummaryStatements.Source.FINDING, SummaryStatements.Source.of(null));
+    assertEquals(SummaryStatements.Source.FINDING, SummaryStatements.Source.of("the diff"));
   }
 }

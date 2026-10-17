@@ -1,0 +1,42 @@
+{
+  "kind": "summary-verification",
+  "sourcePr": 1151,
+  "why": "Server rc8, review session 7451 on ThrillhouseBot#1151 (head 6fa7f1e2): the summary check cut S1, the only \"What this PR does\" sentence, on the evidence of one low-confidence finding that the saysUnmet javadoc overstates which unmet words are skipped. The finding is about one case the comment misstates; the sentence saying what the change fixes is true, and cutting it left the summary with no purpose. A finding alone never removes a purpose sentence now, and the purpose is never cut down to nothing.",
+  "expectation": "nothing-cut",
+  "keywords": [],
+  "keptKeywords": [
+    "This PR fixes how LinkedIssueCriteria interprets overview clauses"
+  ],
+  "prTitle": "fix(review): do not read a criterion's own words or praise as unmet",
+  "prDescription": "On #1147 the summary listed a linked-issue criterion as unmet although the overview said the change matched it: the clause shared the criterion's words, and \"dropped\" counted as a not-met word, though it is the criterion's own word. LinkedIssueCriteria now skips a not-met word the criterion asks for, keeps one the criterion uses for the gap it closes, reads praise of the change as met, spells out contracted negations, and matches qualifier and fulfilment words by stem.",
+  "findings": [
+    {
+      "risk": "low",
+      "confidence": "medium",
+      "file": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/LinkedIssueCriteria.java",
+      "line": 586,
+      "title": "saysUnmet javadoc states an unmet word must not be the criterion's own, but gap words that are the criterion's own are still reported",
+      "description": "The new javadoc says a criterion is unmet from 'an UNMET word that is not one of the criterion's own and no negation turns into praise', but holdsUnmetWord's actual condition is '!negatedBefore(clause.substring(0, unmet.start())) && !asksFor(unmet.group(), criterion)', and asksFor returns false for a word that IS one of the criterion's own words when the criterion negates it before or follows it with a remedy, in which case the word still reports the criterion unmet. The criterion's own word 'fails' in 'A duplicate email import fails: fixed.' is reported unmet by an overview saying 'fails'. The comment should say an unmet word is skipped only when the criterion asks for what it says (asksFor).",
+      "suggestion_old": null,
+      "suggestion_new": null
+    }
+  ],
+  "summary": {
+    "total_findings": 1,
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 1,
+    "overall_assessment": "One low finding on a comment.",
+    "pr_purpose": "This PR fixes how LinkedIssueCriteria interprets overview clauses against acceptance criteria, so a criterion's own words ('dropped') or praise ('matches the acceptance criteria') are no longer reported as unmet, contracted negations are spelled out before reading, and qualifier and fulfilment word lists match by stem across inflections.",
+    "description_gaps": [],
+    "suggested_labels": [],
+    "file_summaries": [
+      {
+        "path": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/LinkedIssueCriteria.java",
+        "summary": "Reads overview clauses against the criterion's own words and praise"
+      }
+    ],
+    "walkthrough_diagram": null
+  }
+}

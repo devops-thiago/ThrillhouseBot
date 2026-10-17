@@ -65,10 +65,12 @@ public final class SummaryVerifierPrompts {
             text from the summary.
 
             For every statement you list, quote the evidence: the diff line, or the finding title,
-            that shows it is false.
+            that shows it is false. Set "source" to "diff" when the evidence is a line of the diff,
+            and to "finding" when it is a review finding. A purpose sentence (S<n>) is only removed
+            on evidence from the diff.
 
             Respond with exactly this JSON object:
-            {"contradicted": [{"id": "S1", "evidence": "the line or finding that shows it is false"}]}
+            {"contradicted": [{"id": "S1", "source": "diff", "evidence": "the line or finding that shows it is false"}]}
             Use an empty array when no statement is contradicted.
             """;
 
