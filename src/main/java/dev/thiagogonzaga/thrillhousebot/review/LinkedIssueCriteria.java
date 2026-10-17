@@ -542,7 +542,7 @@ final class LinkedIssueCriteria {
    * word: "not dropped" says a criterion asking for the drop is unmet.
    */
   private static boolean praises(String rest, String criterion) {
-    var words = withoutIntensifiers(NON_ALPHANUMERIC.split(rest.strip()));
+    var words = withoutIntensifiers(tokens(rest));
     for (var i = 0; i < Math.min(PRAISE_REACH, words.size()); i++) {
       var from = String.join(" ", words.subList(i, words.size()));
       // "not dropped" is no praise when the criterion asks for the drop.
@@ -560,7 +560,7 @@ final class LinkedIssueCriteria {
    * missing".
    */
   private static boolean negatedBefore(String lead) {
-    var words = withoutIntensifiers(NON_ALPHANUMERIC.split(lead.strip().toLowerCase(Locale.ROOT)));
+    var words = withoutIntensifiers(tokens(lead.toLowerCase(Locale.ROOT)));
     for (var i = Math.max(0, words.size() - PRAISE_REACH); i < words.size(); i++) {
       if (PRAISING_NEGATIONS.contains(words.get(i))) {
         return true;
@@ -627,13 +627,20 @@ final class LinkedIssueCriteria {
 
   /** Whether a {@link #REMEDY} is among the first {@value #REMEDY_REACH} words of {@code tail}. */
   private static boolean remedyFollows(String tail) {
-    var words = NON_ALPHANUMERIC.split(tail.strip());
-    return Arrays.stream(words).limit(REMEDY_REACH).anyMatch(w -> REMEDY.matcher(w).matches());
+    return tokens(tail).stream().limit(REMEDY_REACH).anyMatch(w -> REMEDY.matcher(w).matches());
+  }
+
+  /**
+   * The words of {@code text}, in order: the runs of letters and digits, with no empty token for
+   * punctuation opening it (": fixed", "\"now\" missing"), so a fixed reach counts words only.
+   */
+  private static List<String> tokens(String text) {
+    return Arrays.stream(NON_ALPHANUMERIC.split(text)).filter(word -> !word.isEmpty()).toList();
   }
 
   /** {@code words} less the {@link #INTENSIFIERS} and the adverbs ending in "-ly". */
-  private static List<String> withoutIntensifiers(String[] words) {
-    return Arrays.stream(words)
+  private static List<String> withoutIntensifiers(List<String> words) {
+    return words.stream()
         .filter(word -> !INTENSIFIERS.contains(word.toLowerCase(Locale.ROOT)))
         .filter(word -> !word.toLowerCase(Locale.ROOT).endsWith("ly"))
         .toList();

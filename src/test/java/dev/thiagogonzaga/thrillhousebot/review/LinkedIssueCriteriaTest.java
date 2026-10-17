@@ -984,6 +984,27 @@ class LinkedIssueCriteriaTest {
     assertEquals(1, unmet(ISSUE_256, List.of(), overview, Map.of()).lines().size(), overview);
   }
 
+  /** A punctuation mark opening the text after a word takes no slot of a fixed reach. */
+  @Test
+  void theRemedyReachCountsWordsNotThePunctuationBeforeThem() {
+    // "fixed" is the third word after "fails", past a colon: still within the remedy's reach.
+    var issue =
+        ISSUE_PARSER.replace(
+            "A duplicate email import fails: fixed.",
+            "A duplicate email import fails: on duplicates: fixed.");
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE,
+        unmet(
+            issue, List.of(), "The issue's 'duplicate email import' rule never fails.", Map.of()));
+  }
+
+  @Test
+  void thePraiseReachCountsWordsNotTheQuoteMarkBeforeThem() {
+    // "missing" is the second word after "not", past a quote mark: still within the praise reach.
+    var praise = "The issue's 'declines two offers' rule is not \"now\" missing any offers.";
+    assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_256, List.of(), praise, Map.of()));
+  }
+
   /** The summary renders the lines in place of the finding bullets they point at. */
   @Test
   void theSectionNamesTheIssueAndItsCriterionAndTheLineIsNotCarried() {
