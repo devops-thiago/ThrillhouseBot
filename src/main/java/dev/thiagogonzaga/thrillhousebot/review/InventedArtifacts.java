@@ -293,6 +293,10 @@ final class InventedArtifacts {
           "have", "had", "not", "never", "cannot", "nor", "also", "now", "yet", "still", "just",
           "only", "finally", "then");
 
+  /** A modal or "to", after which a bare verb form joined by a coordinator is still a verb. */
+  private static final Set<String> INFINITIVE_LEAD =
+      Set.of("to", "will", "would", "can", "could", "should", "may", "might", "must", "shall");
+
   /** A word joining a second verb, which an inflected {@link #ADDITION} form follows as one. */
   private static final Set<String> COORDINATOR = Set.of("and", "or", "then", "plus", "but");
 
@@ -586,8 +590,8 @@ final class InventedArtifacts {
         .orElse(-1);
   }
 
-  /** A verb read in a text: where it starts and ends. */
-  private record Verb(int start, int end) {}
+  /** A verb read in a text: its lower-case word and where it starts and ends. */
+  private record Verb(String word, int start, int end) {}
 
   /** Each word of {@code text} in one of {@code forms} that stands where a verb does, in order. */
   private static List<Verb> verbs(String text, Set<String> forms, Set<String> bare) {
@@ -601,10 +605,12 @@ final class InventedArtifacts {
       ends.add(word.end());
     }
     var verbs = new ArrayList<Verb>();
+    var infinitive = false;
     for (var i = 0; i < words.size(); i++) {
-      if (forms.contains(words.get(i)) && inVerbPlace(words, i, bare)) {
-        verbs.add(new Verb(starts.get(i), ends.get(i)));
+      if (forms.contains(words.get(i)) && inVerbPlace(words, i, bare, infinitive)) {
+        verbs.add(new Verb(words.get(i), starts.get(i), ends.get(i)));
       }
+      infinitive |= INFINITIVE_LEAD.contains(words.get(i));
     }
     return verbs;
   }
@@ -613,16 +619,19 @@ final class InventedArtifacts {
    * Whether the verb form at {@code i} stands where a verb does: before its object ("adds a",
    * "ships the"; the artifact itself follows the last word), first in the text ("Deprecates the old
    * flow and a …", a summary line), after a subject, an auxiliary, a modal, a negation or "to" ("it
-   * adds", "is building", "to build"), or, when not one of the {@code bare} forms, after a
-   * coordinator ("and added tests"). "the old build script" and "nightly builds and" are nouns.
+   * adds", "is building", "to build"), or after a coordinator: inflected ("and added tests"), or
+   * bare when an earlier modal or "to" governs both verbs ({@code infinitive}: "will refactor the
+   * router and remove old settings"). "the old build script", "nightly builds and" and "the cache
+   * and drop shadows" are nouns.
    */
-  private static boolean inVerbPlace(List<String> words, int i, Set<String> bare) {
+  private static boolean inVerbPlace(
+      List<String> words, int i, Set<String> bare, boolean infinitive) {
     if (i == 0 || i == words.size() - 1 || OBJECT_LEAD.contains(words.get(i + 1))) {
       return true;
     }
     var before = words.get(i - 1);
     return VERB_LEAD.contains(before)
-        || (COORDINATOR.contains(before) && !bare.contains(words.get(i)));
+        || (COORDINATOR.contains(before) && (infinitive || !bare.contains(words.get(i))));
   }
 
   /**
@@ -665,13 +674,16 @@ final class InventedArtifacts {
    */
   private static boolean opensClause(String text, int from, int to) {
     var segment = text.substring(from, to);
+    // Read from the break on, so an inflected verb opening the segment opens a clause ("…,
+    // removing old settings", "— drops admin screens") and its last word still sees what follows
+    // it. A bare form opening it continues a list of verbs ("does not add, ship or modify a …").
+    var rest = text.substring(from);
+    var length = to - from;
     if (NEGATION.matcher(segment).find()
-        || verbs(text, REMOVAL, REMOVAL_BARE).stream()
-            .anyMatch(verb -> verb.start() >= from && verb.start() < to)) {
-      return true;
-    }
-    var addition = additionAt(text, from);
-    if (addition >= 0 && addition < to) {
+        || Stream.concat(
+                verbs(rest, REMOVAL, REMOVAL_BARE).stream(),
+                verbs(rest, ADDITION, ADDITION_BARE).stream())
+            .anyMatch(verb -> verb.start() < length && !continuesVerbList(verb, rest))) {
       return true;
     }
     var word = WORD.matcher(segment);
@@ -681,6 +693,12 @@ final class InventedArtifacts {
       }
     }
     return false;
+  }
+
+  /** Whether {@code verb} is a bare form opening {@code segment}, after a list of verbs. */
+  private static boolean continuesVerbList(Verb verb, String segment) {
+    return (REMOVAL_BARE.contains(verb.word()) || ADDITION_BARE.contains(verb.word()))
+        && segment.substring(0, verb.start()).isBlank();
   }
 
   /**

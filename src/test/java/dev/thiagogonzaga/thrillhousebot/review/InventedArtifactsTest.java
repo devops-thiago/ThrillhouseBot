@@ -526,6 +526,55 @@ class InventedArtifactsTest {
   }
 
   @Test
+  void aRemovalOpeningAClauseGovernsABareNounObject() {
+    var removed =
+        InventedArtifacts.Change.of(
+            List.of(
+                new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                added("web/src/App.tsx", "const app = 1;")));
+
+    // After a comma, a dash or a list item, the verb opens its clause whatever its object.
+    assertFalse(
+        InventedArtifacts.invents(
+            "It refactors the router, removing old settings and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It refactors the router — drops admin screens and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It refactors the router, the long docs page, deleting stale links and a settings page.",
+            removed));
+    // After a semicolon.
+    assertFalse(
+        InventedArtifacts.invents(
+            "It refactors the router; removes old settings and a settings page.", removed));
+    // A bare form after "and" is a verb when an earlier modal or "to" governs both.
+    assertFalse(
+        InventedArtifacts.invents(
+            "It will refactor the router and remove old settings and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It is meant to refactor the router and drop old settings and a settings page.",
+            removed));
+    // Without one, it stays a noun.
+    assertTrue(
+        InventedArtifacts.invents(
+            "It removes nothing; it adds the cache and drop shadows and a settings page.",
+            removed));
+    // A bare removal form opening a segment continues a list of negated verbs.
+    var change = InventedArtifacts.Change.of(List.of(added("web/src/App.tsx", "const app = 1;")));
+    assertFalse(
+        InventedArtifacts.invents("It does not ship, remove or modify a settings page.", change));
+    // A bare form inside the segment, after "to", is a verb and opens the clause.
+    assertTrue(
+        InventedArtifacts.invents("It removes the old router, to build a settings page.", removed));
+    // An addition opening a clause after a comma is judged the same way.
+    assertTrue(
+        InventedArtifacts.invents(
+            "It removes the old router, adding new settings and a settings page.", removed));
+  }
+
+  @Test
   void nothingToJudgeLeavesTheSummaryAsItIs() {
     var fenced = "Adds the queue.\n```\na settings page\n```";
     var original = summary(fenced, null);
