@@ -2366,6 +2366,33 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void aGapCreditingANamedFindingStandsOnlyWhileAnOpenFindingStatesIt() {
+    // #1150's final approving review still listed this entry; the finding it credits was fixed on
+    // an earlier head and no finding of that round stated it.
+    var credited = DescriptionGapScreenTest.CREDITED_1150;
+    var carried =
+        new Finding(
+            RiskLevel.LOW,
+            Confidence.MEDIUM,
+            "src/main/java/dev/thiagogonzaga/thrillhousebot/review/FindingPipeline.java",
+            120,
+            "Carried PriorOverviewCarryover text is verified, contradicting the description",
+            "The description says carried summaries are not checked, but FindingPipeline verifies"
+                + " the carried PriorOverviewCarryover text.",
+            null,
+            null);
+    var unrelated =
+        new Finding(RiskLevel.LOW, "pom.xml", 3, "Timestamp is fixed", "desc", null, null);
+
+    assertEquals(List.of(), PrSummaryGenerator.backedByFindings(List.of(credited), List.of()));
+    assertEquals(
+        List.of(), PrSummaryGenerator.backedByFindings(List.of(credited), List.of(unrelated)));
+    assertEquals(
+        List.of(credited),
+        PrSummaryGenerator.backedByFindings(List.of(credited), List.of(carried, unrelated)));
+  }
+
+  @Test
   void aGapCreditingTheReviewStandsOnlyWhileAnOpenFindingStatesIt() {
     // #1127: on #1124 "a review pass flags …" named a claim no posted finding made.
     var credited =
