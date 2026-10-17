@@ -52,7 +52,9 @@ site or any page it includes (README, CONTRIBUTING, `docs/`), run
 
 CI runs the same checks, plus actionlint, the DCO sign-off check, Dependency
 Review, SonarCloud, Trivy and a Docker build; CodeQL runs on pull requests to `main`. CI builds the GraalVM native image when a pull request
-touches `pom.xml`, `src/main/**` or `.github/workflows/ci.yml`. To build a
+touches `pom.xml`, `src/main/**`, the native integration tests or
+`.github/workflows/ci.yml`, then runs the `*IT` integration tests against that
+binary. To build a
 throwaway test image for a branch or pull request without touching `latest`, run
 the Docker test image workflow (`.github/workflows/docker-test-image.yml`) from
 the Actions tab.

@@ -34,7 +34,8 @@ same diff.
   `cd website && npm ci && npm run build`. Links inside the included regions are absolute GitHub
   URLs because the site renders them out of repo context.
 - CI also runs Dependency Review, Trivy, SonarCloud (new issues fail the `test` job's scan step)
-  and, when `pom.xml`, `src/main/**` or the CI workflow change, the GraalVM native build.
+  and, when `pom.xml`, `src/main/**`, the native integration tests or the CI workflow change,
+  the GraalVM native build followed by the `*IT` suite against the built binary (#671).
 
 ## Package map
 
@@ -518,6 +519,16 @@ live `fence(...)` (#604).
   (`quarkus.native.additional-build-args` in `application.properties`). Add a new one there.
 - Classpath resources read at run time must be listed in `quarkus.native.resources.includes`
   (e.g. the jtokkit BPE table `TokenCounter` loads).
+- `nativeimage/NativeImageIT` (under `src/test/java/`) is a `@QuarkusIntegrationTest` that
+  failsafe runs against the native binary under `-Pnative` (#671): boot past
+  `StartupConfigValidator`, readiness over PostgreSQL, and webhook HMAC and Jackson binding.
+  `NativeRuntimeConfig` passes the required settings as system properties, since the test
+  `application.properties` never reaches the `prod` binary. The binary is built for PostgreSQL,
+  so the run needs `DATABASE_URL` and `QUARKUS_DATASOURCE_USERNAME` / `PASSWORD` in its
+  environment (the `native-build` CI job runs a service). Locally, without a native toolchain,
+  the same suite runs against the JVM jar: `./mvnw package -DskipTests` then
+  `./mvnw failsafe:integration-test failsafe:verify -DskipITs=false`. Keep the cases off every
+  path that calls GitHub or the model.
 
 ## Tests
 
@@ -573,6 +584,7 @@ by the bot: `ReviewLearningService.retract` clears `active` and records who and 
 | Letting any maintainer reply settle an older round's finding | The model reports only on the effective round, so a wrong "cannot run concurrently" reply on an older finding removed it with no re-check (#947). |
 | Matching double-check items by proximity and shared wording | A finding about one config key replaced the open item about the key on the next row (#961). `DefectIdentity` requires an anchored match and vetoes different identifiers. |
 | Relying on learnings or the model to keep a declined scan finding settled | The scan reads neither, so the decline lasted one round and the next round requested changes on the same head (#982). |
+| Caching the native toolchain image between CI runs | The build runs in Quarkus's pinned Mandrel builder image (`quarkus.native.container-build`, as the release does); a `docker save` tarball of it restores no faster than a pull from quay.io. Maven's repository is cached (#671). |
 | A call-graph taint pass in `LogSafeInvariantTest` | Measured: 31 extra reports, sampled ones were name collisions with impossible fixes (#764). |
 
 ## CHANGELOG and docs
