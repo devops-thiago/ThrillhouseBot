@@ -222,7 +222,7 @@ final class InventedArtifacts {
           "prune");
 
   /** What leads a replacing verb to the new artifact: "with", "to", "into", "by". */
-  private static final Pattern NEW_TARGET = Pattern.compile("(?i)\\b(?:with|to|into|by)\\b");
+  private static final Set<String> NEW_TARGET = Set.of("with", "to", "into", "by");
 
   /**
    * A conjunction that starts a new statement after a negated one: "ships without config and adds".
@@ -545,23 +545,35 @@ final class InventedArtifacts {
       return false;
     }
     var last = removals.getLast();
-    return !leadsToNew(clause, last.start()) && additionAt(clause, last.end()) < 0;
+    return !leadsToNew(clause) && additionAt(clause, last.end()) < 0;
   }
 
   /**
-   * Whether a {@link #REPLACING} form at or after {@code from} in {@code clause} leads, through a
-   * {@link #NEW_TARGET}, to what follows: "replaces the old page with a …", "the old page, replaced
-   * by a …".
+   * Whether the artifact {@code clause} leads to is the new thing of a replace, rename or move: the
+   * clause ends in a {@link #NEW_TARGET} word, and the nearest removal word before it is a {@link
+   * #REPLACING} one, as verb or participle ("replaces the old page with a …", "the old page,
+   * replaced by a …", "renames the old screen to a …"). A target word that leads elsewhere
+   * ("deletes the flow renamed to legacy and a …") or follows a plain removal ("removes the link to
+   * a …") leaves the artifact removed.
    */
-  private static boolean leadsToNew(String clause, int from) {
+  private static boolean leadsToNew(String clause) {
+    var words = new ArrayList<String>();
     var word = WORD.matcher(clause);
-    word.region(from, clause.length());
     while (word.find()) {
-      if (REPLACING.contains(word.group().toLowerCase(Locale.ROOT))) {
-        return NEW_TARGET.matcher(clause).region(word.end(), clause.length()).find();
-      }
+      words.add(word.group().toLowerCase(Locale.ROOT));
     }
-    return false;
+    // removedInClause read a removal verb in the clause, so it has words and a removal word stands
+    // before its last one.
+    var target = words.size() - 1;
+    if (!NEW_TARGET.contains(words.get(target))) {
+      return false;
+    }
+    var nearest =
+        words.subList(0, target).reversed().stream()
+            .filter(REMOVAL::contains)
+            .findFirst()
+            .orElse("");
+    return REPLACING.contains(nearest);
   }
 
   /**

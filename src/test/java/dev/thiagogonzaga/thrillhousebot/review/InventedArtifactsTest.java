@@ -641,6 +641,37 @@ class InventedArtifactsTest {
   }
 
   @Test
+  void theNewThingOfAReplaceIsOnlyTheArtifactItsTargetWordLeadsTo() {
+    var removed =
+        InventedArtifacts.Change.of(
+            List.of(
+                new FileDiff("web/src/SettingsPage.tsx", "removed", 0, 12, 12, "-x"),
+                added("web/src/App.tsx", "const app = 1;")));
+
+    // A removal after the new artifact does not undo its judgement.
+    assertTrue(
+        InventedArtifacts.invents(
+            "It replaces the old page with a settings page and removes the legacy flag.", removed));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It renames the old screen to a settings page and deletes the old flow.", removed));
+    assertTrue(
+        InventedArtifacts.invents(
+            "It moves the docs into a settings page and drops the legacy flag.", removed));
+    // A replace, rename or move earlier in the clause, whose target is something else, leaves
+    // the removal that governs the artifact in charge.
+    assertFalse(
+        InventedArtifacts.invents(
+            "It deletes the flow renamed to legacy and a settings page.", removed));
+    assertFalse(
+        InventedArtifacts.invents(
+            "It replaces the old flag with a toggle and removes a settings page.", removed));
+    assertFalse(InventedArtifacts.invents("It moves the docs to v2 and a settings page.", removed));
+    // A target word after a plain removal is no new thing.
+    assertFalse(InventedArtifacts.invents("It removes the link to a settings page.", removed));
+  }
+
+  @Test
   void nothingToJudgeLeavesTheSummaryAsItIs() {
     var fenced = "Adds the queue.\n```\na settings page\n```";
     var original = summary(fenced, null);
