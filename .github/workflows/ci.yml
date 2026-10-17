@@ -23,7 +23,8 @@ jobs:
   #
   # `native` narrows `code` to the inputs the native image is built from: pom.xml, main sources
   # and resources (reflection, resource loading and serialization fail natively before they fail
-  # on the JVM), the Dockerfiles, and this workflow, which holds the build command. A pull
+  # on the JVM), the Dockerfiles, the native integration tests (#671), and this workflow, which
+  # holds the build command. A pull
   # request builds the native image only when it touches one of those (#792); main always does.
   changes:
     runs-on: ubuntu-latest
@@ -63,7 +64,7 @@ jobs:
           if [ -n "$changed" ]; then
             printf '%s\n' "$changed" | grep -qvE '(\.md$|^docs/)' || code=false
             printf '%s\n' "$changed" \
-              | grep -qE '^(pom\.xml$|src/main/(java|resources|docker)/|\.github/workflows/ci\.yml$)' \
+              | grep -qE '^(pom\.xml$|src/main/(java|resources|docker)/|src/test/java/dev/thiagogonzaga/thrillhousebot/nativeimage/|\.github/workflows/ci\.yml$)' \
               || native=false
           fi
           echo "code=${code}" >> "$GITHUB_OUTPUT"
@@ -182,14 +183,23 @@ jobs:
   # pull request builds when it touches something the native image is made from (#792), so a
   # change that links on the JVM and fails natively is caught before it reaches main. The gate
   # is a job-level `if`, like every other conditional job here: a skipped run reports a
-  # `skipped` conclusion, which satisfies a required check.
+  # `skipped` conclusion, which satisfies a required check. Pushes to release/** build too, so a
+  # release branch is never cut from a binary nobody booted; a tag promotes the image main built
+  # here, which passed these same tests.
+  #
+  # The binary is then booted and driven by the @QuarkusIntegrationTest suite (#671), so what is
+  # tested is what ships: linking alone does not catch a missing reflection registration or
+  # resource. The prod binary is built for PostgreSQL, hence the service. Build and tests are
+  # separate steps, and the job summary names which one failed, so a native-only failure reads
+  # apart from a JVM test failure.
   native-build:
     needs: [frontend, changes]
     if: >-
       needs.changes.outputs.code == 'true' &&
-      (github.ref == 'refs/heads/main' ||
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') ||
        (github.event_name == 'pull_request' && needs.changes.outputs.native == 'true'))
     strategy:
+      fail-fast: false
       matrix:
         include:
           - runner: ubuntu-latest
@@ -197,6 +207,20 @@ jobs:
           - runner: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
+    services:
+      postgres:
+        image: postgres@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea # 16-alpine
+        env:
+          POSTGRES_DB: thrillhouse
+          POSTGRES_USER: thrillhouse
+          POSTGRES_PASSWORD: thrillhouse
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U thrillhouse -d thrillhouse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
@@ -212,7 +236,49 @@ jobs:
         with:
           name: frontend-dist
           path: src/main/resources/META-INF/resources/dashboard/
-      - run: ./mvnw package -Pnative -DskipTests -Dquarkus.native.container-build=true
+      - name: Build native image
+        id: build
+        run: ./mvnw package -Pnative -DskipTests -Dquarkus.native.container-build=true
+      # failsafe alone, on the binary the step above built: the unit tests already ran in `test`.
+      - name: Native integration tests
+        id: it
+        env:
+          DATABASE_URL: jdbc:postgresql://localhost:5432/thrillhouse
+          QUARKUS_DATASOURCE_USERNAME: thrillhouse
+          QUARKUS_DATASOURCE_PASSWORD: thrillhouse
+        run: ./mvnw -Pnative failsafe:integration-test failsafe:verify
+      - name: Job summary
+        if: always()
+        env:
+          ARCH: ${{ matrix.arch }}
+          BUILD: ${{ steps.build.outcome }}
+          IT: ${{ steps.it.outcome }}
+        run: |
+          {
+            echo "### Native image (${ARCH})"
+            echo
+            echo "| Step | Outcome |"
+            echo "|---|---|"
+            echo "| Native build | ${BUILD} |"
+            echo "| Native integration tests | ${IT} |"
+            report=target/failsafe-reports/failsafe-summary.xml
+            if [ -f "$report" ]; then
+              tag() { sed -n "s:.*<$1>\([0-9]*\)</$1>.*:\1:p" "$report"; }
+              echo
+              echo "Tests: $(tag completed) run, $(tag failures) failed, $(tag errors) errored, $(tag skipped) skipped."
+            fi
+            echo
+            if [ "$BUILD" = failure ]; then
+              echo "The native compilation failed: look for missing reflection, resource or build-time initialization registration (AGENTS.md, Native image)."
+            elif [ "$IT" = failure ]; then
+              echo "The binary built but failed against the integration tests: a native-only failure if the JVM \`test\` job passed."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure() && steps.it.outcome == 'failure'
+        with:
+          name: native-it-reports-${{ matrix.arch }}
+          path: target/failsafe-reports/
       # Only the main-branch image publish consumes the binaries; a pull request build proves
       # the link and keeps nothing.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
