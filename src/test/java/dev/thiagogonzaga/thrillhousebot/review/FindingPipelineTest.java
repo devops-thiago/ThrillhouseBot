@@ -4100,8 +4100,9 @@ class FindingPipelineTest {
             0,
             0,
             "ok",
+            // #1090: and one introducing a page no changed file or line holds is cut too.
             "Adds a dashboard in react/Dashboard.tsx. It also moves the README to"
-                + " docs/REACT-VIV.md.",
+                + " docs/REACT-VIV.md. It adds a settings page.",
             List.of(),
             List.of(),
             List.of(),
