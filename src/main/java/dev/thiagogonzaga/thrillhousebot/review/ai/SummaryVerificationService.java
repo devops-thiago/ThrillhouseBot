@@ -209,40 +209,7 @@ public class SummaryVerificationService {
             ledgerSessionId);
         return summary;
       }
-      var contradicted = contradicted(raw);
-      var sources = new LinkedHashMap<String, SummaryStatements.Source>();
-      contradicted.forEach((id, verdict) -> sources.put(id, verdict.source()));
-      var allowed = statements.cuttable(sources);
-      var named =
-          statements.statements().stream()
-              .filter(statement -> contradicted.containsKey(statement.id()))
-              .toList();
-      var cut = named.stream().filter(statement -> allowed.contains(statement.id())).toList();
-      // Only the ids that name a statement are logged: those are this class's own labels, while
-      // anything else the answer put there is model text.
-      var cutIds = String.join(", ", cut.stream().map(SummaryStatements.Statement::id).toList());
-      Log.infof(
-          "Summary verification for review session %d checked %d statement(s); contradicted: %s",
-          ledgerSessionId,
-          statements.statements().size(),
-          cut.isEmpty() ? "none" : LogSafe.oneLine(cutIds));
-      // One line per statement the answer named, cut or kept, with the statement, the source and
-      // the evidence the answer gave, so whether a cut was right can be checked from the log; the
-      // statement and evidence are model text, flattened to one line.
-      for (var statement : named) {
-        var verdict = contradicted.get(statement.id());
-        var outcome = allowed.contains(statement.id()) ? "cut" : "kept";
-        var kind = verdict.source() == SummaryStatements.Source.DIFF ? "diff" : "finding";
-        Log.infof(
-            "Summary verification for review session %d %s %s \"%s\"; %s evidence: \"%s\"",
-            ledgerSessionId,
-            outcome,
-            LogSafe.oneLine(statement.id()),
-            LogSafe.oneLine(statement.text()),
-            kind,
-            LogSafe.oneLine(clipped(verdict.evidence())));
-      }
-      return statements.without(allowed);
+      return applied(ledgerSessionId, statements, raw);
     } catch (IOException | RuntimeException e) {
       // Only the type is logged: the message can carry provider or model text.
       Log.warnf(
@@ -250,6 +217,48 @@ public class SummaryVerificationService {
           ledgerSessionId, e.getClass().getSimpleName());
       return summary;
     }
+  }
+
+  /**
+   * The summary with the statements the answer {@code raw} contradicts removed, as far as {@link
+   * SummaryStatements#cuttable} lets them go, each named statement logged as cut or kept.
+   */
+  private ReviewResponse.Summary applied(
+      long ledgerSessionId, SummaryStatements statements, String raw) throws IOException {
+    var contradicted = contradicted(raw);
+    var sources = new LinkedHashMap<String, SummaryStatements.Source>();
+    contradicted.forEach((id, verdict) -> sources.put(id, verdict.source()));
+    var allowed = statements.cuttable(sources);
+    var named =
+        statements.statements().stream()
+            .filter(statement -> contradicted.containsKey(statement.id()))
+            .toList();
+    var cut = named.stream().filter(statement -> allowed.contains(statement.id())).toList();
+    // Only the ids that name a statement are logged: those are this class's own labels, while
+    // anything else the answer put there is model text.
+    var cutIds = String.join(", ", cut.stream().map(SummaryStatements.Statement::id).toList());
+    Log.infof(
+        "Summary verification for review session %d checked %d statement(s); contradicted: %s",
+        ledgerSessionId,
+        statements.statements().size(),
+        cut.isEmpty() ? "none" : LogSafe.oneLine(cutIds));
+    // One line per statement the answer named, cut or kept, with the statement, the source and
+    // the evidence the answer gave, so whether a cut was right can be checked from the log; the
+    // statement and evidence are model text, flattened to one line.
+    for (var statement : named) {
+      var verdict = contradicted.get(statement.id());
+      var outcome = allowed.contains(statement.id()) ? "cut" : "kept";
+      var kind = verdict.source() == SummaryStatements.Source.DIFF ? "diff" : "finding";
+      Log.infof(
+          "Summary verification for review session %d %s %s \"%s\"; %s evidence: \"%s\"",
+          ledgerSessionId,
+          outcome,
+          LogSafe.oneLine(statement.id()),
+          LogSafe.oneLine(statement.text()),
+          kind,
+          LogSafe.oneLine(clipped(verdict.evidence())));
+    }
+    return statements.without(allowed);
   }
 
   /**
