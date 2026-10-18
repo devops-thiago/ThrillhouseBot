@@ -112,6 +112,13 @@ public class PrSummaryGenerator {
   /** Heading of the Description vs. Implementation section when a mismatch exists. */
   static final String GAPS_HEADING = "### ⚠️ Description vs. Implementation";
 
+  /** The heading of the criteria the description shows met by existing code (#1148). */
+  static final String MET_HEADING = "### ✅ Met by existing code";
+
+  /** The line under {@link #MET_HEADING}. */
+  static final String MET_INTRO =
+      "The description cites code already on the base branch for these linked-issue criteria:\n";
+
   /**
    * Opening of a Description vs. Implementation bullet that names a finding instead of restating it
    * (#964). The section used to say only that every mismatch "is reported as a finding below" once
@@ -194,8 +201,15 @@ public class PrSummaryGenerator {
    * @param linkedIssues the unfenced linked-issue section alone, {@code ""} when none; with one
    *     issue linked, each criterion the round states unmet gets its own line ({@link
    *     LinkedIssueCriteria}, #1093)
+   * @param baseCode the code the PR description cites as already meeting a criterion; a criterion
+   *     it shows met on the base branch is listed as met by existing code instead ({@link
+   *     BaseCodeCitations}, #1148)
    */
-  record DescriptionSources(String claimText, Set<String> previouslyNamed, String linkedIssues) {
+  record DescriptionSources(
+      String claimText,
+      Set<String> previouslyNamed,
+      String linkedIssues,
+      BaseCodeCitations baseCode) {
 
     static final DescriptionSources NONE = new DescriptionSources("", Set.of());
 
@@ -203,6 +217,12 @@ public class PrSummaryGenerator {
       claimText = claimText == null ? "" : claimText;
       previouslyNamed = Set.copyOf(previouslyNamed);
       linkedIssues = Objects.requireNonNullElse(linkedIssues, "");
+      baseCode = Objects.requireNonNullElse(baseCode, BaseCodeCitations.NONE);
+    }
+
+    /** Sources with no description citations read. */
+    DescriptionSources(String claimText, Set<String> previouslyNamed, String linkedIssues) {
+      this(claimText, previouslyNamed, linkedIssues, BaseCodeCitations.NONE);
     }
 
     /** Sources with no linked-issue section known. */
@@ -306,12 +326,15 @@ public class PrSummaryGenerator {
             summariesByPath(aiSummary));
     var gaps = new ArrayList<>(rendered);
     gaps.addAll(criteria.lines());
+    // #1148: a criterion the description shows met by code already on the base branch.
+    var split = sources.baseCode().split(gaps);
     appendDescriptionGaps(
         sb,
-        gaps,
+        split.unmet(),
         descriptionFindings(surfaces.gapFindings(), result.findings(), sources).stream()
             .filter(f -> !criteria.pointed().contains(f))
             .toList());
+    appendMetByExistingCode(sb, split.met());
     appendWalkthroughDiagram(sb, aiSummary);
 
     sb.append("### Changes Overview\n");
@@ -821,6 +844,32 @@ public class PrSummaryGenerator {
     }
     for (Finding f : findings) {
       sb.append("- ").append(findingBullet(f)).append("\n");
+    }
+    sb.append("\n");
+  }
+
+  /**
+   * The linked-issue criteria the description shows met by code the base branch holds (#1148), each
+   * with what it cites. Under its own heading, after Description vs. Implementation: the next round
+   * reads that section's bullets back as the gaps it carries, and these are not gaps.
+   */
+  private static void appendMetByExistingCode(StringBuilder sb, List<BaseCodeCitations.Met> met) {
+    if (met.isEmpty()) {
+      return;
+    }
+    sb.append(MET_HEADING).append("\n").append(MET_INTRO);
+    for (var criterion : met) {
+      var cited =
+          criterion.citations().stream()
+              .map(c -> "`" + MarkdownSafe.oneLine(c) + "`")
+              .collect(Collectors.joining(", "));
+      sb.append("- Linked issue")
+          .append(criterion.issues().isEmpty() ? "" : " " + criterion.issues())
+          .append(": ")
+          .append(MarkdownSafe.oneLine(criterion.criterion()))
+          .append(" — cited: ")
+          .append(cited)
+          .append("\n");
     }
     sb.append("\n");
   }

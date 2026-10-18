@@ -167,6 +167,32 @@ public class VerdictBuilder {
       String claimText,
       CiFailureCitations ciCitations,
       String linkedIssues) {
+    return build(
+        ctx,
+        aiResponse,
+        ciEvaluation,
+        plan,
+        claimText,
+        ciCitations,
+        linkedIssues,
+        BaseCodeCitations.NONE);
+  }
+
+  /**
+   * {@link #build(ReviewContextLoader.ReviewContext, ReviewResponse,
+   * CiStatusEvaluator.CiEvaluation, DiffBudgetPlanner.BudgetPlan, String, CiFailureCitations,
+   * String)} with the code the PR description cites: a linked-issue criterion it shows met on the
+   * base branch is listed as met by existing code, not as unmet (#1148).
+   */
+  ReviewResult build(
+      ReviewContextLoader.ReviewContext ctx,
+      ReviewResponse aiResponse,
+      CiStatusEvaluator.CiEvaluation ciEvaluation,
+      DiffBudgetPlanner.BudgetPlan plan,
+      String claimText,
+      CiFailureCitations ciCitations,
+      String linkedIssues,
+      BaseCodeCitations baseCode) {
     // Budgeted: plan omitted + clipped files, with any file a failed batch left uncovered folded
     // into the omitted set (effective*); legacy: line-cap count — never sum both. Patchless files
     // are the one class both lanes carry (#785): the line cap counts sections it dropped, and a
@@ -367,7 +393,8 @@ public class VerdictBuilder {
                     ? DescriptionGapCarryover.previousFindingBullets(
                         ctx.conversationComments(), botIdentity)
                     : Set.of(),
-                linkedIssues)),
+                linkedIssues,
+                baseCode)),
         ciEvaluation,
         backstopStatuses);
   }
