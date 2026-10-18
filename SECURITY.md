@@ -4,7 +4,13 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| latest  | :white_check_mark: |
+| Latest release | :white_check_mark: |
+| Older releases | :x:                |
+
+Fixes, including security fixes, ship in the next release and are not
+backported to older lines.
+[docs/VERSIONING.md](docs/VERSIONING.md) describes the versioning,
+deprecation and support policy.
 
 ## Reporting a Vulnerability
 

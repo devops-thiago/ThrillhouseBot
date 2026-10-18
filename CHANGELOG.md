@@ -27,6 +27,10 @@ All notable changes to ThrillhouseBot.
 - **Description vs. Implementation no longer lists entries that say they are not a gap** (#1146): bullets such as "(disclosed, not contradicted)" or "which matches the diff — no gap beyond the noted scope" were listed under "does not fully match". They are now dropped, fresh or carried, as are bullets that only say the material cannot confirm a claim ("the changed-file list and findings cannot confirm this parsing behavior"). An unmet criterion of a linked issue stays listed even when the bullet adds that the change matches the description.
 - **A clean re-review approves a head the bot has not approved yet** (#1144): when a follow-up round found nothing and its summary comment was re-posted, the review was skipped without checking the bot's earlier reviews. A `/review` whose previous bot review was COMMENTED on the commit before ended with a green check run and no approval on the head. The review is now skipped only when the bot's latest review already approves the same head commit and the round would approve again; in every other case it is posted. The check reuses the reviews the run already fetched, and a failed fetch posts the review.
 
+### Documentation
+
+- **Versioning, deprecation and support policy** (#46): `docs/VERSIONING.md`, also on the docs site, says what a minor and a patch release can change, lists the public contract (settings, repository files, commands, GitHub App events and permissions, image tags, database schema, health and metrics endpoints), describes how a setting is deprecated and removed, and states that only the latest release gets fixes. `SECURITY.md` and the README's Upgrading section link to it.
+
 ## [0.7.1] — 2026-10-13
 
 A bug-fix release. Most of the fixes are in follow-up rounds and the summary comment: findings from earlier rounds now get a status and have their threads resolved once fixed, the summary and its Description vs. Implementation section keep to what the change and its description contain, and a finding is placed, counted and matched to its duplicates the same way on every review.
