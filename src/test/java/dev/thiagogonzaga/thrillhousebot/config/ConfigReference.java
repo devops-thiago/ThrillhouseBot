@@ -625,7 +625,7 @@ final class ConfigReference {
     }
     try {
       return String.valueOf(owner.getField(signature.substring(1)).get(null));
-    } catch (ReflectiveOperationException e) {
+    } catch (ReflectiveOperationException _) {
       errors.add(where + ": no constant " + signature);
       return "";
     }

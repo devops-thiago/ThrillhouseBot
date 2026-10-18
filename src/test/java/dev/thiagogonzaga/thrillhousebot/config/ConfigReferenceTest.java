@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.sun.source.doctree.DocCommentTree;
 import io.smallrye.config.WithDefault;
 import io.smallrye.config.WithName;
 import java.io.IOException;
@@ -250,11 +251,12 @@ class ConfigReferenceTest {
 
   @Test
   void aMalformedPropertiesLineIsRejected() {
+    var profileOnly = List.of("%prod=1");
+    var noEquals = List.of("no-equals");
+
     assertThrows(
-        IllegalArgumentException.class, () -> ConfigReference.parseProperties(List.of("%prod=1")));
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> ConfigReference.parseProperties(List.of("no-equals")));
+        IllegalArgumentException.class, () -> ConfigReference.parseProperties(profileOnly));
+    assertThrows(IllegalArgumentException.class, () -> ConfigReference.parseProperties(noEquals));
   }
 
   @Test
@@ -265,9 +267,13 @@ class ConfigReferenceTest {
 
   @Test
   void aCompositeValueDocumentsTheVariableItReads() {
+    var docs = ConfigReference.javadoc(PROBE_SOURCE);
+    var undocumented =
+        ConfigReference.parseProperties(List.of("thrillhousebot.url=${PROBE_HOST:x}/api"));
     var error =
         assertThrows(
-            IllegalStateException.class, () -> probe("thrillhousebot.url=${PROBE_HOST:x}/api"));
+            IllegalStateException.class,
+            () -> ConfigReference.build(Probe.class, docs, undocumented));
     assertTrue(error.getMessage().contains("PROBE_HOST: no '# doc:' comment"));
 
     var ref =
@@ -280,14 +286,12 @@ class ConfigReferenceTest {
 
   @Test
   void anUndocumentedVariableOrPropertyFailsGeneration() {
+    var entries = ConfigReference.parseProperties(List.of("quarkus.x=${UNDOCUMENTED:1}"));
+    Map<String, DocCommentTree> noDocs = Map.of();
+
     var error =
         assertThrows(
-            IllegalStateException.class,
-            () ->
-                ConfigReference.build(
-                    Probe.class,
-                    Map.of(),
-                    ConfigReference.parseProperties(List.of("quarkus.x=${UNDOCUMENTED:1}"))));
+            IllegalStateException.class, () -> ConfigReference.build(Probe.class, noDocs, entries));
 
     assertTrue(error.getMessage().contains("ConfigReferenceTest.Probe#enabled: no javadoc"));
     assertTrue(error.getMessage().contains("UNDOCUMENTED: no '# doc:' comment"));
@@ -295,22 +299,27 @@ class ConfigReferenceTest {
 
   @Test
   void aLinkInThePublishedParagraphFailsGeneration() {
-    var source = PROBE_SOURCE.replace("Base address.", "Base address, see {@link #enabled()}.");
+    var docs =
+        ConfigReference.javadoc(
+            PROBE_SOURCE.replace("Base address.", "Base address, see {@link #enabled()}."));
+    List<ConfigReference.Entry> noEntries = List.of();
 
     var error =
         assertThrows(
-            IllegalStateException.class,
-            () -> ConfigReference.build(Probe.class, ConfigReference.javadoc(source), List.of()));
+            IllegalStateException.class, () -> ConfigReference.build(Probe.class, docs, noEntries));
 
     assertTrue(error.getMessage().contains("Probe#url: unsupported javadoc element LINK"));
   }
 
   @Test
   void aDocCommentOnAMappingKeyFailsGeneration() {
+    var docs = ConfigReference.javadoc(PROBE_SOURCE);
+    var entries =
+        ConfigReference.parseProperties(
+            List.of("# doc: Says too much.", "thrillhousebot.enabled=${PROBE_ENABLED:true}"));
     var error =
         assertThrows(
-            IllegalStateException.class,
-            () -> probe("# doc: Says too much.", "thrillhousebot.enabled=${PROBE_ENABLED:true}"));
+            IllegalStateException.class, () -> ConfigReference.build(Probe.class, docs, entries));
 
     assertTrue(error.getMessage().contains("thrillhousebot.enabled: a mapping key is described"));
   }
