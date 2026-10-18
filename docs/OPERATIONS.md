@@ -3,8 +3,10 @@
 
 How to run ThrillhouseBot day to day: what it keeps and where, how to back it
 up and upgrade it, what a restart does, and how to wire its health checks into
-Docker Compose or Kubernetes. The commands assume the `docker-compose.yml` in
-the repository, with the services `thrillhousebot` and `db`.
+Docker Compose or Kubernetes. There are no migration scripts, so instead of
+migrate and rollback commands the page covers backups and restoring them. The
+commands assume the `docker-compose.yml` in the repository, with the services
+`thrillhousebot` and `db`.
 
 ## What is stored, and what is not
 
@@ -44,9 +46,10 @@ For the same reason, replace the bot by stopping the old process before the new
 one starts. `docker compose up -d` does this. In Kubernetes, use
 `replicas: 1` with the `Recreate` deployment strategy, not `RollingUpdate`.
 
-To handle more load in one process, raise the limits on the model calls rather
-than adding replicas; see [AI call budget](https://github.com/devops-thiago/ThrillhouseBot/blob/main/README.md#ai-call-budget)
-and `AI_MAX_CONCURRENT_CALLS` in the README.
+Within the one process there is no review queue or worker limit: each review
+runs on its own virtual thread. Model calls are not limited either unless
+`AI_MAX_CONCURRENT_CALLS` sets a cap, so the model provider is what limits how
+many reviews run at once.
 
 ## Health endpoints
 
@@ -199,8 +202,8 @@ Use your `DB_USER` in place of `thrillhouse` after `-U` if you changed it.
 
 There are no migration scripts. On startup the production profile lets
 Hibernate update the schema in place (`schema-management.strategy=update`): it
-creates missing tables, columns and constraints, and never drops or renames
-anything. On a new, empty database the first start logs warnings such as
+creates missing tables and columns and never drops or renames them. On a new,
+empty database the first start logs warnings such as
 `constraint "uq_pausedpr_repository_pr" of relation "pausedpr" does not exist,
 skipping`; they are expected.
 
