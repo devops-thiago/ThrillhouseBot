@@ -956,6 +956,84 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void anEmptyBodyIsFollowedByOneMoreCallWhoseVerdictsAreApplied() {
+    // #1079, kotlin ThrillhouseBot-test#276: one empty body sent all 17 findings out unverified.
+    ReviewResponse original =
+        response(finding("critical", "high", "Real"), finding("high", "high", "Invented"));
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            Result.<String>builder()
+                .finishReason(FinishReason.STOP)
+                .tokenUsage(new TokenUsage(500, 4000))
+                .build())
+        .thenReturn(
+            aiOkWithUsage(
+                """
+                {"verdicts": [{"id": 1, "verdict": "confirmed", "reason": "real"},
+                              {"id": 2, "verdict": "rejected", "reason": "not in the diff"}]}
+                """,
+                500,
+                90));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(1, result.findings().size());
+    assertEquals("Real", result.findings().get(0).title());
+    assertEquals(List.of(new VerificationCoverage(2, 2)), reported);
+    verify(verifier, times(2))
+        .verify(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+    verify(tokenLedger).recordUsage(SESSION, 500, 4000);
+    verify(tokenLedger).recordUsage(SESSION, 500, 90);
+  }
+
+  @Test
+  void twoEmptyBodiesKeepTheFindingsUnverifiedAfterExactlyTwoCalls() {
+    ReviewResponse original = response(finding("high", "high", "Unverified"));
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(aiOk("  "))
+        .thenReturn(aiNoContent());
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertKeptUnscreened(original, result);
+    assertEquals(List.of(new VerificationCoverage(1, 0)), reported);
+    verify(verifier, times(2))
+        .verify(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+  }
+
+  @Test
+  void anEmptyBodyIsNotRepeatedOnceTheSpendCeilingIsReached() {
+    ReviewResponse original = response(finding("high", "high", "Unverified"));
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(aiNoContent());
+    when(tokenLedger.ceilingReached(SESSION)).thenReturn(false, true);
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertKeptUnscreened(original, result);
+    verify(verifier, times(1))
+        .verify(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+  }
+
+  @Test
+  void aBodyThatArrivesIsNeverAskedForTwice() {
+    ReviewResponse original = response(finding("high", "high", "Real"));
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(aiOk("{\"verdicts\": [{\"id\": 1, \"verdict\": \"confirmed\"}]}"));
+
+    service.verify(SESSION, original, "diff", "stack", "");
+
+    verify(verifier, times(1))
+        .verify(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+  }
+
+  @Test
   void reportsZeroCoverageWhenTheModelReturnsNoBody() {
     // #623: the empty-body soft failure keeps the findings (fail open, unchanged) but must no
     // longer be indistinguishable from a verified set — the coverage says none were verified.

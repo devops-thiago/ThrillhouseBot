@@ -287,6 +287,21 @@ previous round's overview fills what it lacks, and a removed statement is not fi
 removal is logged with its statement and evidence. The call fails open on an error, an empty, cut or malformed answer, an input
 over the per-call budget or the spend ceiling, and it never changes findings.
 
+### Response repair
+
+When the parser refuses a review or summary answer, `AiReviewService` hands it to
+`ResponseRepairService` before the full retry (`REVIEW_RESPONSE_REPAIR_ENABLED`, on by default).
+One call (`ResponseRepairer` on the active model for a review answer, `SummaryResponseRepairer` on
+the concise model for a summary answer) gets the failed answer, fenced, the parser's error and the
+response contract, and the result is read by the same parser. A repaired review answer is rejected
+when it holds fewer findings than the failed answer has titles, a finding title the failed answer
+does not have, or more statuses than it wrote. Timeouts, provider errors, throttles and length
+stops never reach the repair. A failed or rejected repair leaves the retry loop as it was. A summary
+answer whose `file_summaries` is a string holding JSON is read as that JSON; any other string gets
+one re-ask for that field, and only rows whose path is in the string are kept. The finding
+verifier makes its call once more when the first returns no body. Each call records its usage on the
+token ledger, is skipped at the spend ceiling and holds a model-call gate slot.
+
 ### Deterministic security scan
 
 With `REVIEW_SECRET_SCAN_ENABLED` or `REVIEW_IAC_SCAN_ENABLED` (both off by default),

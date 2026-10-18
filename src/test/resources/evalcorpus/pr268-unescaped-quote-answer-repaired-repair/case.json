@@ -1,0 +1,11 @@
+{
+  "kind": "repair",
+  "sourcePr": 268,
+  "why": "Round 18 (#1079): python ThrillhouseBot-test#268 and three other reviews returned answers that were not valid review JSON, and each was recovered only by resending the whole prompt. This answer has the shape those failures had: prose before the object, double quotes left unescaped inside two descriptions and trailing commas. The repair call must return both findings with the same titles, so the review continues without a full retry.",
+  "expectation": "repaired",
+  "keywords": [
+    "Pagination loop never runs",
+    "bag() sends no Authorization header"
+  ],
+  "answer": "Here is my review.\n\n{\"findings\": [\n  {\"risk\": \"high\", \"confidence\": \"high\", \"file\": \"python/bags/client.py\", \"line\": 12,\n   \"title\": \"Pagination loop never runs\",\n   \"description\": \"cursor starts as None and the loop runs only \"while cursor is not None\", so fetch_all_bags returns [] without one request.\",\n   \"suggestion_old\": \"        while cursor is not None:\",\n   \"suggestion_new\": \"        while True:\",},\n  {\"risk\": \"medium\", \"confidence\": \"high\", \"file\": \"python/bags/client.py\", \"line\": 24,\n   \"title\": \"bag() sends no Authorization header\",\n   \"description\": \"Every other request sends the \"Bearer\" token; bag() calls the API anonymously.\",},\n],\n\"previous_findings_status\": []}\n"
+}

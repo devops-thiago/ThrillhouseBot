@@ -325,6 +325,7 @@ bounds at boot while it is on.
 | `REVIEW_BLOCKING_STRICTNESS` | Which findings request changes: `balanced`, `strict` or `lenient`. See [Blocking strictness](#blocking-strictness) | `balanced` |
 | `REVIEW_VERIFIER_ENABLED` | Run a second, skeptical pass that re-checks each finding against the diff and drops or downgrades what it cannot confirm. See [AI call budget](#ai-call-budget) | `true` |
 | `REVIEW_SUMMARY_VERIFICATION_ENABLED` | Check the summary's sentences, walkthrough rows and diagram against the diff and the findings, and remove what they contradict. One more call per review. See [AI call budget](#ai-call-budget) | `false` |
+| `REVIEW_RESPONSE_REPAIR_ENABLED` | When a review or summary answer is not valid review JSON, send only that answer and the parser's error in one small call and ask for the same content in the required shape, before resending the whole prompt. Also asks again for the walkthrough's file summaries when the summary answer wrote them as a string. See [AI call budget](#ai-call-budget) | `true` |
 | `REVIEW_DIMENSION_ROUTING_ENABLED` | Give each review call only the review-dimension blocks its files can use, instead of all ten. See [Dimension routing](#dimension-routing) | `false` |
 | `REVIEW_DECLINE_RECHECK_ENABLED` | Check a maintainer's decline against the reviewed code before recording the finding justified. See [Re-checking declines](#re-checking-declines). `false` makes any reply final | `true` |
 | `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads and finding replies | `true` |
@@ -453,6 +454,21 @@ round is checked; text carried over from the previous round on the same head is
 not, and a removed statement is not carried back in. Each removal is logged at
 INFO with the statement and the evidence. Findings are never changed. It fails
 open: an error, a cut answer or the spend ceiling leaves the summary as written.
+
+An answer that is not valid review JSON used to be retried with the whole prompt.
+With `REVIEW_RESPONSE_REPAIR_ENABLED` (on by default) one repair call comes
+first. It gets only the failed answer, the parser's error and the response
+shape, and returns the same content in that shape. The repair runs on the model
+that wrote the answer and sees no diff. A repaired review answer must keep as
+many findings as the failed answer has titles, and may add no finding title and
+no status the failed answer does not have. If the repair errors, is cut, does not
+parse or fails those checks, the full retry runs as before. A summary answer that
+wrote `file_summaries` as a string holding JSON is read as that JSON; any other
+string gets one small call that asks for that field alone, and only rows whose
+path is in the string are kept. A finding verification call that returns no
+response body is made once more before the findings are kept unverified. These
+calls are not counted by `REVIEW_MAX_AI_CALLS`; they record their usage against
+`REVIEW_MAX_TOKENS_PER_REVIEW` and are skipped at that ceiling.
 
 ### Dimension routing
 

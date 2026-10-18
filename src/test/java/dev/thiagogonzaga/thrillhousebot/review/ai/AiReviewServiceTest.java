@@ -82,6 +82,9 @@ class AiReviewServiceTest {
   /** The shipped shape: no active-model cap, the concise lane at its 8192 default. */
   @Spy private ResponseCaps responseCaps = TestResponseCaps.defaults();
 
+  /** Repairs nothing unless a test says so: every refused answer goes to the full retry. */
+  @Mock private ResponseRepairService repairService;
+
   private static final AiReviewService.PromptInputs PROMPT_INPUTS =
       new AiReviewService.PromptInputs("diff", "", "base", "", "", "", "");
 
@@ -882,7 +885,8 @@ class AiReviewServiceTest {
             broadcaster,
             tokenLedger,
             callGate,
-            responseCaps) {
+            responseCaps,
+            repairService) {
           @Override
           StreamingHandle streamingHandleOf(TokenStream stream) {
             return handle;
@@ -928,7 +932,8 @@ class AiReviewServiceTest {
             broadcaster,
             tokenLedger,
             callGate,
-            responseCaps) {
+            responseCaps,
+            repairService) {
           @Override
           StreamingHandle streamingHandleOf(TokenStream stream) {
             return handle;
@@ -1009,7 +1014,8 @@ class AiReviewServiceTest {
             broadcaster,
             realLedger,
             callGate,
-            responseCaps);
+            responseCaps,
+            repairService);
     when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
         .thenReturn(new ErrorTokenStream(new RuntimeException("transient")))
         .thenReturn(new FakeTokenStream("{\"findings\":[]}"));
@@ -1040,7 +1046,8 @@ class AiReviewServiceTest {
             broadcaster,
             realLedger,
             callGate,
-            responseCaps);
+            responseCaps,
+            repairService);
     when(reviewConfig.maxAiRetries()).thenReturn(5);
     when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
         .thenAnswer(invocation -> new FakeTokenStream("{\"schema\":\"unexpected\"}"));
@@ -1519,7 +1526,8 @@ class AiReviewServiceTest {
             broadcaster,
             tokenLedger,
             callGate,
-            TestResponseCaps.of(96_000, 8192));
+            TestResponseCaps.of(96_000, 8192),
+            repairService);
     var starts = new java.util.concurrent.atomic.AtomicInteger();
     when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
         .thenAnswer(
@@ -1802,7 +1810,254 @@ class AiReviewServiceTest {
 
   private AiReviewService serviceGatedBy(ModelCallGate gate) {
     return new AiReviewService(
-        prReviewer, prSummarizer, parser, config, broadcaster, tokenLedger, gate, responseCaps);
+        prReviewer,
+        prSummarizer,
+        parser,
+        config,
+        broadcaster,
+        tokenLedger,
+        gate,
+        responseCaps,
+        repairService);
+  }
+
+  @Test
+  void aRepairedAnswerContinuesTheReviewWithoutAFullRetry() {
+    // #1079: the failed answer goes to one repair call, and its result is the call's answer.
+    ReviewSession session = reviewSession();
+    stubReviewStreams(new FakeTokenStream("{\"findings\": [{\"title\": \"t\",}]}"));
+    var refusal = new IllegalArgumentException("Model response is not valid review JSON");
+    when(parser.parse(anyString())).thenThrow(refusal);
+    var repaired = new ReviewResponse(List.of(), List.of(), null);
+    when(repairService.repair(anyLong(), any(), anyString(), any()))
+        .thenReturn(Optional.of(repaired));
+
+    assertSame(repaired, service.review(session, PROMPT_INPUTS));
+
+    verifyReviewStreamCalls(1);
+    verify(repairService)
+        .repair(
+            ReviewTokenLedger.keyFor(session),
+            AiResponses.ModelLane.ACTIVE,
+            "{\"findings\": [{\"title\": \"t\",}]}",
+            refusal);
+    var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
+    verify(broadcaster, atLeast(0)).broadcast(captor.capture());
+    assertTrue(captor.getAllValues().stream().noneMatch(e -> "review.retry".equals(e.type())));
+  }
+
+  @Test
+  void aFailedRepairLeavesTheFullRetryAsItWas() {
+    ReviewSession session = reviewSession();
+    stubReviewStreams(new FakeTokenStream("not json"), new FakeTokenStream("{\"findings\":[]}"));
+    var parsed = new ReviewResponse(List.of(), List.of(), null);
+    when(parser.parse(anyString()))
+        .thenThrow(new IllegalArgumentException("Model response is not valid review JSON"))
+        .thenReturn(parsed);
+    when(repairService.repair(anyLong(), any(), anyString(), any())).thenReturn(Optional.empty());
+
+    assertSame(parsed, service.review(session, PROMPT_INPUTS));
+
+    verifyReviewStreamCalls(2);
+    verify(repairService, times(1)).repair(anyLong(), any(), anyString(), any());
+  }
+
+  @Test
+  void eachRefusedAttemptGetsOneRepairAndTheLastFailureStaysTheParsersRefusal() {
+    ReviewSession session = reviewSession();
+    when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
+        .thenAnswer(inv -> new FakeTokenStream("not json"));
+    when(parser.parse(anyString()))
+        .thenThrow(new IllegalArgumentException("Model response is not valid review JSON"));
+
+    var thrown =
+        assertThrows(AiReviewException.class, () -> service.review(session, PROMPT_INPUTS));
+
+    verify(repairService, times(3)).repair(anyLong(), any(), anyString(), any());
+    var refusal = Throwables.findCause(thrown, IllegalArgumentException.class).orElseThrow();
+    assertEquals("Model response is not valid review JSON", refusal.getMessage());
+  }
+
+  @Test
+  void anEmptyAnswerIsNotRepaired() {
+    ReviewSession session = reviewSession();
+    stubReviewStreams(new FakeTokenStream(""), new FakeTokenStream("{\"findings\":[]}"));
+    var parsed = new ReviewResponse(List.of(), List.of(), null);
+    when(parser.parse(anyString()))
+        .thenThrow(new IllegalArgumentException("Model returned an empty response"))
+        .thenReturn(parsed);
+
+    assertSame(parsed, service.review(session, PROMPT_INPUTS));
+
+    verifyNoInteractions(repairService);
+  }
+
+  @Test
+  void transientFailuresAreNotRepaired() {
+    // Timeouts, provider errors and throttles are retried as before, never handed to the repair.
+    ReviewSession session = reviewSession();
+    when(reviewConfig.maxAiRetries()).thenReturn(4);
+    stubReviewStreams(
+        new ErrorTokenStream(new InternalServerException("503 Service Unavailable")),
+        new ErrorTokenStream(new RuntimeException("connection reset")),
+        new ErrorTokenStream(new RateLimitException(new HttpException(429, SLOT_REFUSAL))),
+        new FakeTokenStream("{\"findings\":[]}"));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var quick =
+        new AiReviewService(
+            prReviewer,
+            prSummarizer,
+            parser,
+            config,
+            broadcaster,
+            tokenLedger,
+            callGate,
+            responseCaps,
+            repairService) {
+          @Override
+          void sleep(Duration delay) {
+            // The throttle's 30 s wait is not what this test is about.
+          }
+        };
+
+    quick.review(session, PROMPT_INPUTS);
+
+    verifyReviewStreamCalls(4);
+    verifyNoInteractions(repairService);
+  }
+
+  @Test
+  void aTimedOutAttemptIsNotRepaired() {
+    ReviewSession session = reviewSession();
+    when(reviewConfig.aiTimeoutSeconds()).thenReturn(1);
+    stubReviewStreams(new HangingTokenStream(), new FakeTokenStream("{\"findings\":[]}"));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    service.review(session, PROMPT_INPUTS);
+
+    verifyNoInteractions(repairService);
+  }
+
+  @Test
+  void aLengthStopIsNotRepaired() {
+    ReviewSession session = reviewSession();
+    when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
+        .thenAnswer(
+            invocation ->
+                new TruncatedTokenStream("{\"findings\":[{\"file\":\"A", new AtomicInteger()));
+
+    assertThrows(AiResponseTruncatedException.class, () -> service.review(session, PROMPT_INPUTS));
+
+    verifyNoInteractions(repairService);
+  }
+
+  @Test
+  void aRefusedSummaryAnswerIsRepairedOnTheConciseLane() {
+    ReviewSession session = reviewSession();
+    when(prSummarizer.summarizeStream(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(new FakeTokenStream("{\"summary\": ["));
+    when(parser.parseSummary(anyString()))
+        .thenThrow(new IllegalArgumentException("Model response is not valid review JSON"));
+    var repaired = new ReviewResponse(List.of(), List.of(), null);
+    when(repairService.repair(anyLong(), eq(AiResponses.ModelLane.CONCISE), anyString(), any()))
+        .thenReturn(Optional.of(repaired));
+
+    assertSame(
+        repaired,
+        service.summarize(
+            session, new AiReviewService.SummaryInputs("ctx", "[]", "files", "", "")));
+    verify(prSummarizer, times(1))
+        .summarizeStream(anyString(), anyString(), anyString(), anyString(), anyString());
+  }
+
+  @Test
+  void aSummaryWhoseFileSummariesArrivedAsAStringGetsThemFromOneReAsk() {
+    // #1079, react ThrillhouseBot-test#273: 19 of 20 rows rendered "Not summarized".
+    ReviewSession session = reviewSession();
+    var raw = "{\"summary\": {\"pr_purpose\": \"p\", \"file_summaries\": \"a.py: adds X\"}}";
+    when(prSummarizer.summarizeStream(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(new FakeTokenStream(raw));
+    var parsed =
+        new ReviewResponse(
+            List.of(),
+            List.of(),
+            new ReviewResponse.Summary(
+                0, 0, 0, 0, 0, "ok", "p", List.of("gap"), List.of(), List.of(), null));
+    when(parser.parseSummary(raw)).thenReturn(parsed);
+    when(parser.unreadFileSummaries(raw)).thenReturn(Optional.of("a.py: adds X"));
+    var rows = List.of(new ReviewResponse.FileSummary("a.py", "Adds X"));
+    when(repairService.fileSummaries(ReviewTokenLedger.keyFor(session), "a.py: adds X"))
+        .thenReturn(Optional.of(rows));
+
+    var response =
+        service.summarize(session, new AiReviewService.SummaryInputs("ctx", "[]", "files", "", ""));
+
+    assertEquals(rows, response.summary().fileSummaries());
+    assertEquals("p", response.summary().prPurpose());
+    assertEquals(List.of("gap"), response.summary().descriptionGaps());
+  }
+
+  @Test
+  void aSummaryWithFileSummariesOrNoneToReadMakesNoReAsk() {
+    ReviewSession session = reviewSession();
+    when(prSummarizer.summarizeStream(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenAnswer(inv -> new FakeTokenStream("{}"));
+    var withRows =
+        new ReviewResponse(
+            List.of(),
+            List.of(),
+            new ReviewResponse.Summary(
+                0,
+                0,
+                0,
+                0,
+                0,
+                "ok",
+                "p",
+                List.of(),
+                List.of(),
+                List.of(new ReviewResponse.FileSummary("a.py", "x")),
+                null));
+    var noRows =
+        new ReviewResponse(
+            List.of(),
+            List.of(),
+            new ReviewResponse.Summary(
+                0, 0, 0, 0, 0, "ok", "p", List.of(), List.of(), List.of(), null));
+    var noSummary = new ReviewResponse(List.of(), List.of(), null);
+    when(parser.parseSummary(anyString())).thenReturn(withRows, noRows, noSummary, noRows);
+    when(parser.unreadFileSummaries(anyString()))
+        .thenReturn(Optional.empty(), Optional.of("a.py: x"));
+    var inputs = new AiReviewService.SummaryInputs("ctx", "[]", "files", "", "");
+
+    assertSame(withRows, service.summarize(session, inputs));
+    assertSame(noRows, service.summarize(session, inputs));
+    assertSame(noSummary, service.summarize(session, inputs));
+    assertSame(noRows, service.summarize(session, inputs), "a re-ask that reads nothing");
+
+    verify(parser, times(2)).unreadFileSummaries(anyString());
+    verify(repairService, times(1)).fileSummaries(anyLong(), anyString());
+  }
+
+  @Test
+  void aReviewBatchNeverAsksForFileSummaries() {
+    ReviewSession session = reviewSession();
+    stubReviewStreams(new FakeTokenStream("{\"findings\":[]}"));
+    when(parser.parse(anyString()))
+        .thenReturn(
+            new ReviewResponse(
+                List.of(),
+                List.of(),
+                new ReviewResponse.Summary(
+                    0, 0, 0, 0, 0, "ok", "p", List.of(), List.of(), List.of(), null)));
+
+    service.review(session, PROMPT_INPUTS);
+
+    verify(parser, never()).unreadFileSummaries(anyString());
+    verifyNoInteractions(repairService);
   }
 
   private void stubReviewStreams(TokenStream first, TokenStream... then) {

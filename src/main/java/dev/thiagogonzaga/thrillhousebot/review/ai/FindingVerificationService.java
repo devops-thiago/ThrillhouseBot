@@ -41,6 +41,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -826,19 +827,30 @@ public class FindingVerificationService {
       return markUnscreened(screened);
     }
     try {
-      var result =
-          verifier.verify(
-              PromptTemplateEscaper.escape(renderCandidates(screened.findings(), evidence)),
-              prContext == null ? "" : prContext,
-              diff,
-              projectStack,
-              previousFindings == null ? "" : previousFindings,
-              verifierSystemPrompt(screened.findings()));
-      // Meter before unwrapping: a truncated response was still billed, so its spend counts.
-      recordVerifierUsage(ledgerSessionId, result);
-      var raw =
-          AiResponses.textOrThrowOnTruncation(
-              result, "Finding verification", responseCaps.forLane(AiResponses.ModelLane.CONCISE));
+      var candidates =
+          PromptTemplateEscaper.escape(renderCandidates(screened.findings(), evidence));
+      var systemPrompt = verifierSystemPrompt(screened.findings());
+      Supplier<String> call =
+          () ->
+              meteredVerifierCall(
+                  ledgerSessionId,
+                  verifier.verify(
+                      candidates,
+                      prContext == null ? "" : prContext,
+                      diff,
+                      projectStack,
+                      previousFindings == null ? "" : previousFindings,
+                      systemPrompt));
+      var raw = call.get();
+      if ((raw == null || raw.isBlank()) && !tokenLedger.ceilingReached(ledgerSessionId)) {
+        // #1079: kotlin ThrillhouseBot-test#276 posted all 17 round-1 findings unverified on one
+        // empty body. The call is made once more before failing open; the ceiling still bounds it.
+        Log.warnf(
+            "Finding verification returned no response body — repeating the call once for the %d"
+                + " candidate finding(s)",
+            screened.findings().size());
+        raw = call.get();
+      }
       if (raw == null || raw.isBlank()) {
         // The unwrap helper's documented "no response" soft failure, which this caller has to
         // honour like every other one: a reasoning model can spend the whole output budget on
@@ -1025,6 +1037,16 @@ public class FindingVerificationService {
     return verdict == null || verdict.verdict() == null
         ? ""
         : verdict.verdict().strip().toLowerCase(Locale.ROOT);
+  }
+
+  /**
+   * The verifier call's answer text, its usage recorded first: a truncated response was still
+   * billed, so its spend counts. {@code null} or blank for no response body.
+   */
+  private String meteredVerifierCall(long ledgerSessionId, Result<String> result) {
+    recordVerifierUsage(ledgerSessionId, result);
+    return AiResponses.textOrThrowOnTruncation(
+        result, "Finding verification", responseCaps.forLane(AiResponses.ModelLane.CONCISE));
   }
 
   /**

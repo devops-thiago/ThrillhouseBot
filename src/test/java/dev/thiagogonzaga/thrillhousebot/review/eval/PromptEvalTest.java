@@ -30,12 +30,14 @@ import dev.thiagogonzaga.thrillhousebot.review.PromptSections;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
 import dev.thiagogonzaga.thrillhousebot.review.RiskLevel;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewer;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrSummarizer;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ResponseCaps;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ResponseRepairService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponseParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
@@ -49,11 +51,13 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -112,6 +116,7 @@ class PromptEvalTest {
   @Inject ReviewResponseParser reviewResponseParser;
   @Inject ReviewDimensionRouter dimensionRouter;
   @Inject SummaryVerifier summaryVerifier;
+  @Inject ResponseRepairService responseRepairService;
   @Inject ObjectMapper mapper;
   @Inject ReviewTokenLedger tokenLedger;
   @Inject ResponseCaps responseCaps;
@@ -181,6 +186,9 @@ class PromptEvalTest {
     }
     if (evalCase.isSummaryVerificationCase()) {
       return summaryVerificationOutcome(evalCase);
+    }
+    if (evalCase.isRepairCase()) {
+      return repairOutcome(evalCase);
     }
     return evalCase.isSummaryCase() ? summaryOutcome(evalCase) : generatorOutcome(evalCase);
   }
@@ -288,6 +296,50 @@ class PromptEvalTest {
     var verified = service.verify(Long.MIN_VALUE, spec.summary(), material);
     return summaryVerificationGrade(
         spec.keywords(), spec.keptKeywords(), EvalCorpusTest.summaryText(verified));
+  }
+
+  /**
+   * Runs the production repair step (#1079) over the case's failed answer. A review answer is
+   * repaired after the parser's own refusal of it, and the sample is "repaired" when the result
+   * holds exactly one finding per keyword, each titled by it; "not-repaired" when the step returned
+   * nothing (a failed call, an answer the parser still refuses, or one the content checks
+   * rejected), "content-changed" otherwise. A summary answer's {@code file_summaries} string is
+   * re-asked, and the sample is "file-summaries-read" when the rows name exactly the keyword paths,
+   * "no-rows" or "wrong-rows" otherwise.
+   */
+  private String repairOutcome(EvalCase evalCase) {
+    var spec = evalCase.spec();
+    var answer = spec.answer();
+    // No review session: the unopened sentinel key means no ceiling gates the call.
+    if (EvalCase.FILE_SUMMARIES_READ.equals(spec.expectation())) {
+      var text = reviewResponseParser.unreadFileSummaries(answer).orElse("");
+      var rows = responseRepairService.fileSummaries(Long.MIN_VALUE, text).orElse(List.of());
+      if (rows.isEmpty()) {
+        return "no-rows";
+      }
+      var paths = rows.stream().map(ReviewResponse.FileSummary::path).collect(Collectors.toSet());
+      return paths.equals(Set.copyOf(spec.keywords()))
+          ? EvalCase.FILE_SUMMARIES_READ
+          : "wrong-rows";
+    }
+    IllegalArgumentException refusal;
+    try {
+      reviewResponseParser.parse(answer);
+      return "parsed-without-repair";
+    } catch (IllegalArgumentException e) {
+      refusal = e;
+    }
+    var repaired =
+        responseRepairService.repair(Long.MIN_VALUE, AiResponses.ModelLane.ACTIVE, answer, refusal);
+    if (repaired.isEmpty()) {
+      return "not-repaired";
+    }
+    var titles = repaired.get().findings().stream().map(ReviewResponse.Finding::title).toList();
+    var kept =
+        titles.size() == spec.keywords().size()
+            && spec.keywords().stream()
+                .allMatch(k -> titles.stream().anyMatch(t -> t != null && t.contains(k)));
+    return kept ? EvalCase.REPAIRED : "content-changed";
   }
 
   /**

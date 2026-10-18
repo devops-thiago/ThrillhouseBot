@@ -285,6 +285,17 @@ public interface ThrillhouseConfig {
     boolean summaryVerificationEnabled();
 
     /**
+     * The repair call (#1079): when a review or summary answer is not review JSON, one call gets
+     * only that answer, the parser's error and the response contract and returns the same content
+     * in the required shape, before the full retry; it also re-asks for a {@code file_summaries}
+     * field written as a string. On by default; it fails open, and a failed repair leaves the full
+     * retry exactly as it was.
+     */
+    @WithDefault("true")
+    @WithName("response-repair-enabled")
+    boolean responseRepairEnabled();
+
+    /**
      * Per-call review dimension routing (#665): each review call's system prompt carries the core
      * plus only the dimension blocks its files can use, instead of all ten, and the verifier's
      * dimension carve-outs follow the files its candidates are anchored in. Off by default while it
