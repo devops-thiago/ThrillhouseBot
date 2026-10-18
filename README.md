@@ -1606,6 +1606,13 @@ gh attestation verify thrillhousebot-v0.7.1-linux-amd64.tar.gz \
   --repo devops-thiago/ThrillhouseBot
 ```
 
+## Operations
+
+[docs/OPERATIONS.md](docs/OPERATIONS.md) covers what the bot stores and what
+it keeps only in memory, the single-replica limit, the health endpoints with
+Compose and Kubernetes probes, restarts, backups, and going back to an earlier
+release.
+
 ## Upgrading
 
 Only the latest release receives fixes, including security fixes. To upgrade,
