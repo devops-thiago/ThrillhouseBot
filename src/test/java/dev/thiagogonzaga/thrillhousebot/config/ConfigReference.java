@@ -171,7 +171,8 @@ final class ConfigReference {
     var other = otherVariables(entries, walker.leafKeys, walker.aliases, errors);
     if (!errors.isEmpty()) {
       throw new IllegalStateException(
-          "Configuration reference cannot be generated:\n  " + String.join("\n  ", errors));
+          "Configuration reference cannot be generated:\n  "
+              + String.join("\n  ", new LinkedHashSet<>(errors)));
     }
     var sections =
         walker.sections.entrySet().stream()
@@ -498,6 +499,9 @@ final class ConfigReference {
       var profile = "";
       if (key.startsWith("%")) {
         var dot = key.indexOf('.');
+        if (dot < 0) {
+          throw new IllegalArgumentException("profile without a key: " + key);
+        }
         profile = key.substring(1, dot);
         key = key.substring(dot + 1);
       }

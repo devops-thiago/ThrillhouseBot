@@ -249,6 +249,15 @@ class ConfigReferenceTest {
   }
 
   @Test
+  void aMalformedPropertiesLineIsRejected() {
+    assertThrows(
+        IllegalArgumentException.class, () -> ConfigReference.parseProperties(List.of("%prod=1")));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ConfigReference.parseProperties(List.of("no-equals")));
+  }
+
+  @Test
   void onlyAListDefaultIsSplitAtCommas() {
     assertEquals(
         "`a,b`", row(probe("thrillhousebot.url=a,b"), "thrillhousebot.url").defaultValue());
