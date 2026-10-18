@@ -98,7 +98,7 @@ public final class ReviewDispatcher {
       }
       if (result.coalescedCount() > 0) {
         logCoalesced(req, result.coalescedCount());
-      } else if (result.startWorker()) {
+      } else {
         logQueued(req);
       }
 

@@ -798,6 +798,19 @@ class ReviewDispatcherTest {
   }
 
   @Test
+  void shouldQueueManualReviewWhenANewerHeadStartedReviewAfterTheHeadWasRead() {
+    var state = new ReviewDispatcher.PerPrState();
+    state.onDispatch(reviewRequest("owner", "repo", 39, "sha2"));
+    state.takeNext();
+    state.beginReview("sha2");
+
+    var result = state.onManualDispatch(manualRequest(39), "sha1");
+
+    assertFalse(result.covered());
+    assertEquals(1, result.coalescedCount());
+  }
+
+  @Test
   void shouldCoalesceManualReviewWhenAnotherRequestAlreadyWaits() {
     var state = new ReviewDispatcher.PerPrState();
     state.onDispatch(reviewRequest("owner", "repo", 37, "sha1"));
