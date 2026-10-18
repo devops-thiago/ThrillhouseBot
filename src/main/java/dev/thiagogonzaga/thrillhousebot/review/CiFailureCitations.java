@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
@@ -55,6 +56,12 @@ import java.util.regex.Pattern;
  * fails (#1091): the review prompt has a finding predict a failure ("CI will confirm") rather than
  * state it, and such a finding named the very test CI reports failing. A finding that names no
  * failing test or check says nothing about it, so the sentence then states the failure alone.
+ *
+ * <p>A finding that quotes one of a failing test's assertions cites that test as if it named it
+ * (#952): rust ThrillhouseBot-test#279's finding quoted the failing test's {@code assert!} line and
+ * never named the test, whose log printed only "got 4". The assertions are read from the test's
+ * body in the pull request's changed files ({@link TestAssertions}), so a section parsed without
+ * them ({@link #parse(String)}) cites by name only.
  */
 final class CiFailureCitations implements FindingVerificationService.FailingChecks {
 
@@ -240,7 +247,7 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
    * finding's lower-cased text: its words are ordinary prose ("validates the input"), which a
    * finding about something else can say.
    */
-  private record FailingTest(String name, List<String> phrases) {
+  private record FailingTest(String name, List<String> phrases, List<String> assertions) {
 
     boolean namedIn(String raw, String text) {
       if (name.indexOf(' ') >= 0) {
@@ -263,6 +270,12 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       char c = text.charAt(at);
       return Character.isLetterOrDigit(c) || c == '_';
     }
+
+    /** Whether one of {@code quotes} is part of one of this test's assertion lines. */
+    boolean quotesAnAssertion(List<String> quotes) {
+      return quotes.stream()
+          .anyMatch(quote -> assertions.stream().anyMatch(a -> a.contains(quote)));
+    }
   }
 
   /**
@@ -271,8 +284,11 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
    */
   private record Check(String name, String words, List<FailingTest> tests) {}
 
-  /** What a finding cites: a check by its name ({@code test} null), or by one of its tests. */
-  private record Citation(Check check, FailingTest test) {}
+  /**
+   * What a finding cites: a check by its name ({@code test} null), or by one of its tests, named or
+   * through one of its assertions the finding quotes ({@code byAssertion}).
+   */
+  private record Citation(Check check, FailingTest test, boolean byAssertion) {}
 
   private final List<Check> checks;
 
@@ -282,6 +298,14 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
 
   /** The failing checks the rendered section records; {@link #NONE} for a blank section. */
   static CiFailureCitations parse(String section) {
+    return parse(section, List.of());
+  }
+
+  /**
+   * {@link #parse(String)}, with each failing test's assertions read from its body in {@code
+   * files}, the pull request's changed files, so a finding quoting one cites the test.
+   */
+  static CiFailureCitations parse(String section, List<GitHubPullRequestClient.FileDiff> files) {
     if (section == null || section.isBlank()) {
       return NONE;
     }
@@ -289,11 +313,16 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     for (String line : section.split("\n")) {
       reader.read(line);
     }
+    var sources =
+        reader.testLines.stream().allMatch(List::isEmpty)
+            ? TestAssertions.NONE
+            : TestAssertions.of(files);
     var checks = new ArrayList<Check>();
     for (int i = 0; i < reader.names.size(); i++) {
       String name = reader.names.get(i).strip();
       if (!normalized(name).isBlank()) {
-        checks.add(new Check(name, normalized(name), failingTests(reader.testLines.get(i))));
+        checks.add(
+            new Check(name, normalized(name), failingTests(reader.testLines.get(i), sources)));
       }
     }
     return checks.isEmpty() ? NONE : new CiFailureCitations(List.copyOf(checks));
@@ -347,14 +376,21 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     }
   }
 
-  /** The distinctive test names among one check's failing-test lines, each once. */
-  private static List<FailingTest> failingTests(List<String> lines) {
+  /**
+   * The distinctive test names among one check's failing-test lines, each once, with the assertions
+   * {@code sources} holds for it.
+   */
+  private static List<FailingTest> failingTests(List<String> lines, TestAssertions sources) {
     var tests = new ArrayList<FailingTest>();
     var seen = new HashSet<String>();
     for (String line : lines) {
       String name = testName(line);
       if (name != null && distinctive(name) && seen.add(normalized(name))) {
-        tests.add(new FailingTest(name, phrasesOf(name, line.strip().startsWith(VITEST_MARK))));
+        tests.add(
+            new FailingTest(
+                name,
+                phrasesOf(name, line.strip().startsWith(VITEST_MARK)),
+                sources.assertionsOf(name)));
       }
     }
     return List.copyOf(tests);
@@ -572,7 +608,11 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
         checkNames.add(quoted(citation.check().name()));
       } else {
         testNames.add(
-            quoted(citation.test().name()) + " (check " + quoted(citation.check().name()) + ")");
+            quoted(citation.test().name())
+                + " (check "
+                + quoted(citation.check().name())
+                + ")"
+                + (citation.byAssertion() ? ", whose assertion the finding quotes," : ""));
       }
     }
     var records = new ArrayList<String>();
@@ -681,14 +721,19 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
         || states(text, DISCLAIMERS)) {
       return List.of();
     }
+    var quotes = TestAssertions.quotesIn(raw);
     var cited = new ArrayList<Citation>();
     for (Check check : checks) {
       if (failureStated && namesAsACheck(check, raw, text)) {
-        cited.add(new Citation(check, null));
+        cited.add(new Citation(check, null, false));
       }
-      check.tests().stream()
-          .filter(test -> test.namedIn(raw, text))
-          .forEach(test -> cited.add(new Citation(check, test)));
+      for (FailingTest test : check.tests()) {
+        if (test.namedIn(raw, text)) {
+          cited.add(new Citation(check, test, false));
+        } else if (test.quotesAnAssertion(quotes)) {
+          cited.add(new Citation(check, test, true));
+        }
+      }
     }
     return cited;
   }

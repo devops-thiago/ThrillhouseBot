@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
@@ -395,6 +396,44 @@ class ContextEvidenceResolverTest {
     assertTrue(
         note.contains(
             "names the failing test \"topCandidatesReturnsAtMostLimit\" (check \"unit\")"),
+        note);
+    assertTrue(round.failingChecks().cites(cites));
+  }
+
+  /**
+   * #952: a finding that quotes a failing test's assertion, and names neither the test nor its
+   * check, reaches the verifier with that test when the test's body is in the changed files.
+   */
+  @Test
+  void carriesTheFailingTestWhoseAssertionAFindingQuotes() {
+    var round =
+        ContextEvidenceResolver.forReview(
+            null,
+            PathScopedInstructions.NONE,
+            """
+            ### unit (conclusion: failure)
+            Failing tests named in the job log:
+            - [ERROR]   WaitlistServiceTest.topCandidatesReturnsAtMostLimit:67 expected
+            """,
+            List.of(
+                new GitHubPullRequestClient.FileDiff(
+                    "src/test/WaitlistServiceTest.java",
+                    "added",
+                    3,
+                    0,
+                    3,
+                    "@@ -0,0 +1,3 @@\n+  void topCandidatesReturnsAtMostLimit() {\n"
+                        + "+    assertEquals(2, service.topCandidates(2).size());\n+  }")),
+            new EvidenceBudget());
+    var cites =
+        finding(PATH, 42, "`assertEquals(2, service.topCandidates(2).size())` fails: limit+1.");
+
+    var note = evidence(round, cites);
+
+    assertTrue(
+        note.contains(
+            "names the failing test \"topCandidatesReturnsAtMostLimit\" (check \"unit\"), whose"
+                + " assertion the finding quotes,"),
         note);
     assertTrue(round.failingChecks().cites(cites));
   }

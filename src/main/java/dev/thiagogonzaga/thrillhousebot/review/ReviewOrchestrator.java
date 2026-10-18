@@ -371,7 +371,9 @@ public class ReviewOrchestrator {
       var earlyCi = ciFuture.join();
       CiStatusEvaluator.CiEvaluation ciEvaluation = rereadCiIfHeld(auth, ciReq, earlyCi);
       var renderedCiFailures = refreshCiFailures(auth, ciReq, ciFailures, earlyCi, ciEvaluation);
-      var aiResponse = floorOnRefreshedCi(session, reviewed, ciFailures, renderedCiFailures);
+      var aiResponse =
+          floorOnRefreshedCi(
+              session, reviewed, ciFailures, renderedCiFailures, ctx.reviewableFiles());
 
       // #1074: the description findings the summary names must quote or paraphrase this text.
       var result =
@@ -381,7 +383,7 @@ public class ReviewOrchestrator {
               ciEvaluation,
               plan,
               PromptSections.prContext(req.prTitle(), req.prDescription()) + "\n" + linkedIssues,
-              CiFailureCitations.parse(renderedCiFailures),
+              CiFailureCitations.parse(renderedCiFailures, ctx.reviewableFiles()),
               linkedIssues);
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
@@ -700,17 +702,22 @@ public class ReviewOrchestrator {
    * section refreshed after the model call (#1092, #952). The verifier floored the findings that
    * cite a check the review-start reading saw failing; a finding citing a check that failed while
    * the review ran is lifted from low to medium confidence here, and the round is persisted again,
-   * since later rounds read it from the stored response. Unchanged when the section was not
+   * since later rounds read it from the stored response. A failing test is cited by name or by an
+   * assertion of its body in {@code files} the finding quotes. Unchanged when the section was not
    * refreshed or no finding cites what it added.
    */
   private ReviewResponse floorOnRefreshedCi(
-      ReviewSession session, ReviewResponse reviewed, String section, String refreshed) {
+      ReviewSession session,
+      ReviewResponse reviewed,
+      String section,
+      String refreshed,
+      List<GitHubPullRequestClient.FileDiff> files) {
     if (refreshed.equals(section)) {
       return reviewed;
     }
     var floored =
         FindingVerificationService.floorCiCitedConfidence(
-            reviewed, CiFailureCitations.parse(refreshed));
+            reviewed, CiFailureCitations.parse(refreshed, files));
     if (floored != reviewed) {
       findingPipeline.persistAiResponse(session, floored);
     }
