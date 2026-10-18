@@ -791,7 +791,7 @@ class ReviewDispatcherTest {
     state.beginReview("sha1");
     state.endReview();
 
-    var result = state.onManualDispatch(manualRequest(36), "sha1");
+    var result = state.onDispatch(manualRequest(36), "sha1");
 
     assertFalse(result.covered());
     assertTrue(result.startWorker());
@@ -804,10 +804,47 @@ class ReviewDispatcherTest {
     state.takeNext();
     state.beginReview("sha2");
 
-    var result = state.onManualDispatch(manualRequest(39), "sha1");
+    var result = state.onDispatch(manualRequest(39), "sha1");
 
     assertFalse(result.covered());
     assertEquals(1, result.coalescedCount());
+  }
+
+  @Test
+  void shouldAnswerOrQueueManualReviewWithInfoLoggingDisabled() throws InterruptedException {
+    var julLogger = java.util.logging.Logger.getLogger(ReviewDispatcher.class.getName());
+    var originalLevel = julLogger.getLevel();
+    julLogger.setLevel(java.util.logging.Level.WARNING);
+    try {
+      var started = new CountDownLatch(1);
+      var release = new CountDownLatch(1);
+      blockReviewUntil(started, release);
+      var manual = manualRequest(40);
+      when(coverage.currentHead(manual))
+          .thenReturn(Optional.of("sha1"))
+          .thenReturn(Optional.of("sha2"));
+
+      dispatcher.dispatch(reviewRequest("owner", "repo", 40, "sha1"));
+      assertTrue(started.await(2, TimeUnit.SECONDS));
+      assertTrue(dispatcher.dispatch(manual));
+      assertTrue(dispatcher.dispatch(manual));
+      release.countDown();
+
+      verify(coverage).notifyCovered(manual, "sha1");
+      verify(orchestrator, timeout(5000)).review(manual);
+    } finally {
+      julLogger.setLevel(originalLevel);
+    }
+  }
+
+  @Test
+  void shouldDispatchNormallyWithoutACoveredHead() {
+    var state = new ReviewDispatcher.PerPrState();
+
+    var result = state.onDispatch(manualRequest(41), null);
+
+    assertFalse(result.covered());
+    assertTrue(result.startWorker());
   }
 
   @Test
@@ -818,7 +855,7 @@ class ReviewDispatcherTest {
     state.beginReview("sha1");
     state.onDispatch(reviewRequest("owner", "repo", 37, "sha2"));
 
-    var result = state.onManualDispatch(manualRequest(37), "sha1");
+    var result = state.onDispatch(manualRequest(37), "sha1");
 
     assertFalse(result.covered());
     assertEquals(2, result.coalescedCount());
@@ -830,7 +867,7 @@ class ReviewDispatcherTest {
     state.beginReview("sha1");
     state.markRetired();
 
-    var result = state.onManualDispatch(manualRequest(38), "sha1");
+    var result = state.onDispatch(manualRequest(38), "sha1");
 
     assertFalse(result.covered());
     assertTrue(result.removeAndRetry());

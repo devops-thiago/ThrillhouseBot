@@ -80,20 +80,13 @@ public final class ReviewDispatcher {
 
     while (true) {
       var state = states.computeIfAbsent(key, ignored -> new PerPrState());
-      var result =
-          coveredHead != null ? state.onManualDispatch(req, coveredHead) : state.onDispatch(req);
+      var result = state.onDispatch(req, coveredHead);
       if (result.removeAndRetry()) {
         states.remove(key, state);
         continue;
       }
       if (result.covered()) {
-        log.info(
-            "Not queueing /review for {}/{} #{} — the running review covers its head {}",
-            req.owner(),
-            req.repo(),
-            req.prNumber(),
-            abbreviateSha(coveredHead));
-        coverage.notifyCovered(req, coveredHead);
+        answerCovered(req, coveredHead);
         return true;
       }
       if (result.coalescedCount() > 0) {
@@ -124,7 +117,8 @@ public final class ReviewDispatcher {
    * The head a running review of the PR is reviewing, when the PR's current head is that same
    * commit; {@code null} when no review is running, its head is not known, the head moved, or the
    * head could not be read. The read happens outside the state lock, so {@link
-   * PerPrState#onManualDispatch} checks the running head again before dropping the request.
+   * PerPrState#onDispatch(ReviewOrchestrator.ReviewRequest, String)} checks the running head again
+   * before dropping the request.
    */
   private String headUnderReview(PrKey key, ReviewOrchestrator.ReviewRequest req) {
     var state = states.get(key);
@@ -145,16 +139,33 @@ public final class ReviewDispatcher {
       return null;
     }
     if (!head.get().equalsIgnoreCase(reviewing)) {
-      log.info(
-          "Head of {}/{} #{} moved to {} from {} under review — queueing the /review",
-          req.owner(),
-          req.repo(),
-          req.prNumber(),
-          abbreviateSha(head.get()),
-          abbreviateSha(reviewing));
+      if (log.isInfoEnabled()) {
+        log.info(
+            "Head of {}/{} #{} moved to {} from {} under review — queueing the /review",
+            req.owner(),
+            req.repo(),
+            req.prNumber(),
+            abbreviateSha(head.get()),
+            abbreviateSha(reviewing));
+      }
       return null;
     }
     return reviewing;
+  }
+
+  /**
+   * Answers a {@code /review} the running review of {@code head} covers, instead of queueing it.
+   */
+  private void answerCovered(ReviewOrchestrator.ReviewRequest req, String head) {
+    if (log.isInfoEnabled()) {
+      log.info(
+          "Not queueing /review for {}/{} #{} — the running review covers its head {}",
+          req.owner(),
+          req.repo(),
+          req.prNumber(),
+          abbreviateSha(head));
+    }
+    coverage.notifyCovered(req, head);
   }
 
   /**
@@ -418,16 +429,17 @@ public final class ReviewDispatcher {
     }
 
     /**
-     * Drops a manual request when the review running now is still of {@code head} and nothing else
-     * waits; otherwise dispatches it like any other. The head was read outside this lock, so a
-     * review that finished in between leaves the request to run.
+     * Drops the request when {@code coveredHead} is set, the review running now is still of that
+     * head and nothing else waits; otherwise dispatches it like any other. The head was read
+     * outside this lock, so a review that finished in between leaves the request to run.
      */
-    DispatchResult onManualDispatch(ReviewOrchestrator.ReviewRequest req, String head) {
+    DispatchResult onDispatch(ReviewOrchestrator.ReviewRequest req, String coveredHead) {
       synchronized (lock) {
-        if (!retired
+        if (coveredHead != null
+            && !retired
             && latestRequest == null
             && reviewingSha != null
-            && reviewingSha.equalsIgnoreCase(head)) {
+            && reviewingSha.equalsIgnoreCase(coveredHead)) {
           return new DispatchResult(false, false, 0, true);
         }
         return onDispatch(req);
