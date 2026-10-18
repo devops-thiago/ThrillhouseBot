@@ -59,6 +59,7 @@ export default defineConfig({
         { label: "Getting started", slug: "getting-started" },
         { label: "Commands", slug: "commands" },
         { label: "Configuration", slug: "configuration" },
+        { label: "Configuration reference", slug: "configuration-reference" },
         { label: "AI providers", slug: "providers" },
         { label: "Architecture", slug: "architecture" },
         { label: "Finding feedback", slug: "feedback" },
