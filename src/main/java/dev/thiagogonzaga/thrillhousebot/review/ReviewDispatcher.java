@@ -29,6 +29,11 @@ import org.slf4j.LoggerFactory;
  * the same PR are coalesced so only the latest head SHA is reviewed after the in-flight run
  * completes. A CI re-evaluation of a held verdict (#825) rides the same per-PR worker, after any
  * review in flight, so it can never race a review of the pull request.
+ *
+ * <p>A manual {@code /review} that arrives while a review is running reads the pull request's head
+ * first (#1152). When it is the head under review, the running review already covers it: the
+ * command gets a reply and no second run is queued. A moved head, a head the dispatcher cannot
+ * read, or a running review whose head is not known yet queues the command as before.
  */
 @ApplicationScoped
 public final class ReviewDispatcher {
@@ -40,6 +45,7 @@ public final class ReviewDispatcher {
   private final AutoReviewRateLimiter autoReviewRateLimiter;
   private final ReviewSkipEmitter skipEmitter;
   private final CiHoldRevisit ciHoldRevisit;
+  private final RunningReviewCoverage coverage;
 
   private final ConcurrentHashMap<PrKey, PerPrState> states = new ConcurrentHashMap<>();
 
@@ -49,30 +55,46 @@ public final class ReviewDispatcher {
       ReviewOrchestrator orchestrator,
       AutoReviewRateLimiter autoReviewRateLimiter,
       ReviewSkipEmitter skipEmitter,
-      CiHoldRevisit ciHoldRevisit) {
+      CiHoldRevisit ciHoldRevisit,
+      RunningReviewCoverage coverage) {
     this.reviewExecutor = reviewExecutor;
     this.orchestrator = orchestrator;
     this.autoReviewRateLimiter = autoReviewRateLimiter;
     this.skipEmitter = skipEmitter;
     this.ciHoldRevisit = ciHoldRevisit;
+    this.coverage = coverage;
   }
 
   /**
-   * Queues a review for the request's PR, coalescing rapid same-PR events into the in-flight run.
+   * Queues a review for the request's PR, coalescing rapid same-PR events into the in-flight run. A
+   * manual {@code /review} for the head a running review covers is answered instead (#1152).
    *
-   * @return {@code true} if the review was queued or coalesced into a running worker; {@code false}
-   *     if the executor rejected the task (e.g. it is saturated or shutting down) so no review will
-   *     run. Callers use this to roll back webhook dedup state so a redelivery can retry.
+   * @return {@code true} if the review was queued, coalesced into a running worker, or covered by
+   *     the running review; {@code false} if the executor rejected the task (e.g. it is saturated
+   *     or shutting down) so no review will run. Callers use this to roll back webhook dedup state
+   *     so a redelivery can retry.
    */
   public boolean dispatch(ReviewOrchestrator.ReviewRequest req) {
     var key = new PrKey(req.owner(), req.repo(), req.prNumber());
+    var coveredHead = req.isManualTrigger() ? headUnderReview(key, req) : null;
 
     while (true) {
       var state = states.computeIfAbsent(key, ignored -> new PerPrState());
-      var result = state.onDispatch(req);
+      var result =
+          coveredHead != null ? state.onManualDispatch(req, coveredHead) : state.onDispatch(req);
       if (result.removeAndRetry()) {
         states.remove(key, state);
         continue;
+      }
+      if (result.covered()) {
+        log.info(
+            "Not queueing /review for {}/{} #{} — the running review covers its head {}",
+            req.owner(),
+            req.repo(),
+            req.prNumber(),
+            abbreviateSha(coveredHead));
+        coverage.notifyCovered(req, coveredHead);
+        return true;
       }
       if (result.coalescedCount() > 0) {
         logCoalesced(req, result.coalescedCount());
@@ -96,6 +118,43 @@ public final class ReviewDispatcher {
       }
       return true;
     }
+  }
+
+  /**
+   * The head a running review of the PR is reviewing, when the PR's current head is that same
+   * commit; {@code null} when no review is running, its head is not known, the head moved, or the
+   * head could not be read. The read happens outside the state lock, so {@link
+   * PerPrState#onManualDispatch} checks the running head again before dropping the request.
+   */
+  private String headUnderReview(PrKey key, ReviewOrchestrator.ReviewRequest req) {
+    var state = states.get(key);
+    var reviewing = state != null ? state.reviewingSha() : null;
+    if (reviewing == null) {
+      return null;
+    }
+    if (reviewing.isBlank()) {
+      log.info(
+          "A review of {}/{} #{} is running on a head not resolved yet — queueing the /review",
+          req.owner(),
+          req.repo(),
+          req.prNumber());
+      return null;
+    }
+    var head = coverage.currentHead(req);
+    if (head.isEmpty()) {
+      return null;
+    }
+    if (!head.get().equalsIgnoreCase(reviewing)) {
+      log.info(
+          "Head of {}/{} #{} moved to {} from {} under review — queueing the /review",
+          req.owner(),
+          req.repo(),
+          req.prNumber(),
+          abbreviateSha(head.get()),
+          abbreviateSha(reviewing));
+      return null;
+    }
+    return reviewing;
   }
 
   /**
@@ -174,7 +233,7 @@ public final class ReviewDispatcher {
       if (next.recheck() != null) {
         recheckCi(next.recheck());
       } else {
-        runReviewBatch(next.review());
+        runReviewBatch(state, next.review());
       }
 
       if (state.tryRetireIfIdle()) {
@@ -184,7 +243,7 @@ public final class ReviewDispatcher {
     }
   }
 
-  private void runReviewBatch(PerPrState.ReviewBatch batch) {
+  private void runReviewBatch(PerPrState state, PerPrState.ReviewBatch batch) {
     // Re-check after dispatch: a request can pass the controller gate then reach here once the
     // window closed (coalesce or recordCompletion gap).
     var req = batch.request();
@@ -197,7 +256,7 @@ public final class ReviewDispatcher {
           req.prNumber(),
           "within the auto-review rate window after dispatch (manual /review bypasses)");
     } else {
-      reviewBatch(batch);
+      reviewBatch(state, batch);
     }
   }
 
@@ -210,8 +269,9 @@ public final class ReviewDispatcher {
     }
   }
 
-  private void reviewBatch(PerPrState.ReviewBatch batch) {
+  private void reviewBatch(PerPrState state, PerPrState.ReviewBatch batch) {
     logReviewStart(batch.request(), batch.coalesced(), batch.queueWaitMs());
+    state.beginReview(batch.request().commitSha());
     try {
       var surfaced = orchestrator.review(batch.request());
       if (surfaced && !batch.request().isManualTrigger()) {
@@ -225,6 +285,8 @@ public final class ReviewDispatcher {
           batch.request().repo(),
           batch.request().prNumber(),
           e);
+    } finally {
+      state.endReview();
     }
   }
 
@@ -308,12 +370,20 @@ public final class ReviewDispatcher {
     /** At most one CI re-evaluation waits per PR; it runs after every queued review (#825). */
     CiHoldRevisit.Recheck pendingRecheck;
 
+    /**
+     * The head the orchestrator is reviewing right now, blank for a manual run that resolves its
+     * head itself, and {@code null} while no review runs — a CI re-evaluation or a rate-limit skip
+     * reviews nothing (#1152).
+     */
+    String reviewingSha;
+
     boolean running = false;
     boolean retired = false;
     int coalesced = 0;
     long queuedAtMs;
 
-    record DispatchResult(boolean removeAndRetry, boolean startWorker, int coalescedCount) {}
+    record DispatchResult(
+        boolean removeAndRetry, boolean startWorker, int coalescedCount, boolean covered) {}
 
     record ReviewBatch(ReviewOrchestrator.ReviewRequest request, int coalesced, long queueWaitMs) {}
 
@@ -334,16 +404,51 @@ public final class ReviewDispatcher {
         // A finishing worker can retire the state between the map lookup and this
         // lock — reviving it would let two workers run for the same PR.
         if (retired) {
-          return new DispatchResult(true, false, 0);
+          return new DispatchResult(true, false, 0, false);
         }
         latestRequest = req;
         if (running) {
           coalesced++;
-          return new DispatchResult(false, false, coalesced);
+          return new DispatchResult(false, false, coalesced, false);
         }
         running = true;
         queuedAtMs = System.currentTimeMillis();
-        return new DispatchResult(false, true, 0);
+        return new DispatchResult(false, true, 0, false);
+      }
+    }
+
+    /**
+     * Drops a manual request when the review running now is still of {@code head} and nothing else
+     * waits; otherwise dispatches it like any other. The head was read outside this lock, so a
+     * review that finished in between leaves the request to run.
+     */
+    DispatchResult onManualDispatch(ReviewOrchestrator.ReviewRequest req, String head) {
+      synchronized (lock) {
+        if (!retired
+            && latestRequest == null
+            && reviewingSha != null
+            && reviewingSha.equalsIgnoreCase(head)) {
+          return new DispatchResult(false, false, 0, true);
+        }
+        return onDispatch(req);
+      }
+    }
+
+    String reviewingSha() {
+      synchronized (lock) {
+        return reviewingSha;
+      }
+    }
+
+    void beginReview(String headSha) {
+      synchronized (lock) {
+        reviewingSha = headSha != null ? headSha : "";
+      }
+    }
+
+    void endReview() {
+      synchronized (lock) {
+        reviewingSha = null;
       }
     }
 
