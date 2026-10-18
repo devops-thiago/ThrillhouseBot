@@ -154,6 +154,10 @@ public class GitHubAuthClient {
    * (GitHub maximum).
    */
   public String generateAppJwt() {
+    return signedAppJwt();
+  }
+
+  private String signedAppJwt() {
     try {
       Instant now = clock.get();
       var privateKey = privateKey();
@@ -183,6 +187,10 @@ public class GitHubAuthClient {
    * 1 hour per GitHub.
    */
   public String getInstallationToken(long installationId) {
+    return installationToken(installationId);
+  }
+
+  private String installationToken(long installationId) {
     var cached = tokenCache.get(installationId);
     if (cached != null && clock.get().isBefore(cached.expiresAt())) {
       log.debug("Using cached installation token (expires at {})", cached.expiresAt());
@@ -190,7 +198,7 @@ public class GitHubAuthClient {
     }
 
     log.info("Generating new installation token for installation {}", installationId);
-    var jwt = generateAppJwt();
+    var jwt = signedAppJwt();
     var authHeader = BEARER + jwt;
 
     var response =
@@ -224,7 +232,7 @@ public class GitHubAuthClient {
 
   /** Returns an Authorization header value for GitHub API calls. */
   public String getAuthHeader(long installationId) {
-    return BEARER + getInstallationToken(installationId);
+    return BEARER + installationToken(installationId);
   }
 
   /**
@@ -245,7 +253,8 @@ public class GitHubAuthClient {
    * request.
    *
    * <p>Kept separate from the method the constructor binds only because a constructor must not hand
-   * out a reference to an overridable method — CDI subclasses this bean.
+   * out a reference to an overridable method — CDI subclasses this bean. For the same reason
+   * everything it reaches is private, and the public token methods only delegate to it.
    */
   Optional<String> refreshedAuthHeader(String deadAuthHeader) {
     return mintedReplacementFor(deadAuthHeader);
@@ -270,7 +279,7 @@ public class GitHubAuthClient {
         installationId,
         (id, cached) ->
             cached.token().equals(dead) ? new CachedToken(dead, Instant.EPOCH, id) : cached);
-    return Optional.of(getAuthHeader(installationId));
+    return Optional.of(BEARER + installationToken(installationId));
   }
 
   private RSAPrivateKey privateKey() {
