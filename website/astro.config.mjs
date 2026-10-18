@@ -43,6 +43,7 @@ export default defineConfig({
       // Empty alt: the visible site title next to the logo already names the site.
       logo: { src: "./src/assets/icon.png", alt: "" },
       favicon: "/icon.png",
+      customCss: ["./src/styles/custom.css"],
       social: [
         {
           icon: "github",
