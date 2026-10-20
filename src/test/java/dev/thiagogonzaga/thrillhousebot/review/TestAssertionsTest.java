@@ -142,7 +142,7 @@ class TestAssertionsTest {
                     file(
                         "src/test/BrokerTest.java",
                         """
-                        @@ -0,0 +1,21 @@
+                        @@ -0,0 +1,20 @@
                         +  void retriesWhenTheBrokerFails() {
                         +    var expected = expectedFor(name);
                         +    String required = requirements.first();
@@ -157,7 +157,6 @@ class TestAssertionsTest {
                         +    assert broker.calls == 2
                         +    assert_eq!(calls, 2);
                         +    let _ = verify(mock).send(name);
-                        +    result = shouldRetry(response)
                         +    if got != want { t.Errorf("got %d", got) }
                         +    t.Fatalf("broker: %v", err)
                         +    Assertions.assertThat(calls).isEqualTo(2);
@@ -175,13 +174,90 @@ class TestAssertionsTest {
             "assert broker.calls == 2",
             "assert_eq!(calls, 2);",
             "let _ = verify(mock).send(name);",
-            "result = shouldretry(response)",
             "if got != want { t.errorf(\"got %d\", got) }",
             "t.fatalf(\"broker: %v\", err)",
             "assertions.assertthat(calls).isequalto(2);",
             "assert.equal(calls, 2);",
             "$mock.verify(send);"),
         assertions);
+  }
+
+  /**
+   * A variable or helper named after a keyword is not an assertion: {@code should} and {@code
+   * require} count only as the bare keyword ({@code should.equal(}, {@code x.should.be}, {@code
+   * require.NoError(}), and a suffixed name ({@code assertEquals}) only as a call.
+   */
+  @Test
+  void aNameThatStartsWithAKeywordIsNotAnAssertion() {
+    var assertions =
+        TestAssertions.of(
+                List.of(
+                    file(
+                        "src/test/RetryTest.java",
+                        """
+                        @@ -0,0 +1,21 @@
+                        +  void retriesOnce() {
+                        +    var shouldRetry = shouldRetryFor(response);
+                        +    result = shouldRetry(response)
+                        +    shouldRetry.set(true);
+                        +    assertCount.incrementAndGet();
+                        +    verifyCount.set(0);
+                        +    expectThrows.add(error);
+                        +    requireNonNull(input);
+                        +    requireAuth(user)
+                        +    x.should.equal(1);
+                        +    should.exist(response);
+                        +    require.NoError(t, err)
+                        +    verifyNoMoreInteractions(mock);
+                        +    expectThrows(IllegalStateException.class, () -> run());
+                        +    refute_nil(result)
+                        +    AssertCount = 0;
+                        +    Assert.AreEqual(2, calls);
+                        +    calls.Should().Be(2);
+                        +    Expect(calls).To(Equal(2))
+                        +    mock.Verify(m => m.Send(), Times.Once());
+                        +  }
+                        """)))
+            .assertionsOf("retriesOnce");
+
+    assertEquals(
+        List.of(
+            "x.should.equal(1);",
+            "should.exist(response);",
+            "require.noerror(t, err)",
+            "verifynomoreinteractions(mock);",
+            "expectthrows(illegalstateexception.class, () -> run());",
+            "refute_nil(result)",
+            "assert.areequal(2, calls);",
+            "calls.should().be(2);",
+            "expect(calls).to(equal(2))",
+            "mock.verify(m => m.send(), times.once());"),
+        assertions);
+  }
+
+  /** A brace on its own line under the declaration (Allman style) opens the body, not ends it. */
+  @Test
+  void aBraceOnItsOwnLineOpensTheBody() {
+    var assertions =
+        TestAssertions.of(
+                List.of(
+                    file(
+                        "tests/PoolTests.cs",
+                        """
+                        @@ -0,0 +1,9 @@
+                        +    [Fact]
+                        +    public void TakeReturnsTheSlotsRequested()
+                        +    {
+                        +        Assert.Equal(2, pool.Take(2).Count);
+                        +    }
+                        +
+                        +    [Fact]
+                        +    public void Other()
+                        +    { Assert.True(false); }
+                        """)))
+            .assertionsOf("TakeReturnsTheSlotsRequested");
+
+    assertEquals(List.of("assert.equal(2, pool.take(2).count);"), assertions);
   }
 
   /**

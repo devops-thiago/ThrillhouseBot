@@ -55,14 +55,24 @@ final class TestAssertions {
   static final int MAX_BODY_LINES = 200;
 
   /**
-   * An assertion call: an assert, expect, should, require, verify or refute call in any library's
-   * spelling ({@code assert_eq!(}, {@code assertEquals(}, {@code expect(}, {@code assert.equal(}).
-   * The keyword is the whole name or is followed by a capital or an underscore, so a setup call
-   * such as {@code expectedFor(name)} is not one. It may follow a qualifier.
+   * An assertion keyword used as itself: called ({@code assert(}, {@code expect(}, {@code
+   * assert!(}) or used as an object ({@code assert.equal(}, {@code should.exist(}, {@code
+   * x.should.be}, {@code require.NoError(}), capitalized as .NET and Gomega write it ({@code
+   * Assert.Equal(}, {@code x.Should().Be(}, {@code Expect(x)}, {@code mock.Verify(}). A name that
+   * only starts with a keyword ({@code shouldRetry}, {@code assertCount}, {@code expectedFor}) is
+   * not one. It may follow a qualifier.
    */
   private static final Pattern ASSERTION_CALL =
-      Pattern.compile(
-          "(?:assert|expect|should|require|verify|refute)(?:[A-Z_][\\w$]*+)?+\\s*+[(!.]");
+      Pattern.compile("(?:[Aa]ssert|[Ee]xpect|[Ss]hould|[Rr]equire|[Vv]erify|[Rr]efute)\\s*+[(!.]");
+
+  /**
+   * A library's suffixed assertion, only as a call: {@code assertEquals(}, {@code assert_eq!(},
+   * {@code expectThrows(}, {@code verifyNoMoreInteractions(}, {@code refute_nil(}. {@code should}
+   * and {@code require} have no such form here: {@code shouldRetry(…)} and {@code
+   * requireNonNull(…)} are helpers and preconditions as often as checks.
+   */
+  private static final Pattern SUFFIXED_CALL =
+      Pattern.compile("(?:assert|expect|verify|refute)[A-Z_][\\w$]*+\\s*+!?+\\(");
 
   /** pytest's and Python's {@code assert} statement opening a line. */
   private static final Pattern ASSERT_STATEMENT = Pattern.compile("assert\\s");
@@ -182,7 +192,8 @@ final class TestAssertions {
 
   /**
    * Adds the assertion lines of the body declared at {@code start}: that line, then the following
-   * lines of its hunk that are blank or indented deeper than it.
+   * lines of its hunk that are blank or indented deeper than it. A brace alone on the line right
+   * after the declaration (Allman style) opens the body rather than ending it.
    */
   private static void collectBody(
       List<PatchLines.Line> lines, int start, LinkedHashSet<String> out) {
@@ -191,8 +202,9 @@ final class TestAssertions {
     addIfAssertion(declaration.text(), out);
     for (int i = start + 1; i < lines.size() && i <= start + MAX_BODY_LINES; i++) {
       var line = lines.get(i);
+      var opensBody = i == start + 1 && line.text().strip().equals("{");
       if (line.hunk() != declaration.hunk()
-          || (!line.text().isBlank() && indentOf(line.text()) <= indent)) {
+          || (!line.text().isBlank() && !opensBody && indentOf(line.text()) <= indent)) {
         return;
       }
       addIfAssertion(line.text(), out);
@@ -232,8 +244,10 @@ final class TestAssertions {
       end++;
     }
     var call = ASSERTION_CALL.matcher(code);
+    var suffixed = SUFFIXED_CALL.matcher(code);
     for (int at = 0; at <= end; at = code.indexOf('.', at) + 1) {
-      if (call.region(at, code.length()).lookingAt()) {
+      if (call.region(at, code.length()).lookingAt()
+          || suffixed.region(at, code.length()).lookingAt()) {
         return true;
       }
       if (code.indexOf('.', at) < 0) {
