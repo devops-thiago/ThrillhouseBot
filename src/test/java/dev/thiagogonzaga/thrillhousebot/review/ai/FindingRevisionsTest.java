@@ -148,6 +148,10 @@ class FindingRevisionsTest {
         "Ends a line.\nNext line.",
         FindingRevisions.withoutSentence(
             raised, "Ends a line. Cut this sentence.\nNext line.", "Cut this sentence."));
+    assertEquals(
+        "Ends a line.\r\nNext line.",
+        FindingRevisions.withoutSentence(
+            raised, "Ends a line. Cut this sentence.\r\nNext line.", "Cut this sentence."));
   }
 
   @Test
