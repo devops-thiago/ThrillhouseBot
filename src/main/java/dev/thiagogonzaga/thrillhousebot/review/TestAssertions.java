@@ -80,7 +80,7 @@ final class TestAssertions {
   private static final Pattern COMMENT = Pattern.compile("(?://|/\\*|\\*|#|--)");
 
   /** An identifier a line holds, the key the patches are indexed by. */
-  private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z0-9_]++");
+  private static final Pattern IDENTIFIER = Pattern.compile("\\w++");
 
   /** A quote in a finding's text: one backtick span on one line. */
   private static final Pattern QUOTE = Pattern.compile("`([^`\\n]++)`");
