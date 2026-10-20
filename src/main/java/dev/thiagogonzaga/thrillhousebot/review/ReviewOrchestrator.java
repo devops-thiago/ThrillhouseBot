@@ -354,8 +354,9 @@ public class ReviewOrchestrator {
       }
 
       // #650/#475: one evidence round for the whole review, so the batches share its fetch budget,
-      // its file cache, and the single character budget every attached note is charged to. Only
-      // files this pull request changes are ever read.
+      // its file cache, and the single character budget every attached note is charged to. The
+      // findings' evidence reads only files this pull request changes; the summary reads at most a
+      // few more, the ones the description cites as already meeting a linked-issue criterion.
       var evidence =
           ReviewEvidence.forReview(
                   citedLocationResolver,
@@ -382,7 +383,11 @@ public class ReviewOrchestrator {
               plan,
               PromptSections.prContext(req.prTitle(), req.prDescription()) + "\n" + linkedIssues,
               CiFailureCitations.parse(renderedCiFailures),
-              linkedIssues);
+              // #1148: the description alone, never the issue text, is read for citations.
+              new VerdictBuilder.LinkedIssueContext(
+                  linkedIssues,
+                  BaseCodeCitations.of(
+                      req.prDescription(), ctx.files(), evidence.citedLocations())));
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);
