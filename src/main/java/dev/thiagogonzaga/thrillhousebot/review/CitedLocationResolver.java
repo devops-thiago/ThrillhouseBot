@@ -85,6 +85,12 @@ public class CitedLocationResolver {
   /** Distinct files read per review round; findings citing further files resolve to nothing. */
   static final int MAX_FILES_FETCHED = 8;
 
+  /**
+   * Repository files read per review for code the PR description cites ({@link #citedFileLines}),
+   * counted apart from {@link #MAX_FILES_FETCHED} so the findings' reads cannot use them up.
+   */
+  static final int MAX_CITED_FILES_FETCHED = 8;
+
   /** A source file is never megabytes; anything larger is skipped rather than decoded. */
   static final long MAX_FILE_BYTES = 512L * 1024;
 
@@ -167,6 +173,8 @@ public class CitedLocationResolver {
 
     private final AtomicInteger fetches = new AtomicInteger();
 
+    private final AtomicInteger citedFetches = new AtomicInteger();
+
     /** The review's evidence budget, shared with the other resolvers that attach notes (#475). */
     private final EvidenceBudget budget;
 
@@ -218,6 +226,24 @@ public class CitedLocationResolver {
      */
     public Optional<RepositoryPaths> repositoryPaths() {
       return repositoryPaths.get();
+    }
+
+    /**
+     * The lines of a repository file the PR description cites (#1148), at the round's ref, read
+     * once per round and at most {@link #MAX_CITED_FILES_FETCHED} files; empty when the file is
+     * past that cap, unreadable, or there is no repository access.
+     */
+    public Optional<List<String>> citedFileLines(String path) {
+      if (prClient == null) {
+        return Optional.empty();
+      }
+      if (contents.containsKey(path)) {
+        return contents.get(path);
+      }
+      if (citedFetches.incrementAndGet() > MAX_CITED_FILES_FETCHED) {
+        return Optional.empty();
+      }
+      return contents.computeIfAbsent(path, this::fetch);
     }
 
     private Optional<RepositoryPaths> listRepository() {
