@@ -1,0 +1,11 @@
+/*
+ * Mermaid's dark theme draws edge labels as #cccccc on #585858, a contrast
+ * ratio of 4.43:1, below the 4.5:1 WCAG AA needs for normal text. astro-mermaid
+ * applies the same theme variables to the light and dark themes, so the colour
+ * is set here for the dark theme only. Mermaid scopes its styles with the
+ * diagram's id, which needs !important to override.
+ */
+:root[data-theme="dark"] pre.mermaid .edgeLabel,
+:root[data-theme="dark"] pre.mermaid .edgeLabel p {
+  color: #e6e6e6 !important;
+}

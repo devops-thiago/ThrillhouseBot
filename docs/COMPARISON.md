@@ -15,7 +15,7 @@ is left out because its self-hosting and model details are not in its public
 docs. PRSense and Kit are included because they also run on your own machine
 with your own model.
 
-| | ThrillhouseBot | CodeRabbit | PR-Agent | Copilot review | PRSense | Kit |
+| Feature | ThrillhouseBot | CodeRabbit | PR-Agent | Copilot review | PRSense | Kit |
 |---|---|---|---|---|---|---|
 | License | Apache-2.0 | Proprietary [^cr-tos] | MIT [^pra-lic] | Proprietary [^cop-terms] | Apache-2.0 [^prs] | MIT [^kit] |
 | Git platforms | GitHub | GitHub, GitLab, Bitbucket, Azure DevOps [^cr-plat] | GitHub, GitLab, Bitbucket, Azure DevOps, Gitea [^pra-plat] | GitHub; Azure DevOps in preview [^cop] | Local git; reads GitHub, GitLab and Codeberg PRs [^prs] | GitHub, local diffs [^kit] |
