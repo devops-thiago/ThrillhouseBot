@@ -276,148 +276,38 @@ uppercase, with `.` and `-` replaced by `_` (`thrillhousebot.review.ignored-file
 Every optional feature added in 0.7.0 is off by default. Each one validates its
 bounds at boot while it is on.
 
-### AI provider
+### Most-used settings
+
+<!-- config-reference:essentials:start -->
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `AI_API_KEY` | API key for the AI provider | _(required)_ |
-| `AI_BASE_URL` | OpenAI-compatible base URL | `https://api.deepseek.com/v1` |
-| `AI_MODEL` | Chat model name | `deepseek-chat` |
-| `AI_PROVIDER` | Provider label for telemetry (`gen_ai.provider.name`); derived from `AI_BASE_URL` when unset | _(derived)_ |
-| `AI_TIMEOUT` | Per-request timeout | `300s` |
-| `AI_MAX_CONCURRENT_CALLS` | Most model calls in flight at once across the process (review batches, summaries, the verifier, replies and commands). A call past it waits for a slot, up to `THRILLHOUSEBOT_REVIEW_AI_TIMEOUT_SECONDS`, and a wait over 5 seconds is logged at INFO. A provider's rate-limit or concurrent-slot refusal is retried after 30 seconds either way. `0` means no limit | `0` |
-| `AI_REASONING_ENABLED` | Send a reasoning-effort hint. When `false`, no reasoning parameter is sent and the provider default applies | `false` |
-| `AI_REASONING_EFFORT` | Effort for the review and the on-demand commands: `none`, `low`, `medium`, `high`, `xhigh` or `max`. Reasoning tokens are billed as output. See **Reading a cut response** under [Per-model AI settings](#per-model-ai-settings) | `low` |
-| `AI_REASONING_EFFORT_CONCISE` | Effort for the calls on the `concise` model (summary, verifier, replies), which do not follow `AI_REASONING_EFFORT`. Same values. Unset means `low`, or `AI_REASONING_EFFORT` when that is lower | `low` |
+| `AI_API_KEY` | API key for the AI provider. Required. | _(none)_ |
+| `AI_BASE_URL` | OpenAI-compatible base URL of the AI provider. | `https://api.deepseek.com/v1` |
+| `AI_MODEL` | Chat model name. It also selects the model's entry in the per-model settings and the pricing map. | `deepseek-chat` |
+| `GITHUB_APP_ID` | GitHub App ID, from the App's settings page. Required. | _(none)_ |
+| `GITHUB_PRIVATE_KEY` | GitHub App private key (PEM), on one line with each newline written as `\n`, unquoted. Required. | _(none)_ |
+| `GITHUB_WEBHOOK_SECRET` | The GitHub App's webhook secret, used to check each delivery's HMAC signature. Required. | _(none)_ |
+| `GITHUB_CLIENT_ID` | OAuth client ID for dashboard login, from the GitHub App's settings. Leave it and `GITHUB_CLIENT_SECRET` unset to disable login. | _(none)_ |
+| `GITHUB_CLIENT_SECRET` | OAuth client secret for dashboard login, from the GitHub App's settings. | _(none)_ |
+| `DASHBOARD_URL` | Public dashboard URL, used for the OAuth callback and the session links posted to GitHub. | `http://localhost:8080` |
+| `DATABASE_URL` | JDBC URL of the production database (`jdbc:postgresql://db:5432/thrillhouse` in Docker Compose). | `%prod`: `jdbc:postgresql://localhost:5432/thrillhouse` |
+| `REVIEW_CI_GATING` | How CI affects approval: `strict` holds approval while required CI is pending, failing or unreadable; `warn` approves and notes the CI state; `off` ignores CI. See [CI gating](https://github.com/devops-thiago/ThrillhouseBot#ci-gating). | `strict` |
+| `REVIEW_BLOCKING_STRICTNESS` | Which findings request changes: `balanced`, `strict` or `lenient`. See [Blocking strictness](https://github.com/devops-thiago/ThrillhouseBot#blocking-strictness). | `balanced` |
+| `REVIEW_MAX_INPUT_TOKENS` | Input-token budget per call for reviews and the batched commands; larger PRs are split into batches. Capped by the model's `max-input-tokens` (see the per-model settings). `0` disables budgeting. | `48000` |
+| `REVIEW_MAX_AI_CALLS` | Most AI calls per review (batch calls plus the summary call) and per command run (batch calls plus, for `/describe` and `/changelog`, the merge call). At `1`, a review that makes its review call has none left for the summary and posts a counts-only summary that says so. Verifier calls are not counted. | `6` |
+| `WEBHOOK_SKIP_DRAFTS` | Do not auto-review drafts; the PR is reviewed once marked ready (`ready_for_review`). | `false` |
+| `WEBHOOK_REQUIRED_LABELS` | Comma-separated labels; auto-review only PRs carrying at least one (case-insensitive exact match). Unset means no label is required. | _(none)_ |
 
-### GitHub and webhooks
+<!-- config-reference:essentials:end -->
 
-| Variable | Purpose | Default |
-|---|---|---|
-| `GITHUB_APP_ID` | GitHub App ID | _(required)_ |
-| `GITHUB_PRIVATE_KEY` | GitHub App private key (PEM) | _(required)_ |
-| `GITHUB_WEBHOOK_SECRET` | Webhook HMAC secret | _(required)_ |
-| `GITHUB_BOT_LOGINS` | Comma-separated bot logins the bot ignores so it never answers itself. Override when the app slug differs (`<app-slug>[bot]`) | `thrillhousebot[bot],thrillhouse-bot[bot]` |
-| `GITHUB_WRITE_MIN_INTERVAL` | Minimum spacing between two content-creating GitHub calls (comments, review comments, replies, reviews), shared by the whole process. GitHub's guidance is at most one per second; it answers faster writes with `403`, `429` or a `422` "was submitted too quickly". When GitHub throttles a write anyway, every queued write waits with it. `0` disables pacing | `1s` |
-| `GITHUB_WRITE_MAX_WAIT` | Longest one caller waits for its write slot before it goes out unpaced and the backoff handles any refusal | `90s` |
-| `GITHUB_WRITE_RETRY_BUDGET` | Longest one review may spend waiting on GitHub's rate limit across all its writes. Once spent, later throttled writes are not retried, and the review body names the findings they carried and asks for a re-run. `0` disables the limit | `5m` |
-| `WEBHOOK_DEDUP_TTL` | How long a webhook delivery id is remembered, to ignore GitHub redeliveries | `24h` |
-| `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS` | Comma-separated logins allowed to run slash commands without write access. Does not apply to the `resolved` and `declined` directives | _(empty)_ |
-| `MANUAL_TRIGGER_AUTH_TIMEOUT` | Time limit on the write-access check for a command. Slower answers from GitHub deny the command | `5s` |
-| `ACK_REACTION_TIMEOUT` | Time limit on posting the 👀 reaction; the reaction may land late | `3s` |
+Docker Compose also reads `DB_USER` and `DB_PASSWORD` (both `thrillhouse` by
+default) for the bot and the PostgreSQL container.
 
-### Automatic review triggers
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `AUTO_REVIEW_MIN_INTERVAL` | Minimum time between automatic reviews of one PR. Pushes inside the window are skipped, even on a new head (in memory, per replica). `/review` always runs. `0` reviews every push | `0` |
-| `WEBHOOK_SKIP_DRAFTS` | Do not auto-review drafts; the PR is reviewed once marked ready | `false` |
-| `WEBHOOK_REQUIRED_LABELS` | Comma-separated labels; auto-review only PRs carrying at least one (case-insensitive) | _(empty, no gate)_ |
-| `WEBHOOK_EXCLUDED_LABELS` | Comma-separated labels; skip PRs carrying any. Wins over required labels | _(empty)_ |
-| `WEBHOOK_BASE_BRANCHES` | Comma-separated globs; auto-review only PRs whose base branch matches one (`main,release/*`). `*` does not cross `/`; use `**` for that | _(empty, all branches)_ |
-| `WEBHOOK_IGNORED_BASE_BRANCHES` | Comma-separated globs; skip PRs whose base branch matches one (`dependabot/**`). Wins over the allowlist | _(empty)_ |
-
-### Review behaviour
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `REVIEW_CI_GATING` | How CI affects approval: `strict` holds approval while required CI is pending, failing or unreadable; `warn` approves and notes the CI state; `off` ignores CI. See [CI gating](#ci-gating) | `strict` |
-| `REVIEW_BLOCKING_STRICTNESS` | Which findings request changes: `balanced`, `strict` or `lenient`. See [Blocking strictness](#blocking-strictness) | `balanced` |
-| `REVIEW_VERIFIER_ENABLED` | Run a second, skeptical pass that re-checks each finding against the diff and drops or downgrades what it cannot confirm. See [AI call budget](#ai-call-budget) | `true` |
-| `REVIEW_SUMMARY_VERIFICATION_ENABLED` | Check the summary's sentences, walkthrough rows and diagram against the diff and the findings, and remove what they contradict. One more call per review. See [AI call budget](#ai-call-budget) | `false` |
-| `REVIEW_DIMENSION_ROUTING_ENABLED` | Give each review call only the review-dimension blocks its files can use, instead of all ten. See [Dimension routing](#dimension-routing) | `false` |
-| `REVIEW_DECLINE_RECHECK_ENABLED` | Check a maintainer's decline against the reviewed code before recording the finding justified. See [Re-checking declines](#re-checking-declines). `false` makes any reply final | `true` |
-| `REVIEW_CONVERSATIONAL_REPLIES_ENABLED` | Answer `@thrillhousebot` mentions in PR threads and finding replies | `true` |
-| `REVIEW_ADD_DOCS_ENABLED` | Allow `/add-docs` | `true` |
-| `REVIEW_IMPROVE_ENABLED` | Allow `/improve` | `true` |
-| `REVIEW_GENERATE_TESTS_ENABLED` | Allow `/generate-tests` | `true` |
-| `REVIEW_DIAGRAM_ENABLED` | Add a Mermaid control-flow diagram to the summary | `false` |
-| `REVIEW_FOLLOW_UP_SUMMARY_ENABLED` | Include new, resolved and still-open counts in the follow-up review outcome, naming closed findings once. No separate delta comment; nothing is added when no finding is raised or closed | `false` |
-| `REVIEW_LARGE_PR_NUDGE_ENABLED` | On a large PR whose review opened no inline finding and left no earlier finding open, add a note to the summary pointing at `/review` and `/improve`. No extra AI call; the verdict is unchanged | `false` |
-| `REVIEW_LARGE_PR_NUDGE_MIN_FILES` | Changed files (ignored files included) at which a PR counts as large. `0` turns this test off | `20` |
-| `REVIEW_LARGE_PR_NUDGE_MIN_CHANGED_LINES` | Added plus deleted lines at which a PR counts as large; either test is enough. `0` turns this test off | `1000` |
-| `THRILLHOUSEBOT_REVIEW_MAX_REVIEW_COMMENTS` | Most inline comments per review; the rest are listed in the summary | `50` |
-| `THRILLHOUSEBOT_REVIEW_INSTRUCTIONS_FILE` | Repository path of the instructions file | `.github/thrillhousebot.md` |
-| `THRILLHOUSEBOT_REVIEW_IGNORED_FILES` | Comma-separated gitignore-style globs never reviewed. A pattern without `/` matches at any depth (`*.lock`, `vendor`); one with `/` is anchored at the root (`docs/generated/**`); a trailing `/` means the directory's tree; `*` does not cross `/`. Write a `{a,b}` alternation as separate patterns. Setting it replaces the default list | Lockfiles, generated and minified code, sourcemaps, and build and vendor trees (the shipped value of `thrillhousebot.review.ignored-files` in `application.properties`). Build manifests such as `pom.xml`, `build.gradle`, `Cargo.toml`, `package.json` and `build.zig` are reviewed; every file the list excludes is named in the summary's scope note |
-| `THRILLHOUSEBOT_REVIEW_REPO_CONFIG_ENABLED` | Read `.github/thrillhousebot.yml` from each repository (extra ignore globs, path-scoped rules, coverage artifact). See [Repository configuration](#repository-configuration) | `true` |
-| `REVIEW_LABELS_ENABLED` | Suggest PR labels. See [PR labels](#pr-labels) | `false` |
-| `REVIEW_LABELS_APPLY` | Add the labels to the PR instead of suggesting them in a comment | `false` |
-| `REVIEW_LABELS_ALLOW_CREATE` | Allow creating a suggested label that does not exist yet | `false` |
-| `REVIEW_LABELS_MAX` | Most labels applied or suggested per PR | `3` |
-
-### Token and call budget
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `REVIEW_MAX_INPUT_TOKENS` | Input-token budget per call for reviews and the batched commands; larger PRs are split into batches. Capped by the model's `max-input-tokens` (see [Per-model AI settings](#per-model-ai-settings)). `0` disables budgeting | `48000` |
-| `REVIEW_OUTPUT_BUFFER_TOKENS` | Tokens reserved from the input budget for the response | `8192` |
-| `REVIEW_TOKEN_SAFETY_MARGIN` | Fraction of the input budget actually used, to absorb token-estimate error | `0.9` |
-| `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` | Response cap (`max_tokens`) for the calls on the `concise` model: the summary call, the verifier and replies. A summary cut at this cap is salvaged or replaced by a counts-only summary, and the findings are kept. Set it empty to send no cap | `8192` |
-| `REVIEW_MAX_AI_CALLS` | Most AI calls per review (batch calls plus the summary call) and per command run (batch calls plus, for `/describe` and `/changelog`, the merge call). At `1`, a review that makes its review call has none left for the summary and posts a counts-only summary that says so. Verifier calls are not counted | `6` |
-| `REVIEW_MAX_TOKENS_PER_REVIEW` | Most tokens one review may use across all its calls, as the provider reports them, retries and the summary call included. Once reached, no further call is made: the remaining batches are named as not reviewed, the summary degrades to counts only, and the findings already paid for are kept. Reviews only. `0` disables it | `0` |
-| `REVIEW_MAX_DIFF_LINES` | Line cap for single-call diff renders (replies, base comparison, reviews with budgeting off). Token-budgeted reviews and the batched commands ignore it. `0` disables it | `5000` |
-| `THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` | Attempts per failed AI call. At most two may end in a timeout | `5` |
-| `THRILLHOUSEBOT_REVIEW_AI_RETRY_BASE_DELAY_MS` | Base delay of the exponential retry backoff, in milliseconds | `2000` |
-| `THRILLHOUSEBOT_REVIEW_AI_TIMEOUT_SECONDS` | Client-side wait per streaming attempt. Keep it at or above `AI_TIMEOUT` so a timed-out attempt does not leave a stream open at the provider. A second timeout fails the call | `300` |
-
-### Optional review context
-
-All off by default. The CI, linked-issue and learnings sections are fenced as
-untrusted data in the prompt and counted in the per-call token budget.
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `REVIEW_PATCH_COVERAGE_ENABLED` | Tell the review which added lines the repository's own coverage report never ran. Needs `coverage-artifact` in `.github/thrillhousebot.yml` (see [Repository configuration](#repository-configuration)) | `false` |
-| `REVIEW_CI_CONTEXT_ENABLED` | Include the checks that had already failed on the head commit. See [CI-failure context](#ci-failure-context) | `false` |
-| `REVIEW_CI_CONTEXT_INCLUDE_LOGS` | Also include the last 30 lines of up to two failing GitHub Actions job logs | `false` |
-| `REVIEW_CI_CONTEXT_MAX_CHARS` | Character cap on the CI section (500–20000) | `4000` |
-| `REVIEW_TICKET_CONTEXT_ENABLED` | Include the issues the PR links and list unaddressed acceptance criteria in the summary. See [Linked-issue context](#linked-issue-context) | `false` |
-| `REVIEW_TICKET_CONTEXT_PROVIDER` | Where issues are read from. Only `github` exists | `github` |
-| `REVIEW_TICKET_CONTEXT_MAX_ISSUES` | Linked issues read per review (1–5) | `3` |
-| `REVIEW_TICKET_CONTEXT_MAX_CHARS` | Character cap on the linked-issue section (1000–20000) | `6000` |
-| `REVIEW_TICKET_CONTEXT_FROM_BRANCH` | Also take an issue number from the head branch name (`issue-57`, `fix/57-short-name`) when nothing else links one | `false` |
-| `REVIEW_LEARNINGS_ENABLED` | Remember maintainer declines and `/remember` conventions per repository and show them to later reviews. See [Review learnings](#review-learnings). Startup fails if this is on while `REVIEW_DECLINE_RECHECK_ENABLED` is off | `false` |
-| `REVIEW_LEARNINGS_MAX_PER_REPO` | Active learnings one repository may hold (1–1000). At the cap a new learning is refused, not evicted; two captures racing at the cap can each add one | `100` |
-| `REVIEW_LEARNINGS_PROMPT_MAX_ITEMS` | Most learnings in one review prompt (1–50) | `10` |
-| `REVIEW_LEARNINGS_PROMPT_MAX_CHARS` | Character cap on the learnings section (500–20000) | `3000` |
-
-### Security scan
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `REVIEW_SECRET_SCAN_ENABLED` | Scan added lines for leaked credentials. See [Security scan](#security-scan) | `false` |
-| `REVIEW_IAC_SCAN_ENABLED` | Scan added lines for risky infrastructure-as-code settings | `false` |
-| `REVIEW_SECRET_SCAN_ENTROPY_THRESHOLD` | Minimum Shannon entropy (bits per character) for the generic credential-assignment rule; the known token formats ignore it. Must be in (0, 8] | `3.5` |
-| `REVIEW_SECURITY_SCAN_SKIPPED_FILES` | Comma-separated globs the scan skips on top of the review's ignore list, for fixtures and snapshots | `**/fixtures/**,**/__fixtures__/**,**/testdata/**,**/test-data/**,**/__snapshots__/**,**/*.snap` |
-
-### Outgoing notifications
-
-See [Outgoing notifications](#outgoing-notifications).
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `NOTIFICATIONS_WEBHOOK_URL` | Receiver of review-outcome notifications; unset turns them off. Must be `https://`. Treated as a secret and logged only as scheme, host and port | _(unset, off)_ |
-| `NOTIFICATIONS_WEBHOOK_FORMAT` | `json`, `slack` or `discord` | `json` |
-| `NOTIFICATIONS_WEBHOOK_SECRET` | HMAC-SHA256 key; when set, each request carries `X-Thrillhousebot-Signature-256: sha256=<hex>` | _(unset, unsigned)_ |
-| `NOTIFICATIONS_WEBHOOK_EVENTS` | Comma-separated outcomes to send: `completed`, `failed` | `completed,failed` |
-| `NOTIFICATIONS_WEBHOOK_INCLUDE_CONTENT` | Also send the PR title and each finding's severity, file, line and title | `false` |
-| `NOTIFICATIONS_WEBHOOK_ALLOW_HTTP` | Accept a plain `http://` URL, for local testing | `false` |
-| `NOTIFICATIONS_WEBHOOK_TIMEOUT` | Per-attempt timeout (at most `60s`) | `10s` |
-| `NOTIFICATIONS_WEBHOOK_MAX_ATTEMPTS` | Attempts per notification (1–5). A timeout, connection failure, `429` or `5xx` is retried after 1, 2, 4 and 8 seconds, then dropped with a WARN | `3` |
-
-### Dashboard, database and runtime
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | OAuth credentials for dashboard login. Leave both unset to disable login | _(required for the dashboard)_ |
-| `DASHBOARD_URL` | Public dashboard URL, used for the OAuth callback and session links | `http://localhost:8080` |
-| `DATASOURCE_DB_KIND` | `h2` or `postgresql`. Quarkus fixes this at build time, so released images are PostgreSQL builds and ignore `h2` | `h2` (dev), `postgresql` (`%prod`) |
-| `DATABASE_URL` | JDBC URL of the production database | `jdbc:postgresql://localhost:5432/thrillhouse` (`db:5432` in Docker Compose) |
-| `DB_USER` / `DB_PASSWORD` | Database credentials, read by Docker Compose for both the bot and the PostgreSQL container | `thrillhouse` / `thrillhouse` |
-| `HTTP_CONNECT_TIMEOUT` | Outbound HTTP connect timeout (GitHub API, OAuth) | `10s` |
-| `HTTP_REQUEST_TIMEOUT` | Outbound HTTP request timeout (GitHub API, OAuth) | `10s` |
-| `WEBSOCKET_KEEPALIVE_MS` | Dashboard WebSocket keepalive in ms; `0` or less disables it and stale replay-buffer eviction | `25000` |
-| `PROMETHEUS_METRICS_ENABLED` | Serve the same metrics in Prometheus text format at `GET /metrics` on the main HTTP port; the endpoint is unauthenticated, so shield it before enabling it on internet-facing deployments | `false` |
+Every setting, with its type and default, is listed in the
+[configuration reference](https://github.com/devops-thiago/ThrillhouseBot/blob/main/docs/CONFIGURATION.md),
+which is generated from the code. The sections below explain the features those
+settings control.
 
 ### AI call budget
 
@@ -1606,6 +1496,13 @@ gh attestation verify thrillhousebot-v0.7.1-linux-amd64.tar.gz \
   --repo devops-thiago/ThrillhouseBot
 ```
 
+## Operations
+
+[docs/OPERATIONS.md](docs/OPERATIONS.md) covers what the bot stores and what
+it keeps only in memory, the single-replica limit, the health endpoints with
+Compose and Kubernetes probes, restarts, backups, and going back to an earlier
+release.
+
 ## Upgrading
 
 Only the latest release receives fixes, including security fixes. To upgrade,
@@ -1623,6 +1520,10 @@ PostgreSQL schema in place (`schema-management.strategy=update`), and new
 settings default to the previous behaviour unless the notes say otherwise. If
 you pin a version with `IMAGE_TAG` in `.env`, set it to the new tag before
 pulling.
+
+[docs/VERSIONING.md](docs/VERSIONING.md) describes what each kind of release
+can change, what counts as the public contract, how a setting is deprecated
+and which releases get fixes.
 
 ## Development
 
