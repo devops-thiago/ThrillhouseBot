@@ -39,6 +39,7 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** {@link BaseCodeCitations}: linked-issue criteria the description shows met on the base. */
 class BaseCodeCitationsTest {
@@ -550,6 +551,82 @@ class BaseCodeCitationsTest {
             .met();
 
     assertEquals(List.of("VerdictBuilder.newFindingsSummary"), met.getFirst().citations());
+  }
+
+  /** The criterion stated with {@code claim} before its citation. */
+  private static String claimed(String claim) {
+    return "The check run reports the open total with the new count separate, which "
+        + claim
+        + ": `VerdictBuilder.newFindingsSummary` (VerdictBuilder.java:458).";
+  }
+
+  /**
+   * A negation anywhere in the clause before the claim withdraws it, not only one right before the
+   * claim's word; a negation after the claim, in the same sentence, does not.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "is not, as far as I can tell, already met",
+        "is not yet shipped",
+        "was never shipped before this PR",
+        "isn't really already met",
+        "no earlier change has already met",
+        "cannot be said to have already shipped"
+      })
+  void aNegationInTheClauseWithdrawsTheClaim(String claim) {
+    assertEquals(
+        List.of(CHECK_RUN_GAP),
+        new Repository().citations(claimed(claim), List.of()).split(List.of(CHECK_RUN_GAP)).unmet(),
+        claim);
+  }
+
+  @Test
+  void aNegationAfterTheClaimOrInAnEarlierSentenceLeavesIt() {
+    var repository = new Repository();
+    assertEquals(
+        1,
+        repository
+            .citations(claimed("already shipped, and this PR does not change it"), List.of())
+            .split(List.of(CHECK_RUN_GAP))
+            .met()
+            .size());
+    assertEquals(
+        1,
+        repository
+            .citations("Nothing here is new. " + claimed("already shipped"), List.of())
+            .split(List.of(CHECK_RUN_GAP))
+            .met()
+            .size());
+  }
+
+  /**
+   * Text that is not the author's own prose is never a claim: a fenced code block, a blockquote and
+   * an HTML comment, whether they hold the passage itself or the paragraph that leads its list.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "```\nThe check run already reports the open total with the new count separate:"
+            + " `VerdictBuilder.newFindingsSummary`.\n```",
+        "~~~text\nCriteria 1 and 2 shipped in 0.7.1:\n~~~\n- The check run reports the open"
+            + " total with the new count separate: `VerdictBuilder.newFindingsSummary`.",
+        "> The check run already reports the open total with the new count separate:"
+            + " `VerdictBuilder.newFindingsSummary`.",
+        "> Criteria 1 and 2 shipped in 0.7.1:\n- The check run reports the open total with the"
+            + " new count separate: `VerdictBuilder.newFindingsSummary`.",
+        "<!-- The check run already reports the open total with the new count separate:"
+            + " `VerdictBuilder.newFindingsSummary`. -->",
+        "<!--\nCriteria 1 and 2 shipped in 0.7.1:\n-->\n- The check run reports the open total"
+            + " with the new count separate: `VerdictBuilder.newFindingsSummary`.",
+        "<!-- The check run already reports the open total with the new count separate:"
+            + " `VerdictBuilder.newFindingsSummary`."
+      })
+  void quotedFencedOrCommentedTextIsNoClaim(String description) {
+    assertEquals(
+        List.of(CHECK_RUN_GAP),
+        new Repository().citations(description, List.of()).split(List.of(CHECK_RUN_GAP)).unmet(),
+        description);
   }
 
   @Test

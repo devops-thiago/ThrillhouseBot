@@ -44,11 +44,13 @@ import java.util.regex.Pattern;
  * these hold, and is kept otherwise:
  *
  * <ul>
- *   <li>a passage of the description (a paragraph or a list item) states the criterion: it shares
- *       at least {@value LinkedIssueCriteria#MIN_SHARED} of the criterion's content words and half
- *       of them, the most of any passage;
+ *   <li>a passage of the description (a paragraph or a list item of the author's own prose: never
+ *       inside a fenced code block, a blockquote or an HTML comment) states the criterion: it
+ *       shares at least {@value LinkedIssueCriteria#MIN_SHARED} of the criterion's content words
+ *       and half of them, the most of any passage;
  *   <li>that passage, or the paragraph that introduces its list, says the criterion is already met
- *       ({@link #MET}: "already", "shipped", "landed", "existing code", "is met");
+ *       ({@link #MET}: "already", "shipped", "landed", "existing code", "is met"), with no negation
+ *       earlier in that clause ({@link #NEGATION});
  *   <li>the passage cites code, as a {@code path:line} or as a {@code Type.member} code span, such
  *       as a test's {@code SecurityScanTest.eachIacRule…}, and every one of its citations is on the
  *       base: the file is in the repository and not added or renamed by this pull request, the
@@ -65,7 +67,7 @@ final class BaseCodeCitations {
 
   /**
    * What says a criterion is already met, rather than met by this change. One pattern per shape; a
-   * match right after "not" or "n't" does not count.
+   * match with a {@link #NEGATION} earlier in its clause does not count.
    */
   private static final List<Pattern> MET =
       List.of(
@@ -75,8 +77,22 @@ final class BaseCodeCitations {
           Pattern.compile("(?i)\\bmet\\s++(?:by|in|on|before)\\b"),
           Pattern.compile("(?i)\\bbefore\\s++this\\s++(?:pr|pull\\s++request|change)\\b"));
 
-  /** A negation ending the text just before a {@link #MET} match. */
-  private static final Pattern NEGATED = Pattern.compile("(?i)(?:\\bnot|n['’]t)\\s*+$");
+  /**
+   * A negation in the clause before a {@link #MET} match: "not", "never", "no", "nor", "cannot" or
+   * a contraction's "n't", wherever it stands in that clause ("is not, as far as I can tell,
+   * already met").
+   */
+  private static final Pattern NEGATION =
+      Pattern.compile("(?i)\\b(?:not|never|no|nor|cannot)\\b|n['’]t\\b");
+
+  /** What ends a clause: sentence punctuation followed by a blank, or a line break. */
+  private static final Pattern CLAUSE_END = Pattern.compile("[.;:!?](?=\\s)|\\R");
+
+  /** Opens an HTML comment, which GitHub does not render. */
+  private static final String COMMENT_OPEN = "<!--";
+
+  /** Closes an HTML comment; an unclosed one runs to the end. */
+  private static final String COMMENT_CLOSE = "-->";
 
   /**
    * A run of the characters a {@code path:line} citation is written with; {@link #pathLine} reads
@@ -232,7 +248,7 @@ final class BaseCodeCitations {
     for (var pattern : MET) {
       var met = pattern.matcher(text);
       while (met.find()) {
-        if (!NEGATED.matcher(text.substring(0, met.start())).find()) {
+        if (!NEGATION.matcher(clauseBefore(text, met.start())).find()) {
           return true;
         }
       }
@@ -261,6 +277,16 @@ final class BaseCodeCitations {
     }
     return new PathLine(
         token.substring(0, colon), Integer.parseInt(token.substring(colon + 1, end)));
+  }
+
+  /** The text of the clause {@code at} stands in, from the clause's start up to {@code at}. */
+  private static String clauseBefore(String text, int at) {
+    var start = 0;
+    var ends = CLAUSE_END.matcher(text).region(0, at);
+    while (ends.find()) {
+      start = ends.end();
+    }
+    return text.substring(start, at);
   }
 
   /** Whether a path token names a file: its last segment has a name and an extension. */
@@ -377,11 +403,38 @@ final class BaseCodeCitations {
    */
   private static List<Passage> passages(String description) {
     var reader = new PassageReader();
-    for (var line : description.split("\\R", -1)) {
+    for (var line : authorProse(description).split("\\R", -1)) {
       reader.read(line);
     }
     reader.flush();
     return List.copyOf(reader.passages);
+  }
+
+  /**
+   * {@code description} with what is not the author's own prose blanked, line breaks kept: fenced
+   * code blocks ({@link MarkdownFences}) and HTML comments. A claim quoted from elsewhere, or left
+   * in a comment the page does not show, is not the description's.
+   */
+  private static String authorProse(String description) {
+    var prose = new StringBuilder(description);
+    for (var span : MarkdownFences.spans(description)) {
+      blank(prose, span[0], span[1]);
+    }
+    for (int open = description.indexOf(COMMENT_OPEN); open >= 0; ) {
+      var close = description.indexOf(COMMENT_CLOSE, open + COMMENT_OPEN.length());
+      var end = close < 0 ? description.length() : close + COMMENT_CLOSE.length();
+      blank(prose, open, end);
+      open = description.indexOf(COMMENT_OPEN, end);
+    }
+    return prose.toString();
+  }
+
+  private static void blank(StringBuilder text, int start, int end) {
+    for (int i = start; i < end; i++) {
+      if (text.charAt(i) != '\n') {
+        text.setCharAt(i, ' ');
+      }
+    }
   }
 
   /** Reads the description line by line into {@link Passage}s. */
@@ -393,8 +446,10 @@ final class BaseCodeCitations {
 
     void read(String line) {
       var heading = line.startsWith("#");
-      var item = !heading && LIST_ITEM.matcher(line).find();
-      if (line.isBlank() || heading || item) {
+      // A blockquote is someone else's text: it ends a passage and is none.
+      var quote = line.strip().startsWith(">");
+      var item = !heading && !quote && LIST_ITEM.matcher(line).find();
+      if (line.isBlank() || heading || quote || item) {
         flush();
         lead = heading ? "" : lead;
         open = item ? new StringBuilder(line.strip()) : null;
