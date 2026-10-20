@@ -43,6 +43,7 @@ export default defineConfig({
       // Empty alt: the visible site title next to the logo already names the site.
       logo: { src: "./src/assets/icon.png", alt: "" },
       favicon: "/icon.png",
+      customCss: ["./src/styles/custom.css"],
       social: [
         {
           icon: "github",
@@ -61,6 +62,7 @@ export default defineConfig({
         { label: "Configuration", slug: "configuration" },
         { label: "Configuration reference", slug: "configuration-reference" },
         { label: "AI providers", slug: "providers" },
+        { label: "Operations", slug: "operations" },
         { label: "Architecture", slug: "architecture" },
         { label: "Versioning and support", slug: "versioning" },
         { label: "Finding feedback", slug: "feedback" },
