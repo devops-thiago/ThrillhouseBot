@@ -79,11 +79,16 @@ final class BaseCodeCitations {
   private static final Pattern NEGATED = Pattern.compile("(?i)(?:\\bnot|n['’]t)\\s*+$");
 
   /**
-   * A {@code path:line} citation: a path token, then a colon and the line. The token counts only
-   * when it names a file with an extension ({@link #namesAFile}).
+   * A run of the characters a {@code path:line} citation is written with; {@link #pathLine} reads
+   * the citation out of it.
    */
-  private static final Pattern PATH_LINE =
-      Pattern.compile("(?<![\\w/.-])([\\w./-]++):(\\d{1,9}+)(?!\\d)");
+  private static final Pattern PATH_TOKEN = Pattern.compile("[\\w./:-]++");
+
+  /** Digits of a cited line number, at most. */
+  private static final int MAX_LINE_DIGITS = 9;
+
+  /** A {@code path:line} citation read from a token. */
+  record PathLine(String path, int line) {}
 
   /** Characters a file extension may have, at most. */
   private static final int MAX_EXTENSION_CHARS = 10;
@@ -184,14 +189,14 @@ final class BaseCodeCitations {
       return null;
     }
     var citations = new LinkedHashSet<String>();
-    var pathLines = PATH_LINE.matcher(passage.text());
-    while (pathLines.find()) {
-      var cited = pathLines.group(1);
-      if (namesAFile(cited)) {
-        if (!lineOnBase(cited, Integer.parseInt(pathLines.group(2)))) {
+    var tokens = PATH_TOKEN.matcher(passage.text());
+    while (tokens.find()) {
+      var cited = pathLine(tokens.group());
+      if (cited != null) {
+        if (!lineOnBase(cited.path(), cited.line())) {
           return null;
         }
-        citations.add(pathLines.group());
+        citations.add(cited.path() + ":" + cited.line());
       }
     }
     var symbols = SYMBOL_SPAN.matcher(passage.text());
@@ -233,6 +238,29 @@ final class BaseCodeCitations {
       }
     }
     return false;
+  }
+
+  /**
+   * The {@code path:line} a token holds: a file path ({@link #namesAFile}), a colon, and a line of
+   * at most {@value #MAX_LINE_DIGITS} digits, which may be followed by a {@code :column}. {@code
+   * null} for anything else, such as a URL or a time of day.
+   */
+  static PathLine pathLine(String token) {
+    var colon = token.indexOf(':');
+    if (colon <= 0 || !namesAFile(token.substring(0, colon))) {
+      return null;
+    }
+    var end = colon + 1;
+    while (end < token.length() && Character.isDigit(token.charAt(end))) {
+      end++;
+    }
+    var digits = end - colon - 1;
+    var closed = end == token.length() || token.charAt(end) == ':' || token.charAt(end) == '.';
+    if (digits == 0 || digits > MAX_LINE_DIGITS || !closed) {
+      return null;
+    }
+    return new PathLine(
+        token.substring(0, colon), Integer.parseInt(token.substring(colon + 1, end)));
   }
 
   /** Whether a path token names a file: its last segment has a name and an extension. */

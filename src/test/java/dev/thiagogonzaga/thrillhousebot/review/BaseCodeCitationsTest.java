@@ -520,6 +520,22 @@ class BaseCodeCitationsTest {
     assertEquals(file, BaseCodeCitations.namesAFile(token));
   }
 
+  @ParameterizedTest
+  @CsvSource({
+    "VerdictBuilder.java:458, VerdictBuilder.java, 458",
+    "src/a.java:12:5, src/a.java, 12",
+    "a.java:12., a.java, 12",
+    "https://x.io/a.md, , 0",
+    "a.java:, , 0",
+    "a.java:1234567890, , 0",
+    "a.java:12-14, , 0",
+    ":12, , 0"
+  })
+  void aTokenIsReadAsPathAndLine(String token, String path, int line) {
+    var cited = BaseCodeCitations.pathLine(token);
+    assertEquals(path == null ? null : new BaseCodeCitations.PathLine(path, line), cited, token);
+  }
+
   /** A path token that is no file name, or a line number too long to be one, cites nothing. */
   @Test
   void aTokenThatIsNoFileOrNoLineIsNotACitation() {
