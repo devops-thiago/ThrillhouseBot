@@ -50,6 +50,19 @@ If you changed the dashboard, also run
 site or any page it includes (README, CONTRIBUTING, `docs/`), run
 `cd website && npm ci && npm run build`; the build fails on a broken link.
 
+If you add a configuration key or change one's javadoc, default or alias,
+regenerate the configuration reference (`docs/CONFIGURATION.md`) and the
+README's most-used settings table:
+
+```bash
+./mvnw test -Dtest=ConfigReferenceTest -Dconfig-reference.write=true
+```
+
+`ConfigReferenceTest` fails when either file is out of date. A key's
+description is the first paragraph of its javadoc in `ThrillhouseConfig`; a
+variable that only `application.properties` reads is described by `# doc:`
+comment lines directly above its key.
+
 CI runs the same checks, plus actionlint, the DCO sign-off check, Dependency
 Review, SonarCloud, Trivy and a Docker build; CodeQL runs on pull requests to `main`. CI builds the GraalVM native image when a pull request
 touches `pom.xml`, `src/main/**` or `.github/workflows/ci.yml`. To build a
