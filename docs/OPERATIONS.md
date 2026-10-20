@@ -117,12 +117,26 @@ spec:
       labels:
         app: thrillhousebot
     spec:
+      automountServiceAccountToken: false
       terminationGracePeriodSeconds: 40
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: thrillhousebot
           image: ghcr.io/devops-thiago/thrillhousebot:v0.7.1
           ports:
             - containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           envFrom:
             - secretRef:
                 name: thrillhousebot
@@ -142,11 +156,23 @@ spec:
               path: /q/health/ready
               port: 8080
             periodSeconds: 10
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ```
 
 The secret holds the same variables as `.env`, including `DATABASE_URL`,
 `QUARKUS_DATASOURCE_USERNAME` and `QUARKUS_DATASOURCE_PASSWORD`, which Compose
 sets for you.
+
+The bot never calls the Kubernetes API, so the pod gets no service account
+token. It needs no Linux capabilities, since it listens on port 8080, and
+writes only to `/tmp`: Vert.x creates `/tmp/vertx-cache` at startup, and with a
+read-only root filesystem and no writable `/tmp` the bot fails to start
+(`/tmp/vertx-cache: Read-only file system`). The `emptyDir` gives it that
+directory. The default image runs as user 1001. The `-distroless` image runs as
+`nonroot`, a name the kubelet cannot check against `runAsNonRoot`, so the
+example sets `runAsUser: 1001`, which works with both images.
 
 ## Restarts and shutdown
 
