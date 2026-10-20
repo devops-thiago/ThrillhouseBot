@@ -34,6 +34,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -51,6 +52,7 @@ class ReviewDispatcherTest {
   @Mock private AutoReviewRateLimiter rateLimiter;
   @Mock private ReviewSkipEmitter skipEmitter;
   @Mock private CiHoldRevisit ciHoldRevisit;
+  @Mock private RunningReviewCoverage coverage;
 
   private ExecutorService reviewExecutor;
   private ReviewDispatcher dispatcher;
@@ -60,7 +62,8 @@ class ReviewDispatcherTest {
     MockitoAnnotations.openMocks(this);
     reviewExecutor = Executors.newSingleThreadExecutor();
     dispatcher =
-        new ReviewDispatcher(reviewExecutor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit);
+        new ReviewDispatcher(
+            reviewExecutor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit, coverage);
   }
 
   private static CiHoldRevisit.Recheck recheck(int prNumber, String sha) {
@@ -211,7 +214,8 @@ class ReviewDispatcherTest {
     var rejecting = mock(ExecutorService.class);
     doThrow(new RejectedExecutionException("saturated")).when(rejecting).execute(any());
     var saturated =
-        new ReviewDispatcher(rejecting, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit);
+        new ReviewDispatcher(
+            rejecting, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit, coverage);
 
     assertFalse(saturated.dispatchCiRecheck(recheck(42, "sha1")));
     assertEquals(0, saturated.stateCount());
@@ -352,7 +356,8 @@ class ReviewDispatcherTest {
     ExecutorService executor = mock(ExecutorService.class);
     doThrow(new RejectedExecutionException("shut down")).when(executor).execute(any());
     dispatcher =
-        new ReviewDispatcher(executor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit);
+        new ReviewDispatcher(
+            executor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit, coverage);
 
     dispatcher.dispatch(reviewRequest("owner", "repo", 10, "sha1"));
     verify(orchestrator, after(500).never()).review(any(ReviewOrchestrator.ReviewRequest.class));
@@ -480,7 +485,8 @@ class ReviewDispatcherTest {
     ExecutorService executor = mock(ExecutorService.class);
     doThrow(new RejectedExecutionException("shut down")).when(executor).execute(any());
     dispatcher =
-        new ReviewDispatcher(executor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit);
+        new ReviewDispatcher(
+            executor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit, coverage);
 
     // A rejected task means no review will run, so callers can roll back dedup state.
     assertFalse(dispatcher.dispatch(reviewRequest("owner", "repo", 10, "sha1")));
@@ -505,7 +511,8 @@ class ReviewDispatcherTest {
         .execute(any());
 
     dispatcher =
-        new ReviewDispatcher(executor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit);
+        new ReviewDispatcher(
+            executor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit, coverage);
 
     dispatcher.dispatch(reviewRequest("owner", "repo", 8, "sha1"));
     dispatcher.dispatch(reviewRequest("owner", "repo", 8, "sha2"));
@@ -666,6 +673,217 @@ class ReviewDispatcherTest {
     // An unexpected failure means no review was surfaced, so the next event may retry immediately.
     verify(orchestrator, timeout(2000)).review(any(ReviewOrchestrator.ReviewRequest.class));
     verify(rateLimiter, after(500).never()).recordCompletion(anyString(), anyString(), anyInt());
+  }
+
+  @Test
+  void shouldAnswerManualReviewOfTheHeadUnderReviewWithoutASecondRun() throws InterruptedException {
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+    var manual = manualRequest(30);
+    when(coverage.currentHead(manual)).thenReturn(Optional.of("SHA1"));
+
+    dispatcher.dispatch(reviewRequest("owner", "repo", 30, "sha1"));
+    assertTrue(started.await(2, TimeUnit.SECONDS));
+    assertTrue(dispatcher.dispatch(manual));
+    release.countDown();
+
+    verify(coverage).notifyCovered(manual, "sha1");
+    awaitEmptyDispatcherState(dispatcher, 5, TimeUnit.SECONDS);
+    verify(orchestrator, after(300).times(1)).review(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(orchestrator, never()).review(manual);
+  }
+
+  @Test
+  void shouldQueueManualReviewOfTheNewHeadWhenAnOlderHeadIsUnderReview()
+      throws InterruptedException {
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+    var manual = manualRequest(31);
+    when(coverage.currentHead(manual)).thenReturn(Optional.of("sha2"));
+
+    dispatcher.dispatch(reviewRequest("owner", "repo", 31, "sha1"));
+    assertTrue(started.await(2, TimeUnit.SECONDS));
+    assertTrue(dispatcher.dispatch(manual));
+    release.countDown();
+
+    verify(orchestrator, timeout(5000)).review(manual);
+    verify(coverage, never()).notifyCovered(any(), anyString());
+  }
+
+  @Test
+  void shouldRunManualReviewOnAnIdlePrEvenOnAnUnchangedHead() {
+    var auto = reviewRequest("owner", "repo", 32, "sha1");
+    dispatcher.dispatch(auto);
+    verify(orchestrator, timeout(2000)).review(auto);
+    awaitEmptyDispatcherState(dispatcher, 2, TimeUnit.SECONDS);
+    var manual = manualRequest(32);
+
+    assertTrue(dispatcher.dispatch(manual));
+
+    verify(orchestrator, timeout(2000)).review(manual);
+    verify(coverage, never()).currentHead(any());
+    verify(coverage, never()).notifyCovered(any(), anyString());
+  }
+
+  @Test
+  void shouldQueueManualReviewWhenTheHeadCannotBeRead() throws InterruptedException {
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+    var manual = manualRequest(33);
+    when(coverage.currentHead(manual)).thenReturn(Optional.empty());
+
+    dispatcher.dispatch(reviewRequest("owner", "repo", 33, "sha1"));
+    assertTrue(started.await(2, TimeUnit.SECONDS));
+    assertTrue(dispatcher.dispatch(manual));
+    release.countDown();
+
+    verify(orchestrator, timeout(5000)).review(manual);
+    verify(coverage).currentHead(manual);
+    verify(coverage, never()).notifyCovered(any(), anyString());
+  }
+
+  @Test
+  void shouldQueueManualReviewWhenTheRunningReviewHasNotResolvedItsHead()
+      throws InterruptedException {
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    blockReviewUntil(started, release);
+    var second = manualRequest(34);
+
+    dispatcher.dispatch(manualRequest(34));
+    assertTrue(started.await(2, TimeUnit.SECONDS));
+    assertTrue(dispatcher.dispatch(second));
+    release.countDown();
+
+    verify(orchestrator, timeout(5000).times(2)).review(second);
+    verify(coverage, never()).currentHead(any());
+  }
+
+  @Test
+  void shouldRunManualReviewThatArrivesDuringACiRecheck() throws InterruptedException {
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    doAnswer(
+            invocation -> {
+              started.countDown();
+              release.await(5, TimeUnit.SECONDS);
+              return null;
+            })
+        .when(ciHoldRevisit)
+        .revisit(any());
+    var manual = manualRequest(35);
+
+    dispatcher.dispatchCiRecheck(recheck(35, "sha1"));
+    assertTrue(started.await(2, TimeUnit.SECONDS));
+    assertTrue(dispatcher.dispatch(manual));
+    release.countDown();
+
+    verify(orchestrator, timeout(5000)).review(manual);
+    verify(coverage, never()).currentHead(any());
+  }
+
+  @Test
+  void shouldRunManualReviewWhenTheRunningReviewEndedAfterTheHeadWasRead() {
+    var state = new ReviewDispatcher.PerPrState();
+    state.beginReview("sha1");
+    state.endReview();
+
+    var result = state.onDispatch(manualRequest(36), "sha1");
+
+    assertFalse(result.covered());
+    assertTrue(result.startWorker());
+  }
+
+  @Test
+  void shouldQueueManualReviewWhenANewerHeadStartedReviewAfterTheHeadWasRead() {
+    var state = new ReviewDispatcher.PerPrState();
+    state.onDispatch(reviewRequest("owner", "repo", 39, "sha2"));
+    state.takeNext();
+    state.beginReview("sha2");
+
+    var result = state.onDispatch(manualRequest(39), "sha1");
+
+    assertFalse(result.covered());
+    assertEquals(1, result.coalescedCount());
+  }
+
+  @Test
+  void shouldAnswerOrQueueManualReviewWithInfoLoggingDisabled() throws InterruptedException {
+    var julLogger = java.util.logging.Logger.getLogger(ReviewDispatcher.class.getName());
+    var originalLevel = julLogger.getLevel();
+    julLogger.setLevel(java.util.logging.Level.WARNING);
+    try {
+      var started = new CountDownLatch(1);
+      var release = new CountDownLatch(1);
+      blockReviewUntil(started, release);
+      var manual = manualRequest(40);
+      when(coverage.currentHead(manual))
+          .thenReturn(Optional.of("sha1"))
+          .thenReturn(Optional.of("sha2"));
+
+      dispatcher.dispatch(reviewRequest("owner", "repo", 40, "sha1"));
+      assertTrue(started.await(2, TimeUnit.SECONDS));
+      assertTrue(dispatcher.dispatch(manual));
+      assertTrue(dispatcher.dispatch(manual));
+      release.countDown();
+
+      verify(coverage).notifyCovered(manual, "sha1");
+      verify(orchestrator, timeout(5000)).review(manual);
+    } finally {
+      julLogger.setLevel(originalLevel);
+    }
+  }
+
+  @Test
+  void shouldDispatchNormallyWithoutACoveredHead() {
+    var state = new ReviewDispatcher.PerPrState();
+
+    var result = state.onDispatch(manualRequest(41), null);
+
+    assertFalse(result.covered());
+    assertTrue(result.startWorker());
+  }
+
+  @Test
+  void shouldCoalesceManualReviewWhenAnotherRequestAlreadyWaits() {
+    var state = new ReviewDispatcher.PerPrState();
+    state.onDispatch(reviewRequest("owner", "repo", 37, "sha1"));
+    state.takeNext();
+    state.beginReview("sha1");
+    state.onDispatch(reviewRequest("owner", "repo", 37, "sha2"));
+
+    var result = state.onDispatch(manualRequest(37), "sha1");
+
+    assertFalse(result.covered());
+    assertEquals(2, result.coalescedCount());
+  }
+
+  @Test
+  void shouldRetryManualReviewOnARetiredState() {
+    var state = new ReviewDispatcher.PerPrState();
+    state.beginReview("sha1");
+    state.markRetired();
+
+    var result = state.onDispatch(manualRequest(38), "sha1");
+
+    assertFalse(result.covered());
+    assertTrue(result.removeAndRetry());
+  }
+
+  @Test
+  void shouldTreatAMissingHeadUnderReviewAsUnresolved() {
+    var state = new ReviewDispatcher.PerPrState();
+    state.beginReview(null);
+
+    assertEquals("", state.reviewingSha());
+  }
+
+  private static ReviewOrchestrator.ReviewRequest manualRequest(int prNumber) {
+    return new ReviewOrchestrator.ReviewRequest(
+        "owner", "repo", prNumber, "", "(manual review)", "", "", "main", 1L, true);
   }
 
   private static ReviewOrchestrator.ReviewRequest reviewRequest(
