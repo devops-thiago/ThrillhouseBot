@@ -1,0 +1,77 @@
+### c/src/validator.c (added, +73 -0)
+```diff
+@@ -0,0 +1,73 @@
++#include "meterval.h"
++
++#include <stdlib.h>
++#include <string.h>
++
++/* A step between consecutive readings of one meter is a spike when it exceeds
++ * MAX_DELTA_LITRES: 2,000 L, roughly a burst service pipe running for an hour. */
++#define MAX_DELTA_LITRES 20000.0
++
++static enum reject_reason check_one(const struct meter_config *cfg, registry_fn registry,
++                                    const struct reading *r, size_t i, const unsigned char *dup)
++{
++    const struct reading *cur = &r[i];
++    if (!config_zone_allowed(cfg, cur->zone))
++        return REJECT_ZONE;
++    if (cur->litres < 0.0)
++        return REJECT_NEGATIVE;
++    if (dup[i])
++        return REJECT_DUPLICATE;
++    if (registry(cur->serial) != REG_ACTIVE)
++        return REJECT_REGISTRY;
++    if (i > 0 && strcmp(r[i - 1].serial, cur->serial) == 0 &&
++        cur->litres - r[i - 1].litres > MAX_DELTA_LITRES)
++        return REJECT_SPIKE;
++    return REJECT_NONE;
++}
++
++int validator_run(const struct meter_config *cfg, registry_fn registry, const struct reading *r,
++                  size_t n, struct batch_result *out)
++{
++    memset(out, 0, sizeof *out);
++    size_t cap = n ? n : 1;
++    unsigned char *dup = malloc(cap);
++    enum reject_reason *reasons = calloc(cap, sizeof *reasons);
++    out->rejected_readings = malloc(cap * sizeof *out->rejected_readings);
++    out->reasons = malloc(cap * sizeof *out->reasons);
++    if (!dup || !reasons || !out->rejected_readings || !out->reasons) {
++        free(dup);
++        free(reasons);
++        batch_result_free(out);
++        return -1;
++    }
++
++    mark_duplicates(r, n, dup);
++    for (size_t i = 0; i < n; i++)
++        reasons[i] = check_one(cfg, registry, r, i, dup);
++    /* A meter whose register runs backwards anywhere in the batch is rejected entirely. */
++    for (size_t start = 0, end; start < n; start = end) {
++        for (end = start; end < n && strcmp(r[end].serial, r[start].serial) == 0; end++)
++            ;
++        int monotonic = series_is_monotonic(&r[start], end - start);
++        for (size_t k = start; k < end && !monotonic; k++)
++            if (reasons[k] == REJECT_NONE)
++                reasons[k] = REJECT_ROLLBACK;
++    }
++
++    for (size_t i = 0; i < n; i++) {
++        if (reasons[i] == REJECT_NONE)
++            out->accepted++;
++        out->rejected_readings[out->rejected_count] = r[i];
++        out->reasons[out->rejected_count++] = reasons[i];
++    }
++    free(dup);
++    free(reasons);
++    return 0;
++}
++
++void batch_result_free(struct batch_result *res)
++{
++    free(res->rejected_readings);
++    free(res->reasons);
++    memset(res, 0, sizeof *res);
++}
+```

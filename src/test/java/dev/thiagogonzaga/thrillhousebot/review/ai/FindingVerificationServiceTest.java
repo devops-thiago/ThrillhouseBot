@@ -956,6 +956,121 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void aConfirmedFindingsBrokenSuggestionIsReplacedWithTheCorrectedOne() {
+    // #1080, go ThrillhouseBot-test#247: the suggestion renamed the COPY destination while the
+    // ENTRYPOINT kept the old path.
+    var raised =
+        new ReviewResponse.Finding(
+            "high",
+            "high",
+            "go/Dockerfile",
+            10,
+            "Runtime stage copies an artifact the build stage never produces",
+            "No stage produces /out/pickbatchd. The image build fails.",
+            "COPY --from=build /out/pickbatchd /usr/local/bin/pickbatchd",
+            "COPY --from=build /out/pickbatch /usr/local/bin/pickbatch");
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+                {"verdicts": [{"id": 1, "verdict": "confirmed", "risk": "high",
+                  "confidence": "high", "reason": "the ENTRYPOINT keeps pickbatchd",
+                  "suggestion": "replace",
+                  "suggestion_new": "COPY --from=build /out/pickbatch /usr/local/bin/pickbatchd"}]}
+                """));
+
+    var result = service.verify(SESSION, response(raised), "diff", "stack", "");
+
+    var kept = result.findings().get(0);
+    assertEquals(
+        "COPY --from=build /out/pickbatch /usr/local/bin/pickbatchd", kept.suggestionNew());
+    assertEquals(raised.suggestionOld(), kept.suggestionOld());
+    assertEquals("high", kept.risk());
+    assertEquals("high", kept.confidence());
+  }
+
+  @Test
+  void aDowngradedFindingCanLoseItsSuggestionAndASentence() {
+    var raised =
+        new ReviewResponse.Finding(
+            "high",
+            "high",
+            "src/Main.java",
+            10,
+            "Loop never runs",
+            "The cursor starts empty. The constant MAX_PAGEZ is misspelt.",
+            "old",
+            "new");
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+                {"verdicts": [{"id": 1, "verdict": "downgraded", "risk": "medium",
+                  "confidence": "medium", "reason": "r", "suggestion": "drop",
+                  "cut": ["The constant MAX_PAGEZ is misspelt."]}]}
+                """));
+
+    var kept = service.verify(SESSION, response(raised), "diff", "stack", "").findings().get(0);
+
+    assertNull(kept.suggestionNew());
+    assertEquals("old", kept.suggestionOld());
+    assertEquals("The cursor starts empty.", kept.description());
+    assertEquals("medium", kept.risk());
+  }
+
+  @Test
+  void aRejectedOrUnscreenedFindingIsNotRevised() {
+    ReviewResponse original =
+        response(finding("high", "high", "Rejected"), finding("high", "high", "Unknown label"));
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+                {"verdicts": [
+                  {"id": 1, "verdict": "rejected", "reason": "r", "suggestion": "drop"},
+                  {"id": 2, "verdict": "maybe", "suggestion": "replace", "suggestion_new": "x"}]}
+                """));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertEquals(1, result.findings().size());
+    assertEquals("Unknown label", result.findings().get(0).title());
+    assertEquals("new", result.findings().get(0).suggestionNew());
+  }
+
+  @Test
+  void aConfirmedFindingWhoseSuggestionIsKeptIsReturnedAsItWas() {
+    ReviewResponse original = response(finding("high", "high", "Real"));
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                "{\"verdicts\": [{\"id\": 1, \"verdict\": \"confirmed\", \"risk\":"
+                    + " \"high\", \"confidence\": \"high\", \"suggestion\": \"keep\"}]}"));
+
+    assertSame(original, service.verify(SESSION, original, "diff", "stack", ""));
+  }
+
+  @Test
+  void aConfirmedFindingWithOnlyARevisionIsReturnedRevised() {
+    ReviewResponse original = response(finding("high", "high", "Real"));
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                "{\"verdicts\": [{\"id\": 1, \"verdict\": \"confirmed\", \"risk\":"
+                    + " \"high\", \"confidence\": \"high\", \"suggestion\": \"drop\"}]}"));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertNull(result.findings().get(0).suggestionNew());
+    assertEquals(1, result.summary().totalFindings());
+  }
+
+  @Test
   void reportsZeroCoverageWhenTheModelReturnsNoBody() {
     // #623: the empty-body soft failure keeps the findings (fail open, unchanged) but must no
     // longer be indistinguishable from a verified set — the coverage says none were verified.
