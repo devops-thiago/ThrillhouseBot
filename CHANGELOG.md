@@ -32,10 +32,8 @@ All notable changes to ThrillhouseBot.
 ### Documentation
 
 - **Versioning, deprecation and support policy** (#46): `docs/VERSIONING.md`, also on the docs site, says what a minor and a patch release can change, lists the public contract (settings, repository files, commands, GitHub App events and permissions, image tags, database schema, health and metrics endpoints), describes how a setting is deprecated and removed, and states that only the latest release gets fixes. `SECURITY.md` and the README's Upgrading section link to it.
-
-### Documentation
-
 - **The configuration reference is generated from the code** (#672): the README's tables of environment variables were written by hand next to the `ThrillhouseConfig` mapping and the defaults in `application.properties`, so a new key meant three edits and a table row could disagree with the code. `docs/CONFIGURATION.md` now lists every setting with its environment variable, property name, type, effective default and description, generated from the mapping's metadata and javadoc and from `application.properties`. The README keeps a short table of the most-used settings, generated the same way, and links to the full reference, which the docs site also shows. `ConfigReferenceTest` fails the build when either file is out of date or a setting has no description.
+- **Operations runbook** (#47): `docs/OPERATIONS.md`, also on the docs site, lists the four PostgreSQL tables and the state kept only in memory, says to run one replica and replace it with `Recreate`, describes the `/q/health/live`, `/q/health/ready` and `/q/health/started` endpoints with Compose and Kubernetes probe examples, explains what a restart does to a running review, and gives `pg_dump` / `pg_restore` commands for backups and for going back to the previous release. There are no migration scripts to apply or roll back: Hibernate updates the schema on startup.
 
 ## [0.7.1] — 2026-10-13
 
