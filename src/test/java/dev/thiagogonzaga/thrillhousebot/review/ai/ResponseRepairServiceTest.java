@@ -20,6 +20,7 @@ import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiOk;
 import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiTruncated;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -130,7 +131,7 @@ class ResponseRepairServiceTest {
         error.getValue());
     assertFalse(error.getValue().contains("at [line 3]"), "only the cause's first line");
     assertEquals(BROKEN_REVIEW, PromptTemplateEscaper.unfence(answer.getValue()));
-    assertTrue(!answer.getValue().equals(BROKEN_REVIEW), "the answer arrives fenced");
+    assertNotEquals(BROKEN_REVIEW, answer.getValue(), "the answer arrives fenced");
   }
 
   @Test

@@ -338,17 +338,7 @@ public class AiReviewService {
             attempt, maxAttempts, session.id);
         throw e;
       } catch (RuntimeException e) {
-        var rejection = AiContextWindowExceededException.classify(e);
-        if (rejection.isPresent()) {
-          // Deterministic like a truncation: the identical request against the identical window
-          // is rejected identically, and every attempt here is a fresh full-price call (#622).
-          Log.warnf(
-              "AI review attempt %d/%d for session %d was rejected for exceeding the model's"
-                  + " context window; not retrying (an identical request would be rejected"
-                  + " identically)",
-              attempt, maxAttempts, session.id);
-          throw rejection.get();
-        }
+        failIfContextWindowExceeded(session, attempt, maxAttempts, e);
         var repaired = repaired(session, attempt, maxAttempts, lane, e);
         if (repaired.isPresent()) {
           return repaired.get();
@@ -365,6 +355,25 @@ public class AiReviewService {
 
     throw new AiReviewException(
         "AI review failed after " + maxAttempts + " attempts", maxAttempts, lastFailure);
+  }
+
+  /**
+   * Ends the call when {@code failure} is the provider rejecting the request for exceeding the
+   * model's context window. Deterministic like a truncation: the identical request against the
+   * identical window is rejected identically, and every attempt here is a fresh full-price call
+   * (#622). Returns for every other failure.
+   */
+  private static void failIfContextWindowExceeded(
+      ReviewSession session, int attempt, int maxAttempts, RuntimeException failure) {
+    var rejection = AiContextWindowExceededException.classify(failure);
+    if (rejection.isPresent()) {
+      Log.warnf(
+          "AI review attempt %d/%d for session %d was rejected for exceeding the model's"
+              + " context window; not retrying (an identical request would be rejected"
+              + " identically)",
+          attempt, maxAttempts, session.id);
+      throw rejection.get();
+    }
   }
 
   /**
