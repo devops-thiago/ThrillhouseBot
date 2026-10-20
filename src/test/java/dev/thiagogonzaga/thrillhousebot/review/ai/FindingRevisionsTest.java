@@ -130,8 +130,11 @@ class FindingRevisionsTest {
   void theFirstOrLastSentenceIsCutAndLineBreaksStay() {
     var raised =
         finding(
-            "An invented first claim is here. The defect.\nA second line.\nAn invented last claim"
-                + " stands here.",
+            """
+            An invented first claim is here. The defect.
+            A second line.
+            An invented last claim stands here.\
+            """,
             null);
 
     var revised =
