@@ -32,6 +32,10 @@ All notable changes to ThrillhouseBot.
 
 - **Versioning, deprecation and support policy** (#46): `docs/VERSIONING.md`, also on the docs site, says what a minor and a patch release can change, lists the public contract (settings, repository files, commands, GitHub App events and permissions, image tags, database schema, health and metrics endpoints), describes how a setting is deprecated and removed, and states that only the latest release gets fixes. `SECURITY.md` and the README's Upgrading section link to it.
 
+### Documentation
+
+- **The configuration reference is generated from the code** (#672): the README's tables of environment variables were written by hand next to the `ThrillhouseConfig` mapping and the defaults in `application.properties`, so a new key meant three edits and a table row could disagree with the code. `docs/CONFIGURATION.md` now lists every setting with its environment variable, property name, type, effective default and description, generated from the mapping's metadata and javadoc and from `application.properties`. The README keeps a short table of the most-used settings, generated the same way, and links to the full reference, which the docs site also shows. `ConfigReferenceTest` fails the build when either file is out of date or a setting has no description.
+
 ## [0.7.1] — 2026-10-13
 
 A bug-fix release. Most of the fixes are in follow-up rounds and the summary comment: findings from earlier rounds now get a status and have their threads resolved once fixed, the summary and its Description vs. Implementation section keep to what the change and its description contain, and a finding is placed, counted and matched to its duplicates the same way on every review.
