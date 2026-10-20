@@ -61,6 +61,7 @@ export default defineConfig({
         { label: "Configuration", slug: "configuration" },
         { label: "Configuration reference", slug: "configuration-reference" },
         { label: "AI providers", slug: "providers" },
+        { label: "Operations", slug: "operations" },
         { label: "Architecture", slug: "architecture" },
         { label: "Versioning and support", slug: "versioning" },
         { label: "Finding feedback", slug: "feedback" },
