@@ -727,12 +727,20 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
       if (failureStated && namesAsACheck(check, raw, text)) {
         cited.add(new Citation(check, null, false));
       }
-      for (FailingTest test : check.tests()) {
-        if (test.namedIn(raw, text)) {
-          cited.add(new Citation(check, test, false));
-        } else if (test.quotesAnAssertion(quotes)) {
-          cited.add(new Citation(check, test, true));
-        }
+      cited.addAll(testCitations(check, raw, text, quotes));
+    }
+    return cited;
+  }
+
+  /** The failing tests of {@code check} a finding names, or whose assertion it quotes. */
+  private static List<Citation> testCitations(
+      Check check, String raw, String text, List<String> quotes) {
+    var cited = new ArrayList<Citation>();
+    for (FailingTest test : check.tests()) {
+      if (test.namedIn(raw, text)) {
+        cited.add(new Citation(check, test, false));
+      } else if (test.quotesAnAssertion(quotes)) {
+        cited.add(new Citation(check, test, true));
       }
     }
     return cited;

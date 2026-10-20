@@ -54,8 +54,7 @@ final class TestAssertions {
    */
   private static final Pattern ASSERTION =
       Pattern.compile(
-          "(?<![A-Za-z0-9_])(?:assert|expect|should|require|verify|refute)"
-              + "|(?<![A-Za-z0-9_])t\\.(?:Error|Fatal)",
+          "(?<!\\w)(?:assert|expect|should|require|verify|refute)|(?<!\\w)t\\.(?:Error|Fatal)",
           Pattern.CASE_INSENSITIVE);
 
   /** A quote in a finding's text: one backtick span on one line. */

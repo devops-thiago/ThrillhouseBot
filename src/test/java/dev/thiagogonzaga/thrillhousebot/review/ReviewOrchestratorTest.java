@@ -8307,10 +8307,12 @@ class ReviewOrchestratorTest {
                       4,
                       0,
                       4,
-                      "@@ -0,0 +1,4 @@\n+fn rms_uses_exactly_the_last_window_values() {\n"
-                          + "+    let rms = rms_of_last(&[0.0, 0.0, 3.0, 4.0], 2);\n"
-                          + "+    assert!((rms - 12.5f64.sqrt()).abs() < 1e-9, \"got {rms}\");\n"
-                          + "+}")));
+                      """
+                      @@ -0,0 +1,4 @@
+                      +fn rms_uses_exactly_the_last_window_values() {
+                      +    let rms = rms_of_last(&[0.0, 0.0, 3.0, 4.0], 2);
+                      +    assert!((rms - 12.5f64.sqrt()).abs() < 1e-9, "got {rms}");
+                      +}""")));
       var offByOne =
           new ReviewResponse.Finding(
               "high",

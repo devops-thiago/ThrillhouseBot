@@ -422,8 +422,11 @@ class ContextEvidenceResolverTest {
                     3,
                     0,
                     3,
-                    "@@ -0,0 +1,3 @@\n+  void topCandidatesReturnsAtMostLimit() {\n"
-                        + "+    assertEquals(2, service.topCandidates(2).size());\n+  }")),
+                    """
+                    @@ -0,0 +1,3 @@
+                    +  void topCandidatesReturnsAtMostLimit() {
+                    +    assertEquals(2, service.topCandidates(2).size());
+                    +  }""")),
             new EvidenceBudget());
     var cites =
         finding(PATH, 42, "`assertEquals(2, service.topCandidates(2).size())` fails: limit+1.");

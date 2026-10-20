@@ -844,8 +844,10 @@ class CiFailureCitationsTest {
                 addedAt(
                     "rust/tests/ingest_test.rs",
                     33,
-                    "    let rms = rms_of_last(&[0.0, 0.0, 3.0, 4.0], 2);\n"
-                        + "    assert!((rms - 12.5f64.sqrt()).abs() < 1e-9, \"got {rms}\");\n")));
+                    """
+                        let rms = rms_of_last(&[0.0, 0.0, 3.0, 4.0], 2);
+                        assert!((rms - 12.5f64.sqrt()).abs() < 1e-9, "got {rms}");
+                    """)));
     assertFalse(bodyOnly.cites(RUST_279_FINDING), "no declaration, no body");
   }
 
