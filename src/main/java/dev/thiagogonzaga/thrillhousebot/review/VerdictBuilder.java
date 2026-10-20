@@ -174,15 +174,22 @@ public class VerdictBuilder {
         plan,
         claimText,
         ciCitations,
-        linkedIssues,
-        BaseCodeCitations.NONE);
+        new LinkedIssueContext(linkedIssues, BaseCodeCitations.NONE));
   }
+
+  /**
+   * The linked-issue section a review read and the code its PR description cites (#1148).
+   *
+   * @param section the unfenced linked-issue section, {@code ""} when none
+   * @param baseCode the description's citations; a linked-issue criterion it shows met on the base
+   *     branch is listed as met by existing code, not as unmet
+   */
+  record LinkedIssueContext(String section, BaseCodeCitations baseCode) {}
 
   /**
    * {@link #build(ReviewContextLoader.ReviewContext, ReviewResponse,
    * CiStatusEvaluator.CiEvaluation, DiffBudgetPlanner.BudgetPlan, String, CiFailureCitations,
-   * String)} with the code the PR description cites: a linked-issue criterion it shows met on the
-   * base branch is listed as met by existing code, not as unmet (#1148).
+   * String)} given the linked-issue section together with the code the PR description cites.
    */
   ReviewResult build(
       ReviewContextLoader.ReviewContext ctx,
@@ -191,8 +198,7 @@ public class VerdictBuilder {
       DiffBudgetPlanner.BudgetPlan plan,
       String claimText,
       CiFailureCitations ciCitations,
-      String linkedIssues,
-      BaseCodeCitations baseCode) {
+      LinkedIssueContext linked) {
     // Budgeted: plan omitted + clipped files, with any file a failed batch left uncovered folded
     // into the omitted set (effective*); legacy: line-cap count — never sum both. Patchless files
     // are the one class both lanes carry (#785): the line cap counts sections it dropped, and a
@@ -393,8 +399,8 @@ public class VerdictBuilder {
                     ? DescriptionGapCarryover.previousFindingBullets(
                         ctx.conversationComments(), botIdentity)
                     : Set.of(),
-                linkedIssues,
-                baseCode)),
+                linked.section(),
+                linked.baseCode())),
         ciEvaluation,
         backstopStatuses);
   }

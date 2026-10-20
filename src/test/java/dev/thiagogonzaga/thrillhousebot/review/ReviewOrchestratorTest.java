@@ -8301,8 +8301,11 @@ class ReviewOrchestratorTest {
               42,
               "abcdefgh",
               "Test PR",
-              "Criteria 1 and 2 shipped in 0.7.1:\n\n- The check run reports the open total with"
-                  + " the new count separate: `VerdictBuilder.newFindingsSummary`.",
+              """
+              Criteria 1 and 2 shipped in 0.7.1:
+
+              - The check run reports the open total with the new count separate: \
+              `VerdictBuilder.newFindingsSummary`.""",
               "base1234567",
               "main",
               123L,

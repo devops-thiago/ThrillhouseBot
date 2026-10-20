@@ -383,9 +383,11 @@ public class ReviewOrchestrator {
               plan,
               PromptSections.prContext(req.prTitle(), req.prDescription()) + "\n" + linkedIssues,
               CiFailureCitations.parse(renderedCiFailures),
-              linkedIssues,
               // #1148: the description alone, never the issue text, is read for citations.
-              BaseCodeCitations.of(req.prDescription(), ctx.files(), evidence.citedLocations()));
+              new VerdictBuilder.LinkedIssueContext(
+                  linkedIssues,
+                  BaseCodeCitations.of(
+                      req.prDescription(), ctx.files(), evidence.citedLocations())));
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);

@@ -64,20 +64,29 @@ import java.util.regex.Pattern;
 final class BaseCodeCitations {
 
   /**
-   * What says a criterion is already met, rather than met by this change. One pattern; a match
-   * right after "not" or "n't" does not count.
+   * What says a criterion is already met, rather than met by this change. One pattern per shape; a
+   * match right after "not" or "n't" does not count.
    */
-  private static final Pattern MET =
-      Pattern.compile(
-          "(?i)\\b(?:already|shipped|landed|existing\\s++code|(?:is|are|was|were)\\s++met"
-              + "|met\\s++(?:by|in|on|before)|before\\s++this\\s++(?:pr|pull\\s++request|change))\\b");
+  private static final List<Pattern> MET =
+      List.of(
+          Pattern.compile("(?i)\\b(?:already|shipped|landed)\\b"),
+          Pattern.compile("(?i)\\bexisting\\s++code\\b"),
+          Pattern.compile("(?i)\\b(?:is|are|was|were)\\s++met\\b"),
+          Pattern.compile("(?i)\\bmet\\s++(?:by|in|on|before)\\b"),
+          Pattern.compile("(?i)\\bbefore\\s++this\\s++(?:pr|pull\\s++request|change)\\b"));
 
   /** A negation ending the text just before a {@link #MET} match. */
   private static final Pattern NEGATED = Pattern.compile("(?i)(?:\\bnot|n['’]t)\\s*+$");
 
-  /** A {@code path:line} citation: a file name with an extension, possibly under directories. */
+  /**
+   * A {@code path:line} citation: a path token, then a colon and the line. The token counts only
+   * when it names a file with an extension ({@link #namesAFile}).
+   */
   private static final Pattern PATH_LINE =
-      Pattern.compile("(?<![\\w/.-])((?:[\\w.-]++/)*+[\\w-][\\w.-]*?\\.[A-Za-z0-9]{1,10}):(\\d++)");
+      Pattern.compile("(?<![\\w/.-])([\\w./-]++):(\\d{1,9}+)(?!\\d)");
+
+  /** Characters a file extension may have, at most. */
+  private static final int MAX_EXTENSION_CHARS = 10;
 
   /** A code span holding only {@code Type.member} or {@code Type.member()}. */
   private static final Pattern SYMBOL_SPAN =
@@ -177,10 +186,13 @@ final class BaseCodeCitations {
     var citations = new LinkedHashSet<String>();
     var pathLines = PATH_LINE.matcher(passage.text());
     while (pathLines.find()) {
-      if (!lineOnBase(pathLines.group(1), Integer.parseInt(pathLines.group(2)))) {
-        return null;
+      var cited = pathLines.group(1);
+      if (namesAFile(cited)) {
+        if (!lineOnBase(cited, Integer.parseInt(pathLines.group(2)))) {
+          return null;
+        }
+        citations.add(pathLines.group());
       }
-      citations.add(pathLines.group());
     }
     var symbols = SYMBOL_SPAN.matcher(passage.text());
     while (symbols.find()) {
@@ -212,13 +224,26 @@ final class BaseCodeCitations {
   }
 
   private static boolean claimsMet(String text) {
-    var met = MET.matcher(text);
-    while (met.find()) {
-      if (!NEGATED.matcher(text.substring(0, met.start())).find()) {
-        return true;
+    for (var pattern : MET) {
+      var met = pattern.matcher(text);
+      while (met.find()) {
+        if (!NEGATED.matcher(text.substring(0, met.start())).find()) {
+          return true;
+        }
       }
     }
     return false;
+  }
+
+  /** Whether a path token names a file: its last segment has a name and an extension. */
+  static boolean namesAFile(String token) {
+    var name = fileName(token);
+    var dot = name.lastIndexOf('.');
+    var extension = name.substring(dot + 1);
+    return dot > 0
+        && !extension.isEmpty()
+        && extension.length() <= MAX_EXTENSION_CHARS
+        && extension.chars().allMatch(Character::isLetterOrDigit);
   }
 
   /** Whether the cited line of the cited file is base code: the file is, and the line not added. */

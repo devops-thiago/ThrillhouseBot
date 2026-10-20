@@ -237,9 +237,8 @@ public class CitedLocationResolver {
       if (prClient == null) {
         return Optional.empty();
       }
-      var cached = contents.get(path);
-      if (cached != null) {
-        return cached;
+      if (contents.containsKey(path)) {
+        return contents.get(path);
       }
       if (citedFetches.incrementAndGet() > MAX_CITED_FILES_FETCHED) {
         return Optional.empty();

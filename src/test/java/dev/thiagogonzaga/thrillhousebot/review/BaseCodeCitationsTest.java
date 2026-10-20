@@ -37,6 +37,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 /** {@link BaseCodeCitations}: linked-issue criteria the description shows met on the base. */
 class BaseCodeCitationsTest {
@@ -501,6 +503,37 @@ class BaseCodeCitationsTest {
               .split(gaps)
               .unmet());
     }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "VerdictBuilder.java, true",
+    "src/review/VerdictBuilder.java, true",
+    "0.7.1, true",
+    "Makefile, false",
+    ".env, false",
+    "trailing., false",
+    "name.toolongextension, false",
+    "name.j-s, false"
+  })
+  void aPathTokenNamesAFileByItsExtension(String token, boolean file) {
+    assertEquals(file, BaseCodeCitations.namesAFile(token));
+  }
+
+  /** A path token that is no file name, or a line number too long to be one, cites nothing. */
+  @Test
+  void aTokenThatIsNoFileOrNoLineIsNotACitation() {
+    var met =
+        new Repository()
+            .citations(
+                shipped(
+                    "`VerdictBuilder.newFindingsSummary` (see docs/: 4, Makefile:12,"
+                        + " VerdictBuilder.java:12345678901)"),
+                List.of())
+            .split(List.of(CHECK_RUN_GAP))
+            .met();
+
+    assertEquals(List.of("VerdictBuilder.newFindingsSummary"), met.getFirst().citations());
   }
 
   @Test
