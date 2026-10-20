@@ -129,6 +129,112 @@ class TestAssertionsTest {
         List.of("assert_eq!(parses_batch_result(), 1);"), assertions.assertionsOf("parses_batch"));
   }
 
+  /**
+   * Only an assertion call is an assertion line: at the start of the line, after a qualifier, or
+   * after {@code let}/{@code =}. A setup call whose name merely starts with a keyword and a comment
+   * using one are not.
+   */
+  @Test
+  void onlyAnAssertionCallIsAnAssertionLine() {
+    var assertions =
+        TestAssertions.of(
+                List.of(
+                    file(
+                        "src/test/BrokerTest.java",
+                        """
+                        @@ -0,0 +1,21 @@
+                        +  void retriesWhenTheBrokerFails() {
+                        +    var expected = expectedFor(name);
+                        +    String required = requirements.first();
+                        +    // should retry when the broker returns 503
+                        +    /* expect one retry */
+                        +     * verify the backoff
+                        +    # assert later
+                        +    -- refute nothing
+                        +    assertEquals(expected, broker.send(name));
+                        +    self.assertTrue(broker.retried)
+                        +    expect(broker.calls()).toHaveLength(2);
+                        +    assert broker.calls == 2
+                        +    assert_eq!(calls, 2);
+                        +    let _ = verify(mock).send(name);
+                        +    result = shouldRetry(response)
+                        +    if got != want { t.Errorf("got %d", got) }
+                        +    t.Fatalf("broker: %v", err)
+                        +    Assertions.assertThat(calls).isEqualTo(2);
+                        +    assert.equal(calls, 2);
+                        +    $mock.verify(send);
+                        +  }
+                        """)))
+            .assertionsOf("retriesWhenTheBrokerFails");
+
+    assertEquals(
+        List.of(
+            "assertequals(expected, broker.send(name));",
+            "self.asserttrue(broker.retried)",
+            "expect(broker.calls()).tohavelength(2);",
+            "assert broker.calls == 2",
+            "assert_eq!(calls, 2);",
+            "let _ = verify(mock).send(name);",
+            "result = shouldretry(response)",
+            "if got != want { t.errorf(\"got %d\", got) }",
+            "t.fatalf(\"broker: %v\", err)",
+            "assertions.assertthat(calls).isequalto(2);",
+            "assert.equal(calls, 2);",
+            "$mock.verify(send);"),
+        assertions);
+  }
+
+  /**
+   * The patches are read once, however many failing tests the job log names: each test is then
+   * looked up, not searched for line by line.
+   */
+  @Test
+  void thePatchesAreReadOncePerManyTests() {
+    var patch = new StringBuilder("@@ -0,0 +1,300 @@\n");
+    for (int i = 0; i < 100; i++) {
+      patch
+          .append("+fn case_number_")
+          .append(i)
+          .append("() {\n+    assert_eq!(value(")
+          .append(i)
+          .append("), 1);\n+}\n");
+    }
+    var assertions = TestAssertions.of(List.of(file("tests/cases.rs", patch.toString())));
+
+    for (int i = 0; i < 100; i++) {
+      assertEquals(
+          List.of("assert_eq!(value(" + i + "), 1);"), assertions.assertionsOf("case_number_" + i));
+    }
+    assertEquals(300, assertions.linesRead());
+  }
+
+  /**
+   * A title of several words is found by its longest word and then read whole: a line holding the
+   * word but not the title declares nothing, and a name with no word to look up finds nothing.
+   */
+  @Test
+  void aTitleIsLookedUpByItsLongestWordAndReadWhole() {
+    var assertions =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "src/pool.test.ts",
+                    """
+                    @@ -0,0 +1,6 @@
+                    +  it("requested slots are kept", () => {
+                    +    expect(pool.kept()).toBe(true);
+                    +  });
+                    +  it("returns exactly the slots requested", () => {
+                    +    expect(pool.take(2)).toHaveLength(2);
+                    +  });
+                    """)));
+
+    assertEquals(
+        List.of("expect(pool.take(2)).tohavelength(2);"),
+        assertions.assertionsOf("returns exactly the slots requested"));
+    assertEquals(List.of(), assertions.assertionsOf("» ·"));
+  }
+
   /** A body is read for at most {@link TestAssertions#MAX_BODY_LINES} lines. */
   @Test
   void aBodyIsReadForABoundedNumberOfLines() {

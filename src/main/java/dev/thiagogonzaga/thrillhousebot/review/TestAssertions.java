@@ -17,9 +17,12 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -32,9 +35,13 @@ import java.util.regex.Pattern;
  * <p>A test's body is found from its declaration: a new-side line of a changed file that names the
  * test, then the lines below it in the same hunk indented deeper than that line. The rule reads
  * brace and indentation languages alike, and a body its hunk cuts keeps only what the patch shows.
- * Only the body's lines that state an assertion are kept, and only a quote long enough to be that
- * line's own code matches one, so a finding that quotes a setup line or a short expression cites
- * nothing through this class.
+ * Only the body's lines that state an assertion are kept ({@link #statesAnAssertion}: an assertion
+ * call opening the line, after a binding at most, never a comment), and only a quote long enough to
+ * be that line's own code matches one, so a finding that quotes a setup line or a short expression
+ * cites nothing through this class.
+ *
+ * <p>The patches are indexed by identifier once, on the first lookup, so a job log naming many
+ * failing tests costs one pass over the patches and a lookup per test.
  */
 final class TestAssertions {
 
@@ -48,14 +55,32 @@ final class TestAssertions {
   static final int MAX_BODY_LINES = 200;
 
   /**
-   * A line that states an assertion: an assert, expect, should, require, verify or refute call (of
-   * any library's spelling, {@code assert_eq!}, {@code assertThat}, {@code expect(…)}), or Go's
-   * {@code t.Error} and {@code t.Fatal}.
+   * An assertion call: an assert, expect, should, require, verify or refute call in any library's
+   * spelling ({@code assert_eq!(}, {@code assertEquals(}, {@code expect(}, {@code assert.equal(}).
+   * The keyword is the whole name or is followed by a capital or an underscore, so a setup call
+   * such as {@code expectedFor(name)} is not one. It may follow a qualifier.
    */
-  private static final Pattern ASSERTION =
+  private static final Pattern ASSERTION_CALL =
       Pattern.compile(
-          "(?<!\\w)(?:assert|expect|should|require|verify|refute)|(?<!\\w)t\\.(?:Error|Fatal)",
-          Pattern.CASE_INSENSITIVE);
+          "(?:assert|expect|should|require|verify|refute)(?:[A-Z_][\\w$]*+)?+\\s*+[(!.]");
+
+  /** pytest's and Python's {@code assert} statement opening a line. */
+  private static final Pattern ASSERT_STATEMENT = Pattern.compile("assert\\s");
+
+  /** Go's {@code t.Error}, {@code t.Errorf}, {@code t.Fatal} and {@code t.Fatalf} calls. */
+  private static final Pattern GO_FAILURE = Pattern.compile("(?<![\\w.])t\\.(?:Error|Fatal)f?+\\(");
+
+  /** What a line may open with before its assertion call: {@code let}, a binding and {@code =}. */
+  private static final Pattern BINDING =
+      Pattern.compile("^(?:(?:let|var|val|const)\\s++)?+(?:[\\w$]++\\s*+=(?!=)\\s*+)?+");
+
+  /**
+   * A comment line: {@code //}, {@code /*}, a block comment's {@code *}, {@code #} or {@code --}.
+   */
+  private static final Pattern COMMENT = Pattern.compile("(?://|/\\*|\\*|#|--)");
+
+  /** An identifier a line holds, the key the patches are indexed by. */
+  private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z0-9_]++");
 
   /** A quote in a finding's text: one backtick span on one line. */
   private static final Pattern QUOTE = Pattern.compile("`([^`\\n]++)`");
@@ -63,6 +88,15 @@ final class TestAssertions {
   private static final Pattern WHITESPACE = Pattern.compile("\\s++");
 
   private final List<PatchLines> patches;
+
+  /**
+   * Where each identifier stands: the patch and the line holding it, built on first use in one pass
+   * over the patches, so each failing test is then looked up rather than searched for.
+   */
+  private Map<String, List<int[]>> byIdentifier;
+
+  /** Lines the index read, for the test that pins one pass. */
+  private int linesRead;
 
   private TestAssertions(List<PatchLines> patches) {
     this.patches = patches;
@@ -87,17 +121,63 @@ final class TestAssertions {
    * The assertion lines of every body the changed files declare {@code testName} with, normalized
    * as {@link #normalized} does, each once. Empty when no changed line declares it.
    */
-  List<String> assertionsOf(String testName) {
+  synchronized List<String> assertionsOf(String testName) {
+    var key = lookupKey(testName);
+    if (key.isEmpty()) {
+      return List.of();
+    }
+    // An identifier is found as a whole token by the index; any other name must be in the line.
+    var single = key.equals(testName);
     var assertions = new LinkedHashSet<String>();
-    for (var patch : patches) {
-      var lines = patch.lines();
-      for (int i = 0; i < lines.size(); i++) {
-        if (declares(lines.get(i).text(), testName)) {
-          collectBody(lines, i, assertions);
-        }
+    for (var at : index().getOrDefault(key, List.of())) {
+      var lines = patches.get(at[0]).lines();
+      if (single || lines.get(at[1]).text().contains(testName)) {
+        collectBody(lines, at[1], assertions);
       }
     }
     return List.copyOf(assertions);
+  }
+
+  /** How many patch lines the index has read. */
+  synchronized int linesRead() {
+    return linesRead;
+  }
+
+  private Map<String, List<int[]>> index() {
+    if (byIdentifier == null) {
+      byIdentifier = new HashMap<>();
+      for (int p = 0; p < patches.size(); p++) {
+        var lines = patches.get(p).lines();
+        for (int i = 0; i < lines.size(); i++) {
+          linesRead++;
+          var seen = new HashSet<String>();
+          var identifiers = IDENTIFIER.matcher(lines.get(i).text());
+          while (identifiers.find()) {
+            if (seen.add(identifiers.group())) {
+              byIdentifier
+                  .computeIfAbsent(identifiers.group(), k -> new ArrayList<>())
+                  .add(new int[] {p, i});
+            }
+          }
+        }
+      }
+    }
+    return byIdentifier;
+  }
+
+  /**
+   * The identifier a declaration of {@code testName} must hold: the name itself, or the longest
+   * identifier of a name of several words. Empty when the name holds none.
+   */
+  private static String lookupKey(String testName) {
+    var key = "";
+    var identifiers = IDENTIFIER.matcher(testName);
+    while (identifiers.find()) {
+      if (identifiers.group().length() > key.length()) {
+        key = identifiers.group();
+      }
+    }
+    return key;
   }
 
   /**
@@ -120,33 +200,47 @@ final class TestAssertions {
   }
 
   private static void addIfAssertion(String line, LinkedHashSet<String> out) {
-    if (ASSERTION.matcher(line).find()) {
+    if (statesAnAssertion(line)) {
       out.add(normalized(line));
     }
   }
 
   /**
-   * Whether {@code line} names the test: a name of several words as written, an identifier as a
-   * whole identifier, so {@code parses_batch} is not declared by {@code parses_batch_lines}.
+   * Whether {@code line} is an assertion: an assertion call opening it, after a binding at most, an
+   * {@code assert} statement, or a Go failure call. A comment line never is.
    */
-  private static boolean declares(String line, String name) {
-    if (name.indexOf(' ') >= 0) {
-      return line.contains(name);
+  static boolean statesAnAssertion(String line) {
+    var code = line.strip();
+    if (COMMENT.matcher(code).lookingAt()) {
+      return false;
     }
-    for (int at = line.indexOf(name); at >= 0; at = line.indexOf(name, at + 1)) {
-      if (!identifierChar(line, at - 1) && !identifierChar(line, at + name.length())) {
+    var call =
+        code.substring(BINDING.matcher(code).results().findFirst().map(m -> m.end()).orElse(0));
+    return opensWithAssertionCall(call)
+        || ASSERT_STATEMENT.matcher(code).lookingAt()
+        || GO_FAILURE.matcher(code).find();
+  }
+
+  private static boolean isNameChar(char c) {
+    return Character.isLetterOrDigit(c) || c == '_' || c == '$' || c == '.';
+  }
+
+  /** Whether one segment of the dotted name {@code code} opens with starts an assertion call. */
+  private static boolean opensWithAssertionCall(String code) {
+    int end = 0;
+    while (end < code.length() && isNameChar(code.charAt(end))) {
+      end++;
+    }
+    var call = ASSERTION_CALL.matcher(code);
+    for (int at = 0; at <= end; at = code.indexOf('.', at) + 1) {
+      if (call.region(at, code.length()).lookingAt()) {
         return true;
+      }
+      if (code.indexOf('.', at) < 0) {
+        return false;
       }
     }
     return false;
-  }
-
-  private static boolean identifierChar(String text, int at) {
-    if (at < 0 || at >= text.length()) {
-      return false;
-    }
-    char c = text.charAt(at);
-    return Character.isLetterOrDigit(c) || c == '_';
   }
 
   private static int indentOf(String line) {
