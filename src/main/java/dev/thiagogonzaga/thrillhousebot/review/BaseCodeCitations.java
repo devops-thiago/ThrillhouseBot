@@ -420,7 +420,8 @@ final class BaseCodeCitations {
     for (var span : MarkdownFences.spans(description)) {
       blank(prose, span[0], span[1]);
     }
-    for (int open = description.indexOf(COMMENT_OPEN); open >= 0; ) {
+    var open = description.indexOf(COMMENT_OPEN);
+    while (open >= 0) {
       var close = description.indexOf(COMMENT_CLOSE, open + COMMENT_OPEN.length());
       var end = close < 0 ? description.length() : close + COMMENT_CLOSE.length();
       blank(prose, open, end);
