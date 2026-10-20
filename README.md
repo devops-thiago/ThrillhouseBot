@@ -1624,6 +1624,10 @@ settings default to the previous behaviour unless the notes say otherwise. If
 you pin a version with `IMAGE_TAG` in `.env`, set it to the new tag before
 pulling.
 
+[docs/VERSIONING.md](docs/VERSIONING.md) describes what each kind of release
+can change, what counts as the public contract, how a setting is deprecated
+and which releases get fixes.
+
 ## Development
 
 Local development without Docker needs Java 25+, Node.js 22+ (dashboard) and a
