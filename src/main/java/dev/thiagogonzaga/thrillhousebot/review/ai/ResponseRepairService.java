@@ -310,7 +310,7 @@ public class ResponseRepairService {
       var title = finding.title() == null ? null : plain(finding.title());
       var known =
           title != null
-              && (keys.readable() ? written.containsKey(title) : plainBody.contains(title));
+              && (keys.readable() ? written.containsKey(title) : titled(title, plainBody) > 0);
       if (!known) {
         return Optional.of("it holds a finding whose title the failed answer does not have");
       }
@@ -318,13 +318,13 @@ public class ResponseRepairService {
     }
     // Each title as often as the failed answer wrote it, so a copy of one finding cannot stand in
     // for another (#1176). Without the structure, a title may appear no more often than the text
-    // holds it.
+    // holds it as a title's value.
     var lost =
         keys.readable()
             ? written.entrySet().stream()
                 .anyMatch(title -> held.getOrDefault(title.getKey(), 0) < title.getValue())
             : held.entrySet().stream()
-                .anyMatch(title -> occurrences(title.getKey(), plainBody) < title.getValue());
+                .anyMatch(title -> titled(title.getKey(), plainBody) < title.getValue());
     if (lost) {
       return Optional.of(
           "it repeats a finding's title in place of another finding of the failed answer");
@@ -349,13 +349,19 @@ public class ResponseRepairService {
     return found;
   }
 
-  /** How many times {@code part} appears in {@code text}, without overlap. */
-  private static int occurrences(String part, String text) {
+  /**
+   * How many "title" values of the plain {@code text} are {@code title}: the value closes right
+   * after it, or the text ends there, so a title inside a longer title or in another field's prose
+   * is not counted.
+   */
+  private static int titled(String title, String text) {
+    var value = "\"title\":\"" + title;
     var found = 0;
-    for (var at = text.indexOf(part);
-        at >= 0;
-        at = text.indexOf(part, at + Math.max(1, part.length()))) {
-      found++;
+    for (var at = text.indexOf(value); at >= 0; at = text.indexOf(value, at + value.length())) {
+      var end = at + value.length();
+      if (end == text.length() || text.charAt(end) == '"') {
+        found++;
+      }
     }
     return found;
   }
