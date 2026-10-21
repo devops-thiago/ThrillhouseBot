@@ -181,31 +181,31 @@ record AnswerKeys(List<String> titles, int statuses, boolean readable) {
       }
       return -1;
     }
-  }
 
-  /** A string literal's content with its escapes resolved as far as a title needs. */
-  private static String unescaped(String literal) {
-    var out = new StringBuilder(literal.length());
-    var i = 0;
-    while (i < literal.length()) {
-      var c = literal.charAt(i);
-      // A literal never ends on a lone backslash: closingQuote skips the character after one.
-      if (c == '\\') {
-        out.append(escaped(literal.charAt(i + 1)));
-        i += 2;
-      } else {
-        out.append(c);
-        i++;
+    /** A string literal's content with its escapes resolved as far as a title needs. */
+    private static String unescaped(String literal) {
+      var out = new StringBuilder(literal.length());
+      var i = 0;
+      while (i < literal.length()) {
+        var c = literal.charAt(i);
+        // A literal never ends on a lone backslash: closingQuote skips the character after one.
+        if (c == '\\') {
+          out.append(escaped(literal.charAt(i + 1)));
+          i += 2;
+        } else {
+          out.append(c);
+          i++;
+        }
       }
+      return out.toString();
     }
-    return out.toString();
-  }
 
-  private static char escaped(char code) {
-    return switch (code) {
-      case 'n' -> '\n';
-      case 't' -> '\t';
-      default -> code;
-    };
+    private static char escaped(char code) {
+      return switch (code) {
+        case 'n' -> '\n';
+        case 't' -> '\t';
+        default -> code;
+      };
+    }
   }
 }
