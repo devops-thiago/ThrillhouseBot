@@ -669,6 +669,23 @@ class DescriptionGapScreenTest {
           + " the FindingPipeline finding shows carried PriorOverviewCarryover text is verified,"
           + " contradicting the stated claim.";
 
+  /**
+   * Corpus round 19's round-2 linked-issue gaps saying no finding shows the criterion met (#1203),
+   * java ThrillhouseBot-test#293, scala #297 and c #302.
+   */
+  static final String NEGATED_293 =
+      "Linked issue #291: registration rejects any unit whose expiry is more than 42 days after its"
+          + " collection time with HTTP 422 — no changed file or finding shows such a rejection or"
+          + " a 422 response.";
+
+  static final String NEGATED_297 =
+      "Linked issue #283: '`POST /readings` rejects batches larger than 500 readings with HTTP 413'"
+          + " — no changed file or finding shows any batch-size limit or 413 handling";
+
+  static final String NEGATED_302 =
+      "Linked issue #282: 'Locks a dock for 10 minutes after 3 consecutive failed code entries' —"
+          + " no changed file or finding shows any failed-entry counting or dock lockout …";
+
   @ParameterizedTest
   @ValueSource(
       strings = {
@@ -695,7 +712,22 @@ class DescriptionGapScreenTest {
         "The description says the cap holds; the CapCheck finding revealed it is never read.",
         "The description says the cap holds; it is shown by the earlier review to be unused.",
         // A "by" that is not the verb's agent does not move the subject.
-        "The description says the cap holds; the finding shows it is set by the loader."
+        "The description says the cap holds; the finding shows it is set by the loader.",
+        // A negation in another clause, or one bound to another noun, leaves the credit (#1203).
+        "The description says the job never retries; the review flagged that it does.",
+        "The job never retries as the review flagged, though the description says it does.",
+        "The description says the job never retries and reviewers flagged that it does.",
+        "The description says retries are capped; not capped retries loop until reviewers flagged"
+            + " them.",
+        "The description says the T-shaped cap holds; the reviewer flagged it unused.",
+        // A negation after the crediting verb negates what the review reported, not the credit.
+        "The description says the job retries; the review flagged that it never retries.",
+        "The description says the cap is read; the finding shows it is not read.",
+        // A negation too far before a verb to bind it, with the review noun after the verb.
+        "The description says retries are capped; not capped retries loop forever as flagged by"
+            + " the reviewer.",
+        "The description says retries are capped; not capped retries loop forever as shown by the"
+            + " review."
       })
   void aBulletCreditingTheReviewIsRecognised(String gap) {
     assertTrue(DescriptionGapScreen.creditsReview(gap));
@@ -736,7 +768,28 @@ class DescriptionGapScreenTest {
             + " it unused.",
         "The description says the cap holds; it is shown by one of the many slow nightly reviews.",
         "The description says the review shows every commit; `ci.yml` skips merges.",
-        "The description says \"the FindingPipeline finding shows the text\", but none does."
+        "The description says \"the FindingPipeline finding shows the text\", but none does.",
+        // A review noun under a negation says the review did not state it (#1203).
+        NEGATED_293,
+        NEGATED_297,
+        NEGATED_302,
+        "The description says retries are capped; neither the diff nor any finding shows a cap.",
+        "The description says retries are capped; no finding reports a cap.",
+        "The description says the job is pinned; the unpinned action is not flagged by any finding.",
+        "The description says the job is pinned; the unpinned action wasn't flagged by any reviewer.",
+        "The description says the cap holds; it was never reported by any reviewer.",
+        // A negation between the review noun and its crediting verb.
+        "The description says the job is pinned; the review did not flag the unpinned action.",
+        "The description says retries are capped; reviewers didn't report a cap.",
+        "The description says retries are capped; the review has never flagged a cap.",
+        "The description says the cap holds; no reviewer has flagged it.",
+        "The description says the cap holds; the finding never mentions it.",
+        "The description says the cap holds; the earlier finding does not show it unused.",
+        // A negated verb with the review noun after it, past a determiner.
+        "The description says the job is pinned; the unpinned action wasn't flagged by the"
+            + " reviewer.",
+        "The description says the cap holds; the overflow was not reported during the review.",
+        "The description says the cap holds; it is not shown by the earlier review to be unused."
       })
   void aBulletNotCreditingTheReviewIsNotRecognised(String gap) {
     assertFalse(DescriptionGapScreen.creditsReview(gap));
