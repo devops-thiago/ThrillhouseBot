@@ -1,7 +1,7 @@
 # Security model
 
-What ThrillhouseBot protects, where its trust boundaries are, and the reasons
-to believe the protections hold. To report a vulnerability, see
+This document describes the bot's access controls, trust boundaries and
+security limits. To report a vulnerability, see
 [SECURITY.md](../SECURITY.md). Class names below are under
 `src/main/java/dev/thiagogonzaga/thrillhousebot/`.
 

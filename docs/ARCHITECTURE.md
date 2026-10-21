@@ -45,7 +45,7 @@ flowchart LR
     RO --> NOTE --> HOOK
 ```
 
-The `github/` clients wrap the GitHub API surface the bot uses: app auth and installation tokens,
+The `github/` clients handle app authentication, installation tokens and GitHub API calls for
 pull request files, reviews and review comments, issue comments, check runs, labels, reactions,
 thread resolution over GraphQL, the instructions file and the repository settings file.
 
@@ -89,7 +89,9 @@ default `5s`).
 
 `ReviewDispatcher` keeps one worker per pull request on the review executor. A request that
 arrives while a review of the same PR runs replaces any request already waiting, so only the
-newest head is reviewed next. A CI-hold recheck runs once no review of that PR is queued.
+newest head is reviewed next. A manual `/review` first reads the head: if the running review
+already covers that commit, the command acknowledges it without queuing another run. A moved
+head or a failed head read queues a run. A CI-hold recheck runs once no review of that PR is queued.
 
 ## A review, step by step
 
@@ -114,8 +116,10 @@ newest head is reviewed next. A CI-hold recheck runs once no review of that PR i
    (`DiffBudgetPlanner.plan`). The CI reading for the verdict runs in parallel: from step 2 when CI
    context is on, from here otherwise.
 5. Run the model calls and the finding chain (`FindingPipeline.run`).
-6. Read CI again if the first reading would hold approval, then build the verdict
-   (`VerdictBuilder.build`).
+6. Refresh CI if the first reading would hold approval. With CI-failure context enabled, also
+   refresh when checks were pending or none had appeared at review start. Add newly failed checks
+   to the summary context and apply the confidence floor to findings citing them, then build the
+   verdict (`VerdictBuilder.build`).
 7. Check that the round may still post (`ReviewStandDown.beforeFirstWrite`, which runs the
    `PrePublishGuard`s in order and stops at the first that stands the round down). Read the PR
    head again (`HeadMovedGuard`): if it moved during the round, mark the check run `skipped`, hand
@@ -213,7 +217,8 @@ be cut the same way: the findings completed before the cut are kept and the affe
 disclosed. A length stop with no content (reasoning used the whole cap) is repeated once at a
 lower effort: `none` when reasoning is enabled, the lane's effort (`low` unless set) when it is off
 in config and the provider default reasoned the cap away. The blocking review-path calls (the
-finding verifier, the summary check, response repair) repeat the same way. Each call is bounded by `AI_TIMEOUT` (default 300 s).
+finding verifier, the summary check, response repair) repeat the same way.
+Each call is bounded by `AI_TIMEOUT` (default 300 s).
 
 `AI_MAX_CONCURRENT_CALLS` caps model calls in flight across the process (default `0`, no cap); a
 call past the cap waits for a slot. `REVIEW_MAX_TOKENS_PER_REVIEW` caps the tokens one review may
@@ -292,10 +297,10 @@ material contradicts, each with its evidence, and `SummaryStatements` removes th
 cut, a row loses its file summary, and any named diagram line drops the diagram. An entry with no
 evidence is ignored. Each entry names its source, the diff or a finding. A purpose sentence is
 cut only on evidence from the diff, and when every purpose sentence would go, all of them stay; a
-missing or unknown source counts as a finding. Only the text the summary call wrote in that round is checked, before the
-previous round's overview fills what it lacks, and a removed statement is not filled back in. Each
-removal is logged with its statement and evidence. The call fails open on an error, an empty, cut or malformed answer, an input
-over the per-call budget or the spend ceiling, and it never changes findings.
+missing or unknown source counts as a finding. The check runs on that round's new summary text,
+before earlier overview text fills missing fields. Removed statements are not filled back in.
+Each removal is logged with its statement and evidence. Errors, empty, cut or malformed answers,
+and input or spend limits keep the summary unchanged. The check never changes findings.
 
 ### Response repair
 
@@ -304,8 +309,8 @@ When the parser refuses a review or summary answer, `AiReviewService` hands it t
 One call (`ResponseRepairer` on the active model for a review answer, `SummaryResponseRepairer` on
 the concise model for a summary answer) gets the failed answer, fenced, the parser's error and the
 response contract, and the result is read by the same parser. A repaired review answer is rejected
-when it holds fewer findings than the failed answer has titles, a finding title the failed answer
-does not have, or more statuses than it wrote. Timeouts, provider errors, throttles and length
+if it loses a title, including any repeated occurrence, introduces a new title, or contains
+more previous-finding statuses than the failed answer. Timeouts, provider errors, throttles and length
 stops never reach the repair. A failed or rejected repair leaves the retry loop as it was. A summary
 answer whose `file_summaries` is a string holding JSON is read as that JSON; any other string gets
 one re-ask for that field, and only rows whose path is in the string are kept. The finding

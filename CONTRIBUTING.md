@@ -149,10 +149,19 @@ for you:
 Signed-off-by: Your Name <you@example.com>
 ```
 
-To sign off commits you already made on your branch, run
-`git rebase --signoff main` and force-push. The `dco` check fails a pull request
-that has a commit without a matching sign-off. Commits that Dependabot or
-GitHub Actions author in pull requests they open are exempt.
+The `dco` check examines every non-merge commit between the pull request's
+base and head. A cryptographic commit signature does not replace the sign-off.
+When squash-merging, keep a sign-off matching the resulting commit's author in
+the squash message. Do not assume sign-offs on the original commits will be
+preserved.
+
+To sign off your own commits on an unpublished topic branch, use
+`git rebase --signoff <base-branch>`. Do not rewrite shared release branches
+or add another author's certification on their behalf. A missing sign-off in
+shared history needs the maintainer and the affected author to agree on its
+remediation. Commits that Dependabot or GitHub Actions author in pull requests
+they open are exempt; a later human-authored release pull request checks those
+commits again.
 
 ## Governance
 

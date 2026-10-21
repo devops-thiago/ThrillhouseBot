@@ -3,8 +3,7 @@ title: Getting started
 description: Create the GitHub App, configure the bot, and start it with Docker Compose.
 ---
 
-Everything you need to go from zero to a bot reviewing your pull requests:
-create the GitHub App, configure the bot, and start it with Docker Compose.
+Create the GitHub App, configure credentials and start the bot with Docker Compose.
 
 ## Prerequisites
 
@@ -16,11 +15,10 @@ create the GitHub App, configure the bot, and start it with Docker Compose.
 ## 1. Create the GitHub App
 
 The bot authenticates as a GitHub App, so the app must exist before the bot
-starts. The easiest path is the
-**[hosted installer](/ThrillhouseBot/install.html)**: type the public hostname
-where the bot will run and click **Create ThrillhouseBot GitHub App** — the
-page builds the app manifest for you and sends it to GitHub. No local server
-needed.
+starts. Open the **[hosted installer](/ThrillhouseBot/install.html)**, enter
+the bot's public hostname and click **Create ThrillhouseBot GitHub App**.
+The page builds the app manifest and sends it to GitHub; you can register the
+app before starting the bot.
 
 After GitHub creates the app:
 
@@ -57,7 +55,7 @@ npx smee-client -u https://smee.io/YOUR_CHANNEL -t http://localhost:8080/api/web
 :::
 
 :::note[Manual registration instead]
-Prefer to register the app by hand? Create it at
+To register the app manually, open
 <https://github.com/settings/apps/new> with these settings:
 
 | Setting | Value |
@@ -79,8 +77,7 @@ redirects happen in your browser against the local bot.
 Once the bot is running, `install.html` on the bot's own URL
 (`https://<your-host>/install.html` behind a reverse proxy, or
 `http://localhost:8080/install.html` when hitting it directly) builds the
-manifest from the detected host automatically — handy for adding the app to
-another account. Smee-based dev setups should re-register through the
+manifest from the detected host when adding the app to another account. Smee-based dev setups should re-register through the
 [hosted installer](/ThrillhouseBot/install.html) instead: the bot's own page
 registers the origin it's served from, without the Smee webhook-root handling.
 :::
@@ -110,8 +107,8 @@ docker compose up -d
 ```
 
 The bot is running on `http://localhost:8080`. Point your reverse proxy at it
-and you're done — the next pull request on an installed repository gets
-reviewed automatically.
+to receive GitHub webhooks. Eligible pull requests on installed repositories
+are reviewed automatically; drafts and configured filters can prevent a review.
 
 ## Next steps
 

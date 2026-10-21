@@ -1,12 +1,11 @@
 # Operations
 <!-- docs:operations:start -->
 
-How to run ThrillhouseBot day to day: what it keeps and where, how to back it
-up and upgrade it, what a restart does, and how to wire its health checks into
-Docker Compose or Kubernetes. There are no migration scripts, so instead of
-migrate and rollback commands the page covers backups and restoring them. The
-commands assume the `docker-compose.yml` in the repository, with the services
-`thrillhousebot` and `db`.
+This guide covers stored data, health probes, shutdown, backups and upgrades.
+Commands use the repository's `docker-compose.yml`, with the services
+`thrillhousebot` and `db`. Hibernate updates the schema at startup; there are no
+migration scripts. Back up the database before an upgrade and restore that
+backup if you need to return to an older version.
 
 ## What is stored, and what is not
 
@@ -126,7 +125,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: thrillhousebot
-          image: ghcr.io/devops-thiago/thrillhousebot:v0.7.1
+          image: ghcr.io/devops-thiago/thrillhousebot:v0.8.0
           ports:
             - containerPort: 8080
           securityContext:

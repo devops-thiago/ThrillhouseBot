@@ -17,8 +17,9 @@
 </p>
 
 ThrillhouseBot is a GitHub App that reviews pull requests. It is built with
-Quarkus, compiled to a GraalVM native binary, and talks to any OpenAI-compatible
-chat API, so it works with any language and any provider you choose.
+Quarkus and distributed as a GraalVM native binary. It sends diffs to an
+OpenAI-compatible chat API, including local models served by Ollama. The model
+you configure determines which languages it can review.
 
 See [how it compares](docs/COMPARISON.md) to CodeRabbit, PR-Agent and Copilot
 code review.
@@ -39,15 +40,15 @@ guide, configuration reference, architecture, comparison, and the hosted
 
 <!-- docs:features:start -->
 - Reviews diffs for correctness, security, regressions, stale comments and code quality, and tags every finding `critical`, `high`, `medium` or `low`
-- Reviews large pull requests whole: the diff is split into token-budgeted batches reviewed in parallel, and any file that does not fit is named
+- Splits large diffs into batches reviewed in parallel within a token budget; lists files that exceed the budget or have no reviewable patch
 - Inline suggestions you can apply with one click
-- A second pass re-checks each finding against the diff before it is posted
+- A second pass checks findings, suggested fixes and contradicted description sentences against the diff; an optional summary check screens summary statements too
 - Follow-up reviews track whether earlier findings were fixed, declined or are still open, and re-check a maintainer's decline against the code
 - One summary comment per pull request, edited in place every round, with a risk breakdown, a changed-files walkthrough and every finding still open
 - Comment commands (`/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`, `/help`, and with learnings on `/learnings`, `/remember`, `/forget`) and conversational replies to `@thrillhousebot`
 - Auto-review triggers: skip drafts, gate on labels, filter by base branch, and optionally space out reviews of one PR (`AUTO_REVIEW_MIN_INTERVAL`)
 - Maintainer 👍/👎 reactions and "not useful" replies are recorded as [finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/)
-- Optional review context, each off by default: the issues a PR links and their acceptance criteria, the CI checks that already failed on the head commit, patch coverage from your own coverage report, and review learnings (maintainer declines and `/remember` conventions from earlier reviews of the same repository)
+- Optional review context, each off by default: the issues a PR links and their acceptance criteria, failing CI checks and test names, patch coverage from your own coverage report, and review learnings (maintainer declines and `/remember` conventions from earlier reviews of the same repository)
 - Optional deterministic scan of added lines for leaked credentials and risky Terraform, Kubernetes, CloudFormation and Dockerfile settings, with no model call and every matched secret redacted
 - Optional per-call review dimension routing, which sends each call only the review rules its files need
 - Optional outgoing notification when a review completes or fails: JSON, Slack or Discord, HMAC-signed, metadata only unless you opt in
@@ -91,8 +92,8 @@ to the number of concurrent requests your plan allows. Calls past it wait for a
 slot instead of being refused, and a refusal that still gets through is retried
 after 30 seconds.
 
-DeepSeek is the default only because it is inexpensive. Nothing in the bot is
-tied to it.
+DeepSeek is the default provider. Set `AI_BASE_URL`, `AI_MODEL` and `AI_API_KEY`
+to use another provider.
 <!-- docs:providers:end -->
 
 ## Commands
@@ -328,9 +329,10 @@ findings, and then a summary call, which writes the PR summary (purpose,
 description gaps, file walkthrough, labels, diagram) from the verified findings
 and the list of changed files. The summary call does not carry the diff, so it
 is small. When the review call reports findings, a verification call re-sends
-the diff with the candidate findings, so a review with findings costs roughly
-twice the tokens of the diff. A large PR makes one review call and one
-verification call per batch, then the one summary call.
+the diff with the candidate findings, so a review with findings sends the diff
+roughly twice, before retries. Output tokens and the other context add to that
+cost. A large PR makes one review call and one verification call per batch,
+then one summary call.
 
 At `REVIEW_MAX_AI_CALLS=1` the summary call is skipped after a review call. A
 review whose every file exceeded the budget makes no review call and still gets
@@ -350,20 +352,22 @@ does not do. This call gets the summary's sentences, walkthrough rows and
 diagram lines with the diff and the findings, and names the statements they
 contradict. A named sentence is cut, a named row shows "Not summarized", and a
 named diagram line drops the diagram. A "What this PR does" sentence is cut only
-on evidence from the diff, never on a finding alone, and never all of them. Only text the summary call wrote in that
-round is checked; text carried over from the previous round on the same head is
-not, and a removed statement is not carried back in. Each removal is logged at
+on evidence from the diff, rather than a finding alone. If the check would
+remove every purpose sentence, all of them stay. It checks only text written
+in that round; it does not check text carried from the previous round on the
+same head or restore a removed statement from it. Each removal is logged at
 INFO with the statement and the evidence. Findings are never changed. It fails
 open: an error, a cut answer or the spend ceiling leaves the summary as written.
 
-An answer that is not valid review JSON used to be retried with the whole prompt.
-With `REVIEW_RESPONSE_REPAIR_ENABLED` (on by default) one repair call comes
-first. It gets only the failed answer, the parser's error and the response
-shape, and returns the same content in that shape. The repair runs on the model
-that wrote the answer and sees no diff. A repaired review answer must keep as
-many findings as the failed answer has titles, and may add no finding title and
-no status the failed answer does not have. If the repair errors, is cut, does not
-parse or fails those checks, the full retry runs as before. A summary answer that
+With `REVIEW_RESPONSE_REPAIR_ENABLED` (on by default), an answer that is not
+valid review JSON gets one repair call before a full retry. It gets only the
+failed answer, the parser's error and the response shape, and returns the same
+content in that shape. The repair runs on the model that wrote the answer and
+sees no diff. A repaired review answer must preserve every title from the
+failed answer, including repeated titles. It rejects new titles and a
+previous-finding status count greater than the failed answer's. If the repair
+errors, is cut, does not parse or fails those checks, the full retry runs as
+before. A summary answer that
 wrote `file_summaries` as a string holding JSON is read as that JSON; any other
 string gets one small call that asks for that field alone, and only rows whose
 path is in the string are kept. A finding verification call that returns no
@@ -949,9 +953,9 @@ findings still open from earlier reviews count.
 
 Checks still running add only a count next to a failure. An automatic review
 usually starts before CI finishes, so the review call often sees no failure.
-When a check was still running at the start, the head's check runs are read
-once more after the model call (one request), and a check that has failed by
-then is added before the summary is rendered: the overview's sentence names it
+When a check was still running at the start, or no check had appeared yet,
+the head's check runs are read once more after the model call. A check that
+has failed by then is added before the summary is rendered: the overview's sentence names it
 and the open findings that cite it, and a finding that cites it is raised from
 low to medium confidence. A CI failure after the review is posted does not start
 a new one; comment `/review` to get a review whose findings see it.
@@ -1137,7 +1141,7 @@ again. Commands such as `/describe` or `/improve` send nothing.
   "schema_version": 1,
   "event": "review.completed",
   "timestamp": "2026-09-29T12:00:00Z",
-  "bot": { "name": "thrillhousebot", "version": "0.7.1" },
+  "bot": { "name": "thrillhousebot", "version": "0.8.0" },
   "repository": "octo/repo",
   "pull_request": { "number": 42, "head_sha": "0123abc…", "url": "https://github.com/octo/repo/pull/42" },
   "session_url": "https://bot.example/session/…",
@@ -1596,14 +1600,14 @@ Sigstore) and carry build-provenance attestations. To check a release:
 cosign verify \
   --certificate-identity-regexp='https://github.com/devops-thiago/ThrillhouseBot.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/devops-thiago/thrillhousebot:v0.7.1
+  ghcr.io/devops-thiago/thrillhousebot:v0.8.0
 
 # Provenance (image)
-gh attestation verify oci://ghcr.io/devops-thiago/thrillhousebot:v0.7.1 \
+gh attestation verify oci://ghcr.io/devops-thiago/thrillhousebot:v0.8.0 \
   --repo devops-thiago/ThrillhouseBot
 
 # Provenance (a downloaded binary)
-gh attestation verify thrillhousebot-v0.7.1-linux-amd64.tar.gz \
+gh attestation verify thrillhousebot-v0.8.0-linux-amd64.tar.gz \
   --repo devops-thiago/ThrillhouseBot
 ```
 
@@ -1719,8 +1723,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 | Layer | Choice |
 |---|---|
-| Framework | Quarkus 3.39 (REST) |
-| LLM | Quarkus LangChain4j 1.13 (OpenAI-compatible API) |
+| Framework | Quarkus 3.40 (REST) |
+| LLM | Quarkus LangChain4j 1.14 (OpenAI-compatible API) |
 | Frontend | Next.js 16 + React 19 (static export) |
 | Database | H2 (dev) / PostgreSQL (prod) + Panache |
 | Observability | OpenTelemetry |
@@ -1733,7 +1737,7 @@ Both images are built from the same native binary and published to GHCR:
 
 - `ghcr.io/devops-thiago/thrillhousebot:latest`: UBI9-micro (default).
 - `ghcr.io/devops-thiago/thrillhousebot:latest-distroless`: distroless base
-  (`:v0.7.1-distroless`, and so on).
+  (`:v0.8.0-distroless`, and so on).
 - Snapshot tags: `:snapshot`, `:v<version>-<short-sha>-snapshot` and
   `:<full-sha>`, each with a `-distroless` variant.
 
