@@ -969,6 +969,20 @@ change never touches, or a description that defers it). An entry naming an
 issue the PR does not link is rewritten to the linked one. When this section is
 present, the bug-fix efficacy check uses it instead of reading the issue again.
 
+A criterion that an earlier pull request already met looks unmet to the summary
+call, since no changed file touches it. When the PR description states such a
+criterion in a paragraph or list item, says it is already met ("already",
+"shipped", "existing code", "is met") with no negation earlier in that clause,
+and cites the code as `path:line` or as a
+`Type.member` code span (a method or a test), the bot checks each citation
+against the repository: the file must exist, must not be added or renamed by
+the pull request, and the cited line or member must not be one the pull request
+adds. When every citation passes, the criterion moves from Description vs.
+Implementation to a "Met by existing code" section that lists what was cited.
+Text inside a fenced code block, a blockquote or an HTML comment is not read as
+a claim. A criterion with no citation, a citation that cannot be found, or a
+repository that cannot be read keeps the entry listed.
+
 ### Review learnings
 
 `REVIEW_LEARNINGS_ENABLED=true` lets the bot remember what maintainers taught it

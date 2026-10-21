@@ -8348,6 +8348,67 @@ class ReviewOrchestratorTest {
       assertEquals(Confidence.MEDIUM, result.getValue().findings().getFirst().confidence());
     }
 
+    /**
+     * #1148: the summary is handed the PR description's citations, read against the repository at
+     * the head, so a linked-issue criterion the description shows met on the base is listed as met
+     * by existing code.
+     */
+    @Test
+    void theSummaryReadsTheDescriptionsCitationsAgainstTheRepository() {
+      stubCommonReviewMocks(buildCheck("completed", "success"));
+      var builder = "src/main/java/dev/thiagogonzaga/thrillhousebot/review/VerdictBuilder.java";
+      when(prClient.getTree(any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), any()))
+          .thenReturn(
+              new GitHubPullRequestClient.TreeResponse(
+                  "t", List.of(new GitHubPullRequestClient.TreeEntry(builder, "blob", 40)), false));
+      when(prClient.getFileContent(any(), any(), eq("owner"), eq("repo"), eq(builder), any()))
+          .thenReturn(
+              new GitHubPullRequestClient.FileContent(
+                  "VerdictBuilder.java",
+                  builder,
+                  java.util.Base64.getEncoder()
+                      .encodeToString(
+                          "class VerdictBuilder {\n  static String newFindingsSummary() {}\n}\n"
+                              .getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                  "base64",
+                  40));
+      var described =
+          new ReviewOrchestrator.ReviewRequest(
+              "owner",
+              "repo",
+              42,
+              "abcdefgh",
+              "Test PR",
+              """
+              Criteria 1 and 2 shipped in 0.7.1:
+
+              - The check run reports the open total with the new count separate: \
+              `VerdictBuilder.newFindingsSummary`.""",
+              "base1234567",
+              "main",
+              123L,
+              false,
+              "main");
+
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+        orchestrator.review(described);
+      }
+      var sources = ArgumentCaptor.forClass(PrSummaryGenerator.DescriptionSources.class);
+      verify(summaryGenerator)
+          .generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), sources.capture());
+      var gap =
+          "Linked issue #952: The check-run title reports the open total (new + still open), with"
+              + " the new count separate — no changed file touches it.";
+      var split = sources.getValue().baseCode().split(List.of(gap));
+      assertEquals(List.of(), split.unmet());
+      assertEquals(
+          List.of("VerdictBuilder.newFindingsSummary"), split.met().getFirst().citations());
+    }
+
     @Test
     void aFailedReReadKeepsTheReviewStartReading() {
       stubCommonReviewMocks(buildCheck("completed", "success"));

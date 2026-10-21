@@ -619,4 +619,25 @@ class CitedLocationResolverTest {
 
     assertTrue(CitedLocationResolver.disabled().repositoryPaths().isEmpty());
   }
+
+  /**
+   * #1148: a file the description cites is read once, cached, and counted apart from the findings'
+   * reads, at most {@link CitedLocationResolver#MAX_CITED_FILES_FETCHED} files.
+   */
+  @Test
+  void citedFilesAreReadOnceAndCappedApartFromTheFindings() {
+    givenFile("docs/A.md", "one\ntwo\n");
+    var round = round(changed(PATH));
+
+    assertEquals(List.of("one", "two"), round.citedFileLines("docs/A.md").orElseThrow());
+    assertEquals(List.of("one", "two"), round.citedFileLines("docs/A.md").orElseThrow());
+    verify(prClient, times(1)).getFileContent(any(), any(), any(), any(), eq("docs/A.md"), any());
+
+    for (int i = 1; i < CitedLocationResolver.MAX_CITED_FILES_FETCHED; i++) {
+      round.citedFileLines("other" + i);
+    }
+    assertTrue(round.citedFileLines("one-too-many").isEmpty());
+    verify(prClient, never()).getFileContent(any(), any(), any(), any(), eq("one-too-many"), any());
+    assertTrue(CitedLocationResolver.disabled().citedFileLines("docs/A.md").isEmpty());
+  }
 }
