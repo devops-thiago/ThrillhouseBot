@@ -870,11 +870,14 @@ class CiStatusEvaluatorTest {
           List.of(
               run(1L, "build", "completed", "success", "github-actions", null),
               run(2L, "test", "completed", "failure", "github-actions", "1 test failed"),
-              run(3L, "e2e", "queued", null, "github-actions", null));
+              run(3L, "e2e", "queued", null, "github-actions", null),
+              run(4L, CheckRunManager.CHECK_NAME, "in_progress", null, "thrillhousebot", null));
       when(checkRunClient.getCheckRuns(any(), any(), any(), any(), any(), anyInt(), anyInt()))
           .thenReturn(new GitHubCheckRunClient.CheckRunsResponse(runs.size(), runs));
 
       var failures = evaluator.checkRunFailures("auth", "owner", "repo", "sha").orElseThrow();
+      // #1092: the passing check counts as reported; the bot's own check does not.
+      assertEquals(3, failures.reported());
 
       assertEquals(
           List.of("test"),
@@ -892,6 +895,14 @@ class CiStatusEvaluatorTest {
           .thenThrow(new RuntimeException("503"));
 
       assertTrue(evaluator.checkRunFailures("auth", "owner", "repo", "sha").isEmpty());
+    }
+
+    @Test
+    void failuresBuiltWithoutACountOfReportedChecksCountTheFailedAndPendingOnes() {
+      var failed = new CiStatusEvaluator.FailedCheck("test", "failure", 2L, null, null, null, 0);
+
+      assertEquals(3, new CiStatusEvaluator.CiFailures(List.of(failed), 2).reported());
+      assertEquals(0, CiStatusEvaluator.CiFailures.NONE.reported());
     }
 
     @Test
