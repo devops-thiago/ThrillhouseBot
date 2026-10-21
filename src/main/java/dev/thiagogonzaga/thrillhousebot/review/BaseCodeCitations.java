@@ -54,14 +54,15 @@ import java.util.regex.Pattern;
  *   <li>the passage cites code, as a {@code path:line} or as a {@code Type.member} code span, such
  *       as a test's {@code SecurityScanTest.eachIacRule…}, and every one of its citations is on the
  *       base: the file is in the repository and not added or renamed by this pull request, the
- *       cited line is not one the pull request adds, and the member is named on a line of its
- *       type's file that the pull request does not add.
+ *       cited line is in the file and not one the pull request adds, and the member is named on a
+ *       line of its type's file that the pull request does not add.
  * </ul>
  *
  * <p>Anything this class cannot read counts against the release: no repository listing, a path not
  * in a truncated listing or matching several files, a changed file whose patch GitHub omitted, or a
- * file past the read cap. A criterion line that points at an open finding is never released, since
- * that finding says the changed code does not meet it.
+ * file that cannot be read or is past the read cap. Each cited file is read once. A criterion line
+ * that points at an open finding is never released, since that finding says the changed code does
+ * not meet it.
  */
 final class BaseCodeCitations {
 
@@ -145,7 +146,8 @@ final class BaseCodeCitations {
     this.changed = new HashMap<>();
     files.forEach(file -> changed.putIfAbsent(file.filename(), file));
     this.paths = paths;
-    this.lines = lines;
+    var read = new HashMap<String, Optional<List<String>>>();
+    this.lines = path -> read.computeIfAbsent(path, lines);
   }
 
   /**
@@ -300,12 +302,16 @@ final class BaseCodeCitations {
         && extension.chars().allMatch(Character::isLetterOrDigit);
   }
 
-  /** Whether the cited line of the cited file is base code: the file is, and the line not added. */
+  /**
+   * Whether the cited line of the cited file is base code: the file is, and the line is in it and
+   * not added (#1177).
+   */
   private boolean lineOnBase(String cited, int line) {
     var path = resolve(cited, name -> name.equals(fileName(cited)));
     return path.isPresent()
         && line > 0
-        && addedLines(path.get()).map(a -> !a.contains(line)).orElse(false);
+        && addedLines(path.get()).map(a -> !a.contains(line)).orElse(false)
+        && lines.apply(path.get()).map(file -> line <= file.size()).orElse(false);
   }
 
   /** Whether {@code member} is named on a base line of the one file {@code type} is named after. */
