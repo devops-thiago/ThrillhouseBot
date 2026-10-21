@@ -1029,7 +1029,8 @@ class FindingVerificationServiceTest {
     var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
 
     assertEquals(java.util.Arrays.asList(null, "low"), effortPerCall);
-    assertEquals(List.of("Real"), result.findings().stream().map(f -> f.title()).toList());
+    assertEquals(
+        List.of("Real"), result.findings().stream().map(ReviewResponse.Finding::title).toList());
     assertEquals(List.of(new VerificationCoverage(2, 2)), reported);
     verify(tokenLedger).recordUsage(SESSION, 500, 8192);
     verify(tokenLedger).recordUsage(SESSION, 500, 90);
