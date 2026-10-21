@@ -59,12 +59,12 @@ record AnswerKeys(List<String> titles, int statuses, boolean readable) {
     while (at < body.length()) {
       var c = body.charAt(at);
       if (c == '"') {
-        var end = Scan.closingQuote(body, at + 1);
-        var literal = Scan.unescaped(body.substring(at + 1, end < 0 ? body.length() : end));
+        var end = stringEnd(body, at);
+        var literal = Scan.unescaped(body.substring(at + 1, end));
         if (titleValueNext) {
           values.add(literal);
         }
-        at = end < 0 ? body.length() : end + 1;
+        at = end + 1;
         titleValueNext = "title".equals(literal) && nextIsColon(body, at);
       } else {
         at++;
@@ -72,6 +72,12 @@ record AnswerKeys(List<String> titles, int statuses, boolean readable) {
       }
     }
     return values;
+  }
+
+  /** Where the string opened at {@code open} ends: its closing quote, or the end of the text. */
+  private static int stringEnd(String body, int open) {
+    var close = Scan.closingQuote(body, open + 1);
+    return close < 0 ? body.length() : close;
   }
 
   private static boolean nextIsColon(String body, int from) {
