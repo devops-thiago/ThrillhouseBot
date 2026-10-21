@@ -799,6 +799,60 @@ class PathMentionsTest {
             .description());
   }
 
+  /** The angular pull request (#301): angular.json names its entry point from the project root. */
+  private static final List<FileDiff> ANGULAR_BUILD =
+      List.of(
+          new FileDiff("angular/Dockerfile", "added", 1, 0, 1, "+RUN npm run build"),
+          new FileDiff(
+              "angular/angular.json",
+              "added",
+              1,
+              0,
+              1,
+              "+            \"browser\": \"src/main.ts\","),
+          new FileDiff("angular/src/main.ts", "added", 1, 0, 1, "+bootstrapApplication(App);"),
+          new FileDiff("angular/README.md", "added", 1, 0, 1, "+The app starts at src/main.ts:3."));
+
+  /**
+   * Angular ThrillhouseBot-test#301: a code span quoting angular.json's line keeps the path as the
+   * line writes it, in a finding and in summary text; the same path outside such a quote, alone in
+   * a code span, or in a span no patch holds is still completed.
+   */
+  @Test
+  void aCodeSpanQuotingAChangedLineKeepsItsPath() {
+    var mentions = mentions(ANGULAR_BUILD, "", Set.of());
+    var quoting =
+        findingOn(
+            "angular/Dockerfile",
+            "angular.json lists only `\"browser\": \"src/main.ts\"` and no assets.",
+            null,
+            null);
+    var response = new ReviewResponse(List.of(quoting), List.of(), null);
+
+    assertSame(response, mentions.screen(response));
+    assertEquals(
+        "The build reads `\"browser\": \"src/main.ts\",` from angular.json.",
+        mentions.withoutUnresolvedMentions(
+            "The build reads `\"browser\": \"src/main.ts\",` from angular.json."));
+    assertEquals(
+        "angular/src/main.ts never imports the zone package, and `angular/src/main.ts` is the entry point.",
+        mentions.withoutUnresolvedMentions(
+            "src/main.ts never imports the zone package, and `src/main.ts` is the entry point."));
+    assertEquals(
+        "It needs `import 'zone.js'` in `angular/src/main.ts`, as `browser = angular/src/main.ts`"
+            + " shows.",
+        mentions.withoutUnresolvedMentions(
+            "It needs `import 'zone.js'` in `src/main.ts`, as `browser = src/main.ts` shows."));
+    assertEquals(
+        "Neither `'angular/src/main.ts'` nor `entry=angular/src/main.ts` is in a patch.",
+        mentions.withoutUnresolvedMentions(
+            "Neither `'src/main.ts'` nor `entry=src/main.ts` is in a patch."));
+    assertEquals(
+        "The README says `src/main.ts:3`; the bootstrap is at `angular/src/main.ts:1`.",
+        mentions.withoutUnresolvedMentions(
+            "The README says `src/main.ts:3`; the bootstrap is at `src/main.ts:1`."));
+  }
+
   /** The zig pull request (#274): the Dockerfile copies the artifact under its own name. */
   private static final List<FileDiff> ZIG_IMAGE =
       List.of(
