@@ -347,11 +347,12 @@ public class ReviewDiffFormatter {
             .append(" declared in this repository's ThrillhouseBot config matched no file in this")
             .append(" pull request (")
             .append(String.join(", ", samples));
-    var more = unmatched.size() - samples.size();
-    if (more > 0) {
-      sb.append(", and ").append(more).append(" more");
-    }
-    return sb.append(')').toString();
+    return sb.append(andMore(unmatched.size() - samples.size())).append(')').toString();
+  }
+
+  /** How many of a capped list's entries were left out, as the list's last item; none: "". */
+  private static String andMore(int more) {
+    return more > 0 ? ", and " + more + " more" : "";
   }
 
   /**
@@ -457,12 +458,11 @@ public class ReviewDiffFormatter {
       return "";
     }
     var named = ignored.subList(0, Math.min(IGNORED_NAMES_CAP, ignored.size()));
-    var more = ignored.size() - named.size();
     return ignored.size()
         + (ignored.size() == 1 ? " file" : " files")
         + " excluded from AI review by the ignore list ("
         + String.join(", ", named.stream().map(MarkdownSafe::inline).toList())
-        + (more > 0 ? ", and " + more + " more" : "")
+        + andMore(ignored.size() - named.size())
         + ")\n";
   }
 
@@ -490,11 +490,7 @@ public class ReviewDiffFormatter {
         .append(pureRenames.size() == 1 ? " pure rename" : " pure renames")
         .append(" omitted from AI review (")
         .append(String.join(", ", samples));
-    var more = pureRenames.size() - samples.size();
-    if (more > 0) {
-      sb.append(", and ").append(more).append(" more");
-    }
-    sb.append(")\n");
+    sb.append(andMore(pureRenames.size() - samples.size())).append(")\n");
     return sb.toString();
   }
 
