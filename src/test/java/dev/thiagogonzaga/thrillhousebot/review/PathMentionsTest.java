@@ -732,6 +732,73 @@ class PathMentionsTest {
     assertSame(text, mentions(both, "", Set.of()).withoutUnresolvedMentions(text));
   }
 
+  /** #1180: a root Dockerfile copies a file only web/ holds; the build runs from the root. */
+  private static final List<FileDiff> ROOT_CONTEXT =
+      List.of(
+          new FileDiff("Dockerfile", "added", 1, 0, 1, "+COPY conf/site.conf /etc/app/"),
+          new FileDiff("web/conf/site.conf", "added", 1, 0, 1, "+server {}"));
+
+  private static ReviewResponse screenedRootContext(ReviewResponse response) {
+    return mentions(
+            ROOT_CONTEXT,
+            "Build from the repository root with docker build .",
+            Set.of("Dockerfile", "web/conf/site.conf"))
+        .screen(response);
+  }
+
+  /**
+   * #1180: a path the finding's file writes as it stands keeps its spelling, so a missing {@code
+   * COPY} source is not completed into the one changed file that exists; the finding, its severity
+   * and its suggestion stay as raised.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The COPY source conf/site.conf does not exist.",
+        "The COPY source `conf/site.conf` does not exist."
+      })
+  void aPathTheFindingsFileWritesAsItStandsIsNotCompleted(String description) {
+    var raised =
+        findingOn(
+            "Dockerfile",
+            description,
+            "COPY conf/site.conf /etc/app/",
+            "COPY web/conf/site.conf /etc/app/");
+    var response = new ReviewResponse(List.of(raised), List.of(), null);
+
+    assertSame(response, screenedRootContext(response));
+  }
+
+  /**
+   * #1180: the same mention is still completed where the finding's file does not write it as it
+   * stands: on another changed file, or on a line naming the longer path.
+   */
+  @Test
+  void aShortenedPathTheFindingsFileDoesNotWriteIsStillCompleted() {
+    var onTheConf =
+        findingOn("web/conf/site.conf", "conf/site.conf sets no server name.", null, null);
+    var longer =
+        List.of(
+            new FileDiff("Dockerfile", "added", 1, 0, 1, "+COPY web/conf/site.conf /etc/app/"),
+            new FileDiff("web/conf/site.conf", "added", 1, 0, 1, "+server {}"));
+    var onTheDockerfile =
+        findingOn("Dockerfile", "The COPY source conf/site.conf is never read.", null, null);
+
+    assertEquals(
+        "web/conf/site.conf sets no server name.",
+        screenedRootContext(new ReviewResponse(List.of(onTheConf), List.of(), null))
+            .findings()
+            .getFirst()
+            .description());
+    assertEquals(
+        "The COPY source web/conf/site.conf is never read.",
+        mentions(longer, "", Set.of())
+            .screen(new ReviewResponse(List.of(onTheDockerfile), List.of(), null))
+            .findings()
+            .getFirst()
+            .description());
+  }
+
   /** The zig pull request (#274): the Dockerfile copies the artifact under its own name. */
   private static final List<FileDiff> ZIG_IMAGE =
       List.of(
