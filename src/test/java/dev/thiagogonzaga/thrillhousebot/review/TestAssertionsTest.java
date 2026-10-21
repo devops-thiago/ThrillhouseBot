@@ -235,6 +235,33 @@ class TestAssertionsTest {
         assertions);
   }
 
+  /**
+   * A project's own assert and verify helpers are read as assertions: by convention they wrap
+   * checks, and in a failing test the helper's call line is where the failure is reported.
+   */
+  @Test
+  void aProjectsOwnAssertOrVerifyHelperIsAnAssertion() {
+    var assertions =
+        TestAssertions.of(
+                List.of(
+                    file(
+                        "src/test/UserTest.java",
+                        """
+                        @@ -0,0 +1,6 @@
+                        +  void createsTheUser() {
+                        +    var created = service.create(request);
+                        +    verifyUserExists(created, repository);
+                        +    assertValidOrder(created.order());
+                        +    shouldNotify(created);
+                        +  }
+                        """)))
+            .assertionsOf("createsTheUser");
+
+    assertEquals(
+        List.of("verifyuserexists(created, repository);", "assertvalidorder(created.order());"),
+        assertions);
+  }
+
   /** A brace on its own line under the declaration (Allman style) opens the body, not ends it. */
   @Test
   void aBraceOnItsOwnLineOpensTheBody() {

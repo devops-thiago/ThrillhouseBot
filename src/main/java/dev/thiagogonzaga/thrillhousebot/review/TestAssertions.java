@@ -66,10 +66,16 @@ final class TestAssertions {
       Pattern.compile("(?:[Aa]ssert|[Ee]xpect|[Ss]hould|[Rr]equire|[Vv]erify|[Rr]efute)\\s*+[(!.]");
 
   /**
-   * A library's suffixed assertion, only as a call: {@code assertEquals(}, {@code assert_eq!(},
-   * {@code expectThrows(}, {@code verifyNoMoreInteractions(}, {@code refute_nil(}. {@code should}
-   * and {@code require} have no such form here: {@code shouldRetry(…)} and {@code
-   * requireNonNull(…)} are helpers and preconditions as often as checks.
+   * A suffixed assertion, only as a call: {@code assertEquals(}, {@code assertThat(} (JUnit,
+   * AssertJ, Hamcrest), {@code assert_eq!(} (Rust), {@code expectThrows(}, {@code
+   * verifyNoMoreInteractions(} (Mockito), {@code refute_nil(} (Minitest). These four prefixes name
+   * checks by convention: a project's own {@code assertValidOrder(…)} or {@code
+   * verifyUserExists(…)} wraps assertions, and in a failing test it is the line the failure is
+   * reported from, so it is kept. {@code should} and {@code require} have no such form here: {@code
+   * shouldRetry(…)} and {@code requireNonNull(…)} are helpers and preconditions as often as checks.
+   * Only the body of a test the CI log names as failing is read, and a finding cites such a line
+   * only by quoting it whole ({@link #MIN_QUOTE_CHARS}), so a helper read as an assertion can only
+   * tie a finding to a test that did fail.
    */
   private static final Pattern SUFFIXED_CALL =
       Pattern.compile("(?:assert|expect|verify|refute)[A-Z_][\\w$]*+\\s*+!?+\\(");
