@@ -44,6 +44,17 @@ export default defineConfig({
       logo: { src: "./src/assets/icon.png", alt: "" },
       favicon: "/icon.png",
       customCss: ["./src/styles/custom.css"],
+      // Makes overflowing tables focusable and names scrolling code blocks.
+      head: [
+        {
+          tag: "script",
+          attrs: { type: "module" },
+          content: readFileSync(
+            resolve(websiteRoot, "src/scripts/scroll-regions.js"),
+            "utf8",
+          ),
+        },
+      ],
       social: [
         {
           icon: "github",
