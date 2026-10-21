@@ -149,10 +149,58 @@ for you:
 Signed-off-by: Your Name <you@example.com>
 ```
 
-To sign off commits you already made on your branch, run
-`git rebase --signoff main` and force-push. The `dco` check fails a pull request
-that has a commit without a matching sign-off. Commits that Dependabot or
-GitHub Actions author in pull requests they open are exempt.
+The `dco` check examines every commit between the pull request's base and
+head. An unsigned two-parent merge passes only when its tree is an unchanged
+automatic merge; other merge changes require the author's certification. A
+cryptographic commit signature does not replace the sign-off.
+When squash-merging, keep a sign-off matching the resulting commit's author in
+the squash message. Do not assume sign-offs on the original commits will be
+preserved.
+
+To sign off your own commits on an unpublished topic branch, use
+`git rebase --signoff <base-branch>`. Do not rewrite shared release branches
+or add another author's certification on their behalf. A missing sign-off in
+shared history needs the maintainer and the affected author to agree on its
+remediation. Commits that Dependabot or GitHub Actions author in pull requests
+they open are exempt; a later human-authored release pull request checks those
+commits again.
+
+### GitHub squash commits and release history
+
+Use the same email for local commits, sign-offs and the final squash author. If
+GitHub uses your private noreply address, configure this repository's Git
+`user.email` to that address before running `git commit -s`. Check the final
+squash message for the matching trailer; a trailer in the PR description alone
+is not sufficient.
+
+The DCO check can also establish certification from a merged source PR. It
+requires a GitHub-signed squash, an exact match between its SHA and the source
+PR's merge SHA, and a reconstructed merge tree identical to the squash tree.
+Every original contribution must pass DCO. In both the checked PR range and
+the original source history, an unsigned merge must be an unchanged automatic
+merge; extra conflict-resolution changes need their own certification. An existing trailer with a different email is accepted only
+when a source commit ties that signed-off email to the same GitHub author,
+authenticated by its signature or by that author opening the original PR.
+DCO sign-offs on original commits do not require cryptographic signatures.
+Account names, PR descriptions and a green historical check alone do not
+establish certification. Unavailable evidence fails the check. A bot exemption carries forward only
+through its authenticated original bot PR; a bot-shaped email alone never
+exempts a commit in a human release PR.
+
+For incomplete evidence in shared history, the affected author can add a new,
+cryptographically signed and signed-off commit containing one trailer for each
+full commit SHA they explicitly certify:
+
+```text
+DCO-Remediation: <full 40-character commit SHA>
+Signed-off-by: Your Name <email-matching-this-new-commit>
+```
+
+The new commit must be in the checked PR range. GitHub must authenticate its
+signature and associate its author with the same account as the commit being
+certified. A maintainer cannot add someone else's certification. Do not rewrite
+shared release history to repair a sign-off. The check prints the source PR or
+remediation used for each accepted commit and lists any remaining gaps.
 
 ## Governance
 
