@@ -44,6 +44,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerifier;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ModelCallGate;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewer;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrSummarizer;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ResponseRepairService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponseParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
@@ -158,7 +159,8 @@ class RetriedFollowUpRoundTest {
             mock(SessionEventBroadcaster.class),
             mock(ReviewTokenLedger.class),
             new ModelCallGate(config),
-            TestResponseCaps.defaults());
+            TestResponseCaps.defaults(),
+            mock(ResponseRepairService.class));
 
     // The pipeline's ledger is at its ceiling: the verifier fails open and the summary call is
     // skipped, so the only model calls this test makes are the review call's two attempts.

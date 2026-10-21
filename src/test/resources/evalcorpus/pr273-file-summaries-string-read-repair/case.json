@@ -1,0 +1,10 @@
+{
+  "kind": "repair",
+  "sourcePr": 273,
+  "why": "Round 18 (#1079): on react ThrillhouseBot-test#273 the summary answer wrote file_summaries as one string, the parser logged that it arrived as STRING and recovered nothing, and 19 of 20 walkthrough rows rendered \"Not summarized\". One re-ask for that field alone must return a row for the file the string describes, under its exact path.",
+  "expectation": "file-summaries-read",
+  "keywords": [
+    "python/bags/client.py"
+  ],
+  "answer": "{\n  \"findings\": [],\n  \"previous_findings_status\": [],\n  \"summary\": {\n    \"total_findings\": 1,\n    \"critical\": 0,\n    \"high\": 1,\n    \"medium\": 0,\n    \"low\": 0,\n    \"overall_assessment\": \"The pagination loop never runs, so the client returns no bags.\",\n    \"pr_purpose\": \"Adds a Python client for the bags API with a paginated listing and a single-bag lookup.\",\n    \"description_gaps\": [],\n    \"file_summaries\": \"python/bags/client.py: adds BagClient with fetch_all_bags, which pages through /bags by cursor, and bag, which reads one bag by id\"\n  }\n}"
+}

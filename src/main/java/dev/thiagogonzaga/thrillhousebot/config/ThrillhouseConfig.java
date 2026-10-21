@@ -334,6 +334,20 @@ public interface ThrillhouseConfig {
     boolean summaryVerificationEnabled();
 
     /**
+     * When a review or summary answer is not valid review JSON, send only that answer and the
+     * parser's error in one small call and ask for the same content in the required shape, before
+     * resending the whole prompt. Also asks again for the walkthrough's file summaries when the
+     * summary answer wrote them as a string. See <a
+     * href="https://github.com/devops-thiago/ThrillhouseBot#ai-call-budget">AI call budget</a>.
+     *
+     * <p>#1079: the repair fails open, and a failed or rejected repair leaves the full retry
+     * exactly as it was.
+     */
+    @WithDefault("true")
+    @WithName("response-repair-enabled")
+    boolean responseRepairEnabled();
+
+    /**
      * Give each review call only the review-dimension blocks its files can use, instead of all ten.
      * See <a href="https://github.com/devops-thiago/ThrillhouseBot#dimension-routing">Dimension
      * routing</a>.

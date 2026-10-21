@@ -64,7 +64,7 @@ same diff.
 | Opt-in linked-issue context: resolve the PR's linked issues, read them, extract acceptance criteria, sanitize and cap | `review/TicketContextResolver.resolve` over an `review/IssueTrackerProvider` (`review/GitHubIssuesProvider.linkedTickets`: PR-body closing keywords, then `closingIssuesReferences`, then optionally the branch name), called from `ReviewOrchestrator` and handed to `ReviewPromptAssembler.assemble(ctx, req, ciFailures, linkedIssues)` |
 | Fence untrusted input, build review and summary guidance, pick the system prompt | `review/ReviewPromptAssembler` (with `PromptSections`, `PromptTemplateEscaper`, `ReviewDimensionRouter`) |
 | Token budget and batches | `review/DiffBudgetPlanner` (`plan`, `boundPreviousFindings`, `perCallInputBudget`) |
-| Model calls: single call, batches, retries, sequential retry, truncation salvage, summary call | `review/FindingPipeline.run` → `review/ai/AiReviewService` (`review`, `reviewBatch`, `summarize`) |
+| Model calls: single call, batches, retries, sequential retry, truncation salvage, summary call. Before a full retry of an answer the parser refused (never a timeout, provider error, throttle or length stop), one repair call gets only that answer, fenced, the parser's error and the contract, on the lane's model; a repaired review answer is rejected when it has fewer findings than the failed answer has titles, a title that is none of the failed answer's, or more statuses than it wrote (read by `AnswerKeys` from the elements of the findings and statuses arrays, every key in the text when the scan loses the structure), a failed or rejected repair leaves the retry as it was, and a repaired summary answer gets the same `file_summaries` re-ask as a parsed one. A `file_summaries` string holding JSON is read as that JSON; any other string gets one re-ask for that field, keeping rows whose whole path the string names (#1079, `REVIEW_RESPONSE_REPAIR_ENABLED`) | `review/FindingPipeline.run` → `review/ai/AiReviewService` (`review`, `reviewBatch`, `summarize`, `repaired`, `withReadFileSummaries`) → `review/ai/ResponseRepairService` (`ResponseRepairer`, `SummaryResponseRepairer`, `ResponseRepairPrompts`) |
 | Post-model chain, single call, in order: evidence, quote validation, framework filter, dedupe, rejection memory, verifier, remember verdicts (`FindingScreen.screenSingleCall`), then severity calibration, replied-duplicate and litigated drops, anchors and the changed file a mistyped path names (`DiffLineResolver.diffPathFor`: case, then a unique path suffix, then a unique file name; #1022, #945), then the lines the finding's `suggestion_old` quotes (`SuggestionAnchor.place`: moved there, or the suggestion dropped when it cannot be placed or rewrites a table row to a different cell count; #924) | `review/FindingPipeline.refine` over `review/FindingScreen` |
 | Post-model chain, multi call: per batch evidence, quote validation, framework filter, rejection memory, verifier, remember verdicts (`refineBatchOutcome` → `FindingScreen.screenBatch`); after all batches status merge, dedupe, severity calibration (#1077: so both lanes place an anchored class alike), replied-duplicate and litigated drops, anchors, the mapped path and the suggestion placement | `review/FindingPipeline.runMultiCall` |
 | Per-call screen stages: one `FindingStage` per step over an immutable `ScreeningContext`; each lane is an explicit ordered stage list built in the `FindingScreen` constructor (the batch list omits dedupe), pinned by `FindingScreenTest` | `review/FindingScreen` over `EvidenceStage`, `QuoteValidationStage`, `FrameworkFilterStage`, `DedupeStage`, `RejectionScreenStage`, `VerificationStage`, `RememberVerdictsStage` |
@@ -92,9 +92,9 @@ same diff.
   `FindingPipeline.run` opens and clears the session entry. Streamed calls are recorded by
   `OtelObservabilityListener` through the `ReviewSessionContext` bind and gated by
   `ensureCallAllowed` in `AiReviewService`. The blocking verifier records its own usage and checks
-  `ceilingReached` in `FindingVerificationService`, and so does the opt-in summary check in
-  `SummaryVerificationService`. A new review-path call must do one or the
-  other. The on-request commands and maintainer replies are outside the ledger: a command is
+  `ceilingReached` in `FindingVerificationService` (including its one repeat after an empty body,
+  #1079), and so does the opt-in summary check in `SummaryVerificationService` and the repair call
+  in `ResponseRepairService`. A new review-path call must do one or the other. The on-request commands and maintainer replies are outside the ledger: a command is
   bounded by `REVIEW_MAX_AI_CALLS`, a reply is one call, and both hold a gate slot.
 - **`REVIEW_MAX_AI_CALLS` counts planned calls, not retries.** `DiffBudgetPlanner.plan` packs at
   most `max-ai-calls - 1` batches and reserves one call for the summary on both lanes. At `1`,
@@ -427,7 +427,8 @@ live `fence(...)` (#604).
 - **Prompt-content tests pin guidance** that specific issues fought for:
   `PrReviewPromptsContentTest`, `FindingVerifierPromptsContentTest`,
   `PrImproveAssistantPromptsContentTest`, `UnitTestAssistantPromptsContentTest`,
-  `TicketContextPromptsContentTest`, `SummaryVerifierPromptsContentTest`. Update a pin
+  `TicketContextPromptsContentTest`, `SummaryVerifierPromptsContentTest`,
+  `ResponseRepairPromptsContentTest`. Update a pin
   deliberately when you reword it. Never delete one to make a build pass.
 - **The eval corpus is the recall gate.** `src/test/resources/evalcorpus/` holds labeled cases:
   `verifier` and `generator` cases for the review prompts, and `summary` cases (#920) that run
@@ -435,14 +436,17 @@ live `fence(...)` (#604).
   (`claim-gapped`), or, for a claim the changed-files evidence can carry, not as a gap
   (`claim-not-gapped`), and `summary-verification` cases (#1078) that run the summary check over a
   written summary and expect the statements their keywords name to be cut and the kept ones to
-  stay (`contradicted-cut`), or nothing cut (`nothing-cut`).
+  stay (`contradicted-cut`), or nothing cut (`nothing-cut`), and `repair` cases (#1079) that run
+  the repair step over a failed answer and expect each keyword title back as one finding
+  (`repaired`) or each keyword path back as one file summary (`file-summaries-read`).
   `EvalCorpusTest` validates the schema and routing coverage in every build. The live
   `PromptEvalTest` is tagged `eval`, runs only with `-Peval`, and skips itself without
   `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY`:
   `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY=… ./mvnw test -Peval -Dtest=PromptEvalTest`. Run it before
   shipping a change to `PrReviewPrompts` or `FindingVerifierPrompts`, with
   `REVIEW_DIMENSION_ROUTING_ENABLED=true` too when routing is involved, and with
-  `-Deval.only=summary-verification` before shipping a change to `SummaryVerifierPrompts`. Without
+  `-Deval.only=summary-verification` before shipping a change to `SummaryVerifierPrompts`, and
+  with `-Deval.only=-repair` before shipping a change to `ResponseRepairPrompts`. Without
   a key, say in the PR that it was not run.
 
 ## Untrusted data

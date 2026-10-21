@@ -1,0 +1,28 @@
+### python/bags/client.py (added, +24 -0)
+```diff
+@@ -0,0 +1,24 @@
++import requests
++
++
++class BagClient:
++    def __init__(self, base_url, token):
++        self.base_url = base_url
++        self.token = token
++
++    def fetch_all_bags(self):
++        bags = []
++        cursor = None
++        while cursor is not None:
++            response = requests.get(
++                f"{self.base_url}/bags",
++                params={"cursor": cursor},
++                headers={"Authorization": f"Bearer {self.token}"},
++            )
++            page = response.json()
++            bags.extend(page["items"])
++            cursor = page.get("next")
++        return bags
++
++    def bag(self, bag_id):
++        return requests.get(f"{self.base_url}/bags/{bag_id}").json()
+```

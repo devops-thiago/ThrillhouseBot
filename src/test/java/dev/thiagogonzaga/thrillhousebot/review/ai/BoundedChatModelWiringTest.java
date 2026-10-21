@@ -57,6 +57,8 @@ class BoundedChatModelWiringTest {
 
   @Inject FindingVerifier findingVerifier;
   @Inject SummaryVerifier summaryVerifier;
+  @Inject ResponseRepairer responseRepairer;
+  @Inject SummaryResponseRepairer summaryResponseRepairer;
   @Inject ReplyAssistant replyAssistant;
   @Inject ChangelogAssistant changelogAssistant;
   @Inject DocGenerator docGenerator;
@@ -77,6 +79,9 @@ class BoundedChatModelWiringTest {
     calls.put(
         "FindingVerifier#verify", () -> findingVerifier.verify("f", "c", "d", "s", "p", "sys"));
     calls.put("SummaryVerifier#verify", () -> summaryVerifier.verify("st", "[]", "c", "d", "s"));
+    calls.put("ResponseRepairer#repair", () -> responseRepairer.repair("c", "e", "a"));
+    calls.put(
+        "SummaryResponseRepairer#repair", () -> summaryResponseRepairer.repair("c", "e", "a"));
     calls.put("ReplyAssistant#reply", () -> replyAssistant.reply("q", "c", "f", "d", "t"));
     calls.put("ChangelogAssistant#draft", () -> changelogAssistant.draft("d", "7", "t", "b", "i"));
     calls.put("ChangelogAssistant#merge", () -> changelogAssistant.merge("c", "7", "t", "b", "i"));
@@ -114,7 +119,9 @@ class BoundedChatModelWiringTest {
     assertTrue(
         services.containsAll(STREAMED_THROUGH_REVIEW_SERVICE)
             && services.contains(FindingVerifier.class)
-            && services.contains(SummaryVerifier.class),
+            && services.contains(SummaryVerifier.class)
+            && services.contains(ResponseRepairer.class)
+            && services.contains(SummaryResponseRepairer.class),
         "the AI services must be discoverable: " + services);
 
     for (var service : services) {

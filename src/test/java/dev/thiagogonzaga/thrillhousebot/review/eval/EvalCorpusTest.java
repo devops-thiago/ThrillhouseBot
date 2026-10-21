@@ -18,11 +18,15 @@ package dev.thiagogonzaga.thrillhousebot.review.eval;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewDimension;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponseParser;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -52,8 +56,11 @@ class EvalCorpusTest {
           c.isVerifierCase()
               || c.isGeneratorCase()
               || c.isSummaryCase()
-              || c.isSummaryVerificationCase(),
-          c.name() + ": kind must be 'verifier', 'generator', 'summary' or 'summary-verification'");
+              || c.isSummaryVerificationCase()
+              || c.isRepairCase(),
+          c.name()
+              + ": kind must be 'verifier', 'generator', 'summary', 'summary-verification' or"
+              + " 'repair'");
       assertTrue(c.spec().sourcePr() > 0, c.name() + ": sourcePr must reference the dogfood PR");
       assertNotNull(c.spec().why(), c.name() + ": why must document the resolved outcome");
       assertFalse(c.spec().why().isBlank(), c.name() + ": why must document the resolved outcome");
@@ -199,6 +206,44 @@ class EvalCorpusTest {
       }
     }
     assertTrue(found, "the corpus needs a summary verification case (#1078)");
+  }
+
+  @Test
+  void repairCasesCarryAFailedAnswerAndWhatTheRepairMustKeep() {
+    var parser = new ReviewResponseParser(new ObjectMapper());
+    var kinds = new HashSet<String>();
+    for (EvalCase c : corpus) {
+      if (!c.isRepairCase()) {
+        continue;
+      }
+      var expectation = c.spec().expectation();
+      kinds.add(expectation);
+      var answer = c.spec().answer();
+      assertNotNull(answer, c.name() + ": the failed answer");
+      assertNotNull(c.spec().keywords(), c.name() + ": keywords naming what to keep");
+      assertFalse(c.spec().keywords().isEmpty(), c.name() + ": keywords must not be empty");
+      for (var keyword : c.spec().keywords()) {
+        assertTrue(answer.contains(keyword), c.name() + ": the answer must hold " + keyword);
+      }
+      if (EvalCase.REPAIRED.equals(expectation)) {
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> parser.parse(answer),
+            c.name() + ": the answer must be one the parser refuses");
+      } else {
+        assertEquals(EvalCase.FILE_SUMMARIES_READ, expectation, c.name() + ": expectation");
+        assertTrue(
+            parser.parseSummary(answer).summary().fileSummaries().isEmpty(),
+            c.name() + ": the parser must read no file summary from the answer");
+        assertTrue(
+            parser.unreadFileSummaries(answer).isPresent(),
+            c.name() + ": the answer's file_summaries must be a string");
+      }
+    }
+    assertEquals(
+        Set.of(EvalCase.REPAIRED, EvalCase.FILE_SUMMARIES_READ),
+        kinds,
+        "the corpus needs a repair case of each kind (#1079)");
   }
 
   /** Every statement of {@code summary} the summary verification call reads, one per line. */
