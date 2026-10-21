@@ -722,7 +722,12 @@ class DescriptionGapScreenTest {
         "The description says the T-shaped cap holds; the reviewer flagged it unused.",
         // A negation after the crediting verb negates what the review reported, not the credit.
         "The description says the job retries; the review flagged that it never retries.",
-        "The description says the cap is read; the finding shows it is not read."
+        "The description says the cap is read; the finding shows it is not read.",
+        // A negation too far before a verb to bind it, with the review noun after the verb.
+        "The description says retries are capped; not capped retries loop forever as flagged by"
+            + " the reviewer.",
+        "The description says retries are capped; not capped retries loop forever as shown by the"
+            + " review."
       })
   void aBulletCreditingTheReviewIsRecognised(String gap) {
     assertTrue(DescriptionGapScreen.creditsReview(gap));
@@ -779,7 +784,12 @@ class DescriptionGapScreenTest {
         "The description says retries are capped; the review has never flagged a cap.",
         "The description says the cap holds; no reviewer has flagged it.",
         "The description says the cap holds; the finding never mentions it.",
-        "The description says the cap holds; the earlier finding does not show it unused."
+        "The description says the cap holds; the earlier finding does not show it unused.",
+        // A negated verb with the review noun after it, past a determiner.
+        "The description says the job is pinned; the unpinned action wasn't flagged by the"
+            + " reviewer.",
+        "The description says the cap holds; the overflow was not reported during the review.",
+        "The description says the cap holds; it is not shown by the earlier review to be unused."
       })
   void aBulletNotCreditingTheReviewIsNotRecognised(String gap) {
     assertFalse(DescriptionGapScreen.creditsReview(gap));

@@ -635,9 +635,9 @@ final class DescriptionGapScreen {
    * in one clause: "the earlier review had flagged", "reported during the review", "flagged by one
    * of the reviewers". A review noun a negation reaches ({@link #NEGATION_REACH}) credits nothing:
    * "no changed file or finding shows" says the review did not state it (#1203), and nor does a
-   * verb a negation between them reaches: "the review did not flag", "reviewers didn't report".
-   * Quoted passages, and a clause the description is said to state ("the description says one
-   * reviewer reported downtime"), are the PR text's words, not the bullet's.
+   * negated verb ({@link #negatedFor}): "the review did not flag", "not reported during the
+   * review". Quoted passages, and a clause the description is said to state ("the description says
+   * one reviewer reported downtime"), are the PR text's words, not the bullet's.
    */
   static boolean creditsReview(String gap) {
     var own = ownWords(gap);
@@ -720,21 +720,34 @@ final class DescriptionGapScreen {
   /**
    * Whether the review noun at word {@code noun} and the crediting verb {@code verb} (its index,
    * where it starts, and the negation binding it) make a credit: within {@link #CREDIT_REACH} of
-   * each other, with no negation between them ("the review did not flag").
+   * each other, and the verb not negated for the noun ({@link #negatedFor}).
    */
   private static boolean credits(int noun, int[] verb) {
-    return Math.abs(noun - verb[0]) <= CREDIT_REACH && verb[2] < noun;
+    return Math.abs(noun - verb[0]) <= CREDIT_REACH && !negatedFor(noun, verb);
   }
 
   /**
    * Whether the review noun at word {@code noun} is the subject of the subject-only verb {@code
    * verb} (its index, where an agent after "by" starts, and the negation binding it): within {@link
-   * #CREDIT_REACH} before it with no negation between them, or after its "by".
+   * #CREDIT_REACH} before it, or after its "by", and the verb not negated for the noun ({@link
+   * #negatedFor}).
    */
   private static boolean creditsAsSubject(int noun, int[] verb) {
-    return noun < verb[0]
-        ? verb[0] - noun <= CREDIT_REACH && verb[2] < noun
-        : noun >= verb[1] && noun - verb[0] <= CREDIT_REACH;
+    return (noun < verb[0]
+            ? verb[0] - noun <= CREDIT_REACH
+            : noun >= verb[1] && noun - verb[0] <= CREDIT_REACH)
+        && !negatedFor(noun, verb);
+  }
+
+  /**
+   * Whether the negation binding {@code verb} (its index first, that negation's third) cancels its
+   * credit to the review noun at word {@code noun}. With the noun before the verb, only a negation
+   * between them does ("the review did not flag"): one before the noun is the noun's own ({@link
+   * #NEGATION_REACH}). With the noun after it, any negation within {@link #NEGATION_REACH} before
+   * the verb does, whatever stands between the verb and the noun: "wasn't flagged by the reviewer".
+   */
+  private static boolean negatedFor(int noun, int[] verb) {
+    return noun < verb[0] ? verb[2] > noun : verb[0] - verb[2] <= NEGATION_REACH;
   }
 
   /**
