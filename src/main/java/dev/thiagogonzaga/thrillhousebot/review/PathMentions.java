@@ -51,7 +51,9 @@ import java.util.regex.Pattern;
  *   <li>text the review was given verbatim: a patch, the PR title and description, the linked
  *       issues. A path that is missing on purpose ("the description promises docs/FOO.md, which no
  *       file adds", a {@code COPY} source the build cannot find) is quoted from there. A quoted
- *       path that one changed file ends with is not missing, so the step above completes it first;
+ *       path that one changed file ends with is not missing, so the step above completes it first,
+ *       unless the patch of the finding's own file writes it as it stands: a root Dockerfile's
+ *       {@code COPY conf/site.conf} names conf/site.conf, not web/conf/site.conf (#1180);
  *   <li>the one changed file {@link DiffLineResolver#diffPathFor} maps it onto, which replaces it;
  *   <li>a repository file at the head, from one recursive listing read only when a token reaches
  *       this step.
@@ -305,6 +307,9 @@ final class PathMentions {
    */
   private final Map<String, Optional<String>> resolutions = new ConcurrentHashMap<>();
 
+  /** The paths each finding's file writes in its patch lines ({@link #pathsWrittenBy}). */
+  private final Map<String, Set<String>> writtenByFile = new ConcurrentHashMap<>();
+
   /**
    * Paths indexed once, in lower case: whole, by file name, and by every directory holding one, so
    * a token is judged by lookups rather than a walk over a repository-sized listing.
@@ -404,7 +409,7 @@ final class PathMentions {
     for (var finding : response.findings()) {
       var description =
           withQuotedPathsCorrected(
-              withoutUnresolvedMentions(finding.description()), finding.file());
+              withoutUnresolvedMentions(finding.description(), finding.file()), finding.file());
       var suggestionNew = finding.suggestionNew();
       var unresolved = unresolvedInSuggestion(finding);
       if (unresolved != null) {
@@ -547,10 +552,18 @@ final class PathMentions {
    * returned as it was.
    */
   String withoutUnresolvedMentions(String text) {
+    return withoutUnresolvedMentions(text, null);
+  }
+
+  /**
+   * {@link #withoutUnresolvedMentions(String)} for a finding's description on {@code file}, whose
+   * patch lines keep a path they write as it stands ({@link #rewrite(String, Set)}).
+   */
+  String withoutUnresolvedMentions(String text, String file) {
     if (text == null || text.isBlank()) {
       return text;
     }
-    var rewritten = rewrite(text);
+    var rewritten = rewrite(text, pathsWrittenBy(file));
     if (rewritten.unresolved().isEmpty()) {
       return rewritten.text();
     }
@@ -738,6 +751,18 @@ final class PathMentions {
   private record Rewrite(String text, List<int[]> unresolved) {}
 
   private Rewrite rewrite(String text) {
+    return rewrite(text, Set.of());
+  }
+
+  /**
+   * {@code text} rewritten, with a token in {@code written} kept as it stands (#1180): those are
+   * the paths the patch lines of the finding's file write, and such a path is what its line names
+   * however few changed files end with it. Completing a root Dockerfile's missing {@code COPY}
+   * source conf/site.conf to web/conf/site.conf made a finding that it is missing claim that an
+   * existing file is. A shortened path quoted only by another file's patch, as the c #277 README
+   * quotes docs/CONFIG-C.md, is still completed.
+   */
+  private Rewrite rewrite(String text, Set<String> written) {
     var out = new StringBuilder(text.length());
     var unresolved = new ArrayList<int[]>();
     var urls = new SpanCursor(spans(URL, text));
@@ -755,7 +780,7 @@ final class PathMentions {
           || partOfSomethingElse(text, start, fullEnd)) {
         continue;
       }
-      var resolution = resolve(token);
+      var resolution = written.contains(token) ? token : resolve(token);
       out.append(text, at, start);
       if (resolution == null) {
         unresolved.add(new int[] {out.length(), out.length() + (fullEnd - start)});
@@ -834,7 +859,7 @@ final class PathMentions {
     if (description == null || file == null || description.indexOf('`') < 0) {
       return description;
     }
-    var lines = patchLines.get(resolver.diffPathFor(file));
+    var lines = linesOf(file);
     if (lines == null) {
       return description;
     }
@@ -851,6 +876,31 @@ final class PathMentions {
     out.append(description, at, description.length());
     String result = out.toString();
     return result.equals(description) ? description : result;
+  }
+
+  /** The patch lines of the changed file {@code file} names, or {@code null} for none. */
+  private List<String> linesOf(String file) {
+    return file == null ? null : patchLines.get(resolver.diffPathFor(file));
+  }
+
+  /**
+   * The path-shaped tokens {@code file}'s patch lines hold whole, never the tail of a longer path;
+   * read once per file.
+   */
+  private Set<String> pathsWrittenBy(String file) {
+    var lines = linesOf(file);
+    return lines == null ? Set.of() : writtenByFile.computeIfAbsent(file, f -> pathsWritten(lines));
+  }
+
+  private static Set<String> pathsWritten(List<String> lines) {
+    var paths = new HashSet<String>();
+    for (String line : lines) {
+      var matcher = TOKEN.matcher(line);
+      while (matcher.find()) {
+        paths.add(stripTrailingDots(matcher.group(1)));
+      }
+    }
+    return paths;
   }
 
   /**
