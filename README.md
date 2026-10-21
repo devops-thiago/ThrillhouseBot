@@ -73,13 +73,15 @@ chat-completions API. Set `AI_BASE_URL` and `AI_MODEL` for your provider:
 | NVIDIA (build.nvidia.com) | `https://integrate.api.nvidia.com/v1` | `meta/llama-3.3-70b-instruct` |
 | Ollama (local) | `http://localhost:11434/v1` | `llama3.2` |
 
-Hugging Face and NVIDIA both have free tiers, useful for trying the bot. For
-Hugging Face, `AI_API_KEY` is an access token
-with the "Make calls to Inference Providers" permission. A free account's
-monthly credits are small, so expect a few reviews before requests are refused.
-For NVIDIA, `AI_API_KEY` is a key from build.nvidia.com. The free tier is
-limited to about 40 requests per minute, so set `AI_MAX_CONCURRENT_CALLS` low
-(for example `2`). Check each provider's current terms; both change them.
+For Hugging Face, `AI_API_KEY` is an access token with the "Make calls to
+Inference Providers" permission. A free Hugging Face account includes no
+monthly credits, so requests need purchased credits or a PRO, Team or
+Enterprise plan; see the
+[Inference Providers pricing](https://huggingface.co/docs/inference-providers/pricing).
+NVIDIA has a free tier, useful for trying the bot. `AI_API_KEY` is a key from
+build.nvidia.com, and the free tier is limited to about 40 requests per minute,
+so set `AI_MAX_CONCURRENT_CALLS` low (for example `2`). Check each provider's
+current terms; both change them.
 
 Ollama's cloud endpoint (`https://ollama.com/v1`) limits how many requests one
 account has in flight and refuses the rest with `timed out waiting for a
