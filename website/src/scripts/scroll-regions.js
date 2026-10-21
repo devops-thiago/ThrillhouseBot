@@ -27,8 +27,11 @@ function syncTable(table) {
   }
 }
 
+// The pages are rendered at build time, so the code blocks and their order
+// are fixed once the module runs.
+const blocks = Array.from(document.querySelectorAll(CODE));
+
 function codeLabel(pre) {
-  const blocks = Array.from(document.querySelectorAll(CODE));
   const title = pre.closest("figure")?.querySelector("figcaption .title")?.textContent?.trim();
   const detail = title || pre.dataset.language;
   const label = `Code block ${blocks.indexOf(pre) + 1}`;
@@ -57,4 +60,4 @@ const roles = new MutationObserver((records) => {
   }
 });
 roles.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["role"] });
-for (const pre of document.querySelectorAll(CODE)) syncCode(pre);
+for (const pre of blocks) syncCode(pre);
