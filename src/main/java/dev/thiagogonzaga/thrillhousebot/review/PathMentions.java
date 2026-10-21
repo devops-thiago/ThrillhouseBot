@@ -82,8 +82,10 @@ import java.util.regex.Pattern;
  * <p>Not paths: URLs, a route ({@code /scan}, {@code /triage/run}), a package name ({@code
  * com.example.x}), a scoped package ({@code @angular/core}), an image reference ({@code
  * node:24-alpine}, {@code ghcr.io/org/app:1.2}), a domain-led reference ({@code github.com/org}), a
- * glob ({@code src/**}{@code /*.ts}), one-slash prose ({@code and/or}, {@code CI/CD}) and
- * technology names ({@code Node.js}). Fenced code blocks are left as written.
+ * glob ({@code src/**}{@code /*.ts}), one-slash prose ({@code and/or}, {@code CI/CD}), technology
+ * names ({@code Node.js}), and a list of words joined by slashes ({@code
+ * isFull/buildBoard/boardMessage}) that ends with no file name and whose first word is no top-level
+ * directory of a changed or repository file (#1204). Fenced code blocks are left as written.
  */
 final class PathMentions {
 
@@ -354,6 +356,13 @@ final class PathMentions {
       return paths.contains(wanted)
           || directories.contains(wanted.endsWith("/") ? wanted : wanted + "/");
     }
+
+    /** Whether {@code token}'s first segment is a top-level directory of one of the paths. */
+    boolean opensWithDirectory(String token) {
+      int slash = token.indexOf('/');
+      return slash > 0
+          && directories.contains(token.substring(0, slash + 1).toLowerCase(Locale.ROOT));
+    }
   }
 
   private PathMentions(
@@ -527,9 +536,7 @@ final class PathMentions {
    * directory of a changed file, which makes it a directory rather than prose such as "and/or".
    */
   private boolean underAChangedDirectory(String token) {
-    int slash = token.indexOf('/');
-    return slash > 0
-        && changed.directories().contains(token.substring(0, slash + 1).toLowerCase(Locale.ROOT));
+    return changed.opensWithDirectory(token);
   }
 
   /** {@code text} without its sentences naming a path nothing resolves, mapped paths replaced. */
@@ -855,7 +862,7 @@ final class PathMentions {
     if (completed != null) {
       return completed;
     }
-    if (verbatim.contains(token)) {
+    if (verbatim.contains(token) || listsWords(token)) {
       return token;
     }
     if (token.contains("/") && !token.endsWith("/")) {
@@ -867,6 +874,22 @@ final class PathMentions {
     }
     var index = repository.get();
     return index.isEmpty() || index.get().names(token) ? token : null;
+  }
+
+  /**
+   * Whether {@code token} is a slash-joined list of words rather than a path (#1204): it ends with
+   * no file name or slash, and its first segment is no top-level directory of a changed or
+   * repository file. Corpus round 19 cut whole summary sentences over {@code
+   * OK/OUT_OF_RANGE/OFFLINE} and {@code API/config/slot/notes/notification}; read before the near
+   * miss, start/stop/run is not mapped onto a changed scripts/bin/run. The repository is listed
+   * only for a token shaped so; with no listing it is left as written, as any token is.
+   */
+  private boolean listsWords(String token) {
+    if (token.endsWith("/") || endsWithFileName(token) || underAChangedDirectory(token)) {
+      return false;
+    }
+    var index = repository.get();
+    return index.isEmpty() || !index.get().opensWithDirectory(token);
   }
 
   /**
@@ -1121,9 +1144,11 @@ final class PathMentions {
 
   /** Whether a path-shaped token ends in a file name: an extension or a dotless file name. */
   private static boolean namesAFile(String token) {
-    if (!pathShaped(token) || token.endsWith("/")) {
-      return false;
-    }
+    return pathShaped(token) && !token.endsWith("/") && endsWithFileName(token);
+  }
+
+  /** Whether {@code token}'s last segment has a known extension or is a dotless file name. */
+  private static boolean endsWithFileName(String token) {
     String last = fileName(token);
     return (last.lastIndexOf('.') > 0 && EXTENSIONS.contains(extension(last)))
         || DOTLESS_FILE_NAMES.contains(last.toLowerCase(Locale.ROOT));
@@ -1164,10 +1189,7 @@ final class PathMentions {
     if (token.endsWith("/")) {
       return true;
     }
-    String last = fileName(token);
-    return (last.lastIndexOf('.') > 0 && EXTENSIONS.contains(extension(last)))
-        || DOTLESS_FILE_NAMES.contains(last.toLowerCase(Locale.ROOT))
-        || token.chars().filter(c -> c == '/').count() >= 2;
+    return endsWithFileName(token) || token.chars().filter(c -> c == '/').count() >= 2;
   }
 
   private static String extension(String name) {
