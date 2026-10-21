@@ -380,9 +380,11 @@ public class AiReviewService {
    * The answer of one repair call (#1079) when {@code failure} is the parser refusing a non-blank
    * answer: only that answer, the parser's error and the response contract are sent, and the result
    * is read by the lane's parser. Empty for every other failure (a timeout, a provider error, a
-   * throttle, an empty answer; a length stop never reaches here) and whenever the repair fails, so
-   * the full retry runs exactly as before. It runs after the attempt returned its {@link
-   * ModelCallGate} slot, and the repair call takes a slot of its own.
+   * throttle, an empty answer; a length stop never reaches here), while the step is off, and
+   * whenever the repair fails, so the full retry runs exactly as before. A repaired summary answer
+   * goes through the same {@code file_summaries} re-ask as one the parser accepted. It runs after
+   * the attempt returned its {@link ModelCallGate} slot, and the repair call takes a slot of its
+   * own.
    */
   private Optional<ReviewResponse> repaired(
       ReviewSession session,
@@ -391,18 +393,25 @@ public class AiReviewService {
       ModelLane lane,
       RuntimeException failure) {
     var malformed = Throwables.findCause(failure, MalformedAnswer.class);
-    if (malformed.isEmpty() || malformed.get().body().isBlank()) {
+    if (malformed.isEmpty() || malformed.get().body().isBlank() || !repairService.enabled()) {
       return Optional.empty();
     }
+    // The step may still decline (the spend ceiling) or fail; it logs its own outcome.
     Log.warnf(
         "AI review attempt %d/%d for session %d returned an answer that is not review JSON (%s);"
-            + " asking for it in the required shape before a full retry",
+            + " handing it to the repair step before a full retry",
         attempt, maxAttempts, session.id, malformed.get().getMessage());
-    return repairService.repair(
-        ReviewTokenLedger.keyFor(session),
-        lane,
-        malformed.get().body(),
-        malformed.get().parseFailure());
+    return repairService
+        .repair(
+            ReviewTokenLedger.keyFor(session),
+            lane,
+            malformed.get().body(),
+            malformed.get().parseFailure())
+        .map(
+            repair ->
+                lane == ModelLane.CONCISE
+                    ? withReadFileSummaries(session, new Answer(repair.response(), repair.body()))
+                    : repair.response());
   }
 
   /**

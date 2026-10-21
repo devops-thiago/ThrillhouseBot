@@ -28,7 +28,9 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * The repair step (#1079, {@code REVIEW_RESPONSE_REPAIR_ENABLED}, on by default): when a review or
@@ -45,9 +47,11 @@ import java.util.regex.Pattern;
  *
  * <p>A repaired review answer is held to the failed one, so the repair cannot turn a broken answer
  * into an approval or add a finding: it must keep at least as many findings as the failed answer
- * has {@code "title"} keys, every finding title must be in the failed answer, and it may not hold
- * more statuses than the failed answer has {@code "status"} keys. A re-asked file summary is kept
- * only when its path is in the string it came from.
+ * has titles, every finding title must be one of the failed answer's, and it may not hold more
+ * statuses than the failed answer has. Those are read by {@link AnswerKeys} from the failed
+ * answer's structure, so JSON quoted inside a field counts for nothing; when the scan loses track
+ * of the structure, every {@code "title"} and {@code "status"} key in the text counts instead. A
+ * re-asked file summary is kept only when its whole path is named in the string it came from.
  *
  * <p>It fails open: disabled, the spend ceiling reached, an error, an empty or cut answer, an
  * answer the parser still refuses or one the checks above reject, each returns nothing, and the
@@ -91,6 +95,12 @@ public class ResponseRepairService {
     this.enabled = config.review().responseRepairEnabled();
   }
 
+  /**
+   * A repaired answer and the text it was read from, so the caller handles it as it handles an
+   * answer the parser accepted the first time (the {@code file_summaries} re-ask reads the text).
+   */
+  public record Repair(ReviewResponse response, String body) {}
+
   /** Whether the step is on ({@code REVIEW_RESPONSE_REPAIR_ENABLED}). */
   public boolean enabled() {
     return enabled;
@@ -102,7 +112,7 @@ public class ResponseRepairService {
    * ledgerKey} is the review's {@link ReviewTokenLedger#keyFor ledger key}; {@code parseFailure} is
    * the parser's refusal of {@code body}.
    */
-  public Optional<ReviewResponse> repair(
+  public Optional<Repair> repair(
       long ledgerKey, ModelLane lane, String body, IllegalArgumentException parseFailure) {
     if (!enabled || body == null || body.isBlank()) {
       return Optional.empty();
@@ -129,7 +139,7 @@ public class ResponseRepairService {
           "Response repair for review session %d reshaped the answer the parser refused (%s);"
               + " no full retry needed",
           ledgerKey, parseFailure.getMessage());
-      return Optional.of(repaired);
+      return Optional.of(new Repair(repaired, raw.get()));
     } catch (RuntimeException e) {
       Log.warnf(
           "Response repair for review session %d returned an answer the parser also refused (%s);"
@@ -188,11 +198,36 @@ public class ResponseRepairService {
     for (var entry : root.path(ReviewResponseParser.FILE_SUMMARIES)) {
       var path = entry.path("path").asText("").strip();
       var summary = entry.path("summary").asText("").strip();
-      if (!path.isEmpty() && !summary.isEmpty() && text.contains(path)) {
+      if (!path.isEmpty() && !summary.isEmpty() && namesPath(text, path)) {
         rows.add(new ReviewResponse.FileSummary(path, summary));
       }
     }
     return List.copyOf(rows);
+  }
+
+  /**
+   * Whether {@code text} names {@code path} whole: an occurrence not run on into a longer path or
+   * name ({@code data.py} does not name {@code a.py}, nor {@code a.pyc} {@code a.py}); a period
+   * after it ends a sentence only when no name character follows.
+   */
+  static boolean namesPath(String text, String path) {
+    for (var at = text.indexOf(path); at >= 0; at = text.indexOf(path, at + 1)) {
+      var end = at + path.length();
+      var startsClean = at == 0 || !isPathChar(text.charAt(at - 1));
+      var endsClean =
+          end == text.length()
+              || !isPathChar(text.charAt(end))
+              || (text.charAt(end) == '.'
+                  && (end + 1 == text.length() || !isPathChar(text.charAt(end + 1))));
+      if (startsClean && endsClean) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean isPathChar(char c) {
+    return Character.isLetterOrDigit(c) || c == '_' || c == '-' || c == '/' || c == '.';
   }
 
   /**
@@ -235,11 +270,14 @@ public class ResponseRepairService {
 
   /**
    * Why a repaired review answer cannot stand for the failed {@code body}, empty when it can: it
-   * dropped findings, holds a finding whose title the failed answer does not have, or holds more
+   * dropped findings, holds a finding whose title is none of the failed answer's, or holds more
    * statuses than the failed answer wrote.
    */
   static Optional<String> rejection(ReviewResponse repaired, String body) {
-    var titles = count(TITLE_KEY, body);
+    // The structure the scan read, or, when it lost track of it, every key in the raw text: the
+    // stricter count, so a scan that went astray can only cost a full retry.
+    var keys = AnswerKeys.of(body);
+    var titles = keys.readable() ? keys.titleCount() : count(TITLE_KEY, body);
     if (repaired.findings().size() < titles) {
       return Optional.of(
           "it holds "
@@ -248,13 +286,20 @@ public class ResponseRepairService {
               + titles
               + " title(s)");
     }
+    var known =
+        keys.readable()
+            ? keys.titles().stream().map(ResponseRepairService::plain).collect(Collectors.toSet())
+            : Set.<String>of();
     var plainBody = plain(body);
     for (var finding : repaired.findings()) {
-      if (finding.title() == null || !plainBody.contains(plain(finding.title()))) {
+      var title = finding.title() == null ? null : plain(finding.title());
+      var held =
+          title != null && (keys.readable() ? known.contains(title) : plainBody.contains(title));
+      if (!held) {
         return Optional.of("it holds a finding whose title the failed answer does not have");
       }
     }
-    var statuses = count(STATUS_KEY, body);
+    var statuses = keys.readable() ? keys.statuses() : count(STATUS_KEY, body);
     if (repaired.previousFindingsStatus().size() > statuses) {
       return Optional.of(
           "it holds "

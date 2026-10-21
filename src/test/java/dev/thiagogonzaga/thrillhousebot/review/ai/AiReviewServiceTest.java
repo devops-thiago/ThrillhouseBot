@@ -103,6 +103,7 @@ class AiReviewServiceTest {
     lenient().when(reasoning.enabled()).thenReturn(true);
     lenient().when(reasoning.effort()).thenReturn("max");
     lenient().when(reasoning.conciseEffort()).thenReturn(Optional.empty());
+    lenient().when(repairService.enabled()).thenReturn(true);
   }
 
   @Test
@@ -1830,7 +1831,7 @@ class AiReviewServiceTest {
     when(parser.parse(anyString())).thenThrow(refusal);
     var repaired = new ReviewResponse(List.of(), List.of(), null);
     when(repairService.repair(anyLong(), any(), anyString(), any()))
-        .thenReturn(Optional.of(repaired));
+        .thenReturn(Optional.of(new ResponseRepairService.Repair(repaired, "{}")));
 
     assertSame(repaired, service.review(session, PROMPT_INPUTS));
 
@@ -1961,7 +1962,7 @@ class AiReviewServiceTest {
         .thenThrow(new IllegalArgumentException("Model response is not valid review JSON"));
     var repaired = new ReviewResponse(List.of(), List.of(), null);
     when(repairService.repair(anyLong(), eq(AiResponses.ModelLane.CONCISE), anyString(), any()))
-        .thenReturn(Optional.of(repaired));
+        .thenReturn(Optional.of(new ResponseRepairService.Repair(repaired, "{}")));
 
     assertSame(
         repaired,
@@ -1969,6 +1970,76 @@ class AiReviewServiceTest {
             session, new AiReviewService.SummaryInputs("ctx", "[]", "files", "", "")));
     verify(prSummarizer, times(1))
         .summarizeStream(anyString(), anyString(), anyString(), anyString(), anyString());
+  }
+
+  @Test
+  void aRepairedSummaryAnswerGetsTheSameFileSummariesReAsk() {
+    // rc15 review of #1168: the repaired answer skipped the re-ask a parsed one gets.
+    ReviewSession session = reviewSession();
+    when(prSummarizer.summarizeStream(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(new FakeTokenStream("{\"summary\": {\"pr_purpose\": \"p\",}"));
+    when(parser.parseSummary(anyString()))
+        .thenThrow(new IllegalArgumentException("Model response is not valid review JSON"));
+    var repairedBody = "{\"summary\": {\"pr_purpose\": \"p\", \"file_summaries\": \"a.py: x\"}}";
+    var repaired =
+        new ReviewResponse(
+            List.of(),
+            List.of(),
+            new ReviewResponse.Summary(
+                0, 0, 0, 0, 0, "ok", "p", List.of(), List.of(), List.of(), null));
+    when(repairService.repair(anyLong(), eq(AiResponses.ModelLane.CONCISE), anyString(), any()))
+        .thenReturn(Optional.of(new ResponseRepairService.Repair(repaired, repairedBody)));
+    when(parser.unreadFileSummaries(repairedBody)).thenReturn(Optional.of("a.py: x"));
+    var rows = List.of(new ReviewResponse.FileSummary("a.py", "X"));
+    when(repairService.fileSummaries(ReviewTokenLedger.keyFor(session), "a.py: x"))
+        .thenReturn(Optional.of(rows));
+
+    var response =
+        service.summarize(session, new AiReviewService.SummaryInputs("ctx", "[]", "files", "", ""));
+
+    assertEquals(rows, response.summary().fileSummaries());
+    assertEquals("p", response.summary().prPurpose());
+  }
+
+  @Test
+  void withTheStepOffNoRepairIsAnnouncedOrAsked() {
+    // rc15 review of #1168: the log said a repair was asked for while the step was off.
+    ReviewSession session = reviewSession();
+    when(repairService.enabled()).thenReturn(false);
+    stubReviewStreams(new FakeTokenStream("not json"), new FakeTokenStream("{\"findings\":[]}"));
+    var parsed = new ReviewResponse(List.of(), List.of(), null);
+    when(parser.parse(anyString()))
+        .thenThrow(new IllegalArgumentException("Model response is not valid review JSON"))
+        .thenReturn(parsed);
+    var logged = new CopyOnWriteArrayList<String>();
+    var logger = Logger.getLogger(AiReviewService.class.getName());
+    var handler =
+        new Handler() {
+          @Override
+          public void publish(LogRecord entry) {
+            logged.add(String.valueOf(entry.getMessage()));
+          }
+
+          @Override
+          public void flush() {
+            // nothing buffered
+          }
+
+          @Override
+          public void close() {
+            // nothing to release
+          }
+        };
+    logger.addHandler(handler);
+    try {
+      assertSame(parsed, service.review(session, PROMPT_INPUTS));
+    } finally {
+      logger.removeHandler(handler);
+    }
+
+    verify(repairService, never()).repair(anyLong(), any(), anyString(), any());
+    assertTrue(logged.stream().noneMatch(line -> line.contains("repair")), "logged: " + logged);
   }
 
   @Test

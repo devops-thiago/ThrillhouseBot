@@ -106,8 +106,8 @@ class ResponseRepairServiceTest {
     var repaired = service.repair(SESSION, ModelLane.ACTIVE, BROKEN_REVIEW, refusal());
 
     assertTrue(repaired.isPresent());
-    assertEquals("Cursor loop never runs", repaired.get().findings().get(0).title());
-    assertEquals("resolved", repaired.get().previousFindingsStatus().get(0).status());
+    assertEquals("Cursor loop never runs", repaired.get().response().findings().get(0).title());
+    assertEquals("resolved", repaired.get().response().previousFindingsStatus().get(0).status());
     verifyNoInteractions(summaryRepairer);
   }
 
@@ -141,7 +141,7 @@ class ResponseRepairServiceTest {
 
     var repaired = service.repair(SESSION, ModelLane.CONCISE, "{\"summary\": [", refusal());
 
-    assertEquals("Adds paging.", repaired.orElseThrow().summary().prPurpose());
+    assertEquals("Adds paging.", repaired.orElseThrow().response().summary().prPurpose());
     var contract = ArgumentCaptor.forClass(String.class);
     var error = ArgumentCaptor.forClass(String.class);
     verify(summaryRepairer).repair(contract.capture(), error.capture(), anyString());
@@ -278,6 +278,118 @@ class ResponseRepairServiceTest {
     reviewAnswer(aiOk("{\"findings\": [{\"title\": \"Quote \\\"x\\\" is unescaped\"}]}"));
 
     assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isPresent());
+  }
+
+  @Test
+  void keysQuotedInsideAStringAreNotCountedAsFindingsOrStatuses() {
+    // rc15 review of #1168: a description quoting JSON inflated the guard's counts.
+    var body =
+        """
+        {"findings": [{"title": "Parser drops the status field", "risk": "medium",
+          "description": "It reads {\\"title\\": \\"x\\", \\"status\\": \\"open\\"} as empty",},
+        ], "previous_findings_status": []}
+        """;
+    reviewAnswer(
+        aiOk(
+            """
+            {"findings": [{"title": "Parser drops the status field", "risk": "medium",
+              "description": "It reads {\\"title\\": \\"x\\", \\"status\\": \\"open\\"} as empty"}],
+             "previous_findings_status": []}
+            """));
+
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isPresent());
+  }
+
+  @Test
+  void aNestedObjectsTitleIsNotCountedAsAFinding() {
+    // rc15 review of #1168: the raw-text count took every "title" key in the answer.
+    var body =
+        """
+        {"findings": [{"title": "Parser drops the status field", "risk": "medium",
+          "example": {"title": "a quoted record", "status": "open"},},
+        ], "previous_findings_status": []}
+        """;
+    reviewAnswer(
+        aiOk(
+            """
+            {"findings": [{"title": "Parser drops the status field", "risk": "medium"}],
+             "previous_findings_status": []}
+            """));
+
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isPresent());
+  }
+
+  @Test
+  void aTitleThatOnlyAppearsInsideAnotherFieldIsNotTheFailedAnswers() {
+    var body =
+        """
+        {"findings": [{"title": "Cursor loop never runs", "risk": "high",
+          "description": "Unlike Entrypoint names the old path, this one is real",}]}
+        """;
+    reviewAnswer(
+        aiOk(
+            """
+            {"findings": [{"title": "Entrypoint names the old path", "risk": "high"}]}
+            """));
+
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isEmpty());
+  }
+
+  @Test
+  void aReAskedRowIsKeptOnlyWhenItsWholePathIsInTheText() {
+    // rc15 review of #1168: "a.py" is not named by "data.py: ..." or "a.pyc".
+    var text = "data.py: reads the rows; lib/a.pyc is generated; app.py.";
+    when(summaryRepairer.repair(anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                """
+                {"file_summaries": [
+                  {"path": "a.py", "summary": "Partial match"},
+                  {"path": "data.py", "summary": "Reads the rows"},
+                  {"path": "lib/a.py", "summary": "Prefix of a.pyc"},
+                  {"path": "app.py", "summary": "Ends the sentence"}]}
+                """));
+
+    assertEquals(
+        List.of(
+            new ReviewResponse.FileSummary("data.py", "Reads the rows"),
+            new ReviewResponse.FileSummary("app.py", "Ends the sentence")),
+        service.fileSummaries(SESSION, text).orElseThrow());
+  }
+
+  @Test
+  void anAnswerTheScanCannotFollowIsCountedByEveryKeyInTheText() {
+    // An unterminated string: the scan gives up, and every "title" key in the text counts.
+    var body = "{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B\", \"note\": \"cut";
+    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isEmpty());
+
+    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isPresent());
+
+    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"Z\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isEmpty());
+
+    var statusBody =
+        "{\"findings\": [], \"previous_findings_status\": [{\"id\": 1, \"status\": \"open";
+    reviewAnswer(
+        aiOk(
+            "{\"findings\": [], \"previous_findings_status\": [{\"id\": 1, \"status\": \"resolved\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, statusBody, refusal()).isPresent());
+  }
+
+  @Test
+  void aPathAtTheStartOrEndOfTheTextIsNamed() {
+    assertTrue(ResponseRepairService.namesPath("a.py", "a.py"));
+    assertTrue(ResponseRepairService.namesPath("see a.py", "a.py"));
+    assertTrue(ResponseRepairService.namesPath("a.py: x", "a.py"));
+    assertFalse(ResponseRepairService.namesPath("a.py.bak: x", "a.py"));
+    assertFalse(ResponseRepairService.namesPath("ba.py", "a.py"));
+    assertTrue(ResponseRepairService.namesPath("a.py. Then b.py", "a.py"));
+    assertFalse(ResponseRepairService.namesPath("a.pyx", "a.py"));
+    assertFalse(ResponseRepairService.namesPath("a.py-old", "a.py"));
+    assertFalse(ResponseRepairService.namesPath("a.py_old", "a.py"));
+    assertFalse(ResponseRepairService.namesPath("lib/a.py", "/a.py"));
   }
 
   @Test

@@ -334,7 +334,8 @@ class PromptEvalTest {
     if (repaired.isEmpty()) {
       return "not-repaired";
     }
-    var titles = repaired.get().findings().stream().map(ReviewResponse.Finding::title).toList();
+    var titles =
+        repaired.get().response().findings().stream().map(ReviewResponse.Finding::title).toList();
     var kept =
         titles.size() == spec.keywords().size()
             && spec.keywords().stream()
