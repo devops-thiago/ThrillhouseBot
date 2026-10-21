@@ -36,10 +36,24 @@ class SentenceBreaksTest {
         new String[] {"a guard, e.g. x", "one, i.e. x", "tags, etc. x", "a vs. b", "see cf. x"}) {
       assertFalse(SentenceBreaks.endsSentenceAt(text, text.indexOf(". ") + 1), text);
     }
+    for (var text :
+        new String[] {
+          "Dr. x", "Mr. x", "Mrs. x", "Ms. x", "Prof. x", "St. x", "Jr. x", "Sr. x", "(Dr. x"
+        }) {
+      assertFalse(SentenceBreaks.endsSentenceAt(text, text.indexOf(". ") + 1), text);
+    }
     assertFalse(SentenceBreaks.endsSentenceAt("ratio 1.5", 7));
     assertFalse(SentenceBreaks.endsSentenceAt("Foo.bar", 4));
     assertFalse(SentenceBreaks.endsSentenceAt("Client.java", 7));
     assertFalse(SentenceBreaks.endsSentenceAt("a, b", 2));
+  }
+
+  @Test
+  void aWordOnlyShapedLikeATitleEndsASentence() {
+    for (var text :
+        new String[] {"500 ms. x", "the dr. x", "the CIDR. x", "an MS. x", "the prof. x"}) {
+      assertTrue(SentenceBreaks.endsSentenceAt(text, text.lastIndexOf('.') + 1), text);
+    }
   }
 
   @Test

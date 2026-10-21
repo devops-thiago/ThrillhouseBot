@@ -277,6 +277,9 @@ class InventedArtifactsTest {
         InventedArtifacts.invents(
             "It removes the old vs. new toggle and a settings page.", change));
     assertFalse(
+        InventedArtifacts.invents(
+            "It removes the old toggle Dr. Lee added and a settings page.", change));
+    assertFalse(
         InventedArtifacts.invents("It removes legacy pages, including a settings page.", change));
     assertFalse(
         InventedArtifacts.invents("It removes legacy pages: such as a settings page.", change));
