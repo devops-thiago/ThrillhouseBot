@@ -1,0 +1,52 @@
+### scala/src/main/scala/baggage/ManifestClient.scala (added, +48 -0)
+```diff
+@@ -0,0 +1,48 @@
++package baggage
++
++import java.net.{URI, URLEncoder}
++import java.net.http.{HttpClient, HttpRequest, HttpResponse}
++import java.nio.charset.StandardCharsets.UTF_8
++import java.time.{Duration, Instant}
++import scala.jdk.OptionConverters._
++
++object ManifestDefaults {
++  val apiToken: String = "not-a-real-token"
++}
++
++/** Airline manifest API. Results are paged; follow `nextCursor` until it is None. */
++trait ManifestApi {
++  def fetchPage(flight: String, cursor: Option[String]): ManifestPage
++}
++
++final class HttpManifestApi(baseUrl: URI, token: String) extends ManifestApi {
++  private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build()
++
++  override def fetchPage(flight: String, cursor: Option[String]): ManifestPage = {
++    def enc(v: String) = URLEncoder.encode(v, UTF_8)
++    val query = cursor.fold(s"flight=${enc(flight)}")(c => s"flight=${enc(flight)}&cursor=${enc(c)}")
++    val request = HttpRequest
++      .newBuilder(URI.create(s"$baseUrl?$query"))
++      .header("Authorization", s"Bearer $token")
++      .timeout(Duration.ofSeconds(10))
++      .GET()
++      .build()
++    val response = http.send(request, HttpResponse.BodyHandlers.ofString())
++    if (response.statusCode() != 200)
++      throw new IllegalStateException(s"manifest API returned ${response.statusCode()} for $flight")
++    val bags = response.body().linesIterator.filter(_.nonEmpty).map(parseLine).toSeq
++    ManifestPage(bags, response.headers().firstValue("X-Next-Cursor").toScala)
++  }
++
++  // tag,passenger,connectionHub,inboundArrival,outboundDeparture
++  private def parseLine(line: String): ManifestBag = {
++    val f = line.split(",", -1)
++    ManifestBag(f(0), f(1), f(2).toUpperCase, Instant.parse(f(3)), Instant.parse(f(4)))
++  }
++}
++
++final class ManifestService(api: ManifestApi) {
++  /** Every bag booked to transfer onto `flight`. */
++  def transferBags(flight: String): Seq[ManifestBag] =
++    api.fetchPage(flight, None).bags
++}
+```

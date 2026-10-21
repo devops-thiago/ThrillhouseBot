@@ -48,6 +48,8 @@ public record EvalCase(String name, String diff, Spec spec) {
   static final String CLAIM_NOT_GAPPED = "claim-not-gapped";
   static final String MUST_FIND = "must-find";
   static final String MUST_NOT_FIND = "must-not-find";
+  static final String SUGGESTION_FIXED = "suggestion-fixed";
+  static final String CLAIM_CUT = "claim-cut";
 
   /**
    * The JSON body of {@code case.json}; unknown properties fail loading to keep fixtures honest.
@@ -124,6 +126,17 @@ public record EvalCase(String name, String diff, Spec spec) {
 
   boolean isVerifierCase() {
     return KIND_VERIFIER.equals(spec.kind());
+  }
+
+  /**
+   * A verifier case that also judges the finding's fix or description (#1080): {@code
+   * suggestion-fixed} expects the broken suggestion replaced (by code holding every {@code
+   * keywords} entry) or dropped, and {@code claim-cut} expects the side claim the {@code keywords}
+   * name cut from the description while the correct suggestion stays. Either way the verdict must
+   * be one of {@code expectedVerdicts}.
+   */
+  boolean judgesTheFix() {
+    return isVerifierCase() && spec.expectation() != null;
   }
 
   boolean isGeneratorCase() {

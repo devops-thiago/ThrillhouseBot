@@ -267,6 +267,14 @@ and confirms, downgrades or drops it. It is on by default (`REVIEW_VERIFIER_ENAB
 call, a deterministic pass drops findings that retract themselves and demotes hedged blocking
 claims. That pass still runs with the verifier off.
 
+The same call judges each kept finding's suggested fix and its side claims (`FindingRevisions`).
+For a suggestion the verdict says `keep`, `replace` with corrected code, or `drop`: a replacement
+takes the place of `suggestion_new` and leaves `suggestion_old`, so the suggestion is still placed
+on the lines it quotes, and a drop removes `suggestion_new` and keeps the finding. Sentences of
+the description that the material contradicts are listed under `cut` and removed when the
+description holds them exactly as whole sentences, never the last one. A missing, unknown or
+malformed part changes nothing.
+
 Verification fails open. An error, an empty or cut response, or a call skipped at the spend
 ceiling keeps the candidates. Those findings are capped at medium confidence and say in their text
 that they were not verified, so under the default blocking strictness they cannot request changes

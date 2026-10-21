@@ -422,10 +422,27 @@ public final class FindingVerifierPrompts {
             execution signal or provided CI context settles it; on the strength of counting alone
             it is never "confirmed" and never above confidence "low".
 
-            Also audit each finding's suggested fix: when the underlying issue is real but
-            suggestion_new is incorrect, incomplete, or would introduce a new defect, return
-            "downgraded" with confidence "low" and state in the reason that the suggestion is
-            unreliable.
+            Also audit each finding's suggested fix, apart from the verdict on the finding. For a
+            finding you do not reject that has a suggestion_new, judge whether replacing
+            suggestion_old with suggestion_new fixes the defect without breaking the surrounding
+            code the material shows. A suggestion is broken when, applied, it still fails or fails
+            somewhere else: a loop whose condition is false on the first check (a cursor
+            initialised to None and then looped while it is defined never fetches a page), a path
+            renamed in one line while another line still uses the old one (a COPY destination
+            changed while the ENTRYPOINT keeps the old path), a call to a name the material does
+            not define, or a fix that undoes another part of the change.
+            - "suggestion": "keep" when it is correct.
+            - "suggestion": "replace" with "suggestion_new" set to the corrected code, full lines
+              and no backticks, replacing the same suggestion_old lines, when you can write a
+              correct fix.
+            - "suggestion": "drop" when it is broken and you cannot write a correct one.
+            A broken suggestion is not by itself a reason to downgrade or reject a real finding.
+
+            Then check each kept finding's description for side claims: a statement beside the
+            defect itself that the material contradicts, such as a test or fixture said to break or
+            pass when the diff shows otherwise, or a name, constant, value or path quoted as present
+            that the material does not have. Copy each such sentence exactly, whole, into "cut".
+            Never list the sentence that states the defect, and list nothing when in doubt.
 
             """;
 
@@ -439,10 +456,13 @@ public final class FindingVerifierPrompts {
             Response schema:
             {"verdicts": [{"id": <finding id>, "verdict": "confirmed" | "downgraded" | "rejected",
             "risk": "critical" | "high" | "medium" | "low",
-            "confidence": "high" | "medium" | "low", "reason": "<one short sentence>"}]}
+            "confidence": "high" | "medium" | "low", "reason": "<one short sentence>",
+            "suggestion": "keep" | "replace" | "drop", "suggestion_new": "<corrected code, only
+            with replace>", "cut": ["<a sentence copied exactly from the description>"]}]}
 
             Include exactly one verdict per candidate finding, keyed by its "id". For
-            "confirmed", repeat the original risk and confidence.
+            "confirmed", repeat the original risk and confidence. Leave out "suggestion" for a
+            finding with no suggestion_new, and "cut" when nothing is to be cut.
             """;
 
   /**

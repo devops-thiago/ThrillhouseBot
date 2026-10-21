@@ -401,7 +401,13 @@ class PromptEvalTest {
     return keywords.stream().anyMatch(k -> lower.contains(k.toLowerCase(Locale.ROOT)));
   }
 
-  private static boolean sampleMatchesExpectation(EvalCase evalCase, String outcome) {
+  static boolean sampleMatchesExpectation(EvalCase evalCase, String outcome) {
+    if (evalCase.judgesTheFix()) {
+      var parts = outcome.split("\\+", 2);
+      return parts.length == 2
+          && evalCase.spec().expectedVerdicts().contains(parts[0])
+          && parts[1].equals(evalCase.spec().expectation());
+    }
     if (evalCase.isVerifierCase()) {
       return evalCase.spec().expectedVerdicts().contains(outcome);
     }
@@ -425,6 +431,11 @@ class PromptEvalTest {
   }
 
   private static String expectationOf(EvalCase evalCase) {
+    if (evalCase.judgesTheFix()) {
+      return String.join("|", evalCase.spec().expectedVerdicts())
+          + "+"
+          + evalCase.spec().expectation();
+    }
     return evalCase.isVerifierCase()
         ? String.join("|", evalCase.spec().expectedVerdicts())
         : evalCase.spec().expectation();
@@ -457,6 +468,7 @@ class PromptEvalTest {
       return "rejected";
     }
     var kept = verified.findings().get(0);
+    var revision = evalCase.judgesTheFix() ? "+" + revisionOutcome(evalCase, candidate, kept) : "";
     // Both enums declare constants most- to least-severe, so a higher ordinal is a lower rating. A
     // deterministic floor can RAISE a rating (#570, #926), which is not a downgrade.
     var lowered =
@@ -464,7 +476,37 @@ class PromptEvalTest {
                 > RiskLevel.fromString(candidate.risk()).ordinal()
             || Confidence.fromString(kept.confidence()).ordinal()
                 > Confidence.fromString(candidate.confidence()).ordinal();
-    return lowered ? "downgraded" : "confirmed";
+    return (lowered ? "downgraded" : "confirmed") + revision;
+  }
+
+  /**
+   * What the verifier made of a kept finding's fix and description (#1080). For {@code
+   * suggestion-fixed}: "suggestion-fixed" when the suggestion was dropped or replaced by code
+   * holding every keyword, "suggestion-kept" when it is unchanged, "suggestion-still-broken"
+   * otherwise. For {@code claim-cut}: "claim-cut" when no sentence names a keyword any more and the
+   * suggestion is unchanged, "claim-kept" when one still does, "suggestion-changed" when the
+   * correct suggestion was touched.
+   */
+  static String revisionOutcome(
+      EvalCase evalCase, ReviewResponse.Finding raised, ReviewResponse.Finding kept) {
+    var keywords =
+        evalCase.spec().keywords() == null ? List.<String>of() : evalCase.spec().keywords();
+    var suggestion = kept.suggestionNew();
+    if (EvalCase.SUGGESTION_FIXED.equals(evalCase.spec().expectation())) {
+      if (suggestion == null) {
+        return EvalCase.SUGGESTION_FIXED;
+      }
+      if (suggestion.equals(raised.suggestionNew())) {
+        return "suggestion-kept";
+      }
+      return keywords.stream().allMatch(suggestion::contains)
+          ? EvalCase.SUGGESTION_FIXED
+          : "suggestion-still-broken";
+    }
+    if (!java.util.Objects.equals(suggestion, raised.suggestionNew())) {
+      return "suggestion-changed";
+    }
+    return mentionsAny(keywords, orEmpty(kept.description())) ? "claim-kept" : EvalCase.CLAIM_CUT;
   }
 
   /**
