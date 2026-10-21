@@ -634,9 +634,10 @@ final class DescriptionGapScreen {
    * and a {@link #CREDIT_VERBS} verb at most {@value #CREDIT_REACH} words apart, in either order,
    * in one clause: "the earlier review had flagged", "reported during the review", "flagged by one
    * of the reviewers". A review noun a negation reaches ({@link #NEGATION_REACH}) credits nothing:
-   * "no changed file or finding shows" says the review did not state it (#1203). Quoted passages,
-   * and a clause the description is said to state ("the description says one reviewer reported
-   * downtime"), are the PR text's words, not the bullet's.
+   * "no changed file or finding shows" says the review did not state it (#1203), and nor does a
+   * verb a negation between them reaches: "the review did not flag", "reviewers didn't report".
+   * Quoted passages, and a clause the description is said to state ("the description says one
+   * reviewer reported downtime"), are the PR text's words, not the bullet's.
    */
   static boolean creditsReview(String gap) {
     var own = ownWords(gap);
@@ -667,7 +668,8 @@ final class DescriptionGapScreen {
     var words = WORD.matcher(text).region(from, to);
     var nouns = new ArrayList<int[]>();
     var verbs = new ArrayList<int[]>();
-    // A subject-only verb: its index, and the index from which a noun after it counts (after "by").
+    // A subject-only verb: its index, the index from which a noun after it counts (after "by"), and
+    // the negation binding it, which a crediting verb records too.
     var subjectVerbs = new ArrayList<int[]>();
     var previous = "";
     // The index of the last negation still binding the words that follow.
@@ -679,9 +681,9 @@ final class DescriptionGapScreen {
       if (REVIEW_NOUNS.contains(word)) {
         nouns.add(new int[] {index, words.start(), negation});
       } else if (verbal && CREDIT_VERBS.contains(word)) {
-        verbs.add(new int[] {index, words.start()});
+        verbs.add(new int[] {index, words.start(), negation});
       } else if (verbal && SUBJECT_CREDIT_VERBS.contains(word)) {
-        subjectVerbs.add(new int[] {index, Integer.MAX_VALUE});
+        subjectVerbs.add(new int[] {index, Integer.MAX_VALUE, negation});
       } else if ("by".equals(word)
           && !subjectVerbs.isEmpty()
           && subjectVerbs.getLast()[0] == index - 1) {
@@ -694,7 +696,7 @@ final class DescriptionGapScreen {
         .filter(
             noun ->
                 noun[0] - noun[2] > NEGATION_REACH
-                    && (verbs.stream().anyMatch(verb -> Math.abs(noun[0] - verb[0]) <= CREDIT_REACH)
+                    && (verbs.stream().anyMatch(verb -> credits(noun[0], verb))
                         || subjectVerbs.stream().anyMatch(verb -> creditsAsSubject(noun[0], verb))))
         .map(noun -> noun[1])
         .toList();
@@ -716,13 +718,22 @@ final class DescriptionGapScreen {
   }
 
   /**
+   * Whether the review noun at word {@code noun} and the crediting verb {@code verb} (its index,
+   * where it starts, and the negation binding it) make a credit: within {@link #CREDIT_REACH} of
+   * each other, with no negation between them ("the review did not flag").
+   */
+  private static boolean credits(int noun, int[] verb) {
+    return Math.abs(noun - verb[0]) <= CREDIT_REACH && verb[2] < noun;
+  }
+
+  /**
    * Whether the review noun at word {@code noun} is the subject of the subject-only verb {@code
-   * verb} (its index, and where an agent after "by" starts): within {@link #CREDIT_REACH} before
-   * it, or after its "by".
+   * verb} (its index, where an agent after "by" starts, and the negation binding it): within {@link
+   * #CREDIT_REACH} before it with no negation between them, or after its "by".
    */
   private static boolean creditsAsSubject(int noun, int[] verb) {
     return noun < verb[0]
-        ? verb[0] - noun <= CREDIT_REACH
+        ? verb[0] - noun <= CREDIT_REACH && verb[2] < noun
         : noun >= verb[1] && noun - verb[0] <= CREDIT_REACH;
   }
 

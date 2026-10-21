@@ -719,7 +719,10 @@ class DescriptionGapScreenTest {
         "The description says the job never retries and reviewers flagged that it does.",
         "The description says retries are capped; not capped retries loop until reviewers flagged"
             + " them.",
-        "The description says the T-shaped cap holds; the reviewer flagged it unused."
+        "The description says the T-shaped cap holds; the reviewer flagged it unused.",
+        // A negation after the crediting verb negates what the review reported, not the credit.
+        "The description says the job retries; the review flagged that it never retries.",
+        "The description says the cap is read; the finding shows it is not read."
       })
   void aBulletCreditingTheReviewIsRecognised(String gap) {
     assertTrue(DescriptionGapScreen.creditsReview(gap));
@@ -769,7 +772,14 @@ class DescriptionGapScreenTest {
         "The description says retries are capped; no finding reports a cap.",
         "The description says the job is pinned; the unpinned action is not flagged by any finding.",
         "The description says the job is pinned; the unpinned action wasn't flagged by any reviewer.",
-        "The description says the cap holds; it was never reported by any reviewer."
+        "The description says the cap holds; it was never reported by any reviewer.",
+        // A negation between the review noun and its crediting verb.
+        "The description says the job is pinned; the review did not flag the unpinned action.",
+        "The description says retries are capped; reviewers didn't report a cap.",
+        "The description says retries are capped; the review has never flagged a cap.",
+        "The description says the cap holds; no reviewer has flagged it.",
+        "The description says the cap holds; the finding never mentions it.",
+        "The description says the cap holds; the earlier finding does not show it unused."
       })
   void aBulletNotCreditingTheReviewIsNotRecognised(String gap) {
     assertFalse(DescriptionGapScreen.creditsReview(gap));
