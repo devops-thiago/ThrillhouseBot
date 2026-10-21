@@ -72,4 +72,15 @@ class AnswerKeysTest {
     assertFalse(AnswerKeys.of("{\"findings\": []}]}").readable());
     assertFalse(AnswerKeys.of("{\"title\": \"x\\").readable());
   }
+
+  @Test
+  void stringsOutsideAnObjectAndSpacedColonsAreReadAsTheyStand() {
+    var keys =
+        AnswerKeys.of(
+            "\"prose\" {\"findings\": [\"loose\", {\"title\" : \"T\", \"risk\": \"low\"}]}");
+
+    assertTrue(keys.readable());
+    assertEquals(List.of("T"), keys.titles());
+    assertFalse(AnswerKeys.of("{\"findings\": [{\"title\": \"T\"}], \"tail\"").readable());
+  }
 }
