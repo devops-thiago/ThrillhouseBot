@@ -288,3 +288,13 @@ test('real Git primary range rejects unsigned edits made only in a merge commit'
     assert.equal(automatic.accepted.find(c => c.sha === clean).method, 'unchanged-automatic-merge');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('remediation output identifies the certifying commit', async () => {
+  const f = fixture({ missing: true });
+  f.git.allRange = (b) => b === base ? [repair, squash] : [source];
+  f.api.pulls = async () => [];
+  const result = await f.run();
+  assert.equal(result.failures.length, 0);
+  assert.equal(result.accepted.find(c => c.sha === squash).remediation, repair);
+  assert.ok(f.output.find(line => line.includes(squash)).includes(`remediation ${repair}`));
+});

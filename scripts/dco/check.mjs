@@ -92,8 +92,9 @@ export class DcoChecker {
     for (const remediation of this.remediations.get(sha) || []) {
       const [target, author] = await Promise.all([this.github.commit(sha), this.github.commit(remediation)]);
       if (authenticatedAuthor(author) && target.author?.id && author.author.id === target.author.id) {
-        this.evidence.push({ sha, method: 'author-remediation', remediation });
-        return true;
+        const proof = { sha, method: 'author-remediation', remediation };
+        this.evidence.push(proof);
+        return proof;
       }
     }
     return false;
@@ -107,7 +108,8 @@ export class DcoChecker {
     if (!SHA.test(sha)) throw new Error('Invalid commit SHA');
     const details = this.git.details(sha);
     if (this.exact(details)) return { sha, method: 'matching-signoff' };
-    if (await this.remediated(sha)) return { sha, method: 'author-remediation' };
+    const remediation = await this.remediated(sha);
+    if (remediation) return remediation;
     const parents = this.git.parents(sha);
     if (parents.length > 1) {
       if (this.automaticMerge(sha, parents)) return { sha, method: 'unchanged-automatic-merge' };
@@ -177,7 +179,7 @@ export class DcoChecker {
       try {
         const result = await this.validate(sha, opener);
         accepted.push(result);
-        this.log(`ok ${sha}: ${result.method}${result.pull ? ` (source PR #${result.pull})` : ''}`);
+        this.log(`ok ${sha}: ${result.method}${result.pull ? ` (source PR #${result.pull})` : ''}${result.remediation ? ` (remediation ${result.remediation})` : ''}`);
       } catch (error) {
         failures.push({ sha, reason: error.message });
         this.log(`::error::DCO ${sha}: ${safe(error.message)}. Supply complete source evidence or an author-signed DCO-Remediation commit; do not rewrite shared history.`);
