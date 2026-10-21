@@ -190,6 +190,15 @@ class BaseCodeCitationsTest {
             "FindingDeduplicator.LINE_TOLERANCE",
             "SecurityScanTest.eachIacRuleCollapsesAModelFindingNamingItsDefectNearby"),
         split.met().get(1).citations());
+    assertEquals(
+        List.of(
+            REVIEW + "VerdictBuilder.java",
+            TESTS + "VerdictBuilderTest.java",
+            REVIEW + "SecurityScan.java",
+            REVIEW + "FindingDeduplicator.java",
+            TESTS + "SecurityScanTest.java"),
+        repository.read,
+        "each cited file is read once, however often it is cited");
   }
 
   /**
@@ -273,6 +282,68 @@ class BaseCodeCitationsTest {
         List.of(IAC_GAP),
         ambiguous.citations(body, pr1141Files()).split(List.of(IAC_GAP)).unmet(),
         "two files of the cited name");
+  }
+
+  /**
+   * #1177: a cited line must be in the file. A line past its end, or a file listed but not read,
+   * cites nothing on the base and keeps the gap; the last line of a file is still cited.
+   */
+  @Test
+  void aCitedLineTheFileDoesNotHoldKeepsTheGap() {
+    var gaps = List.of(CHECK_RUN_GAP);
+    var oneLine = new Repository();
+    oneLine.contents.put(REVIEW + "VerdictBuilder.java", List.of("// one line only"));
+    assertEquals(
+        gaps,
+        oneLine
+            .citations(
+                "The check-run title already reports the open total with the new count"
+                    + " separate: VerdictBuilder.java:999999999.",
+                List.of())
+            .split(gaps)
+            .unmet(),
+        "the #1177 reproduction");
+    assertEquals(List.of(REVIEW + "VerdictBuilder.java"), oneLine.read);
+
+    var repository = new Repository();
+    assertEquals(
+        gaps,
+        repository.citations(shipped("VerdictBuilder.java:901"), List.of()).split(gaps).unmet(),
+        "one line past the end of a 900-line file");
+    assertEquals(
+        List.of("VerdictBuilder.java:900"),
+        repository
+            .citations(shipped("VerdictBuilder.java:900"), List.of())
+            .split(gaps)
+            .met()
+            .getFirst()
+            .citations(),
+        "the last line");
+
+    var unreadable = new Repository();
+    unreadable.contents.remove(REVIEW + "VerdictBuilder.java");
+    assertEquals(
+        gaps,
+        unreadable.citations(shipped("VerdictBuilder.java:372"), List.of()).split(gaps).unmet(),
+        "a listed file that cannot be read");
+    assertEquals(
+        gaps,
+        unreadable
+            .citations(shipped("`VerdictBuilder.newFindingsSummary`"), List.of())
+            .split(gaps)
+            .unmet(),
+        "a member of a listed file that cannot be read");
+
+    var changed = new Repository();
+    assertEquals(
+        gaps,
+        changed
+            .citations(
+                shipped("VerdictBuilder.java:901"),
+                List.of(modified(REVIEW + "VerdictBuilder.java", 40)))
+            .split(gaps)
+            .unmet(),
+        "past the end of a file the pull request changes");
   }
 
   /**
@@ -375,9 +446,45 @@ class BaseCodeCitationsTest {
    */
   @Test
   void theSummaryListsTheCriteriaAsMetAndTheNextRoundCarriesNone() throws IOException {
-    var sources =
-        new PrSummaryGenerator.DescriptionSources(
-            "", Set.of(), "", new Repository().citations(pr1141Body(), pr1141Files()));
+    var rendered =
+        summary(
+            new Repository().citations(pr1141Body(), pr1141Files()),
+            List.of(CHECK_RUN_GAP, IAC_GAP.replace("Linked issue #952:", "Linked issue:")));
+
+    assertFalse(rendered.contains(PrSummaryGenerator.GAPS_HEADING), rendered);
+    assertTrue(rendered.contains(PrSummaryGenerator.MET_HEADING), rendered);
+    assertTrue(
+        rendered.contains("- Linked issue #952: The check-run title reports the open total"),
+        rendered);
+    assertTrue(
+        rendered.contains(
+            "- Linked issue: The IaC scan drops a model finding on the same line and same"
+                + " rule — cited: `SecurityScan.java:1098`, `SecurityScan.java:1614`,"
+                + " `SecurityScan.duplicatesDetection`, `FindingDeduplicator.LINE_TOLERANCE`,"
+                + " `SecurityScanTest.eachIacRuleCollapsesAModelFindingNamingItsDefectNearby`"),
+        rendered);
+    assertEquals(List.of(), carried(rendered));
+  }
+
+  /**
+   * #1177: a criterion whose citation is past the end of its file stays under Description vs.
+   * Implementation, and the next round carries it.
+   */
+  @Test
+  void aCriterionCitingALinePastTheEndIsListedAndCarried() {
+    var rendered =
+        summary(
+            new Repository().citations(shipped("VerdictBuilder.java:999999999"), List.of()),
+            List.of(CHECK_RUN_GAP));
+
+    assertTrue(rendered.contains(PrSummaryGenerator.GAPS_HEADING), rendered);
+    assertFalse(rendered.contains(PrSummaryGenerator.MET_HEADING), rendered);
+    assertEquals(List.of(CHECK_RUN_GAP), carried(rendered));
+  }
+
+  /** The summary of an empty review whose summary call listed {@code gaps}. */
+  private static String summary(BaseCodeCitations citations, List<String> gaps) {
+    var sources = new PrSummaryGenerator.DescriptionSources("", Set.of(), "", citations);
     var empty =
         new ReviewResult(
             List.of(),
@@ -393,45 +500,26 @@ class BaseCodeCitationsTest {
             List.of(),
             0);
 
-    var rendered =
-        new PrSummaryGenerator(false)
-            .generate(
-                8,
-                374,
-                31,
-                List.of(),
-                new ReviewResponse.Summary(
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    "ok",
-                    "Fixes #952.",
-                    List.of(CHECK_RUN_GAP, IAC_GAP.replace("Linked issue #952:", "Linked issue:"))),
-                empty,
-                sources);
+    return new PrSummaryGenerator(false)
+        .generate(
+            8,
+            374,
+            31,
+            List.of(),
+            new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", "Fixes #952.", gaps),
+            empty,
+            sources);
+  }
 
-    assertFalse(rendered.contains(PrSummaryGenerator.GAPS_HEADING), rendered);
-    assertTrue(rendered.contains(PrSummaryGenerator.MET_HEADING), rendered);
-    assertTrue(
-        rendered.contains("- Linked issue #952: The check-run title reports the open total"),
-        rendered);
-    assertTrue(
-        rendered.contains(
-            "- Linked issue: The IaC scan drops a model finding on the same line and same"
-                + " rule — cited: `SecurityScan.java:1098`, `SecurityScan.java:1614`,"
-                + " `SecurityScan.duplicatesDetection`, `FindingDeduplicator.LINE_TOLERANCE`,"
-                + " `SecurityScanTest.eachIacRuleCollapsesAModelFindingNamingItsDefectNearby`"),
-        rendered);
+  /** The gaps the next round carries from a summary comment holding {@code rendered}. */
+  private static List<String> carried(String rendered) {
     var conversation =
         List.of(
             new IssueComment(
                 PrSummaryGenerator.SUMMARY_MARKER + "\n" + rendered,
                 new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")));
-    assertEquals(
-        List.of(),
-        DescriptionGapCarryover.previousGaps(conversation, BotIdentity.of("thrillhousebot[bot]")));
+    return DescriptionGapCarryover.previousGaps(
+        conversation, BotIdentity.of("thrillhousebot[bot]"));
   }
 
   /** The criterion line #1148 is about, as a passage led by a claim that it shipped. */
