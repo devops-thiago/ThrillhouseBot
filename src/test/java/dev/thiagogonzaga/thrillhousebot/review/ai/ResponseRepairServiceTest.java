@@ -490,6 +490,27 @@ class ResponseRepairServiceTest {
     reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B\"}]}"));
     assertTrue(service.repair(SESSION, ModelLane.ACTIVE, openTitle, refusal()).isPresent());
 
+    // JSON a description quotes, escaped inside its string, holds no title (#1176).
+    var quoted =
+        "{\"findings\":[{\"title\":\"A\",\"description\":\"example {\\\"title\\\":\\\"A\\\"}\"},"
+            + "{\"title\":\"B\",\"note\":\"cut";
+    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"A\"}]}"));
+    assertTrue(
+        service.repair(SESSION, ModelLane.ACTIVE, quoted, refusal()).isEmpty(),
+        "the escaped example is part of a description, so B was lost");
+    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, quoted, refusal()).isPresent());
+
+    // A title the failed answer writes twice must come back twice here too.
+    var twice =
+        "{\"findings\": [{\"title\": \"A\"}, {\"title\": \"A\"}, {\"title\": \"B\", \"note\": \"cut";
+    reviewAnswer(
+        aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B\"}, {\"title\": \"B\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, twice, refusal()).isEmpty());
+    reviewAnswer(
+        aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"A\"}, {\"title\": \"B\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, twice, refusal()).isPresent());
+
     var statusBody =
         "{\"findings\": [], \"previous_findings_status\": [{\"id\": 1, \"status\": \"open";
     reviewAnswer(
