@@ -819,7 +819,8 @@ final class PathMentions {
     while (matcher.find()) {
       var content = matcher.group(1).strip();
       if (quotesMoreThanAPath(content)
-          && quotedInPatches.computeIfAbsent(content, this::anyPatchLineHolds)) {
+          && Boolean.TRUE.equals(
+              quotedInPatches.computeIfAbsent(content, this::anyPatchLineHolds))) {
         quoted.add(new int[] {matcher.start(), matcher.end()});
       }
     }
