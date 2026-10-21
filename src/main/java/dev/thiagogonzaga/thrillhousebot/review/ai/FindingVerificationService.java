@@ -797,6 +797,23 @@ public class FindingVerificationService {
     return FindingVerifierPrompts.verifierSystemPrompt(dimensions);
   }
 
+  /**
+   * The verifier's answer, the call made once more when it returns no body and the spend ceiling
+   * allows it (#1079: kotlin ThrillhouseBot-test#276 posted all 17 round-1 findings unverified on
+   * one empty body).
+   */
+  private String answerOrRepeat(long ledgerSessionId, Supplier<String> call, int candidates) {
+    var raw = call.get();
+    if ((raw == null || raw.isBlank()) && !tokenLedger.ceilingReached(ledgerSessionId)) {
+      Log.warnf(
+          "Finding verification returned no response body — repeating the call once for the %d"
+              + " candidate finding(s)",
+          candidates);
+      raw = call.get();
+    }
+    return raw;
+  }
+
   /** The audit itself; {@link #verify} applies the deterministic severity floor to its result. */
   @SuppressWarnings("java:S107") // Mirrors the public overload it implements.
   private ReviewResponse audit(
@@ -837,21 +854,12 @@ public class FindingVerificationService {
                   () ->
                       verifier.verify(
                           candidates,
-                          prContext == null ? "" : prContext,
+                          Objects.requireNonNullElse(prContext, ""),
                           diff,
                           projectStack,
-                          previousFindings == null ? "" : previousFindings,
+                          Objects.requireNonNullElse(previousFindings, ""),
                           systemPrompt));
-      var raw = call.get();
-      if ((raw == null || raw.isBlank()) && !tokenLedger.ceilingReached(ledgerSessionId)) {
-        // #1079: kotlin ThrillhouseBot-test#276 posted all 17 round-1 findings unverified on one
-        // empty body. The call is made once more before failing open; the ceiling still bounds it.
-        Log.warnf(
-            "Finding verification returned no response body — repeating the call once for the %d"
-                + " candidate finding(s)",
-            screened.findings().size());
-        raw = call.get();
-      }
+      var raw = answerOrRepeat(ledgerSessionId, call, screened.findings().size());
       if (raw == null || raw.isBlank()) {
         // The unwrap helper's documented "no response" soft failure, which this caller has to
         // honour like every other one: a reasoning model can spend the whole output budget on

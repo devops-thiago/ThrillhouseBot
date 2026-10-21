@@ -75,30 +75,11 @@ public class SummaryVerificationService {
       ReviewTokenLedger tokenLedger,
       ResponseCaps responseCaps,
       TokenCounter tokenCounter) {
-    this(
-        verifier,
-        config,
-        config.review().summaryVerificationEnabled(),
-        config.review().diagram().enabled(),
-        mapper,
-        tokenLedger,
-        responseCaps,
-        tokenCounter);
-  }
-
-  private SummaryVerificationService(
-      SummaryVerifier verifier,
-      ThrillhouseConfig config,
-      boolean enabled,
-      boolean diagramEnabled,
-      ObjectMapper mapper,
-      ReviewTokenLedger tokenLedger,
-      ResponseCaps responseCaps,
-      TokenCounter tokenCounter) {
     this.verifier = verifier;
     this.config = config;
-    this.enabled = enabled;
-    this.diagramEnabled = diagramEnabled;
+    // No configuration is the step switched off ({@link #disabled()}).
+    this.enabled = config != null && config.review().summaryVerificationEnabled();
+    this.diagramEnabled = config != null && config.review().diagram().enabled();
     this.mapper = mapper;
     this.tokenLedger = tokenLedger;
     this.responseCaps = responseCaps;
@@ -107,7 +88,7 @@ public class SummaryVerificationService {
 
   /** The step switched off, for callers that construct the pipeline without configuration. */
   public static SummaryVerificationService disabled() {
-    return new SummaryVerificationService(null, null, false, false, null, null, null, null);
+    return new SummaryVerificationService(null, null, null, null, null, null);
   }
 
   /**
