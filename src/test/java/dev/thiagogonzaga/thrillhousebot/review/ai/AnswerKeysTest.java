@@ -83,4 +83,28 @@ class AnswerKeysTest {
     assertEquals(List.of("T"), keys.titles());
     assertFalse(AnswerKeys.of("{\"findings\": [{\"title\": \"T\"}], \"tail\"").readable());
   }
+
+  @Test
+  void aFindingsArrayNestedInsideAFindingCountsForNothing() {
+    // rc16 review of #1168: a nested "findings" array added a phantom title.
+    var keys =
+        AnswerKeys.of(
+            "{\"findings\": [{\"title\": \"real\", \"example\": {\"findings\": [{\"title\":"
+                + " \"phantom\"}]}}]}");
+
+    assertTrue(keys.readable());
+    assertEquals(List.of("real"), keys.titles());
+  }
+
+  @Test
+  void aStatusesArrayNestedInsideAnotherObjectCountsForNothing() {
+    var keys =
+        AnswerKeys.of(
+            "{\"findings\": [{\"title\": \"real\", \"example\": {\"previous_findings_status\":"
+                + " [{\"id\": 9, \"status\": \"resolved\"}]}}],"
+                + " \"summary\": {\"previous_findings_status\": [{\"status\": \"x\"}]},"
+                + " \"previous_findings_status\": [{\"id\": 1, \"status\": \"resolved\"}]}");
+
+    assertEquals(1, keys.statuses());
+  }
 }

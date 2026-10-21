@@ -23,10 +23,11 @@ import java.util.List;
 /**
  * The finding titles and status entries a failed review answer holds, read by a tolerant JSON scan
  * rather than a parser, because the answer is one the parser refused (#1079). Only the keys of an
- * object directly inside the {@code findings} array (or a top-level array, #960) count as titles,
- * and only those directly inside {@code previous_findings_status} count as statuses, so JSON quoted
- * in a description, or a nested object with its own {@code title}, counts for nothing. Trailing
- * commas, prose between documents and several documents are read through.
+ * object directly inside the top-level object's {@code findings} array (or a top-level array, #960)
+ * count as titles, and only those directly inside its {@code previous_findings_status} count as
+ * statuses, so JSON quoted in a description, a nested object with its own {@code title}, or an
+ * array of either name nested deeper counts for nothing. Trailing commas, prose between documents
+ * and several documents are read through.
  *
  * <p>A scan that ends inside a string or with a bracket left open lost track of the structure (a
  * quote left unescaped can do that); it reports itself not {@link #readable()}, and the caller
@@ -148,25 +149,23 @@ record AnswerKeys(List<String> titles, int statuses, boolean readable) {
 
     /**
      * The array key whose elements the current object is: {@link #FINDINGS_KEY} for an object
-     * directly inside the findings array or a top-level array, {@link #STATUSES_KEY} for one inside
-     * the statuses array, {@code null} otherwise.
+     * directly inside a top-level array, or inside the findings array of a top-level object; {@link
+     * #STATUSES_KEY} for one inside the statuses array of a top-level object; {@code null}
+     * otherwise. An array of the same name nested anywhere deeper (a finding quoting an example
+     * answer) counts for nothing.
      */
     private String elementOf() {
-      var iterator = frames.iterator();
-      iterator.next();
-      if (!iterator.hasNext()) {
+      var path = List.copyOf(frames);
+      if (path.size() < 2 || !path.get(1).array()) {
         return null;
       }
-      var parent = iterator.next();
-      if (!parent.array()) {
-        return null;
-      }
-      if (ROOT.equals(parent.key()) && !iterator.hasNext()) {
+      var key = path.get(1).key();
+      if (path.size() == 2) {
+        // The array is the document itself: a bare array of findings (#960).
         return FINDINGS_KEY;
       }
-      return FINDINGS_KEY.equals(parent.key()) || STATUSES_KEY.equals(parent.key())
-          ? parent.key()
-          : null;
+      var named = FINDINGS_KEY.equals(key) || STATUSES_KEY.equals(key);
+      return path.size() == 3 && named ? key : null;
     }
 
     /** The index of the quote closing a string opened before {@code from}, or -1. */

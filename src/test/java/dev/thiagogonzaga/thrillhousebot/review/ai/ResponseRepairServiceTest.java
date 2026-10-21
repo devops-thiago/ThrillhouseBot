@@ -320,6 +320,19 @@ class ResponseRepairServiceTest {
   }
 
   @Test
+  void aTitleFromANestedFindingsArrayIsNotOneOfTheFailedAnswers() {
+    // rc16 review of #1168: {real, phantom} passed when "phantom" sat in a nested findings array.
+    var body =
+        "{\"findings\": [{\"title\": \"real\", \"example\": {\"findings\": [{\"title\":"
+            + " \"phantom\"}]},}]}";
+    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"real\"}, {\"title\": \"phantom\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isEmpty());
+
+    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"real\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isPresent());
+  }
+
+  @Test
   void aTitleThatOnlyAppearsInsideAnotherFieldIsNotTheFailedAnswers() {
     var body =
         """
