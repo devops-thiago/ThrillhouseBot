@@ -26,9 +26,10 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -47,11 +48,13 @@ import java.util.stream.Collectors;
  *
  * <p>A repaired review answer is held to the failed one, so the repair cannot turn a broken answer
  * into an approval or add a finding: it must keep at least as many findings as the failed answer
- * has titles, every finding title must be one of the failed answer's, and it may not hold more
+ * has titles, every finding title must be one of the failed answer's, each of those titles must
+ * come back at least as often as the failed answer wrote it (#1176), and it may not hold more
  * statuses than the failed answer has. Those are read by {@link AnswerKeys} from the failed
  * answer's structure, so JSON quoted inside a field counts for nothing; when the scan loses track
- * of the structure, every {@code "title"} and {@code "status"} key in the text counts instead. A
- * re-asked file summary is kept only when its whole path is named in the string it came from.
+ * of the structure, every {@code "title"} and {@code "status"} key in the text counts instead, and
+ * a title may come back no more often than the text holds it. A re-asked file summary is kept only
+ * when its whole path is named in the string it came from.
  *
  * <p>It fails open: disabled, the spend ceiling reached, an error, an empty or cut answer, an
  * answer the parser still refuses or one the checks above reject, each returns nothing, and the
@@ -280,8 +283,8 @@ public class ResponseRepairService {
 
   /**
    * Why a repaired review answer cannot stand for the failed {@code body}, empty when it can: it
-   * dropped findings, holds a finding whose title is none of the failed answer's, or holds more
-   * statuses than the failed answer wrote.
+   * dropped findings, holds a finding whose title is none of the failed answer's, repeats one
+   * finding's title in place of another's, or holds more statuses than the failed answer wrote.
    */
   static Optional<String> rejection(ReviewResponse repaired, String body) {
     // The structure the scan read, or, when it lost track of it, every key in the raw text: the
@@ -296,18 +299,35 @@ public class ResponseRepairService {
               + titles
               + " title(s)");
     }
-    var known =
+    var written =
         keys.readable()
-            ? keys.titles().stream().map(ResponseRepairService::plain).collect(Collectors.toSet())
-            : Set.<String>of();
+            ? keys.titles().stream()
+                .collect(Collectors.toMap(ResponseRepairService::plain, title -> 1, Integer::sum))
+            : Map.<String, Integer>of();
     var plainBody = plain(body);
+    var held = new HashMap<String, Integer>();
     for (var finding : repaired.findings()) {
       var title = finding.title() == null ? null : plain(finding.title());
-      var held =
-          title != null && (keys.readable() ? known.contains(title) : plainBody.contains(title));
-      if (!held) {
+      var known =
+          title != null
+              && (keys.readable() ? written.containsKey(title) : plainBody.contains(title));
+      if (!known) {
         return Optional.of("it holds a finding whose title the failed answer does not have");
       }
+      held.merge(title, 1, Integer::sum);
+    }
+    // Each title as often as the failed answer wrote it, so a copy of one finding cannot stand in
+    // for another (#1176). Without the structure, a title may appear no more often than the text
+    // holds it.
+    var lost =
+        keys.readable()
+            ? written.entrySet().stream()
+                .anyMatch(title -> held.getOrDefault(title.getKey(), 0) < title.getValue())
+            : held.entrySet().stream()
+                .anyMatch(title -> occurrences(title.getKey(), plainBody) < title.getValue());
+    if (lost) {
+      return Optional.of(
+          "it repeats a finding's title in place of another finding of the failed answer");
     }
     var statuses = keys.readable() ? keys.statuses() : count(STATUS_KEY, body);
     if (repaired.previousFindingsStatus().size() > statuses) {
@@ -324,6 +344,17 @@ public class ResponseRepairService {
     var matcher = key.matcher(text);
     var found = 0;
     while (matcher.find()) {
+      found++;
+    }
+    return found;
+  }
+
+  /** How many times {@code part} appears in {@code text}, without overlap. */
+  private static int occurrences(String part, String text) {
+    var found = 0;
+    for (var at = text.indexOf(part);
+        at >= 0;
+        at = text.indexOf(part, at + Math.max(1, part.length()))) {
       found++;
     }
     return found;
