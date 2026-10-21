@@ -256,6 +256,15 @@ class FindingRevisionsTest {
         "It calls Foo.bar on every page it reads. The loop never runs.|bar on every page it"
             + " reads.",
         "The test in Client.java covers this case. The loop never runs.|The test in Client.",
+        "The parser rejects Dr. Smith's valid input by mistake. The loop never runs.|Smith's valid"
+            + " input by mistake.",
+        "The parser rejects Dr. Smith's valid input by mistake. The loop never runs.|The parser"
+            + " rejects Dr.",
+        "The fixture Mr. Jones wrote reads one page. The loop never runs.|Jones wrote reads one"
+            + " page.",
+        "It cites Prof. Knuth on the sort it uses. The loop never runs.|Knuth on the sort it"
+            + " uses.",
+        "Ask Mrs. Lee or Ms. Kay about the old loop. The loop never runs.|Kay about the old loop.",
       })
   void aPeriodThatEndsNoSentenceBoundsNoCut(String description, String cut) {
     var raised = finding(description, null);
@@ -274,6 +283,29 @@ class FindingRevisionsTest {
             "The loop never runs. It calls Foo.bar 1.5 times, e.g. in Client.java. It returns no"
                 + " bags.",
             "It calls Foo.bar 1.5 times, e.g. in Client.java."));
+  }
+
+  /**
+   * #1178: only a capitalised title closes an abbreviation, so a sentence ending in a unit ("500
+   * ms.") or a word that ends in the same letters ("CIDR.") still bounds a cut.
+   */
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      value = {
+        "The timeout is 500 ms. Every bag on page two is lost. The loop never runs.|The timeout is"
+            + " 500 ms. The loop never runs.",
+        "It parses the CIDR. Every bag on page two is lost. The loop never runs.|It parses the"
+            + " CIDR. The loop never runs.",
+        "Dr. Smith wrote the parser. Every bag on page two is lost. The loop never runs.|Dr. Smith"
+            + " wrote the parser. The loop never runs.",
+      })
+  void aWholeSentenceNextToAWordThatIsNoTitleIsCut(String description, String revised) {
+    var raised = finding(description, null);
+
+    assertEquals(
+        revised,
+        FindingRevisions.withoutSentence(raised, description, "Every bag on page two is lost."));
   }
 
   @Test
