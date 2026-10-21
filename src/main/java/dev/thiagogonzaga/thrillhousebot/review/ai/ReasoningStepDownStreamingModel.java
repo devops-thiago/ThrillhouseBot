@@ -19,17 +19,15 @@ import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
-import dev.langchain4j.model.openai.OpenAiChatRequestParameters;
-import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.AiPricingConfig.ReasoningConfig;
 import io.quarkiverse.langchain4j.ModelName;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.util.function.Supplier;
 
 /**
  * The streaming model the review's AI services call, with the per-call reasoning step-down (#839)
- * in front of the provider model: a call that {@link AiReviewService} bound as {@linkplain
- * ReviewSessionContext#reasoningDisabledForCurrentCall() reasoning-disabled} goes out with {@code
- * reasoning_effort=none}, every other call goes out exactly as configured.
+ * in front of the provider model: a call that {@link AiReviewService} starts under a {@linkplain
+ * ReasoningRepeat#override reasoning override} goes out with that {@code reasoning_effort}, every
+ * other call goes out exactly as configured.
  *
  * <p>The override is applied here, at the model, and not as a per-call request parameter on the AI
  * service method, because that slot does not reach the wire on this path: for a {@code TokenStream}
@@ -39,17 +37,16 @@ import java.util.function.Supplier;
  * a per-call {@code @ModelName}, is silently dropped for streamed calls while the blocking and
  * {@code Multi} paths honour it. The step-down is decided after a call has already failed once, so
  * it has to be per call rather than a second configured model with its own duplicated settings;
- * what survives the extension's path unchanged is the thread that starts the stream, and the
- * session binding that {@link AiReviewService} already puts on it for the observability listener
- * carries the flag the same way.
+ * what survives the extension's path unchanged is the thread that starts the stream, which carries
+ * the override.
  *
- * <p>The rewrite folds the request's own parameters into an OpenAI-typed copy and sets the effort
- * on that: the provider model merges a call's parameters over its builder-level defaults through
- * its own builder, and only an OpenAI-typed value keeps the OpenAI-specific fields through that
- * merge — a plain {@code reasoning_effort} on a generic parameters object would be flattened away.
- * Everything else about the call is untouched: the delegate's own {@code chat} runs its listeners,
- * so the observability listener and the token ledger see the stepped-down call exactly as any
- * other.
+ * <p>The rewrite ({@link ReasoningRepeat#applied}) folds the request's own parameters into an
+ * OpenAI-typed copy and sets the effort on that: the provider model merges a call's parameters over
+ * its builder-level defaults through its own builder, and only an OpenAI-typed value keeps the
+ * OpenAI-specific fields through that merge — a plain {@code reasoning_effort} on a generic
+ * parameters object would be flattened away. Everything else about the call is untouched: the
+ * delegate's own {@code chat} runs its listeners, so the observability listener and the token
+ * ledger see the stepped-down call exactly as any other.
  */
 final class ReasoningStepDownStreamingModel implements StreamingChatModel {
 
@@ -61,34 +58,13 @@ final class ReasoningStepDownStreamingModel implements StreamingChatModel {
 
   @Override
   public void chat(ChatRequest request, StreamingChatResponseHandler handler) {
-    delegate.chat(
-        ReviewSessionContext.reasoningDisabledForCurrentCall()
-            ? withReasoningDisabled(request)
-            : request,
-        handler);
+    delegate.chat(ReasoningRepeat.applied(request), handler);
   }
 
   /** The delegate's defaults: this wrapper adds nothing a caller could read off the model. */
   @Override
   public ChatRequestParameters defaultRequestParameters() {
     return delegate.defaultRequestParameters();
-  }
-
-  /**
-   * {@code request} with {@code reasoning_effort=none} on an OpenAI-typed copy of its parameters,
-   * so the provider model's merge keeps the effort and every other value the request carried. Only
-   * the call's own parameters are copied here; the delegate's builder-level defaults are not part
-   * of the rewrite, and the provider model merges them in afterwards, when it applies the call's
-   * parameters over its defaults.
-   */
-  static ChatRequest withReasoningDisabled(ChatRequest request) {
-    return request.toBuilder()
-        .parameters(
-            OpenAiChatRequestParameters.builder()
-                .overrideWith(request.parameters())
-                .reasoningEffort(ReasoningConfig.EFFORT_NONE)
-                .build())
-        .build();
   }
 
   /**

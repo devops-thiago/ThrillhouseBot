@@ -276,6 +276,66 @@ class SummaryVerificationServiceTest {
     verify(ledger).recordUsage(SESSION, 1200, 80);
   }
 
+  /**
+   * #1169: with reasoning off in config, glm-5.3-flash spent the whole concise cap reasoning on
+   * most summary checks and the check kept a contradicted row. The call is repeated once at the
+   * concise lane's effort, and the repeat's answer is applied.
+   */
+  @Test
+  void aCheckThatReasonedItsCapAwayIsRepeatedOnceAtTheConciseEffort() {
+    reasoningOff();
+    var effortPerCall = new ArrayList<String>();
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenAnswer(
+            invocation -> {
+              effortPerCall.add(ReasoningRepeat.current());
+              return effortPerCall.size() == 1
+                  ? Result.<String>builder()
+                      .content(null)
+                      .finishReason(FinishReason.LENGTH)
+                      .tokenUsage(new TokenUsage(2900, 8192))
+                      .build()
+                  : Result.<String>builder()
+                      .content(
+                          "{\"contradicted\": [{\"id\": \"R2\", \"source\": \"finding\","
+                              + " \"evidence\": \"No billing_runs row is written\"}]}")
+                      .finishReason(FinishReason.STOP)
+                      .tokenUsage(new TokenUsage(2900, 300))
+                      .build();
+            });
+
+    var verified = service.verify(SESSION, SUMMARY_252, material());
+
+    assertEquals(java.util.Arrays.asList(null, "low"), effortPerCall);
+    assertEquals(1, verified.fileSummaries().size(), "the repeat's verdict cuts R2");
+    verify(ledger).recordUsage(SESSION, 2900, 8192);
+    verify(ledger).recordUsage(SESSION, 2900, 300);
+    verify(ledger).recordReasoningStepDown(SESSION);
+  }
+
+  @Test
+  void theRepeatIsNotMadeOnceTheSpendCeilingIsReached() {
+    reasoningOff();
+    when(ledger.ceilingReached(SESSION)).thenReturn(false, true);
+    when(verifier.verify(anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            Result.<String>builder().content(null).finishReason(FinishReason.LENGTH).build());
+
+    assertSame(SUMMARY_252, service.verify(SESSION, SUMMARY_252, material()));
+    verify(verifier).verify(anyString(), anyString(), anyString(), anyString(), anyString());
+    verify(ledger, never()).recordReasoningStepDown(anyLong());
+  }
+
+  private void reasoningOff() {
+    var ai = mock(ThrillhouseConfig.AiPricingConfig.class);
+    var reasoning = mock(ThrillhouseConfig.AiPricingConfig.ReasoningConfig.class);
+    when(config.ai()).thenReturn(ai);
+    when(ai.reasoning()).thenReturn(reasoning);
+    when(reasoning.enabled()).thenReturn(false);
+    when(reasoning.effort()).thenReturn("low");
+    when(reasoning.conciseEffort()).thenReturn(java.util.Optional.empty());
+  }
+
   @Test
   void aCallWithNoReportedUsageRecordsNothing() {
     answer("{\"contradicted\": []}");

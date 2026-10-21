@@ -1151,7 +1151,8 @@ public interface ThrillhouseConfig {
 
       /**
        * Send a reasoning-effort hint ({@code reasoning_effort}). When {@code false}, no reasoning
-       * parameter is sent and the provider default applies.
+       * parameter is sent and the provider default applies, except on the one repeat of a call that
+       * spent its whole output cap reasoning, which sends the lane's effort.
        */
       @WithDefault("false")
       boolean enabled();

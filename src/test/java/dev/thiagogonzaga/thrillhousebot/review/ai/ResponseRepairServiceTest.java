@@ -174,6 +174,36 @@ class ResponseRepairServiceTest {
     verify(ledger).recordUsage(SESSION, 30, 900);
   }
 
+  /**
+   * #1169: a repair call whose reasoning spent the whole cap is repeated once, at the concise
+   * lane's effort for a summary answer, before the repair gives up.
+   */
+  @Test
+  void aRepairThatReasonedItsCapAwayIsRepeatedOnceAtTheLanesEffort() {
+    var ai = mock(ThrillhouseConfig.AiPricingConfig.class);
+    var reasoning = mock(ThrillhouseConfig.AiPricingConfig.ReasoningConfig.class);
+    when(config.ai()).thenReturn(ai);
+    when(ai.reasoning()).thenReturn(reasoning);
+    when(reasoning.enabled()).thenReturn(false);
+    when(reasoning.effort()).thenReturn("max");
+    when(reasoning.conciseEffort()).thenReturn(java.util.Optional.empty());
+    var effortPerCall = new java.util.ArrayList<String>();
+    when(summaryRepairer.repair(anyString(), anyString(), anyString()))
+        .thenAnswer(
+            invocation -> {
+              effortPerCall.add(ReasoningRepeat.current());
+              return effortPerCall.size() == 1
+                  ? Result.<String>builder().content(null).finishReason(FinishReason.LENGTH).build()
+                  : aiOk("{\"summary\": {\"pr_purpose\": \"Adds paging.\"}}");
+            });
+
+    var repaired = service.repair(SESSION, ModelLane.CONCISE, "{\"summary\": [", refusal());
+
+    assertEquals("Adds paging.", repaired.orElseThrow().response().summary().prPurpose());
+    assertEquals(java.util.Arrays.asList(null, "low"), effortPerCall);
+    verify(ledger).recordReasoningStepDown(SESSION);
+  }
+
   @Test
   void aCutEmptyFailedOrUnreadableRepairReturnsNothing() {
     reviewAnswer(aiTruncated("{\"findings\": ["));

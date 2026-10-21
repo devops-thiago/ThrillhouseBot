@@ -75,6 +75,7 @@ public class ResponseRepairService {
   private final ObjectMapper mapper;
   private final ReviewTokenLedger tokenLedger;
   private final ResponseCaps responseCaps;
+  private final ThrillhouseConfig config;
   private final boolean enabled;
 
   @Inject
@@ -92,6 +93,7 @@ public class ResponseRepairService {
     this.mapper = mapper;
     this.tokenLedger = tokenLedger;
     this.responseCaps = responseCaps;
+    this.config = config;
     this.enabled = config.review().responseRepairEnabled();
   }
 
@@ -233,7 +235,8 @@ public class ResponseRepairService {
   /**
    * One repair call's answer text, or empty when the ceiling is reached, the call fails, or the
    * answer is empty or cut. The usage is recorded before the answer is read: a cut answer was still
-   * billed.
+   * billed. A call whose reasoning spent the whole cap before any answer is repeated once at a
+   * lower effort (#1169).
    */
   private Optional<String> call(
       long ledgerKey, ModelLane lane, String contract, String error, String answer) {
@@ -246,11 +249,18 @@ public class ResponseRepairService {
     }
     try {
       var fenced = PromptTemplateEscaper.fence(answer);
+      var concise = lane == ModelLane.CONCISE;
       var result =
-          lane == ModelLane.CONCISE
-              ? summaryRepairer.repair(contract, error, fenced)
-              : reviewRepairer.repair(contract, error, fenced);
-      recordUsage(ledgerKey, result);
+          ReasoningRepeat.blocking(
+              "Response repair for review session " + ledgerKey,
+              () ->
+                  concise
+                      ? summaryRepairer.repair(contract, error, fenced)
+                      : reviewRepairer.repair(contract, error, fenced),
+              () -> ReasoningRepeat.effortFor(config, concise),
+              () -> tokenLedger.ceilingReached(ledgerKey),
+              repaired -> recordUsage(ledgerKey, repaired),
+              () -> tokenLedger.recordReasoningStepDown(ledgerKey));
       var raw =
           AiResponses.textOrThrowOnTruncation(
               result, "Response repair", responseCaps.forLane(lane));

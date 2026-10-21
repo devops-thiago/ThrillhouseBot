@@ -988,6 +988,55 @@ class FindingVerificationServiceTest {
     verify(tokenLedger).recordUsage(SESSION, 500, 90);
   }
 
+  /**
+   * #1169: with reasoning off in config, a verifier call whose reasoning spent the whole concise
+   * cap is repeated once at the concise lane's effort, and the repeat's verdicts are applied
+   * instead of every finding going out unverified.
+   */
+  @Test
+  void aVerifierCallThatReasonedItsCapAwayIsRepeatedOnceAtTheConciseEffort() {
+    var ai = mock(ThrillhouseConfig.AiPricingConfig.class);
+    var reasoning = mock(ThrillhouseConfig.AiPricingConfig.ReasoningConfig.class);
+    when(config.ai()).thenReturn(ai);
+    when(ai.reasoning()).thenReturn(reasoning);
+    when(reasoning.enabled()).thenReturn(false);
+    when(reasoning.effort()).thenReturn("low");
+    when(reasoning.conciseEffort()).thenReturn(java.util.Optional.empty());
+    ReviewResponse original =
+        response(finding("critical", "high", "Real"), finding("high", "high", "Invented"));
+    var effortPerCall = new ArrayList<String>();
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenAnswer(
+            invocation -> {
+              effortPerCall.add(ReasoningRepeat.current());
+              return effortPerCall.size() == 1
+                  ? Result.<String>builder()
+                      .content(null)
+                      .finishReason(FinishReason.LENGTH)
+                      .tokenUsage(new TokenUsage(500, 8192))
+                      .build()
+                  : aiOkWithUsage(
+                      """
+                      {"verdicts": [{"id": 1, "verdict": "confirmed", "reason": "real"},
+                                    {"id": 2, "verdict": "rejected", "reason": "not in the diff"}]}
+                      """,
+                      500,
+                      90);
+            });
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(java.util.Arrays.asList(null, "low"), effortPerCall);
+    assertEquals(
+        List.of("Real"), result.findings().stream().map(ReviewResponse.Finding::title).toList());
+    assertEquals(List.of(new VerificationCoverage(2, 2)), reported);
+    verify(tokenLedger).recordUsage(SESSION, 500, 8192);
+    verify(tokenLedger).recordUsage(SESSION, 500, 90);
+    verify(tokenLedger).recordReasoningStepDown(SESSION);
+  }
+
   @Test
   void twoEmptyBodiesKeepTheFindingsUnverifiedAfterExactlyTwoCalls() {
     ReviewResponse original = response(finding("high", "high", "Unverified"));

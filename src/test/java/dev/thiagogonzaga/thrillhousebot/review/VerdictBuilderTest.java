@@ -2080,9 +2080,9 @@ class VerdictBuilderTest {
             .summaryMarkdown()
             .startsWith(
                 PrSummaryGenerator.SUMMARY_HEADING
-                    + "\n\n> **AI review scope:** this review ran with reasoning disabled after the"
-                    + " model spent its whole output allowance reasoning and produced no answer at"
-                    + " the configured effort\n\n"),
+                    + "\n\n> **AI review scope:** this review ran at a lower reasoning effort after"
+                    + " the model spent its whole output allowance reasoning and produced no answer"
+                    + " on its first attempt\n\n"),
         result.summaryMarkdown());
     assertEquals(ReviewState.APPROVE, result.reviewState(), "a step-down never holds approval");
   }
@@ -2163,9 +2163,9 @@ class VerdictBuilderTest {
                     + "\n>\n> 1 finding from the review of superseded head `23e2771`, abandoned"
                     + " when the pull request head moved, was carried into this review as"
                     + " previous findings and re-checked against the current head"
-                    + "\n>\n> this review ran with reasoning disabled after the model spent its"
-                    + " whole output allowance reasoning and produced no answer at the configured"
-                    + " effort\n\n"),
+                    + "\n>\n> this review ran at a lower reasoning effort after the model spent its"
+                    + " whole output allowance reasoning and produced no answer on its first"
+                    + " attempt\n\n"),
         result.summaryMarkdown());
   }
 

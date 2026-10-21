@@ -16,10 +16,8 @@
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -66,20 +64,28 @@ class ReasoningStepDownStreamingModelTest {
   }
 
   @Test
-  void aCallBoundAsReasoningDisabledGoesOutWithEffortNone() {
-    ReviewSessionContext.bind(1L, 1, true);
-
-    model.chat(REQUEST, handler());
+  void aCallUnderAReasoningOverrideGoesOutWithThatEffort() {
+    ReviewSessionContext.bind(1L, 1);
+    try (var _ = ReasoningRepeat.override("none")) {
+      model.chat(REQUEST, handler());
+    }
+    try (var _ = ReasoningRepeat.override("low")) {
+      model.chat(REQUEST, handler());
+    }
 
     var sent = assertInstanceOf(OpenAiChatRequestParameters.class, seen.get(0).parameters());
     assertEquals("none", sent.reasoningEffort());
+    assertEquals(
+        "low",
+        assertInstanceOf(OpenAiChatRequestParameters.class, seen.get(1).parameters())
+            .reasoningEffort());
     assertEquals(0.5, sent.temperature(), "the request's own values survive the rewrite");
     assertEquals(REQUEST.messages(), seen.get(0).messages());
   }
 
   @Test
   void aCallBoundAtTheConfiguredEffortGoesOutUntouched() {
-    ReviewSessionContext.bind(1L, 1, false);
+    ReviewSessionContext.bind(1L, 1);
 
     model.chat(REQUEST, handler());
 
@@ -106,11 +112,13 @@ class ReasoningStepDownStreamingModelTest {
             .temperature(0.3)
             .build();
 
+    ChatRequest rewritten;
+    try (var _ = ReasoningRepeat.override("none")) {
+      rewritten = ReasoningRepeat.applied(REQUEST);
+    }
     var effective =
         assertInstanceOf(
-            OpenAiChatRequestParameters.class,
-            configured.overrideWith(
-                ReasoningStepDownStreamingModel.withReasoningDisabled(REQUEST).parameters()));
+            OpenAiChatRequestParameters.class, configured.overrideWith(rewritten.parameters()));
 
     assertEquals("none", effective.reasoningEffort());
     assertEquals(4096, effective.maxOutputTokens());
@@ -125,10 +133,10 @@ class ReasoningStepDownStreamingModelTest {
 
   @Test
   void bothSuppliersWrapTheModelTheyAreGiven() {
-    ReviewSessionContext.bind(1L, 1, true);
-
-    new ReasoningStepDownStreamingModel.ActiveSupplier(delegate).get().chat(REQUEST, handler());
-    new ReasoningStepDownStreamingModel.ConciseSupplier(delegate).get().chat(REQUEST, handler());
+    try (var _ = ReasoningRepeat.override("none")) {
+      new ReasoningStepDownStreamingModel.ActiveSupplier(delegate).get().chat(REQUEST, handler());
+      new ReasoningStepDownStreamingModel.ConciseSupplier(delegate).get().chat(REQUEST, handler());
+    }
 
     assertEquals(2, seen.size());
     for (var request : seen) {
@@ -137,18 +145,6 @@ class ReasoningStepDownStreamingModelTest {
           assertInstanceOf(OpenAiChatRequestParameters.class, request.parameters())
               .reasoningEffort());
     }
-  }
-
-  @Test
-  void theBindingCarriesTheFlagAndClearsWithIt() {
-    ReviewSessionContext.bind(9L, 2, true);
-    assertTrue(ReviewSessionContext.reasoningDisabledForCurrentCall());
-    ReviewSessionContext.clear();
-    assertFalse(ReviewSessionContext.reasoningDisabledForCurrentCall(), "no binding, no flag");
-    ReviewSessionContext.bind(9L, 2);
-    assertFalse(
-        ReviewSessionContext.reasoningDisabledForCurrentCall(),
-        "the two-argument bind is an ordinary call at the configured effort");
   }
 
   /** The delegate above records the request and never calls back, so the handler has no work. */

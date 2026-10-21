@@ -69,6 +69,35 @@ class BoundedChatModelTest {
     assertEquals(1, gate.availableSlots(), "a finished call must return its slot");
   }
 
+  /** #1169: the repeat of a blocking call that reasoned its cap away carries its own effort. */
+  @Test
+  void aCallUnderAReasoningOverrideGoesOutWithThatEffortAndOthersAsTheyCame() {
+    var gate = new ModelCallGate(1, Duration.ofSeconds(30), System::nanoTime);
+    var seen = new java.util.ArrayList<ChatRequest>();
+    // Records the request as the wrapper hands it on, before a provider model's merge.
+    var recording =
+        new ChatModel() {
+          @Override
+          public ChatResponse chat(ChatRequest request) {
+            seen.add(request);
+            return RESPONSE;
+          }
+        };
+    var model = new BoundedChatModel(recording, gate);
+
+    model.chat(REQUEST);
+    try (var _ = ReasoningRepeat.override("low")) {
+      model.chat(REQUEST);
+    }
+
+    assertSame(REQUEST, seen.get(0), "an ordinary call is passed on as it came");
+    assertEquals(
+        "low",
+        ((dev.langchain4j.model.openai.OpenAiChatRequestParameters) seen.get(1).parameters())
+            .reasoningEffort());
+    assertEquals(REQUEST.messages(), seen.get(1).messages());
+  }
+
   @Test
   void aFailedCallReturnsItsSlot() {
     var gate = new ModelCallGate(1, Duration.ofSeconds(30), System::nanoTime);

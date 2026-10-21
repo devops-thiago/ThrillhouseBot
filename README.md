@@ -448,9 +448,14 @@ thrillhousebot.ai.models.some-separate-budget-model.separate-output-budget=true
   leave no answer; the verifier then keeps its findings unverified. Raising
   `REVIEW_CONCISE_MAX_OUTPUT_TOKENS` only shifts the odds. Keep
   `AI_REASONING_EFFORT_CONCISE` low and spend effort on `AI_REASONING_EFFORT`.
-- **Reading a cut response.** When a streamed review or summary call spends its
-  whole cap reasoning and returns no answer, it is repeated once with reasoning
-  off, and the summary's scope note says so. If the repeat writes its
+- **Reading a cut response.** When a review, summary, verifier, summary-check
+  or repair call spends its whole cap reasoning and returns no answer, it is
+  repeated once at a lower effort, and the summary's scope note says so. With
+  `AI_REASONING_ENABLED=true` the repeat sends `none`. With it off, nothing was
+  sent and the provider's default effort applied, so the repeat sends the lane's
+  effort (`low` unless set). A model that reasons by default, such as
+  `glm-5.3-flash`, can hit this on most concise calls and bill the cap each
+  time; enable reasoning for such a model. If a `none` repeat writes its
   deliberation into the response instead, it is stopped once 8,000 characters
   arrive with no JSON object opened, so the cap is not billed twice. On any
   `finish_reason=length` stop, the log line, the failed check run and the PR
