@@ -76,7 +76,7 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 |---|---|---|---|
 | `AI_REASONING_EFFORT_CONCISE`<br>`thrillhousebot.ai.reasoning.concise-effort` | Effort for the calls on the `concise` model (summary, verifier, replies), which do not follow `AI_REASONING_EFFORT`. Same values. Unset means `low`, or `AI_REASONING_EFFORT` when that is lower. | string | _(none)_ |
 | `AI_REASONING_EFFORT`<br>`thrillhousebot.ai.reasoning.effort` | Effort for the review and the on-demand commands: `none`, `low`, `medium`, `high`, `xhigh` or `max`. Reasoning tokens are billed as output. A provider that does not know a tier rejects the call. See [Per-model AI settings](https://github.com/devops-thiago/ThrillhouseBot#per-model-ai-settings). | string | `low` |
-| `AI_REASONING_ENABLED`<br>`thrillhousebot.ai.reasoning.enabled` | Send a reasoning-effort hint (`reasoning_effort`). When `false`, no reasoning parameter is sent and the provider default applies. | boolean | `false` |
+| `AI_REASONING_ENABLED`<br>`thrillhousebot.ai.reasoning.enabled` | Send a reasoning-effort hint (`reasoning_effort`). When `false`, no reasoning parameter is sent and the provider default applies, except on the one repeat of a call that spent its whole output cap reasoning, which sends the lane's effort. | boolean | `false` |
 
 ## `thrillhousebot.dashboard`
 

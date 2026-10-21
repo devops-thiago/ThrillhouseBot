@@ -210,8 +210,10 @@ the spend ceiling is retried once, one batch at a time, after the parallel pass.
 A failed call attempt is retried with backoff, up to `thrillhousebot.review.max-ai-retries`
 attempts (default 5). A response cut at its length cap is not retried, because the same call would
 be cut the same way: the findings completed before the cut are kept and the affected files are
-disclosed. A length stop with no content (reasoning used the whole cap) is repeated once with
-reasoning off. Each call is bounded by `AI_TIMEOUT` (default 300 s).
+disclosed. A length stop with no content (reasoning used the whole cap) is repeated once at a
+lower effort: `none` when reasoning is enabled, the lane's effort (`low` unless set) when it is off
+in config and the provider default reasoned the cap away. The blocking review-path calls (the
+finding verifier, the summary check, response repair) repeat the same way. Each call is bounded by `AI_TIMEOUT` (default 300 s).
 
 `AI_MAX_CONCURRENT_CALLS` caps model calls in flight across the process (default `0`, no cap); a
 call past the cap waits for a slot. `REVIEW_MAX_TOKENS_PER_REVIEW` caps the tokens one review may

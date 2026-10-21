@@ -775,15 +775,15 @@ public class VerdictBuilder {
   }
 
   /**
-   * The summary's review-scope note for a review whose model call had to be repeated with reasoning
-   * disabled (#839), in the voice of the other scope notes: a length stop with no content is the
-   * reasoning tail spending the whole output allowance, and the repeat that produced the review ran
-   * without it — less than the configured effort, which a maintainer weighing the review's findings
-   * should know.
+   * The summary's review-scope note for a review whose model call had to be repeated at a lower
+   * reasoning effort (#839, #1169), in the voice of the other scope notes: a length stop with no
+   * content is the reasoning tail spending the whole output allowance, and the repeat that produced
+   * the review reasoned less than the first call was set to, which a maintainer weighing the
+   * review's findings should know.
    */
   static final String REASONING_STEP_DOWN_NOTE =
-      "this review ran with reasoning disabled after the model spent its whole output allowance"
-          + " reasoning and produced no answer at the configured effort";
+      "this review ran at a lower reasoning effort after the model spent its whole output"
+          + " allowance reasoning and produced no answer at the effort it was first called with";
 
   /**
    * The review-scope note for a step-down repeat that was stopped (#893): the model wrote its
@@ -983,9 +983,9 @@ public class VerdictBuilder {
   /**
    * The summary's review-scope blockquote: what the review did not look at, and why — after a
    * superseded run, what it looked at that a fresh pass would not have (#806) — and whether it ran
-   * with reasoning disabled after the model spent its output allowance reasoning (#839). Every note
-   * is optional and any can stand alone; when several apply they are separate paragraphs of one
-   * blockquote, so a reader meets one scope caveat rather than competing banners.
+   * at a lower reasoning effort after the model spent its output allowance reasoning (#839). Every
+   * note is optional and any can stand alone; when several apply they are separate paragraphs of
+   * one blockquote, so a reader meets one scope caveat rather than competing banners.
    */
   private static String reviewScopeNote(SummaryInputs summaryInputs) {
     var notes = new ArrayList<String>(4);

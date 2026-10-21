@@ -190,11 +190,11 @@ class ChatModelWiringTest {
   }
 
   /**
-   * #839 — a call bound as reasoning-disabled on the thread that starts it goes out with {@code
+   * #839 — a call started under a reasoning override on its thread goes out with {@code
    * reasoning_effort=none}, and the next call goes out at the configured effort again. Runs through
    * the real AI-service wiring, so this pins the whole path the step-down relies on: the supplier
    * on {@link PrReviewer} puts {@link ReasoningStepDownStreamingModel} in front of the model bean,
-   * the binding is visible when the stream starts, and the rewritten parameters survive the
+   * the override is visible when the stream starts, and the rewritten parameters survive the
    * provider model's merge over its defaults.
    */
   @Test
@@ -218,12 +218,13 @@ class ChatModelWiringTest {
 
   /**
    * Streams one review on the calling thread under a session binding, the way {@code
-   * AiReviewService.streamOnce} does; {@code reasoningDisabled} is the step-down flag (#839).
+   * AiReviewService.streamOnce} does; {@code reasoningDisabled} sets the step-down's override
+   * (#839).
    */
   private Void streamOneReview(String diff, boolean reasoningDisabled) {
     var done = new CompletableFuture<Void>();
-    ReviewSessionContext.bind(7L, 1, reasoningDisabled);
-    try {
+    ReviewSessionContext.bind(7L, 1);
+    try (var _ = ReasoningRepeat.override(reasoningDisabled ? "none" : null)) {
       prReviewer
           .reviewStream(
               new AiReviewService.PromptInputs(

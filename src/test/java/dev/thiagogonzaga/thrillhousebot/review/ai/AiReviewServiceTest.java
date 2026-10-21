@@ -1143,13 +1143,13 @@ class AiReviewServiceTest {
   @Test
   void aNoContentLengthStopIsRetriedOnceWithReasoningDisabled() {
     var starts = new java.util.concurrent.atomic.AtomicInteger();
-    var reasoningDisabledPerCall = new java.util.ArrayList<Boolean>();
+    var effortPerCall = new java.util.ArrayList<String>();
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
         .thenAnswer(
             invocation -> {
-              reasoningDisabledPerCall.add(ReviewSessionContext.reasoningDisabledForCurrentCall());
-              return reasoningDisabledPerCall.size() == 1
+              effortPerCall.add(ReasoningRepeat.current());
+              return effortPerCall.size() == 1
                   ? TruncatedTokenStream.reasoningExhausted(starts)
                   : new FakeTokenStream("{\"findings\":[]}");
             });
@@ -1161,12 +1161,11 @@ class AiReviewServiceTest {
     assertSame(parsed, response, "the answer of the repeat without reasoning is the review's");
     assertEquals(1, starts.get(), "the exhausted call is not repeated at the same effort");
     assertEquals(
-        List.of(false, true),
-        reasoningDisabledPerCall,
+        java.util.Arrays.asList(null, "none"),
+        effortPerCall,
         "the first call runs at the configured effort, the repeat with reasoning disabled");
-    assertFalse(
-        ReviewSessionContext.reasoningDisabledForCurrentCall(),
-        "the binding is cleared with the call; nothing later inherits the step-down");
+    assertNull(
+        ReasoningRepeat.current(), "the override ends with the call; nothing later inherits it");
     verify(tokenLedger).recordReasoningStepDown(42L);
     var events = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
     verify(broadcaster, atLeastOnce()).broadcast(events.capture());
@@ -1367,19 +1366,63 @@ class AiReviewServiceTest {
     verify(tokenLedger, never()).recordReasoningStepDown(anyLong());
   }
 
-  /** #839 — with reasoning off in config nothing is sent, so there is nothing to step down. */
+  /**
+   * #1169 — with reasoning off in config nothing is sent and the provider's default effort applies;
+   * a model that reasons by default can spend the whole cap that way. The repeat sends the lane's
+   * effort as it would go out with reasoning on, not {@code none}, which glm-5.3-flash ignored.
+   */
   @Test
-  void aNoContentLengthStopIsNotRepeatedWhileReasoningIsOffInConfig() {
+  void aNoContentLengthStopWhileReasoningIsOffInConfigIsRepeatedAtTheLanesEffort() {
     when(reasoning.enabled()).thenReturn(false);
+    when(reasoning.effort()).thenReturn("Low");
     var starts = new java.util.concurrent.atomic.AtomicInteger();
+    var effortPerCall = new java.util.ArrayList<String>();
     ReviewSession session = reviewSession();
     when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
-        .thenAnswer(invocation -> TruncatedTokenStream.reasoningExhausted(starts));
+        .thenAnswer(
+            invocation -> {
+              effortPerCall.add(ReasoningRepeat.current());
+              return effortPerCall.size() == 1
+                  ? TruncatedTokenStream.reasoningExhausted(starts)
+                  : new FakeTokenStream("{\"findings\":[]}");
+            });
+    var parsed = new ReviewResponse(List.of(), List.of(), null);
+    when(parser.parse("{\"findings\":[]}")).thenReturn(parsed);
 
-    assertThrows(AiResponseTruncatedException.class, () -> service.review(session, PROMPT_INPUTS));
+    var response = service.review(session, PROMPT_INPUTS);
 
-    assertEquals(1, starts.get());
-    verify(tokenLedger, never()).recordReasoningStepDown(anyLong());
+    assertSame(parsed, response, "the repeat's answer is the review's");
+    assertEquals(java.util.Arrays.asList(null, "low"), effortPerCall);
+    verify(tokenLedger).recordReasoningStepDown(42L);
+  }
+
+  /**
+   * #1169 — the summary call on the concise lane, with reasoning off in config, repeats at the
+   * concise lane's own effort ({@code low} when unset), whatever the active lane's effort is.
+   */
+  @Test
+  void aNoContentSummaryCapWhileReasoningIsOffIsRepeatedAtTheConciseEffort() {
+    when(reasoning.enabled()).thenReturn(false);
+    var starts = new java.util.concurrent.atomic.AtomicInteger();
+    var effortPerCall = new java.util.ArrayList<String>();
+    ReviewSession session = reviewSession();
+    when(prSummarizer.summarizeStream(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenAnswer(
+            invocation -> {
+              effortPerCall.add(ReasoningRepeat.current());
+              return effortPerCall.size() == 1
+                  ? TruncatedTokenStream.reasoningExhausted(starts)
+                  : new FakeTokenStream("{\"findings\":[]}");
+            });
+    var parsed = new ReviewResponse(List.of(), List.of(), null);
+    when(parser.parseSummary("{\"findings\":[]}")).thenReturn(parsed);
+
+    var response =
+        service.summarize(session, new AiReviewService.SummaryInputs("ctx", "[]", "files", "", ""));
+
+    assertSame(parsed, response);
+    assertEquals(java.util.Arrays.asList(null, "low"), effortPerCall);
   }
 
   /** #839 — a lane already at {@code none} would repeat the identical call; it does not. */
@@ -1405,14 +1448,14 @@ class AiReviewServiceTest {
   @Test
   void aNoContentSummaryCapIsRepeatedWithReasoningDisabledOnTheConciseLane() {
     var starts = new java.util.concurrent.atomic.AtomicInteger();
-    var reasoningDisabledPerCall = new java.util.ArrayList<Boolean>();
+    var effortPerCall = new java.util.ArrayList<String>();
     ReviewSession session = reviewSession();
     when(prSummarizer.summarizeStream(
             anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenAnswer(
             invocation -> {
-              reasoningDisabledPerCall.add(ReviewSessionContext.reasoningDisabledForCurrentCall());
-              return reasoningDisabledPerCall.size() == 1
+              effortPerCall.add(ReasoningRepeat.current());
+              return effortPerCall.size() == 1
                   ? TruncatedTokenStream.reasoningExhausted(starts)
                   : new FakeTokenStream("{\"findings\":[]}");
             });
@@ -1424,7 +1467,7 @@ class AiReviewServiceTest {
 
     assertSame(parsed, response);
     assertEquals(1, starts.get());
-    assertEquals(List.of(false, true), reasoningDisabledPerCall);
+    assertEquals(java.util.Arrays.asList(null, "none"), effortPerCall);
     verify(tokenLedger).recordReasoningStepDown(42L);
   }
 
