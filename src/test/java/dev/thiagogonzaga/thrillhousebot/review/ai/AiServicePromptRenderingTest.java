@@ -37,6 +37,7 @@ import io.quarkus.qute.Engine;
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -68,6 +69,8 @@ class AiServicePromptRenderingTest {
   @Inject ReplyAssistant replyAssistant;
   @Inject FindingVerifier findingVerifier;
   @Inject SummaryVerifier summaryVerifier;
+  @Inject ResponseRepairer responseRepairer;
+  @Inject SummaryResponseRepairer summaryResponseRepairer;
   @Inject PrReviewer prReviewer;
   @Inject PrSummarizer prSummarizer;
   @Inject PrDescribeAssistant describeAssistant;
@@ -311,6 +314,37 @@ class AiServicePromptRenderingTest {
     assertTrue(
         systemText(request).contains("\"contradicted\""),
         "the system prompt must state the answer shape");
+  }
+
+  @Test
+  void repairPromptsCarryTheContractTheErrorAndTheFencedAnswerOnTheirLanesModel() {
+    // #1079: a dropped @V would ask for a reshaped answer the call never saw.
+    ChatRequest review =
+        captureBlockingRequest(
+            chatModel,
+            () ->
+                responseRepairer.repair(
+                    "CONTRACT_SENTINEL",
+                    "ERROR_SENTINEL",
+                    PromptTemplateEscaper.fence("ANSWER_SENTINEL {\"findings\": [")));
+    ChatRequest summary =
+        captureBlockingRequest(
+            conciseChatModel,
+            () ->
+                summaryResponseRepairer.repair(
+                    "CONTRACT_SENTINEL",
+                    "ERROR_SENTINEL",
+                    PromptTemplateEscaper.fence("ANSWER_SENTINEL {\"summary\": [")));
+    for (var request : List.of(review, summary)) {
+      String user = userText(request);
+      assertTrue(user.contains("CONTRACT_SENTINEL"), "contract missing");
+      assertTrue(user.contains("ERROR_SENTINEL"), "error missing");
+      assertTrue(user.contains("ANSWER_SENTINEL"), "answer missing");
+      assertTrue(user.contains("[[THRILLHOUSEBOT-UNTRUSTED-DATA-"), "the answer arrives fenced");
+      assertTrue(
+          systemText(request).contains("Keep every finding"),
+          "the system prompt must say nothing is added or dropped");
+    }
   }
 
   @Test

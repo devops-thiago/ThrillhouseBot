@@ -18,6 +18,9 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -685,6 +688,71 @@ class ReviewResponseParserTest {
     assertNotNull(response.summary(), "the summary object must survive a mis-shaped field");
     assertEquals("p", response.summary().prPurpose());
     assertTrue(response.summary().fileSummaries().isEmpty());
+  }
+
+  @Test
+  void fileSummariesWrittenAsAJsonStringAreReadAsTheJsonTheyHold() {
+    // #1079, react ThrillhouseBot-test#273: the field "arrived as STRING".
+    var array =
+        parser.parseSummary(
+            """
+            {"summary": {"pr_purpose": "p",
+              "file_summaries": "[{\\"path\\": \\"a.py\\", \\"summary\\": \\"adds X\\"}]"}}
+            """);
+    assertEquals(
+        List.of(new ReviewResponse.FileSummary("a.py", "adds X")), array.summary().fileSummaries());
+
+    var map =
+        parser.parseSummary(
+            """
+            {"summary": {"file_summaries": " {\\"a.py\\": \\"adds X\\", \\"b.py\\": \\"adds Y\\"}"}}
+            """);
+    assertEquals(
+        List.of(
+            new ReviewResponse.FileSummary("a.py", "adds X"),
+            new ReviewResponse.FileSummary("b.py", "adds Y")),
+        map.summary().fileSummaries());
+  }
+
+  @Test
+  void aFileSummariesStringThatIsNotJsonRecoversNothing() {
+    for (var text : List.of("[not json", "{\\\"a.py\\\": ", "\\\"just a string\\\"", "42")) {
+      var response =
+          parser.parseSummary(
+              "{\"summary\": {\"pr_purpose\": \"p\", \"file_summaries\": \"" + text + "\"}}");
+      assertTrue(response.summary().fileSummaries().isEmpty(), text);
+      assertEquals("p", response.summary().prPurpose(), text);
+    }
+  }
+
+  @Test
+  void unreadFileSummariesIsTheStringTheParserReadNoEntryFrom() {
+    assertEquals(
+        Optional.of("a.py: adds X; b.py: adds Y"),
+        parser.unreadFileSummaries(
+            "{\"summary\": {\"file_summaries\": \"a.py: adds X; b.py: adds Y\"}}"));
+    // The summary's fields written on the root (#850).
+    assertEquals(
+        Optional.of("a.py: adds X"),
+        parser.unreadFileSummaries(
+            "Here: {\"pr_purpose\": \"p\", \"file_summaries\": \"a.py: adds X\"}"));
+  }
+
+  @Test
+  void unreadFileSummariesIsEmptyForEveryOtherAnswer() {
+    for (var raw :
+        Arrays.asList(
+            null,
+            " ",
+            "not json at all",
+            "[{\"risk\": \"low\", \"title\": \"t\"}]",
+            "{\"summary\": {\"file_summaries\": [{\"path\": \"a.py\", \"summary\": \"x\"}]}}",
+            "{\"summary\": {\"file_summaries\": \"  \"}}",
+            "{\"summary\": {\"file_summaries\": \"[{\\\"path\\\": \\\"a.py\\\"}]\"}}",
+            "{\"summary\": {\"pr_purpose\": \"p\"}}",
+            "{\"findings\": [")) {
+      assertEquals(Optional.empty(), parser.unreadFileSummaries(raw), String.valueOf(raw));
+    }
   }
 
   @Test

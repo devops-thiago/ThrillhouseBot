@@ -158,6 +158,23 @@ public record ReviewResponse(
           List.of());
     }
 
+    /** This summary with its file summaries replaced; every other field is kept. */
+    public Summary withFileSummaries(List<FileSummary> rows) {
+      return new Summary(
+          totalFindings,
+          critical,
+          high,
+          medium,
+          low,
+          overallAssessment,
+          prPurpose,
+          descriptionGaps,
+          suggestedLabels,
+          rows,
+          walkthroughDiagram,
+          addressedGaps);
+    }
+
     private static <T> List<T> withoutNulls(List<T> values) {
       return values == null ? List.of() : values.stream().filter(Objects::nonNull).toList();
     }

@@ -57,6 +57,12 @@ class AiServiceUserMessagePlacementTest {
   }
 
   @Test
+  void responseRepairersPutUserMessageOnTheMethod() {
+    assertUserMessageOnMethodNotParameter(ResponseRepairer.class);
+    assertUserMessageOnMethodNotParameter(SummaryResponseRepairer.class);
+  }
+
+  @Test
   void unitTestAssistantPutsUserMessageOnTheMethod() {
     assertUserMessageOnMethodNotParameter(UnitTestAssistant.class);
   }

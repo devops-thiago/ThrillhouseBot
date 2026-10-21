@@ -31,6 +31,7 @@ import io.quarkus.logging.Log;
 import io.quarkus.qute.TemplateData;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.io.Serial;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -93,6 +94,8 @@ public class AiReviewService {
 
   private final ResponseCaps responseCaps;
 
+  private final ResponseRepairService repairService;
+
   @Inject
   public AiReviewService(
       PrReviewer prReviewer,
@@ -102,7 +105,8 @@ public class AiReviewService {
       SessionEventBroadcaster broadcaster,
       ReviewTokenLedger tokenLedger,
       ModelCallGate callGate,
-      ResponseCaps responseCaps) {
+      ResponseCaps responseCaps,
+      ResponseRepairService repairService) {
     this.prReviewer = prReviewer;
     this.prSummarizer = prSummarizer;
     this.parser = parser;
@@ -111,6 +115,7 @@ public class AiReviewService {
     this.tokenLedger = tokenLedger;
     this.callGate = callGate;
     this.responseCaps = responseCaps;
+    this.repairService = repairService;
   }
 
   /** Single-call review (normal-size PRs): streams tokens to the dashboard as they arrive. */
@@ -309,8 +314,11 @@ public class AiReviewService {
       }
 
       try {
-        return streamOnce(
-            session, streamFactory, attempt, broadcastTokens, lane, reasoningDisabled);
+        var answer =
+            streamOnce(session, streamFactory, attempt, broadcastTokens, lane, reasoningDisabled);
+        return lane == ModelLane.CONCISE
+            ? withReadFileSummaries(session, answer)
+            : answer.response();
       } catch (AiResponseTruncatedException e) {
         // Deterministic: the next attempt sends the identical prompt against the identical cap and
         // is cut at the identical point. Retrying only bills the same failure again. The one
@@ -330,16 +338,10 @@ public class AiReviewService {
             attempt, maxAttempts, session.id);
         throw e;
       } catch (RuntimeException e) {
-        var rejection = AiContextWindowExceededException.classify(e);
-        if (rejection.isPresent()) {
-          // Deterministic like a truncation: the identical request against the identical window
-          // is rejected identically, and every attempt here is a fresh full-price call (#622).
-          Log.warnf(
-              "AI review attempt %d/%d for session %d was rejected for exceeding the model's"
-                  + " context window; not retrying (an identical request would be rejected"
-                  + " identically)",
-              attempt, maxAttempts, session.id);
-          throw rejection.get();
+        failIfContextWindowExceeded(session, attempt, maxAttempts, e);
+        var repaired = repaired(session, attempt, maxAttempts, lane, e);
+        if (repaired.isPresent()) {
+          return repaired.get();
         }
         lastFailure = e;
         Log.warnf(
@@ -353,6 +355,118 @@ public class AiReviewService {
 
     throw new AiReviewException(
         "AI review failed after " + maxAttempts + " attempts", maxAttempts, lastFailure);
+  }
+
+  /**
+   * Ends the call when {@code failure} is the provider rejecting the request for exceeding the
+   * model's context window. Deterministic like a truncation: the identical request against the
+   * identical window is rejected identically, and every attempt here is a fresh full-price call
+   * (#622). Returns for every other failure.
+   */
+  private static void failIfContextWindowExceeded(
+      ReviewSession session, int attempt, int maxAttempts, RuntimeException failure) {
+    var rejection = AiContextWindowExceededException.classify(failure);
+    if (rejection.isPresent()) {
+      Log.warnf(
+          "AI review attempt %d/%d for session %d was rejected for exceeding the model's"
+              + " context window; not retrying (an identical request would be rejected"
+              + " identically)",
+          attempt, maxAttempts, session.id);
+      throw rejection.get();
+    }
+  }
+
+  /**
+   * The answer of one repair call (#1079) when {@code failure} is the parser refusing a non-blank
+   * answer: only that answer, the parser's error and the response contract are sent, and the result
+   * is read by the lane's parser. Empty for every other failure (a timeout, a provider error, a
+   * throttle, an empty answer; a length stop never reaches here), while the step is off, and
+   * whenever the repair fails, so the full retry runs exactly as before. A repaired summary answer
+   * goes through the same {@code file_summaries} re-ask as one the parser accepted. It runs after
+   * the attempt returned its {@link ModelCallGate} slot, and the repair call takes a slot of its
+   * own.
+   */
+  private Optional<ReviewResponse> repaired(
+      ReviewSession session,
+      int attempt,
+      int maxAttempts,
+      ModelLane lane,
+      RuntimeException failure) {
+    var malformed = Throwables.findCause(failure, MalformedAnswer.class);
+    if (malformed.isEmpty() || malformed.get().body().isBlank() || !repairService.enabled()) {
+      return Optional.empty();
+    }
+    // The step may still decline (the spend ceiling) or fail; it logs its own outcome.
+    Log.warnf(
+        "AI review attempt %d/%d for session %d returned an answer that is not review JSON (%s);"
+            + " handing it to the repair step before a full retry",
+        attempt, maxAttempts, session.id, malformed.get().getMessage());
+    return repairService
+        .repair(
+            ReviewTokenLedger.keyFor(session),
+            lane,
+            malformed.get().body(),
+            malformed.get().parseFailure())
+        .map(
+            repair ->
+                lane == ModelLane.CONCISE
+                    ? withReadFileSummaries(session, new Answer(repair.response(), repair.body()))
+                    : repair.response());
+  }
+
+  /**
+   * The summary answer, with its file summaries read by one re-ask for that field alone when the
+   * answer wrote {@code file_summaries} as a string the parser read no entry from (#1079); the
+   * answer as parsed whenever it has file summaries, or the re-ask returns none.
+   */
+  private ReviewResponse withReadFileSummaries(ReviewSession session, Answer answer) {
+    var response = answer.response();
+    var summary = response.summary();
+    if (summary == null || !summary.fileSummaries().isEmpty()) {
+      return response;
+    }
+    return parser
+        .unreadFileSummaries(answer.body())
+        .flatMap(text -> repairService.fileSummaries(ReviewTokenLedger.keyFor(session), text))
+        .map(
+            rows ->
+                new ReviewResponse(
+                    response.findings(),
+                    response.previousFindingsStatus(),
+                    summary.withFileSummaries(rows)))
+        .orElse(response);
+  }
+
+  /** One attempt's parsed answer and the text it was read from. */
+  private record Answer(ReviewResponse response, String body) {}
+
+  /**
+   * The parser's refusal of an answer, carrying the answer so one repair call can reshape it
+   * (#1079). Its message is the parser's own, so every surface that reported the refusal reads as
+   * before.
+   */
+  static final class MalformedAnswer extends IllegalArgumentException {
+
+    @Serial private static final long serialVersionUID = 1L;
+
+    private final String body;
+
+    private final IllegalArgumentException parseFailure;
+
+    MalformedAnswer(IllegalArgumentException parseFailure, String body) {
+      super(parseFailure.getMessage(), parseFailure);
+      this.body = body;
+      this.parseFailure = parseFailure;
+    }
+
+    String body() {
+      return body;
+    }
+
+    /** The parser's own exception, whose cause carries the JSON parser's detail. */
+    IllegalArgumentException parseFailure() {
+      return parseFailure;
+    }
   }
 
   /**
@@ -581,7 +695,7 @@ public class AiReviewService {
    * ceiling of 1 that stops every model call in the process; a bounded overshoot is the lesser
    * failure.
    */
-  private ReviewResponse streamOnce(
+  private Answer streamOnce(
       ReviewSession session,
       Supplier<TokenStream> streamFactory,
       int attempt,
@@ -594,14 +708,14 @@ public class AiReviewService {
     }
   }
 
-  private ReviewResponse streamInSlot(
+  private Answer streamInSlot(
       ReviewSession session,
       Supplier<TokenStream> streamFactory,
       int attempt,
       boolean broadcastTokens,
       ModelLane lane,
       boolean reasoningDisabled) {
-    var result = new CompletableFuture<ReviewResponse>();
+    var result = new CompletableFuture<Answer>();
     var buffer = new StreamBuffer();
     var chunkCount = new AtomicInteger();
     var lastFlushNanos = new AtomicLong(System.nanoTime());
@@ -699,7 +813,7 @@ public class AiReviewService {
   private static void stopOnInlinedDeliberation(
       InlinedDeliberationGuard guard,
       StreamBuffer buffer,
-      CompletableFuture<ReviewResponse> result,
+      CompletableFuture<Answer> result,
       AtomicBoolean cancelled) {
     // Checked before the buffer is read: the guard decides once, and a snapshot of the whole
     // buffer on every later token would cost a copy per token for the rest of a long response.
@@ -715,7 +829,7 @@ public class AiReviewService {
 
   private void handleCompleteResponse(
       ChatResponse response,
-      CompletableFuture<ReviewResponse> result,
+      CompletableFuture<Answer> result,
       StreamBuffer buffer,
       Runnable flushStream,
       AtomicBoolean cancelled,
@@ -756,15 +870,27 @@ public class AiReviewService {
       // The summary is the one call on the concise lane that streams through here (the verifier
       // and reply calls block and read their own shapes), and it is read with the summary lane's
       // tolerances; every batch keeps the #805 refusal of a root with no findings node (#850).
-      result.complete(lane == ModelLane.CONCISE ? parser.parseSummary(text) : parser.parse(text));
+      result.complete(new Answer(parsed(text, lane), text));
     } catch (RuntimeException e) {
       result.completeExceptionally(e);
     }
   }
 
+  /**
+   * {@code text} read by the lane's parser; a refusal is rethrown as a {@link MalformedAnswer}
+   * carrying the text, for the repair step (#1079).
+   */
+  private ReviewResponse parsed(String text, ModelLane lane) {
+    try {
+      return lane == ModelLane.CONCISE ? parser.parseSummary(text) : parser.parse(text);
+    } catch (IllegalArgumentException e) {
+      throw new MalformedAnswer(e, text);
+    }
+  }
+
   private static void handleStreamError(
       Throwable error,
-      CompletableFuture<ReviewResponse> result,
+      CompletableFuture<Answer> result,
       Runnable flushStream,
       AtomicBoolean cancelled) {
     if (cancelled.get()) {

@@ -35,6 +35,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.StringJoiner;
 import java.util.regex.Matcher;
@@ -55,7 +56,7 @@ public class ReviewResponseParser {
 
   private static final String DESCRIPTION_GAPS = "description_gaps";
   private static final String ADDRESSED_GAPS = "addressed_gaps";
-  private static final String FILE_SUMMARIES = "file_summaries";
+  static final String FILE_SUMMARIES = "file_summaries";
   private static final String PATH = "path";
 
   /**
@@ -695,6 +696,11 @@ public class ReviewResponseParser {
    * fact (#872). The node itself stays out of the row — it is the whole walkthrough's worth of
    * model prose on a row already holding the response, for a question the node type and the first
    * entry's field names answer.
+   *
+   * <p>A string that holds the array or object itself, quoted as one JSON string, is read as what
+   * it holds (#1079): react ThrillhouseBot-test#273's walkthrough lost 19 of 20 rows to a field
+   * that "arrived as STRING". A string holding anything else recovers nothing here; {@link
+   * #unreadFileSummaries} hands it to the caller, which can ask for that field again.
    */
   private void normalizeFileSummaries(JsonNode root) {
     if (!(root instanceof ObjectNode rootObject)
@@ -703,6 +709,12 @@ public class ReviewResponseParser {
     }
     var fileSummaries = summary.get(FILE_SUMMARIES);
     if (fileSummaries == null || fileSummaries.isNull()) {
+      return;
+    }
+    var embedded = embeddedJson(fileSummaries);
+    if (embedded != null) {
+      summary.set(FILE_SUMMARIES, embedded);
+      normalizeFileSummaries(root);
       return;
     }
     var normalized = mapper.createArrayNode();
@@ -729,6 +741,56 @@ public class ReviewResponseParser {
     // Anything else is a scalar where the walkthrough belongs: no (path, summary) pair at all.
     logUnrecovered(fileSummaries, normalized, seen);
     summary.set(FILE_SUMMARIES, normalized);
+  }
+
+  /**
+   * The array or object a {@code file_summaries} string holds as JSON text, or {@code null} when
+   * the node is not a string or its text is not such a document.
+   */
+  private JsonNode embeddedJson(JsonNode fileSummaries) {
+    if (!fileSummaries.isTextual()) {
+      return null;
+    }
+    var text = fileSummaries.asText().strip();
+    if (!text.startsWith("[") && !text.startsWith("{")) {
+      return null;
+    }
+    try {
+      // A document that opens on a bracket or a brace reads as an array or an object.
+      return mapper.readTree(text);
+    } catch (JsonProcessingException _) {
+      return null;
+    }
+  }
+
+  /**
+   * The text a summary answer {@code raw} wrote where the {@code file_summaries} array belongs,
+   * when it is a non-blank string the parser reads no entry from (#1079): not JSON, so {@link
+   * #normalizeFileSummaries} recovered nothing and the walkthrough would render every row "Not
+   * summarized". The field is looked for in the {@code summary} object and, for an answer that
+   * wrote the summary's fields on its root (#850), on the root. Empty for every other answer,
+   * including one that cannot be read at all.
+   */
+  public Optional<String> unreadFileSummaries(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return Optional.empty();
+    }
+    try {
+      var root = mapper.readTree(extractJson(raw, REVIEW_ROOT_KEYS, true));
+      if (!root.isObject()) {
+        return Optional.empty();
+      }
+      var field = root.path(SUMMARY).path(FILE_SUMMARIES);
+      if (field.isMissingNode()) {
+        field = root.path(FILE_SUMMARIES);
+      }
+      if (!field.isTextual() || field.asText().isBlank() || embeddedJson(field) != null) {
+        return Optional.empty();
+      }
+      return Optional.of(field.asText());
+    } catch (JsonProcessingException | RuntimeException _) {
+      return Optional.empty();
+    }
   }
 
   /**

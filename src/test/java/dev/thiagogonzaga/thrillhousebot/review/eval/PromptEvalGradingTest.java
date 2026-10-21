@@ -128,6 +128,7 @@ class PromptEvalGradingTest {
             null,
             null,
             null,
+            null,
             null);
     return new EvalCase("case", "", spec);
   }

@@ -186,8 +186,9 @@ lists providers known to work.
 
 ## Prompt eval corpus
 
-Check any change to the review, verifier or summary check prompts
-(`PrReviewPrompts`, `FindingVerifierPrompts`, `SummaryVerifierPrompts`) against the labeled corpus in
+Check any change to the review, verifier, summary check or repair prompts
+(`PrReviewPrompts`, `FindingVerifierPrompts`, `SummaryVerifierPrompts`,
+`ResponseRepairPrompts`) against the labeled corpus in
 `src/test/resources/evalcorpus/` before it ships. Each case directory holds a
 `case.json` spec and a `diff.txt` in the format the review pipeline sends to the
 model, and pins a real outcome from reviews of this repository:
@@ -203,6 +204,10 @@ model, and pins a real outcome from reviews of this repository:
   summary check with the diff, and expects the statements naming its keywords
   to be cut while those naming its kept keywords stay (`contradicted-cut`), or
   nothing to be cut (`nothing-cut`).
+- A repair case sends a failed answer to the repair step. A review answer the
+  parser refuses must come back with one finding per keyword, each titled by it
+  (`repaired`); a summary answer whose `file_summaries` is a string must come
+  back with a row for each keyword path and no other (`file-summaries-read`).
 
 `EvalCorpusTest` validates the corpus schema in every build. The live suite calls
 a real model, so it only runs on request:
@@ -220,7 +225,8 @@ routed prompts; run that before turning routing on anywhere.
 
 `-Deval.only=<part>,<part>` runs only the cases whose name contains one of the
 parts. A change to the summary check prompt (`SummaryVerifierPrompts`) needs
-only its cases: `-Deval.only=summary-verification`.
+only its cases: `-Deval.only=summary-verification`. A change to the repair prompt
+(`ResponseRepairPrompts`) needs `-Deval.only=-repair`.
 
 Each case runs `-Deval.samples` times (default 3) and passes on a majority.
 `-Deval.tolerated` (default 0) lets that many cases fail, so a known failure that
