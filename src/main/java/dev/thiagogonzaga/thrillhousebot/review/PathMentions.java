@@ -53,7 +53,9 @@ import java.util.regex.Pattern;
  *       file adds", a {@code COPY} source the build cannot find) is quoted from there. A quoted
  *       path that one changed file ends with is not missing, so the step above completes it first,
  *       unless the patch of the finding's own file writes it as it stands: a root Dockerfile's
- *       {@code COPY conf/site.conf} names conf/site.conf, not web/conf/site.conf (#1180);
+ *       {@code COPY conf/site.conf} names conf/site.conf, not web/conf/site.conf (#1180), or a code
+ *       span quotes a changed line that holds it as it stands ({@code "browser": "src/main.ts"}
+ *       from angular.json);
  *   <li>the one changed file {@link DiffLineResolver#diffPathFor} maps it onto, which replaces it;
  *   <li>a repository file at the head, from one recursive listing read only when a token reaches
  *       this step.
@@ -289,6 +291,9 @@ final class PathMentions {
   /** A line break and the indentation after it, inside a wrapped code span. */
   private static final Pattern WRAP = Pattern.compile("[ \\t]*+\\n[ \\t]*+");
 
+  /** A code span's text that is a path and nothing else ({@link #quotesMoreThanAPath}). */
+  private static final Pattern BARE_PATH = Pattern.compile("[\\w./-]+");
+
   private static final Pattern BLANK_RUN = Pattern.compile(" {2,}");
 
   private static final Pattern BLANK_BEFORE_PUNCTUATION = Pattern.compile(" ([.,;:!?])");
@@ -308,6 +313,12 @@ final class PathMentions {
    * finding description, and each sentence a cut re-reads, ask about the same tokens.
    */
   private final Map<String, Optional<String>> resolutions = new ConcurrentHashMap<>();
+
+  /**
+   * Whether a patch line holds a code span's text as it stands, per text, so each quote is looked
+   * for in the patches once per review however many texts repeat it ({@link #quotedCode}).
+   */
+  private final Map<String, Boolean> quotedInPatches = new ConcurrentHashMap<>();
 
   /** The paths each finding's file writes in its patch lines ({@link #pathsWrittenBy}). */
   private final Map<String, Set<String>> writtenByFile = new ConcurrentHashMap<>();
@@ -774,6 +785,7 @@ final class PathMentions {
     var unresolved = new ArrayList<int[]>();
     var urls = new SpanCursor(spans(URL, text));
     var fences = new SpanCursor(fences(text));
+    var quotes = new SpanCursor(quotedCode(text));
     var matcher = TOKEN.matcher(text);
     int at = 0;
     while (matcher.find()) {
@@ -787,7 +799,7 @@ final class PathMentions {
           || partOfSomethingElse(text, start, fullEnd)) {
         continue;
       }
-      var resolution = written.contains(token) ? token : resolve(token);
+      var resolution = written.contains(token) || quotes.covers(start) ? token : resolve(token);
       out.append(text, at, start);
       if (resolution == null) {
         unresolved.add(new int[] {out.length(), out.length() + (fullEnd - start)});
@@ -800,6 +812,36 @@ final class PathMentions {
     out.append(text, at, text.length());
     String rewritten = out.toString();
     return new Rewrite(rewritten.equals(text) ? text : rewritten, unresolved);
+  }
+
+  /**
+   * The code spans of {@code text} that quote changed code: more than a bare path, held as they
+   * stand by a patch line. A path in one is what that line writes, so it is not completed: angular
+   * ThrillhouseBot-test#301 quoted angular.json's {@code "browser": "src/main.ts"}, and completion
+   * made the quote read {@code "angular/src/main.ts"}, which the file does not hold.
+   */
+  private List<int[]> quotedCode(String text) {
+    var quoted = new ArrayList<int[]>();
+    var matcher = CODE_SPAN.matcher(text);
+    while (matcher.find()) {
+      var content = matcher.group(1).strip();
+      if (quotesMoreThanAPath(content)
+          && Boolean.TRUE.equals(
+              quotedInPatches.computeIfAbsent(content, this::anyPatchLineHolds))) {
+        quoted.add(new int[] {matcher.start(), matcher.end()});
+      }
+    }
+    return quoted;
+  }
+
+  private boolean anyPatchLineHolds(String content) {
+    return patchLines.values().stream()
+        .anyMatch(lines -> lines.stream().anyMatch(line -> line.contains(content)));
+  }
+
+  /** Whether a code span holds more than one path: anything besides a path's characters. */
+  private static boolean quotesMoreThanAPath(String content) {
+    return !BARE_PATH.matcher(content).matches();
   }
 
   /**
