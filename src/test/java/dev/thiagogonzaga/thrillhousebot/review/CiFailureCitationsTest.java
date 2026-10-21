@@ -21,6 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -592,13 +594,17 @@ class CiFailureCitationsTest {
    * so a test sees exactly what reached the round-18 summaries.
    */
   private static CiFailureCitations fromJobLog(String log) {
+    return CiFailureCitations.parse(sectionFromJobLog(log));
+  }
+
+  private static String sectionFromJobLog(String log) {
     var section = new StringBuilder("### test (conclusion: failure)\n");
     var lines = CiFailureContextResolver.failingTestLines(log.getBytes(StandardCharsets.UTF_8));
     if (!lines.isEmpty()) {
       section.append("Failing tests named in the job log:\n");
       lines.forEach(line -> section.append("- ").append(line).append('\n'));
     }
-    return CiFailureCitations.parse(section.toString());
+    return section.toString();
   }
 
   /**
@@ -687,41 +693,162 @@ class CiFailureCitationsTest {
         citations.overviewSentences(List.of(Finding.fromAiResponse(finding))));
   }
 
+  /** rust ThrillhouseBot-test#279's job log: the failing test's name, and "got 4". */
+  private static final String RUST_279_LOG =
+      """
+      test rms_uses_exactly_the_last_window_values ... FAILED
+      test thresholds_are_sorted ... ok
+      ---- rms_uses_exactly_the_last_window_values stdout ----
+      thread 'rms_uses_exactly_the_last_window_values' (2483) panicked at tests/ingest_test.rs:34:5:
+      got 4
+      test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+      """;
+
+  /** Lines 18-43 of rust ThrillhouseBot-test#279's {@code rust/tests/ingest_test.rs}. */
+  private static final String RUST_279_TESTS =
+      """
+      #[test]
+      fn parses_batch_lines() {
+          let batch = parse_batch("acc-1,1000,12.5\\n\\nacc-1,1001,-3\\n").unwrap();
+          assert_eq!(batch, vec![reading("acc-1", 1000, 12.5), reading("acc-1", 1001, -3.0)]);
+          assert!(parse_batch("acc-1,1000").is_err());
+      }
+
+      #[test]
+      fn dedup_drops_retransmitted_samples() {
+          let unique = dedup(vec![reading("a", 1, 1.0), reading("a", 1, 1.0), reading("b", 1, 2.0)]);
+          assert_eq!(unique.len(), 2);
+      }
+
+      #[test]
+      fn rms_uses_exactly_the_last_window_values() {
+          let rms = rms_of_last(&[0.0, 0.0, 3.0, 4.0], 2);
+          assert!((rms - 12.5f64.sqrt()).abs() < 1e-9, "got {rms}");
+      }
+
+      #[test]
+      fn zone_counts_crossed_thresholds() {
+          let thresholds = [4.5, 7.1, 11.2];
+          assert_eq!(zone(1.0, &thresholds), 0);
+          assert_eq!(zone(7.1, &thresholds), 2);
+          assert_eq!(zone(30.0, &thresholds), 3);
+      }
+      """;
+
+  /** The round-18 rust finding (4253724050), posted HIGH at low confidence. */
+  private static final ReviewResponse.Finding RUST_279_FINDING =
+      new ReviewResponse.Finding(
+          "high",
+          "low",
+          "rust/src/ingest.rs",
+          45,
+          "rms_of_last window arithmetic is off by one and drops a sample",
+          "Worked from the values quoted verbatim in the test: for `[0.0, 0.0, 3.0, 4.0]` with"
+              + " `window = 2`, `4 - 2 = 2`, `+ 1 = 3`, so the tail is `[4.0]` and the RMS would"
+              + " be 4.0, while the assertion `assert!((rms - 12.5f64.sqrt()).abs() < 1e-9, \"got"
+              + " {rms}\");` expects roughly 3.5355 — the committed `cargo test` run will confirm"
+              + " whether this assertion fails as written.",
+          null,
+          null);
+
+  /** {@code content} as the patch of a file the pull request adds, its first line at {@code at}. */
+  private static GitHubPullRequestClient.FileDiff addedAt(String path, int at, String content) {
+    var lines = content.split("\n", -1);
+    int count = content.endsWith("\n") ? lines.length - 1 : lines.length;
+    var patch = new StringBuilder("@@ -0,0 +" + at + "," + count + " @@\n");
+    for (int i = 0; i < count; i++) {
+      patch.append('+').append(lines[i]).append('\n');
+    }
+    return new GitHubPullRequestClient.FileDiff(path, "added", count, 0, count, patch.toString());
+  }
+
+  private static CiFailureCitations rust279(List<GitHubPullRequestClient.FileDiff> files) {
+    return CiFailureCitations.parse(sectionFromJobLog(RUST_279_LOG), files);
+  }
+
   /**
-   * rust ThrillhouseBot-test#279 (finding 4253724050) quotes the test's assertion, which the job
-   * log does not print ("got 4"), and not the test's name: nothing ties it to the failure, so the
-   * sentence states the failure and says nothing of the findings (#1091).
+   * Without the test's body the rust finding, which quotes the test's assertion and not its name,
+   * is tied to nothing: the job log does not print the assertion ("got 4"), so the sentence states
+   * the failure and says nothing of the findings (#1091).
    */
   @Test
-  void aFindingQuotingAnAssertionTheLogDoesNotPrintClaimsNothing() {
-    var citations =
-        fromJobLog(
-            """
-            test rms_uses_exactly_the_last_window_values ... FAILED
-            test thresholds_are_sorted ... ok
-            ---- rms_uses_exactly_the_last_window_values stdout ----
-            thread 'rms_uses_exactly_the_last_window_values' (2483) panicked at tests/ingest_test.rs:34:5:
-            got 4
-            test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-            """);
-    var finding =
-        new Finding(
-            RiskLevel.HIGH,
-            "rust/src/ingest.rs",
-            45,
-            "rms_of_last window arithmetic is off by one and drops a sample",
-            "Worked from the values quoted verbatim in the test: for `[0.0, 0.0, 3.0, 4.0]` with"
-                + " `window = 2`, `4 - 2 = 2`, `+ 1 = 3`, so the tail is `[4.0]` and the RMS would"
-                + " be 4.0, while the assertion `assert!((rms - 12.5f64.sqrt()).abs() < 1e-9, \"got"
-                + " {rms}\");` expects roughly 3.5355 — the committed `cargo test` run will confirm"
-                + " whether this assertion fails as written.",
-            null,
-            null);
+  void aQuotedAssertionCitesNothingWithoutTheTestsBody() {
+    var citations = fromJobLog(RUST_279_LOG);
 
     assertEquals(
         "CI on this commit fails the check \"test\" (failing test"
             + " \"rms_uses_exactly_the_last_window_values\").",
-        citations.overviewSentences(List.of(finding)));
+        citations.overviewSentences(List.of(Finding.fromAiResponse(RUST_279_FINDING))));
+    assertFalse(citations.cites(RUST_279_FINDING));
+    assertFalse(
+        rust279(List.of(addedAt("rust/src/ingest.rs", 1, "pub fn rms_of_last() {}\n")))
+            .cites(RUST_279_FINDING),
+        "a test file outside the diff gives no body");
+  }
+
+  /**
+   * #952, round 18: with the test file in the diff, the rust finding cites the failing test whose
+   * assertion it quotes. It gets the verifier's note, the CI-cited floor lifts it from low to
+   * medium confidence at its HIGH risk, and the summary's sentence names it.
+   */
+  @Test
+  void theRound18RustFindingCitesTheTestWhoseAssertionItQuotes() {
+    var citations = rust279(List.of(addedAt("rust/tests/ingest_test.rs", 18, RUST_279_TESTS)));
+
+    assertTrue(citations.cites(RUST_279_FINDING));
+    var note = citations.noteFor(RUST_279_FINDING);
+    assertTrue(
+        note.contains(
+            "names the failing test \"rms_uses_exactly_the_last_window_values\" (check \"test\"),"
+                + " whose assertion the finding quotes, in the job log"),
+        note);
+    var floored =
+        FindingVerificationService.floorCiCitedConfidence(
+                new ReviewResponse(List.of(RUST_279_FINDING), List.of(), null), citations)
+            .findings()
+            .getFirst();
+    assertEquals("high", floored.risk());
+    assertEquals("medium", floored.confidence());
+    assertTrue(
+        citations
+            .overviewSentences(List.of(Finding.fromAiResponse(RUST_279_FINDING)))
+            .endsWith(
+                ", which the finding \"rms_of_last window arithmetic is off by one and drops a"
+                    + " sample\" explains."));
+  }
+
+  /**
+   * Only an assertion of the failing test's own body cites it: one of a passing test, a setup line
+   * of the failing one, a quote too short to be the assertion's own code, a disclaimed failure, and
+   * an assertion whose declaration the patch does not show all cite nothing.
+   */
+  @Test
+  void onlyAQuotedAssertionOfTheFailingTestsOwnBodyCitesIt() {
+    var citations = rust279(List.of(addedAt("rust/tests/ingest_test.rs", 18, RUST_279_TESTS)));
+
+    assertFalse(citations.cites(described("`assert_eq!(zone(7.1, &thresholds), 2);` fails.")));
+    assertFalse(
+        citations.cites(described("`let rms = rms_of_last(&[0.0, 0.0, 3.0, 4.0], 2);` fails.")));
+    assertFalse(citations.cites(described("`(rms - 12.5f64` fails.")));
+    assertFalse(
+        citations.cites(
+            described(
+                "`assert!((rms - 12.5f64.sqrt()).abs() < 1e-9` fails, unrelated to this change.")));
+    assertTrue(
+        citations.cites(described("`assert!((rms - 12.5f64.sqrt()).abs() < 1e-9` fails.")),
+        "part of the assertion line is enough");
+
+    var bodyOnly =
+        rust279(
+            List.of(
+                addedAt(
+                    "rust/tests/ingest_test.rs",
+                    33,
+                    """
+                        let rms = rms_of_last(&[0.0, 0.0, 3.0, 4.0], 2);
+                        assert!((rms - 12.5f64.sqrt()).abs() < 1e-9, "got {rms}");
+                    """)));
+    assertFalse(bodyOnly.cites(RUST_279_FINDING), "no declaration, no body");
   }
 
   /**

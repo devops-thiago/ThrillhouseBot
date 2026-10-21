@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.LogSafe;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
@@ -139,8 +140,28 @@ public final class ContextEvidenceResolver {
       PathScopedInstructions pathInstructions,
       String ciFailures,
       EvidenceBudget budget) {
+    return forReview(patchCoverage, pathInstructions, ciFailures, List.of(), budget);
+  }
+
+  /**
+   * {@link #forReview(String, PathScopedInstructions, String, EvidenceBudget)} that also reads the
+   * failing tests' assertions from the pull request's changed files, so a finding quoting one cites
+   * its check (#952).
+   *
+   * @param files the pull request's reviewable changed files, with their patches
+   */
+  public static Round forReview(
+      String patchCoverage,
+      PathScopedInstructions pathInstructions,
+      String ciFailures,
+      List<GitHubPullRequestClient.FileDiff> files,
+      EvidenceBudget budget) {
     return new Round(
-        patchCoverage, pathInstructions, CiFailureCitations.parse(ciFailures), budget, false);
+        patchCoverage,
+        pathInstructions,
+        CiFailureCitations.parse(ciFailures, files),
+        budget,
+        false);
   }
 
   /**

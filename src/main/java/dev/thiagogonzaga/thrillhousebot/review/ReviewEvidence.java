@@ -74,7 +74,11 @@ public record ReviewEvidence(
     return new ReviewEvidence(
         resolver.forReview(auth, owner, repo, ref, ctx.reviewableFiles(), budget),
         ContextEvidenceResolver.forReview(
-            ctx.patchCoverage(), ctx.pathInstructions(), ciFailures, budget));
+            ctx.patchCoverage(),
+            ctx.pathInstructions(),
+            ciFailures,
+            ctx.reviewableFiles(),
+            budget));
   }
 
   /**

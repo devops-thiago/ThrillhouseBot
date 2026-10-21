@@ -8271,6 +8271,84 @@ class ReviewOrchestratorTest {
     }
 
     /**
+     * #952, round 18, rust ThrillhouseBot-test#279: the round-1 finding quotes the failing test's
+     * assertion and never names the test or the check. The refreshed section names the test from
+     * its job log, the test's body is in the changed files, and the finding is floored and stored.
+     */
+    @Test
+    void aFindingQuotingTheAssertionOfATestThatFailedWhileTheReviewRanIsFloored() {
+      stubCommonReviewMocks(buildCheck("completed", "success"));
+      var actions =
+          new GitHubCheckRunClient.CheckRunsResponse.CheckRun.App(1L, "github-actions", "");
+      when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(
+              buildPassedTest("in_progress", null),
+              List.of(
+                  new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                      1L, "build", "completed", "success", null),
+                  new GitHubCheckRunClient.CheckRunsResponse.CheckRun(
+                      2L, "test", "completed", "failure", actions)));
+      var logUri = java.net.URI.create("https://blob.example/log");
+      var actionsClient = mock(GitHubActionsClient.class);
+      when(actionsClient.downloadJobLogs(any(), any(), any(), any(), eq(2L)))
+          .thenReturn(Response.status(302).location(logUri).build());
+      var fetcher = mock(ArtifactZipFetcher.class);
+      when(fetcher.fetchTail(eq(logUri), anyInt()))
+          .thenReturn(
+              "test rms_uses_exactly_the_last_window_values ... FAILED\ngot 4\n"
+                  .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      when(prClient.getPullRequestFiles(
+              anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(
+              List.of(
+                  new GitHubPullRequestClient.FileDiff(
+                      "tests/ingest_test.rs",
+                      "added",
+                      4,
+                      0,
+                      4,
+                      """
+                      @@ -0,0 +1,4 @@
+                      +fn rms_uses_exactly_the_last_window_values() {
+                      +    let rms = rms_of_last(&[0.0, 0.0, 3.0, 4.0], 2);
+                      +    assert!((rms - 12.5f64.sqrt()).abs() < 1e-9, "got {rms}");
+                      +}""")));
+      var offByOne =
+          new ReviewResponse.Finding(
+              "high",
+              "low",
+              "tests/ingest_test.rs",
+              2,
+              "rms_of_last window arithmetic is off by one",
+              "The assertion `assert!((rms - 12.5f64.sqrt()).abs() < 1e-9, \"got {rms}\");` fails"
+                  + " as written.",
+              null,
+              null);
+      when(aiReviewService.review(any(ReviewSession.class), any()))
+          .thenReturn(new ReviewResponse(List.of(offByOne), List.of(), null));
+      ciFailureContext =
+          new CiFailureContextResolver(checkRunClient, actionsClient, fetcher, true, false, 4000);
+      orchestrator = newOrchestrator();
+
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = sessionWithPublicId();
+        mockedStatic
+            .when(() -> ReviewSession.create(anyString(), anyInt(), anyString(), anyString()))
+            .thenReturn(session);
+
+        orchestrator.review(request());
+
+        var stored = ArgumentCaptor.forClass(String.class);
+        verify(session, atLeastOnce()).setAiResponseJson(stored.capture());
+        assertTrue(stored.getValue().contains("\"confidence\":\"medium\""), stored.getValue());
+      }
+      var result = ArgumentCaptor.forClass(ReviewResult.class);
+      verify(summaryGenerator)
+          .generate(anyInt(), anyInt(), anyInt(), any(), any(), result.capture(), any());
+      assertEquals(Confidence.MEDIUM, result.getValue().findings().getFirst().confidence());
+    }
+
+    /**
      * #1148: the summary is handed the PR description's citations, read against the repository at
      * the head, so a linked-issue criterion the description shows met on the base is listed as met
      * by existing code.
