@@ -163,10 +163,10 @@ class ChatModelWiringTest {
 
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
       executor
-          .submit(() -> streamOneReview("diff-of-the-first-pr", false))
+          .submit(() -> streamOneReview("diff-of-the-first-pr", null))
           .get(30, TimeUnit.SECONDS);
       executor
-          .submit(() -> streamOneReview("diff-of-the-second-pr", false))
+          .submit(() -> streamOneReview("diff-of-the-second-pr", null))
           .get(30, TimeUnit.SECONDS);
     }
 
@@ -190,23 +190,23 @@ class ChatModelWiringTest {
   }
 
   /**
-   * #839 — a call bound as reasoning-disabled on the thread that starts it goes out with {@code
+   * #839 — a call started under a reasoning override on its thread goes out with {@code
    * reasoning_effort=none}, and the next call goes out at the configured effort again. Runs through
    * the real AI-service wiring, so this pins the whole path the step-down relies on: the supplier
    * on {@link PrReviewer} puts {@link ReasoningStepDownStreamingModel} in front of the model bean,
-   * the binding is visible when the stream starts, and the rewritten parameters survive the
+   * the override is visible when the stream starts, and the rewritten parameters survive the
    * provider model's merge over its defaults.
    */
   @Test
-  void aCallBoundAsReasoningDisabledGoesOutWithEffortNoneAndTheNextOneDoesNot() throws Exception {
+  void aCallUnderAReasoningOverrideGoesOutWithThatEffortAndTheNextOneDoesNot() throws Exception {
     var parameters = new CopyOnWriteArrayList<ChatRequestParameters>();
     QuarkusMock.installMockForType(
         new CapturingStreamingChatModel(new CopyOnWriteArrayList<>(), parameters),
         StreamingChatModel.class);
 
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-      executor.submit(() -> streamOneReview("diff", true)).get(30, TimeUnit.SECONDS);
-      executor.submit(() -> streamOneReview("diff", false)).get(30, TimeUnit.SECONDS);
+      executor.submit(() -> streamOneReview("diff", "none")).get(30, TimeUnit.SECONDS);
+      executor.submit(() -> streamOneReview("diff", null)).get(30, TimeUnit.SECONDS);
     }
 
     assertEquals(2, parameters.size(), "both review calls must reach the model");
@@ -218,12 +218,13 @@ class ChatModelWiringTest {
 
   /**
    * Streams one review on the calling thread under a session binding, the way {@code
-   * AiReviewService.streamOnce} does; {@code reasoningDisabled} is the step-down flag (#839).
+   * AiReviewService.streamOnce} does; {@code effort} is the step-down's override (#839), {@code
+   * null} for a call at the configured effort.
    */
-  private Void streamOneReview(String diff, boolean reasoningDisabled) {
+  private Void streamOneReview(String diff, String effort) {
     var done = new CompletableFuture<Void>();
-    ReviewSessionContext.bind(7L, 1, reasoningDisabled);
-    try {
+    ReviewSessionContext.bind(7L, 1);
+    try (var _ = ReasoningRepeat.override(effort)) {
       prReviewer
           .reviewStream(
               new AiReviewService.PromptInputs(

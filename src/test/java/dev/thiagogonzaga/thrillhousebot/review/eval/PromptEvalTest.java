@@ -22,6 +22,7 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ChangeSymbols;
 import dev.thiagogonzaga.thrillhousebot.review.Confidence;
@@ -30,12 +31,12 @@ import dev.thiagogonzaga.thrillhousebot.review.PromptSections;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
 import dev.thiagogonzaga.thrillhousebot.review.RiskLevel;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewer;
-import dev.thiagogonzaga.thrillhousebot.review.ai.PrSummarizer;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ResponseCaps;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ResponseRepairService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -55,7 +56,6 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Tag;
@@ -112,7 +112,9 @@ class PromptEvalTest {
 
   @Inject FindingVerificationService findingVerificationService;
   @Inject PrReviewer prReviewer;
-  @Inject PrSummarizer prSummarizer;
+  @Inject AiReviewService aiReviewService;
+  @Inject EvalCallRecorder callRecorder;
+  @Inject ThrillhouseConfig thrillhouseConfig;
   @Inject ReviewResponseParser reviewResponseParser;
   @Inject ReviewDimensionRouter dimensionRouter;
   @Inject SummaryVerifier summaryVerifier;
@@ -199,6 +201,11 @@ class PromptEvalTest {
    * and reports whether the description claim came back as a description gap and nowhere it reads
    * as implemented: "claim-gapped", else "claim-implemented" when the purpose, a file summary or
    * the diagram states it, or "claim-dropped" when it is in neither (#920).
+   *
+   * <p>The call goes through {@link AiReviewService#summarize}, as the pipeline makes it, so the
+   * sample sees the repeat a call that reasoned its whole cap away gets (#1169). Only that repeat
+   * is allowed: a sample that took any other further call (a retry, a repair, a re-ask) is
+   * "needed-retry", and one cut at the cap is "cut", both failures.
    */
   private String summaryOutcome(EvalCase evalCase) throws Exception {
     var spec = evalCase.spec();
@@ -212,29 +219,34 @@ class PromptEvalTest {
           .append(ChangeSymbols.overviewSuffix(path, patches.get(path)))
           .append('\n');
     }
-    var raw = new CompletableFuture<String>();
-    prSummarizer
-        .summarizeStream(
+    var inputs =
+        new AiReviewService.SummaryInputs(
             PromptTemplateEscaper.fence(
                 PromptSections.prContext(orEmpty(spec.prTitle()), orEmpty(spec.prDescription()))),
             PromptTemplateEscaper.escape(new ObjectMapper().writeValueAsString(spec.findings())),
             PromptTemplateEscaper.escape(overview.toString()),
             "",
-            PrReviewPrompts.DIAGRAM_REQUEST)
-        .onPartialResponse(token -> {})
-        .onCompleteResponse(response -> raw.complete(response.aiMessage().text()))
-        .onError(raw::completeExceptionally)
-        .start();
+            PrReviewPrompts.DIAGRAM_REQUEST);
+    // Shaped as the orchestrator creates one: the retry and repeat events read its fields.
+    var session =
+        ReviewSession.create(
+            "eval/" + evalCase.name(), spec.sourcePr(), orEmpty(spec.prTitle()), "eval");
+    session.id = EVAL_SESSION_ID;
+    callRecorder.reset();
     ReviewResponse.Summary summary;
     try {
-      summary =
-          reviewResponseParser
-              .parseSummary(raw.get(SAMPLE_TIMEOUT_MINUTES, TimeUnit.MINUTES))
-              .summary();
-    } catch (IllegalArgumentException _) {
-      return "unparseable";
-    } catch (ExecutionException | TimeoutException _) {
+      summary = aiReviewService.summarize(session, inputs).summary();
+    } catch (AiResponseTruncatedException _) {
+      return "cut";
+    } catch (RuntimeException e) {
+      // Only the type is logged: the message can carry provider or model text.
+      Log.infof("Summary sample failed (%s)", e.getClass().getSimpleName());
       return CALL_FAILED;
+    } finally {
+      Log.infof("Summary sample calls: %s", callRecorder.calls());
+    }
+    if (!EvalCallRecorder.oneCallOrItsRepeat(callRecorder.calls())) {
+      return "needed-retry";
     }
     if (summary == null) {
       return "no-summary";
@@ -264,6 +276,8 @@ class PromptEvalTest {
     var review = mock(ThrillhouseConfig.ReviewConfig.class);
     var diagram = mock(ThrillhouseConfig.DiagramConfig.class);
     when(config.review()).thenReturn(review);
+    // The repeat after a call that reasoned its whole cap away reads the reasoning settings.
+    when(config.ai()).thenReturn(thrillhouseConfig.ai());
     when(review.summaryVerificationEnabled()).thenReturn(true);
     when(review.diagram()).thenReturn(diagram);
     when(diagram.enabled()).thenReturn(true);
@@ -293,7 +307,9 @@ class PromptEvalTest {
             findings,
             Integer.MAX_VALUE);
     // No review session: the unopened sentinel key means no ceiling gates the call.
+    callRecorder.reset();
     var verified = service.verify(Long.MIN_VALUE, spec.summary(), material);
+    Log.infof("Summary verification sample calls: %s", callRecorder.calls());
     return summaryVerificationGrade(
         spec.keywords(), spec.keptKeywords(), EvalCorpusTest.summaryText(verified));
   }
@@ -390,6 +406,12 @@ class PromptEvalTest {
           Pattern.compile("(?i)\\bno (?:changed )?(?:files?|code|evidence)\\b"),
           Pattern.compile("(?i)\\b(?:pr|pull request) (?:text|body|title)\\b"),
           Pattern.compile("(?i)\\b(?:stated|according to|only (?:from|in) the)\\b"));
+
+  /**
+   * The review session id the summary samples run under: no session row has it, so the dashboard
+   * writes the observability listener makes for it update nothing.
+   */
+  private static final long EVAL_SESSION_ID = -1169L;
 
   /**
    * The outcome of a sample whose model call failed or timed out: a failing sample, not a crash.

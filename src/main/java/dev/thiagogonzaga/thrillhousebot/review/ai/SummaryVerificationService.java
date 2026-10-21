@@ -47,9 +47,10 @@ import java.util.Objects;
  *
  * <p>It fails open like the finding verifier: disabled, nothing to check, the spend ceiling
  * reached, an input over the per-call budget, an error, an empty, cut or malformed answer, each
- * keeps the summary as it was. Its usage is recorded on the review's {@link ReviewTokenLedger}
- * entry, and it reaches the model through {@link BoundedChatModel}, so it holds a {@link
- * ModelCallGate} slot like every other call.
+ * keeps the summary as it was. A call that stops at its cap with no answer, its reasoning having
+ * spent the whole allowance, is first repeated once at a lower effort ({@link ReasoningRepeat}).
+ * Its usage is recorded on the review's {@link ReviewTokenLedger} entry, and it reaches the model
+ * through {@link BoundedChatModel}, so it holds a {@link ModelCallGate} slot like every other call.
  */
 @ApplicationScoped
 public class SummaryVerificationService {
@@ -58,6 +59,7 @@ public class SummaryVerificationService {
   static final String ROOT_KEY = "contradicted";
 
   private final SummaryVerifier verifier;
+  private final ThrillhouseConfig config;
   private final boolean enabled;
   private final boolean diagramEnabled;
   private final ObjectMapper mapper;
@@ -75,6 +77,7 @@ public class SummaryVerificationService {
       TokenCounter tokenCounter) {
     this(
         verifier,
+        config,
         config.review().summaryVerificationEnabled(),
         config.review().diagram().enabled(),
         mapper,
@@ -85,6 +88,7 @@ public class SummaryVerificationService {
 
   private SummaryVerificationService(
       SummaryVerifier verifier,
+      ThrillhouseConfig config,
       boolean enabled,
       boolean diagramEnabled,
       ObjectMapper mapper,
@@ -92,6 +96,7 @@ public class SummaryVerificationService {
       ResponseCaps responseCaps,
       TokenCounter tokenCounter) {
     this.verifier = verifier;
+    this.config = config;
     this.enabled = enabled;
     this.diagramEnabled = diagramEnabled;
     this.mapper = mapper;
@@ -102,7 +107,7 @@ public class SummaryVerificationService {
 
   /** The step switched off, for callers that construct the pipeline without configuration. */
   public static SummaryVerificationService disabled() {
-    return new SummaryVerificationService(null, false, false, null, null, null, null);
+    return new SummaryVerificationService(null, null, false, false, null, null, null, null);
   }
 
   /**
@@ -190,15 +195,22 @@ public class SummaryVerificationService {
       if (diffSlot.isEmpty() && material.findings().isEmpty()) {
         return summary;
       }
+      // Each call's usage is recorded before the answer is read: a cut response was still billed.
+      // A call whose reasoning spent the whole cap is repeated once at a lower effort (#1169).
       var result =
-          verifier.verify(
-              statementsSlot,
-              findingsSlot,
-              material.prContext(),
-              diffSlot,
-              material.projectStack());
-      // Recorded before the answer is read: a cut response was still billed.
-      recordUsage(ledgerSessionId, result);
+          ReasoningRepeat.blocking(
+              "Summary verification for review session " + ledgerSessionId,
+              () ->
+                  verifier.verify(
+                      statementsSlot,
+                      findingsSlot,
+                      material.prContext(),
+                      diffSlot,
+                      material.projectStack()),
+              () -> ReasoningRepeat.effortFor(config, true),
+              () -> tokenLedger.ceilingReached(ledgerSessionId),
+              answer -> recordUsage(ledgerSessionId, answer),
+              () -> tokenLedger.recordReasoningStepDown(ledgerSessionId));
       var raw =
           AiResponses.textOrThrowOnTruncation(
               result, "Summary verification", responseCaps.forLane(AiResponses.ModelLane.CONCISE));

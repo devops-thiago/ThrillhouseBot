@@ -834,13 +834,14 @@ public class FindingVerificationService {
           () ->
               meteredVerifierCall(
                   ledgerSessionId,
-                  verifier.verify(
-                      candidates,
-                      prContext == null ? "" : prContext,
-                      diff,
-                      projectStack,
-                      previousFindings == null ? "" : previousFindings,
-                      systemPrompt));
+                  () ->
+                      verifier.verify(
+                          candidates,
+                          prContext == null ? "" : prContext,
+                          diff,
+                          projectStack,
+                          previousFindings == null ? "" : previousFindings,
+                          systemPrompt));
       var raw = call.get();
       if ((raw == null || raw.isBlank()) && !tokenLedger.ceilingReached(ledgerSessionId)) {
         // #1079: kotlin ThrillhouseBot-test#276 posted all 17 round-1 findings unverified on one
@@ -1041,10 +1042,18 @@ public class FindingVerificationService {
 
   /**
    * The verifier call's answer text, its usage recorded first: a truncated response was still
-   * billed, so its spend counts. {@code null} or blank for no response body.
+   * billed, so its spend counts. {@code null} or blank for no response body. A call whose reasoning
+   * spent the whole cap before any answer is repeated once at a lower effort (#1169).
    */
-  private String meteredVerifierCall(long ledgerSessionId, Result<String> result) {
-    recordVerifierUsage(ledgerSessionId, result);
+  private String meteredVerifierCall(long ledgerSessionId, Supplier<Result<String>> call) {
+    var result =
+        ReasoningRepeat.blocking(
+            "Finding verification for review session " + ledgerSessionId,
+            call,
+            () -> ReasoningRepeat.effortFor(config, true),
+            () -> tokenLedger.ceilingReached(ledgerSessionId),
+            answer -> recordVerifierUsage(ledgerSessionId, answer),
+            () -> tokenLedger.recordReasoningStepDown(ledgerSessionId));
     return AiResponses.textOrThrowOnTruncation(
         result, "Finding verification", responseCaps.forLane(AiResponses.ModelLane.CONCISE));
   }

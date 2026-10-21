@@ -76,10 +76,10 @@ public class AiReviewService {
   /** Wording of Ollama cloud's refusal when no concurrent request slot freed in time (#838). */
   private static final String CONCURRENT_SLOT_REFUSAL = "concurrent request slot";
 
-  /** Dashboard reason for the one repeat with reasoning disabled (#839). */
+  /** Dashboard reason for the one repeat at a lower reasoning effort (#839, #1169). */
   static final String REASONING_STEP_DOWN_REASON =
       "Model spent its output allowance reasoning and returned no content; repeating the call"
-          + " with reasoning disabled";
+          + " at a lower reasoning effort";
 
   private final PrReviewer prReviewer;
   private final PrSummarizer prSummarizer;
@@ -169,8 +169,10 @@ public class AiReviewService {
 
   /**
    * Runs one logical AI call: the transient-failure retry loop at the configured effort, and — once
-   * — the same loop again with reasoning disabled when the first pass ends in a length stop that
-   * produced no content at all (#839).
+   * — the same loop again at a lower effort when the first pass ends in a length stop that produced
+   * no content at all (#839). The lower effort is {@code none} when reasoning is enabled, and the
+   * lane's own effort ({@code low} unless configured) when it is off in config and the provider
+   * default reasoned the cap away (#1169); {@link ReasoningRepeat#effortFor} decides.
    *
    * <p>A length stop comes in two shapes that the retry loop must tell apart. With content, the
    * answer itself outgrew the cap: the identical call would be cut identically, so it is not
@@ -182,7 +184,7 @@ public class AiReviewService {
    * on the provider where this was measured the tiers barely move the reasoning length, so a tier
    * down burns the cap a second time. The step-down is per call — the configured effort is not
    * touched, the next call sends it again — and it is noted on the review's ledger entry so the
-   * posted summary discloses that the review ran with reasoning off. A repeat that also stops at
+   * posted summary discloses that the review ran with less reasoning. A repeat that also stops at
    * the cap propagates as before, so the cap is hit at most twice per logical call; a transient
    * failure on either pass keeps the ordinary {@code max-ai-retries} budget, because a provider
    * error on the repeat is the same kind of failure it is on any other call and is retried on the
@@ -211,23 +213,26 @@ public class AiReviewService {
       ModelLane lane) {
     var timeouts = new TimeoutBudget();
     try {
-      return attemptWithRetries(session, streamFactory, broadcastTokens, lane, false, timeouts);
+      return attemptWithRetries(session, streamFactory, broadcastTokens, lane, null, timeouts);
     } catch (AiResponseTruncatedException e) {
-      var effort = reasoningEffortToStepDownFrom(e, lane);
+      var effort = repeatEffort(e, lane);
       if (effort.isEmpty()) {
         throw e;
       }
       Log.warnf(
           "AI review for session %d stopped at its response-length cap with no content at"
               + " reasoning_effort=%s (%s): the reasoning tail spent the whole output allowance,"
-              + " so the call is repeated once with reasoning disabled",
-          session.id, effort.get(), describeUsage(e));
+              + " so the call is repeated once at reasoning_effort=%s",
+          session.id,
+          ReasoningRepeat.firstEffort(config, lane == ModelLane.CONCISE),
+          describeUsage(e),
+          effort.get());
       tokenLedger.recordReasoningStepDown(ReviewTokenLedger.keyFor(session));
       broadcaster.broadcast(
           SessionEventBroadcaster.SessionEvent.retry(
               session, 1, config.review().maxAiRetries(), REASONING_STEP_DOWN_REASON));
-      return repeatWithReasoningDisabled(
-          session, streamFactory, broadcastTokens, lane, timeouts, e);
+      return repeatAtLowerEffort(
+          session, streamFactory, broadcastTokens, lane, timeouts, e, effort.get());
     }
   }
 
@@ -237,15 +242,16 @@ public class AiReviewService {
    * showed, so every surface that reports the truncation states both (#893). Nothing else about the
    * repeat's outcome changes: an answer is the call's, and any other failure propagates as before.
    */
-  private ReviewResponse repeatWithReasoningDisabled(
+  private ReviewResponse repeatAtLowerEffort(
       ReviewSession session,
       Supplier<TokenStream> streamFactory,
       boolean broadcastTokens,
       ModelLane lane,
       TimeoutBudget timeouts,
-      AiResponseTruncatedException firstStop) {
+      AiResponseTruncatedException firstStop,
+      String effort) {
     try {
-      return attemptWithRetries(session, streamFactory, broadcastTokens, lane, true, timeouts);
+      return attemptWithRetries(session, streamFactory, broadcastTokens, lane, effort, timeouts);
     } catch (InlinedDeliberationGuard.Stopped stopped) {
       tokenLedger.recordReasoningRepeatStopped(ReviewTokenLedger.keyFor(session));
       var report = firstStop.report().withInlinedDeliberation(stopped.chars());
@@ -266,19 +272,17 @@ public class AiReviewService {
   }
 
   /**
-   * The reasoning effort a no-content length stop ran at, when there is one to step down from.
+   * The effort a no-content length stop's one repeat goes out at, when there is a repeat to make.
    * Empty for a stop with content (the answer was too long — the salvage path's case, never
-   * retried), when reasoning is off in config (nothing is sent, so there is nothing to disable),
-   * and when the lane already runs at {@code none} (the repeat would be the identical call). The
-   * lane matters because the concise lane resolves its own effort (#567).
+   * retried) and when the lane already runs at {@code none} with reasoning enabled (the repeat
+   * would be the identical call); otherwise {@link ReasoningRepeat#effortFor}. The lane matters
+   * because the concise lane resolves its own effort (#567).
    */
-  private Optional<String> reasoningEffortToStepDownFrom(
-      AiResponseTruncatedException e, ModelLane lane) {
+  private Optional<String> repeatEffort(AiResponseTruncatedException e, ModelLane lane) {
     if (!"".equals(e.partialBody())) {
       return Optional.empty();
     }
-    return ChatModelCustomizers.reasoningEffort(config, lane == ModelLane.CONCISE)
-        .filter(effort -> !ReasoningConfig.EFFORT_NONE.equals(effort));
+    return ReasoningRepeat.effortFor(config, lane == ModelLane.CONCISE);
   }
 
   /**
@@ -294,7 +298,7 @@ public class AiReviewService {
       Supplier<TokenStream> streamFactory,
       boolean broadcastTokens,
       ModelLane lane,
-      boolean reasoningDisabled,
+      String reasoningEffort,
       TimeoutBudget timeouts) {
     var maxAttempts = config.review().maxAiRetries();
     RuntimeException lastFailure = null;
@@ -315,14 +319,14 @@ public class AiReviewService {
 
       try {
         var answer =
-            streamOnce(session, streamFactory, attempt, broadcastTokens, lane, reasoningDisabled);
+            streamOnce(session, streamFactory, attempt, broadcastTokens, lane, reasoningEffort);
         return lane == ModelLane.CONCISE
             ? withReadFileSummaries(session, answer)
             : answer.response();
       } catch (AiResponseTruncatedException e) {
         // Deterministic: the next attempt sends the identical prompt against the identical cap and
         // is cut at the identical point. Retrying only bills the same failure again. The one
-        // repeat that changes the call — reasoning off after a no-content stop (#839) — is decided
+        // repeat that changes the call — a lower effort after a no-content stop (#839) — is decided
         // by runWithRetries around this loop, not here.
         Log.warnf(
             "AI review attempt %d/%d for session %d hit the response-length cap; not retrying"
@@ -701,10 +705,9 @@ public class AiReviewService {
       int attempt,
       boolean broadcastTokens,
       ModelLane lane,
-      boolean reasoningDisabled) {
+      String reasoningEffort) {
     try (var _ = callGate.acquire("AI review call for session " + session.id)) {
-      return streamInSlot(
-          session, streamFactory, attempt, broadcastTokens, lane, reasoningDisabled);
+      return streamInSlot(session, streamFactory, attempt, broadcastTokens, lane, reasoningEffort);
     }
   }
 
@@ -714,7 +717,7 @@ public class AiReviewService {
       int attempt,
       boolean broadcastTokens,
       ModelLane lane,
-      boolean reasoningDisabled) {
+      String reasoningEffort) {
     var result = new CompletableFuture<Answer>();
     var buffer = new StreamBuffer();
     var chunkCount = new AtomicInteger();
@@ -722,35 +725,38 @@ public class AiReviewService {
     var cancelled = new AtomicBoolean(false);
     // Only the step-down's repeat is watched for deliberation written into the response (#893);
     // a call at the configured effort streams exactly as before.
-    var deliberationGuard = reasoningDisabled ? new InlinedDeliberationGuard() : null;
+    var deliberationGuard =
+        ReasoningConfig.EFFORT_NONE.equals(reasoningEffort) ? new InlinedDeliberationGuard() : null;
 
     Runnable flushStream =
         broadcastTokens
             ? () -> flushPendingStream(session, buffer, chunkCount, attempt, lastFlushNanos)
             : () -> {};
 
-    // The binding travels on this thread into the model's chat call: the observability listener
-    // reads the session off it, and the step-down model reads whether this call goes out with
-    // reasoning disabled (#839). Both run before the stream returns, on this same thread.
-    ReviewSessionContext.bind(session.id, attempt, reasoningDisabled);
+    // The binding travels on this thread into the model's chat call, where the observability
+    // listener reads the session off it; the step-down model reads the reasoning override (#839)
+    // the same way. Both run before the stream returns, on this same thread.
+    ReviewSessionContext.bind(session.id, attempt);
     var callId = ReviewSessionContext.currentCallId();
     var deadline = streamTimeout();
     TokenStream stream = null;
     try {
-      stream = streamFactory.get();
+      try (var _ = ReasoningRepeat.override(reasoningEffort)) {
+        stream = streamFactory.get();
 
-      stream
-          .onPartialResponse(
-              token -> {
-                handlePartialToken(token, buffer, flushStream, cancelled, lastFlushNanos);
-                stopOnInlinedDeliberation(deliberationGuard, buffer, result, cancelled);
-              })
-          .onCompleteResponse(
-              response ->
-                  handleCompleteResponse(response, result, buffer, flushStream, cancelled, lane))
-          // langchain4j requires exactly one of onError/ignoreErrors; start() rejects both.
-          .onError(error -> handleStreamError(error, result, flushStream, cancelled))
-          .start();
+        stream
+            .onPartialResponse(
+                token -> {
+                  handlePartialToken(token, buffer, flushStream, cancelled, lastFlushNanos);
+                  stopOnInlinedDeliberation(deliberationGuard, buffer, result, cancelled);
+                })
+            .onCompleteResponse(
+                response ->
+                    handleCompleteResponse(response, result, buffer, flushStream, cancelled, lane))
+            // langchain4j requires exactly one of onError/ignoreErrors; start() rejects both.
+            .onError(error -> handleStreamError(error, result, flushStream, cancelled))
+            .start();
+      }
 
       return result.get(deadline.toMillis(), TimeUnit.MILLISECONDS);
     } catch (TimeoutException e) {

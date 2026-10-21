@@ -118,9 +118,16 @@ same diff.
   refused.
 - **Length stops.** A length stop with content is not retried: the identical call would be cut
   identically (#495). The response is salvaged or disclosed. A length stop with no content (the
-  reasoning spent the cap) is repeated once with reasoning off (#839, `ReasoningStepDownStreamingModel`).
-  `InlinedDeliberationGuard` stops that repeat when the model writes its deliberation into the
-  content (#893).
+  reasoning spent the cap) is repeated once at the effort `ReasoningRepeat.effortFor` names (#839):
+  `none` with reasoning enabled, and the lane's own effort (`low` unless set) with reasoning off in
+  config, where nothing was sent and the provider default reasoned the cap away (#1169). The
+  streamed calls repeat in `AiReviewService.runWithRetries`; the blocking review-path calls (finding
+  verifier, summary check, response repair) through `ReasoningRepeat.blocking`, which meters both
+  calls and skips the repeat at the spend ceiling. The effort reaches the model through the
+  `ReasoningRepeat.override` thread-local, which `ReasoningStepDownStreamingModel` and
+  `BoundedChatModel` apply; it is not on the `ReviewSessionContext` binding, because binding a
+  blocking call would make the listener meter it a second time. `InlinedDeliberationGuard` stops a
+  `none` repeat when the model writes its deliberation into the content (#893).
 - **Truncations state figures.** `ResponseCaps` resolves each lane's `ResponseCap`, and
   `TruncationReport` states the licensed cap, the setting that supplies it and the billed usage. It
   names the setting as the remedy only when the stop reached the cap (#895).
@@ -432,9 +439,10 @@ live `fence(...)` (#604).
   deliberately when you reword it. Never delete one to make a build pass.
 - **The eval corpus is the recall gate.** `src/test/resources/evalcorpus/` holds labeled cases:
   `verifier` and `generator` cases for the review prompts, and `summary` cases (#920) that run
-  `PrSummarizer` and expect a description claim back as a gap and nowhere it reads as implemented
-  (`claim-gapped`), or, for a claim the changed-files evidence can carry, not as a gap
-  (`claim-not-gapped`), and `summary-verification` cases (#1078) that run the summary check over a
+  the summary call through `AiReviewService.summarize` (one call, or one call and its #1169 repeat;
+  a sample that needed any other call fails, `EvalCallRecorder`) and expect a description claim
+  back as a gap and nowhere it reads as implemented (`claim-gapped`), or, for a claim the
+  changed-files evidence can carry, not as a gap (`claim-not-gapped`), and `summary-verification` cases (#1078) that run the summary check over a
   written summary and expect the statements their keywords name to be cut and the kept ones to
   stay (`contradicted-cut`), or nothing cut (`nothing-cut`), and `repair` cases (#1079) that run
   the repair step over a failed answer and expect each keyword title back as one finding
@@ -583,6 +591,8 @@ by the bot: `ReviewLearningService.retract` clears `active` and records who and 
 | Default chat memory on AI services | Every call shared one memory id, so each review resent the previous reviews' prompts and answers (#584). |
 | Retrying a length stop that produced content | The identical call is cut identically; salvage what completed instead (#495). |
 | Stepping reasoning down one tier on an empty length stop | Tiers barely move reasoning length on the measured provider, so the cap burned twice. The repeat goes straight to `none` (#839). |
+| Repeating at `none` when reasoning is off in config | `glm-5.3-flash` ignores `none` and spent the 8192-token concise cap again, while at `low` it answered in under a thousand tokens. With nothing sent, the repeat sends the lane's effort instead (#1169). |
+| Sending the concise effort even with reasoning off | A provider or model that does not accept `reasoning_effort` would reject every call; only the repeat of a call that already failed sends it (#1169). |
 | Summary fields on the review call | The hottest call paid input for the summary spec and output for the object, a response cut at its cap lost the summary, and the counts described unverified findings. Now a dedicated summary call on both lanes (#664). |
 | Sizing each batch from its own routed prompt | Circular (prompt depends on files, files on budget). The PR-wide prompt bounds every batch (#665). |
 | Reading the answer from the first bracket or the last fence | Deliberation brackets and fenced excerpts ahead of the answer lost findings, and split answers span fences (#894, #805). |

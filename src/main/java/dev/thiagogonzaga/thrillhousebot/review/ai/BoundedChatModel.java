@@ -46,6 +46,10 @@ import java.util.function.Supplier;
  * HTTP client's {@code AI_TIMEOUT} bounds how long that is. Only {@link #chat(ChatRequest)} takes a
  * slot: it is the one entry point the extension's AI services call. The defaults, provider and
  * capabilities are read off the model while the request is built, so they are the wrapped model's.
+ *
+ * <p>A call made under a {@linkplain ReasoningRepeat#override reasoning override}, the repeat of a
+ * call that spent its whole allowance reasoning (#1169), goes out with that {@code
+ * reasoning_effort}; every other call goes out as configured.
  */
 final class BoundedChatModel implements ChatModel {
 
@@ -60,7 +64,7 @@ final class BoundedChatModel implements ChatModel {
   @Override
   public ChatResponse chat(ChatRequest request) {
     try (var _ = gate.acquire("A blocking model call")) {
-      return delegate.chat(request);
+      return delegate.chat(ReasoningRepeat.applied(request));
     }
   }
 
