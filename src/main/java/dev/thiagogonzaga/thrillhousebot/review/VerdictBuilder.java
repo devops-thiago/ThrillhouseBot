@@ -783,7 +783,7 @@ public class VerdictBuilder {
    */
   static final String REASONING_STEP_DOWN_NOTE =
       "this review ran at a lower reasoning effort after the model spent its whole output"
-          + " allowance reasoning and produced no answer at the effort it was first called with";
+          + " allowance reasoning and produced no answer on its first attempt";
 
   /**
    * The review-scope note for a step-down repeat that was stopped (#893): the model wrote its

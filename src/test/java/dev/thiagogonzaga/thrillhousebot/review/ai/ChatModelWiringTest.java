@@ -163,10 +163,10 @@ class ChatModelWiringTest {
 
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
       executor
-          .submit(() -> streamOneReview("diff-of-the-first-pr", false))
+          .submit(() -> streamOneReview("diff-of-the-first-pr", null))
           .get(30, TimeUnit.SECONDS);
       executor
-          .submit(() -> streamOneReview("diff-of-the-second-pr", false))
+          .submit(() -> streamOneReview("diff-of-the-second-pr", null))
           .get(30, TimeUnit.SECONDS);
     }
 
@@ -198,15 +198,15 @@ class ChatModelWiringTest {
    * provider model's merge over its defaults.
    */
   @Test
-  void aCallBoundAsReasoningDisabledGoesOutWithEffortNoneAndTheNextOneDoesNot() throws Exception {
+  void aCallUnderAReasoningOverrideGoesOutWithThatEffortAndTheNextOneDoesNot() throws Exception {
     var parameters = new CopyOnWriteArrayList<ChatRequestParameters>();
     QuarkusMock.installMockForType(
         new CapturingStreamingChatModel(new CopyOnWriteArrayList<>(), parameters),
         StreamingChatModel.class);
 
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-      executor.submit(() -> streamOneReview("diff", true)).get(30, TimeUnit.SECONDS);
-      executor.submit(() -> streamOneReview("diff", false)).get(30, TimeUnit.SECONDS);
+      executor.submit(() -> streamOneReview("diff", "none")).get(30, TimeUnit.SECONDS);
+      executor.submit(() -> streamOneReview("diff", null)).get(30, TimeUnit.SECONDS);
     }
 
     assertEquals(2, parameters.size(), "both review calls must reach the model");
@@ -218,13 +218,13 @@ class ChatModelWiringTest {
 
   /**
    * Streams one review on the calling thread under a session binding, the way {@code
-   * AiReviewService.streamOnce} does; {@code reasoningDisabled} sets the step-down's override
-   * (#839).
+   * AiReviewService.streamOnce} does; {@code effort} is the step-down's override (#839), {@code
+   * null} for a call at the configured effort.
    */
-  private Void streamOneReview(String diff, boolean reasoningDisabled) {
+  private Void streamOneReview(String diff, String effort) {
     var done = new CompletableFuture<Void>();
     ReviewSessionContext.bind(7L, 1);
-    try (var _ = ReasoningRepeat.override(reasoningDisabled ? "none" : null)) {
+    try (var _ = ReasoningRepeat.override(effort)) {
       prReviewer
           .reviewStream(
               new AiReviewService.PromptInputs(

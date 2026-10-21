@@ -2082,7 +2082,7 @@ class VerdictBuilderTest {
                 PrSummaryGenerator.SUMMARY_HEADING
                     + "\n\n> **AI review scope:** this review ran at a lower reasoning effort after"
                     + " the model spent its whole output allowance reasoning and produced no answer"
-                    + " at the effort it was first called with\n\n"),
+                    + " on its first attempt\n\n"),
         result.summaryMarkdown());
     assertEquals(ReviewState.APPROVE, result.reviewState(), "a step-down never holds approval");
   }
@@ -2164,8 +2164,8 @@ class VerdictBuilderTest {
                     + " when the pull request head moved, was carried into this review as"
                     + " previous findings and re-checked against the current head"
                     + "\n>\n> this review ran at a lower reasoning effort after the model spent its"
-                    + " whole output allowance reasoning and produced no answer at the effort it"
-                    + " was first called with\n\n"),
+                    + " whole output allowance reasoning and produced no answer on its first"
+                    + " attempt\n\n"),
         result.summaryMarkdown());
   }
 
