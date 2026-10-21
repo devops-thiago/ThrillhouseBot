@@ -1,0 +1,21 @@
+{
+  "kind": "verifier",
+  "sourcePr": 248,
+  "why": "Round 17 (#1080): scala ThrillhouseBot-test#248 posted a correct finding (transferBags reads only the first manifest page) with a suggestion that initialises the cursor to None and then loops while it is defined, so the loop never runs and applying it returns no bags. The finding is real and must be kept; the suggestion must be corrected or dropped.",
+  "expectedVerdicts": [
+    "confirmed",
+    "downgraded"
+  ],
+  "expectation": "suggestion-fixed",
+  "keywords": [],
+  "finding": {
+    "risk": "high",
+    "confidence": "low",
+    "file": "scala/src/main/scala/baggage/ManifestClient.scala",
+    "line": 47,
+    "title": "transferBags reads only the first manifest page and ignores nextCursor",
+    "description": "The API contract in the same file says at ManifestClient.scala:13: \"Results are paged; follow `nextCursor` until it is None.\" But the only consumer, ManifestService, fetches a single page: api.fetchPage(flight, None).bags (line 47) — the second line of the two-page contract. Every bag on page two onward is silently absent from reconciliation: it is never classified, never shown in GET /transfers, and never reaches the misconnect alert even if it was never scanned at its connection hub, which defeats the reconciliation feature for exactly those bags. fetchPage already plumbs the cursor and reads X-Next-Cursor (line 34), so the loop just is not written. Verify the deployed manifest API's page size to size the truncation, then walk the pages until nextCursor is None.",
+    "suggestion_old": "  /** Every bag booked to transfer onto `flight`. */\n  def transferBags(flight: String): Seq[ManifestBag] =\n    api.fetchPage(flight, None).bags",
+    "suggestion_new": "  /** Every bag booked to transfer onto `flight`. */\n  def transferBags(flight: String): Seq[ManifestBag] = {\n    val builder = scala.collection.mutable.ListBuffer.empty[ManifestBag]\n    var cursor: Option[String] = None\n    while (cursor.isDefined) {\n      val page = api.fetchPage(flight, cursor)\n      builder ++= page.bags\n      cursor = page.nextCursor\n    }\n    builder.toSeq\n  }"
+  }
+}

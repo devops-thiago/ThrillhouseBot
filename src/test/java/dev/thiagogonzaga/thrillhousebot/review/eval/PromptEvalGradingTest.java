@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -106,5 +107,82 @@ class PromptEvalGradingTest {
     assertEquals(
         EvalCase.NOTHING_CUT,
         PromptEvalTest.summaryVerificationGrade(List.of(), kept, "It records an invoice."));
+  }
+
+  private static EvalCase fixCase(String expectation, List<String> keywords) {
+    var spec =
+        new EvalCase.Spec(
+            EvalCase.KIND_VERIFIER,
+            1,
+            "why",
+            List.of("confirmed", "downgraded"),
+            null,
+            expectation,
+            null,
+            keywords,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null);
+    return new EvalCase("case", "", spec);
+  }
+
+  private static ReviewResponse.Finding withFix(String description, String suggestionNew) {
+    return new ReviewResponse.Finding(
+        "high", "high", "f", 1, "t", description, "old", suggestionNew);
+  }
+
+  @Test
+  void aBrokenSuggestionIsFixedWhenDroppedOrReplacedByCodeHoldingTheKeywords() {
+    // #1080: the go #247 fix must keep the /usr/local/bin/pickbatchd destination.
+    var fixCase = fixCase(EvalCase.SUGGESTION_FIXED, List.of("pickbatchd"));
+    var raised = withFix("d", "COPY /out/pickbatch /usr/local/bin/pickbatch");
+
+    assertEquals(
+        "suggestion-fixed", PromptEvalTest.revisionOutcome(fixCase, raised, withFix("d", null)));
+    assertEquals(
+        "suggestion-fixed",
+        PromptEvalTest.revisionOutcome(
+            fixCase, raised, withFix("d", "COPY /out/pickbatch /usr/local/bin/pickbatchd")));
+    assertEquals("suggestion-kept", PromptEvalTest.revisionOutcome(fixCase, raised, raised));
+    assertEquals(
+        "suggestion-still-broken",
+        PromptEvalTest.revisionOutcome(fixCase, raised, withFix("d", "COPY /out/x /usr/bin/x")));
+    assertEquals(
+        "suggestion-fixed",
+        PromptEvalTest.revisionOutcome(
+            fixCase(EvalCase.SUGGESTION_FIXED, null), raised, withFix("d", "anything else")));
+  }
+
+  @Test
+  void aSideClaimIsCutWhenNoSentenceNamesItAndTheCorrectFixStays() {
+    var cutCase = fixCase(EvalCase.CLAIM_CUT, List.of("misspelled"));
+    var raised = withFix("Wrong value. The name is misspelled.", "fix");
+
+    assertEquals(
+        "claim-cut",
+        PromptEvalTest.revisionOutcome(cutCase, raised, withFix("Wrong value.", "fix")));
+    assertEquals("claim-kept", PromptEvalTest.revisionOutcome(cutCase, raised, raised));
+    assertEquals(
+        "suggestion-changed",
+        PromptEvalTest.revisionOutcome(cutCase, raised, withFix("Wrong value.", null)));
+    assertEquals(
+        "claim-cut", PromptEvalTest.revisionOutcome(cutCase, raised, withFix(null, "fix")));
+  }
+
+  @Test
+  void aFixJudgingSampleNeedsBothAnExpectedVerdictAndTheExpectedRevision() {
+    var fixCase = fixCase(EvalCase.SUGGESTION_FIXED, List.of());
+
+    assertTrue(PromptEvalTest.sampleMatchesExpectation(fixCase, "confirmed+suggestion-fixed"));
+    assertTrue(PromptEvalTest.sampleMatchesExpectation(fixCase, "downgraded+suggestion-fixed"));
+    assertFalse(PromptEvalTest.sampleMatchesExpectation(fixCase, "confirmed+suggestion-kept"));
+    assertFalse(PromptEvalTest.sampleMatchesExpectation(fixCase, "rejected"));
+    assertFalse(PromptEvalTest.sampleMatchesExpectation(fixCase, "other+suggestion-fixed"));
   }
 }

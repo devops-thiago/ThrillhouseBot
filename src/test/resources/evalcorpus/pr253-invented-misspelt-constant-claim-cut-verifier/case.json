@@ -1,0 +1,23 @@
+{
+  "kind": "verifier",
+  "sourcePr": 253,
+  "why": "Round 17 (#1080): c ThrillhouseBot-test#253 posted a correct finding (the comment says 2,000 L while MAX_DELTA_LITRES is 20000.0) that also claimed the comment misspells the constant name, which it does not: the comment writes MAX_DELTA_LITRES exactly as the #define does. The side claim must be cut and the correct suggestion kept.",
+  "expectedVerdicts": [
+    "confirmed",
+    "downgraded"
+  ],
+  "expectation": "claim-cut",
+  "keywords": [
+    "misspelled"
+  ],
+  "finding": {
+    "risk": "medium",
+    "confidence": "high",
+    "file": "c/src/validator.c",
+    "line": 8,
+    "title": "Spike threshold comment says 2,000 L but the code uses 20,000 L",
+    "description": "The comment above the constant reads \"A step between consecutive readings of one meter is a spike when it exceeds MAX_DELTA_LITRES: 2,000 L, roughly a burst service pipe running for an hour.\" while the next declaration is `#define MAX_DELTA_LITRES 20000.0`. The comment states one tenth of the value the code applies. The same constant name is also misspelled in that comment, MAX vs MAX_. A maintainer reasoning about detection thresholds from the comment would predict spikes at 2,001 L and conclude the meter rejects ten times more readings than it does.",
+    "suggestion_old": "/* A step between consecutive readings of one meter is a spike when it exceeds\n * MAX_DELTA_LITRES: 2,000 L, roughly a burst service pipe running for an hour. */",
+    "suggestion_new": "/* A step between consecutive readings of one meter is a spike when it exceeds\n * MAX_DELTA_LITRES: 20,000 L, roughly a burst service pipe running for an hour. */"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "kind": "verifier",
+  "sourcePr": 247,
+  "why": "Round 17 (#1080): go ThrillhouseBot-test#247 posted a correct finding (the runtime stage copies /out/pickbatchd, which the build stage never produces) with a suggestion that also renames the COPY destination to /usr/local/bin/pickbatch while the ENTRYPOINT keeps starting /usr/local/bin/pickbatchd, turning a build failure into a start failure. The finding must be kept, and the suggestion corrected to keep the /usr/local/bin/pickbatchd destination, or dropped.",
+  "expectedVerdicts": [
+    "confirmed",
+    "downgraded"
+  ],
+  "expectation": "suggestion-fixed",
+  "keywords": [
+    "/usr/local/bin/pickbatchd"
+  ],
+  "finding": {
+    "risk": "high",
+    "confidence": "high",
+    "file": "go/Dockerfile",
+    "line": 10,
+    "title": "Runtime stage copies an artifact the build stage never produces",
+    "description": "The build stage compiles to a different filename than the one the runtime stage copies: line 5 'RUN CGO_ENABLED=0 go build -o /out/pickbatch .' produces /out/pickbatch, but line 10 is 'COPY --from=build /out/pickbatchd /usr/local/bin/pickbatchd', and the ENTRYPOINT (line 17) starts /usr/local/bin/pickbatchd. No stage produces /out/pickbatchd, so the image build fails deterministically the first time it runs (COPY: /out/pickbatchd: not found). This also explains nothing being runnable even if the COPY were fixed.",
+    "suggestion_old": "COPY --from=build /out/pickbatchd /usr/local/bin/pickbatchd",
+    "suggestion_new": "COPY --from=build /out/pickbatch /usr/local/bin/pickbatch"
+  }
+}
