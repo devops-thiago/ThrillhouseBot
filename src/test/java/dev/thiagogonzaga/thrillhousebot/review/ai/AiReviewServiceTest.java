@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.exception.HttpException;
 import dev.langchain4j.exception.InternalServerException;
 import dev.langchain4j.exception.RateLimitException;
@@ -28,6 +29,7 @@ import dev.langchain4j.service.TokenStream;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
+import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -1904,6 +1906,50 @@ class AiReviewServiceTest {
 
     verifyReviewStreamCalls(2);
     verify(repairService, times(1)).repair(anyLong(), any(), anyString(), any());
+  }
+
+  @Test
+  void aRejectedRepairTakesTheFullRetryAndNoneOfItsFindingsAreKept() {
+    // #1176: a repair that writes A twice in place of A and B is rejected, and the retry answers.
+    ReviewSession session = reviewSession();
+    var failed = "{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B\"},]}";
+    stubReviewStreams(new FakeTokenStream(failed), new FakeTokenStream("{\"findings\":[]}"));
+    var reviewParser = new ReviewResponseParser(new ObjectMapper());
+    var retried = reviewParser.parse("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B\"}]}");
+    when(parser.parse(anyString()))
+        .thenThrow(new IllegalArgumentException("Model response is not valid review JSON"))
+        .thenReturn(retried);
+    when(reviewConfig.responseRepairEnabled()).thenReturn(true);
+    var repairer = mock(ResponseRepairer.class);
+    when(repairer.repair(anyString(), anyString(), anyString()))
+        .thenReturn(AiResults.aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"A\"}]}"));
+    var repairing =
+        new AiReviewService(
+            prReviewer,
+            prSummarizer,
+            parser,
+            config,
+            broadcaster,
+            tokenLedger,
+            callGate,
+            responseCaps,
+            new ResponseRepairService(
+                repairer,
+                mock(SummaryResponseRepairer.class),
+                reviewParser,
+                new ObjectMapper(),
+                tokenLedger,
+                responseCaps,
+                config));
+
+    assertSame(retried, repairing.review(session, PROMPT_INPUTS));
+
+    verifyReviewStreamCalls(2);
+    verify(repairer)
+        .repair(
+            anyString(),
+            anyString(),
+            argThat(answer -> failed.equals(PromptTemplateEscaper.unfence(answer))));
   }
 
   @Test
