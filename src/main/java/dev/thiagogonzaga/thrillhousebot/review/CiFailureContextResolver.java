@@ -372,7 +372,7 @@ public class CiFailureContextResolver {
                   auth,
                   owner,
                   repo,
-                  new CiStatusEvaluator.CiFailures(added, fresh.pending()),
+                  new CiStatusEvaluator.CiFailures(added, fresh.pending(), fresh.reported()),
                   FAILED_SINCE_START),
               maxChars);
       return section.isEmpty() ? block : section + "\n" + block;

@@ -8215,6 +8215,39 @@ class ReviewOrchestratorTest {
     }
 
     /**
+     * #1092, round 19: GitHub created the check suites 20 to 90 seconds after the reviews started,
+     * so the review-start reading saw no check, none counted as pending, and with no required check
+     * nothing held approval. The check runs are read again, and the failure is in the summary.
+     */
+    @Test
+    void aCheckCreatedAfterTheReviewStartedAndFailedIsInThatReviewsCiSentence() {
+      stubCommonReviewMocks(buildCheck("completed", "success"));
+      when(checkRunClient.getRequiredStatusChecks(any(), any(), any(), any(), any()))
+          .thenReturn(new GitHubCheckRunClient.RequiredStatusChecks(List.of(), List.of()));
+      when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(List.of(), buildPassedTest("completed", "failure"));
+
+      var summary = renderedSummaryWithCiContext();
+
+      assertTrue(
+          summary.prPurpose().contains(CiFailureCitations.SENTENCE_OPENING + "\"test\""),
+          summary.prPurpose());
+      verify(checkRunClient, times(2)).getAllCheckRuns(any(), any(), any(), any(), any());
+      verify(checkRunClient, times(1)).getAllCombinedStatus(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void checksThatHadAllFinishedAtReviewStartAreNotReadAgain() {
+      stubCommonReviewMocks(buildCheck("completed", "success"));
+      when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
+          .thenReturn(buildPassedTest("completed", "success"));
+
+      renderedSummaryWithCiContext();
+
+      verify(checkRunClient, times(1)).getAllCheckRuns(any(), any(), any(), any(), any());
+    }
+
+    /**
      * #1092, #952 (round 18, rust #279): the round-1 finding the failing test confirms was posted
      * at low confidence because the test failed after review start. The refreshed CI section floors
      * it at medium, and the round is stored with the floored grade.
