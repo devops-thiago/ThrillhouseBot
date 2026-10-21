@@ -309,6 +309,12 @@ final class PathMentions {
    */
   private final Map<String, Optional<String>> resolutions = new ConcurrentHashMap<>();
 
+  /**
+   * Whether a patch line holds a code span's text as it stands, per text, so each quote is looked
+   * for in the patches once per review however many texts repeat it ({@link #quotedCode}).
+   */
+  private final Map<String, Boolean> quotedInPatches = new ConcurrentHashMap<>();
+
   /** The paths each finding's file writes in its patch lines ({@link #pathsWrittenBy}). */
   private final Map<String, Set<String>> writtenByFile = new ConcurrentHashMap<>();
 
@@ -810,12 +816,16 @@ final class PathMentions {
     while (matcher.find()) {
       var content = matcher.group(1).strip();
       if (quotesMoreThanAPath(content)
-          && patchLines.values().stream()
-              .anyMatch(lines -> lines.stream().anyMatch(line -> line.contains(content)))) {
+          && quotedInPatches.computeIfAbsent(content, this::anyPatchLineHolds)) {
         quoted.add(new int[] {matcher.start(), matcher.end()});
       }
     }
     return quoted;
+  }
+
+  private boolean anyPatchLineHolds(String content) {
+    return patchLines.values().stream()
+        .anyMatch(lines -> lines.stream().anyMatch(line -> line.contains(content)));
   }
 
   /** Whether a code span holds more than one path: a space, a quote or an assignment besides it. */
