@@ -34,10 +34,28 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           DCO_EVIDENCE_FILE: ${{ runner.temp }}/dco-evidence.json
         run: node scripts/dco/check.mjs
+      - name: Preflight release history when the validator changes
+        if: startsWith(github.base_ref, 'release/')
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- scripts/dco .github/workflows/dco.yml; then
+            exit 0
+          else
+            diff_status=$?
+            if [ "$diff_status" -ne 1 ]; then
+              exit "$diff_status"
+            fi
+          fi
+          release_base=$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')
+          BASE_SHA="$release_base" DCO_EVIDENCE_FILE="$RUNNER_TEMP/dco-release-evidence.json" node scripts/dco/check.mjs
       - name: Preserve DCO evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dco-evidence
-          path: ${{ runner.temp }}/dco-evidence.json
+          path: ${{ runner.temp }}/dco*-evidence.json
           if-no-files-found: ignore
