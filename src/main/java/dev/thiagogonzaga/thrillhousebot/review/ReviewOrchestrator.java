@@ -677,8 +677,11 @@ public class ReviewOrchestrator {
    * was built from the review-start reading, and a check still running then often fails before the
    * review posts. The re-read {@link #rereadCiIfHeld} took is used when there is one (a required
    * check not yet reported at review start holds approval without counting as pending); otherwise,
-   * when the early reading counted a pending check, the check runs are read with one call. Nothing
-   * is read when nothing was pending, and a failed read keeps the review-start section.
+   * when the early reading counted a pending check or saw no check at all, the check runs are read
+   * with one call: GitHub often creates a pull request's check suites a minute after the event that
+   * started the review, and on all 12 round-19 corpus PRs the review-start reading saw none.
+   * Nothing is read when every check it saw had finished, and a failed read keeps the review-start
+   * section.
    */
   private String refreshCiFailures(
       String auth,
@@ -686,8 +689,7 @@ public class ReviewOrchestrator {
       String section,
       CiStatusEvaluator.CiEvaluation early,
       CiStatusEvaluator.CiEvaluation verdictReading) {
-    if (!ciFailureContext.enabled()
-        || (verdictReading == early && early.failures().pending() == 0)) {
+    if (!ciFailureContext.enabled() || (verdictReading == early && settled(early.failures()))) {
       return section;
     }
     var fresh =
@@ -700,6 +702,11 @@ public class ReviewOrchestrator {
                 ciFailureContext.refresh(
                     auth, req.owner(), req.repo(), section, early.failures(), failures))
         .orElse(section);
+  }
+
+  /** Whether a CI reading saw checks and none of them was still running. */
+  private static boolean settled(CiStatusEvaluator.CiFailures failures) {
+    return failures.pending() == 0 && failures.reported() > 0;
   }
 
   /**

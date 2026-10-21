@@ -242,13 +242,20 @@ public class CiStatusEvaluator {
    * The failing and still-pending checks one CI read saw, required or not, the bot's own excluded,
    * deduplicated by name across the Check Runs and Commit Status APIs. Unlike the offending list,
    * this is not filtered to the required contexts: an optional lint job that fails still explains a
-   * defect.
+   * defect. {@code reported} counts the checks the read saw in any state, passing ones included, so
+   * a read made before GitHub created any check is told apart from one that saw them all finish
+   * (#1092).
    */
-  record CiFailures(List<FailedCheck> failed, int pending) {
-    static final CiFailures NONE = new CiFailures(List.of(), 0);
+  record CiFailures(List<FailedCheck> failed, int pending, int reported) {
+    static final CiFailures NONE = new CiFailures(List.of(), 0, 0);
 
     CiFailures {
       failed = List.copyOf(failed);
+    }
+
+    /** Failures and pending checks with nothing else known to have reported. */
+    CiFailures(List<FailedCheck> failed, int pending) {
+      this(failed, pending, failed.size() + pending);
     }
   }
 
@@ -290,6 +297,7 @@ public class CiStatusEvaluator {
             offendingNames,
             offending,
             new LinkedHashMap<>(),
+            new HashSet<>(),
             new HashSet<>());
     var checkRunsReadable =
         collectReadable(
@@ -331,6 +339,7 @@ public class CiStatusEvaluator {
             new HashSet<>(),
             new ArrayList<>(),
             new LinkedHashMap<>(),
+            new HashSet<>(),
             new HashSet<>());
     var readable =
         collectReadable(
@@ -369,7 +378,8 @@ public class CiStatusEvaluator {
       Set<String> offendingNames,
       List<ReviewResult.CiCheck> offending,
       Map<String, FailedCheck> failed,
-      Set<String> pending) {
+      Set<String> pending,
+      Set<String> reported) {
 
     /**
      * Records a non-bot check for the review context, required or not: its failure detail the first
@@ -380,6 +390,7 @@ public class CiStatusEvaluator {
       if (name == null) {
         return;
       }
+      reported.add(name);
       if (CI_FAILING.equals(ciStatus)) {
         failed.computeIfAbsent(name, ignored -> failure.get());
       } else if (CI_PENDING.equals(ciStatus)) {
@@ -391,7 +402,7 @@ public class CiStatusEvaluator {
     CiFailures failures() {
       var stillPending = new HashSet<>(pending);
       stillPending.removeAll(failed.keySet());
-      return new CiFailures(List.copyOf(failed.values()), stillPending.size());
+      return new CiFailures(List.copyOf(failed.values()), stillPending.size(), reported.size());
     }
   }
 
