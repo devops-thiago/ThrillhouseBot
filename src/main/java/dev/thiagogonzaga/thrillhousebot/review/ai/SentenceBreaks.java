@@ -21,16 +21,18 @@ import java.util.regex.Pattern;
  * Where a sentence of model-written text ends. A "!" or "?" ends one; a period ends one only when a
  * blank or the end follows it, so a decimal ("1.5") or a dotted name ({@code Foo.bar}, {@code
  * Client.java}) ends nothing, and only when it does not close a common abbreviation ("e.g.",
- * "i.e.", "etc.", "vs.", "cf.").
+ * "i.e.", "etc.", "vs.", "cf.") or a title of a name ("Dr.", "Mr.", "Mrs.", "Ms.", "Prof.", "St.",
+ * "Jr.", "Sr."). A title counts only capitalised and as a whole word, so a unit ("500 ms.") or a
+ * longer word ending in the same letters ("CIDR.") still ends its sentence.
  */
 public final class SentenceBreaks {
 
-  /** A common abbreviation a period closes, read just before that period's end. */
+  /** A common abbreviation or a title a period closes, read just before that period's end. */
   public static final Pattern ABBREVIATION =
-      Pattern.compile("(?i)\\b(?:e\\.g|i\\.e|etc|vs|cf)\\.\\z");
+      Pattern.compile("\\b(?:(?i:e\\.g|i\\.e|etc|vs|cf)|Dr|Mrs?|Ms|Prof|St|[JS]r)\\.\\z");
 
   /** Characters at most an {@link #ABBREVIATION} spans, its period included. */
-  public static final int ABBREVIATION_CHARS = 4;
+  public static final int ABBREVIATION_CHARS = 5;
 
   private SentenceBreaks() {}
 
