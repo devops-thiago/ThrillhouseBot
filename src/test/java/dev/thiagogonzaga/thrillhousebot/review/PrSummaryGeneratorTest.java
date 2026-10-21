@@ -2426,6 +2426,13 @@ class PrSummaryGeneratorTest {
         PrSummaryGenerator.backedByFindings(List.of(credited, unbacked), List.of(listed)));
     var none = List.of(plain);
     assertSame(none, PrSummaryGenerator.backedByFindings(none, List.of()));
+    // #1203: a gap saying no finding shows its criterion credits nothing and stays unbacked.
+    var negated =
+        List.of(
+            DescriptionGapScreenTest.NEGATED_293,
+            DescriptionGapScreenTest.NEGATED_297,
+            DescriptionGapScreenTest.NEGATED_302);
+    assertSame(negated, PrSummaryGenerator.backedByFindings(negated, List.of()));
 
     var result =
         new ReviewResult(

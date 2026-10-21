@@ -409,6 +409,24 @@ final class DescriptionGapScreen {
   static final int CREDIT_REACH = 5;
 
   /**
+   * Negations that, before a {@link #REVIEW_NOUNS} word, say the review did not state the claim
+   * (#1203): "no changed file or finding shows", "nor any finding", "not flagged by any reviewer",
+   * "never reported by any reviewer". A contracted "n't" is read as "not".
+   */
+  private static final Set<String> NEGATIONS = Set.of("no", "not", "nor", "never");
+
+  /**
+   * Word positions, at most, from a {@link #NEGATIONS} word to the review noun it negates: "no
+   * changed file or finding" is four apart. A {@link #DETERMINERS} word other than "any", or an
+   * "and", between them starts another noun phrase the negation does not reach: "never retries as
+   * the review flagged".
+   */
+  static final int NEGATION_REACH = 4;
+
+  /** Where no negation binds the words that follow, for {@link #creditsIn}. */
+  private static final int UNNEGATED = -NEGATION_REACH - 1;
+
+  /**
    * Words that make the word after them a noun: "a report", "the notes", "its warnings" name
    * things, they do not credit a claim.
    */
@@ -615,8 +633,10 @@ final class DescriptionGapScreen {
    * while an open finding states it; on #1124 none did. A credit is a {@link #REVIEW_NOUNS} word
    * and a {@link #CREDIT_VERBS} verb at most {@value #CREDIT_REACH} words apart, in either order,
    * in one clause: "the earlier review had flagged", "reported during the review", "flagged by one
-   * of the reviewers". Quoted passages, and a clause the description is said to state ("the
-   * description says one reviewer reported downtime"), are the PR text's words, not the bullet's.
+   * of the reviewers". A review noun a negation reaches ({@link #NEGATION_REACH}) credits nothing:
+   * "no changed file or finding shows" says the review did not state it (#1203). Quoted passages,
+   * and a clause the description is said to state ("the description says one reviewer reported
+   * downtime"), are the PR text's words, not the bullet's.
    */
   static boolean creditsReview(String gap) {
     var own = ownWords(gap);
@@ -650,12 +670,14 @@ final class DescriptionGapScreen {
     // A subject-only verb: its index, and the index from which a noun after it counts (after "by").
     var subjectVerbs = new ArrayList<int[]>();
     var previous = "";
+    // The index of the last negation still binding the words that follow.
+    var negation = UNNEGATED;
     for (var index = 0; words.find(); index++) {
       var word = words.group().toLowerCase(Locale.ROOT);
       // After a determiner a verb's form is a noun: "a report", "the show".
       var verbal = !DETERMINERS.contains(previous);
       if (REVIEW_NOUNS.contains(word)) {
-        nouns.add(new int[] {index, words.start()});
+        nouns.add(new int[] {index, words.start(), negation});
       } else if (verbal && CREDIT_VERBS.contains(word)) {
         verbs.add(new int[] {index, words.start()});
       } else if (verbal && SUBJECT_CREDIT_VERBS.contains(word)) {
@@ -665,15 +687,32 @@ final class DescriptionGapScreen {
           && subjectVerbs.getLast()[0] == index - 1) {
         subjectVerbs.getLast()[1] = index + 1;
       }
+      negation = negationAfter(word, previous, index, negation);
       previous = word;
     }
     return nouns.stream()
         .filter(
             noun ->
-                verbs.stream().anyMatch(verb -> Math.abs(noun[0] - verb[0]) <= CREDIT_REACH)
-                    || subjectVerbs.stream().anyMatch(verb -> creditsAsSubject(noun[0], verb)))
+                noun[0] - noun[2] > NEGATION_REACH
+                    && (verbs.stream().anyMatch(verb -> Math.abs(noun[0] - verb[0]) <= CREDIT_REACH)
+                        || subjectVerbs.stream().anyMatch(verb -> creditsAsSubject(noun[0], verb))))
         .map(noun -> noun[1])
         .toList();
+  }
+
+  /**
+   * The index of the negation binding the words after {@code word}, at {@code index} and after
+   * {@code previous}, given {@code negation} bound the words before it: {@code word}'s own index
+   * when it is a {@link #NEGATIONS} word or the "t" of an "n't", {@link #UNNEGATED} when it starts
+   * another noun phrase ({@link #NEGATION_REACH}), else {@code negation}.
+   */
+  private static int negationAfter(String word, String previous, int index, int negation) {
+    if (NEGATIONS.contains(word) || "t".equals(word) && previous.endsWith("n")) {
+      return index;
+    }
+    return "and".equals(word) || DETERMINERS.contains(word) && !"any".equals(word)
+        ? UNNEGATED
+        : negation;
   }
 
   /**
