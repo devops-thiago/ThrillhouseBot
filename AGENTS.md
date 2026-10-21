@@ -38,6 +38,19 @@ same diff.
   and, when `pom.xml`, `src/main/**`, the native integration tests or the CI workflow change,
   the GraalVM native build followed by the `*IT` suite against the built binary (#671).
 
+## DCO provenance check
+
+- The required `dco` job runs `scripts/dco/check.mjs` and its Node regression tests.
+  Keep the job read-only. A matching trailer passes directly; the squash fallback
+  needs an authenticated GitHub squash, the exact merged source PR, an identical
+  reconstructed tree and certified original contributions. Email aliases require
+  a verified same-author source sign-off. Source merges cannot hide uncertified
+  conflict resolutions. Missing API or Git evidence fails closed.
+- `DCO-Remediation: <full SHA>` in an authenticated, signed-off commit in the PR
+  range certifies only commits GitHub associates with that same author. Never
+  manufacture a certification or rewrite shared release history to pass DCO.
+- `scripts/dco/` is code-owner protected like the workflow that delegates to it.
+
 ## Package map
 
 | Package | Owns |

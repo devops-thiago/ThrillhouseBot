@@ -1,3 +1,5 @@
 # Protect CI/CD workflows — require owner review for any changes
 /.github/workflows/ @devops-thiago
 /.github/CODEOWNERS @devops-thiago
+# The required DCO check delegates to this validator and its regression tests.
+/scripts/dco/ @devops-thiago
