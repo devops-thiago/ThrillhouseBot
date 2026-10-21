@@ -379,6 +379,58 @@ class ResponseRepairServiceTest {
   }
 
   @Test
+  void aRepairThatReplacesAFindingWithACopyOfAnotherIsRejected() {
+    // #1176: [A, B] repaired as [A, A] kept the count and only known titles, and lost B.
+    var body = "{\"findings\":[{\"title\":\"harmless\"},{\"title\":\"critical lost finding\"}],}";
+    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"harmless\"}, {\"title\": \"harmless\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isEmpty());
+
+    reviewAnswer(
+        aiOk(
+            "{\"findings\": [{\"title\": \"harmless\"}, {\"title\": \"critical lost"
+                + " finding\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isPresent());
+  }
+
+  @Test
+  void aTitleTheFailedAnswerRepeatsMustBeKeptAsOftenAsItWasWritten() {
+    var body = "{\"findings\": [{\"title\": \"A\"}, {\"title\": \"A\"}, {\"title\": \"B\"},]}";
+    reviewAnswer(
+        aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"A\"}, {\"title\": \"B\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isPresent());
+
+    reviewAnswer(
+        aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B\"}, {\"title\": \"B\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isEmpty());
+
+    reviewAnswer(
+        aiOk(
+            "{\"findings\": [{\"title\": \"A\"}, {\"title\": \"A\"}, {\"title\": \"B\"},"
+                + " {\"title\": \"B\"}]}"));
+    assertTrue(
+        service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isPresent(),
+        "an extra copy of a title loses nothing");
+  }
+
+  @Test
+  void titlesThatDifferOnlyInEscapesAndSpacesCountAsOneTitleWrittenTwice() {
+    var body =
+        "{\"findings\": [{\"title\": \"Quote \\\"x\\\" is  unescaped\"},"
+            + " {\"title\": \"Quote \\\"x\\\" is unescaped\"}, {\"title\": \"B\"},]}";
+    reviewAnswer(
+        aiOk(
+            "{\"findings\": [{\"title\": \"Quote \\\"x\\\" is unescaped\"},"
+                + " {\"title\": \"Quote \\\"x\\\"  is unescaped\"}, {\"title\": \"B\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isPresent());
+
+    reviewAnswer(
+        aiOk(
+            "{\"findings\": [{\"title\": \"Quote \\\"x\\\" is unescaped\"},"
+                + " {\"title\": \"B\"}, {\"title\": \"B\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isEmpty());
+  }
+
+  @Test
   void aReAskedRowIsKeptOnlyWhenItsWholePathIsInTheText() {
     // rc15 review of #1168: "a.py" is not named by "data.py: ..." or "a.pyc".
     var text = "data.py: reads the rows; lib/a.pyc is generated; app.py.";
@@ -412,6 +464,31 @@ class ResponseRepairServiceTest {
 
     reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"Z\"}]}"));
     assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isEmpty());
+
+    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"A\"}]}"));
+    assertTrue(
+        service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isEmpty(),
+        "the text holds one copy of A, so B was lost");
+
+    // A title inside another title or in another field's prose is no copy of it.
+    var nested =
+        "{\"findings\": [{\"title\": \"error\", \"description\": \"an error case\"},"
+            + " {\"title\": \"error X\", \"note\": \"cut";
+    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"error\"}, {\"title\": \"error\"}]}"));
+    assertTrue(
+        service.repair(SESSION, ModelLane.ACTIVE, nested, refusal()).isEmpty(),
+        "\"error\" is the value of one title only, so \"error X\" was lost");
+    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"error\"}, {\"title\": \"error X\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, nested, refusal()).isPresent());
+    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"error\"}, {\"title\": \"case\"}]}"));
+    assertTrue(
+        service.repair(SESSION, ModelLane.ACTIVE, nested, refusal()).isEmpty(),
+        "\"case\" is only in a description, not a title");
+
+    // A title the text cuts off before its closing quote still counts.
+    var openTitle = "{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B";
+    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, openTitle, refusal()).isPresent());
 
     var statusBody =
         "{\"findings\": [], \"previous_findings_status\": [{\"id\": 1, \"status\": \"open";
