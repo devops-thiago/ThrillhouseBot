@@ -28,7 +28,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -299,32 +298,25 @@ public class ResponseRepairService {
               + titles
               + " title(s)");
     }
+    // Without the structure, every "title" value the text holds as a string, so JSON quoted
+    // inside another string (a description's escaped example) holds no title (#1176).
     var written =
-        keys.readable()
-            ? keys.titles().stream()
-                .collect(Collectors.toMap(ResponseRepairService::plain, title -> 1, Integer::sum))
-            : Map.<String, Integer>of();
-    var plainBody = plain(body);
+        (keys.readable() ? keys.titles() : AnswerKeys.titleValues(body))
+            .stream()
+                .collect(Collectors.toMap(ResponseRepairService::plain, title -> 1, Integer::sum));
     var held = new HashMap<String, Integer>();
     for (var finding : repaired.findings()) {
       var title = finding.title() == null ? null : plain(finding.title());
-      var known =
-          title != null
-              && (keys.readable() ? written.containsKey(title) : titled(title, plainBody) > 0);
-      if (!known) {
+      if (title == null || !written.containsKey(title)) {
         return Optional.of("it holds a finding whose title the failed answer does not have");
       }
       held.merge(title, 1, Integer::sum);
     }
     // Each title as often as the failed answer wrote it, so a copy of one finding cannot stand in
-    // for another (#1176). Without the structure, a title may appear no more often than the text
-    // holds it as a title's value.
+    // for another (#1176).
     var lost =
-        keys.readable()
-            ? written.entrySet().stream()
-                .anyMatch(title -> held.getOrDefault(title.getKey(), 0) < title.getValue())
-            : held.entrySet().stream()
-                .anyMatch(title -> titled(title.getKey(), plainBody) < title.getValue());
+        written.entrySet().stream()
+            .anyMatch(title -> held.getOrDefault(title.getKey(), 0) < title.getValue());
     if (lost) {
       return Optional.of(
           "it repeats a finding's title in place of another finding of the failed answer");
@@ -345,23 +337,6 @@ public class ResponseRepairService {
     var found = 0;
     while (matcher.find()) {
       found++;
-    }
-    return found;
-  }
-
-  /**
-   * How many "title" values of the plain {@code text} are {@code title}: the value closes right
-   * after it, or the text ends there, so a title inside a longer title or in another field's prose
-   * is not counted.
-   */
-  private static int titled(String title, String text) {
-    var value = "\"title\":\"" + title;
-    var found = 0;
-    for (var at = text.indexOf(value); at >= 0; at = text.indexOf(value, at + value.length())) {
-      var end = at + value.length();
-      if (end == text.length() || text.charAt(end) == '"') {
-        found++;
-      }
     }
     return found;
   }
