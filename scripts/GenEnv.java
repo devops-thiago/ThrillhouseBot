@@ -62,6 +62,7 @@ void main(String[] args) throws Exception {
 
       # --- OpenTelemetry (optional) ---
       # OTEL_EXPORTER_ENDPOINT=http://<alloy-host>:4317
+      # OTEL_SDK_DISABLED=true   # no collector: export nothing
 
       # --- Network tuning (optional; keepalive <= 0 disables it) ---
       # HTTP_CONNECT_TIMEOUT=10s
