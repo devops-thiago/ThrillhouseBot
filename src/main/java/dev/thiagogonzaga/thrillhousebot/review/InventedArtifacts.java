@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import dev.thiagogonzaga.thrillhousebot.review.ai.SentenceBreaks;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -344,7 +345,7 @@ final class InventedArtifacts {
   /**
    * Where an artifact's clause starts, for {@link #REMOVAL}: punctuation or a dash. A comma or
    * colon between digits ("1,000", "10:30") ends nothing, nor does a period not followed by a blank
-   * or the end ("v1.2") or one closing a common abbreviation ("e.g.", "i.e.", "etc.", "vs.").
+   * or the end ("v1.2") or one closing a common abbreviation ({@link SentenceBreaks#ABBREVIATION}).
    */
   private static final Pattern CLAUSE_END =
       Pattern.compile("[;!?—–]|(?<!\\d)[,:]|[,:](?!\\d)|\\.(?=\\s|\\z)");
@@ -374,13 +375,6 @@ final class InventedArtifacts {
     ADDED,
     DENIED
   }
-
-  /** A common abbreviation a period closes, read just before that period's end. */
-  private static final Pattern ABBREVIATION =
-      Pattern.compile("(?i)\\b(?:e\\.g|i\\.e|etc|vs|cf)\\.\\z");
-
-  /** Characters at most an {@link #ABBREVIATION} spans, its period included. */
-  private static final int ABBREVIATION_CHARS = 4;
 
   /**
    * {@code summary} with every sentence of its purpose and assessment that introduces an artifact
@@ -723,12 +717,13 @@ final class InventedArtifacts {
       listBreak.add(LIST_BREAKS.indexOf(breaks.group().charAt(0)) >= 0);
     }
     var example = EXAMPLE_LEAD.matcher(lead);
-    var abbreviation = ABBREVIATION.matcher(lead).useTransparentBounds(true);
+    var abbreviation = SentenceBreaks.ABBREVIATION.matcher(lead).useTransparentBounds(true);
     var start = 0;
     for (var i = 0; i < ends.size(); i++) {
       var end = ends.get(i);
       var segmentEnd = i + 1 < ends.size() ? ends.get(i + 1) - 1 : lead.length();
-      var abbreviated = abbreviation.region(Math.max(0, end - ABBREVIATION_CHARS - 1), end).find();
+      var abbreviated =
+          abbreviation.region(Math.max(0, end - SentenceBreaks.ABBREVIATION_CHARS - 1), end).find();
       var continues =
           abbreviated
               || example.region(end, lead.length()).lookingAt()

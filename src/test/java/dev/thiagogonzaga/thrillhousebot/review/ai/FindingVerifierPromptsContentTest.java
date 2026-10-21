@@ -267,4 +267,50 @@ class FindingVerifierPromptsContentTest {
         "That is the general rule for every context section",
         "the next context dimension must follow this pattern rather than add a slot (#475)");
   }
+
+  @Test
+  void verifierJudgesTheSuggestionApartFromTheFinding() {
+    // #1080: scala ThrillhouseBot-test#248 and go #247 posted real findings with broken fixes.
+    String sys = FindingVerifierPrompts.CORE_TAIL;
+    assertContains(
+        sys,
+        "a cursor\ninitialised to None and then looped while it is defined never fetches a page",
+        "the scala loop that never runs is the example of a broken suggestion");
+    assertContains(
+        sys,
+        "a COPY destination\nchanged while the ENTRYPOINT keeps the old path",
+        "the go rename the ENTRYPOINT still names is the second example");
+    assertContains(
+        sys,
+        "\"suggestion\": \"replace\" with \"suggestion_new\" set to the corrected code",
+        "a correctable suggestion is replaced, not only flagged");
+    assertContains(sys, "\"suggestion\": \"drop\"", "an uncorrectable one is dropped");
+    assertContains(
+        sys,
+        "A broken suggestion is not by itself a reason to downgrade or reject a real finding.",
+        "the finding is kept when only its fix is wrong");
+  }
+
+  @Test
+  void verifierCutsOnlyContradictedSideClaimsCopiedWhole() {
+    String sys = FindingVerifierPrompts.CORE_TAIL;
+    assertContains(
+        sys,
+        "a test or fixture said to break or\npass when the diff shows otherwise",
+        "zig ThrillhouseBot-test#250's fixture claim is the example");
+    assertContains(sys, "Copy each such sentence exactly, whole, into \"cut\".", "exact copy");
+    assertContains(
+        sys,
+        "Never list the sentence that states the defect, and list nothing when in doubt.",
+        "the defect itself is never cut");
+  }
+
+  @Test
+  void theResponseSchemaCarriesTheSuggestionAndCutFields() {
+    String schema = FindingVerifierPrompts.RESPONSE_SCHEMA;
+    assertContains(schema, "\"suggestion\": \"keep\" | \"replace\" | \"drop\"", "labels");
+    assertContains(schema, "\"suggestion_new\": \"<corrected code, only\nwith replace>\"", "code");
+    assertContains(
+        schema, "\"cut\": [\"<a sentence copied exactly from the description>\"]", "cut");
+  }
 }

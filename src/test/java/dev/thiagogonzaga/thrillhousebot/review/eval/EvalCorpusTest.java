@@ -86,7 +86,34 @@ class EvalCorpusTest {
       assertTrue(
           c.diff().contains(finding.file().substring(finding.file().lastIndexOf('/') + 1)),
           c.name() + ": the finding's file must appear in the diff");
+      if (c.judgesTheFix()) {
+        assertTrue(
+            Set.of(EvalCase.SUGGESTION_FIXED, EvalCase.CLAIM_CUT).contains(c.spec().expectation()),
+            c.name() + ": a verifier case's expectation is suggestion-fixed or claim-cut");
+        assertNotNull(finding.suggestionOld(), c.name() + ": the fix's suggestion_old");
+        assertNotNull(finding.suggestionNew(), c.name() + ": the fix's suggestion_new");
+        assertTrue(
+            c.diff().contains(finding.suggestionOld().lines().findFirst().orElseThrow()),
+            c.name() + ": suggestion_old must quote the diff");
+      }
+      if (EvalCase.CLAIM_CUT.equals(c.spec().expectation())) {
+        assertFalse(c.spec().keywords().isEmpty(), c.name() + ": keywords naming the claim");
+        for (var keyword : c.spec().keywords()) {
+          assertTrue(
+              finding.description().contains(keyword),
+              c.name() + ": the description must make the claim " + keyword);
+        }
+      }
     }
+    var fixes =
+        corpus.stream()
+            .filter(EvalCase::judgesTheFix)
+            .map(c -> c.spec().expectation())
+            .collect(java.util.stream.Collectors.toSet());
+    assertEquals(
+        Set.of(EvalCase.SUGGESTION_FIXED, EvalCase.CLAIM_CUT),
+        fixes,
+        "the corpus needs a broken-suggestion and a side-claim verifier case (#1080)");
   }
 
   @Test
