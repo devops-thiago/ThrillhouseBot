@@ -193,6 +193,90 @@ class PathMentionsTest {
     assertEquals(text, mentions.withoutUnresolvedMentions(text));
   }
 
+  /**
+   * Corpus round 19 (#1204): a slash-joined list of identifiers names no file. With no file name at
+   * its end and a first word that is no top-level directory of a changed or repository file, its
+   * sentence is kept, though react/src/api/ holds a directory called api.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "Classifies sensor readings into OK/OUT_OF_RANGE/OFFLINE by catching"
+            + " SensorOfflineException.",
+        "WaitlistService with join/position/promote_next/search_waitlist/distinct_waiting_members;"
+            + " findings: none.",
+        "Builds slot note HTML (escapeHtml/normalizeNote/formatNote/buildNoteHtml); injects the"
+            + " note unescaped.",
+        "Tests for isFull/buildBoard/boardMessage; asserts isFull true at capacity.",
+        "It includes CSV parsing/dedupe/staleness helpers and a history store abstraction.",
+        "Unit tests with an AlwaysDeliveredGateway fake and detector/tracker/reported-split checks.",
+        "A new React pickup-slot board spanning 15 files (UI, API/config/slot/notes/notification"
+            + " modules) is functionally incomplete."
+      })
+  void aSlashJoinedListOfIdentifiersIsKept(String sentence) {
+    var mentions = mentions(REACT, "", Set.of("react/src/api/client.ts", "web/app/main.ts"));
+
+    assertSame(sentence, mentions.withoutUnresolvedSentences(sentence));
+    var screened =
+        mentions.screen(
+            summary(
+                "Adds a board.",
+                List.of(),
+                List.of(new ReviewResponse.FileSummary("react/src/loans/paging.ts", sentence))));
+    assertEquals(sentence, screened.fileSummaries().getFirst().summary());
+  }
+
+  /**
+   * A token that opens with a top-level directory of a changed or repository file, in any letter
+   * case, or ends with a file name or a slash, is still a path: invented, its sentence goes.
+   */
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "react/src/nope/paging",
+        "DOCS/drafts/old",
+        "web/app/missing",
+        "api/config/slot.ts",
+        "api/config/Dockerfile",
+        "api/config/slot/"
+      })
+  void aPathOpeningWithAKnownDirectoryOrEndingWithAFileIsStillJudged(String token) {
+    var mentions = mentions(REACT, "", Set.of("react/src/api/client.ts", "web/app/main.ts"));
+
+    assertEquals(
+        "Kept.", mentions.withoutUnresolvedSentences("Kept. It reads " + token + " first."));
+  }
+
+  /** A list of identifiers that is a repository directory is kept, as is any with no listing. */
+  @Test
+  void aListOfIdentifiersTheRepositoryHoldsIsKept() {
+    var mentions = mentions(REACT, "", Set.of("web/app/main.ts"));
+
+    var text = "It renders web/app/ and lists isFull/buildBoard/boardMessage.";
+    assertSame(text, mentions.withoutUnresolvedSentences(text));
+    var unknown = PathMentions.of(REACT, "", Optional::empty);
+    var invented = "It reads web/app/missing first.";
+    assertSame(invented, unknown.withoutUnresolvedSentences(invented));
+  }
+
+  /**
+   * A list of words ending with the name of a dotless changed file is no near miss of it: "run" in
+   * start/stop/run is a word, not scripts/bin/run. A path under a changed directory still maps.
+   */
+  @Test
+  void aListOfIdentifiersIsNotMappedOntoAChangedFile() {
+    var files = List.of(new FileDiff("scripts/bin/run", "added", 3, 0, 3, "+#!/bin/sh"));
+    var listed = mentions(files, "", Set.of("scripts/bin/run"));
+    var unknown = PathMentions.of(files, "", Optional::empty);
+
+    var text = "Adds start/stop/run commands.";
+    assertSame(text, listed.withoutUnresolvedSentences(text));
+    assertSame(text, unknown.withoutUnresolvedSentences(text));
+    assertEquals(
+        "It runs scripts/bin/run.",
+        listed.withoutUnresolvedSentences("It runs scripts/tools/run."));
+  }
+
   @Test
   void theShapeOfAPath() {
     assertTrue(PathMentions.pathShaped("docs/REACT-VIV.md"));
