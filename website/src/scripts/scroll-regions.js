@@ -28,13 +28,15 @@ function syncTable(table) {
 }
 
 // The pages are rendered at build time, so the code blocks and their order
-// are fixed once the module runs.
+// are fixed once the module runs. Each block's number is looked up, not
+// searched for, so naming every block stays linear.
 const blocks = Array.from(document.querySelectorAll(CODE));
+const ordinals = new Map(blocks.map((pre, i) => [pre, i + 1]));
 
 function codeLabel(pre) {
   const title = pre.closest("figure")?.querySelector("figcaption .title")?.textContent?.trim();
   const detail = title || pre.dataset.language;
-  const label = `Code block ${blocks.indexOf(pre) + 1}`;
+  const label = `Code block ${ordinals.get(pre)}`;
   return detail ? `${label}, ${detail}` : label;
 }
 
