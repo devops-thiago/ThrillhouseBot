@@ -144,23 +144,18 @@ final class FindingRevisions {
 
   /**
    * Whether {@code cut}, found at {@code at}, is whole sentences of {@code description}: it starts
-   * the text or a line, or follows a sentence's closing mark and a space, and it ends on a
-   * sentence's closing mark. A fragment cut from inside a sentence would leave the rest of that
-   * sentence unreadable.
+   * the text or a line, or follows a sentence's end and a space, and it ends where a sentence ends
+   * ({@link SentenceBreaks}: not on the period of an abbreviation, a decimal or a dotted name). A
+   * fragment cut from inside a sentence would leave the rest of that sentence unreadable.
    */
   private static boolean isSentence(String description, int at, String cut) {
-    var before = description.substring(0, at);
-    var previous = before.stripTrailing();
+    var previous = description.substring(0, at).stripTrailing();
     var starts =
         previous.isEmpty()
-            || before.endsWith("\n")
-            || (previous.length() < before.length() && endsSentence(previous));
-    return starts && endsSentence(cut);
-  }
-
-  private static boolean endsSentence(String text) {
-    var last = text.charAt(text.length() - 1);
-    return last == '.' || last == '!' || last == '?';
+            || description.charAt(at - 1) == '\n'
+            || (previous.length() < at
+                && SentenceBreaks.endsSentenceAt(description, previous.length()));
+    return starts && SentenceBreaks.endsSentenceAt(description, at + cut.length());
   }
 
   /** How many spaces {@code text} starts with. */

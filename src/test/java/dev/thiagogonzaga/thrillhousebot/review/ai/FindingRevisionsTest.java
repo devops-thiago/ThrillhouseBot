@@ -23,6 +23,7 @@ import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /** #1080: the verifier's judgment of a kept finding's suggestion and side claims, applied. */
@@ -229,6 +230,50 @@ class FindingRevisionsTest {
     assertSame(
         description,
         FindingRevisions.withoutSentence(raised, description, "Every bag on page two is lost."));
+  }
+
+  /**
+   * rc15 review of #1170: a period that closes an abbreviation, sits inside a decimal or joins a
+   * dotted name ends no sentence, so a cut bounded by one is a fragment and is not made.
+   */
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      value = {
+        "Use a guard, e.g. a null check before the loop. The loop never runs.|a null check before"
+            + " the loop.",
+        "Use a guard, e.g. a null check before the loop. The loop never runs.|Use a guard, e.g.",
+        "Pick a fixture, i.e. the second one in the file. The loop never runs.|the second one in"
+            + " the file.",
+        "It reads tags, ids, etc. and stores them all. The loop never runs.|and stores them all.",
+        "Compare page one vs. the last page of the run. The loop never runs.|the last page of the"
+            + " run.",
+        "See the old loop, cf. the new one in the change. The loop never runs.|the new one in the"
+            + " change.",
+        "The ratio here is 1.5 times the page size. The loop never runs.|The ratio here is 1.",
+        "The ratio here is 1.5 times the page size. The loop never runs.|5 times the page size.",
+        "It calls Foo.bar on every page it reads. The loop never runs.|It calls Foo.",
+        "It calls Foo.bar on every page it reads. The loop never runs.|bar on every page it"
+            + " reads.",
+        "The test in Client.java covers this case. The loop never runs.|The test in Client.",
+      })
+  void aPeriodThatEndsNoSentenceBoundsNoCut(String description, String cut) {
+    var raised = finding(description, null);
+
+    assertSame(description, FindingRevisions.withoutSentence(raised, description, cut));
+  }
+
+  @Test
+  void aWholeSentenceHoldingAbbreviationsDecimalsAndDottedNamesIsCut() {
+    var raised = finding("x", null);
+
+    assertEquals(
+        "The loop never runs. It returns no bags.",
+        FindingRevisions.withoutSentence(
+            raised,
+            "The loop never runs. It calls Foo.bar 1.5 times, e.g. in Client.java. It returns no"
+                + " bags.",
+            "It calls Foo.bar 1.5 times, e.g. in Client.java."));
   }
 
   @Test
