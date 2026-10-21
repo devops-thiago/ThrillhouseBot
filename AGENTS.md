@@ -44,8 +44,9 @@ same diff.
   Keep the job read-only. A matching trailer passes directly; the squash fallback
   needs an authenticated GitHub squash, the exact merged source PR, an identical
   reconstructed tree and certified original contributions. Email aliases require
-  a verified same-author source sign-off. Source merges cannot hide uncertified
-  conflict resolutions. Missing API or Git evidence fails closed.
+  a verified same-author source sign-off. Both checked-range and source merges
+  must be unchanged automatic merges or carry their author's certification; neither
+  can hide uncertified conflict resolutions. Missing API or Git evidence fails closed.
 - `DCO-Remediation: <full SHA>` in an authenticated, signed-off commit in the PR
   range certifies only commits GitHub associates with that same author. Never
   manufacture a certification or rewrite shared release history to pass DCO.

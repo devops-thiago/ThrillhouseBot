@@ -98,18 +98,27 @@ export class DcoChecker {
     }
     return false;
   }
+  automaticMerge(sha, parents) {
+    if (parents.length !== 2) return false;
+    try { return this.git.mergeTree(parents[0], parents[1]) === this.git.tree(sha); }
+    catch { return false; } // A conflict or unreadable tree needs certification.
+  }
   async validate(sha, opener, stack = new Set()) {
     if (!SHA.test(sha)) throw new Error('Invalid commit SHA');
     const details = this.git.details(sha);
     if (this.exact(details)) return { sha, method: 'matching-signoff' };
-    if (await this.bot(sha, opener)) return { sha, method: 'authenticated-bot-pr' };
     if (await this.remediated(sha)) return { sha, method: 'author-remediation' };
+    const parents = this.git.parents(sha);
+    if (parents.length > 1) {
+      if (this.automaticMerge(sha, parents)) return { sha, method: 'unchanged-automatic-merge' };
+      throw new Error('Merge lacks author certification and unchanged automatic-merge evidence');
+    }
+    if (await this.bot(sha, opener)) return { sha, method: 'authenticated-bot-pr' };
     if (stack.has(sha) || stack.size >= 20) throw new Error('Circular or excessive source-PR history');
     const next = new Set(stack).add(sha);
     const commit = await this.github.commit(sha);
     // The fallback is only for a GitHub-signed squash of an actually merged PR.
     if (!authenticatedAuthor(commit) || commit.committer?.login !== 'web-flow') throw new Error('No authenticated GitHub squash provenance');
-    const parents = this.git.parents(sha);
     if (parents.length !== 1) throw new Error('Source-PR fallback requires a single-parent squash commit');
     const pulls = (await this.github.pulls(sha)).filter((p) => p.merged_at && p.merge_commit_sha === sha
       && p.base?.repo?.full_name === this.repository);
@@ -120,17 +129,10 @@ export class DcoChecker {
     if (this.git.mergeTree(parents[0], pr.head.sha) !== this.git.tree(sha)) throw new Error('Source PR does not reproduce the squash tree');
     const sources = this.git.range(parents[0], pr.head.sha);
     if (!sources.length) throw new Error('No original contributions found');
-    // Merges are not contributions only when their tree is an unmodified automatic merge.
-    // Otherwise their own changes also need the merge author's certification.
+    // Apply the same merge certification rule to both histories.
+    const merges = [];
     for (const source of this.git.allRange(parents[0], pr.head.sha)) {
-      const ps = this.git.parents(source);
-      if (ps.length <= 1 || this.exact(this.git.details(source))) continue;
-      let automatic = false;
-      if (ps.length === 2) {
-        try { automatic = this.git.mergeTree(ps[0], ps[1]) === this.git.tree(source); }
-        catch { /* A conflict resolution needs its own certification. */ }
-      }
-      if (!automatic && !(await this.remediated(source))) throw new Error('Source merge adds uncertified changes');
+      if (this.git.parents(source).length > 1) merges.push(await this.validate(source, pr.user, next));
     }
     const certifications = [];
     for (const source of sources) certifications.push(await this.validate(source, pr.user, next));
@@ -153,13 +155,13 @@ export class DcoChecker {
       }
       if (!alias) throw new Error('Mismatched trailer has no verified same-author source sign-off');
     }
-    const evidence = { sha, method: details.signoffs.length ? 'verified-source-alias' : 'signed-source-contributions', pull: pr.number, head: pr.head.sha, sources: certifications };
+    const evidence = { sha, method: details.signoffs.length ? 'verified-source-alias' : 'signed-source-contributions', pull: pr.number, head: pr.head.sha, sources: certifications, merges };
     this.evidence.push(evidence);
     return evidence;
   }
   async check(base, head, opener) {
     if (!SHA.test(base) || !SHA.test(head)) throw new Error('Base and head must be full commit SHAs');
-    const commits = this.git.range(base, head); // git failures are fatal, never an empty passing range.
+    const commits = this.git.allRange(base, head); // git failures are fatal, never an empty passing range.
     this.remediations.clear();
     for (const sha of commits) {
       const d = this.git.details(sha);

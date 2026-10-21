@@ -149,8 +149,10 @@ for you:
 Signed-off-by: Your Name <you@example.com>
 ```
 
-The `dco` check examines every non-merge commit between the pull request's
-base and head. A cryptographic commit signature does not replace the sign-off.
+The `dco` check examines every commit between the pull request's base and
+head. An unsigned two-parent merge passes only when its tree is an unchanged
+automatic merge; other merge changes require the author's certification. A
+cryptographic commit signature does not replace the sign-off.
 When squash-merging, keep a sign-off matching the resulting commit's author in
 the squash message. Do not assume sign-offs on the original commits will be
 preserved.
@@ -174,9 +176,9 @@ is not sufficient.
 The DCO check can also establish certification from a merged source PR. It
 requires a GitHub-signed squash, an exact match between its SHA and the source
 PR's merge SHA, and a reconstructed merge tree identical to the squash tree.
-Every original contribution must pass DCO. An unsigned source merge must be an
-unchanged automatic merge; extra conflict-resolution changes need their own
-certification. An existing trailer with a different email is accepted only
+Every original contribution must pass DCO. In both the checked PR range and
+the original source history, an unsigned merge must be an unchanged automatic
+merge; extra conflict-resolution changes need their own certification. An existing trailer with a different email is accepted only
 when a source commit ties that signed-off email to the same GitHub author,
 authenticated by its signature or by that author opening the original PR.
 DCO sign-offs on original commits do not require cryptographic signatures.

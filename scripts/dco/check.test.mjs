@@ -18,7 +18,7 @@ function fixture({ missing = false } = {}) {
   const pull = { number: 42, merged_at: '2026-10-21T00:00:00Z', merge_commit_sha: squash, base: { repo: { full_name: repo } }, head: { sha: source }, user: owner };
   const git = {
     range: (b) => b === base ? [squash] : [source],
-    allRange: () => [source], details: (s) => structuredClone(details.get(s)),
+    allRange: (b) => b === base ? [squash] : [source], details: (s) => structuredClone(details.get(s)),
     parents: (s) => s === squash ? [sha(10)] : [sha(11)],
     fetchPull: () => {}, mergeTree: () => sha(20), tree: () => sha(20),
   };
@@ -55,7 +55,7 @@ const invalidProvenance = {
   'unmerged PR': (f) => { f.pull.merged_at = null; },
   'another repository': (f) => { f.pull.base.repo.full_name = 'attacker/repo'; },
   'ambiguous source PR': (f) => { f.api.pulls = async () => [f.pull, f.pull]; },
-  'non-squash merge': (f) => { f.git.parents = () => [base, source]; },
+  'non-squash merge with uncertified edits': (f) => { f.git.parents = () => [base, source]; f.git.mergeTree = () => sha(99); },
   'invalid PR number': (f) => { f.pull.number = '../secret'; },
   'invalid source head': (f) => { f.pull.head.sha = '--help'; },
   'source PR ref changed': (f) => { f.git.fetchPull = () => { throw new Error('head changed'); }; },
@@ -76,27 +76,27 @@ for (const [name, mutate] of Object.entries(invalidProvenance)) test(`fail close
 test('unsigned source merge with hidden changes does not inherit its parents certifications', async () => {
   const f = fixture({ missing: true });
   f.details.set(merge, { ...signed(), signoffs: [] });
-  f.git.allRange = () => [source, merge];
+  f.git.allRange = (b) => b === base ? [squash] : [source, merge];
   f.git.parents = (s) => s === merge ? [sha(7), sha(8)] : [sha(10)];
   f.git.mergeTree = (p) => p === sha(7) ? sha(98) : sha(20);
-  assert.match((await f.run()).failures[0].reason, /uncertified/);
+  assert.match((await f.run()).failures[0].reason, /certification/);
 });
 test('unchanged automatic source merge is allowed', async () => {
   const f = fixture({ missing: true }); f.details.set(merge, { ...signed(), signoffs: [] });
-  f.git.allRange = () => [source, merge];
+  f.git.allRange = (b) => b === base ? [squash] : [source, merge];
   f.git.parents = (s) => s === merge ? [sha(7), sha(8)] : [sha(10)];
   assert.equal((await f.run()).failures.length, 0);
 });
 test('a signed source merge certifies its own conflict resolution', async () => {
   const f = fixture({ missing: true }); f.details.set(merge, signed());
-  f.git.allRange = () => [source, merge];
+  f.git.allRange = (b) => b === base ? [squash] : [source, merge];
   f.git.parents = (s) => s === merge ? [sha(7), sha(8)] : [sha(10)];
   assert.equal((await f.run()).failures.length, 0);
 });
 
 for (const invalid of [null, 'other-author', 'unsigned', 'invalid-signature', 'wrong-signer', 'short-sha', 'self-reference']) test(`author remediation: ${invalid || 'valid'}`, async () => {
   const f = fixture({ missing: true });
-  f.git.range = (b) => b === base ? [repair, squash] : [source];
+  f.git.allRange = (b) => b === base ? [repair, squash] : [source];
   f.api.pulls = async () => []; // No provenance fallback: remediation must stand on its own.
   if (invalid === 'other-author') f.records.get(repair).author = { id: 80, login: 'bob' };
   if (invalid === 'unsigned') f.details.get(repair).signoffs = [];
@@ -121,7 +121,7 @@ test('no broad bot exception in a human release PR', async () => {
   assert.equal((await f.run()).failures.length, 1);
 });
 test('a failed git range fails the entire check', async () => {
-  const f = fixture(); f.git.range = () => { throw new Error('missing base'); };
+  const f = fixture(); f.git.allRange = () => { throw new Error('missing base'); };
   await assert.rejects(f.run(), /missing base/);
 });
 test('workflow annotation output escapes injected newlines', async () => {
@@ -179,7 +179,7 @@ test('original DCO sign-off in the same authors authenticated PR needs no crypto
 test('an unsigned conflict-resolution merge can be explicitly remediated by its author', async () => {
   const f = fixture({ missing: true }); f.details.set(merge, { ...signed(), signoffs: [] });
   f.records.set(merge, metadata(merge)); f.details.get(repair).remediation = [merge];
-  f.git.range = (b) => b === base ? [repair, squash] : [source]; f.git.allRange = () => [source, merge];
+  f.git.allRange = (b) => b === base ? [repair, squash] : [source]; f.git.allRange = (b) => b === base ? [repair, squash] : [source, merge];
   f.git.parents = (s) => s === merge ? [sha(7), sha(8)] : [sha(10)];
   f.git.mergeTree = (p) => { if (p === sha(7)) throw new Error('conflict'); return sha(20); };
   assert.equal((await f.run()).failures.length, 0);
@@ -246,4 +246,45 @@ test('a human release can prove the original narrow bot-PR exemption without a b
   assert.equal((await f.run()).failures.length, 0);
   f.details.get(squash).signoffs = ['Unknown <other@example.org>'];
   assert.equal((await f.run()).failures.length, 1);
+});
+
+for (const kind of ['edited', 'conflict', 'octopus', 'automatic', 'signed', 'remediated', 'wrong-remediator']) {
+  test(`primary range merge: ${kind}`, async () => {
+    const f = fixture();
+    f.details.set(merge, { ...signed(), signoffs: kind === 'signed' ? signed().signoffs : [] });
+    f.records.set(merge, metadata(merge));
+    f.git.range = () => [source]; // The old non-merge scan would silently skip the merge.
+    f.git.allRange = () => ['remediated', 'wrong-remediator'].includes(kind) ? [repair, merge, source] : [merge, source];
+    f.git.parents = (s) => s === merge ? (kind === 'octopus' ? [sha(7), sha(8), sha(9)] : [sha(7), sha(8)]) : [sha(10)];
+    f.git.mergeTree = () => { if (kind === 'conflict') throw new Error('conflict'); return kind === 'automatic' ? sha(20) : sha(99); };
+    f.details.get(repair).remediation = [merge];
+    if (kind === 'wrong-remediator') f.records.get(repair).author = { id: 80, login: 'bob' };
+    const result = await f.run();
+    const valid = ['automatic', 'signed', 'remediated'].includes(kind);
+    assert.equal(result.failures.length, valid ? 0 : 1);
+    if (valid) assert.ok(result.accepted.some(c => c.sha === merge));
+    else assert.equal(result.failures[0].sha, merge);
+  });
+}
+
+test('real Git primary range rejects unsigned edits made only in a merge commit', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dco-merge-'));
+  try {
+    const git = new Git(dir); const run = (...args) => git.run(...args);
+    run('init', '-b', 'main'); run('config', 'user.name', 'Alice'); run('config', 'user.email', 'alice@example.org'); run('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(dir, 'base'), 'base'); run('add', '.'); run('commit', '-s', '-m', 'base'); const b = run('rev-parse', 'HEAD');
+    run('checkout', '-b', 'topic'); writeFileSync(join(dir, 'feature'), 'feature'); run('add', '.'); run('commit', '-s', '-m', 'feature');
+    run('checkout', 'main'); writeFileSync(join(dir, 'main'), 'main'); run('add', '.'); run('commit', '-s', '-m', 'main'); const parent = run('rev-parse', 'HEAD');
+    run('merge', '--no-ff', '--no-commit', 'topic'); writeFileSync(join(dir, 'hidden'), 'uncertified merge-only change'); run('add', '.'); run('commit', '-m', 'merge with extra edit'); const edited = run('rev-parse', 'HEAD');
+    const api = { commit: async () => { throw new Error('No API proof expected'); } };
+    const checker = new DcoChecker(git, api, repo, () => {});
+    const result = await checker.check(b, edited, owner);
+    assert.equal(result.failures.length, 1); assert.equal(result.failures[0].sha, edited);
+    run('commit', '--amend', '-s', '-m', 'certify merge changes');
+    assert.equal((await checker.check(b, run('rev-parse', 'HEAD'), owner)).failures.length, 0);
+    run('checkout', '-b', 'clean', parent); run('merge', '--no-ff', '-m', 'automatic merge', 'topic'); const clean = run('rev-parse', 'HEAD');
+    const automatic = await checker.check(b, clean, owner);
+    assert.equal(automatic.failures.length, 0);
+    assert.equal(automatic.accepted.find(c => c.sha === clean).method, 'unchanged-automatic-merge');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
