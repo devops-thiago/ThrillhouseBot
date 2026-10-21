@@ -289,6 +289,9 @@ final class PathMentions {
   /** A line break and the indentation after it, inside a wrapped code span. */
   private static final Pattern WRAP = Pattern.compile("[ \\t]*+\\n[ \\t]*+");
 
+  /** A code span's text that is a path and nothing else ({@link #quotesMoreThanAPath}). */
+  private static final Pattern BARE_PATH = Pattern.compile("[\\w./-]+");
+
   private static final Pattern BLANK_RUN = Pattern.compile(" {2,}");
 
   private static final Pattern BLANK_BEFORE_PUNCTUATION = Pattern.compile(" ([.,;:!?])");
@@ -828,11 +831,9 @@ final class PathMentions {
         .anyMatch(lines -> lines.stream().anyMatch(line -> line.contains(content)));
   }
 
-  /** Whether a code span holds more than one path: a space, a quote or an assignment besides it. */
+  /** Whether a code span holds more than one path: anything besides a path's characters. */
   private static boolean quotesMoreThanAPath(String content) {
-    return content
-        .chars()
-        .anyMatch(c -> Character.isWhitespace(c) || c == '"' || c == '\'' || c == '=');
+    return !BARE_PATH.matcher(content).matches();
   }
 
   /**

@@ -810,7 +810,8 @@ class PathMentionsTest {
               0,
               1,
               "+            \"browser\": \"src/main.ts\","),
-          new FileDiff("angular/src/main.ts", "added", 1, 0, 1, "+bootstrapApplication(App);"));
+          new FileDiff("angular/src/main.ts", "added", 1, 0, 1, "+bootstrapApplication(App);"),
+          new FileDiff("angular/README.md", "added", 1, 0, 1, "+The app starts at src/main.ts:3."));
 
   /**
    * Angular ThrillhouseBot-test#301: a code span quoting angular.json's line keeps the path as the
@@ -846,6 +847,10 @@ class PathMentionsTest {
         "Neither `'angular/src/main.ts'` nor `entry=angular/src/main.ts` is in a patch.",
         mentions.withoutUnresolvedMentions(
             "Neither `'src/main.ts'` nor `entry=src/main.ts` is in a patch."));
+    assertEquals(
+        "The README says `src/main.ts:3`; the bootstrap is at `angular/src/main.ts:1`.",
+        mentions.withoutUnresolvedMentions(
+            "The README says `src/main.ts:3`; the bootstrap is at `src/main.ts:1`."));
   }
 
   /** The zig pull request (#274): the Dockerfile copies the artifact under its own name. */
