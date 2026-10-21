@@ -1,7 +1,7 @@
 name: DCO
 
-# Checks that every commit in a pull request carries a Signed-off-by line for
-# its author (Developer Certificate of Origin, see CONTRIBUTING.md). Commits
+# Checks author sign-offs or equivalent certified source-PR contributions for
+# GitHub squash commits (Developer Certificate of Origin, see CONTRIBUTING.md). Commits
 # authored by Dependabot or GitHub Actions are exempt in pull requests that bot
 # opened, so a commit cannot skip the check by claiming a bot's address.
 on:
@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   dco:
@@ -21,40 +22,22 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Check sign-offs
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Test DCO validator
+        run: node --test scripts/dco/check.test.mjs
+      - name: Check sign-offs and squash provenance
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-        run: |
-          set -euo pipefail
-          failed=0
-          checked=0
-          # A failed rev-list (for example a missing base commit) must fail the job, not pass it.
-          commits=$(git rev-list --no-merges "${BASE_SHA}..${HEAD_SHA}")
-          for sha in $commits; do
-            author_email=$(git log -1 --format='%ae' "$sha" | tr '[:upper:]' '[:lower:]')
-            case "$author_email" in
-              *"+${PR_AUTHOR}@users.noreply.github.com")
-                if [ "$PR_AUTHOR" = 'dependabot[bot]' ] || [ "$PR_AUTHOR" = 'github-actions[bot]' ]; then
-                  echo "skip ${sha:0:12}: authored by ${PR_AUTHOR}, which opened this pull request"
-                  continue
-                fi
-                ;;
-            esac
-            checked=$((checked + 1))
-            signoffs=$(git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$sha" \
-              | sed -n 's/.*<\([^>]*\)>.*/\1/p' | tr '[:upper:]' '[:lower:]')
-            if grep -qxF "$author_email" <<<"$signoffs"; then
-              echo "ok   ${sha:0:12}: signed off by ${author_email}"
-            else
-              subject=$(git log -1 --format='%s' "$sha")
-              echo "::error::Commit ${sha:0:12} (${subject}) has no Signed-off-by line for its author <${author_email}>."
-              failed=1
-            fi
-          done
-          echo "Checked ${checked} commit(s)."
-          if [ "$failed" -ne 0 ]; then
-            echo "Sign off with 'git commit -s', or 'git rebase --signoff ${BASE_SHA}' for existing commits, then force-push."
-            exit 1
-          fi
+          GITHUB_TOKEN: ${{ github.token }}
+          DCO_EVIDENCE_FILE: ${{ runner.temp }}/dco-evidence.json
+        run: node scripts/dco/check.mjs
+      - name: Preserve DCO evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dco-evidence
+          path: ${{ runner.temp }}/dco-evidence.json
+          if-no-files-found: ignore
