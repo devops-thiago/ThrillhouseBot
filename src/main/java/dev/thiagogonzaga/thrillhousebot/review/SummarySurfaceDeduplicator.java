@@ -26,7 +26,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Collapses one observation published on several surfaces of the same summary comment down to its
@@ -38,7 +41,8 @@ import java.util.regex.Pattern;
  * <p>Precedence is inline finding &gt; description-gap bullet &gt; walkthrough row, so:
  *
  * <ul>
- *   <li>a description gap that restates a finding published inline (or an earlier gap) is dropped;
+ *   <li>a description gap that restates a finding published inline and named in the Description vs.
+ *       Implementation section, or an earlier gap's claim, is dropped;
  *   <li>a walkthrough row keeps its <em>first</em> clause always — a row summarising a file that
  *       also carries an inline finding is normal and useful — and drops only the clauses appended
  *       after it that restate an already-published claim.
@@ -137,7 +141,8 @@ final class SummarySurfaceDeduplicator {
   /**
    * The description-gap bullets and per-path walkthrough notes left after collapsing, and the
    * findings the collapsed gaps restated, once each in the order of the gaps they took (#964), so
-   * the Description vs. Implementation section can name them instead of saying they exist.
+   * the Description vs. Implementation section can name them instead of saying they exist. Every
+   * one of them is a finding the section names (#1205).
    */
   record Surfaces(
       List<String> descriptionGaps, Map<String, String> fileSummaries, List<Finding> gapFindings) {}
@@ -255,6 +260,43 @@ final class SummarySurfaceDeduplicator {
   static final double RESTATEMENT_OVERLAP = 0.75;
 
   /**
+   * The words the gap template names its source and its evidence in: "the description says",
+   * "linked issue #N", "no changed file declares any", "no changed file or finding shows", "is not
+   * shown by any changed file". Taken from the gap shapes the summary prompt teaches and from the
+   * runs of {@value #PHRASE_TOKENS} content words two gaps of one round 19 review shared, every one
+   * of them template wording (#1205). Stemmed as {@link #claim} stems a content word.
+   */
+  private static final Set<String> FRAME_WORDS =
+      Stream.of(
+              "anything",
+              "change",
+              "changed",
+              "declares",
+              "description",
+              "file",
+              "finding",
+              "issue",
+              "linked",
+              "says",
+              "shown",
+              "shows",
+              "states")
+          .map(SummarySurfaceDeduplicator::stem)
+          .collect(Collectors.toUnmodifiableSet());
+
+  /** Adjacent frame words that make template wording; one alone may be the claim's own. */
+  static final int MIN_FRAME_RUN = 2;
+
+  /**
+   * {@link #collapse(List, Map, List, Predicate)} with every finding named in the Description vs.
+   * Implementation section, as when no claim text is known to judge them by.
+   */
+  static Surfaces collapse(
+      List<String> descriptionGaps, Map<String, String> fileSummaries, List<Finding> findings) {
+    return collapse(descriptionGaps, fileSummaries, findings, finding -> true);
+  }
+
+  /**
    * Collapses {@code descriptionGaps} and {@code fileSummaries} against the findings already
    * published as their own items, and against each other in precedence order.
    *
@@ -267,41 +309,92 @@ final class SummarySurfaceDeduplicator {
    * reader that way. Demoted findings still outrank a walkthrough clause, which carries neither the
    * claim's own wording nor the {@code path:line} the double-check bullet prints, so they keep
    * trimming those.
+   *
+   * <p>The first inline finding a gap restates takes it only when {@code named} holds for that
+   * finding: the Description vs. Implementation section names it in the gap's place. Collapsing
+   * onto one the section does not name left the claim out of the section altogether; on round 19
+   * that took six real gaps with it, four of them a linked issue's unmet criterion (#1205). A later
+   * finding the section names does not take the gap either. React #300's weekly booking criterion
+   * restated the unnamed SLOT_HOLD_TIMEOUT finding first and, through that key alone, a named
+   * finding about the config table next; falling through to the second would have named an
+   * unrelated finding and still lost the criterion.
    */
   static Surfaces collapse(
-      List<String> descriptionGaps, Map<String, String> fileSummaries, List<Finding> findings) {
-    var claims = new ArrayList<Claim>(2 * findings.size() + descriptionGaps.size());
-    // The finding each claim states, null for a kept gap's: what a collapsed gap is reported as.
-    var owners = new ArrayList<Finding>(2 * findings.size() + descriptionGaps.size());
-    var demoted = new ArrayList<Claim>(2 * findings.size());
+      List<String> descriptionGaps,
+      Map<String, String> fileSummaries,
+      List<Finding> findings,
+      Predicate<Finding> named) {
+    // What a gap may collapse onto, and the finding each of those claims states.
+    var claims = new ArrayList<Claim>(2 * findings.size());
+    var owners = new ArrayList<Finding>(2 * findings.size());
+    // What a walkthrough clause may restate: every finding, and every gap kept.
+    var published = new ArrayList<Claim>(2 * findings.size() + descriptionGaps.size());
     for (Finding finding : findings) {
       var own = claimsOf(finding);
+      published.addAll(own);
       if (finding.postsInline()) {
         claims.addAll(own);
         own.forEach(c -> owners.add(finding));
-      } else {
-        demoted.addAll(own);
       }
     }
     var keptGaps = new ArrayList<String>(descriptionGaps.size());
+    var keptClaims = new ArrayList<Claim>(descriptionGaps.size());
     var gapFindings = new LinkedHashSet<Finding>();
     for (String gap : descriptionGaps) {
       var candidate = claim(gap);
       var at = restatedAt(candidate, claims);
-      if (at < 0) {
-        keptGaps.add(gap);
-        claims.add(candidate);
-        owners.add(null);
-      } else if (owners.get(at) != null) {
+      var withoutFrame = gapClaim(candidate);
+      if (at >= 0 && named.test(owners.get(at))) {
         gapFindings.add(owners.get(at));
+      } else if (!restates(withoutFrame, keptClaims)) {
+        keptGaps.add(gap);
+        keptClaims.add(withoutFrame);
+        published.add(candidate);
       }
     }
-    claims.addAll(demoted);
     var trimmed = HashMap.<String, String>newHashMap(fileSummaries.size());
     for (var entry : fileSummaries.entrySet()) {
-      trimmed.put(entry.getKey(), trimRestatedClauses(entry.getValue(), claims));
+      trimmed.put(entry.getKey(), trimRestatedClauses(entry.getValue(), published));
     }
     return new Surfaces(keptGaps, trimmed, List.copyOf(gapFindings));
+  }
+
+  /**
+   * A gap's claim as weighed against another gap: with the gap template's wording taken out. Gap
+   * bullets share a template — "the description says …", "linked issue #N: …", "no changed file
+   * declares any …" — so two gaps about different claims share a run of {@value #PHRASE_TOKENS}
+   * content words through the template alone. On round 19 that run removed three real gaps: the
+   * #290 413 limit for the payment retry, the description's audit log for the #288
+   * conflict-of-interest check, and the browser cache for the #284 snooze range (#1205).
+   *
+   * <p>A run of {@value #MIN_FRAME_RUN} or more {@link #FRAME_WORDS} is template wording and splits
+   * the claim there: its words leave the word set, and no phrase spans the hole it leaves, so
+   * taking it out can only part two gaps, never join them. A frame word on its own stays, since it
+   * is often the claim's own ("the JSON audit file"). The polarity is the whole gap's.
+   */
+  private static Claim gapClaim(Claim gap) {
+    var all = gap.words();
+    var words = new ArrayList<String>(all.size());
+    var phrases = new HashSet<String>();
+    var segment = new ArrayList<String>();
+    var i = 0;
+    while (i < all.size()) {
+      var end = i;
+      while (end < all.size() && FRAME_WORDS.contains(all.get(end))) {
+        end++;
+      }
+      if (end - i >= MIN_FRAME_RUN) {
+        phrases.addAll(phrases(segment));
+        segment.clear();
+        i = end;
+      } else {
+        segment.add(all.get(i));
+        words.add(all.get(i));
+        i++;
+      }
+    }
+    phrases.addAll(phrases(segment));
+    return new Claim(words, gap.negated(), false, Set.copyOf(words), phrases);
   }
 
   /**

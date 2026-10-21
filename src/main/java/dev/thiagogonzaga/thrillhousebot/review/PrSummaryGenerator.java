@@ -308,10 +308,14 @@ public class PrSummaryGenerator {
 
     // One observation must be published once. The findings are the most specific surface, so a
     // description-gap bullet — or a walkthrough clause appended after the row's file summary —
-    // that only restates one of them is collapsed away before anything is rendered (#588).
+    // that only restates one of them is collapsed away before anything is rendered (#588). A gap
+    // gives way only to a finding the section names in its place (#1205).
     var surfaces =
         SummarySurfaceDeduplicator.collapse(
-            descriptionGaps(aiSummary), summariesByPath(aiSummary), result.findings());
+            descriptionGaps(aiSummary),
+            summariesByPath(aiSummary),
+            result.findings(),
+            sources::echoedBy);
 
     appendPrPurpose(sb, aiSummary);
     // #1093: every criterion of the one linked issue the round states unmet gets its own line; a
