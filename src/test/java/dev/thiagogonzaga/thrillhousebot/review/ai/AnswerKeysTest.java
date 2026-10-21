@@ -107,4 +107,21 @@ class AnswerKeysTest {
 
     assertEquals(1, keys.statuses());
   }
+
+  @Test
+  void titleValuesAreReadStringByStringAtAnyDepth() {
+    assertEquals(
+        List.of("A", "inner", "B"),
+        AnswerKeys.titleValues(
+            "{\"findings\": [{\"title\": \"A\", \"description\": \"e.g. {\\\"title\\\": \\\"x\\\"}\","
+                + " \"meta\": {\"title\" : \"inner\"}}, {\"title\": \"B\", \"note\": \"cut"));
+    assertEquals(
+        List.of("A"),
+        AnswerKeys.titleValues("{\"title\": 5, \"name\": \"title\", \"title\": \"A\"}"),
+        "a title that is no string, and \"title\" as a value, hold no title");
+    assertEquals(
+        List.of("A", "B"), AnswerKeys.titleValues("[{\"title\": \"A\"}, {\"title\": \"B\\"));
+    assertEquals(List.of(), AnswerKeys.titleValues("{\"title\": "));
+    assertEquals(List.of(), AnswerKeys.titleValues("{\"title\" "));
+  }
 }

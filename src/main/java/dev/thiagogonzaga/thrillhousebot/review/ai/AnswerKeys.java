@@ -47,6 +47,41 @@ record AnswerKeys(List<String> titles, int statuses, boolean readable) {
     return new Scan(body).run();
   }
 
+  /**
+   * Every {@code title} value {@code body} writes, at any depth, read string by string so a quote
+   * escaped inside a string ends nothing: the reading when the scan lost the structure. A value the
+   * text cuts off before its closing quote counts as far as it goes.
+   */
+  static List<String> titleValues(String body) {
+    var values = new ArrayList<String>();
+    var titleValueNext = false;
+    var at = 0;
+    while (at < body.length()) {
+      var c = body.charAt(at);
+      if (c == '"') {
+        var end = Scan.closingQuote(body, at + 1);
+        var literal = Scan.unescaped(body.substring(at + 1, end < 0 ? body.length() : end));
+        if (titleValueNext) {
+          values.add(literal);
+        }
+        at = end < 0 ? body.length() : end + 1;
+        titleValueNext = "title".equals(literal) && nextIsColon(body, at);
+      } else {
+        at++;
+        titleValueNext = titleValueNext && (c == ':' || Character.isWhitespace(c));
+      }
+    }
+    return values;
+  }
+
+  private static boolean nextIsColon(String body, int from) {
+    var i = from;
+    while (i < body.length() && Character.isWhitespace(body.charAt(i))) {
+      i++;
+    }
+    return i < body.length() && body.charAt(i) == ':';
+  }
+
   /** How many finding titles the scan found. */
   int titleCount() {
     return titles.size();
@@ -168,8 +203,14 @@ record AnswerKeys(List<String> titles, int statuses, boolean readable) {
       return path.size() == 3 && named ? key : null;
     }
 
-    /** The index of the quote closing a string opened before {@code from}, or -1. */
     private int closingQuote(int from) {
+      return closingQuote(body, from);
+    }
+
+    /**
+     * The index of the quote closing a string of {@code body} opened before {@code from}, or -1.
+     */
+    static int closingQuote(String body, int from) {
       var i = from;
       while (i < body.length()) {
         var c = body.charAt(i);
@@ -181,14 +222,18 @@ record AnswerKeys(List<String> titles, int statuses, boolean readable) {
       return -1;
     }
 
-    /** A string literal's content with its escapes resolved as far as a title needs. */
-    private static String unescaped(String literal) {
+    /**
+     * A string literal's content with its escapes resolved as far as a title needs; a lone
+     * backslash ending a literal the text cuts off is dropped.
+     */
+    static String unescaped(String literal) {
       var out = new StringBuilder(literal.length());
       var i = 0;
       while (i < literal.length()) {
         var c = literal.charAt(i);
-        // A literal never ends on a lone backslash: closingQuote skips the character after one.
-        if (c == '\\') {
+        if (c == '\\' && i + 1 == literal.length()) {
+          i++;
+        } else if (c == '\\') {
           out.append(escaped(literal.charAt(i + 1)));
           i += 2;
         } else {
