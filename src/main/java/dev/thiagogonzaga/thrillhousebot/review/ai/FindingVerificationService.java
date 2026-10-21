@@ -1241,11 +1241,12 @@ public class FindingVerificationService {
    * finding is paired with its raised copy by file, line and title; one the audit retitled or moved
    * keeps the audit's grade.
    *
-   * <p>The audit also answers "low" when the defect is real but the suggested fix is not, and a
-   * floored finding posts inline with its suggestion. So when it was the audit that took the
-   * finding down to "low" — the review raised it higher in {@code raised} — the lifted finding
-   * keeps its anchor but loses {@code suggestion_new}: the established evidence restores the
-   * finding, not a fix the audit may have judged unreliable.
+   * <p>A floored finding posts inline with its suggestion, and an audit that took the finding down
+   * to "low" — the review raised it higher in {@code raised} — doubted the finding as it was
+   * written, its fix included. So such a lifted finding keeps its anchor but loses {@code
+   * suggestion_new}: the established evidence restores the finding, not a fix the audit may have
+   * judged unreliable. A fix the audit judged on its own (#1080) is already corrected or dropped by
+   * then.
    *
    * @param raised the findings as the review raised them, before the audit
    */
@@ -1889,6 +1890,7 @@ public class FindingVerificationService {
     var rejected = 0;
     var downgraded = 0;
     var unscreened = 0;
+    var revised = 0;
     for (var i = 0; i < response.findings().size(); i++) {
       var finding = response.findings().get(i);
       var verdict = byId.get(i + 1);
@@ -1902,11 +1904,18 @@ public class FindingVerificationService {
               finding.line(),
               LogSafe.oneLine(verdict.reason()));
         }
+        // #1080: a verdict that keeps the finding also judges its suggestion and side claims.
         case "downgraded" -> {
           downgraded++;
-          kept.add(downgrade(finding, verdict));
+          var revision = FindingRevisions.revised(finding, verdict);
+          revised += revision == finding ? 0 : 1;
+          kept.add(downgrade(revision, verdict));
         }
-        case "confirmed" -> kept.add(finding);
+        case "confirmed" -> {
+          var revision = FindingRevisions.revised(finding, verdict);
+          revised += revision == finding ? 0 : 1;
+          kept.add(revision);
+        }
         // Unknown decision, or no verdict at all — fail open and keep the finding, but not as a
         // screened one (#885). The same labels candidatesCovered leaves out of the coverage count,
         // so the findings marked here are exactly the ones the round-level disclosure counts.
@@ -1917,7 +1926,7 @@ public class FindingVerificationService {
       }
     }
 
-    if (rejected == 0 && downgraded == 0 && unscreened == 0) {
+    if (rejected == 0 && downgraded == 0 && unscreened == 0 && revised == 0) {
       return response;
     }
     Log.infof(

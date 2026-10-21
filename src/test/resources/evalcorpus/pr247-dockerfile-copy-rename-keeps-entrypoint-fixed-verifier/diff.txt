@@ -1,0 +1,21 @@
+### go/Dockerfile (added, +17 -0)
+```diff
+@@ -0,0 +1,17 @@
++FROM golang:latest AS build
++WORKDIR /src
++COPY go.mod ./
++COPY *.go ./
++RUN CGO_ENABLED=0 go build -o /out/pickbatch .
++
++FROM alpine:3.20
++RUN apk add --no-cache cups-client
++COPY --from=golang:1.22-alpine /usr/local/go/lib/time/zoneinfo.zip /usr/local/go/lib/time/zoneinfo.zip
++COPY --from=build /out/pickbatchd /usr/local/bin/pickbatchd
++ENV ZONEINFO=/usr/local/go/lib/time/zoneinfo.zip
++ARG PICKBATCH_API_TOKEN
++ENV PICKBATCH_API_TOKEN=${PICKBATCH_API_TOKEN}
++# lp talks to the local CUPS socket
++USER root
++EXPOSE 8080
++ENTRYPOINT ["/usr/local/bin/pickbatchd"]
+```
