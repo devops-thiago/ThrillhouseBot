@@ -228,8 +228,10 @@ public class FindingFeedbackService {
     for (var r : rows) {
       var installationId = ((Number) r[0]).longValue();
       var repositoryId = ((Number) r[1]).longValue();
-      // The query matches each id list on its own; keep only pairs the caller asked for, so a
-      // repository id is counted under its own installation only.
+      // The query matches the installation and repository id sets independently, so a row under
+      // one installation whose repository id was only listed for another one can come back; keep
+      // only pairs the caller asked for, so a repository id is counted under its own installation
+      // only.
       if (repositoryIdsByInstallation.get(installationId).contains(repositoryId)) {
         counts.put(
             new RepoScope(installationId, repositoryId),
