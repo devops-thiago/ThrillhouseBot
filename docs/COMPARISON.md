@@ -2,7 +2,7 @@
 <!-- docs:comparison:start -->
 
 This page compares ThrillhouseBot with other AI code-review tools. Each fact
-about another tool comes from its public documentation, verified October 2026,
+about another tool comes from its public documentation, checked in October 2026,
 and the source is linked in the notes below the table. Vendors change their
 products often, so check the source if a detail matters to you. "Not
 documented" means the public docs do not mention the capability; it does not
@@ -10,10 +10,8 @@ prove the tool lacks it.
 
 The table covers ThrillhouseBot, [CodeRabbit][cr], the open-source
 [PR-Agent][pra], [GitHub Copilot code review][cop], the [PRSense][prs] CLI, and
-[Kit][kit] (cased-kit). Qodo's commercial product, which grew out of PR-Agent,
-is left out because its self-hosting and model details are not in its public
-docs. PRSense and Kit are included because they also run on your own machine
-with your own model.
+[Kit][kit] (cased-kit). Qodo's commercial product is outside the scope of this table. PRSense and Kit
+are included as CLI alternatives that can run with your own model.
 
 | Feature | ThrillhouseBot | CodeRabbit | PR-Agent | Copilot review | PRSense | Kit |
 |---|---|---|---|---|---|---|
@@ -22,54 +20,40 @@ with your own model.
 | How reviews run | GitHub App, on webhooks | GitHub App; also IDE and CLI [^cr-plat] | Self-hosted app or webhook, GitHub Action, CLI [^pra-plat] | Requested reviewer or ruleset; also IDEs and CLI [^cop] | CLI or pre-push hook, output to the terminal [^prs] | CLI or CI job, posts one PR comment [^kit] |
 | Self-host | Yes, the only option | Enterprise, 500+ seats [^cr-sh] | Yes | Models no; runners yes [^cop-run] | Yes, local CLI [^prs] | Yes, CLI or your own CI [^kit] |
 | Bring your own model | Any OpenAI-compatible endpoint | Self-hosted only; providers not listed [^cr-sh] | Yes, via LiteLLM or an OpenAI-compatible URL [^pra-model] | No [^cop-model] | Ollama, OpenAI, Google, Anthropic [^prs] | Anthropic, OpenAI, Google, Ollama, OpenAI-compatible [^kit] |
-| Local models (Ollama) | Yes | Not documented | Yes; docs call them unsuitable for production [^pra-model] | No [^cop-model] | Yes, the default [^prs] | Yes [^kit] |
+| Local models (Ollama) | Yes | Not documented | Yes; docs include a dated quality caveat [^pra-model] | No [^cop-model] | Yes, the default [^prs] | Yes [^kit] |
 | Cost / token reporting | Built-in web dashboard | Usage dashboard without token or cost figures [^cr-dash] | Optional tokens and cost in the PR comment [^pra-cost] | Billing reports and usage metrics, no per-review breakdown [^cop-bill] | Token counts with `--stats` [^prs] | Dollar cost per review in CLI output [^kit] |
-| Footprint | Native binary; container image about 57 MB compressed [^tb-size] | SaaS, or a self-hosted container image [^cr-sh] | Python package or Docker image [^pra-foot] | SaaS; the review runs on GitHub Actions [^cop-run] | Node.js CLI [^prs] | Python package [^kit] |
-| Cost model | Free; you pay your own API usage | Paid per seat; free for public repositories [^cr-price] | Free; you pay your own API usage | Paid Copilot plans only [^cop-bill] | Free; you pay your own API usage | Free; you pay your own API usage |
+| Footprint | Native binary; versioned image measurements [^tb-size] | SaaS, or a self-hosted container image [^cr-sh] | Python package or Docker image [^pra-foot] | SaaS; the review runs on GitHub Actions [^cop-run] | Node.js CLI [^prs] | Python package [^kit] |
+| Cost model | No software fee; hosting and model costs apply | Seat subscription with usage limits; public repositories free [^cr-price] | No software fee; hosting and model costs apply | Paid plans or organization-funded reviews [^cop-bill] | No software fee; hosting and model costs apply | No software fee; hosting and model costs apply |
 | Deterministic secret scanning | Opt-in, added lines only | Yes, Betterleaks on by default [^cr-tools] | Not documented [^pra-sec] | Not documented [^cop-sec] | Not documented | Not documented |
 | IaC / infrastructure checks | Opt-in, fixed rule set | Yes: Checkov, Trivy, TFLint, Hadolint, actionlint [^cr-tools] | Not documented [^pra-sec] | Not documented | Not documented | Not documented |
-| Linked-issue / acceptance-criteria check | Opt-in, GitHub Issues in the same repository | Yes: GitHub, GitLab, Jira, Linear, Azure DevOps [^cr-issues] | Yes, on by default: GitHub and GitLab issues, Jira Cloud, Asana, Azure DevOps [^pra-ticket] | No built-in check; issue context through MCP servers [^cop-mcp] | Not documented | Not documented |
-| CI-failure context in reviews | Opt-in: failed checks, optionally the Actions log tail | Yes, reads the failure output [^cr-ci] | No built-in tool; the GitHub Action can add a CI output file [^pra-ci] | Not documented | Not documented | Not documented |
+| Linked-issue / acceptance-criteria check | Opt-in, GitHub Issues in the same repository | Yes: GitHub, GitLab, Jira, Linear, Azure DevOps [^cr-issues] | Yes, on by default: GitHub and GitLab issues, Jira Cloud, Asana, Linear [^pra-ticket] | No built-in check; issue context through MCP servers [^cop-mcp] | Not documented | Not documented |
+| CI-failure context in reviews | Opt-in: failed checks and test names; optional Actions log tail | Yes, reads the failure output [^cr-ci] | No built-in tool; the GitHub Action can add a CI output file [^pra-ci] | Not documented | Not documented | Not documented |
 | Learning from maintainer feedback | Opt-in: declines with a reason, plus `/remember` | Yes, learnings from chat replies [^cr-learn] | No; static instruction files only [^pra-learn] | Repository facts with Copilot Memory (preview) [^cop-mem] | Not documented | Not documented; on the roadmap [^kit-road] |
 
 ## Where ThrillhouseBot fits
 
-ThrillhouseBot is a GitHub App you run yourself, against any OpenAI-compatible
-endpoint. With a local Ollama model, no code leaves your network. A built-in web
-dashboard keeps the token use and cost of every review. Large pull requests are
-split into batches that fit a token budget. It is released under Apache-2.0 and
-ships as a GraalVM native binary.
+ThrillhouseBot runs as a self-hosted GitHub App. You configure an
+OpenAI-compatible model endpoint; a local Ollama endpoint keeps model requests
+on your network. The dashboard stores review history, token use and costs.
+Large diffs are split into batches within a token budget, and files that do not
+fit are listed as unreviewed.
 
-Among the tools above, it is the only one that pairs a self-hosted GitHub App
-with a cost and token dashboard. PR-Agent also runs as a self-hosted app and can
-print a run's tokens and estimated cost in its PR comment, but it keeps no
-history across reviews.
+In 0.8.0, the finding verifier can also revise suggested fixes and remove
+contradicted description sentences. An optional summary-verification call
+checks summary statements against the diff and findings. These model checks
+can miss defects or retain unsupported claims; inspect suggestions before
+applying them.
 
-The secret and IaC scan, linked-issue context, CI-failure context and review
-learnings are all off by default; each is turned on with its own setting. The
-scan uses fixed patterns, not a dedicated scanner such as Betterleaks or
-Checkov, and linked issues come from GitHub Issues in the same repository only.
+Secret and IaC scanning, linked-issue context, CI-failure context and review
+learnings are off by default. The scanners match fixed patterns on added
+lines. Linked issues come from GitHub Issues in the same repository.
+ThrillhouseBot supports GitHub pull requests only and has no hosted service.
 
-ThrillhouseBot reviews GitHub pull requests only, with no GitLab, Bitbucket or
-Azure DevOps support, and there is no hosted version: you run it yourself.
-
-CodeRabbit has the widest feature set here. It covers four git platforms, runs
-dedicated secret and IaC scanners, reads linked issues from five trackers and
-reads failure output from several CI systems. It is hosted and paid per seat;
-self-hosting needs an Enterprise plan with at least 500 seats. Copilot code
-review is built into GitHub, uses GitHub's own models and needs a paid Copilot
-plan.
-
-PR-Agent is the closest open-source alternative. It supports more git
-platforms, any LiteLLM provider, and ticket compliance against several trackers.
-PRSense and Kit run as CLIs, from a terminal, a git hook or a CI job, rather
-than as an app that reviews every pull request.
-
-Pick CodeRabbit or Copilot if you want a hosted product and do not need your own
-model. Pick PR-Agent if you need GitLab, Bitbucket or Azure DevOps, or another
-ticket tracker. Pick PRSense or Kit if you want a CLI. Pick ThrillhouseBot if you
-want a self-hosted GitHub App with your own model and a dashboard of what each
-review cost.
+The table separates deployment and model choice from review context and
+reporting. CodeRabbit and Copilot provide hosted reviews. PR-Agent supports
+self-hosted integrations on several git platforms. PRSense and Kit provide
+CLI workflows. Check the linked documentation for the platforms, model
+providers and subscription terms your deployment needs.
 
 [cr]: https://www.coderabbit.ai/
 [pra]: https://github.com/The-PR-Agent/pr-agent
@@ -94,8 +78,9 @@ review cost.
 [^cr-dash]: The Review Usage dashboard reports review events, rate limits and
     files reviewed, and "is not a billing ledger".
     <https://docs.coderabbit.ai/management/review-usage-dashboard>
-[^cr-price]: Plans are priced per developer per month, with a 14-day trial.
-    Public repositories are reviewed for free.
+[^cr-price]: Plans are priced per developer per month, with included review limits and
+    optional usage-based reviews. There is a 14-day trial; public repositories
+    are reviewed for free.
     <https://www.coderabbit.ai/pricing>
 [^cr-tools]: Betterleaks "is enabled by default" and runs on changed files.
     The tool list includes TruffleHog, Checkov, Trivy, TFLint, Hadolint,
@@ -119,8 +104,8 @@ review cost.
     DevOps and Gitea; the CLI and CI pipelines are also supported.
     <https://docs.pr-agent.ai/overview/supported_platforms/>
 [^pra-model]: Models are reached through LiteLLM or an OpenAI-compatible
-    `api_base`. Ollama and vLLM work, but the docs say local models "are not
-    suitable for production-level code analysis tasks".
+    `api_base`. Ollama and vLLM are supported. The page also carries a January 2025
+    warning about local-model review quality; that is not a current benchmark.
     <https://docs.pr-agent.ai/usage-guide/changing_a_model/>
 [^pra-cost]: `config.output_run_details` adds the model, token count and run
     time to the comment; `config.output_run_cost` adds an estimated cost. Both
@@ -155,10 +140,12 @@ review cost.
     can use your own provider, including Ollama.
     <https://docs.github.com/en/copilot/concepts/agents/code-review> ·
     <https://github.blog/changelog/2026-04-07-copilot-cli-now-supports-byok-and-local-models/>
-[^cop-bill]: Copilot Free does not include code review. Each review is billed as
+[^cop-bill]: Copilot Free does not include code review. Organizations can also fund
+    reviews for members without an individual Copilot license. Reviews use
     AI credits for tokens plus GitHub Actions minutes, and minutes are charged
     on private repositories only. Usage shows up in billing reports and the
     Copilot usage metrics; the model is not disclosed.
+    <https://docs.github.com/en/copilot/concepts/agents/code-review> ·
     <https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing> ·
     <https://github.blog/changelog/2026-04-27-github-copilot-code-review-will-start-consuming-github-actions-minutes-on-june-1-2026/>
 [^cop-sec]: The code review docs describe no secret scanner. GitHub secret
@@ -166,7 +153,7 @@ review cost.
     <https://docs.github.com/en/copilot/concepts/agents/code-review>
 [^cop-mcp]: The review can pull issue-tracking context from configured MCP
     servers. <https://docs.github.com/en/copilot/concepts/agents/code-review>
-[^cop-mem]: Copilot Memory is in public preview on Pro, Pro+ and Max plans, and
+[^cop-mem]: Copilot Memory is in public preview on all paid plans, and
     code review uses repository-level facts only. A 👎 on a comment does not
     stop the same comment on a re-review.
     <https://docs.github.com/en/copilot/concepts/agents/copilot-memory> ·

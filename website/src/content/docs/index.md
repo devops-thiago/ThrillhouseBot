@@ -1,14 +1,14 @@
 ---
 title: ThrillhouseBot
-description: Self-hosted AI pull-request reviewer — a GraalVM-native GitHub App built with Quarkus.
+description: A self-hosted GitHub App that reviews pull requests using an OpenAI-compatible model.
 ---
 
 > **"Everything's coming up Thrillhouse!"**
 
-A self-hosted, GraalVM-native PR review bot, built as a GitHub App with Quarkus.
-It reviews pull requests using any OpenAI-compatible chat API, so the review is
-language-agnostic and you can pick the provider that suits you — including a
-local Ollama model, so no code has to leave your network.
+ThrillhouseBot is a self-hosted GitHub App built with Quarkus and distributed
+as a GraalVM native binary. It sends pull-request diffs to the
+OpenAI-compatible chat API you configure. A local Ollama endpoint keeps model
+requests on your network; language support depends on the model.
 
 ![ThrillhouseBot approving a clean pull request](../../assets/pr-approval.png)
 
@@ -32,8 +32,8 @@ local Ollama model, so no code has to leave your network.
   through the system.
 - **[Finding feedback](/ThrillhouseBot/feedback/)** — maintainer 👍/👎 capture,
   and how it differs from review learnings.
-- **[How it compares](/ThrillhouseBot/comparison/)** — an honest look at where
-  ThrillhouseBot sits next to other AI code-review tools.
+- **[How it compares](/ThrillhouseBot/comparison/)** — deployment, model support,
+  review context and costs across code-review tools.
 - **[Contributing](/ThrillhouseBot/contributing/)** — development setup and the
   CI bar.
 

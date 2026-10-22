@@ -1,9 +1,8 @@
 # Versioning and support
 <!-- docs:versioning:start -->
 
-What a ThrillhouseBot version number tells you, what an upgrade keeps working,
-how a breaking change is announced, and which releases get fixes. The steps to
-upgrade are in
+This policy defines release numbers, compatibility, deprecation and support.
+Upgrade instructions are in
 [Upgrading](https://github.com/devops-thiago/ThrillhouseBot/blob/main/README.md#upgrading)
 in the README.
 
