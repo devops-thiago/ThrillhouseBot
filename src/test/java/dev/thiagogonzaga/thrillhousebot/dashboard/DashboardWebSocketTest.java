@@ -23,6 +23,7 @@ import jakarta.websocket.CloseReason;
 import jakarta.websocket.Session;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,6 +32,8 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 class DashboardWebSocketTest {
+
+  private static final String TICKET_PREFIX = "ticket-for-";
 
   private DashboardWebSocket webSocket;
   private SessionEventBroadcaster broadcaster;
@@ -47,57 +50,45 @@ class DashboardWebSocketTest {
               return token != null && !token.isBlank();
             });
     when(sessionValidator.repositoryScope(anyString())).thenReturn(RepositoryScope.NONE);
+    // A ticket "ticket-for-<token>" redeems to <token>; anything else redeems to nothing.
+    when(sessionValidator.redeemSocketTicket(any()))
+        .thenAnswer(
+            inv -> {
+              String ticket = inv.getArgument(0);
+              return ticket != null && ticket.startsWith(TICKET_PREFIX)
+                  ? Optional.of(ticket.substring(TICKET_PREFIX.length()))
+                  : Optional.empty();
+            });
     webSocket = new DashboardWebSocket(broadcaster, sessionValidator);
   }
 
-  static Stream<Arguments> validCookieHeaders() {
-    return Stream.of(
-        Arguments.of("ws-session-1", "thrillhouse_session=valid-token; other=value"),
-        Arguments.of(
-            "ws-parsed-cookie", "session_id=abc; thrillhouse_session=my-token; path=/; HttpOnly"),
-        Arguments.of("ws-last-cookie", "a=b; thrillhouse_session=last-token"));
+  private static Session sessionWithParameters(String id, Map<String, List<String>> parameters) {
+    var session = mock(Session.class);
+    when(session.getId()).thenReturn(id);
+    when(session.getRequestParameterMap()).thenReturn(parameters);
+    return session;
   }
 
-  @ParameterizedTest
-  @MethodSource("validCookieHeaders")
-  void onOpenShouldAddSessionForValidCookieHeader(String sessionId, String cookieHeader) {
-    var session = mock(Session.class);
-    when(session.getId()).thenReturn(sessionId);
-    when(session.getRequestParameterMap()).thenReturn(Map.of("Cookie", List.of(cookieHeader)));
-
-    webSocket.onOpen(session);
-
-    assertEquals(1, broadcaster.getConnectedCount());
+  private static Session sessionWithTicket(String id, String sessionToken) {
+    return sessionWithParameters(
+        id, Map.of(DashboardWebSocket.TICKET_PARAMETER, List.of(TICKET_PREFIX + sessionToken)));
   }
 
   @Test
-  void onOpenShouldAddSessionWhenCookieInUserProperties() {
-    var session = mock(Session.class);
-    when(session.getId()).thenReturn("ws-session-2");
-    when(session.getRequestParameterMap()).thenReturn(Map.of());
-    when(session.getUserProperties())
-        .thenReturn(
-            Map.of(
-                DashboardWebSocketConfigurator.COOKIE_USER_PROPERTY,
-                (Object) "thrillhouse_session=valid-token"));
-
-    webSocket.onOpen(session);
+  void onOpenShouldAddSessionForARedeemedTicket() {
+    webSocket.onOpen(sessionWithTicket("ws-session-1", "valid-token"));
 
     assertEquals(1, broadcaster.getConnectedCount());
+    verify(sessionValidator).redeemSocketTicket(TICKET_PREFIX + "valid-token");
   }
 
   @Test
   void onCloseShouldRemoveSession() {
-    var session = mock(Session.class);
-    when(session.getId()).thenReturn("ws-session-3");
-    when(session.getRequestParameterMap())
-        .thenReturn(Map.of("Cookie", List.of("thrillhouse_session=valid-token")));
+    var session = sessionWithTicket("ws-session-3", "valid-token");
 
-    // First add via onOpen
     webSocket.onOpen(session);
     assertEquals(1, broadcaster.getConnectedCount());
 
-    // Then remove via onClose
     webSocket.onClose(session);
     assertEquals(0, broadcaster.getConnectedCount());
   }
@@ -107,27 +98,30 @@ class DashboardWebSocketTest {
     var session = mock(Session.class);
     when(session.getId()).thenReturn("ws-session-unknown");
 
-    // Should not throw even if session was never added
     assertDoesNotThrow(() -> webSocket.onClose(session));
     assertEquals(0, broadcaster.getConnectedCount());
   }
 
-  static Stream<Arguments> missingCookieArgs() {
+  /**
+   * Nothing but a redeemable ticket opens a socket: no parameters, an unknown ticket, two tickets,
+   * and the session cookie passed as a query parameter, which used to be accepted (#1223).
+   */
+  static Stream<Arguments> unauthenticatedParameters() {
     return Stream.of(
-        Arguments.of(Map.of(), Map.of()),
-        Arguments.of(Map.of("Cookie", List.of("thrillhouse_session=;")), Map.of()),
-        Arguments.of(Map.of("Cookie", List.of("other_cookie=some-value")), Map.of()));
+        Arguments.of(Map.of()),
+        Arguments.of(Map.of(DashboardWebSocket.TICKET_PARAMETER, List.of("forged"))),
+        Arguments.of(
+            Map.of(
+                DashboardWebSocket.TICKET_PARAMETER,
+                List.of(TICKET_PREFIX + "valid-token", TICKET_PREFIX + "other-token"))),
+        Arguments.of(Map.of("Cookie", List.of("thrillhouse_session=valid-token"))));
   }
 
   @ParameterizedTest
-  @MethodSource("missingCookieArgs")
-  void onOpenShouldCloseSessionWhenMissingValidCookie(
-      Map<String, List<String>> requestParams, Map<String, Object> userProperties)
+  @MethodSource("unauthenticatedParameters")
+  void onOpenShouldCloseSessionWithoutARedeemableTicket(Map<String, List<String>> parameters)
       throws Exception {
-    var session = mock(Session.class);
-    when(session.getId()).thenReturn("ws-close-test");
-    when(session.getRequestParameterMap()).thenReturn(requestParams);
-    when(session.getUserProperties()).thenReturn(userProperties);
+    var session = sessionWithParameters("ws-close-test", parameters);
 
     webSocket.onOpen(session);
 
@@ -135,34 +129,26 @@ class DashboardWebSocketTest {
         .close(
             argThat((CloseReason r) -> r.getCloseCode() == CloseReason.CloseCodes.VIOLATED_POLICY));
     assertEquals(0, broadcaster.getConnectedCount());
+  }
+
+  @Test
+  void onOpenShouldNeverReadTheSharedUserProperties() {
+    var session = sessionWithParameters("ws-user-properties", Map.of());
+    when(session.getUserProperties())
+        .thenReturn(Map.of("Cookie", (Object) "thrillhouse_session=valid-token"));
+
+    webSocket.onOpen(session);
+
+    assertEquals(0, broadcaster.getConnectedCount());
+    verify(session, never()).getUserProperties();
   }
 
   @Test
   void onOpenShouldNotThrowWhenSessionCloseFails() throws Exception {
-    var session = mock(Session.class);
-    when(session.getId()).thenReturn("ws-close-fails");
-    when(session.getRequestParameterMap()).thenReturn(Map.of());
-    when(session.getUserProperties()).thenReturn(Map.of());
+    var session = sessionWithParameters("ws-close-fails", Map.of());
     doThrow(new RuntimeException("close failed")).when(session).close(any(CloseReason.class));
 
-    // Should not propagate exception
     assertDoesNotThrow(() -> webSocket.onOpen(session));
-    assertEquals(0, broadcaster.getConnectedCount());
-  }
-
-  @Test
-  void onOpenShouldRejectEvilCookieNamePrefix() throws Exception {
-    var session = mock(Session.class);
-    when(session.getId()).thenReturn("ws-evil-cookie");
-    when(session.getRequestParameterMap())
-        .thenReturn(Map.of("Cookie", List.of("evil_thrillhouse_session=fake-token")));
-    when(session.getUserProperties()).thenReturn(Map.of());
-
-    webSocket.onOpen(session);
-
-    verify(session)
-        .close(
-            argThat((CloseReason r) -> r.getCloseCode() == CloseReason.CloseCodes.VIOLATED_POLICY));
     assertEquals(0, broadcaster.getConnectedCount());
   }
 
@@ -172,12 +158,9 @@ class DashboardWebSocketTest {
         .thenReturn(new RepositoryScope(false, java.util.Set.of("acme/allowed")));
     when(sessionValidator.isSessionOpen("scoped-token")).thenReturn(true);
     var remote = mock(jakarta.websocket.RemoteEndpoint.Async.class);
-    var session = mock(Session.class);
-    when(session.getId()).thenReturn("ws-scoped");
+    var session = sessionWithTicket("ws-scoped", "scoped-token");
     when(session.isOpen()).thenReturn(true);
     when(session.getAsyncRemote()).thenReturn(remote);
-    when(session.getRequestParameterMap())
-        .thenReturn(Map.of("Cookie", List.of("thrillhouse_session=scoped-token")));
     webSocket.onOpen(session);
 
     broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(review(1L, "acme/secret")));
@@ -194,19 +177,5 @@ class DashboardWebSocketTest {
     var review = ReviewSession.create(repository, 7, "PR", "sha");
     review.id = id;
     return review;
-  }
-
-  @Test
-  void extractCookieValueShouldMatchExactCookieName() {
-    assertEquals(
-        "token",
-        DashboardWebSocket.extractCookieValue(
-            "evil_thrillhouse_session=fake; thrillhouse_session=token; path=/",
-            "thrillhouse_session"));
-    assertNull(
-        DashboardWebSocket.extractCookieValue(
-            "evil_thrillhouse_session=fake", "thrillhouse_session"));
-    assertNull(DashboardWebSocket.extractCookieValue(null, "thrillhouse_session"));
-    assertNull(DashboardWebSocket.extractCookieValue("   ", "thrillhouse_session"));
   }
 }

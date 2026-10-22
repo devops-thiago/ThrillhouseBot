@@ -4,6 +4,16 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Security
+
+- The dashboard WebSocket no longer takes its session from the endpoint configuration that every
+  handshake shares. After any user had connected, a socket opened without a session cookie was
+  authenticated as that user and received their live review events, and two handshakes at the
+  same time could swap identities. The page now fetches a single-use ticket from
+  `POST /api/auth/socket-ticket` and opens the socket with it in the query string; the ticket
+  expires after 30 seconds and works once. The session cookie is no longer accepted as a query
+  parameter. (#1223)
+
 ## [0.8.0] - 2026-10-21
 
 This release adds suggestion verification, an optional summary check, response repair,
