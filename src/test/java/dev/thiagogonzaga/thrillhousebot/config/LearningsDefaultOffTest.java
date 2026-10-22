@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearnings;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -49,6 +50,6 @@ class LearningsDefaultOffTest {
   @Test
   void theWiredStoreInjectsNothingWhileOff() {
     assertFalse(learnings.enabled());
-    assertEquals("", learnings.promptSection(1L, "o", "r", List.of("a.java")));
+    assertEquals("", learnings.promptSection(new RepoScope(1L, 1L), "o", "r", List.of("a.java")));
   }
 }

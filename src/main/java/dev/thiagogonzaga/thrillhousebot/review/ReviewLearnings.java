@@ -21,6 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -136,8 +137,8 @@ public class ReviewLearnings {
    * it; see {@link ReviewPromptAssembler#learningsSection}.
    */
   public String promptSection(
-      long installationId, String owner, String repo, List<String> changedPaths) {
-    return recall(installationId, owner, repo, changedPaths).section();
+      RepoScope scope, String owner, String repo, List<String> changedPaths) {
+    return recall(scope, owner, repo, changedPaths).section();
   }
 
   /** The same bounded selection feeds both the prompt and the deterministic decline check. */
@@ -149,12 +150,12 @@ public class ReviewLearnings {
     }
   }
 
-  public Recall recall(long installationId, String owner, String repo, List<String> changedPaths) {
+  public Recall recall(RepoScope scope, String owner, String repo, List<String> changedPaths) {
     if (!settings.enabled()) {
       return Recall.EMPTY;
     }
     try {
-      var active = store.listActive(installationId, owner + "/" + repo, settings.maxPerRepo());
+      var active = store.listActive(scope, settings.maxPerRepo());
       var selected =
           select(active, changedPaths, settings.promptMaxItems(), settings.promptMaxChars());
       return new Recall(render(selected), selected);
@@ -332,7 +333,7 @@ public class ReviewLearnings {
   /** Everything {@link #captureSurvivingDeclines} reads off one finished review. */
   public record DeclineCapture(
       String auth,
-      long installationId,
+      RepoScope scope,
       String owner,
       String repo,
       int prNumber,
@@ -414,7 +415,7 @@ public class ReviewLearnings {
       DeclineCapture capture, FollowUpAnalyzer.SurvivingDecline decline) {
     var finding = decline.finding();
     return new ReviewLearningService.LearningInput(
-        capture.installationId(),
+        capture.scope(),
         capture.owner() + "/" + capture.repo(),
         ReviewLearning.KIND_DECLINE,
         finding.title(),
@@ -467,7 +468,7 @@ public class ReviewLearnings {
    * holds write access; the text is the maintainer's own words after the command.
    */
   public ReviewLearningService.RecordOutcome rememberConvention(
-      long installationId,
+      RepoScope scope,
       String owner,
       String repo,
       int prNumber,
@@ -476,7 +477,7 @@ public class ReviewLearnings {
       String text) {
     return store.save(
         new ReviewLearningService.LearningInput(
-            installationId,
+            scope,
             owner + "/" + repo,
             ReviewLearning.KIND_CONVENTION,
             null,
@@ -490,14 +491,12 @@ public class ReviewLearnings {
   }
 
   /** Active learnings of a repository, newest first, for {@code /learnings}. */
-  public List<ReviewLearningService.LearningView> list(
-      long installationId, String owner, String repo) {
-    return store.listActive(installationId, owner + "/" + repo, settings.maxPerRepo());
+  public List<ReviewLearningService.LearningView> list(RepoScope scope) {
+    return store.listActive(scope, settings.maxPerRepo());
   }
 
   /** Retracts one learning of this repository, for {@code /forget}. */
-  public ReviewLearningService.RetractOutcome forget(
-      long installationId, String owner, String repo, long id, String login) {
-    return store.retract(installationId, owner + "/" + repo, id, login);
+  public ReviewLearningService.RetractOutcome forget(RepoScope scope, long id, String login) {
+    return store.retract(scope, id, login);
   }
 }

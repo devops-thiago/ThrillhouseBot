@@ -22,6 +22,7 @@ import static org.mockito.Mockito.*;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import jakarta.ws.rs.core.Response;
 import java.util.List;
 import java.util.Optional;
@@ -104,7 +105,7 @@ class DashboardAccessCheckerTest {
     stubInstalledRepo("myowner", "demo");
     when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
 
-    assertTrue(checker.hasRepositoryAccess("MYOWNER", "MyOwner/DEMO"));
+    assertTrue(checker.repositoryScope("MYOWNER").allows("MyOwner/DEMO"));
     verify(installationClient, never())
         .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
   }
@@ -113,23 +114,25 @@ class DashboardAccessCheckerTest {
   @Test
   void shouldIgnoreForeignRepositoryEntriesInCachedSnapshot() throws ReflectiveOperationException {
     var repoRefClass = Class.forName(DashboardAccessChecker.class.getName() + "$RepoRef");
-    var repoRefConstructor = repoRefClass.getDeclaredConstructor(String.class, String.class);
+    var repoRefConstructor =
+        repoRefClass.getDeclaredConstructor(long.class, String.class, String.class);
     repoRefConstructor.setAccessible(true);
-    var foreignRepo = repoRefConstructor.newInstance("other-owner", "demo");
+    var foreignRepo = repoRefConstructor.newInstance(5L, "other-owner", "demo");
 
     var snapshotClass = Class.forName(DashboardAccessChecker.class.getName() + "$RepoSnapshot");
     var snapshotConstructor =
         snapshotClass.getDeclaredConstructor(
-            String.class, List.class, String.class, java.time.Instant.class);
+            String.class, long.class, List.class, String.class, java.time.Instant.class);
     snapshotConstructor.setAccessible(true);
     var snapshot =
-        snapshotConstructor.newInstance("myowner", List.of(foreignRepo), "Bearer token", now.get());
+        snapshotConstructor.newInstance(
+            "myowner", 99L, List.of(foreignRepo), "Bearer token", now.get());
     var cacheField = DashboardAccessChecker.class.getDeclaredField("cachedSnapshot");
     cacheField.setAccessible(true);
     var cache = (java.util.concurrent.atomic.AtomicReference<Object>) cacheField.get(checker);
     cache.set(snapshot);
 
-    assertFalse(checker.hasRepositoryAccess("myowner", "myowner/demo"));
+    assertFalse(checker.repositoryScope("myowner").allows("myowner/demo"));
     verify(installationClient, never())
         .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
   }
@@ -144,7 +147,7 @@ class DashboardAccessCheckerTest {
             eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab")))
         .thenReturn(collaboratorResponse);
 
-    assertTrue(checker.hasRepositoryAccess("collab", "myowner/demo"));
+    assertTrue(checker.repositoryScope("collab").allows("myowner/demo"));
   }
 
   @Test
@@ -157,7 +160,7 @@ class DashboardAccessCheckerTest {
             eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("outsider")))
         .thenReturn(notCollaborator);
 
-    assertFalse(checker.hasRepositoryAccess("outsider", "myowner/demo"));
+    assertFalse(checker.repositoryScope("outsider").allows("myowner/demo"));
   }
 
   @Test
@@ -165,8 +168,8 @@ class DashboardAccessCheckerTest {
     stubInstalledRepo("myowner", "demo");
     when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
 
-    assertFalse(checker.hasRepositoryAccess("myowner", "myowner/missing"));
-    assertFalse(checker.hasRepositoryAccess("myowner", "other-owner/demo"));
+    assertFalse(checker.repositoryScope("myowner").allows("myowner/missing"));
+    assertFalse(checker.repositoryScope("myowner").allows("other-owner/demo"));
     verify(installationClient, never())
         .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
   }
@@ -174,15 +177,20 @@ class DashboardAccessCheckerTest {
   @Test
   void shouldDenyMalformedRepositoryAccessInputs() {
     assertAll(
-        () -> assertFalse(checker.hasRepositoryAccess(null, "myowner/demo")),
-        () -> assertFalse(checker.hasRepositoryAccess("   ", "myowner/demo")),
-        () -> assertFalse(checker.hasRepositoryAccess("myowner", null)),
-        () -> assertFalse(checker.hasRepositoryAccess("myowner", "   ")),
-        () -> assertFalse(checker.hasRepositoryAccess("myowner", "demo")),
-        () -> assertFalse(checker.hasRepositoryAccess("myowner", "/demo")),
-        () -> assertFalse(checker.hasRepositoryAccess("myowner", "myowner/")),
-        () -> assertFalse(checker.hasRepositoryAccess("myowner", "myowner/demo/extra")));
+        () -> assertFalse(checker.repositoryScope(null).allows("myowner/demo")),
+        () -> assertFalse(checker.repositoryScope("   ").allows("myowner/demo")));
     verifyNoInteractions(authClient, installationClient);
+
+    stubInstalledRepo("myowner", "demo");
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+    var scope = checker.repositoryScope("myowner");
+    assertAll(
+        () -> assertFalse(scope.allows(null)),
+        () -> assertFalse(scope.allows("   ")),
+        () -> assertFalse(scope.allows("demo")),
+        () -> assertFalse(scope.allows("/demo")),
+        () -> assertFalse(scope.allows("myowner/")),
+        () -> assertFalse(scope.allows("myowner/demo/extra")));
   }
 
   @Test
@@ -190,7 +198,7 @@ class DashboardAccessCheckerTest {
     when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
         .thenReturn(List.of());
 
-    assertFalse(checker.hasRepositoryAccess("myowner", "myowner/demo"));
+    assertFalse(checker.repositoryScope("myowner").allows("myowner/demo"));
     verify(authClient, never()).getAuthHeader(anyLong());
   }
 
@@ -204,7 +212,7 @@ class DashboardAccessCheckerTest {
             new GitHubInstallationClient.InstallationRepositoriesResponse(
                 1, ownerRepos("myowner", "demo")));
 
-    assertFalse(checker.hasRepositoryAccess("myowner", "myowner/demo"));
+    assertFalse(checker.repositoryScope("myowner").allows("myowner/demo"));
     verify(installationClient, never())
         .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
   }
@@ -214,7 +222,7 @@ class DashboardAccessCheckerTest {
     when(installationClient.getApp(anyString(), anyString()))
         .thenThrow(new RuntimeException("GitHub App unavailable"));
 
-    assertFalse(checker.hasRepositoryAccess("myowner", "myowner/demo"));
+    assertFalse(checker.repositoryScope("myowner").allows("myowner/demo"));
     verify(installationClient, never())
         .listInstallations(anyString(), anyString(), anyInt(), anyInt());
   }
@@ -407,16 +415,19 @@ class DashboardAccessCheckerTest {
     var mixed =
         List.of(
             new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
+                TestScopes.repositoryId("myowner/" + null),
                 null,
                 new GitHubInstallationClient.InstallationRepositoriesResponse.Repository.Owner(
                     "myowner")),
             new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
-                "orphan", null),
+                TestScopes.repositoryId("myowner/" + "orphan"), "orphan", null),
             new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
+                TestScopes.repositoryId("myowner/" + "foreign"),
                 "foreign",
                 new GitHubInstallationClient.InstallationRepositoriesResponse.Repository.Owner(
                     "other-owner")),
             new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
+                TestScopes.repositoryId("myowner/" + "demo"),
                 "demo",
                 new GitHubInstallationClient.InstallationRepositoriesResponse.Repository.Owner(
                     "myowner")));
@@ -779,9 +790,44 @@ class DashboardAccessCheckerTest {
     var scope = checker.repositoryScope("MyOwner");
 
     assertTrue(scope.accountOwner());
-    assertEquals(java.util.Set.of("myowner/alpha", "myowner/beta"), scope.repositories());
+    assertEquals(
+        java.util.Map.of(
+            TestScopes.repositoryId("myowner/Alpha"),
+            "myowner/Alpha",
+            TestScopes.repositoryId("myowner/beta"),
+            "myowner/beta"),
+        scope.repositories(),
+        "names keep GitHub's spelling; ids are what queries match");
+    assertTrue(scope.allows("MYOWNER/alpha"));
     verify(installationClient, never())
         .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
+  }
+
+  @Test
+  void repositoryScopeSkipsARepositoryWithoutAnIdAndKeepsOneEntryPerId() {
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(List.of(installationFor("myowner", 99L)));
+    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+    var owner =
+        new GitHubInstallationClient.InstallationRepositoriesResponse.Repository.Owner("myowner");
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
+        .thenReturn(
+            new GitHubInstallationClient.InstallationRepositoriesResponse(
+                3,
+                List.of(
+                    new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
+                        0L, "no-id", owner),
+                    new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
+                        5L, "demo", owner),
+                    // A repository listed twice, as a page boundary moving mid-listing can do.
+                    new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
+                        5L, "demo", owner))));
+
+    var scope = checker.repositoryScope("myowner");
+
+    assertEquals(java.util.Map.of(5L, "myowner/demo"), scope.repositories());
+    assertFalse(scope.allows("myowner/no-id"));
   }
 
   @Test
@@ -793,12 +839,19 @@ class DashboardAccessCheckerTest {
 
     var scope = checker.repositoryScope("collab");
     assertFalse(scope.accountOwner());
-    assertEquals(java.util.Set.of("myowner/alpha", "myowner/gamma"), scope.repositories());
+    assertEquals(
+        java.util.Set.of("myowner/alpha", "myowner/gamma"),
+        java.util.Set.copyOf(scope.repositories().values()));
+    assertEquals(99L, scope.installationId());
+    assertEquals(
+        java.util.Set.of(
+            TestScopes.repositoryId("myowner/alpha"), TestScopes.repositoryId("myowner/gamma")),
+        scope.repositories().keySet());
 
     // Later requests and per-repository checks within the TTL reuse the set: no GitHub call.
     assertSame(scope, checker.repositoryScope("COLLAB"));
-    assertTrue(checker.hasRepositoryAccess("collab", "myowner/Alpha"));
-    assertFalse(checker.hasRepositoryAccess("collab", "myowner/beta"));
+    assertTrue(checker.repositoryScope("collab").allows("myowner/Alpha"));
+    assertFalse(checker.repositoryScope("collab").allows("myowner/beta"));
     verify(installationClient, times(3))
         .checkCollaborator(anyString(), anyString(), anyString(), anyString(), eq("collab"));
 
@@ -896,6 +949,7 @@ class DashboardAccessCheckerTest {
     for (var name : names) {
       repos.add(
           new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
+              TestScopes.repositoryId(owner + "/" + name),
               name,
               new GitHubInstallationClient.InstallationRepositoriesResponse.Repository.Owner(
                   owner)));

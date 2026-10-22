@@ -24,6 +24,8 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReactionClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -75,8 +77,20 @@ class FindingFeedbackCaptureServiceTest {
   void captureOnReviewReplyRejectsNullOrBlankActorBeforePermissionLookup() {
     when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
 
-    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, reply(null, "false positive"));
-    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, reply("   ", "false positive"));
+    capture.captureOnReviewReply(
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        reply(null, "false positive"));
+    capture.captureOnReviewReply(
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        reply("   ", "false positive"));
 
     verifyNoInteractions(installationClient, reviewClient, reactionClient, feedbackService);
   }
@@ -86,7 +100,7 @@ class FindingFeedbackCaptureServiceTest {
     when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
 
     capture.captureOnReviewReply(
-        9L,
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
         "owner",
         "repo",
         7,
@@ -107,9 +121,19 @@ class FindingFeedbackCaptureServiceTest {
         .thenReturn(new GitHubInstallationClient.CollaboratorPermission(null, null));
 
     capture.captureOnReviewReply(
-        9L, "owner", "repo", 7, 99L, reply("null-response", "false positive"));
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        reply("null-response", "false positive"));
     capture.captureOnReviewReply(
-        9L, "owner", "repo", 7, 99L, reply("null-level", "false positive"));
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        reply("null-level", "false positive"));
 
     verifyNoInteractions(reviewClient, reactionClient, feedbackService);
   }
@@ -124,7 +148,12 @@ class FindingFeedbackCaptureServiceTest {
     assertDoesNotThrow(
         () ->
             capture.captureOnReviewReply(
-                9L, "owner", "repo", 7, 99L, reply("octocat", "false positive")));
+                new RepoScope(9L, TestScopes.REPOSITORY_ID),
+                "owner",
+                "repo",
+                7,
+                99L,
+                reply("octocat", "false positive")));
 
     verifyNoInteractions(reviewClient, reactionClient, feedbackService);
   }
@@ -138,7 +167,14 @@ class FindingFeedbackCaptureServiceTest {
             new GitHubReviewClient.PullRequestComment(
                 99L, null, "Main.java", "finding\n" + SuggestionFormatter.findingMarker(1), null));
 
-    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, "octocat", "not useful");
+    capture.captureOnReviewReply(
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        "octocat",
+        "not useful");
 
     verifyNoInteractions(reactionClient, feedbackService);
   }
@@ -166,7 +202,7 @@ class FindingFeedbackCaptureServiceTest {
     try {
       for (int i = 1; i <= maxConcurrentCaptures; i++) {
         capture.scheduleCaptureOnReviewReply(
-            i,
+            new RepoScope(i, TestScopes.REPOSITORY_ID),
             "owner",
             "repo",
             7,
@@ -178,7 +214,7 @@ class FindingFeedbackCaptureServiceTest {
       assertDoesNotThrow(
           () ->
               capture.scheduleCaptureOnReviewReply(
-                  99L,
+                  new RepoScope(99L, TestScopes.REPOSITORY_ID),
                   "owner",
                   "repo",
                   7,
@@ -214,11 +250,13 @@ class FindingFeedbackCaptureServiceTest {
                     3L, "-1", new GitHubReactionClient.Reaction.User("alice", 3), "t")));
 
     var body = "finding\n" + SuggestionFormatter.findingMarker(2);
-    capture.captureReactions("Bearer t", "owner", "repo", 7, 99L, body);
+    capture.captureReactions(
+        "Bearer t", new RepoScope(9L, TestScopes.REPOSITORY_ID), "owner", "repo", 7, 99L, body);
 
     verify(feedbackService)
         .recordFeedback(
             new FindingFeedbackService.FeedbackInput(
+                new RepoScope(9L, TestScopes.REPOSITORY_ID),
                 "owner/repo",
                 7,
                 99L,
@@ -230,6 +268,7 @@ class FindingFeedbackCaptureServiceTest {
     verify(feedbackService)
         .recordFeedback(
             new FindingFeedbackService.FeedbackInput(
+                new RepoScope(9L, TestScopes.REPOSITORY_ID),
                 "owner/repo",
                 7,
                 99L,
@@ -255,7 +294,13 @@ class FindingFeedbackCaptureServiceTest {
                     1L, "+1", new GitHubReactionClient.Reaction.User("octocat", 1), "t")));
 
     capture.captureReactions(
-        "Bearer t", "owner", "repo", 7, 99L, SuggestionFormatter.findingMarker(2));
+        "Bearer t",
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        SuggestionFormatter.findingMarker(2));
 
     verifyNoInteractions(feedbackService);
   }
@@ -265,7 +310,7 @@ class FindingFeedbackCaptureServiceTest {
     when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
 
     capture.captureOnReviewReply(
-        9L,
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
         "owner",
         "repo",
         7,
@@ -284,7 +329,7 @@ class FindingFeedbackCaptureServiceTest {
         .thenReturn(new GitHubInstallationClient.CollaboratorPermission("read", "read"));
 
     capture.captureOnReviewReply(
-        9L,
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
         "owner",
         "repo",
         7,
@@ -296,7 +341,14 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureReactionsSkipsCommentsWithoutFindingMarker() {
-    capture.captureReactions("Bearer t", "owner", "repo", 7, 99L, "just a human comment");
+    capture.captureReactions(
+        "Bearer t",
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        "just a human comment");
     verifyNoInteractions(reactionClient);
     verifyNoInteractions(feedbackService);
   }
@@ -318,11 +370,18 @@ class FindingFeedbackCaptureServiceTest {
         .thenReturn(List.of());
 
     capture.captureOnReviewReply(
-        9L, "owner", "repo", 7, 99L, "octocat", "this is a false positive");
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        "octocat",
+        "this is a false positive");
 
     verify(feedbackService)
         .recordFeedback(
             new FindingFeedbackService.FeedbackInput(
+                new RepoScope(9L, TestScopes.REPOSITORY_ID),
                 "owner/repo",
                 7,
                 99L,
@@ -346,7 +405,14 @@ class FindingFeedbackCaptureServiceTest {
                 "human review note",
                 new GitHubReviewClient.ReviewResponse.User("alice")));
 
-    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, "octocat", "not useful");
+    capture.captureOnReviewReply(
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        "octocat",
+        "not useful");
 
     verifyNoInteractions(reactionClient);
     verifyNoInteractions(feedbackService);
@@ -354,8 +420,10 @@ class FindingFeedbackCaptureServiceTest {
 
   @Test
   void captureOnPriorFindingsNoopsOnEmptyInput() {
-    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, null);
-    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, List.of());
+    capture.captureOnPriorFindings(
+        "Bearer t", new RepoScope(9L, TestScopes.REPOSITORY_ID), "owner", "repo", 3, null);
+    capture.captureOnPriorFindings(
+        "Bearer t", new RepoScope(9L, TestScopes.REPOSITORY_ID), "owner", "repo", 3, List.of());
     verifyNoInteractions(reactionClient, feedbackService);
   }
 
@@ -407,7 +475,8 @@ class FindingFeedbackCaptureServiceTest {
                 "human\n" + SuggestionFormatter.findingMarker(9),
                 new GitHubReviewClient.ReviewResponse.User("alice")));
 
-    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, comments);
+    capture.captureOnPriorFindings(
+        "Bearer t", new RepoScope(9L, TestScopes.REPOSITORY_ID), "owner", "repo", 3, comments);
 
     verify(reactionClient, times(2))
         .listReviewCommentReactions(
@@ -458,7 +527,14 @@ class FindingFeedbackCaptureServiceTest {
           }
         };
     assertDoesNotThrow(
-        () -> capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, exploding));
+        () ->
+            capture.captureOnPriorFindings(
+                "Bearer t",
+                new RepoScope(9L, TestScopes.REPOSITORY_ID),
+                "owner",
+                "repo",
+                3,
+                exploding));
     verifyNoInteractions(reactionClient, feedbackService);
   }
 
@@ -475,7 +551,13 @@ class FindingFeedbackCaptureServiceTest {
             anyInt()))
         .thenThrow(new RuntimeException("api down"));
     capture.captureReactions(
-        "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
+        "Bearer t",
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        "x\n" + SuggestionFormatter.findingMarker(1));
     verify(feedbackService, never()).recordFeedback(any());
   }
 
@@ -484,7 +566,14 @@ class FindingFeedbackCaptureServiceTest {
     when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
     when(reviewClient.getPullRequestComment(any(), any(), any(), any(), anyLong()))
         .thenThrow(new RuntimeException("gone"));
-    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, "octocat", "not useful");
+    capture.captureOnReviewReply(
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        "octocat",
+        "not useful");
     verifyNoInteractions(reactionClient, feedbackService);
   }
 
@@ -505,11 +594,18 @@ class FindingFeedbackCaptureServiceTest {
         .thenReturn(List.of());
 
     capture.captureReactions(
-        "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
+        "Bearer t",
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        "x\n" + SuggestionFormatter.findingMarker(1));
 
     verify(feedbackService)
         .recordFeedback(
             new FindingFeedbackService.FeedbackInput(
+                new RepoScope(9L, TestScopes.REPOSITORY_ID),
                 "owner/repo",
                 7,
                 99L,
@@ -540,7 +636,8 @@ class FindingFeedbackCaptureServiceTest {
             any(), any(), any(), any(), anyLong(), any(), anyInt(), anyInt()))
         .thenReturn(List.of());
 
-    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, comments);
+    capture.captureOnPriorFindings(
+        "Bearer t", new RepoScope(9L, TestScopes.REPOSITORY_ID), "owner", "repo", 3, comments);
 
     verify(reactionClient, times(max * 2))
         .listReviewCommentReactions(
@@ -586,7 +683,7 @@ class FindingFeedbackCaptureServiceTest {
         .thenReturn(List.of());
 
     capture.scheduleCaptureOnReviewReply(
-        9L,
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
         "owner",
         "repo",
         7,
@@ -612,7 +709,7 @@ class FindingFeedbackCaptureServiceTest {
                 new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")));
 
     capture.scheduleCaptureOnReviewReply(
-        9L,
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
         "owner",
         "repo",
         7,
@@ -636,18 +733,49 @@ class FindingFeedbackCaptureServiceTest {
     when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
     when(reviewClient.getPullRequestComment(any(), any(), any(), any(), anyLong()))
         .thenReturn(null);
-    capture.captureOnReviewReply(9L, "owner", "repo", 7, 99L, "octocat", "not useful");
+    capture.captureOnReviewReply(
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        "octocat",
+        "not useful");
     verifyNoInteractions(reactionClient, feedbackService);
   }
 
   @Test
   void replyHeuristicIgnoresBotAuthorAndNonMatchingBodies() {
-    capture.captureReplyHeuristic("owner", "repo", 1, 9L, 1, "thrillhousebot[bot]", "not useful");
-    capture.captureReplyHeuristic("owner", "repo", 1, 9L, 1, "octocat", "looks fine to me");
-    capture.captureReplyHeuristic("owner", "repo", 1, 9L, 1, null, "not useful");
-    capture.captureReplyHeuristic("owner", "repo", 1, 9L, 1, " ", "not useful");
-    capture.captureReplyHeuristic("owner", "repo", 1, 9L, 1, "octocat", null);
-    capture.captureReplyHeuristic("owner", "repo", 1, 9L, 1, "octocat", "");
+    capture.captureReplyHeuristic(
+        new FindingFeedbackCaptureService.ReplyFeedback(
+            new RepoScope(9L, TestScopes.REPOSITORY_ID), "owner", "repo", 1, 9L, 1),
+        "thrillhousebot[bot]",
+        "not useful");
+    capture.captureReplyHeuristic(
+        new FindingFeedbackCaptureService.ReplyFeedback(
+            new RepoScope(9L, TestScopes.REPOSITORY_ID), "owner", "repo", 1, 9L, 1),
+        "octocat",
+        "looks fine to me");
+    capture.captureReplyHeuristic(
+        new FindingFeedbackCaptureService.ReplyFeedback(
+            new RepoScope(9L, TestScopes.REPOSITORY_ID), "owner", "repo", 1, 9L, 1),
+        null,
+        "not useful");
+    capture.captureReplyHeuristic(
+        new FindingFeedbackCaptureService.ReplyFeedback(
+            new RepoScope(9L, TestScopes.REPOSITORY_ID), "owner", "repo", 1, 9L, 1),
+        " ",
+        "not useful");
+    capture.captureReplyHeuristic(
+        new FindingFeedbackCaptureService.ReplyFeedback(
+            new RepoScope(9L, TestScopes.REPOSITORY_ID), "owner", "repo", 1, 9L, 1),
+        "octocat",
+        null);
+    capture.captureReplyHeuristic(
+        new FindingFeedbackCaptureService.ReplyFeedback(
+            new RepoScope(9L, TestScopes.REPOSITORY_ID), "owner", "repo", 1, 9L, 1),
+        "octocat",
+        "");
     verifyNoInteractions(feedbackService);
   }
 
@@ -655,7 +783,7 @@ class FindingFeedbackCaptureServiceTest {
   void scheduleCaptureOnReviewReplyRunsAsyncAndSwallowsErrors() {
     when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("auth fail"));
     capture.scheduleCaptureOnReviewReply(
-        1L,
+        new RepoScope(1L, TestScopes.REPOSITORY_ID),
         "o",
         "r",
         1,
@@ -677,7 +805,13 @@ class FindingFeedbackCaptureServiceTest {
             anyInt()))
         .thenReturn(null);
     capture.captureReactions(
-        "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
+        "Bearer t",
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        "x\n" + SuggestionFormatter.findingMarker(1));
     verify(feedbackService, never()).recordFeedback(any());
   }
 
@@ -696,7 +830,8 @@ class FindingFeedbackCaptureServiceTest {
             any(), any(), any(), any(), anyLong(), any(), anyInt(), anyInt()))
         .thenReturn(List.of());
 
-    capture.captureOnPriorFindings("Bearer t", "owner", "repo", 3, comments);
+    capture.captureOnPriorFindings(
+        "Bearer t", new RepoScope(9L, TestScopes.REPOSITORY_ID), "owner", "repo", 3, comments);
 
     verify(reactionClient, times(2))
         .listReviewCommentReactions(
@@ -734,7 +869,13 @@ class FindingFeedbackCaptureServiceTest {
         .thenReturn(List.of());
 
     capture.captureReactions(
-        "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
+        "Bearer t",
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        "x\n" + SuggestionFormatter.findingMarker(1));
 
     verify(feedbackService, times(101)).recordFeedback(any());
     verify(reactionClient)
@@ -773,7 +914,13 @@ class FindingFeedbackCaptureServiceTest {
         .thenReturn(List.of());
 
     capture.captureReactions(
-        "Bearer t", "owner", "repo", 7, 99L, "x\n" + SuggestionFormatter.findingMarker(1));
+        "Bearer t",
+        new RepoScope(9L, TestScopes.REPOSITORY_ID),
+        "owner",
+        "repo",
+        7,
+        99L,
+        "x\n" + SuggestionFormatter.findingMarker(1));
 
     verify(reactionClient, times(GitHubReactionClient.MAX_REACTION_PAGES))
         .listReviewCommentReactions(

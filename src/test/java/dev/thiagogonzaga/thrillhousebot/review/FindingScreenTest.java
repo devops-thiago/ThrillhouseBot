@@ -29,6 +29,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -62,7 +63,8 @@ class FindingScreenTest {
   private final ReviewResponse deduped = response(finding("deduped"));
   private final ReviewResponse candidates = response(finding("candidate"));
   private final ReviewResponse verified = response(finding("verified"));
-  private final ReviewSession session = ReviewSession.create("owner/repo", 7, "PR", "sha");
+  private final ReviewSession session =
+      ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 7, "PR", "sha");
 
   private FindingScreen screen;
 

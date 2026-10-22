@@ -28,6 +28,7 @@ import static org.mockito.Mockito.when;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -50,7 +51,17 @@ class RunningReviewCoverageTest {
       new RunningReviewCoverage(authClient, prClient, commentClient);
   private final ReviewOrchestrator.ReviewRequest req =
       new ReviewOrchestrator.ReviewRequest(
-          "owner", "repo", 7, "", "(manual review)", "", "", "main", 3L, true);
+          "owner",
+          "repo",
+          7,
+          "",
+          "(manual review)",
+          "",
+          "",
+          "main",
+          3L,
+          TestScopes.REPOSITORY_ID,
+          true);
 
   @BeforeEach
   void setUp() {

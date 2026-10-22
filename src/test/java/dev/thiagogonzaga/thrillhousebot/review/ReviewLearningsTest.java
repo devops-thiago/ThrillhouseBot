@@ -19,14 +19,14 @@ import static dev.thiagogonzaga.thrillhousebot.review.FollowUpAnalyzerLearningsT
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.LearningInput;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.LearningView;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.RecordOutcome;
@@ -42,6 +42,8 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 
 class ReviewLearningsTest {
+
+  private static final RepoScope SCOPE = new RepoScope(1L, TestScopes.REPOSITORY_ID);
 
   /** Credential-shaped values built at run time, so no real-format literal sits in the source. */
   private static final FakeCredentials FAKE = new FakeCredentials(38);
@@ -120,30 +122,29 @@ class ReviewLearningsTest {
 
   @Test
   void configOffInjectsNothingAndNeverReadsTheStore() {
-    assertEquals("", learnings(false, 10, 3000).promptSection(1L, "o", "r", List.of("a.java")));
+    assertEquals("", learnings(false, 10, 3000).promptSection(SCOPE, "o", "r", List.of("a.java")));
     verifyNoInteractions(store);
   }
 
   @Test
   void theSectionIsReadForThisInstallationAndRepositoryOnly() {
-    when(store.listActive(1L, "o/r", 100))
+    when(store.listActive(SCOPE, 100))
         .thenReturn(List.of(view(4, ReviewLearning.KIND_DECLINE, "src/A.java", "flat", 0)));
 
-    var section = enabled().promptSection(1L, "o", "r", List.of("src/A.java"));
+    var section = enabled().promptSection(SCOPE, "o", "r", List.of("src/A.java"));
 
     assertEquals(
         "- [L4] Declined finding \"Title 4\" (medium) on src/A.java — @maintainer, PR #159:\n"
             + "  flat",
         section);
-    verify(store).listActive(1L, "o/r", 100);
+    verify(store).listActive(SCOPE, 100);
   }
 
   @Test
   void aStoreFailureLeavesTheReviewWithoutLearnings() {
-    when(store.listActive(anyLong(), anyString(), anyInt()))
-        .thenThrow(new IllegalStateException("db down"));
+    when(store.listActive(any(), anyInt())).thenThrow(new IllegalStateException("db down"));
 
-    assertEquals("", enabled().promptSection(1L, "o", "r", List.of("a.java")));
+    assertEquals("", enabled().promptSection(SCOPE, "o", "r", List.of("a.java")));
   }
 
   @Test
@@ -219,14 +220,14 @@ class ReviewLearningsTest {
   @Test
   void theRound11DeclinesReachANewDockerfileInTheReviewPrompt() {
     var title = "Base image pinned to a mutable tag, so builds can change without a commit";
-    when(store.listActive(1L, "o/r", 100))
+    when(store.listActive(SCOPE, 100))
         .thenReturn(
             List.of(
                 declineOn(53, "kotlin/Dockerfile", title, 0),
                 declineOn(52, "go/Dockerfile", title, 10),
                 declineOn(51, "java/Dockerfile", title, 20)));
 
-    var section = enabled().promptSection(1L, "o", "r", List.of("healthcheck/Dockerfile"));
+    var section = enabled().promptSection(SCOPE, "o", "r", List.of("healthcheck/Dockerfile"));
     var prompt = ReviewPromptAssembler.learningsSection(section);
 
     for (var id : List.of("[L51]", "[L52]", "[L53]")) {
@@ -238,17 +239,17 @@ class ReviewLearningsTest {
 
   @Test
   void aLearningOnADockerfileReachesAReviewOfAnotherDockerfile() {
-    when(store.listActive(1L, "o/r", 100))
+    when(store.listActive(SCOPE, 100))
         .thenReturn(List.of(view(9, ReviewLearning.KIND_DECLINE, "a/Dockerfile", "pinned", 0)));
 
-    var section = enabled().promptSection(1L, "o", "r", List.of("b/Dockerfile"));
+    var section = enabled().promptSection(SCOPE, "o", "r", List.of("b/Dockerfile"));
 
     assertTrue(section.startsWith("- [L9] "), section);
   }
 
   @Test
   void aDockerfileLearningStaysOutOfADocumentationOnlyChange() {
-    when(store.listActive(1L, "o/r", 100))
+    when(store.listActive(SCOPE, 100))
         .thenReturn(
             List.of(
                 view(9, ReviewLearning.KIND_DECLINE, "a/Dockerfile", "pinned", 0),
@@ -256,7 +257,7 @@ class ReviewLearningsTest {
                 view(11, ReviewLearning.KIND_DECLINE, "Makefile", "phony", 0)));
 
     var section =
-        enabled().promptSection(1L, "o", "r", List.of("docs/guide.md", "c/Dockerfile.md"));
+        enabled().promptSection(SCOPE, "o", "r", List.of("docs/guide.md", "c/Dockerfile.md"));
 
     assertEquals("", section);
   }
@@ -435,7 +436,7 @@ class ReviewLearningsTest {
       String code) {
     return new ReviewLearnings.DeclineCapture(
         "token",
-        1L,
+        SCOPE,
         "o",
         "r",
         161,
@@ -460,7 +461,7 @@ class ReviewLearningsTest {
     var input = ArgumentCaptor.forClass(LearningInput.class);
     verify(store).save(input.capture(), eq(100));
     var learning = input.getValue();
-    assertEquals(1L, learning.installationId());
+    assertEquals(SCOPE, learning.scope());
     assertEquals("o/r", learning.repository());
     assertEquals(ReviewLearning.KIND_DECLINE, learning.kind());
     assertEquals(NESTED_TITLE, learning.findingTitle());
@@ -486,7 +487,7 @@ class ReviewLearningsTest {
             .captureSurvivingDeclines(
                 new ReviewLearnings.DeclineCapture(
                     "token",
-                    1L,
+                    SCOPE,
                     "o",
                     "r",
                     161,
@@ -524,7 +525,7 @@ class ReviewLearningsTest {
         .captureSurvivingDeclines(
             new ReviewLearnings.DeclineCapture(
                 "token",
-                1L,
+                SCOPE,
                 "o",
                 "r",
                 161,
@@ -659,20 +660,20 @@ class ReviewLearningsTest {
         enabled()
             .captureSurvivingDeclines(
                 new ReviewLearnings.DeclineCapture(
-                    "t", 1L, "o", "r", 1, List.of(), null, List.of(), List.of(), () -> "")));
+                    "t", SCOPE, "o", "r", 1, List.of(), null, List.of(), List.of(), () -> "")));
     assertEquals(
         0,
         enabled()
             .captureSurvivingDeclines(
                 new ReviewLearnings.DeclineCapture(
-                    "t", 1L, "o", "r", 1, null, null, null, null, () -> "")));
+                    "t", SCOPE, "o", "r", 1, null, null, null, null, () -> "")));
     verifyNoInteractions(store, installationClient);
   }
 
   @Test
   void aCaptureCopiesItsListsAndTreatsMissingOnesAsEmpty() {
     var capture =
-        new ReviewLearnings.DeclineCapture("t", 1L, "o", "r", 1, null, null, null, null, null);
+        new ReviewLearnings.DeclineCapture("t", SCOPE, "o", "r", 1, null, null, null, null, null);
 
     assertTrue(capture.previous().isEmpty());
     assertTrue(capture.statuses().isEmpty());
@@ -688,7 +689,7 @@ class ReviewLearningsTest {
 
     assertEquals(
         RecordOutcome.STORED,
-        enabled().rememberConvention(1L, "o", "r", 7, 99L, "maintainer", "Prefer records."));
+        enabled().rememberConvention(SCOPE, "o", "r", 7, 99L, "maintainer", "Prefer records."));
 
     var input = ArgumentCaptor.forClass(LearningInput.class);
     verify(store).save(input.capture(), eq(100));
@@ -699,13 +700,12 @@ class ReviewLearningsTest {
 
   @Test
   void listAndForgetAreScopedToTheRepository() {
-    when(store.listActive(1L, "o/r", 100)).thenReturn(List.of());
-    when(store.retract(1L, "o/r", 5L, "admin"))
+    when(store.listActive(SCOPE, 100)).thenReturn(List.of());
+    when(store.retract(SCOPE, 5L, "admin"))
         .thenReturn(ReviewLearningService.RetractOutcome.RETRACTED);
 
-    assertTrue(enabled().list(1L, "o", "r").isEmpty());
+    assertTrue(enabled().list(SCOPE).isEmpty());
     assertEquals(
-        ReviewLearningService.RetractOutcome.RETRACTED,
-        enabled().forget(1L, "o", "r", 5L, "admin"));
+        ReviewLearningService.RetractOutcome.RETRACTED, enabled().forget(SCOPE, 5L, "admin"));
   }
 }

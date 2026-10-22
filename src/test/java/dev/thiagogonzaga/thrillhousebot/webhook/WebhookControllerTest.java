@@ -22,6 +22,8 @@ import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
 import dev.thiagogonzaga.thrillhousebot.review.CiHoldRegistry;
 import dev.thiagogonzaga.thrillhousebot.review.CiHoldRevisit;
@@ -233,6 +235,7 @@ class WebhookControllerTest {
                 "basesha456",
                 "default",
                 12345L,
+                TestScopes.REPOSITORY_ID,
                 false,
                 "default"));
   }
@@ -247,7 +250,7 @@ class WebhookControllerTest {
                 + "\"action\":\"opened\","
                 + "\"pull_request\":{\"number\":42,\"title\":\"T\","
                 + "\"base\":{\"sha\":\"b\",\"ref\":\"main\"},\"user\":{\"login\":\"octocat\",\"id\":1}},"
-                + "\"repository\":{\"full_name\":\"owner/repo\",\"name\":\"repo\","
+                + "\"repository\":{\"id\":7,\"full_name\":\"owner/repo\",\"name\":\"repo\","
                 + "\"default_branch\":\"main\",\"owner\":{\"login\":\"owner\",\"id\":2}},"
                 + "\"installation\":{\"id\":12345}}")
             .getBytes(StandardCharsets.UTF_8);
@@ -268,7 +271,7 @@ class WebhookControllerTest {
                 + "\"action\":\"opened\","
                 + "\"pull_request\":{\"number\":42,\"title\":\"T\","
                 + "\"head\":{\"sha\":\"h\",\"ref\":\"feature\"},\"user\":{\"login\":\"octocat\",\"id\":1}},"
-                + "\"repository\":{\"full_name\":\"owner/repo\",\"name\":\"repo\","
+                + "\"repository\":{\"id\":7,\"full_name\":\"owner/repo\",\"name\":\"repo\","
                 + "\"default_branch\":\"main\",\"owner\":{\"login\":\"owner\",\"id\":2}},"
                 + "\"installation\":{\"id\":12345}}")
             .getBytes(StandardCharsets.UTF_8);
@@ -302,6 +305,7 @@ class WebhookControllerTest {
                 "basesha456",
                 "develop",
                 12345L,
+                TestScopes.REPOSITORY_ID,
                 false,
                 "develop"));
   }
@@ -329,6 +333,7 @@ class WebhookControllerTest {
                 "basesha456",
                 "main",
                 12345L,
+                TestScopes.REPOSITORY_ID,
                 false,
                 "main"));
   }
@@ -358,6 +363,7 @@ class WebhookControllerTest {
                 "basesha456",
                 "main",
                 12345L,
+                TestScopes.REPOSITORY_ID,
                 false,
                 "main"));
   }
@@ -385,6 +391,7 @@ class WebhookControllerTest {
                 "basesha456",
                 "main",
                 12345L,
+                TestScopes.REPOSITORY_ID,
                 false,
                 "main"));
   }
@@ -392,7 +399,7 @@ class WebhookControllerTest {
   @Test
   void shouldSkipAutomaticReviewWhenPrPaused() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(prPauseService.isPaused("owner", "myrepo", 99)).thenReturn(true);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("myrepo"), eq(99))).thenReturn(true);
 
     var body =
         buildPullRequestPayload("synchronize", 99, "owner/myrepo", "headsha123", "main")
@@ -427,7 +434,7 @@ class WebhookControllerTest {
         "{"
             + "\"action\":null,"
             + "\"pull_request\":{\"number\":1,\"title\":\"t\",\"head\":{\"sha\":\"s\"},\"base\":{\"sha\":\"b\"}},"
-            + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
+            + "\"repository\":{\"id\":7,\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
             + "\"installation\":{\"id\":1}"
             + "}";
 
@@ -447,7 +454,7 @@ class WebhookControllerTest {
         "{"
             + "\"action\":\"opened\","
             + "\"pull_request\":null,"
-            + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
+            + "\"repository\":{\"id\":7,\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
             + "\"installation\":{\"id\":1}"
             + "}";
 
@@ -522,7 +529,7 @@ class WebhookControllerTest {
   @Test
   void shouldEmitStructuredSkipEventWhenPrPaused() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    when(prPauseService.isPaused("owner", "myrepo", 99)).thenReturn(true);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("myrepo"), eq(99))).thenReturn(true);
 
     var body =
         buildPullRequestPayload("synchronize", 99, "owner/myrepo", "headsha123", "main")
@@ -611,7 +618,7 @@ class WebhookControllerTest {
     when(deduplicator.isDuplicate("redelivered-id")).thenReturn(true);
 
     var body =
-        ("{\"action\":\"opened\",\"repository\":{\"full_name\":\"owner/repo\",\"name\":\"repo\","
+        ("{\"action\":\"opened\",\"repository\":{\"id\":7,\"full_name\":\"owner/repo\",\"name\":\"repo\","
                 + "\"owner\":{\"login\":\"owner\",\"id\":1}}}")
             .getBytes(StandardCharsets.UTF_8);
 
@@ -627,7 +634,7 @@ class WebhookControllerTest {
 
     var body =
         ("{\"action\":\"opened\",\"pull_request\":{\"number\":7},"
-                + "\"repository\":{\"full_name\":\"owner/repo\",\"name\":\"repo\"}}")
+                + "\"repository\":{\"id\":7,\"full_name\":\"owner/repo\",\"name\":\"repo\"}}")
             .getBytes(StandardCharsets.UTF_8);
 
     controller.handleWebhook("sha256=valid", "pull_request", null, "redelivered-id", body);
@@ -827,7 +834,7 @@ class WebhookControllerTest {
                 + "\"base\":{\"sha\":\"b\",\"ref\":\"main\"},\"draft\":true,"
                 + "\"labels\":[{\"name\":\"wip\"},{\"name\":\"ai-review\"}]"
                 + "},"
-                + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
+                + "\"repository\":{\"id\":7,\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
                 + "\"installation\":{\"id\":1}"
                 + "}")
             .getBytes(StandardCharsets.UTF_8);
@@ -862,7 +869,17 @@ class WebhookControllerTest {
     verify(reviewDispatcher)
         .dispatch(
             new ReviewOrchestrator.ReviewRequest(
-                "owner", "repo", 77, "", "(manual review)", "", "", "main", 12345L, true));
+                "owner",
+                "repo",
+                77,
+                "",
+                "(manual review)",
+                "",
+                "",
+                "main",
+                12345L,
+                TestScopes.REPOSITORY_ID,
+                true));
   }
 
   @Test
@@ -885,7 +902,17 @@ class WebhookControllerTest {
     verify(reviewDispatcher)
         .dispatch(
             new ReviewOrchestrator.ReviewRequest(
-                "owner", "repo", 77, "", "(manual review)", "", "", "main", 12345L, true));
+                "owner",
+                "repo",
+                77,
+                "",
+                "(manual review)",
+                "",
+                "",
+                "main",
+                12345L,
+                TestScopes.REPOSITORY_ID,
+                true));
     verifyNoInteractions(autoReviewRateLimiter);
   }
 
@@ -914,7 +941,7 @@ class WebhookControllerTest {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
     when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
-    when(prPauseService.isPaused("owner", "repo", 77)).thenReturn(true);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(77))).thenReturn(true);
 
     var body =
         buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/review")
@@ -1084,7 +1111,7 @@ class WebhookControllerTest {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
     when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
-    when(prPauseService.isPaused("owner", "repo", 77)).thenReturn(true);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(77))).thenReturn(true);
 
     var body =
         buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/review")
@@ -1156,7 +1183,7 @@ class WebhookControllerTest {
                 + "\"action\":\"created\","
                 + "\"issue\":{\"number\":1,\"pull_request\":{\"url\":\"u\"}},"
                 + "\"comment\":{\"id\":1,\"body\":\"/help\",\"user\":{\"login\":\"user\",\"id\":1}},"
-                + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
+                + "\"repository\":{\"id\":7,\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
                 + "\"installation\":null"
                 + "}")
             .getBytes(StandardCharsets.UTF_8);
@@ -1281,7 +1308,7 @@ class WebhookControllerTest {
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
     when(triggerDetector.containsBotMention("@thrillhousebot is this thread-safe?"))
         .thenReturn(true);
-    when(prPauseService.isPaused("owner", "repo", 77)).thenReturn(true);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(77))).thenReturn(true);
 
     var body =
         buildIssueCommentPayload(
@@ -1340,7 +1367,7 @@ class WebhookControllerTest {
 
     verify(findingFeedbackCapture)
         .scheduleCaptureOnReviewReply(
-            12345L,
+            new RepoScope(12345L, 7L),
             "owner",
             "repo",
             42,
@@ -1384,7 +1411,7 @@ class WebhookControllerTest {
 
     verify(findingFeedbackCapture)
         .scheduleCaptureOnReviewReply(
-            12345L,
+            new RepoScope(12345L, 7L),
             "owner",
             "repo",
             42,
@@ -1436,7 +1463,7 @@ class WebhookControllerTest {
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
     when(triggerDetector.containsBotMention("@thrillhousebot why is this flagged?"))
         .thenReturn(true);
-    when(prPauseService.isPaused("owner", "repo", 42)).thenReturn(true);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(42))).thenReturn(true);
 
     // A mention clears the trigger gate; the pause check is what must suppress the reply here.
     var body =
@@ -1580,7 +1607,7 @@ class WebhookControllerTest {
                 + "\"action\":\"created\","
                 + "\"comment\":{\"id\":1,\"body\":\"reply\",\"in_reply_to_id\":99,\"user\":null},"
                 + "\"pull_request\":{\"number\":42,\"title\":\"T\",\"head\":{\"sha\":\"h\"},\"base\":{\"sha\":\"b\"},\"body\":\"d\"},"
-                + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
+                + "\"repository\":{\"id\":7,\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
                 + "\"installation\":{\"id\":12345}"
                 + "}"),
         arguments(
@@ -1589,7 +1616,7 @@ class WebhookControllerTest {
                 + "\"action\":\"created\","
                 + "\"comment\":{\"id\":1,\"body\":\"reply\",\"author_association\":\"OWNER\",\"in_reply_to_id\":99,\"user\":{\"login\":\"octocat\",\"id\":1}},"
                 + "\"pull_request\":null,"
-                + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
+                + "\"repository\":{\"id\":7,\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
                 + "\"installation\":{\"id\":12345}"
                 + "}"),
         arguments(
@@ -1598,7 +1625,7 @@ class WebhookControllerTest {
                 + "\"action\":\"created\","
                 + "\"comment\":null,"
                 + "\"pull_request\":{\"number\":42,\"title\":\"T\",\"head\":{\"sha\":\"h\"},\"base\":{\"sha\":\"b\"},\"body\":\"d\"},"
-                + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
+                + "\"repository\":{\"id\":7,\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
                 + "\"installation\":{\"id\":12345}"
                 + "}"));
   }
@@ -1639,7 +1666,7 @@ class WebhookControllerTest {
                 + "\"action\":\"created\","
                 + "\"comment\":{\"id\":1,\"body\":\"reply\",\"author_association\":\"OWNER\",\"in_reply_to_id\":99,\"user\":{\"login\":\"octocat\",\"id\":1}},"
                 + "\"pull_request\":{\"number\":42,\"title\":\"T\",\"head\":{\"sha\":\"h\"},\"base\":{\"sha\":\"b\"},\"body\":\"d\"},"
-                + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
+                + "\"repository\":{\"id\":7,\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
                 + "\"installation\":null"
                 + "}")
             .getBytes(StandardCharsets.UTF_8);
@@ -1665,7 +1692,7 @@ class WebhookControllerTest {
                 + "\"action\":\"created\","
                 + "\"issue\":{\"number\":5,\"title\":\"T\",\"body\":\"d\",\"pull_request\":{\"url\":\"u\"}},"
                 + "\"comment\":{\"id\":1,\"body\":\"@thrillhousebot hi\",\"author_association\":\"OWNER\",\"user\":{\"login\":\"octocat\",\"id\":1}},"
-                + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
+                + "\"repository\":{\"id\":7,\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":2}},"
                 + "\"installation\":null"
                 + "}")
             .getBytes(StandardCharsets.UTF_8);
@@ -1737,6 +1764,33 @@ class WebhookControllerTest {
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
+  /**
+   * Everything the bot stores is scoped by installation and repository id (#1220), so a payload
+   * without either is ignored rather than handled unscoped.
+   */
+  @Test
+  void shouldIgnoreAPullRequestWithoutARepositoryOrInstallationId() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    var payload = buildPullRequestPayload("opened", 1, "a/b", "sha", "main");
+
+    for (var body :
+        List.of(
+            payload.replace("\"id\":7,", ""),
+            payload.replace("\"installation\":{\"id\":12345}", "\"installation\":{\"id\":0}"))) {
+      var response =
+          controller.handleWebhook(
+              "sha256=valid",
+              "pull_request",
+              null,
+              DELIVERY,
+              body.getBytes(StandardCharsets.UTF_8));
+      assertEquals(200, response.getStatus());
+    }
+
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(prPauseService, never()).isPaused(any(), any(), any(), anyInt());
+  }
+
   @Test
   void shouldHandlePingEvent() {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
@@ -1793,7 +1847,8 @@ class WebhookControllerTest {
 
     assertEquals(200, response.getStatus());
     verify(reviewDispatcher)
-        .dispatchCiRecheck(new CiHoldRevisit.Recheck("a", "b", 7, "abc123", 1L));
+        .dispatchCiRecheck(
+            new CiHoldRevisit.Recheck("a", "b", 7, "abc123", 1L, TestScopes.REPOSITORY_ID));
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
     verify(deduplicator, never()).forget(anyString());
   }
@@ -1810,9 +1865,11 @@ class WebhookControllerTest {
     controller.handleWebhook("sha256=valid", "check_suite", null, DELIVERY, body);
 
     verify(reviewDispatcher)
-        .dispatchCiRecheck(new CiHoldRevisit.Recheck("a", "b", 7, "abc123", 1L));
+        .dispatchCiRecheck(
+            new CiHoldRevisit.Recheck("a", "b", 7, "abc123", 1L, TestScopes.REPOSITORY_ID));
     verify(reviewDispatcher)
-        .dispatchCiRecheck(new CiHoldRevisit.Recheck("a", "b", 8, "abc123", 1L));
+        .dispatchCiRecheck(
+            new CiHoldRevisit.Recheck("a", "b", 8, "abc123", 1L, TestScopes.REPOSITORY_ID));
   }
 
   @Test
@@ -1890,7 +1947,7 @@ class WebhookControllerTest {
         arguments(
             "no repository owner",
             "{\"action\":\"completed\",\"check_suite\":{\"head_sha\":\"abc123\"},"
-                + "\"repository\":{\"name\":\"b\"},\"installation\":{\"id\":1}}"),
+                + "\"repository\":{\"id\":7,\"name\":\"b\"},\"installation\":{\"id\":1}}"),
         arguments(
             "no installation",
             "{\"action\":\"completed\",\"check_suite\":{\"head_sha\":\"abc123\"},"
@@ -1911,7 +1968,8 @@ class WebhookControllerTest {
     controller.handleWebhook("sha256=valid", "check_suite", null, DELIVERY, body);
 
     verify(reviewDispatcher)
-        .dispatchCiRecheck(new CiHoldRevisit.Recheck("a", "b", 7, "abc123", 1L));
+        .dispatchCiRecheck(
+            new CiHoldRevisit.Recheck("a", "b", 7, "abc123", 1L, TestScopes.REPOSITORY_ID));
   }
 
   @Test
@@ -1954,7 +2012,8 @@ class WebhookControllerTest {
     controller.handleWebhook("sha256=valid", "status", null, DELIVERY, body);
 
     verify(reviewDispatcher)
-        .dispatchCiRecheck(new CiHoldRevisit.Recheck("a", "b", 7, "abc123", 1L));
+        .dispatchCiRecheck(
+            new CiHoldRevisit.Recheck("a", "b", 7, "abc123", 1L, TestScopes.REPOSITORY_ID));
   }
 
   @Test
@@ -2009,7 +2068,7 @@ class WebhookControllerTest {
 
   private static String repositoryJson(String fullName) {
     var slash = fullName.indexOf('/');
-    return "\"repository\":{\"full_name\":\""
+    return "\"repository\":{\"id\":7,\"full_name\":\""
         + fullName
         + "\",\"name\":\""
         + fullName.substring(slash + 1)
@@ -2073,7 +2132,7 @@ class WebhookControllerTest {
             + "\"action\":\"created\","
             + "\"issue\":null,"
             + "\"comment\":{\"id\":1,\"body\":\"/review\",\"user\":{\"login\":\"user\",\"id\":1}},"
-            + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
+            + "\"repository\":{\"id\":7,\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
             + "\"installation\":{\"id\":12345}"
             + "}";
 
@@ -2096,7 +2155,7 @@ class WebhookControllerTest {
             + "\"action\":\"created\","
             + "\"issue\":{\"number\":1,\"title\":\"Issue\",\"body\":\"desc\"},"
             + "\"comment\":{\"id\":1,\"body\":\"/review\",\"user\":{\"login\":\"user\",\"id\":1}},"
-            + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
+            + "\"repository\":{\"id\":7,\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
             + "\"installation\":{\"id\":12345}"
             + "}";
 
@@ -2117,7 +2176,7 @@ class WebhookControllerTest {
             + "\"action\":\"created\","
             + "\"issue\":{\"number\":1,\"pull_request\":{\"url\":\"u\"}},"
             + "\"comment\":{\"id\":1,\"body\":\"/review\",\"user\":null},"
-            + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
+            + "\"repository\":{\"id\":7,\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
             + "\"installation\":{\"id\":1}"
             + "}";
 
@@ -2163,7 +2222,7 @@ class WebhookControllerTest {
             + "\"action\":\"created\","
             + "\"issue\":{\"number\":1,\"pull_request\":{\"url\":\"u\"}},"
             + "\"comment\":{\"id\":1,\"body\":\"/help\",\"user\":{\"login\":\"user\",\"id\":1}},"
-            + "\"repository\":{\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
+            + "\"repository\":{\"id\":7,\"full_name\":\"a/b\",\"name\":\"b\",\"default_branch\":\"main\",\"owner\":{\"login\":\"a\",\"id\":1}},"
             + "\"installation\":null"
             + "}";
 
@@ -2207,6 +2266,7 @@ class WebhookControllerTest {
         + (includeBody ? ",\"body\":\"PR body\"" : "")
         + "},"
         + "\"repository\":{"
+        + "\"id\":7,"
         + "\"full_name\":\""
         + fullName
         + "\","
@@ -2272,6 +2332,7 @@ class WebhookControllerTest {
         + "\"body\":\"PR body\""
         + "},"
         + "\"repository\":{"
+        + "\"id\":7,"
         + "\"full_name\":\""
         + fullName
         + "\","
@@ -2328,6 +2389,7 @@ class WebhookControllerTest {
         + "\",\"id\":1}"
         + "},"
         + "\"repository\":{"
+        + "\"id\":7,"
         + "\"full_name\":\""
         + fullName
         + "\","

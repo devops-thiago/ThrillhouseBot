@@ -70,6 +70,19 @@ public interface GitHubInstallationClient {
       @PathParam("repo") String repo,
       @PathParam("username") String username);
 
+  /**
+   * The repository by name. A renamed repository answers its old name with a 301 whose {@code
+   * Location} ends in {@code /repositories/{id}}; redirects are not followed, so the caller reads
+   * the id from it (#1220).
+   */
+  @GET
+  @Path("/repos/{owner}/{repo}")
+  Response getRepository(
+      @HeaderParam("Authorization") String authorization,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo);
+
   record Installation(long id, Account account) {
     public record Account(String login, String type) {}
   }
@@ -87,7 +100,7 @@ public interface GitHubInstallationClient {
       this.repositories = repositories == null ? List.of() : List.copyOf(repositories);
     }
 
-    public record Repository(String name, Owner owner) {
+    public record Repository(long id, String name, Owner owner) {
       public record Owner(String login) {}
     }
   }

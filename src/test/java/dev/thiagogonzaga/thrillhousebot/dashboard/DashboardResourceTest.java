@@ -21,6 +21,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.FindingFeedback;
 import dev.thiagogonzaga.thrillhousebot.review.FindingFeedbackService;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearning;
@@ -31,8 +33,8 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,23 +49,21 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
 
   /** The account owner's scope: every repository these tests persist, except private/repo. */
   private static final RepositoryScope OWNER_SCOPE =
-      new RepositoryScope(
+      TestScopes.readable(
           true,
-          Set.of(
-              "owner/repo",
-              "repo/a",
-              "repo/b",
-              "repo/x",
-              "repo/y",
-              "repo/oldest",
-              "repo/newest",
-              "repo/middle",
-              "test/repo",
-              "allowed/repo"));
+          "owner/repo",
+          "repo/a",
+          "repo/b",
+          "repo/x",
+          "repo/y",
+          "repo/oldest",
+          "repo/newest",
+          "repo/middle",
+          "test/repo",
+          "allowed/repo");
 
   /** A collaborator on acme/allowed only, in an installation that also has acme/secret. */
-  private static final RepositoryScope COLLAB_SCOPE =
-      new RepositoryScope(false, Set.of("acme/allowed"));
+  private static final RepositoryScope COLLAB_SCOPE = TestScopes.readable(false, "acme/allowed");
 
   @InjectMock DashboardSessionValidator sessionValidator;
 
@@ -75,7 +75,6 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   void setUp() {
     when(sessionValidator.isValidSession(anyString())).thenReturn(true);
     when(sessionValidator.isValidSession(isNull())).thenReturn(false);
-    when(sessionValidator.hasRepositoryAccess(anyString(), anyString())).thenReturn(true);
     when(sessionValidator.repositoryScope(anyString())).thenReturn(OWNER_SCOPE);
     when(sessionValidator.repositoryScope(COLLAB_TOKEN)).thenReturn(COLLAB_SCOPE);
   }
@@ -136,6 +135,7 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   void shouldReturnFeedbackAggregates() {
     findingFeedbackService.recordFeedback(
         new FindingFeedbackService.FeedbackInput(
+            TestScopes.scope("owner/repo"),
             "owner/repo",
             1,
             10L,
@@ -146,6 +146,7 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
             101L));
     findingFeedbackService.recordFeedback(
         new FindingFeedbackService.FeedbackInput(
+            TestScopes.scope("owner/repo"),
             "owner/repo",
             1,
             10L,
@@ -203,7 +204,6 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
         .get("/learnings")
         .then()
         .statusCode(400);
-    when(sessionValidator.hasRepositoryAccess(VALID_TOKEN, "private/repo")).thenReturn(false);
     given()
         .cookie(COOKIE_NAME, VALID_TOKEN)
         .queryParam("repository", "private/repo")
@@ -217,7 +217,7 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   void learningsListEveryLearningWithItsSourceIncludingRetractedOnes() {
     reviewLearningService.save(
         new ReviewLearningService.LearningInput(
-            1L,
+            TestScopes.scope("owner/repo"),
             "owner/repo",
             ReviewLearning.KIND_DECLINE,
             "renderThread misses deeper nested replies",
@@ -228,8 +228,8 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
             "https://github.com/owner/repo/pull/159#discussion_r1",
             "maintainer"),
         10);
-    var id = reviewLearningService.listActive(1L, "owner/repo", 10).get(0).id();
-    reviewLearningService.retract(1L, "owner/repo", id, "admin");
+    var id = reviewLearningService.listActive(TestScopes.scope("owner/repo"), 10).get(0).id();
+    reviewLearningService.retract(TestScopes.scope("owner/repo"), id, "admin");
 
     given()
         .cookie(COOKIE_NAME, VALID_TOKEN)
@@ -250,7 +250,6 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
 
   @Test
   void shouldRejectFeedbackForAnInaccessibleRepository() {
-    when(sessionValidator.hasRepositoryAccess(VALID_TOKEN, "private/repo")).thenReturn(false);
 
     given()
         .cookie(COOKIE_NAME, VALID_TOKEN)
@@ -263,9 +262,10 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   }
 
   @Test
-  void shouldReturnFeedbackWhenRepositoryQueryCasingDiffers() {
+  void shouldReturnFeedbackLabelledWithTheRepositorysCurrentNameWhenCasingDiffers() {
     findingFeedbackService.recordFeedback(
         new FindingFeedbackService.FeedbackInput(
+            TestScopes.scope("Owner/Repo"),
             "Owner/Repo",
             1,
             10L,
@@ -274,7 +274,6 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
             FindingFeedback.SOURCE_REACTION,
             "octocat",
             301L));
-    when(sessionValidator.hasRepositoryAccess(VALID_TOKEN, "owner/repo")).thenReturn(true);
 
     given()
         .cookie(COOKIE_NAME, VALID_TOKEN)
@@ -283,7 +282,7 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
         .get("/feedback")
         .then()
         .statusCode(200)
-        .body("repositories[0].repository", equalTo("Owner/Repo"))
+        .body("repositories[0].repository", equalTo("owner/repo"))
         .body("repositories[0].usefulCount", equalTo(1))
         .body("repositories[0].totalEvents", equalTo(1))
         .body("recent", hasSize(1));
@@ -293,6 +292,7 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   void shouldFilterInaccessibleRepositoriesFromFeedbackAggregates() {
     findingFeedbackService.recordFeedback(
         new FindingFeedbackService.FeedbackInput(
+            TestScopes.scope("allowed/repo"),
             "allowed/repo",
             1,
             10L,
@@ -303,6 +303,7 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
             201L));
     findingFeedbackService.recordFeedback(
         new FindingFeedbackService.FeedbackInput(
+            TestScopes.scope("private/repo"),
             "private/repo",
             2,
             20L,
@@ -686,6 +687,45 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   }
 
   @Test
+  void theSameNameUnderAnotherInstallationAndAnUnmatchedRowAreNeverServed() throws Exception {
+    var ours = createPersistedSession("acme/allowed", 1, "Ours", "sha1");
+    var theirs = createPersistedSession("acme/allowed", 2, "Theirs", "sha2");
+    var unmatched = createPersistedSession("acme/allowed", 3, "Unmatched", "sha3");
+    tx.begin();
+    var other = TestScopes.scope("acme/allowed");
+    ReviewSession.<ReviewSession>findById(theirs.id)
+        .setScope(new RepoScope(other.installationId() + 1, other.repositoryId()));
+    ReviewSession unscoped = ReviewSession.findById(unmatched.id);
+    unscoped.installationId = null;
+    unscoped.repositoryId = null;
+    tx.commit();
+
+    given()
+        .cookie(COOKIE_NAME, COLLAB_TOKEN)
+        .when()
+        .get("/sessions")
+        .then()
+        .statusCode(200)
+        .body("total", equalTo(1))
+        .body("sessions[0].id", equalTo(ours.id.intValue()));
+    for (var hidden : List.of(theirs.id, unmatched.id)) {
+      given()
+          .cookie(COOKIE_NAME, COLLAB_TOKEN)
+          .when()
+          .get("/sessions/" + hidden)
+          .then()
+          .statusCode(404);
+    }
+    given()
+        .cookie(COOKIE_NAME, COLLAB_TOKEN)
+        .when()
+        .get("/summary")
+        .then()
+        .statusCode(200)
+        .body("totalReviews", equalTo(1));
+  }
+
+  @Test
   void costsAndTokensAggregateOnlyTheCollaboratorsRepositories() throws Exception {
     createCompletedSessionIn("acme/allowed", "deepseek-chat", 100, 200, 0.25);
     createCompletedSessionIn("acme/secret", "deepseek-chat", 1000, 2000, 4.0);
@@ -770,6 +810,7 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   void feedbackAggregatesFollowTheRepositoryScope() {
     findingFeedbackService.recordFeedback(
         new FindingFeedbackService.FeedbackInput(
+            TestScopes.scope("acme/secret"),
             "acme/secret",
             1,
             10L,
@@ -791,7 +832,7 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   private void createCompletedSessionIn(
       String repo, String model, int inputTokens, int outputTokens, double cost) throws Exception {
     tx.begin();
-    ReviewSession s = ReviewSession.create(repo, 50, "Completed", "sha");
+    ReviewSession s = ReviewSession.create(TestScopes.scope(repo), repo, 50, "Completed", "sha");
     s.setModel(model);
     s.setInputTokens(inputTokens);
     s.setOutputTokens(outputTokens);
@@ -805,7 +846,7 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   private ReviewSession createPersistedSession(String repo, int prNumber, String title, String sha)
       throws Exception {
     tx.begin();
-    ReviewSession s = ReviewSession.create(repo, prNumber, title, sha);
+    ReviewSession s = ReviewSession.create(TestScopes.scope(repo), repo, prNumber, title, sha);
     s.persist();
     s.flush();
     tx.commit();
@@ -815,7 +856,9 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   private ReviewSession createPersistedSessionAt(String repo, int prNumber, Instant timestamp)
       throws Exception {
     tx.begin();
-    ReviewSession s = ReviewSession.create(repo, prNumber, "PR " + prNumber, "sha" + prNumber);
+    ReviewSession s =
+        ReviewSession.create(
+            TestScopes.scope(repo), repo, prNumber, "PR " + prNumber, "sha" + prNumber);
     s.setTimestamp(timestamp);
     s.persist();
     s.flush();
@@ -826,7 +869,9 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
   private ReviewSession createPersistedCompletedSession(
       String model, int inputTokens, int outputTokens, double cost) throws Exception {
     tx.begin();
-    ReviewSession s = ReviewSession.create("test/repo", 99, "Completed PR", "abc123");
+    ReviewSession s =
+        ReviewSession.create(
+            TestScopes.scope("test/repo"), "test/repo", 99, "Completed PR", "abc123");
     s.setModel(model);
     s.setInputTokens(inputTokens);
     s.setOutputTokens(outputTokens);
@@ -842,7 +887,8 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
       String model, int inputTokens, int outputTokens, double cost, String errorType)
       throws Exception {
     tx.begin();
-    ReviewSession s = ReviewSession.create("test/repo", 98, "Failed PR", "def456");
+    ReviewSession s =
+        ReviewSession.create(TestScopes.scope("test/repo"), "test/repo", 98, "Failed PR", "def456");
     s.setModel(model);
     s.setInputTokens(inputTokens);
     s.setOutputTokens(outputTokens);

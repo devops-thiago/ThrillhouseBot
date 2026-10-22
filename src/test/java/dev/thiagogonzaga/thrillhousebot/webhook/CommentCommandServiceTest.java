@@ -26,6 +26,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestComment;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ChangelogEntryGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.DocGenerationService;
 import dev.thiagogonzaga.thrillhousebot.review.PrDescriptionGenerator;
@@ -104,7 +105,7 @@ class CommentCommandServiceTest {
 
   private CommentCommandService.CommandContext ctx(CommentCommand command) {
     return new CommentCommandService.CommandContext(
-        command, "owner", "repo", 7, "main", 12345L, "octocat", "OWNER");
+        command, "owner", "repo", 7, "main", 12345L, TestScopes.REPOSITORY_ID, "octocat", "OWNER");
   }
 
   private void authorize(boolean allowed) {
@@ -130,7 +131,7 @@ class CommentCommandServiceTest {
   @Test
   void summaryDispatchesForcedReviewWhenNoLiveSummaryComment() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(false);
     // No summary comment currently on the PR (never generated, or deleted) — the command must run.
     when(contextLoader.botSummaryCommentExists("token", "owner", "repo", 7)).thenReturn(false);
 
@@ -150,6 +151,7 @@ class CommentCommandServiceTest {
                 "",
                 "main",
                 12345L,
+                TestScopes.REPOSITORY_ID,
                 true,
                 "",
                 true));
@@ -159,7 +161,7 @@ class CommentCommandServiceTest {
   @Test
   void summaryExplainsItselfWhenSummaryCommentIsLiveOnPr() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(false);
     when(contextLoader.botSummaryCommentExists("token", "owner", "repo", 7)).thenReturn(true);
 
     service.handle(ctx(CommentCommand.SUMMARY));
@@ -175,7 +177,7 @@ class CommentCommandServiceTest {
   @Test
   void summaryPostsPausedNoticeWhenPaused() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(true);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(true);
 
     service.handle(ctx(CommentCommand.SUMMARY));
 
@@ -198,7 +200,7 @@ class CommentCommandServiceTest {
   @Test
   void describePostsTheGeneratedSuggestion() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(false);
     when(descriptionGenerator.generate("owner", "repo", 7, "main", 12345L, "token"))
         .thenReturn("## suggestion body");
 
@@ -210,7 +212,7 @@ class CommentCommandServiceTest {
   @Test
   void describeSaysSoWhenGeneratorReturnsNothing() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(false);
     when(descriptionGenerator.generate("owner", "repo", 7, "main", 12345L, "token"))
         .thenReturn(null);
 
@@ -223,7 +225,7 @@ class CommentCommandServiceTest {
   @Test
   void describePostsPausedNoticeWhenPaused() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(true);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(true);
 
     service.handle(ctx(CommentCommand.DESCRIBE));
 
@@ -245,7 +247,7 @@ class CommentCommandServiceTest {
   @Test
   void changelogPostsTheGeneratedEntry() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(false);
     when(changelogGenerator.generate("owner", "repo", 7, "main", 12345L, "token"))
         .thenReturn("### Added\n- thing (#7)");
 
@@ -257,7 +259,7 @@ class CommentCommandServiceTest {
   @Test
   void changelogSaysSoWhenGeneratorReturnsNothing() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(false);
     when(changelogGenerator.generate("owner", "repo", 7, "main", 12345L, "token")).thenReturn(null);
 
     service.handle(ctx(CommentCommand.CHANGELOG));
@@ -268,7 +270,7 @@ class CommentCommandServiceTest {
   @Test
   void addDocsDelegatesToDocServiceWhenAuthorized() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(false);
 
     service.handle(ctx(CommentCommand.ADD_DOCS));
 
@@ -280,7 +282,7 @@ class CommentCommandServiceTest {
   @Test
   void changelogPostsPausedNoticeWhenPaused() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(true);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(true);
 
     service.handle(ctx(CommentCommand.CHANGELOG));
 
@@ -302,7 +304,7 @@ class CommentCommandServiceTest {
   @Test
   void addDocsPostsPausedNoticeWhenPaused() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(true);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(true);
 
     service.handle(ctx(CommentCommand.ADD_DOCS));
 
@@ -349,7 +351,7 @@ class CommentCommandServiceTest {
   @Test
   void improveDelegatesToImprovementServiceWhenAuthorized() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(false);
 
     service.handle(ctx(CommentCommand.IMPROVE));
 
@@ -361,7 +363,7 @@ class CommentCommandServiceTest {
   @Test
   void improvePostsPausedNoticeWhenPaused() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(true);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(true);
 
     service.handle(ctx(CommentCommand.IMPROVE));
 
@@ -402,8 +404,9 @@ class CommentCommandServiceTest {
   @Test
   void generateTestsPostsTheGeneratedSuggestion() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
-    when(testGenerator.generate("owner", "repo", 7, "main", 12345L, "token"))
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(false);
+    when(testGenerator.generate(
+            "owner", "repo", 7, "main", 12345L, TestScopes.REPOSITORY_ID, "token"))
         .thenReturn("## suggested unit tests");
 
     service.handle(ctx(CommentCommand.GENERATE_TESTS));
@@ -414,8 +417,10 @@ class CommentCommandServiceTest {
   @Test
   void generateTestsSaysSoWhenGeneratorReturnsNothing() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
-    when(testGenerator.generate("owner", "repo", 7, "main", 12345L, "token")).thenReturn(null);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(false);
+    when(testGenerator.generate(
+            "owner", "repo", 7, "main", 12345L, TestScopes.REPOSITORY_ID, "token"))
+        .thenReturn(null);
 
     service.handle(ctx(CommentCommand.GENERATE_TESTS));
 
@@ -425,7 +430,7 @@ class CommentCommandServiceTest {
   @Test
   void generateTestsPostsPausedNoticeWhenPaused() {
     authorize(true);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(true);
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(true);
 
     service.handle(ctx(CommentCommand.GENERATE_TESTS));
 
@@ -511,7 +516,7 @@ class CommentCommandServiceTest {
 
     service.handle(ctx(CommentCommand.PAUSE));
 
-    verify(prPauseService).pause("owner", "repo", 7);
+    verify(prPauseService).pause(any(), eq("owner"), eq("repo"), eq(7));
     assertTrue(postedBody().contains("paused"));
   }
 
@@ -521,7 +526,7 @@ class CommentCommandServiceTest {
 
     service.handle(ctx(CommentCommand.PAUSE));
 
-    verify(prPauseService, never()).pause(any(), any(), anyInt());
+    verify(prPauseService, never()).pause(any(), any(), any(), anyInt());
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
   }
 
@@ -532,8 +537,8 @@ class CommentCommandServiceTest {
     // so the PR is paused and the confirmation must still be posted.
     doThrow(new RuntimeException("unique constraint violation"))
         .when(prPauseService)
-        .pause("owner", "repo", 7);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(true);
+        .pause(any(), eq("owner"), eq("repo"), eq(7));
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(true);
 
     service.handle(ctx(CommentCommand.PAUSE));
 
@@ -545,8 +550,8 @@ class CommentCommandServiceTest {
     authorize(true);
     doThrow(new RuntimeException("database unavailable"))
         .when(prPauseService)
-        .pause("owner", "repo", 7);
-    when(prPauseService.isPaused("owner", "repo", 7)).thenReturn(false);
+        .pause(any(), eq("owner"), eq("repo"), eq(7));
+    when(prPauseService.isPaused(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(false);
 
     service.handle(ctx(CommentCommand.PAUSE));
 
@@ -557,18 +562,18 @@ class CommentCommandServiceTest {
   @Test
   void resumeClearsPauseAndConfirms() {
     authorize(true);
-    when(prPauseService.resume("owner", "repo", 7)).thenReturn(true);
+    when(prPauseService.resume(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(true);
 
     service.handle(ctx(CommentCommand.RESUME));
 
-    verify(prPauseService).resume("owner", "repo", 7);
+    verify(prPauseService).resume(any(), eq("owner"), eq("repo"), eq(7));
     assertTrue(postedBody().contains("resumed"));
   }
 
   @Test
   void resumeReportsWhenNotPaused() {
     authorize(true);
-    when(prPauseService.resume("owner", "repo", 7)).thenReturn(false);
+    when(prPauseService.resume(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(false);
 
     service.handle(ctx(CommentCommand.RESUME));
 
@@ -636,7 +641,7 @@ class CommentCommandServiceTest {
 
     service.handle(ctx(CommentCommand.RESUME));
 
-    verify(prPauseService, never()).resume(any(), any(), anyInt());
+    verify(prPauseService, never()).resume(any(), any(), any(), anyInt());
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
   }
 

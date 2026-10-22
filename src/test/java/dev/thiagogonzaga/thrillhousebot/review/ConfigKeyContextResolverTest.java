@@ -25,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.TreeEntry;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.TreeResponse;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import jakarta.ws.rs.WebApplicationException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -1128,7 +1129,19 @@ class ConfigKeyContextResolverTest {
             null);
     var req =
         new ReviewOrchestrator.ReviewRequest(
-            "o", "r", 1, "headsha", "title", "body", "basesha", "main", 1L, false, "main", false);
+            "o",
+            "r",
+            1,
+            "headsha",
+            "title",
+            "body",
+            "basesha",
+            "main",
+            1L,
+            TestScopes.REPOSITORY_ID,
+            false,
+            "main",
+            false);
     return assembler.assemble(ctx, req);
   }
 }

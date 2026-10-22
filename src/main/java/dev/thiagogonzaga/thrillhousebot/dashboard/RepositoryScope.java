@@ -15,48 +15,65 @@
  */
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
-import java.util.Collection;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
+import java.util.List;
 import java.util.Locale;
-import java.util.Set;
-import java.util.stream.Collectors;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * The installed repositories one dashboard login may read, resolved once per request from the
- * cached installation snapshot. Names are held as lower-case {@code owner/name} so they match the
- * {@code lower(s.repository)} filter in the dashboard queries regardless of how a webhook spelled
- * the repository.
+ * cached installation snapshot: the installation they belong to and each repository's numeric id
+ * with its current {@code owner/name}. Dashboard queries match stored rows by installation and
+ * repository id (#1220), so a row from a repository of the same name under another installation, or
+ * from before #1220 and never matched by the backfill, is never served.
  *
  * @param accountOwner whether the login is the installation's account owner, who sees every
  *     installed repository and installation-wide counters
- * @param repositories the readable repositories, lower-cased
+ * @param installationId the installation the repositories belong to; 0 when there is none
+ * @param repositories the readable repositories, by numeric id, with their {@code owner/name}
  */
-public record RepositoryScope(boolean accountOwner, Set<String> repositories) {
+public record RepositoryScope(
+    boolean accountOwner, long installationId, Map<Long, String> repositories) {
 
   /** A scope that allows nothing: unknown login, unresolved owner, or no installation. */
-  public static final RepositoryScope NONE = new RepositoryScope(false, Set.of());
+  public static final RepositoryScope NONE = new RepositoryScope(false, 0L, Map.of());
 
   public RepositoryScope {
-    repositories = normalizeAll(repositories);
-  }
-
-  /** The readable repositories, lower-cased; already unmodifiable, so this copy is free. */
-  @Override
-  public Set<String> repositories() {
-    return Set.copyOf(repositories);
+    repositories = Map.copyOf(repositories);
   }
 
   /** Whether {@code repository} ({@code owner/name}, any casing) is readable in this scope. */
   public boolean allows(String repository) {
-    return repository != null && repositories.contains(normalize(repository));
+    return scopeOf(repository).isPresent();
+  }
+
+  /** Whether a row stored under these ids is readable; a row with no ids never is. */
+  public boolean allows(Long rowInstallationId, Long rowRepositoryId) {
+    return rowInstallationId != null
+        && rowRepositoryId != null
+        && rowInstallationId == installationId
+        && repositories.containsKey(rowRepositoryId);
+  }
+
+  /** The stored-row scope of {@code repository} ({@code owner/name}, any casing), if readable. */
+  public Optional<RepoScope> scopeOf(String repository) {
+    if (repository == null) {
+      return Optional.empty();
+    }
+    var wanted = normalize(repository);
+    return repositories.entrySet().stream()
+        .filter(entry -> normalize(entry.getValue()).equals(wanted))
+        .map(entry -> new RepoScope(installationId, entry.getKey()))
+        .findFirst();
+  }
+
+  /** The readable repository ids, as a query parameter. */
+  public List<Long> repositoryIds() {
+    return List.copyOf(repositories.keySet());
   }
 
   static String normalize(String repository) {
     return repository.strip().toLowerCase(Locale.ROOT);
-  }
-
-  private static Set<String> normalizeAll(Collection<String> repositories) {
-    return repositories.stream()
-        .map(RepositoryScope::normalize)
-        .collect(Collectors.toUnmodifiableSet());
   }
 }

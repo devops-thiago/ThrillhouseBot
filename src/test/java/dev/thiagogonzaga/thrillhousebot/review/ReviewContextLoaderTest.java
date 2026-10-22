@@ -25,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.*;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -317,6 +318,7 @@ class ReviewContextLoaderTest {
           "basesha1",
           "main",
           99L,
+          TestScopes.REPOSITORY_ID,
           true,
           "main",
           false);
@@ -367,7 +369,9 @@ class ReviewContextLoaderTest {
               new GitHubPullRequestClient.FileDiff("b.java", "modified", 5, 0, 5, manyLines),
               new GitHubPullRequestClient.FileDiff("c.java", "modified", 5, 0, 5, manyLines));
       stubCommonLoadDeps(files);
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
       var ctx = loader.load("auth", request(), session, "owner/repo");
@@ -390,7 +394,9 @@ class ReviewContextLoaderTest {
               new GitHubPullRequestClient.FileDiff(
                   "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x"));
       stubCommonLoadDeps(files);
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
       var ctx = loader.load("auth", request(), session, "owner/repo");
@@ -418,7 +424,9 @@ class ReviewContextLoaderTest {
           .thenReturn(
               new RepoSettings(
                   List.of("docs/generated/**"), List.of(), ".github/thrillhousebot.yml"));
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
       var ctx = loader.load("auth", request(), session, "owner/repo");
@@ -451,7 +459,9 @@ class ReviewContextLoaderTest {
                   List.of("docs/generated/**", "paymnets/**"),
                   List.of(),
                   ".github/thrillhousebot.yml"));
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
       var ctx = loader.load("auth", request(), session, "owner/repo");
@@ -468,7 +478,9 @@ class ReviewContextLoaderTest {
       stubCommonLoadDeps(files);
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
           .thenReturn(RepoSettings.EMPTY);
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
       var ctx = loader.load("auth", request(), session, "owner/repo");
@@ -496,7 +508,9 @@ class ReviewContextLoaderTest {
           .thenReturn(
               new RepoSettings(
                   List.of("docs/generated/**"), List.of(), ".github/thrillhousebot.yml"));
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
       var ctx = loader.load("auth", request(), session, "owner/repo");
@@ -532,7 +546,9 @@ class ReviewContextLoaderTest {
       stubCommonLoadDeps(files);
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
           .thenReturn(RepoSettings.EMPTY);
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
       var ctx = loader.load("auth", request(), session, "owner/repo");
@@ -550,7 +566,9 @@ class ReviewContextLoaderTest {
       stubCommonLoadDeps(files);
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
           .thenThrow(new IllegalStateException("boom"));
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
       var ctx = assertDoesNotThrow(() -> loader.load("auth", request(), session, "owner/repo"));
@@ -585,7 +603,9 @@ class ReviewContextLoaderTest {
                       new RepoSettings.PathInstructions("payments/**", "Money is in cents."),
                       new RepoSettings.PathInstructions("infra/**", "Untouched by this PR.")),
                   ".github/thrillhousebot.yml"));
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
       var ctx = loader.load("auth", request(), session, "owner/repo");
@@ -609,7 +629,9 @@ class ReviewContextLoaderTest {
       stubCommonLoadDeps(files);
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
           .thenReturn(RepoSettings.EMPTY);
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
       var ctx = loader.load("auth", request(), session, "owner/repo");
@@ -640,7 +662,9 @@ class ReviewContextLoaderTest {
               "coverage-report",
               ".github/thrillhousebot.yml");
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L)).thenReturn(settings);
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
       when(patchCoverageResolver.resolve(eq("auth"), any(), eq(settings), anyList()))
           .thenReturn(new PatchCoverageResolver.Resolution("### uncovered", ""));
@@ -669,7 +693,9 @@ class ReviewContextLoaderTest {
       var settings =
           new RepoSettings(List.of(), List.of(), "coverage-report", ".github/thrillhousebot.yml");
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L)).thenReturn(settings);
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
       when(patchCoverageResolver.resolve(eq("auth"), any(), eq(settings), anyList()))
           .thenReturn(
@@ -691,11 +717,23 @@ class ReviewContextLoaderTest {
 
     private ReviewOrchestrator.ReviewRequest request(String commitSha) {
       return new ReviewOrchestrator.ReviewRequest(
-          "owner", "repo", 42, commitSha, "Title", "", "base-sha", "main", 9L, false);
+          "owner",
+          "repo",
+          42,
+          commitSha,
+          "Title",
+          "",
+          "base-sha",
+          "main",
+          9L,
+          TestScopes.REPOSITORY_ID,
+          false);
     }
 
     private ReviewSession session() {
-      var session = ReviewSession.create("owner/repo", 42, "Title", "expected-sha");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 42, "Title", "expected-sha");
       session.id = 1L;
       return session;
     }
@@ -851,7 +889,18 @@ class ReviewContextLoaderTest {
 
     private ReviewOrchestrator.ReviewRequest request() {
       return new ReviewOrchestrator.ReviewRequest(
-          "owner", "repo", 1, "headsha1", "Title", "body", "basesha1", "main", 99L, false, "main");
+          "owner",
+          "repo",
+          1,
+          "headsha1",
+          "Title",
+          "body",
+          "basesha1",
+          "main",
+          99L,
+          TestScopes.REPOSITORY_ID,
+          false,
+          "main");
     }
 
     private void stubLoad(List<String> priorJsons) {
@@ -881,7 +930,9 @@ class ReviewContextLoaderTest {
     }
 
     private ReviewContextLoader.ReviewContext load() {
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
       return realAnalyzerLoader().load("auth", request(), session, "owner/repo");
     }
@@ -1094,7 +1145,17 @@ class ReviewContextLoaderTest {
 
     private ReviewOrchestrator.ReviewRequest manualRequest(String sha) {
       return new ReviewOrchestrator.ReviewRequest(
-          "owner", "repo", 7, sha, "(manual review)", "", "", "main", 123L, true);
+          "owner",
+          "repo",
+          7,
+          sha,
+          "(manual review)",
+          "",
+          "",
+          "main",
+          123L,
+          TestScopes.REPOSITORY_ID,
+          true);
     }
 
     @Test
@@ -1370,7 +1431,17 @@ class ReviewContextLoaderTest {
       var stack =
           loader.resolveProjectStack(
               new ReviewOrchestrator.ReviewRequest(
-                  "owner", "repo", 1, "sha", "title", "", "base", "main", 123L, false));
+                  "owner",
+                  "repo",
+                  1,
+                  "sha",
+                  "title",
+                  "",
+                  "base",
+                  "main",
+                  123L,
+                  TestScopes.REPOSITORY_ID,
+                  false));
 
       assertEquals("", stack);
     }
@@ -1386,7 +1457,17 @@ class ReviewContextLoaderTest {
 
     private static final ReviewOrchestrator.ReviewRequest REQUEST =
         new ReviewOrchestrator.ReviewRequest(
-            "owner", "repo", 1, "headsha", "title", "", "base", "main", 123L, false);
+            "owner",
+            "repo",
+            1,
+            "headsha",
+            "title",
+            "",
+            "base",
+            "main",
+            123L,
+            TestScopes.REPOSITORY_ID,
+            false);
 
     private static final ReviewDiffFormatter.IgnoreGlobs GLOBS =
         ReviewDiffFormatter.IgnoreGlobs.compile(List.of("config/"));
@@ -1429,6 +1510,7 @@ class ReviewContextLoaderTest {
           "basesha1",
           "main",
           99L,
+          TestScopes.REPOSITORY_ID,
           true,
           "main",
           false);
@@ -1468,7 +1550,9 @@ class ReviewContextLoaderTest {
               new GitHubPullRequestClient.FileDiff(
                   "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x")),
           List.of());
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
       DiffLineResolver.CONSTRUCTION_COUNT.set(0);
 
@@ -1489,7 +1573,9 @@ class ReviewContextLoaderTest {
               new GitHubPullRequestClient.FileDiff(
                   "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x")),
           List.of());
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
       DiffLineResolver.CONSTRUCTION_COUNT.set(0);
 
@@ -1535,7 +1621,9 @@ class ReviewContextLoaderTest {
               new GitHubPullRequestClient.FileDiff(
                   "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x")),
           List.of(priorJson, olderJson));
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
       var ctx = loader.load("auth", request(), session, "owner/repo");
@@ -1616,6 +1704,7 @@ class ReviewContextLoaderTest {
           "basesha1",
           "main",
           99L,
+          TestScopes.REPOSITORY_ID,
           true,
           "main",
           false);
@@ -1681,7 +1770,9 @@ class ReviewContextLoaderTest {
 
     private ReviewContextLoader.ReviewContext loadRoundThree(List<String> priorJsons) {
       stubRoundThree(priorJsons);
-      var session = ReviewSession.create("owner/repo", 1, "Title", "headsha1");
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
       return realAnalyzerLoader().load("auth", request(), session, "owner/repo");
     }

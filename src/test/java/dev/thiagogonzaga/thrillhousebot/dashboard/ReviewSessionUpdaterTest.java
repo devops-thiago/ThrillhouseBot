@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
@@ -136,7 +137,8 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
 
   private ReviewSession persistSession() throws Exception {
     tx.begin();
-    ReviewSession session = ReviewSession.create("owner/repo", 3, "PR", "abc");
+    ReviewSession session =
+        ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 3, "PR", "abc");
     session.persist();
     session.flush();
     tx.commit();

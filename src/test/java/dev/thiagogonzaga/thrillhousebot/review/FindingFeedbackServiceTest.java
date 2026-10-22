@@ -17,9 +17,13 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
+import java.time.Instant;
+import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -41,6 +45,7 @@ class FindingFeedbackServiceTest {
     assertTrue(
         service.recordFeedback(
             new FindingFeedbackService.FeedbackInput(
+                TestScopes.scope("owner/repo"),
                 "owner/repo",
                 7,
                 100L,
@@ -52,6 +57,7 @@ class FindingFeedbackServiceTest {
     assertFalse(
         service.recordFeedback(
             new FindingFeedbackService.FeedbackInput(
+                TestScopes.scope("owner/repo"),
                 "owner/repo",
                 7,
                 100L,
@@ -62,7 +68,7 @@ class FindingFeedbackServiceTest {
                 55L)));
 
     assertEquals(1, FindingFeedback.count());
-    var summary = service.summarize("owner/repo");
+    var summary = service.summarize(TestScopes.scope("owner/repo"), "owner/repo");
     assertEquals(0, summary.usefulCount());
     assertEquals(1, summary.notUsefulCount());
     assertEquals(1, summary.totalEvents());
@@ -73,6 +79,7 @@ class FindingFeedbackServiceTest {
     assertTrue(
         service.recordFeedback(
             new FindingFeedbackService.FeedbackInput(
+                TestScopes.scope("owner/repo"),
                 "owner/repo",
                 3,
                 200L,
@@ -84,6 +91,7 @@ class FindingFeedbackServiceTest {
     assertFalse(
         service.recordFeedback(
             new FindingFeedbackService.FeedbackInput(
+                TestScopes.scope("owner/repo"),
                 "owner/repo",
                 3,
                 200L,
@@ -97,16 +105,17 @@ class FindingFeedbackServiceTest {
     FindingFeedback saved = FindingFeedback.<FindingFeedback>listAll().get(0);
     assertEquals("octocat", saved.reactorLogin);
 
-    var recent = service.listRecent("owner/repo", 10);
+    var recent = service.listRecent(TestScopes.scope("owner/repo"), 10);
     assertEquals(1, recent.size());
     assertEquals(2, recent.get(0).findingIndex());
     assertEquals(1L, recent.get(0).githubReactionId());
   }
 
   @Test
-  void summarizeAllOrdersByTotalEvents() {
+  void countsByRepositoryOrderByTotalEventsWithinTheInstallation() {
     service.recordFeedback(
         new FindingFeedbackService.FeedbackInput(
+            TestScopes.scope("a/one"),
             "a/one",
             1,
             1L,
@@ -117,6 +126,7 @@ class FindingFeedbackServiceTest {
             10L));
     service.recordFeedback(
         new FindingFeedbackService.FeedbackInput(
+            TestScopes.scope("b/two"),
             "b/two",
             1,
             2L,
@@ -127,6 +137,7 @@ class FindingFeedbackServiceTest {
             11L));
     service.recordFeedback(
         new FindingFeedbackService.FeedbackInput(
+            TestScopes.scope("b/two"),
             "b/two",
             1,
             2L,
@@ -136,28 +147,30 @@ class FindingFeedbackServiceTest {
             "u2",
             12L));
 
-    var all = service.summarizeAll();
-    assertEquals(2, all.size());
-    assertEquals("b/two", all.get(0).repository());
-    assertEquals(2, all.get(0).totalEvents());
-    assertEquals("a/one", all.get(1).repository());
+    var one = TestScopes.repositoryId("a/one");
+    var two = TestScopes.repositoryId("b/two");
+    var counts = service.countsByRepository(TestScopes.INSTALLATION_ID, List.of(one, two, 999L));
+    assertEquals(List.of(two, one), List.copyOf(counts.keySet()));
+    assertEquals(new FindingFeedbackService.FeedbackCounts(1, 1, 2), counts.get(two));
+    assertEquals(new FindingFeedbackService.FeedbackCounts(1, 0, 1), counts.get(one));
+    assertTrue(service.countsByRepository(TestScopes.INSTALLATION_ID, List.of()).isEmpty());
+    assertTrue(service.countsByRepository(2L, List.of(one, two)).isEmpty());
   }
 
   @Test
-  void summarizeAndListRecentHandleBlankKeys() {
-    assertEquals(0, service.summarize(null).totalEvents());
-    assertEquals(0, service.summarize(" ").totalEvents());
-    assertTrue(service.listRecent(null, 10).isEmpty());
-    assertTrue(service.listRecent(" ", 10).isEmpty());
-    assertTrue(service.listRecent("owner/repo", 0).isEmpty());
-    assertTrue(service.listRecent("owner/repo", -1).isEmpty());
+  void listRecentNeedsAPositiveLimit() {
+    var scope = TestScopes.scope("owner/repo");
+    assertTrue(service.listRecent(scope, 0).isEmpty());
+    assertTrue(service.listRecent(scope, -1).isEmpty());
   }
 
   @Test
-  void summarizeAndListRecentMatchRepositoryCaseInsensitively() {
+  void rowsAreReadByRepositoryIdAndLabelledByTheCaller() {
+    // Stored under an older casing; the id, not the name, finds it.
     assertTrue(
         service.recordFeedback(
             new FindingFeedbackService.FeedbackInput(
+                TestScopes.scope("owner/repo"),
                 "Owner/Repo",
                 1,
                 10L,
@@ -167,14 +180,49 @@ class FindingFeedbackServiceTest {
                 "octocat",
                 301L)));
 
-    var summary = service.summarize("owner/repo");
-    assertEquals("Owner/Repo", summary.repository());
+    var summary = service.summarize(TestScopes.scope("owner/repo"), "owner/renamed");
+    assertEquals("owner/renamed", summary.repository());
     assertEquals(1, summary.usefulCount());
     assertEquals(1, summary.totalEvents());
 
-    var recent = service.listRecent("OWNER/REPO", 10);
+    var recent = service.listRecent(TestScopes.scope("owner/repo"), 10);
     assertEquals(1, recent.size());
     assertEquals("Owner/Repo", recent.get(0).repository());
+  }
+
+  @Test
+  void theSameNameUnderAnotherInstallationIsNeverCrossed() throws Exception {
+    var ours = TestScopes.scope("owner/repo");
+    var theirs = new RepoScope(2L, ours.repositoryId());
+    service.recordFeedback(
+        new FindingFeedbackService.FeedbackInput(
+            theirs,
+            "owner/repo",
+            1,
+            10L,
+            1,
+            FindingFeedback.SIGNAL_NOT_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "mallory",
+            401L));
+    // A row stored before #1220 that the backfill could not match.
+    tx.begin();
+    var legacy = new FindingFeedback();
+    legacy.repository = "owner/repo";
+    legacy.prNumber = 1;
+    legacy.githubCommentId = 11L;
+    legacy.signal = FindingFeedback.SIGNAL_NOT_USEFUL;
+    legacy.source = FindingFeedback.SOURCE_REACTION;
+    legacy.reactorLogin = "legacy";
+    legacy.createdAt = Instant.now();
+    legacy.persist();
+    tx.commit();
+
+    assertEquals(0, service.summarize(ours, "owner/repo").totalEvents());
+    assertTrue(service.listRecent(ours, 10).isEmpty());
+    assertTrue(
+        service.countsByRepository(ours.installationId(), List.of(ours.repositoryId())).isEmpty());
+    assertEquals(1, service.summarize(theirs, "owner/repo").totalEvents());
   }
 
   @Test
@@ -182,6 +230,7 @@ class FindingFeedbackServiceTest {
     assertTrue(
         service.recordFeedback(
             new FindingFeedbackService.FeedbackInput(
+                TestScopes.scope("owner/repo"),
                 "owner/repo",
                 1,
                 50L,
@@ -193,6 +242,7 @@ class FindingFeedbackServiceTest {
     assertFalse(
         service.recordFeedback(
             new FindingFeedbackService.FeedbackInput(
+                TestScopes.scope("owner/repo"),
                 "owner/repo",
                 1,
                 51L,
@@ -209,6 +259,19 @@ class FindingFeedbackServiceTest {
     assertFalse(
         service.recordFeedback(
             new FindingFeedbackService.FeedbackInput(
+                null,
+                "o/r",
+                1,
+                1L,
+                1,
+                FindingFeedback.SIGNAL_USEFUL,
+                FindingFeedback.SOURCE_REACTION,
+                "u",
+                1L)));
+    assertFalse(
+        service.recordFeedback(
+            new FindingFeedbackService.FeedbackInput(
+                TestScopes.scope(""),
                 "",
                 1,
                 1L,
@@ -220,6 +283,7 @@ class FindingFeedbackServiceTest {
     assertFalse(
         service.recordFeedback(
             new FindingFeedbackService.FeedbackInput(
+                TestScopes.scope("o/r"),
                 "o/r",
                 1,
                 1L,
@@ -231,14 +295,31 @@ class FindingFeedbackServiceTest {
     assertFalse(
         service.recordFeedback(
             new FindingFeedbackService.FeedbackInput(
-                "o/r", 1, 1L, 1, null, FindingFeedback.SOURCE_REACTION, "u", 1L)));
+                TestScopes.scope("o/r"),
+                "o/r",
+                1,
+                1L,
+                1,
+                null,
+                FindingFeedback.SOURCE_REACTION,
+                "u",
+                1L)));
     assertFalse(
         service.recordFeedback(
             new FindingFeedbackService.FeedbackInput(
-                "o/r", 1, 1L, 1, FindingFeedback.SIGNAL_USEFUL, null, "u", 1L)));
+                TestScopes.scope("o/r"),
+                "o/r",
+                1,
+                1L,
+                1,
+                FindingFeedback.SIGNAL_USEFUL,
+                null,
+                "u",
+                1L)));
     assertFalse(
         service.recordFeedback(
             new FindingFeedbackService.FeedbackInput(
+                TestScopes.scope("o/r"),
                 null,
                 1,
                 1L,

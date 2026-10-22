@@ -34,6 +34,7 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubLabelClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.webhook.ReviewTriggerFilter;
 import java.util.List;
 import java.util.Optional;
@@ -51,7 +52,7 @@ class CiHoldRevisitTest {
   private static final String HEAD = "abc123";
   private static final String DETAILS_URL = "https://bot.example/session/x";
   private static final CiHoldRevisit.Recheck RECHECK =
-      new CiHoldRevisit.Recheck("owner", "repo", 42, HEAD, 123L);
+      new CiHoldRevisit.Recheck("owner", "repo", 42, HEAD, 123L, TestScopes.REPOSITORY_ID);
 
   private final GitHubAuthClient authClient = mock(GitHubAuthClient.class);
   private final ReviewContextLoader contextLoader = mock(ReviewContextLoader.class);
@@ -309,7 +310,8 @@ class CiHoldRevisitTest {
   void eventForAnotherHeadThanTheHeldOneIsIgnored() {
     hold();
 
-    revisit.revisit(new CiHoldRevisit.Recheck("owner", "repo", 42, "def456", 123L));
+    revisit.revisit(
+        new CiHoldRevisit.Recheck("owner", "repo", 42, "def456", 123L, TestScopes.REPOSITORY_ID));
 
     verifyNoInteractions(authClient, contextLoader, ciStatusEvaluator, reviewPublisher);
     assertTrue(registry.heldAt("owner", "repo", 42, HEAD).isPresent());

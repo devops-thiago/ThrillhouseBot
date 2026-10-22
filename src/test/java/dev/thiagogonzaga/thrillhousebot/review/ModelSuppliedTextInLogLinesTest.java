@@ -31,6 +31,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerifier;
@@ -523,7 +524,7 @@ class ModelSuppliedTextInLogLinesTest {
     var memory = new VerifierRejectionMemory();
     var session =
         dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession.create(
-            "owner/repo", 70, "PR", "2659f683");
+            TestScopes.scope("owner/repo"), "owner/repo", 70, "PR", "2659f683");
     var claim = finding(FORGED_PATH, 1, FORGED_TITLE, "old");
     memory.remember(session, List.of(claim), List.of());
 
