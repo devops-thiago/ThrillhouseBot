@@ -26,6 +26,12 @@ without it those counters stay hidden and nothing else changes.
   (#1220)
 ### Security
 
+- `GITHUB_ALLOWED_ACCOUNTS` (`thrillhousebot.github.allowed-accounts`) limits the bot to the
+  installations on the listed accounts. Events from any other installation are ignored before
+  any work and logged, and the dashboard does not list those installations. Dashboard sign-in for
+  anyone but the App's owner needs a public App, which anyone can install, so set it when the App
+  is public. Unset serves every installation, as before. (#1235)
+
 - Dashboard access is decided by GitHub with the user's own sign-in: the App's installations
   they can access and the repositories they can read there, across every installation. An
   outside contributor or a non-member sees nothing, an organization member whose base

@@ -79,7 +79,15 @@ public record WebhookPayload(
 
   @RegisterForReflection
   @JsonIgnoreProperties(ignoreUnknown = true)
-  public record Installation(long id) {}
+  public record Installation(long id, Account account) {
+    /**
+     * The account the App is installed on, when the payload includes it. GitHub sends it on
+     * installation events; most other events carry only the installation id.
+     */
+    @RegisterForReflection
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Account(String login) {}
+  }
 
   @RegisterForReflection
   @JsonIgnoreProperties(ignoreUnknown = true)

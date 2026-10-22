@@ -21,6 +21,7 @@ import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.DashboardAccessChecker.AccessDecision;
+import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.Installation;
@@ -77,7 +78,13 @@ class DashboardAccessCheckerTest {
     stubRepositories(AUTH, 20L, repo(200L, "alice", "site"));
     stubMembership("alice", 204);
     checker =
-        new DashboardAccessChecker(config, authClient, installationClient, userClient, now::get);
+        new DashboardAccessChecker(
+            config,
+            authClient,
+            installationClient,
+            userClient,
+            new AllowedAccounts(List.of()),
+            now::get);
   }
 
   @Test
@@ -113,7 +120,9 @@ class DashboardAccessCheckerTest {
 
   @Test
   void theInjectedCheckerUsesTheWallClock() {
-    var injected = new DashboardAccessChecker(config, authClient, installationClient, userClient);
+    var injected =
+        new DashboardAccessChecker(
+            config, authClient, installationClient, userClient, new AllowedAccounts(List.of()));
 
     assertEquals(AccessDecision.ALLOWED, injected.checkAccess("alice", TOKEN));
   }
@@ -136,6 +145,22 @@ class DashboardAccessCheckerTest {
     assertEquals(List.of(20L), scope.sortedInstallations().stream().map(i -> i.id()).toList());
     verify(userClient, never())
         .listRepositories(anyString(), anyString(), eq(10L), anyInt(), anyInt());
+  }
+
+  @Test
+  void theDashboardListsOnlyAllowedAccountsInstallations() {
+    var limited =
+        new DashboardAccessChecker(
+            config,
+            authClient,
+            installationClient,
+            userClient,
+            new AllowedAccounts(List.of("ACME")),
+            now::get);
+
+    var scope = limited.repositoryScope("alice", TOKEN);
+
+    assertEquals(List.of(10L), scope.sortedInstallations().stream().map(i -> i.id()).toList());
   }
 
   @Test
