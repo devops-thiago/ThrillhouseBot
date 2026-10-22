@@ -604,6 +604,16 @@ class DescriptionGapScreenTest {
     assertFalse(DescriptionGapScreen.speculative(gap, RUST_159));
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "The description promises failed uploads leave no file; with Upload.java writing before validation, an invalid request would leave a partial file.",
+        "The description promises at most two attempts; Client.java calls the provider a third time, which would exceed that limit."
+      })
+  void wouldCanStateAConcreteCounterfactual(String gap) {
+    assertFalse(DescriptionGapScreen.speculative(gap, RUST_159));
+  }
+
   @Test
   void aHedgeTheDescriptionItselfMakesIsNotTheBulletsGuess() {
     var paraphrased =

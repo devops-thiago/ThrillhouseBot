@@ -762,6 +762,39 @@ class CiFailureCitationsTest {
     return new GitHubPullRequestClient.FileDiff(path, "added", count, 0, count, patch.toString());
   }
 
+  @Test
+  void aQuotedCommonJsImportDoesNotCiteTheFailingTest() {
+    var citations =
+        CiFailureCitations.parse(
+            sectionFromJobLog("not ok 1 - loads the client"),
+            List.of(
+                addedAt(
+                    "client.test.cjs",
+                    1,
+                    """
+              test("loads the client", () => {
+                const api = require('../api');
+                expect(api.ready()).toBe(true);
+              });
+            """)));
+    var imported = described("The setup line `const api = require('../api');` fails.");
+
+    assertFalse(citations.cites(imported));
+    assertNull(citations.noteFor(imported));
+    assertEquals(
+        "low",
+        FindingVerificationService.floorCiCitedConfidence(
+                new ReviewResponse(List.of(imported), List.of(), null), citations)
+            .findings()
+            .getFirst()
+            .confidence());
+    assertFalse(
+        citations
+            .overviewSentences(List.of(Finding.fromAiResponse(imported)))
+            .contains("which the finding"));
+    assertTrue(citations.cites(described("`expect(api.ready()).toBe(true);` fails.")));
+  }
+
   private static CiFailureCitations rust279(List<GitHubPullRequestClient.FileDiff> files) {
     return CiFailureCitations.parse(sectionFromJobLog(RUST_279_LOG), files);
   }
