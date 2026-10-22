@@ -21,7 +21,7 @@ can keep their configuration. Reviews can make additional repair calls, charged 
 
 ### Changed
 
-- Pull request commits require a DCO sign-off matching the author's email; use `git commit -s`. Archive timestamps are fixed for reproducible JVM builds. The contributor and security documentation now describes project governance and trust boundaries (#1124).
+- DCO checks validate commit sign-offs and verified source-PR certifications when GitHub squash merges change author emails or discard trailers. New contributions use `git commit -s`; incomplete evidence requires author remediation. Archive timestamps are fixed for reproducible JVM builds. The contributor and security documentation describes project governance and trust boundaries (#1124).
 - Native-build CI boots the compiled binary against PostgreSQL and tests health endpoints, webhook signatures and payload binding (#671). Pushes to release branches also run the native build.
 
 ### Fixed

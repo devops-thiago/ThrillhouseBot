@@ -46,10 +46,17 @@ same diff.
   reconstructed tree and certified original contributions. Email aliases require
   a verified same-author source sign-off. Both checked-range and source merges
   must be unchanged automatic merges or carry their author's certification; neither
-  can hide uncertified conflict resolutions. Missing API or Git evidence fails closed.
+  can hide uncertified conflict resolutions. Proofs run in an isolated temporary
+  repository without local attributes or custom drivers. Try the default merge,
+  then only the root `CHANGELOG.md` keep-both (`merge=union`) policy; either must
+  reproduce the entire tree exactly, and the selected policy is recorded. Missing
+  API or Git evidence fails closed.
 - `DCO-Remediation: <full SHA>` in an authenticated, signed-off commit in the PR
   range certifies only commits GitHub associates with that same author. Never
   manufacture a certification or rewrite shared release history to pass DCO.
+- Validator changes targeting a release branch also preflight the complete
+  release range from `origin/main` in CI, not only the topic PR commits. Both
+  evidence reports are uploaded; a missing base or incomplete proof fails.
 - `scripts/dco/` is code-owner protected like the workflow that delegates to it.
 
 ## Package map
