@@ -193,6 +193,93 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
   }
 
   @Test
+  void aStartWithWorkToDoFillsTheRows() throws Exception {
+    legacySession("acme/app");
+
+    backfill.onStart(mock(StartupEvent.class));
+
+    assertEquals(1, ReviewSession.count("installationId = 10 and repositoryId = 100"));
+  }
+
+  @Test
+  void incompleteRepositoryEntriesAreSkipped() throws Exception {
+    legacySession("acme/app");
+    var acme = new InstallationRepositoriesResponse.Repository.Owner("acme");
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer acme"), anyString(), eq(100), eq(1)))
+        .thenReturn(
+            new InstallationRepositoriesResponse(
+                4,
+                List.of(
+                    new InstallationRepositoriesResponse.Repository(1L, null, acme),
+                    new InstallationRepositoriesResponse.Repository(2L, "app", null),
+                    new InstallationRepositoriesResponse.Repository(
+                        3L, "app", new InstallationRepositoriesResponse.Repository.Owner(null)),
+                    new InstallationRepositoriesResponse.Repository(100L, "app", acme))));
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer other"), anyString(), eq(100), eq(1)))
+        .thenReturn(new InstallationRepositoriesResponse(0, List.of()));
+
+    assertEquals(new ScopeBackfill.Result(1, 0, 1), backfill.backfill());
+  }
+
+  @Test
+  void aRedirectThatNamesNoRepositoryOrAnAnswerThatIsNoRedirectMatchesNothing() throws Exception {
+    legacySession("acme/no-location");
+    legacySession("acme/elsewhere");
+    legacySession("acme/still-here");
+    legacySession("no-slash");
+    var noLocation = mock(Response.class);
+    when(noLocation.getStatus()).thenReturn(301);
+    when(installationClient.getRepository("Bearer acme", ACCEPT, "acme", "no-location"))
+        .thenReturn(noLocation);
+    var elsewhere = mock(Response.class);
+    when(elsewhere.getStatus()).thenReturn(301);
+    when(elsewhere.getHeaderString("Location")).thenReturn("https://example.com/somewhere");
+    when(installationClient.getRepository("Bearer acme", ACCEPT, "acme", "elsewhere"))
+        .thenReturn(elsewhere);
+    var ok = mock(Response.class);
+    when(ok.getStatus()).thenReturn(200);
+    when(installationClient.getRepository("Bearer acme", ACCEPT, "acme", "still-here"))
+        .thenReturn(ok);
+
+    assertEquals(new ScopeBackfill.Result(0, 4, 0), backfill.backfill());
+    verify(noLocation).close();
+    verify(ok).close();
+  }
+
+  @Test
+  void installationsArePagedUntilAShortPage() throws Exception {
+    legacySession("acme/app");
+    var fullPage = new java.util.ArrayList<GitHubInstallationClient.Installation>();
+    fullPage.add(installation(10L, "acme"));
+    for (var i = 1; i < 100; i++) {
+      fullPage.add(installation(1000L + i, "filler" + i));
+    }
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
+        .thenReturn(fullPage);
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(2)))
+        .thenReturn(null);
+
+    assertEquals(new ScopeBackfill.Result(1, 0, 1), backfill.backfill());
+    verify(installationClient).listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(2));
+  }
+
+  @Test
+  void aListingThatNeverEndsIsAnError() throws Exception {
+    legacySession("acme/app");
+    var fullPage =
+        java.util.stream.LongStream.rangeClosed(1, 100)
+            .mapToObj(id -> installation(id, "filler" + id))
+            .toList();
+    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), anyInt()))
+        .thenReturn(fullPage);
+
+    assertThrows(IllegalStateException.class, backfill::backfill);
+    assertEquals(1, ReviewSession.count("installationId is null"));
+  }
+
+  @Test
   void nothingToFillMakesNoGitHubCall() {
     assertEquals(new ScopeBackfill.Result(0, 0, 0), backfill.backfill());
     assertDoesNotThrow(() -> backfill.onStart(mock(StartupEvent.class)));

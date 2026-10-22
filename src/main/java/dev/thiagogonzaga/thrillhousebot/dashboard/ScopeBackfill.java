@@ -22,6 +22,7 @@ import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
+import jakarta.ws.rs.core.Response;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -165,32 +166,39 @@ public class ScopeBackfill {
    */
   private Optional<RepoScope> renamed(String name, Map<String, Installed> byOwner) {
     var slash = name.indexOf('/');
-    var installed = slash > 0 ? byOwner.get(name.substring(0, slash)) : null;
+    var installed = byOwner.get(name.substring(0, Math.max(slash, 0)));
     if (installed == null) {
       return Optional.empty();
     }
-    try (var response =
-        installationClient.getRepository(
-            installed.auth(), ACCEPT, name.substring(0, slash), name.substring(slash + 1))) {
-      var location = response.getHeaderString("Location");
-      if (response.getStatus() != 301 || location == null) {
-        return Optional.empty();
-      }
-      var matcher = REPOSITORY_ID_LOCATION.matcher(location);
-      if (!matcher.find()) {
-        return Optional.empty();
-      }
-      var id = Long.parseLong(matcher.group(1));
-      return installed.repositories().containsValue(id)
-          ? Optional.of(new RepoScope(installed.installationId(), id))
-          : Optional.empty();
+    Response response = null;
+    try {
+      response =
+          installationClient.getRepository(
+              installed.auth(), ACCEPT, name.substring(0, slash), name.substring(slash + 1));
+      return movedTo(response)
+          .filter(id -> installed.repositories().containsValue(id))
+          .map(id -> new RepoScope(installed.installationId(), id));
     } catch (RuntimeException e) {
       log.warn(
           "Scope backfill could not look up {}; its rows stay hidden until the next start: {}",
           name,
           e.getMessage());
       return Optional.empty();
+    } finally {
+      if (response != null) {
+        response.close();
+      }
     }
+  }
+
+  /** The repository id a 301 for a renamed repository points to, if this is one. */
+  private static Optional<Long> movedTo(Response response) {
+    if (response.getStatus() != 301) {
+      return Optional.empty();
+    }
+    var matcher =
+        REPOSITORY_ID_LOCATION.matcher(String.valueOf(response.getHeaderString("Location")));
+    return matcher.find() ? Optional.of(Long.parseLong(matcher.group(1))) : Optional.empty();
   }
 
   private static <T> List<T> allPages(IntFunction<List<T>> fetch) {
