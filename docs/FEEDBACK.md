@@ -44,8 +44,8 @@ ignored.
 
 ## Data model
 
-Rows go in the `finding_feedback` table. Hibernate creates and updates the
-schema; there are no migration scripts.
+Rows go in the `finding_feedback` table, created by the Flyway migrations that
+run at startup.
 
 | Column | Type | Notes |
 |--------|------|-------|

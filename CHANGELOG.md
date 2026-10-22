@@ -4,6 +4,14 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Changed
+
+- Flyway now owns the database schema. Migrations in `src/main/resources/db/migration` run at
+  startup, and Hibernate only validates the entities against them instead of updating the schema
+  itself. A database created before this release has the tables but no history; on its first
+  start it is recorded as version 1, the v0.8.0 schema, and only later migrations run. Upgrade
+  from v0.8.x. The dev and test databases are in-memory H2 in PostgreSQL mode, built from the
+  same migrations. (#22)
 ### Security
 
 - The dashboard WebSocket no longer takes its session from the endpoint configuration that every

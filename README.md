@@ -1629,9 +1629,9 @@ docker compose pull && docker compose up -d
 ```
 
 Each release's notes start with what changes for an existing installation:
-new or renamed settings, changed defaults and database changes. There are no
-migration scripts. On startup the production profile lets Hibernate update the
-PostgreSQL schema in place (`schema-management.strategy=update`), and new
+new or renamed settings, changed defaults and database changes. Database
+changes are Flyway migrations that run on startup; a database created before
+v0.9.0 is recognised as the v0.8.0 schema on its first start. New
 settings default to the previous behaviour unless the notes say otherwise. If
 you pin a version with `IMAGE_TAG` in `.env`, set it to the new tag before
 pulling.
