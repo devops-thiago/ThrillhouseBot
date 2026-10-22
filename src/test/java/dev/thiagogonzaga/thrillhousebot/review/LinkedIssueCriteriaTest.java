@@ -621,6 +621,37 @@ class LinkedIssueCriteriaTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "e.g. by the board",
+        "i.e. by the board",
+        "vs. the board",
+        "etc. on the board",
+        "cf. the board",
+        "by Dr. Smith",
+        "by Prof. Smith",
+        "(e.g. by the board)"
+      })
+  void anAbbreviationKeepsTheIssueCitationWithItsUnmetCriterion(String example) {
+    var overview = "The issue's 'remaining spots' rule shown " + example + " is unmet.";
+
+    var lines = unmet(ISSUE_260, List.of(), overview, Map.of()).lines();
+
+    assertEquals(1, lines.size(), overview);
+    assertTrue(lines.getFirst().startsWith("Linked issue #260: The board lists"), overview);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {".", "!", "?", " after 500 ms.", " for CIDR."})
+  void aRealSentenceEndDoesNotLendAnIssueCitationToAnUnrelatedClaim(String ending) {
+    var overview =
+        "The issue's 'remaining spots' rule is implemented" + ending + " The export is unmet.";
+
+    assertEquals(
+        LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_260, List.of(), overview, Map.of()), overview);
+  }
+
   @Test
   void aQuotedPassageHoldingAFullStopStaysInOneSentence() {
     // "Sign-ups closed. " inside the quote is no sentence end, so the clause keeps the quote.
