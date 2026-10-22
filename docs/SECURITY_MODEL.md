@@ -92,7 +92,9 @@ The container images run as an unprivileged user (UID 1001 on UBI9-micro,
 
 `WebhookVerifier` rejects a request when the signature header is missing or
 malformed and when no secret is configured. The dashboard refuses a login it
-cannot check with GitHub, and ends the session when GitHub rejects its token.
+has never been able to check with GitHub, keeps a known login's last answer for
+at most 30 minutes while GitHub is unreachable, and ends the session when GitHub
+rejects its token.
 Organization membership is granted only on GitHub's explicit answer. Optional context and outgoing
 notifications are off until enabled, and a manual `/review` needs write access
 to the repository (`webhook/ManualReviewAuthorizer`).

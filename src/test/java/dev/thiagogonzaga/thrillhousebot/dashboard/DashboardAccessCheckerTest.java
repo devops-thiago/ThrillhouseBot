@@ -222,7 +222,7 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
-  void anUnreachableGitHubDeniesWithoutCachingTheFailure() {
+  void anUnreachableGitHubDeniesAndIsAskedAgainOnlyAfterABackoff() {
     when(userClient.listInstallations(eq(AUTH), anyString(), eq(100), eq(1)))
         .thenThrow(new WebApplicationException(Response.status(502).build()))
         .thenThrow(new IllegalStateException("connection reset"))
@@ -230,13 +230,31 @@ class DashboardAccessCheckerTest {
             new GitHubUserClient.UserInstallations(1, List.of(installation(20L, "alice", "User"))));
 
     assertEquals(AccessDecision.UNAVAILABLE, checker.checkAccess("alice", TOKEN));
+    assertEquals(AccessDecision.UNAVAILABLE, checker.checkAccess("alice", TOKEN), "remembered");
+    verify(userClient, times(1)).listInstallations(eq(AUTH), anyString(), eq(100), eq(1));
+
+    now.set(now.get().plus(DashboardAccessChecker.RETRY_AFTER_ERROR));
     assertEquals(AccessDecision.UNAVAILABLE, checker.checkAccess("alice", TOKEN));
+    now.set(now.get().plus(DashboardAccessChecker.RETRY_AFTER_ERROR));
     assertEquals(AccessDecision.ALLOWED, checker.checkAccess("alice", TOKEN));
   }
 
   @Test
-  void aPageWithoutAnInstallationListIsEmpty() {
-    assertTrue(new GitHubUserClient.UserInstallations(0, null).installations().isEmpty());
+  void anOutageServesTheLastAnswerGitHubGaveWhileItIsRecent() {
+    var answered = checker.repositoryScope("alice", TOKEN);
+    when(userClient.listInstallations(eq(AUTH), anyString(), eq(100), eq(1)))
+        .thenThrow(new IllegalStateException("GitHub is down"));
+
+    now.set(now.get().plus(DashboardAccessChecker.SCOPE_CACHE_TTL));
+    assertSame(answered, checker.repositoryScope("alice", TOKEN), "the last answer");
+    assertSame(answered, checker.repositoryScope("alice", TOKEN), "within the backoff");
+    verify(userClient, times(2)).listInstallations(eq(AUTH), anyString(), eq(100), eq(1));
+
+    now.set(now.get().plus(DashboardAccessChecker.STALE_SCOPE_LIMIT));
+    assertEquals(
+        AccessDecision.UNAVAILABLE,
+        checker.checkAccess("alice", TOKEN),
+        "too old to serve once the outage outlasts the stale limit");
   }
 
   @Test
@@ -342,14 +360,32 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
-  void theCacheDropsExpiredLoginsOnceItGrows() {
+  void theSweepKeepsAnEntryThatCanStillServeAsAFallback() {
+    checker.checkAccess("alice", TOKEN);
+    now.set(now.get().plus(DashboardAccessChecker.SCOPE_CACHE_TTL).plusSeconds(1));
     for (var i = 0; i < DashboardAccessChecker.SCOPE_CACHE_SWEEP_THRESHOLD; i++) {
+      stubInstallations("Bearer s" + i);
+      checker.checkAccess("sweeper" + i, "s" + i);
+    }
+    when(userClient.listInstallations(eq(AUTH), anyString(), eq(100), eq(1)))
+        .thenThrow(new IllegalStateException("GitHub is down"));
+
+    assertEquals(AccessDecision.ALLOWED, checker.checkAccess("alice", TOKEN));
+  }
+
+  @Test
+  void theCacheDropsExpiredLoginsOnceItGrows() {
+    // One login GitHub never answered for: its remembered error goes with the rest.
+    when(userClient.listInstallations(eq("Bearer down"), anyString(), eq(100), eq(1)))
+        .thenThrow(new IllegalStateException("GitHub is down"));
+    checker.checkAccess("unanswered", "down");
+    for (var i = 1; i < DashboardAccessChecker.SCOPE_CACHE_SWEEP_THRESHOLD; i++) {
       stubInstallations("Bearer t" + i);
       checker.checkAccess("user" + i, "t" + i);
     }
     assertEquals(DashboardAccessChecker.SCOPE_CACHE_SWEEP_THRESHOLD, checker.cacheSize());
 
-    now.set(now.get().plus(DashboardAccessChecker.SCOPE_CACHE_TTL).plus(Duration.ofSeconds(1)));
+    now.set(now.get().plus(DashboardAccessChecker.STALE_SCOPE_LIMIT).plus(Duration.ofSeconds(1)));
     checker.checkAccess("alice", TOKEN);
 
     assertEquals(1, checker.cacheSize());

@@ -583,8 +583,10 @@ Every endpoint and the WebSocket are scoped per repository (#1221). `DashboardAc
 asks GitHub with the login's own GitHub App user token: `GET /user/installations` for the App's
 installations the user can access, and `GET /user/installations/{id}/repositories` for the
 repositories they can read in each. The answer, a `RepositoryScope` of installation ids to
-repository ids and names, is cached per token for five minutes; a GitHub error resolves to
-nothing and is not cached, and a token GitHub rejects ends the dashboard session. With
+repository ids and names, is cached per token for five minutes. While GitHub cannot be asked,
+the login keeps the last answer GitHub gave for up to 30 minutes, or is denied when there is
+none, and GitHub is asked again at most once a minute; a token GitHub rejects ends the
+dashboard session. With
 `account-owner` set, only that account's installation is kept. Session lists, paging totals,
 costs, tokens, the summary, feedback and learnings are filtered in the query by one
 `(installationId, repositoryId in …)` term per installation, so a row with no ids is never

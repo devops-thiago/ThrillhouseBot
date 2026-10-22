@@ -27,11 +27,10 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Path("/api/dashboard")
 @Produces(MediaType.APPLICATION_JSON)
@@ -400,23 +399,23 @@ public class DashboardResource {
                   recent))
           .build();
     }
-    var rows = new ArrayList<Map<String, Object>>();
-    for (var readable : scope.sortedInstallations()) {
-      findingFeedbackService
-          .countsByRepository(readable.id(), readable.repositories().keySet())
-          .forEach(
-              (repositoryId, counts) ->
-                  rows.add(
-                      feedbackRow(
-                          readable.repositories().get(repositoryId),
-                          counts.usefulCount(),
-                          counts.notUsefulCount(),
-                          counts.totalEvents())));
-    }
-    // Most feedback first across installations, as within one.
-    rows.sort(
-        Comparator.comparingLong((Map<String, Object> row) -> (Long) row.get(KEY_TOTAL_EVENTS))
-            .reversed());
+    var readable = new HashMap<Long, Set<Long>>();
+    scope
+        .installations()
+        .forEach(
+            (id, readableInstallation) ->
+                readable.put(id, readableInstallation.repositories().keySet()));
+    // One query for every installation, already ordered by total events.
+    var rows =
+        findingFeedbackService.countsByRepository(readable).entrySet().stream()
+            .map(
+                e ->
+                    feedbackRow(
+                        scope.nameOf(e.getKey().installationId(), e.getKey().repositoryId()),
+                        e.getValue().usefulCount(),
+                        e.getValue().notUsefulCount(),
+                        e.getValue().totalEvents()))
+            .toList();
     return Response.ok(Map.of(KEY_REPOSITORIES, rows)).build();
   }
 

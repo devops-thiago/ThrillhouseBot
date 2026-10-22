@@ -20,7 +20,9 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -182,44 +184,56 @@ public class FindingFeedbackService {
   }
 
   /**
-   * Per-repository counts for the given repositories of one installation, ordered by total events
-   * descending; a repository with no feedback is absent. Keyed by repository id, so the caller
-   * labels each with the repository's current name.
+   * Per-repository counts for the given repositories of each installation, in one query, ordered by
+   * total events descending; a repository with no feedback is absent. Keyed by installation and
+   * repository id, so the caller labels each with the repository's current name.
    */
   @Transactional
-  public Map<Long, FeedbackCounts> countsByRepository(
-      long installationId, Collection<Long> repositoryIds) {
-    if (repositoryIds.isEmpty()) {
+  public Map<RepoScope, FeedbackCounts> countsByRepository(
+      Map<Long, ? extends Collection<Long>> repositoryIdsByInstallation) {
+    var terms = new ArrayList<String>();
+    var params = new HashMap<String, Object>();
+    repositoryIdsByInstallation.entrySet().stream()
+        .filter(entry -> !entry.getValue().isEmpty())
+        .sorted(Map.Entry.comparingByKey())
+        .forEach(
+            entry -> {
+              var index = terms.size();
+              terms.add(
+                  "(f.installationId = :installation"
+                      + index
+                      + " and f.repositoryId in :repositories"
+                      + index
+                      + ")");
+              params.put("installation" + index, entry.getKey());
+              params.put("repositories" + index, entry.getValue());
+            });
+    if (terms.isEmpty()) {
       return Map.of();
     }
-    List<Object[]> rows =
+    var query =
         repository
             .getEntityManager()
             .createQuery(
-                """
-                select f.repositoryId,
-                       sum(case when f.signal = :useful then 1 else 0 end),
-                       sum(case when f.signal = :notUseful then 1 else 0 end),
-                       count(f)
-                from FindingFeedback f
-                where f.installationId = :installationId and f.repositoryId in :repositoryIds
-                group by f.repositoryId
-                order by count(f) desc, f.repositoryId
-                """,
+                "select f.installationId, f.repositoryId,"
+                    + " sum(case when f.signal = :useful then 1 else 0 end),"
+                    + " sum(case when f.signal = :notUseful then 1 else 0 end), count(f)"
+                    + " from FindingFeedback f where "
+                    + String.join(" or ", terms)
+                    + " group by f.installationId, f.repositoryId"
+                    + " order by count(f) desc, f.installationId, f.repositoryId",
                 Object[].class)
             .setParameter("useful", FindingFeedback.SIGNAL_USEFUL)
-            .setParameter("notUseful", FindingFeedback.SIGNAL_NOT_USEFUL)
-            .setParameter("installationId", installationId)
-            .setParameter("repositoryIds", repositoryIds)
-            .getResultList();
-    var counts = new LinkedHashMap<Long, FeedbackCounts>();
-    for (var r : rows) {
+            .setParameter("notUseful", FindingFeedback.SIGNAL_NOT_USEFUL);
+    params.forEach(query::setParameter);
+    var counts = new LinkedHashMap<RepoScope, FeedbackCounts>();
+    for (var r : query.getResultList()) {
       counts.put(
-          ((Number) r[0]).longValue(),
+          new RepoScope(((Number) r[0]).longValue(), ((Number) r[1]).longValue()),
           new FeedbackCounts(
-              ((Number) r[1]).longValue(),
               ((Number) r[2]).longValue(),
-              ((Number) r[3]).longValue()));
+              ((Number) r[3]).longValue(),
+              ((Number) r[4]).longValue()));
     }
     return counts;
   }

@@ -47,7 +47,10 @@ import org.slf4j.LoggerFactory;
  * repository gets nothing GitHub would not show them.
  *
  * <p>A resolved scope is cached per token for {@link #SCOPE_CACHE_TTL}, so dashboard requests and
- * live events never wait on GitHub. Fails closed: a GitHub error resolves to nothing, and a token
+ * live events never wait on GitHub. While GitHub cannot be asked, the login keeps the last answer
+ * GitHub gave for up to {@link #STALE_SCOPE_LIMIT}, asked again at most every {@link
+ * #RETRY_AFTER_ERROR}; with no such answer it is denied, and that too is asked again only after
+ * {@link #RETRY_AFTER_ERROR}, so an outage never turns into a GitHub call per request. A token
  * GitHub rejects ends the dashboard session. With {@code thrillhousebot.dashboard.github
  * .account-owner} set, only that account's installation is served.
  */
@@ -57,6 +60,13 @@ public class DashboardAccessChecker {
   private static final Logger log = LoggerFactory.getLogger(DashboardAccessChecker.class);
   private static final String ACCEPT = "application/vnd.github+json";
   static final Duration SCOPE_CACHE_TTL = Duration.ofMinutes(5);
+
+  /** How long the last answer GitHub gave is still served while GitHub cannot be asked. */
+  static final Duration STALE_SCOPE_LIMIT = Duration.ofMinutes(30);
+
+  /** How long a GitHub error is remembered before GitHub is asked again. */
+  static final Duration RETRY_AFTER_ERROR = Duration.ofMinutes(1);
+
   static final int SCOPE_CACHE_SWEEP_THRESHOLD = 1_000;
   private static final int PER_PAGE = 100;
 
@@ -83,7 +93,12 @@ public class DashboardAccessChecker {
     static final Resolution DENIED = new Resolution(AccessDecision.DENIED, RepositoryScope.NONE);
   }
 
-  private record CacheEntry(Resolution resolution, Instant cachedAt) {}
+  /**
+   * A cached resolution: what to answer until {@code retryAt}, and when GitHub last gave an answer
+   * ({@code answeredAt}, null when it never has) so a stale answer is served only within {@link
+   * #STALE_SCOPE_LIMIT}.
+   */
+  private record CacheEntry(Resolution resolution, Instant answeredAt, Instant retryAt) {}
 
   private final ThrillhouseConfig config;
   private final GitHubAuthClient authClient;
@@ -127,16 +142,17 @@ public class DashboardAccessChecker {
   }
 
   /**
-   * Resolves and caches a login's access. Only answers GitHub gave are cached; a rejected token or
-   * an unreachable GitHub is asked again on the next request.
+   * Resolves and caches a login's access. A rejected token is never cached, so the session ends; an
+   * unreachable GitHub falls back as {@link #unavailable} describes.
    */
   public Resolution resolve(String login, String userToken) {
     if (isBlank(login) || isBlank(userToken)) {
       return Resolution.DENIED;
     }
     var key = cacheKey(login, userToken);
+    var now = clock.get();
     var cached = cache.get(key);
-    if (cached != null && cached.cachedAt().isAfter(clock.get().minus(SCOPE_CACHE_TTL))) {
+    if (cached != null && now.isBefore(cached.retryAt())) {
       return cached.resolution();
     }
     Resolution resolution;
@@ -152,11 +168,11 @@ public class DashboardAccessChecker {
         cache.remove(key);
         return new Resolution(AccessDecision.TOKEN_REJECTED, RepositoryScope.NONE);
       }
-      return unavailable(login, e);
+      return unavailable(key, cached, login, e);
     } catch (RuntimeException e) {
-      return unavailable(login, e);
+      return unavailable(key, cached, login, e);
     }
-    cache.put(key, new CacheEntry(resolution, clock.get()));
+    cache.put(key, new CacheEntry(resolution, now, now.plus(SCOPE_CACHE_TTL)));
     sweepExpiredEntries();
     if (resolution.decision() == AccessDecision.DENIED) {
       log.warn("Dashboard access denied for GitHub user {}", login);
@@ -164,9 +180,30 @@ public class DashboardAccessChecker {
     return resolution;
   }
 
-  private static Resolution unavailable(String login, RuntimeException e) {
-    log.warn("Could not resolve dashboard access for {}: {}", login, e.getMessage());
-    return new Resolution(AccessDecision.UNAVAILABLE, RepositoryScope.NONE);
+  /**
+   * GitHub could not be asked: serve the last answer it gave while that is recent enough, or deny,
+   * and remember either for {@link #RETRY_AFTER_ERROR} so the next requests do not ask again.
+   */
+  private Resolution unavailable(String key, CacheEntry cached, String login, RuntimeException e) {
+    var now = clock.get();
+    var stale =
+        cached != null
+            && cached.answeredAt() != null
+            && cached.answeredAt().isAfter(now.minus(STALE_SCOPE_LIMIT));
+    var resolution =
+        stale
+            ? cached.resolution()
+            : new Resolution(AccessDecision.UNAVAILABLE, RepositoryScope.NONE);
+    log.warn(
+        "Could not resolve dashboard access for {}{}: {}",
+        login,
+        stale ? "; serving its last known access" : "",
+        e.getMessage());
+    cache.put(
+        key,
+        new CacheEntry(
+            resolution, stale ? cached.answeredAt() : null, now.plus(RETRY_AFTER_ERROR)));
+    return resolution;
   }
 
   private RepositoryScope fetchScope(String login, String userAuth) {
@@ -285,13 +322,23 @@ public class DashboardAccessChecker {
         .toString();
   }
 
-  /** Drops expired entries once the cache grows, so logins that never return do not stay. */
+  /**
+   * Drops entries once the cache grows: expired ones that can no longer serve as a stale fallback,
+   * so logins that never return do not stay.
+   */
   void sweepExpiredEntries() {
     if (cache.size() < SCOPE_CACHE_SWEEP_THRESHOLD) {
       return;
     }
-    var cutoff = clock.get().minus(SCOPE_CACHE_TTL);
-    cache.entrySet().removeIf(entry -> !entry.getValue().cachedAt().isAfter(cutoff));
+    var now = clock.get();
+    var staleCutoff = now.minus(STALE_SCOPE_LIMIT);
+    cache
+        .entrySet()
+        .removeIf(
+            entry ->
+                !now.isBefore(entry.getValue().retryAt())
+                    && (entry.getValue().answeredAt() == null
+                        || !entry.getValue().answeredAt().isAfter(staleCutoff)));
   }
 
   /** Visible for tests that assert the cache stays bounded. */
