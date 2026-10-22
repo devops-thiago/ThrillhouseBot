@@ -59,7 +59,7 @@ class PullRequestLabelGateTest {
 
   private static PullRequestLabelGate.StandDown where(long checkRunId) {
     return new PullRequestLabelGate.StandDown(
-        AUTH, "owner", "repo", 42, checkRunId, "https://bot.example/s", "the review of abc");
+        AUTH, 123L, "owner", "repo", 42, checkRunId, "https://bot.example/s", "the review of abc");
   }
 
   @Test
@@ -70,7 +70,7 @@ class PullRequestLabelGateTest {
     doThrow(new RuntimeException("check runs down")).when(checkRunManager).updateCheckRun(any());
     assertDoesNotThrow(() -> gate.standDown(EXCLUDED, where(9L)));
 
-    assertEquals(2L, skipEmitter.countsByReason().get("EXCLUDED_LABEL"));
+    assertEquals(2L, skipEmitter.countsByReason(java.util.List.of(123L)).get("EXCLUDED_LABEL"));
   }
 
   private static GitHubLabelClient.Label label(String name) {

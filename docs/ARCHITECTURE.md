@@ -579,17 +579,28 @@ authenticates with a single-use ticket in its query string: the page fetches it 
 after 30 seconds, and `onOpen` redeems it once. Check runs link to `/session/<id>`, which redirects
 a login that may read the session to the session page, and anyone else to the sessions list.
 
-Every endpoint and the WebSocket are scoped per repository. `DashboardAccessChecker` resolves a
-login's `RepositoryScope` once per request from the cached installation snapshot: the account
-owner gets every installed repository, anyone else only the installed repositories they
-collaborate on (one collaborator check per repository, cached for five minutes and only while
-the snapshot it came from is current). The scope holds the installation id and each repository's
-numeric id. Session lists, paging totals, costs, tokens, the summary, feedback and learnings are
-filtered by those ids in the query, so a row with no ids is never served; `?repository=` naming a repository outside it
-answers 403; a session id from one answers 404, the same as a missing id. The installation-wide
-skip counters in the summary go to the owner only. A WebSocket connection takes the scope it had
-when it opened and receives only events, and late-join replays, of those repositories, until the
-login session ends.
+Every endpoint and the WebSocket are scoped per repository (#1221). `DashboardAccessChecker`
+asks GitHub with the login's own GitHub App user token: `GET /user/installations` for the App's
+installations the user can access, and `GET /user/installations/{id}/repositories` for the
+repositories they can read in each. The answer, a `RepositoryScope` of installation ids to
+repository ids and names, is cached per token for five minutes; a GitHub error resolves to
+nothing and is not cached, and a token GitHub rejects ends the dashboard session. With
+`account-owner` set, only that account's installation is kept. Session lists, paging totals,
+costs, tokens, the summary, feedback and learnings are filtered in the query by one
+`(installationId, repositoryId in …)` term per installation, so a row with no ids is never
+served and an empty scope matches nothing; `?installation=` narrows to one installation,
+`?repository=` naming a repository outside the scope answers 403, and a session id from one
+answers 404, the same as a missing id. Skip counters are kept per installation and summed only
+over installations whose installation-wide views the login may see: its own personal account, or
+an organization it is a member of (`GET /orgs/{org}/members/{user}` with the installation token,
+which needs Organization → Members: read and is granted only on 204). A WebSocket connection
+reads its scope from memory on every event; the keepalive tick re-resolves it on a virtual
+thread, never the event loop or a review thread, and closes the connection once nothing is
+readable or the session has ended.
+
+Acting is separate from viewing: `github/RepositoryPermissions` grants it to write, maintain and
+admin (the legacy `permission` field or `role_name`), and `/review`, decline learnings and
+finding feedback all use it. The dashboard has no endpoint that changes state.
 
 With `NOTIFICATIONS_WEBHOOK_URL` set, `ReviewNotifier` posts each final outcome (completed or
 failed) once, as JSON, Slack or Discord, off the review thread. Requests can be signed with

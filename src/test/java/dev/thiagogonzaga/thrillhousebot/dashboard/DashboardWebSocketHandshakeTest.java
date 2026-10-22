@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
@@ -71,13 +72,12 @@ class DashboardWebSocketHandshakeTest {
 
   @BeforeEach
   void setUp() {
-    when(accessChecker.hasAccess(anyString())).thenReturn(true);
-    when(accessChecker.checkAccess(anyString()))
+    when(accessChecker.checkAccess(anyString(), anyString()))
         .thenReturn(DashboardAccessChecker.AccessDecision.ALLOWED);
-    when(accessChecker.repositoryScope("alice"))
-        .thenReturn(TestScopes.readable(false, "acme/alice-repo"));
-    when(accessChecker.repositoryScope("bob"))
-        .thenReturn(TestScopes.readable(false, "acme/bob-repo"));
+    when(accessChecker.resolve(eq("alice"), anyString()))
+        .thenReturn(allowed(TestScopes.readable(false, "acme/alice-repo")));
+    when(accessChecker.resolve(eq("bob"), anyString()))
+        .thenReturn(allowed(TestScopes.readable(false, "acme/bob-repo")));
   }
 
   @AfterEach
@@ -139,7 +139,7 @@ class DashboardWebSocketHandshakeTest {
 
   @Test
   void theTicketEndpointDeniesALoginWithoutAccess() {
-    when(accessChecker.checkAccess("mallory"))
+    when(accessChecker.checkAccess(eq("mallory"), anyString()))
         .thenReturn(DashboardAccessChecker.AccessDecision.DENIED);
 
     given()
@@ -240,5 +240,10 @@ class DashboardWebSocketHandshakeTest {
       }
       return false;
     }
+  }
+
+  private static DashboardAccessChecker.Resolution allowed(RepositoryScope scope) {
+    return new DashboardAccessChecker.Resolution(
+        DashboardAccessChecker.AccessDecision.ALLOWED, scope);
   }
 }

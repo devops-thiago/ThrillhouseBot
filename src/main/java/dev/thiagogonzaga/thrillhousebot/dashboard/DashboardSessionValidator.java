@@ -53,10 +53,9 @@ public class DashboardSessionValidator {
   }
 
   public Optional<String> resolveLogin(String sessionId) {
-    return sessionStore
-        .findSession(sessionId)
-        .filter(session -> accessChecker.hasAccess(session.login()))
-        .map(DashboardSessionStore.DashboardSession::login);
+    return resolve(sessionId)
+        .filter(r -> r.resolution().decision() == DashboardAccessChecker.AccessDecision.ALLOWED)
+        .map(Resolved::login);
   }
 
   /**
@@ -64,9 +63,27 @@ public class DashboardSessionValidator {
    * queries by them; {@link RepositoryScope#NONE} for an unknown or expired session.
    */
   public RepositoryScope repositoryScope(String sessionId) {
+    return resolve(sessionId).map(r -> r.resolution().scope()).orElse(RepositoryScope.NONE);
+  }
+
+  /** A session's login and what it may read. */
+  private record Resolved(String login, DashboardAccessChecker.Resolution resolution) {}
+
+  /**
+   * Resolves the session's access with its login's own GitHub token. A token GitHub rejects
+   * (expired or revoked) ends the session, so the dashboard asks the user to sign in again instead
+   * of showing an empty page.
+   */
+  private Optional<Resolved> resolve(String sessionId) {
     return sessionStore
         .findSession(sessionId)
-        .map(session -> accessChecker.repositoryScope(session.login()))
-        .orElse(RepositoryScope.NONE);
+        .map(
+            session -> {
+              var resolution = accessChecker.resolve(session.login(), session.accessToken());
+              if (resolution.decision() == DashboardAccessChecker.AccessDecision.TOKEN_REJECTED) {
+                sessionStore.invalidate(sessionId);
+              }
+              return new Resolved(session.login(), resolution);
+            });
   }
 }

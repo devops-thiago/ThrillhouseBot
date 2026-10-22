@@ -163,6 +163,7 @@ public class CiHoldRevisit {
             skip.get(),
             new PullRequestLabelGate.StandDown(
                 auth,
+                task.installationId(),
                 task.owner(),
                 task.repo(),
                 task.prNumber(),

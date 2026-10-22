@@ -1,5 +1,6 @@
 import type {
   CostData,
+  InstallationOption,
   SessionDetail,
   SessionListItem,
   SessionSummary,
@@ -113,14 +114,19 @@ function delay<T>(value: T, ms = 0): Promise<T> {
     : new Promise((resolve) => setTimeout(() => resolve(value), ms));
 }
 
+export const mockInstallations: InstallationOption[] = [
+  { id: 1, account: 'devops-thiago', repositories: 2, installationWide: true },
+];
+
 export function createMockApi(ms = 0) {
   return {
-    summary: () => delay(mockSummary, ms),
+    installations: () => delay(mockInstallations, ms),
+    summary: (_installation?: number | null) => delay(mockSummary, ms),
     costs: (period = 'month') =>
       delay({ ...mockCostData, period }, ms),
     tokens: (period = 'month') =>
       delay({ ...mockTokenData, period }, ms),
-    sessions: (page = 0, repo?: string) => {
+    sessions: (page = 0, repo?: string, _installation?: number | null) => {
       const sessions = repo
         ? mockSessions.filter((s) => s.repository === repo)
         : mockSessions;

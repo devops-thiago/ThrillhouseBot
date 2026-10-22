@@ -273,6 +273,7 @@ Create the GitHub App before starting the bot; its credentials go in `.env`.
 | Webhook URL | `https://<your-host>/api/webhook` |
 | Webhook secret | Random string |
 | Repository permissions | Pull requests: R/W, Checks: R/W, Contents: Read, Issues: R/W, Actions: Read, Commit statuses: Read |
+| Organization permissions | Members: Read (shows installation-wide dashboard counters to organization members) |
 | Subscribe to events | Pull request, Issue comment, Pull request review comment, Check suite, Status |
 | Identifying and authorizing users | Enabled (for dashboard login) |
 | Callback URL | `https://<your-host>/api/auth/callback` |
@@ -1226,19 +1227,27 @@ After you sign in with GitHub, the dashboard shows an overview with summary
 cards and a live activity feed, plus cost charts by model, input and output token
 breakdowns, and a paginated session history with PR links.
 
-Access is limited to the GitHub App owner and to collaborators on at least one
-repository where the app is installed under that owner. Everyone else sees an
-access-denied screen. The owner is read from the app registration; set
-`thrillhousebot.dashboard.github.account-owner` when that fails, because the
-dashboard otherwise denies everyone.
+The dashboard asks GitHub, with your own sign-in, which installations of the
+app you can access and which of their repositories you can read: as a
+collaborator of any role, through a team, or through your organization's base
+permission. You see exactly those repositories, across every installation, and
+anyone who can read none of them sees an access-denied screen. An outside
+contributor, or an organization member whose base permission is none, does not
+see a private repository GitHub would not show them. With several installations,
+the overview and the session history offer an installation filter. Set
+`thrillhousebot.dashboard.github.account-owner` to serve only one account's
+installation.
 
-Everything the dashboard shows is scoped per repository. The owner sees every
-repository where the app is installed; any other login sees only the installed
-repositories they collaborate on. This covers the session list and its totals,
-session details, costs, tokens, the overview, feedback, learnings and the live
-feed. A `?repository=` you cannot access returns 403, and a session id from such
-a repository returns 404. The overview's installation-wide skip counts are shown
-to the owner only.
+Everything the dashboard shows is scoped this way: the session list and its
+totals, session details, costs, tokens, the overview, feedback, learnings and
+the live feed, which follows a change in your access within five minutes. A
+`?repository=` you cannot access returns 403, and a session id from such a
+repository returns 404. The overview's skip counts span a whole installation, so
+they are shown for a personal account to that account, and for an organization
+to its members. Checking membership needs the app's Organization → Members: read
+permission; without it the counts stay hidden. Viewing never grants acting:
+`/review` and anything else the bot does on request needs write, maintain or
+admin on the repository.
 
 A review cut off by a restart or crash would stay marked as running, so on
 startup every session still in progress is marked failed with the reason
@@ -1564,8 +1573,9 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
   kept in memory: lost on restart and not shared between replicas. Review
   history and cost totals are stored in PostgreSQL. Multiple replicas are not
   supported.
-- **Dashboard access.** GitHub OAuth only, for the app owner and collaborators on
-  installed repositories; no admin UI or guest mode.
+- **Dashboard access.** GitHub OAuth only, for users who can read a repository
+  where the app is installed; no admin UI or guest mode. A change in someone's
+  access reaches the dashboard within five minutes.
 - **Production database.** Container and native builds use PostgreSQL. H2 is for
   `quarkus:dev` and the tests only, and its driver is not packaged in the image.
 - **OpenAI-compatible APIs only.** The endpoint must implement the

@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.after;
@@ -172,7 +173,8 @@ class ReviewDispatcherTest {
     verify(ciHoldRevisit, timeout(5000)).revisit(task);
     verify(orchestrator, times(1)).review(any(ReviewOrchestrator.ReviewRequest.class));
     verify(skipEmitter)
-        .recordSkip(eq(ReviewSkipReason.RATE_LIMITED), eq("owner"), eq("repo"), eq(42), any());
+        .recordSkip(
+            eq(ReviewSkipReason.RATE_LIMITED), anyLong(), eq("owner"), eq("repo"), eq(42), any());
   }
 
   @Test
@@ -626,7 +628,12 @@ class ReviewDispatcherTest {
     // The async skip still surfaces as a structured event.
     verify(skipEmitter)
         .recordSkip(
-            eq(ReviewSkipReason.RATE_LIMITED), eq("owner"), eq("repo"), eq(19), anyString());
+            eq(ReviewSkipReason.RATE_LIMITED),
+            anyLong(),
+            eq("owner"),
+            eq("repo"),
+            eq(19),
+            anyString());
   }
 
   @Test

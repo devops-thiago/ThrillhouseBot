@@ -83,7 +83,7 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 
 | Variable | Description | Type | Default |
 |---|---|---|---|
-| `THRILLHOUSEBOT_DASHBOARD_GITHUB_ACCOUNT_OWNER`<br>`thrillhousebot.dashboard.github.account-owner` | Login of the account that owns the GitHub App. The dashboard shows that account every installed repository and limits everyone else to the repositories they collaborate on. Unset resolves it from the App (`GET /app`). | string | _(none)_ |
+| `THRILLHOUSEBOT_DASHBOARD_GITHUB_ACCOUNT_OWNER`<br>`thrillhousebot.dashboard.github.account-owner` | Optional. When set, the dashboard serves only the installation on this account. Unset serves every installation the signed-in user can access. Either way a user sees only the repositories GitHub lets them read. | string | _(none)_ |
 | `GITHUB_CLIENT_ID`<br>`thrillhousebot.dashboard.github.client-id` | OAuth client ID for dashboard login, from the GitHub App's settings. Leave it and `GITHUB_CLIENT_SECRET` unset to disable login. | string | _(none)_ |
 | `GITHUB_CLIENT_SECRET`<br>`thrillhousebot.dashboard.github.client-secret` | OAuth client secret for dashboard login, from the GitHub App's settings. | string | _(none)_ |
 | `GITHUB_OAUTH_URL`<br>`thrillhousebot.dashboard.github.oauth-url` | Base URL of GitHub's OAuth endpoints. | string | `https://github.com/login/oauth` |

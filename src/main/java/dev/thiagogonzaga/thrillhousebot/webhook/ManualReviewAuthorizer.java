@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.webhook;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
+import dev.thiagogonzaga.thrillhousebot.github.RepositoryPermissions;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -56,9 +57,6 @@ public class ManualReviewAuthorizer {
    */
   private static final Set<String> WRITE_CAPABLE_ASSOCIATIONS =
       Set.of("OWNER", "MEMBER", "COLLABORATOR");
-
-  /** GitHub collaborator-permission levels that include push (write) access. */
-  private static final Set<String> WRITE_PERMISSIONS = Set.of("admin", "write");
 
   private final ThrillhouseConfig config;
   private final GitHubAuthClient authClient;
@@ -161,10 +159,8 @@ public class ManualReviewAuthorizer {
 
   private boolean writeAccessConfirmed(
       String owner, String repo, long installationId, String login) {
-    var permission =
+    return RepositoryPermissions.canAct(
         installationClient.collaboratorPermission(
-            authClient.getAuthHeader(installationId), ACCEPT, owner, repo, login);
-    var level = permission == null ? null : permission.permission();
-    return level != null && WRITE_PERMISSIONS.contains(level.trim().toLowerCase(Locale.ROOT));
+            authClient.getAuthHeader(installationId), ACCEPT, owner, repo, login));
   }
 }

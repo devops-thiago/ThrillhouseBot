@@ -12,25 +12,26 @@ interface User {
 async function fetchAuthUser(): Promise<{
   user: User | null;
   accessDenied: boolean;
-  notConfigured: boolean;
+  unavailable: boolean;
 }> {
   const response = await fetch('/api/auth/me', { credentials: 'include' });
   if (response.status === 403) {
-    return { user: null, accessDenied: true, notConfigured: false };
+    return { user: null, accessDenied: true, unavailable: false };
   }
+  // 503: GitHub could not be asked about this user's access; signing in again will not help.
   if (response.status === 503) {
-    return { user: null, accessDenied: false, notConfigured: true };
+    return { user: null, accessDenied: false, unavailable: true };
   }
   if (!response.ok) {
-    return { user: null, accessDenied: false, notConfigured: false };
+    return { user: null, accessDenied: false, unavailable: false };
   }
-  return { user: await response.json(), accessDenied: false, notConfigured: false };
+  return { user: await response.json(), accessDenied: false, unavailable: false };
 }
 
 export function useAuth() {
   const [user, setUser] = useState<User | null>(MOCK_MODE ? mockUser : null);
   const [accessDenied, setAccessDenied] = useState(false);
-  const [notConfigured, setNotConfigured] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(!MOCK_MODE);
 
   useEffect(() => {
@@ -40,16 +41,16 @@ export function useAuth() {
 
     const refresh = (background = false) => {
       fetchAuthUser()
-        .then(({ user: nextUser, accessDenied: denied, notConfigured: misconfigured }) => {
+        .then(({ user: nextUser, accessDenied: denied, unavailable: unreachable }) => {
           if (cancelled) return;
           setAccessDenied(denied);
-          setNotConfigured(misconfigured);
+          setUnavailable(unreachable);
           setUser(nextUser);
         })
         .catch(() => {
           if (cancelled || background) return;
           setAccessDenied(false);
-          setNotConfigured(false);
+          setUnavailable(false);
           setUser(null);
         })
         .finally(() => {
@@ -77,7 +78,7 @@ export function useAuth() {
     } finally {
       setUser(null);
       setAccessDenied(false);
-      setNotConfigured(false);
+      setUnavailable(false);
       window.location.href = "/dashboard/";
     }
   };
@@ -86,7 +87,7 @@ export function useAuth() {
     user,
     loading,
     accessDenied,
-    notConfigured,
+    unavailable,
     login,
     logout,
     isAuthenticated: !!user,

@@ -174,6 +174,63 @@ class DashboardWebSocketTest {
     assertTrue(payload.getValue().contains("\"sessionId\":2"));
   }
 
+  @Test
+  void aConnectionFollowsItsLoginsAccessAndClosesOnceItIsGone() throws Exception {
+    when(sessionValidator.repositoryScope("moving-token"))
+        .thenReturn(TestScopes.readable(false, "acme/allowed"))
+        .thenReturn(TestScopes.readable(false, "acme/secret"))
+        .thenReturn(RepositoryScope.NONE);
+    when(sessionValidator.isSessionOpen("moving-token")).thenReturn(true);
+    var remote = mock(jakarta.websocket.RemoteEndpoint.Async.class);
+    var session = sessionWithTicket("ws-moving", "moving-token");
+    when(session.isOpen()).thenReturn(true);
+    when(session.getAsyncRemote()).thenReturn(remote);
+    webSocket.onOpen(session);
+
+    // The refresh runs on the keepalive worker; a broadcast only reads the scope it left.
+    broadcaster.refreshReaders();
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(review(1L, "acme/allowed")));
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(review(2L, "acme/secret")));
+    var payload = org.mockito.ArgumentCaptor.forClass(String.class);
+    verify(remote).sendText(payload.capture(), any());
+    assertTrue(payload.getValue().contains("\"sessionId\":2"));
+
+    broadcaster.refreshReaders();
+    verify(session).close(any(CloseReason.class));
+    assertEquals(0, broadcaster.getConnectedCount());
+  }
+
+  @Test
+  void aLoggedOutSessionIsDroppedAtTheNextRefreshWithoutAskingGitHub() throws Exception {
+    when(sessionValidator.repositoryScope("gone-token"))
+        .thenReturn(TestScopes.readable(false, "acme/allowed"));
+    when(sessionValidator.isSessionOpen("gone-token")).thenReturn(true);
+    var session = sessionWithTicket("ws-gone", "gone-token");
+    when(session.isOpen()).thenReturn(true);
+    webSocket.onOpen(session);
+    when(sessionValidator.isSessionOpen("gone-token")).thenReturn(false);
+
+    broadcaster.refreshReaders();
+
+    verify(session).close(any(CloseReason.class));
+    verify(sessionValidator, times(1)).repositoryScope("gone-token");
+  }
+
+  @Test
+  void aCloseThatFailsStillDropsTheConnection() throws Exception {
+    when(sessionValidator.repositoryScope("broken-token")).thenReturn(RepositoryScope.NONE);
+    when(sessionValidator.isSessionOpen("broken-token")).thenReturn(true);
+    var session = sessionWithTicket("ws-broken", "broken-token");
+    when(session.isOpen()).thenReturn(true);
+    webSocket.onOpen(session);
+    org.mockito.Mockito.doThrow(new java.io.IOException("gone"))
+        .when(session)
+        .close(any(CloseReason.class));
+
+    assertDoesNotThrow(() -> broadcaster.refreshReaders());
+    assertEquals(0, broadcaster.getConnectedCount());
+  }
+
   private static ReviewSession review(long id, String repository) {
     var review = ReviewSession.create(TestScopes.scope(repository), repository, 7, "PR", "sha");
     review.id = id;

@@ -33,16 +33,36 @@ class ReviewSkipEmitterTest {
 
   @Test
   void shouldStartWithNoCounts() {
-    assertTrue(emitter.countsByReason().isEmpty());
+    assertTrue(emitter.countsByReason(java.util.List.of(1L)).isEmpty());
+  }
+
+  @Test
+  void countsAreKeptPerInstallationAndSummedOverTheOnesAsked() {
+    emitter.recordSkip(ReviewSkipReason.DRAFT, 1L, "acme", "app", 1, "draft");
+    emitter.recordSkip(ReviewSkipReason.DRAFT, 2L, "globex", "app", 1, "draft");
+    emitter.recordSkip(ReviewSkipReason.PAUSED, 2L, "globex", "app", 2, "paused");
+    emitter.recordSkip(
+        ReviewSkipReason.DUPLICATE_DELIVERY,
+        ReviewSkipEmitter.UNKNOWN_INSTALLATION,
+        "acme",
+        "app",
+        3,
+        "redelivered");
+
+    assertEquals(java.util.Map.of("DRAFT", 1L), emitter.countsByReason(java.util.List.of(1L)));
+    assertEquals(
+        java.util.Map.of("DRAFT", 2L, "PAUSED", 1L),
+        emitter.countsByReason(java.util.List.of(1L, 2L, 3L)));
+    assertTrue(emitter.countsByReason(java.util.List.of()).isEmpty());
   }
 
   @Test
   void shouldCountSkipsByReason() {
-    emitter.recordSkip(ReviewSkipReason.DRAFT, "owner", "repo", 1, "draft");
-    emitter.recordSkip(ReviewSkipReason.DRAFT, "owner", "repo", 2, "draft");
-    emitter.recordSkip(ReviewSkipReason.PAUSED, "owner", "repo", 3, "paused");
+    emitter.recordSkip(ReviewSkipReason.DRAFT, 1L, "owner", "repo", 1, "draft");
+    emitter.recordSkip(ReviewSkipReason.DRAFT, 1L, "owner", "repo", 2, "draft");
+    emitter.recordSkip(ReviewSkipReason.PAUSED, 1L, "owner", "repo", 3, "paused");
 
-    var counts = emitter.countsByReason();
+    var counts = emitter.countsByReason(java.util.List.of(1L));
     assertEquals(2L, counts.get("DRAFT"));
     assertEquals(1L, counts.get("PAUSED"));
     assertNull(counts.get("RATE_LIMITED"));
@@ -50,11 +70,12 @@ class ReviewSkipEmitterTest {
 
   @Test
   void shouldOrderCountsByEnumDeclaration() {
-    emitter.recordSkip(ReviewSkipReason.RATE_LIMITED, "owner", "repo", 1, "throttled");
-    emitter.recordSkip(ReviewSkipReason.PAUSED, "owner", "repo", 2, "paused");
-    emitter.recordSkip(ReviewSkipReason.DRAFT, "owner", "repo", 3, "draft");
+    emitter.recordSkip(ReviewSkipReason.RATE_LIMITED, 1L, "owner", "repo", 1, "throttled");
+    emitter.recordSkip(ReviewSkipReason.PAUSED, 1L, "owner", "repo", 2, "paused");
+    emitter.recordSkip(ReviewSkipReason.DRAFT, 1L, "owner", "repo", 3, "draft");
 
     assertEquals(
-        List.of("PAUSED", "DRAFT", "RATE_LIMITED"), List.copyOf(emitter.countsByReason().keySet()));
+        List.of("PAUSED", "DRAFT", "RATE_LIMITED"),
+        List.copyOf(emitter.countsByReason(java.util.List.of(1L)).keySet()));
   }
 }

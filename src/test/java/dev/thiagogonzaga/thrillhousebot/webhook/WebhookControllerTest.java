@@ -522,7 +522,8 @@ class WebhookControllerTest {
     controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
 
     verify(skipEmitter)
-        .recordSkip(eq(ReviewSkipReason.DRAFT), eq("owner"), eq("repo"), eq(21), anyString());
+        .recordSkip(
+            eq(ReviewSkipReason.DRAFT), anyLong(), eq("owner"), eq("repo"), eq(21), anyString());
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
@@ -538,7 +539,8 @@ class WebhookControllerTest {
     controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
 
     verify(skipEmitter)
-        .recordSkip(eq(ReviewSkipReason.PAUSED), eq("owner"), eq("myrepo"), eq(99), anyString());
+        .recordSkip(
+            eq(ReviewSkipReason.PAUSED), anyLong(), eq("owner"), eq("myrepo"), eq(99), anyString());
   }
 
   @Test
@@ -555,7 +557,34 @@ class WebhookControllerTest {
 
     verify(skipEmitter)
         .recordSkip(
-            eq(ReviewSkipReason.RATE_LIMITED), eq("owner"), eq("repo"), eq(55), anyString());
+            eq(ReviewSkipReason.RATE_LIMITED),
+            anyLong(),
+            eq("owner"),
+            eq("repo"),
+            eq(55),
+            anyString());
+  }
+
+  @Test
+  void aDuplicateDeliveryWithoutAnInstallationIsCountedUnderNoInstallation() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(deduplicator.isDuplicate("redelivered-id")).thenReturn(true);
+
+    var body =
+        buildPullRequestPayload("opened", 7, "owner/repo", "sha7", "main")
+            .replace("\"installation\":{\"id\":12345}", "\"installation\":null")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, "redelivered-id", body);
+
+    verify(skipEmitter)
+        .recordSkip(
+            eq(ReviewSkipReason.DUPLICATE_DELIVERY),
+            eq(ReviewSkipEmitter.UNKNOWN_INSTALLATION),
+            eq("owner"),
+            eq("repo"),
+            eq(7),
+            anyString());
   }
 
   @Test
@@ -571,7 +600,12 @@ class WebhookControllerTest {
 
     verify(skipEmitter)
         .recordSkip(
-            eq(ReviewSkipReason.DUPLICATE_DELIVERY), eq("owner"), eq("repo"), eq(7), anyString());
+            eq(ReviewSkipReason.DUPLICATE_DELIVERY),
+            anyLong(),
+            eq("owner"),
+            eq("repo"),
+            eq(7),
+            anyString());
   }
 
   @Test
@@ -670,7 +704,12 @@ class WebhookControllerTest {
 
     verify(skipEmitter)
         .recordSkip(
-            eq(ReviewSkipReason.DISPATCH_REJECTED), eq("owner"), eq("repo"), eq(8), anyString());
+            eq(ReviewSkipReason.DISPATCH_REJECTED),
+            anyLong(),
+            eq("owner"),
+            eq("repo"),
+            eq(8),
+            anyString());
     // A rejected dispatch rolls back the dedup slot so a redelivery can retry.
     verify(deduplicator).forget("delivery-rejected");
   }
@@ -742,7 +781,12 @@ class WebhookControllerTest {
 
     verify(skipEmitter)
         .recordSkip(
-            eq(ReviewSkipReason.EXCLUDED_LABEL), eq("owner"), eq("repo"), eq(1012), anyString());
+            eq(ReviewSkipReason.EXCLUDED_LABEL),
+            anyLong(),
+            eq("owner"),
+            eq("repo"),
+            eq(1012),
+            anyString());
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
@@ -781,7 +825,12 @@ class WebhookControllerTest {
 
     verify(skipEmitter)
         .recordSkip(
-            eq(ReviewSkipReason.EXCLUDED_LABEL), eq("owner"), eq("repo"), eq(8), anyString());
+            eq(ReviewSkipReason.EXCLUDED_LABEL),
+            anyLong(),
+            eq("owner"),
+            eq("repo"),
+            eq(8),
+            anyString());
     var dispatched = ArgumentCaptor.forClass(ReviewOrchestrator.ReviewRequest.class);
     verify(reviewDispatcher).dispatch(dispatched.capture());
     assertEquals(9, dispatched.getValue().prNumber());

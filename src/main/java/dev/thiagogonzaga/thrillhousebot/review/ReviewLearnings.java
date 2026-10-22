@@ -22,6 +22,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
+import dev.thiagogonzaga.thrillhousebot.github.RepositoryPermissions;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -61,7 +62,6 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 public class ReviewLearnings {
 
   private static final String ACCEPT = "application/vnd.github+json";
-  private static final Set<String> WRITE_PERMISSIONS = Set.of("admin", "maintain", "write");
   private static final String STATUS_JUSTIFIED = "justified";
 
   /** Name segments that make a file a container build file, in any position of its name. */
@@ -433,12 +433,9 @@ public class ReviewLearnings {
         login.toLowerCase(Locale.ROOT),
         ignored -> {
           try {
-            var permission =
+            return RepositoryPermissions.canAct(
                 installationClient.collaboratorPermission(
-                    capture.auth(), ACCEPT, capture.owner(), capture.repo(), login);
-            var level = permission == null ? null : permission.permission();
-            return level != null
-                && WRITE_PERMISSIONS.contains(level.strip().toLowerCase(Locale.ROOT));
+                    capture.auth(), ACCEPT, capture.owner(), capture.repo(), login));
           } catch (RuntimeException e) {
             Log.debugf(
                 e,

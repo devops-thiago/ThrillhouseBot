@@ -166,6 +166,7 @@ public class WebhookController {
     }
     skipEmitter.recordSkip(
         ReviewSkipReason.DUPLICATE_DELIVERY,
+        installationOf(payload),
         repo.owner().login(),
         repo.name(),
         pr.number(),
@@ -233,6 +234,7 @@ public class WebhookController {
             scope(payload), repo.owner().login(), repo.name(), pr.number())) {
           skipEmitter.recordSkip(
               ReviewSkipReason.PAUSED,
+              installationOf(payload),
               repo.owner().login(),
               repo.name(),
               pr.number(),
@@ -244,6 +246,7 @@ public class WebhookController {
         if (skipReason.isPresent()) {
           skipEmitter.recordSkip(
               skipReason.get().reason(),
+              installationOf(payload),
               repo.owner().login(),
               repo.name(),
               pr.number(),
@@ -257,6 +260,7 @@ public class WebhookController {
             repo.owner().login(), repo.name(), pr.number())) {
           skipEmitter.recordSkip(
               ReviewSkipReason.RATE_LIMITED,
+              installationOf(payload),
               repo.owner().login(),
               repo.name(),
               pr.number(),
@@ -285,6 +289,7 @@ public class WebhookController {
         if (!queued) {
           skipEmitter.recordSkip(
               ReviewSkipReason.DISPATCH_REJECTED,
+              installationOf(payload),
               repo.owner().login(),
               repo.name(),
               pr.number(),
@@ -650,6 +655,13 @@ public class WebhookController {
             ctx.installationId(),
             ctx.repositoryId(),
             true));
+  }
+
+  /** The payload's installation id, or the skip counters' key for an unknown installation. */
+  private static long installationOf(WebhookPayload payload) {
+    return payload.installation() == null
+        ? ReviewSkipEmitter.UNKNOWN_INSTALLATION
+        : payload.installation().id();
   }
 
   /**

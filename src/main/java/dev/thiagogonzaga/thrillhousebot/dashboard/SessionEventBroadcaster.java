@@ -55,6 +55,14 @@ public final class SessionEventBroadcaster {
   @FunctionalInterface
   public interface RepositoryReader {
     boolean canRead(Long installationId, Long repositoryId);
+
+    /**
+     * Re-resolves what the connection may read, off the broadcast path (#1221), and answers whether
+     * it may still read anything. A reader fixed at open never changes.
+     */
+    default boolean refresh() {
+      return true;
+    }
   }
 
   /** Each open dashboard connection with the repositories it may receive events for. */
@@ -74,6 +82,31 @@ public final class SessionEventBroadcaster {
     sessions.put(session, reader);
     replayActiveSessions(session, reader);
     log.debug("WebSocket client connected (total: {})", sessions.size());
+  }
+
+  /**
+   * Re-resolves every open connection's access and closes the ones that lost it, so a login whose
+   * access was removed stops receiving events once its cached scope expires. Runs on a worker
+   * thread, never the broadcast path, since a reader may ask GitHub.
+   */
+  public void refreshReaders() {
+    sessions.forEach(
+        (session, reader) -> {
+          if (!reader.refresh()) {
+            sessions.remove(session);
+            closeQuietly(session);
+          }
+        });
+  }
+
+  private static void closeQuietly(jakarta.websocket.Session session) {
+    try {
+      session.close(
+          new jakarta.websocket.CloseReason(
+              jakarta.websocket.CloseReason.CloseCodes.VIOLATED_POLICY, "Access ended"));
+    } catch (java.io.IOException | RuntimeException e) {
+      log.debug("Failed to close a WebSocket whose access ended", e);
+    }
   }
 
   public void removeSession(jakarta.websocket.Session session) {
