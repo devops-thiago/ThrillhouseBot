@@ -674,8 +674,9 @@ public class WebhookController {
   }
 
   /**
-   * The account an event's installation belongs to: the repository owner, or on events without a
-   * repository the installation's account; null when the payload names neither.
+   * The account an event's installation belongs to: the repository owner's login, or the
+   * installation's account when that login is unavailable (no repository, or its owner or login is
+   * missing); null when the payload names neither.
    */
   private static String accountOf(WebhookPayload payload) {
     var repo = payload.repository();
