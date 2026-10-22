@@ -562,7 +562,11 @@ GitHub OAuth login whose tokens stay on the server, REST endpoints under `/api/d
 (sessions, costs, tokens, feedback, learnings, summary) and a WebSocket at `/ws/dashboard`. The
 WebSocket carries `review.started`, `review.stream`, `review.batch`, `review.progress`,
 `review.retry`, `review.completed` and `review.failed` events, and replays an active session's
-events to a client that connects late. Check runs link to `/session/<id>`, which redirects to the
+events to a client that connects late. A browser cannot send a header the server can read per
+WebSocket connection, and the endpoint configuration is shared by every handshake, so the socket
+authenticates with a single-use ticket in its query string: the page fetches it from
+`POST /api/auth/socket-ticket` with its session cookie just before connecting, the ticket expires
+after 30 seconds, and `onOpen` redeems it once. Check runs link to `/session/<id>`, which redirects to the
 session page.
 
 Every endpoint and the WebSocket are scoped per repository. `DashboardAccessChecker` resolves a

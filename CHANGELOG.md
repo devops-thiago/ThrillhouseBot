@@ -12,6 +12,15 @@ All notable changes to ThrillhouseBot.
   start it is recorded as version 1, the v0.8.0 schema, and only later migrations run. Upgrade
   from v0.8.x. The dev and test databases are in-memory H2 in PostgreSQL mode, built from the
   same migrations. (#22)
+### Security
+
+- The dashboard WebSocket no longer takes its session from the endpoint configuration that every
+  handshake shares. After any user had connected, a socket opened without a session cookie was
+  authenticated as that user and received their live review events, and two handshakes at the
+  same time could swap identities. The page now fetches a single-use ticket from
+  `POST /api/auth/socket-ticket` and opens the socket with it in the query string; the ticket
+  expires after 30 seconds and works once. The session cookie is no longer accepted as a query
+  parameter. (#1223)
 
 ## [0.8.0] - 2026-10-21
 

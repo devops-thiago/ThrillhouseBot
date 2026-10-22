@@ -44,6 +44,14 @@ public class DashboardSessionValidator {
     return sessionStore.findSession(sessionId).isPresent();
   }
 
+  /**
+   * The session a WebSocket ticket was issued for, consuming the ticket; empty for an unknown,
+   * reused or expired ticket (#1223).
+   */
+  public Optional<String> redeemSocketTicket(String ticket) {
+    return sessionStore.redeemSocketTicket(ticket);
+  }
+
   public Optional<String> resolveLogin(String sessionId) {
     return sessionStore
         .findSession(sessionId)

@@ -23,13 +23,30 @@ export interface SessionEvent {
   data: Record<string, any>;
 }
 
-async function isAuthenticated(): Promise<boolean> {
+/**
+ * Fetches the single-use ticket the socket presents in its query string. A WebSocket cannot carry
+ * the session in a header the server can read per connection, so each connect asks for a fresh
+ * ticket; null when the session is gone or not allowed, which stops reconnecting.
+ */
+export async function fetchSocketTicket(): Promise<string | null> {
   try {
-    const res = await fetch("/api/auth/me", { credentials: "include" });
-    return res.ok;
+    const res = await fetch("/api/auth/socket-ticket", {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!res.ok) {
+      return null;
+    }
+    const body: { ticket?: unknown } = await res.json();
+    return typeof body.ticket === "string" && body.ticket !== "" ? body.ticket : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export function socketUrl(location: Pick<Location, "protocol" | "host">, ticket: string): string {
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${location.host}/ws/dashboard?ticket=${encodeURIComponent(ticket)}`;
 }
 
 export function useWebSocket() {
@@ -45,11 +62,6 @@ export function useWebSocket() {
       return;
     }
 
-    if (!(await isAuthenticated())) {
-      setConnected(false);
-      return;
-    }
-
     const existing = wsRef.current;
     if (
       existing &&
@@ -61,8 +73,13 @@ export function useWebSocket() {
 
     existing?.close();
 
-    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${location.host}/ws/dashboard`);
+    const ticket = await fetchSocketTicket();
+    if (!ticket || !mountedRef.current) {
+      setConnected(false);
+      return;
+    }
+
+    const ws = new WebSocket(socketUrl(location, ticket));
 
     ws.onopen = () => {
       if (!mountedRef.current) {
