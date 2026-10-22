@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubUserClient;
@@ -104,6 +105,7 @@ public class DashboardAccessChecker {
   private final GitHubAuthClient authClient;
   private final GitHubInstallationClient installationClient;
   private final GitHubUserClient userClient;
+  private final AllowedAccounts allowedAccounts;
   private final Supplier<Instant> clock;
   private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
   private final AtomicBoolean membersPermissionWarned = new AtomicBoolean();
@@ -113,8 +115,9 @@ public class DashboardAccessChecker {
       ThrillhouseConfig config,
       GitHubAuthClient authClient,
       @RestClient GitHubInstallationClient installationClient,
-      @RestClient GitHubUserClient userClient) {
-    this(config, authClient, installationClient, userClient, Instant::now);
+      @RestClient GitHubUserClient userClient,
+      AllowedAccounts allowedAccounts) {
+    this(config, authClient, installationClient, userClient, allowedAccounts, Instant::now);
   }
 
   /** Visible for tests: allows controlling cache expiry. */
@@ -123,11 +126,13 @@ public class DashboardAccessChecker {
       GitHubAuthClient authClient,
       GitHubInstallationClient installationClient,
       GitHubUserClient userClient,
+      AllowedAccounts allowedAccounts,
       Supplier<Instant> clock) {
     this.config = config;
     this.authClient = authClient;
     this.installationClient = installationClient;
     this.userClient = userClient;
+    this.allowedAccounts = allowedAccounts;
     this.clock = clock;
   }
 
@@ -216,7 +221,8 @@ public class DashboardAccessChecker {
       var account = installation.account();
       if (account == null
           || account.login() == null
-          || owner.filter(o -> !o.equalsIgnoreCase(account.login())).isPresent()) {
+          || owner.filter(o -> !o.equalsIgnoreCase(account.login())).isPresent()
+          || !allowedAccounts.allows(account.login())) {
         continue;
       }
       var repositories = repositories(userAuth, installation.id());

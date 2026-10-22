@@ -22,6 +22,7 @@ import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
@@ -105,6 +106,77 @@ class WebhookControllerTest {
     controller = newController(triggerFilter);
   }
 
+  private AllowedAccounts allowedAccounts = new AllowedAccounts(List.of());
+
+  @Test
+  void eventsFromAnotherAccountsInstallationRunNothing() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    allowedAccounts = new AllowedAccounts(List.of("someone-else"));
+    controller = newController(triggerFilter);
+
+    for (var event :
+        List.of(
+            new String[] {
+              "pull_request", buildPullRequestPayload("opened", 1, "owner/repo", "sha", "main")
+            },
+            new String[] {
+              "check_suite",
+              "{\"action\":\"completed\",\"check_suite\":{\"head_sha\":\"abc\"},"
+                  + "\"repository\":{\"id\":7,\"name\":\"b\",\"owner\":{\"id\":1}},"
+                  + "\"installation\":{\"id\":5,\"account\":{\"login\":\"stranger\"}}}"
+            },
+            new String[] {
+              "check_suite",
+              "{\"action\":\"completed\",\"check_suite\":{\"head_sha\":\"abc\"},"
+                  + "\"repository\":{\"id\":7,\"name\":\"b\"},"
+                  + "\"installation\":{\"id\":5,\"account\":{\"login\":\"stranger\"}}}"
+            },
+            new String[] {
+              "installation",
+              "{\"action\":\"created\",\"installation\":{\"id\":5,\"account\":{\"login\":\"stranger\"}}}"
+            })) {
+      var response =
+          controller.handleWebhook(
+              "sha256=valid", event[0], null, DELIVERY, event[1].getBytes(StandardCharsets.UTF_8));
+      assertEquals(200, response.getStatus());
+      assertTrue(response.getEntity().toString().contains("ignored"));
+    }
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verifyNoInteractions(deduplicator, prPauseService);
+  }
+
+  @Test
+  void anAllowedAccountIsServedIgnoringCase() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    allowedAccounts = new AllowedAccounts(List.of(" OWNER "));
+    controller = newController(triggerFilter);
+    when(reviewDispatcher.dispatch(any(ReviewOrchestrator.ReviewRequest.class))).thenReturn(true);
+
+    controller.handleWebhook(
+        "sha256=valid",
+        "pull_request",
+        null,
+        DELIVERY,
+        buildPullRequestPayload("opened", 1, "owner/repo", "sha", "main")
+            .getBytes(StandardCharsets.UTF_8));
+
+    verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void anEventNamingNoAccountIsNotFiltered() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    allowedAccounts = new AllowedAccounts(List.of("owner"));
+    controller = newController(triggerFilter);
+
+    var response =
+        controller.handleWebhook(
+            "sha256=valid", "ping", null, DELIVERY, "{}".getBytes(StandardCharsets.UTF_8));
+
+    assertEquals(200, response.getStatus());
+    verify(deduplicator).isDuplicate(DELIVERY);
+  }
+
   private WebhookController newController(ReviewTriggerFilter filter) {
     return new WebhookController(
         config,
@@ -123,6 +195,7 @@ class WebhookControllerTest {
         skipEmitter,
         findingFeedbackCapture,
         ciHoldRegistry,
+        allowedAccounts,
         mapper);
   }
 

@@ -110,6 +110,16 @@ public interface ThrillhouseConfig {
     List<String> botLogins();
 
     /**
+     * Comma-separated logins of the accounts whose installations the bot serves. An event from an
+     * installation on any other account is ignored before any work, and the dashboard lists no
+     * other installation. Set it when the GitHub App is public, which dashboard sign-in for anyone
+     * but the App's owner requires, since anyone can install a public App. Unset serves every
+     * installation.
+     */
+    @WithName("allowed-accounts")
+    Optional<List<String>> allowedAccounts();
+
+    /**
      * Minimum spacing between two content-creating GitHub calls (comments, review comments,
      * replies, reviews), shared by the whole process. GitHub's guidance is at most one per second;
      * it answers faster writes with {@code 403}, {@code 429} or a {@code 422} "was submitted too

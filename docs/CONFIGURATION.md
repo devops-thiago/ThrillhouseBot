@@ -94,6 +94,7 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 
 | Variable | Description | Type | Default |
 |---|---|---|---|
+| `GITHUB_ALLOWED_ACCOUNTS`<br>`thrillhousebot.github.allowed-accounts` | Comma-separated logins of the accounts whose installations the bot serves. An event from an installation on any other account is ignored before any work, and the dashboard lists no other installation. Set it when the GitHub App is public, which dashboard sign-in for anyone but the App's owner requires, since anyone can install a public App. Unset serves every installation. | list | _(none)_ |
 | `GITHUB_APP_ID`<br>`thrillhousebot.github.app-id` | GitHub App ID, from the App's settings page. Required. | string | _(none)_ |
 | `GITHUB_BOT_LOGINS`<br>`thrillhousebot.github.bot-logins` | Comma-separated bot logins the bot ignores so it never answers itself. Override when the App slug differs (`<app-slug>[bot]`). | list | `thrillhousebot[bot]`, `thrillhouse-bot[bot]` |
 | `GITHUB_PRIVATE_KEY`<br>`thrillhousebot.github.private-key` | GitHub App private key (PEM), on one line with each newline written as `\n`, unquoted. Required. | string | _(none)_ |

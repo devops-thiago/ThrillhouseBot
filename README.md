@@ -1575,7 +1575,9 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
   supported.
 - **Dashboard access.** GitHub OAuth only, for users who can read a repository
   where the app is installed; no admin UI or guest mode. A change in someone's
-  access reaches the dashboard within five minutes.
+  access reaches the dashboard within five minutes. GitHub lets only the owner of
+  a private app sign in with it, so anyone else needs the app to be public; set
+  `GITHUB_ALLOWED_ACCOUNTS` then, because anyone can install a public app.
 - **Production database.** Container and native builds use PostgreSQL. H2 is for
   `quarkus:dev` and the tests only, and its driver is not packaged in the image.
 - **OpenAI-compatible APIs only.** The endpoint must implement the

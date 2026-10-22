@@ -91,7 +91,9 @@ The container images run as an unprivileged user (UID 1001 on UBI9-micro,
 ### Fail-safe defaults
 
 `WebhookVerifier` rejects a request when the signature header is missing or
-malformed and when no secret is configured. The dashboard refuses a login it
+malformed and when no secret is configured. With `GITHUB_ALLOWED_ACCOUNTS` set,
+an event from an installation on any other account is ignored before any work,
+so a public App installed by a stranger never spends the operator's budget. The dashboard refuses a login it
 has never been able to check with GitHub, keeps a known login's last answer for
 at most 30 minutes while GitHub is unreachable, and ends the session when GitHub
 rejects its token.

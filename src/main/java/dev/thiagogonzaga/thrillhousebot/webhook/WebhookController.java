@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
 import dev.thiagogonzaga.thrillhousebot.review.CiHoldRegistry;
@@ -69,6 +70,8 @@ public class WebhookController {
   private final ReviewSkipEmitter skipEmitter;
   private final FindingFeedbackCaptureService findingFeedbackCapture;
   private final CiHoldRegistry ciHoldRegistry;
+  private final AllowedAccounts allowedAccounts;
+
   private final ObjectMapper mapper;
 
   @Inject
@@ -89,6 +92,7 @@ public class WebhookController {
       ReviewSkipEmitter skipEmitter,
       FindingFeedbackCaptureService findingFeedbackCapture,
       CiHoldRegistry ciHoldRegistry,
+      AllowedAccounts allowedAccounts,
       ObjectMapper mapper) {
     this.config = config;
     this.verifier = verifier;
@@ -106,6 +110,7 @@ public class WebhookController {
     this.skipEmitter = skipEmitter;
     this.findingFeedbackCapture = findingFeedbackCapture;
     this.ciHoldRegistry = ciHoldRegistry;
+    this.allowedAccounts = allowedAccounts;
     this.mapper = mapper;
   }
 
@@ -134,6 +139,17 @@ public class WebhookController {
 
     log.info(
         "Received {} event (action: {}, delivery: {})", eventType, payload.action(), deliveryId);
+
+    // A public App can be installed by anyone; serve only the configured accounts (#1235).
+    var account = accountOf(payload);
+    if (account != null && !allowedAccounts.allows(account)) {
+      log.info(
+          "Ignoring {} event from {}: not an allowed account (delivery: {})",
+          eventType,
+          account,
+          deliveryId);
+      return Response.ok("{\"status\":\"ignored\"}").build();
+    }
 
     // GitHub redeliveries (manual or automatic retry) reuse the same delivery id.
     if (deduplicator.isDuplicate(deliveryId)) {
@@ -655,6 +671,21 @@ public class WebhookController {
             ctx.installationId(),
             ctx.repositoryId(),
             true));
+  }
+
+  /**
+   * The account an event's installation belongs to: the repository owner, or on events without a
+   * repository the installation's account; null when the payload names neither.
+   */
+  private static String accountOf(WebhookPayload payload) {
+    var repo = payload.repository();
+    if (repo != null && repo.owner() != null && repo.owner().login() != null) {
+      return repo.owner().login();
+    }
+    var installation = payload.installation();
+    return installation != null && installation.account() != null
+        ? installation.account().login()
+        : null;
   }
 
   /** The payload's installation id, or the skip counters' key for an unknown installation. */
