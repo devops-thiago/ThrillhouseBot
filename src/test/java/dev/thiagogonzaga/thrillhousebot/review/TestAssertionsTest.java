@@ -21,6 +21,9 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** {@link TestAssertions}: the assertion lines of a failing test's body in the changed files. */
 class TestAssertionsTest {
@@ -83,6 +86,79 @@ class TestAssertionsTest {
     assertEquals(
         List.of("if got := s.first(); got != \"a\" { t.errorf(\"got %q\", got) }"),
         assertions.assertionsOf("TestStoreKeepsOrder"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts"})
+  void commonJsImportsAreSetupNotAssertions(String extension) {
+    var assertions =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "client.test." + extension,
+                    """
+        @@ -0,0 +1,7 @@
+        +  test("loads the client", () => {
+        +    const api = require('../api');
+        +    const dynamic = require(moduleName);
+        +    const resolved = require.resolve('../api');
+        +    module.require('../api');
+        +    expect(api.ready()).toBe(true);
+        +  });
+        """)));
+
+    assertEquals(
+        List.of("expect(api.ready()).tobe(true);"), assertions.assertionsOf("loads the client"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"Checks.kt", "Checks.kts", "Checks.scala"})
+  @NullSource
+  void nonJavaScriptRequireChecksRemainAssertions(String path) {
+    var assertions =
+        TestAssertions.of(
+            List.of(
+                file(
+                    path,
+                    """
+        @@ -0,0 +1,4 @@
+        +  fun checksApi() {
+        +    require(api.isReady())
+        +    require.NoError(t, err)
+        +  }
+        """)));
+
+    assertEquals(
+        List.of("require(api.isready())", "require.noerror(t, err)"),
+        assertions.assertionsOf("checksApi"));
+  }
+
+  @Test
+  void moduleImportsInOneFileDoNotDisableRequireChecksInAnother() {
+    var assertions =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "client.test.js",
+                    """
+            @@ -0,0 +1,4 @@
+            +  function checksApi() {
+            +    const api = require('../api');
+            +    expect(api.ready()).toBe(true);
+            +  }
+            """),
+                file(
+                    "Checks.kt",
+                    """
+            @@ -0,0 +1,3 @@
+            +  fun checksApi() {
+            +    require(api.isReady())
+            +  }
+            """)));
+
+    assertEquals(
+        List.of("expect(api.ready()).tobe(true);", "require(api.isready())"),
+        assertions.assertionsOf("checksApi"));
   }
 
   /** A name of several words is declared where it is written, as a Jest or Vitest title is. */

@@ -23,6 +23,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.regex.Pattern;
 
 /**
@@ -63,7 +64,13 @@ final class TestAssertions {
    * not one. It may follow a qualifier.
    */
   private static final Pattern ASSERTION_CALL =
-      Pattern.compile("(?:[Aa]ssert|[Ee]xpect|[Ss]hould|[Rr]equire|[Vv]erify|[Rr]efute)\\s*+[(!.]");
+      Pattern.compile("(?:[Aa]ssert|[Ee]xpect|[Ss]hould|[Vv]erify|[Rr]efute)\\s*+[(!.]");
+
+  /** Require checks retained in other languages; JS/TS uses require to load modules. */
+  private static final Pattern REQUIRE_CALL = Pattern.compile("[Rr]equire\\s*+[(!.]");
+
+  /** JavaScript/TypeScript files in which CommonJS require is a module loader. */
+  private static final Pattern COMMON_JS_FILE = Pattern.compile("(?i)\\.(?:[cm]?[jt]s|[jt]sx)$");
 
   /**
    * A suffixed assertion, only as a call: {@code assertEquals(}, {@code assertThat(} (JUnit,
@@ -103,7 +110,9 @@ final class TestAssertions {
 
   private static final Pattern WHITESPACE = Pattern.compile("\\s++");
 
-  private final List<PatchLines> patches;
+  private record TestPatch(PatchLines lines, boolean commonJs) {}
+
+  private final List<TestPatch> patches;
 
   /**
    * Where each identifier stands: the patch and the line holding it, built on first use in one pass
@@ -114,7 +123,7 @@ final class TestAssertions {
   /** Lines the index read, for the test that pins one pass. */
   private int linesRead;
 
-  private TestAssertions(List<PatchLines> patches) {
+  private TestAssertions(List<TestPatch> patches) {
     this.patches = patches;
   }
 
@@ -123,11 +132,13 @@ final class TestAssertions {
     if (files == null || files.isEmpty()) {
       return NONE;
     }
-    var patches = new ArrayList<PatchLines>();
+    var patches = new ArrayList<TestPatch>();
     for (var file : files) {
       var lines = PatchLines.parse(file.patch());
       if (!lines.lines().isEmpty()) {
-        patches.add(lines);
+        patches.add(
+            new TestPatch(
+                lines, COMMON_JS_FILE.matcher(Objects.toString(file.filename(), "")).find()));
       }
     }
     return patches.isEmpty() ? NONE : new TestAssertions(List.copyOf(patches));
@@ -146,9 +157,10 @@ final class TestAssertions {
     var single = key.equals(testName);
     var assertions = new LinkedHashSet<String>();
     for (var at : index().getOrDefault(key, List.of())) {
-      var lines = patches.get(at[0]).lines();
+      var patch = patches.get(at[0]);
+      var lines = patch.lines().lines();
       if (single || lines.get(at[1]).text().contains(testName)) {
-        collectBody(lines, at[1], assertions);
+        collectBody(lines, at[1], assertions, patch.commonJs());
       }
     }
     return List.copyOf(assertions);
@@ -163,7 +175,7 @@ final class TestAssertions {
     if (byIdentifier == null) {
       byIdentifier = new HashMap<>();
       for (int p = 0; p < patches.size(); p++) {
-        var lines = patches.get(p).lines();
+        var lines = patches.get(p).lines().lines();
         for (int i = 0; i < lines.size(); i++) {
           linesRead++;
           var seen = new HashSet<String>();
@@ -202,10 +214,10 @@ final class TestAssertions {
    * after the declaration (Allman style) opens the body rather than ending it.
    */
   private static void collectBody(
-      List<PatchLines.Line> lines, int start, LinkedHashSet<String> out) {
+      List<PatchLines.Line> lines, int start, LinkedHashSet<String> out, boolean commonJs) {
     var declaration = lines.get(start);
     int indent = indentOf(declaration.text());
-    addIfAssertion(declaration.text(), out);
+    addIfAssertion(declaration.text(), out, commonJs);
     for (int i = start + 1; i < lines.size() && i <= start + MAX_BODY_LINES; i++) {
       var line = lines.get(i);
       var opensBody = i == start + 1 && line.text().strip().equals("{");
@@ -213,12 +225,12 @@ final class TestAssertions {
           || (!line.text().isBlank() && !opensBody && indentOf(line.text()) <= indent)) {
         return;
       }
-      addIfAssertion(line.text(), out);
+      addIfAssertion(line.text(), out, commonJs);
     }
   }
 
-  private static void addIfAssertion(String line, LinkedHashSet<String> out) {
-    if (statesAnAssertion(line)) {
+  private static void addIfAssertion(String line, LinkedHashSet<String> out, boolean commonJs) {
+    if (statesAnAssertion(line, commonJs)) {
       out.add(normalized(line));
     }
   }
@@ -227,14 +239,14 @@ final class TestAssertions {
    * Whether {@code line} is an assertion: an assertion call opening it, after a binding at most, an
    * {@code assert} statement, or a Go failure call. A comment line never is.
    */
-  static boolean statesAnAssertion(String line) {
+  private static boolean statesAnAssertion(String line, boolean commonJs) {
     var code = line.strip();
     if (COMMENT.matcher(code).lookingAt()) {
       return false;
     }
     var call =
         code.substring(BINDING.matcher(code).results().findFirst().map(m -> m.end()).orElse(0));
-    return opensWithAssertionCall(call)
+    return opensWithAssertionCall(call, commonJs)
         || ASSERT_STATEMENT.matcher(code).lookingAt()
         || GO_FAILURE.matcher(code).find();
   }
@@ -244,16 +256,18 @@ final class TestAssertions {
   }
 
   /** Whether one segment of the dotted name {@code code} opens with starts an assertion call. */
-  private static boolean opensWithAssertionCall(String code) {
+  private static boolean opensWithAssertionCall(String code, boolean commonJs) {
     int end = 0;
     while (end < code.length() && isNameChar(code.charAt(end))) {
       end++;
     }
     var call = ASSERTION_CALL.matcher(code);
     var suffixed = SUFFIXED_CALL.matcher(code);
+    var require = REQUIRE_CALL.matcher(code);
     for (int at = 0; at <= end; at = code.indexOf('.', at) + 1) {
       if (call.region(at, code.length()).lookingAt()
-          || suffixed.region(at, code.length()).lookingAt()) {
+          || suffixed.region(at, code.length()).lookingAt()
+          || (!commonJs && require.region(at, code.length()).lookingAt())) {
         return true;
       }
       if (code.indexOf('.', at) < 0) {

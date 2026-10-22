@@ -276,7 +276,9 @@ final class DescriptionGapScreen {
    * "possibly", "perhaps", "presumably", "maybe", "likely", "probably", "potentially" and
    * "seemingly". After a {@link #CONSEQUENCE} in its sentence such a hedge only weighs what a
    * stated gap leads to. A word joined to another by a hyphen is part of a name ("may-retry"), not
-   * a hedge.
+   * a hedge. {@code would} alone is deliberately not on this list: it can state a definite
+   * consequence of a concrete condition, such as a third call exceeding a two-attempt limit.
+   * Dropping every such counterfactual would hide supported mismatches.
    */
   private static final List<Pattern> SPECULATION =
       List.of(

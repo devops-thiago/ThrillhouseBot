@@ -4,14 +4,6 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
-### Security
-
-- The native image blocks the eight compromised eMudhra intermediate CA certificates of
-  CVE-2026-91403. A native binary keeps the blocked-certificate list of the JDK it was built
-  with, and no Mandrel release carries the updated list yet, so the build replaces it with
-  OpenJDK's updated `blocked.certs`. Runtime revocation flags have no effect on the native
-  binary. CI checks that every fingerprint of the list is in the binary. (#1215)
-
 ## [0.8.0] - 2026-10-21
 
 This release adds suggestion verification, an optional summary check, response repair,
@@ -41,6 +33,14 @@ can keep their configuration. Reviews can make additional repair calls, charged 
 - Complete suffix-only file paths and check paths in finding quotes and suggestions. Remove an unsupported suggestion while keeping its finding (#1094).
 - Recognize a quoted failing-test assertion as a citation of that test, applying the CI confidence floor and linking the finding to the failing check in the summary (#952).
 - Refresh CI before publishing when checks were pending or had not appeared at review start. Include newly failed checks in the summary and raise findings that cite them from low to medium confidence (#1092, #952).
+
+### Security
+
+- The native image blocks the eight compromised eMudhra intermediate CA certificates of
+  CVE-2026-91403. A native binary keeps the blocked-certificate list of the JDK it was built
+  with, and no Mandrel release carries the updated list yet, so the build replaces it with
+  OpenJDK's updated `blocked.certs`. Runtime revocation flags have no effect on the native
+  binary. CI checks that every fingerprint of the list is in the binary. (#1215)
 
 ### Documentation
 
