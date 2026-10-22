@@ -134,7 +134,10 @@ public class ScopeBackfill {
                   installationClient
                       .listInstallationRepositories(auth, ACCEPT, PER_PAGE, page)
                       .repositories())) {
-        if (repo.owner() != null && repo.owner().login() != null && repo.name() != null) {
+        if (repo.id() > 0
+            && repo.owner() != null
+            && repo.owner().login() != null
+            && repo.name() != null) {
           repositories.put(lower(repo.owner().login() + "/" + repo.name()), repo.id());
         }
       }

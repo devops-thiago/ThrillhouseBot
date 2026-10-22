@@ -22,6 +22,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import jakarta.websocket.RemoteEndpoint;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,7 +34,20 @@ class SessionEventBroadcasterTest {
   private static final java.time.Instant FIXED_NOW =
       java.time.Instant.parse("2025-06-01T12:00:00Z");
 
-  private static final SessionEventBroadcaster.RepositoryReader READ_ALL = repository -> true;
+  private static final SessionEventBroadcaster.RepositoryReader READ_ALL =
+      (installationId, repositoryId) -> true;
+
+  /** The installation and repository ids every review session here is stored under. */
+  private static final RepoScope TEST_REPO = new RepoScope(1L, 7L);
+
+  private static final RepoScope OTHER_REPO = new RepoScope(1L, 8L);
+
+  /** A connection that may read exactly {@code scope}. */
+  private static SessionEventBroadcaster.RepositoryReader reads(RepoScope scope) {
+    return (installationId, repositoryId) ->
+        Long.valueOf(scope.installationId()).equals(installationId)
+            && Long.valueOf(scope.repositoryId()).equals(repositoryId);
+  }
 
   private SessionEventBroadcaster broadcaster;
   private ObjectMapper mapper;
@@ -236,7 +250,16 @@ class SessionEventBroadcasterTest {
   void shouldNotBufferNonReviewEvents() {
     var event =
         new SessionEventBroadcaster.SessionEvent(
-            "keepalive", 1L, "owner/repo", 1, "title", "sha", "2025-06-01T12:00:00Z", Map.of());
+            "keepalive",
+            1L,
+            null,
+            null,
+            "owner/repo",
+            1,
+            "title",
+            "sha",
+            "2025-06-01T12:00:00Z",
+            Map.of());
 
     assertDoesNotThrow(() -> broadcaster.broadcast(event));
 
@@ -272,7 +295,8 @@ class SessionEventBroadcasterTest {
     var staleAt = FIXED_NOW.minus(SessionEventBroadcaster.MAX_SESSION_BUFFER_AGE).minusSeconds(1);
     broadcaster.seedReplayState(
         91L,
-        "test/repo",
+        1L,
+        7L,
         "review.started",
         staleAt,
         java.util.List.of("{\"type\":\"review.started\"}"),
@@ -289,8 +313,7 @@ class SessionEventBroadcasterTest {
     reviewSession.id = 92L;
     broadcaster.setClock(java.time.Clock.fixed(FIXED_NOW, java.time.ZoneOffset.UTC));
     var staleAt = FIXED_NOW.minus(SessionEventBroadcaster.MAX_SESSION_BUFFER_AGE).minusSeconds(1);
-    broadcaster.seedReplayState(
-        92L, "test/repo", "review.started", staleAt, java.util.List.of(), null);
+    broadcaster.seedReplayState(92L, 1L, 7L, "review.started", staleAt, java.util.List.of(), null);
 
     broadcaster.broadcast(
         SessionEventBroadcaster.SessionEvent.stream(reviewSession, "tok", "tail", 4, 1, 1));
@@ -639,8 +662,8 @@ class SessionEventBroadcasterTest {
     var allowed = openSession(allowedRemote);
     var deniedRemote = mock(RemoteEndpoint.Async.class);
     var denied = openSession(deniedRemote);
-    broadcaster.addSession(allowed, "TEST/Repo"::equalsIgnoreCase);
-    broadcaster.addSession(denied, "other/repo"::equals);
+    broadcaster.addSession(allowed, reads(TEST_REPO));
+    broadcaster.addSession(denied, reads(OTHER_REPO));
 
     broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(reviewSession));
     broadcaster.sendKeepAlive();
@@ -648,6 +671,8 @@ class SessionEventBroadcasterTest {
     var payload = ArgumentCaptor.forClass(String.class);
     verify(allowedRemote, times(2)).sendText(payload.capture(), any());
     assertTrue(payload.getAllValues().get(0).contains("\"repository\":\"test/repo\""));
+    assertFalse(payload.getAllValues().get(0).contains("installationId"));
+    assertFalse(payload.getAllValues().get(0).contains("repositoryId"));
     verify(deniedRemote).sendText(eq("{\"type\":\"keepalive\"}"), any());
     verifyNoMoreInteractions(deniedRemote);
     assertEquals(2, broadcaster.getConnectedCount());
@@ -656,20 +681,35 @@ class SessionEventBroadcasterTest {
   @Test
   void shouldReplayOnlyActiveReviewsOfReadableRepositories() {
     broadcaster.seedReplayState(
-        70L, "test/repo", "review.started", FIXED_NOW, java.util.List.of("{\"a\":1}"), null);
+        70L, 1L, 7L, "review.started", FIXED_NOW, java.util.List.of("{\"a\":1}"), null);
     broadcaster.seedReplayState(
-        71L, "other/repo", "review.started", FIXED_NOW, java.util.List.of("{\"b\":2}"), null);
+        71L, 1L, 8L, "review.started", FIXED_NOW, java.util.List.of("{\"b\":2}"), null);
     var remote = mock(RemoteEndpoint.Async.class);
 
-    broadcaster.addSession(openSession(remote), "test/repo"::equals);
+    broadcaster.addSession(openSession(remote), reads(TEST_REPO));
 
     verify(remote).sendText(eq("{\"a\":1}"), any());
     verifyNoMoreInteractions(remote);
   }
 
   @Test
+  void theSameRepositoryNameUnderAnotherInstallationGetsNoEventsOrReplays() {
+    var otherInstallation = new RepoScope(2L, TEST_REPO.repositoryId());
+    var liveRemote = mock(RemoteEndpoint.Async.class);
+    broadcaster.addSession(openSession(liveRemote), reads(otherInstallation));
+    var reviewSession = createReviewSession();
+    reviewSession.id = 73L;
+
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(reviewSession));
+    var lateRemote = mock(RemoteEndpoint.Async.class);
+    broadcaster.addSession(openSession(lateRemote), reads(otherInstallation));
+
+    verifyNoInteractions(liveRemote, lateRemote);
+  }
+
+  @Test
   void shouldNotReplayAStateThatNeverRecordedAnEvent() {
-    broadcaster.seedReplayState(72L, "test/repo", null, FIXED_NOW, java.util.List.of("{}"), null);
+    broadcaster.seedReplayState(72L, 1L, 7L, null, FIXED_NOW, java.util.List.of("{}"), null);
     var remote = mock(RemoteEndpoint.Async.class);
 
     broadcaster.addSession(openSession(remote), READ_ALL);
@@ -686,12 +726,13 @@ class SessionEventBroadcasterTest {
 
   private void injectBufferedEvent(long sessionId, String latestType, String json) {
     broadcaster.seedReplayState(
-        sessionId, "test/repo", latestType, FIXED_NOW, java.util.List.of(json), null);
+        sessionId, 1L, 7L, latestType, FIXED_NOW, java.util.List.of(json), null);
   }
 
   private ReviewSession createReviewSession() {
     var session = new ReviewSession();
     session.id = 1L;
+    session.setScope(TEST_REPO);
     session.setRepository("test/repo");
     session.setPrNumber(1);
     session.setPrTitle("Test");

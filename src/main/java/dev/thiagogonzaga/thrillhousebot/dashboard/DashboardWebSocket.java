@@ -66,7 +66,9 @@ public class DashboardWebSocket {
     var scope = sessionValidator.repositoryScope(sessionToken);
     broadcaster.addSession(
         session,
-        repository -> scope.allows(repository) && sessionValidator.isSessionOpen(sessionToken));
+        (installationId, repositoryId) ->
+            scope.allows(installationId, repositoryId)
+                && sessionValidator.isSessionOpen(sessionToken));
     log.info(
         "Dashboard WebSocket connected: {} (total: {})",
         session.getId(),

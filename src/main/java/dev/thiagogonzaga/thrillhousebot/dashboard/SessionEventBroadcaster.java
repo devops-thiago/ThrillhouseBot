@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quarkus.runtime.annotations.RegisterForReflection;
@@ -46,13 +47,14 @@ public final class SessionEventBroadcaster {
   private Clock clock = Clock.systemUTC();
 
   /**
-   * Decides, per connection, whether a review event of one repository may be sent to it. Fixed when
+   * Decides, per connection, whether a review event of one repository may be sent to it, by the
+   * installation and repository id the review was stored under (#1220), never by name. Fixed when
    * the connection opens from the dashboard login's {@link RepositoryScope}, so a broadcast never
    * waits on a GitHub call.
    */
   @FunctionalInterface
   public interface RepositoryReader {
-    boolean canRead(String repository);
+    boolean canRead(Long installationId, Long repositoryId);
   }
 
   /** Each open dashboard connection with the repositories it may receive events for. */
@@ -91,7 +93,7 @@ public final class SessionEventBroadcaster {
       return;
     }
 
-    sendTextTo(reader -> reader.canRead(event.repository()), json);
+    sendTextTo(reader -> reader.canRead(event.installationId(), event.repositoryId()), json);
   }
 
   /** Application-level heartbeat for connected dashboard clients. */
@@ -126,7 +128,8 @@ public final class SessionEventBroadcaster {
     Instant now = Instant.now(clock);
     var state =
         sessionStateById.computeIfAbsent(
-            event.sessionId(), id -> new SessionState(now, event.repository()));
+            event.sessionId(),
+            id -> new SessionState(now, event.installationId(), event.repositoryId()));
     state.latestEventType = event.type();
     state.lastActivityAt = now;
 
@@ -162,7 +165,7 @@ public final class SessionEventBroadcaster {
       var latestType = state.latestEventType;
       if (latestType == null
           || isTerminalReviewEvent(latestType)
-          || !reader.canRead(state.repository)) {
+          || !reader.canRead(state.installationId, state.repositoryId)) {
         continue;
       }
 
@@ -215,12 +218,13 @@ public final class SessionEventBroadcaster {
   /** Seeds replay buffer state for tests without exposing the backing map. */
   void seedReplayState(
       long sessionId,
-      String repository,
+      Long installationId,
+      Long repositoryId,
       String latestEventType,
       Instant lastActivityAt,
       List<String> bufferedEventJson,
       String latestStreamJson) {
-    var state = new SessionState(lastActivityAt, repository);
+    var state = new SessionState(lastActivityAt, installationId, repositoryId);
     state.latestEventType = latestEventType;
     state.lastActivityAt = lastActivityAt;
     state.latestStreamJson = latestStreamJson;
@@ -237,14 +241,16 @@ public final class SessionEventBroadcaster {
   private static final class SessionState {
     private final Object bufferLock = new Object();
     private final Deque<String> buffer = new ArrayDeque<>();
-    final String repository;
+    final Long installationId;
+    final Long repositoryId;
     String latestEventType;
     Instant lastActivityAt;
     String latestStreamJson;
 
-    SessionState(Instant createdAt, String repository) {
+    SessionState(Instant createdAt, Long installationId, Long repositoryId) {
       this.lastActivityAt = createdAt;
-      this.repository = repository;
+      this.installationId = installationId;
+      this.repositoryId = repositoryId;
     }
 
     void appendBufferedEvent(String json, int maxSize) {
@@ -274,6 +280,8 @@ public final class SessionEventBroadcaster {
   public record SessionEvent(
       String type, // review.started, review.stream, review.retry, review.completed, review.failed
       long sessionId,
+      @JsonIgnore Long installationId,
+      @JsonIgnore Long repositoryId,
       String repository,
       int prNumber,
       String prTitle,
@@ -294,6 +302,8 @@ public final class SessionEventBroadcaster {
       return new SessionEvent(
           "review.started",
           session.id,
+          session.getInstallationId(),
+          session.getRepositoryId(),
           session.getRepository(),
           session.getPrNumber(),
           session.getPrTitle(),
@@ -312,6 +322,8 @@ public final class SessionEventBroadcaster {
       return new SessionEvent(
           TYPE_STREAM,
           session.id,
+          session.getInstallationId(),
+          session.getRepositoryId(),
           session.getRepository(),
           session.getPrNumber(),
           session.getPrTitle(),
@@ -337,6 +349,8 @@ public final class SessionEventBroadcaster {
       return new SessionEvent(
           TYPE_RETRY,
           session.id,
+          session.getInstallationId(),
+          session.getRepositoryId(),
           session.getRepository(),
           session.getPrNumber(),
           session.getPrTitle(),
@@ -358,6 +372,8 @@ public final class SessionEventBroadcaster {
       return new SessionEvent(
           TYPE_STREAM_FAILED,
           session.id,
+          session.getInstallationId(),
+          session.getRepositoryId(),
           session.getRepository(),
           session.getPrNumber(),
           session.getPrTitle(),
@@ -378,6 +394,8 @@ public final class SessionEventBroadcaster {
       return new SessionEvent(
           "review.progress",
           session.id,
+          session.getInstallationId(),
+          session.getRepositoryId(),
           session.getRepository(),
           session.getPrNumber(),
           session.getPrTitle(),
@@ -397,6 +415,8 @@ public final class SessionEventBroadcaster {
       return new SessionEvent(
           "review.batch",
           session.id,
+          session.getInstallationId(),
+          session.getRepositoryId(),
           session.getRepository(),
           session.getPrNumber(),
           session.getPrTitle(),
@@ -409,6 +429,8 @@ public final class SessionEventBroadcaster {
       return new SessionEvent(
           TYPE_COMPLETED,
           session.id,
+          session.getInstallationId(),
+          session.getRepositoryId(),
           session.getRepository(),
           session.getPrNumber(),
           session.getPrTitle(),
@@ -441,6 +463,8 @@ public final class SessionEventBroadcaster {
       return new SessionEvent(
           TYPE_FAILED,
           session.id,
+          session.getInstallationId(),
+          session.getRepositoryId(),
           session.getRepository(),
           session.getPrNumber(),
           session.getPrTitle(),

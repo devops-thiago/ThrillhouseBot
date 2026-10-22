@@ -209,13 +209,16 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
             eq("Bearer acme"), anyString(), eq(100), eq(1)))
         .thenReturn(
             new InstallationRepositoriesResponse(
-                4,
+                5,
                 List.of(
                     new InstallationRepositoriesResponse.Repository(1L, null, acme),
                     new InstallationRepositoriesResponse.Repository(2L, "app", null),
                     new InstallationRepositoriesResponse.Repository(
                         3L, "app", new InstallationRepositoriesResponse.Repository.Owner(null)),
-                    new InstallationRepositoriesResponse.Repository(100L, "app", acme))));
+                    new InstallationRepositoriesResponse.Repository(100L, "app", acme),
+                    // Listed without an id: skipped, so it neither replaces the entry above nor
+                    // aborts the run with a scope that cannot exist.
+                    new InstallationRepositoriesResponse.Repository(0L, "app", acme))));
     when(installationClient.listInstallationRepositories(
             eq("Bearer other"), anyString(), eq(100), eq(1)))
         .thenReturn(new InstallationRepositoriesResponse(0, List.of()));
