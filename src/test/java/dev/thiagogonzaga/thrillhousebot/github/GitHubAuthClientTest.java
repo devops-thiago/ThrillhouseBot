@@ -162,6 +162,24 @@ class GitHubAuthClientTest {
   }
 
   @Test
+  void aGoneInstallationsTokenIsDroppedAndOthersAreKept() {
+    when(tokenApi.createInstallationToken(anyString(), anyString(), anyLong()))
+        .thenReturn(new GitHubTokenApi.InstallationTokenResponse("t", "2025-01-01T00:00:00Z"));
+    authClient.getInstallationToken(42L);
+    authClient.getInstallationToken(43L);
+
+    authClient.onInstallationChange(
+        new InstallationChange(InstallationChange.Kind.GONE, 42L, java.util.List.of()));
+    authClient.onInstallationChange(
+        new InstallationChange(InstallationChange.Kind.PERMISSIONS, 43L, java.util.List.of()));
+    authClient.getInstallationToken(42L);
+    authClient.getInstallationToken(43L);
+
+    verify(tokenApi, times(2)).createInstallationToken(anyString(), anyString(), eq(42L));
+    verify(tokenApi, times(1)).createInstallationToken(anyString(), anyString(), eq(43L));
+  }
+
+  @Test
   void shouldGetSeparateTokensForDifferentInstallations() {
     var installId1 = 10L;
     var installId2 = 20L;

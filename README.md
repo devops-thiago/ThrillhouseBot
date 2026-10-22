@@ -274,7 +274,7 @@ Create the GitHub App before starting the bot; its credentials go in `.env`.
 | Webhook secret | Random string |
 | Repository permissions | Pull requests: R/W, Checks: R/W, Contents: Read, Issues: R/W, Actions: Read, Commit statuses: Read |
 | Organization permissions | Members: Read (shows installation-wide dashboard counters to organization members) |
-| Subscribe to events | Pull request, Issue comment, Pull request review comment, Check suite, Status |
+| Subscribe to events | Pull request, Issue comment, Pull request review comment, Check suite, Status, Repository |
 | Identifying and authorizing users | Enabled (for dashboard login) |
 | Callback URL | `https://<your-host>/api/auth/callback` |
 

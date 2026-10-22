@@ -27,6 +27,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.Installation;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.InstallationRepositoriesResponse;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubUserClient;
+import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import java.time.Duration;
@@ -161,6 +162,87 @@ class DashboardAccessCheckerTest {
     var scope = limited.repositoryScope("alice", TOKEN);
 
     assertEquals(List.of(10L), scope.sortedInstallations().stream().map(i -> i.id()).toList());
+  }
+
+  private void change(InstallationChange.Kind kind, long installationId, long... repositoryIds) {
+    checker.onInstallationChange(
+        new InstallationChange(
+            kind,
+            installationId,
+            java.util.Arrays.stream(repositoryIds)
+                .mapToObj(id -> new InstallationChange.Repository(id, "x/" + id))
+                .toList()));
+  }
+
+  @Test
+  void aSuspendedInstallationIsNotServed() {
+    stubInstallations(
+        AUTH,
+        new Installation(
+            10L, new Installation.Account("acme", "Organization"), "2026-06-01T00:00:00Z"),
+        installation(20L, "alice", "User"));
+
+    assertEquals(
+        List.of(20L),
+        checker.repositoryScope("alice", TOKEN).sortedInstallations().stream()
+            .map(i -> i.id())
+            .toList());
+    verify(userClient, never())
+        .listRepositories(anyString(), anyString(), eq(10L), anyInt(), anyInt());
+  }
+
+  @Test
+  void aGoneInstallationStopsBeingServedAtOnceUntilItComesBack() {
+    assertTrue(checker.repositoryScope("alice", TOKEN).allows(10L, 100L));
+
+    change(InstallationChange.Kind.GONE, 10L);
+    var gone = checker.repositoryScope("alice", TOKEN);
+    assertFalse(gone.allows(10L, 100L), "even while GitHub still lists it");
+    assertTrue(gone.allows(20L, 200L));
+
+    change(InstallationChange.Kind.BACK, 10L);
+    assertTrue(checker.repositoryScope("alice", TOKEN).allows(10L, 100L));
+  }
+
+  @Test
+  void aRemovedRepositoryIsHiddenAndServedAgainOnceAdded() {
+    change(InstallationChange.Kind.REPOSITORIES_REMOVED, 10L, 100L);
+    var removed = checker.repositoryScope("alice", TOKEN);
+    assertFalse(removed.allows(10L, 100L));
+    assertTrue(removed.allows(10L, 101L));
+
+    change(InstallationChange.Kind.REPOSITORIES_ADDED, 10L, 100L);
+    assertTrue(checker.repositoryScope("alice", TOKEN).allows(10L, 100L));
+  }
+
+  @Test
+  void everyChangeDropsTheCachedScopes() {
+    checker.repositoryScope("alice", TOKEN);
+    change(InstallationChange.Kind.PERMISSIONS, 10L);
+    checker.repositoryScope("alice", TOKEN);
+    change(InstallationChange.Kind.REPOSITORY_RENAMED, 10L, 100L);
+    checker.repositoryScope("alice", TOKEN);
+
+    verify(userClient, times(3)).listInstallations(eq(AUTH), anyString(), eq(100), eq(1));
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {403, 404})
+  void anInstallationGitHubRefusesToListIsSkippedAlone(int status) {
+    when(userClient.listRepositories(eq(AUTH), anyString(), eq(10L), eq(100), eq(1)))
+        .thenThrow(new WebApplicationException(Response.status(status).build()));
+
+    var scope = checker.repositoryScope("alice", TOKEN);
+
+    assertEquals(List.of(20L), scope.sortedInstallations().stream().map(i -> i.id()).toList());
+  }
+
+  @Test
+  void aServerErrorListingAnInstallationLeavesAccessUnresolved() {
+    when(userClient.listRepositories(eq(AUTH), anyString(), eq(10L), eq(100), eq(1)))
+        .thenThrow(new WebApplicationException(Response.status(502).build()));
+
+    assertEquals(AccessDecision.UNAVAILABLE, checker.checkAccess("alice", TOKEN));
   }
 
   @Test
@@ -323,8 +405,8 @@ class DashboardAccessCheckerTest {
             new GitHubUserClient.UserInstallations(
                 3,
                 java.util.Arrays.asList(
-                    new Installation(30L, null),
-                    new Installation(31L, new Installation.Account(null, "User")),
+                    new Installation(30L, null, null),
+                    new Installation(31L, new Installation.Account(null, "User"), null),
                     installation(20L, "alice", "User"))));
     var owner = new InstallationRepositoriesResponse.Repository.Owner("alice");
     when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(1)))
@@ -376,12 +458,14 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
-  void anEmptyPageEndsTheListing() {
+  void anEmptyPageEndsTheListingAndAnInstallationWithNothingReadableIsLeftOut() {
     when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(1)))
         .thenReturn(new InstallationRepositoriesResponse(0, null));
 
-    assertTrue(
-        checker.repositoryScope("alice", TOKEN).installations().get(20L).repositories().isEmpty());
+    var scope = checker.repositoryScope("alice", TOKEN);
+
+    assertFalse(scope.installations().containsKey(20L));
+    assertTrue(scope.installations().containsKey(10L));
   }
 
   @Test
@@ -438,7 +522,7 @@ class DashboardAccessCheckerTest {
   }
 
   private static Installation installation(long id, String account, String type) {
-    return new Installation(id, new Installation.Account(account, type));
+    return new Installation(id, new Installation.Account(account, type), null);
   }
 
   private static InstallationRepositoriesResponse.Repository repo(

@@ -23,6 +23,7 @@ import static org.mockito.Mockito.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
+import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
@@ -88,6 +89,7 @@ class WebhookControllerTest {
   @Mock private FindingFeedbackCaptureService findingFeedbackCapture;
 
   @Mock private CiHoldRegistry ciHoldRegistry;
+  @Mock private jakarta.enterprise.event.Event<InstallationChange> installationChanges;
 
   private final ObjectMapper mapper = new ObjectMapper();
 
@@ -107,6 +109,116 @@ class WebhookControllerTest {
   }
 
   private AllowedAccounts allowedAccounts = new AllowedAccounts(List.of());
+
+  private void deliver(String event, String json) {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    assertEquals(
+        200,
+        controller
+            .handleWebhook(
+                "sha256=valid", event, null, DELIVERY, json.getBytes(StandardCharsets.UTF_8))
+            .getStatus());
+  }
+
+  private InstallationChange firedChange() {
+    var captor = org.mockito.ArgumentCaptor.forClass(InstallationChange.class);
+    verify(installationChanges).fire(captor.capture());
+    return captor.getValue();
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({
+    "deleted, GONE",
+    "suspend, GONE",
+    "unsuspend, BACK",
+    "new_permissions_accepted, PERMISSIONS"
+  })
+  void installationEventsAreAnnouncedToTheObservers(String action, InstallationChange.Kind kind) {
+    deliver(
+        "installation",
+        "{\"action\":\""
+            + action
+            + "\",\"installation\":{\"id\":5,\"account\":{\"login\":\"owner\"}}}");
+
+    assertEquals(new InstallationChange(kind, 5L, List.of()), firedChange());
+  }
+
+  @Test
+  void otherOrIncompleteInstallationEventsAnnounceNothing() {
+    deliver("installation", "{\"action\":\"created\",\"installation\":{\"id\":5}}");
+    deliver("installation", "{\"action\":\"deleted\"}");
+    deliver("installation", "{\"action\":\"deleted\",\"installation\":{\"id\":0}}");
+    deliver("installation", "{\"installation\":{\"id\":5}}");
+
+    verifyNoInteractions(installationChanges);
+  }
+
+  @Test
+  void removedAndAddedRepositoriesAreAnnounced() {
+    deliver(
+        "installation_repositories",
+        "{\"action\":\"removed\",\"installation\":{\"id\":5},"
+            + "\"repositories_removed\":[{\"id\":70,\"full_name\":\"owner/a\"},{\"id\":0},null],"
+            + "\"repositories_added\":[{\"id\":71,\"full_name\":\"owner/b\"}]}");
+
+    var captor = org.mockito.ArgumentCaptor.forClass(InstallationChange.class);
+    verify(installationChanges, times(2)).fire(captor.capture());
+    assertEquals(
+        List.of(
+            new InstallationChange(
+                InstallationChange.Kind.REPOSITORIES_REMOVED,
+                5L,
+                List.of(new InstallationChange.Repository(70L, "owner/a"))),
+            new InstallationChange(
+                InstallationChange.Kind.REPOSITORIES_ADDED,
+                5L,
+                List.of(new InstallationChange.Repository(71L, "owner/b")))),
+        captor.getAllValues());
+  }
+
+  @Test
+  void repositoryListsWithNothingUsableAnnounceNothing() {
+    deliver(
+        "installation_repositories",
+        "{\"action\":\"removed\",\"installation\":{\"id\":5},\"repositories_removed\":[{\"id\":0}]}");
+    deliver("installation_repositories", "{\"action\":\"added\"}");
+    deliver(
+        "installation_repositories",
+        "{\"action\":\"added\",\"installation\":{\"id\":0},\"repositories_added\":[{\"id\":71}]}");
+
+    verifyNoInteractions(installationChanges);
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"renamed", "transferred"})
+  void aRenamedOrTransferredRepositoryIsAnnouncedWithItsNewName(String action) {
+    deliver(
+        "repository",
+        "{\"action\":\""
+            + action
+            + "\",\"repository\":{\"id\":7,\"full_name\":\"owner/new\","
+            + "\"name\":\"new\",\"owner\":{\"login\":\"owner\"}},\"installation\":{\"id\":5}}");
+
+    assertEquals(
+        new InstallationChange(
+            InstallationChange.Kind.REPOSITORY_RENAMED,
+            5L,
+            List.of(new InstallationChange.Repository(7L, "owner/new"))),
+        firedChange());
+  }
+
+  @Test
+  void otherOrIncompleteRepositoryEventsAnnounceNothing() {
+    deliver(
+        "repository",
+        "{\"action\":\"edited\",\"repository\":{\"id\":7,\"full_name\":\"owner/new\"},\"installation\":{\"id\":5}}");
+    deliver("repository", "{\"action\":\"renamed\",\"installation\":{\"id\":5}}");
+    deliver(
+        "repository",
+        "{\"action\":\"renamed\",\"repository\":{\"id\":7,\"name\":\"new\"},\"installation\":{\"id\":5}}");
+
+    verifyNoInteractions(installationChanges);
+  }
 
   @Test
   void eventsFromAnotherAccountsInstallationRunNothing() {
@@ -196,6 +308,7 @@ class WebhookControllerTest {
         findingFeedbackCapture,
         ciHoldRegistry,
         allowedAccounts,
+        installationChanges,
         mapper);
   }
 

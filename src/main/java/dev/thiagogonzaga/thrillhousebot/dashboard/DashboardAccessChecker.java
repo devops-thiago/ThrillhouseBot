@@ -20,7 +20,10 @@ import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubUserClient;
+import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.WebApplicationException;
 import java.nio.charset.StandardCharsets;
@@ -31,6 +34,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -108,6 +112,8 @@ public class DashboardAccessChecker {
   private final AllowedAccounts allowedAccounts;
   private final Supplier<Instant> clock;
   private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
+  private final Set<Long> goneInstallations = ConcurrentHashMap.newKeySet();
+  private final Set<RepoScope> removedRepositories = ConcurrentHashMap.newKeySet();
   private final AtomicBoolean membersPermissionWarned = new AtomicBoolean();
 
   @Inject
@@ -222,10 +228,15 @@ public class DashboardAccessChecker {
       if (account == null
           || account.login() == null
           || owner.filter(o -> !o.equalsIgnoreCase(account.login())).isPresent()
-          || !allowedAccounts.allows(account.login())) {
+          || !allowedAccounts.allows(account.login())
+          || installation.suspendedAt() != null
+          || goneInstallations.contains(installation.id())) {
         continue;
       }
       var repositories = repositories(userAuth, installation.id());
+      if (repositories.isEmpty()) {
+        continue;
+      }
       installations.put(
           installation.id(),
           new RepositoryScope.Installation(
@@ -237,23 +248,68 @@ public class DashboardAccessChecker {
     return new RepositoryScope(installations);
   }
 
-  /** The repositories of one installation the user can read, by id, as {@code owner/name}. */
+  /**
+   * The repositories of one installation the user can read, by id, as {@code owner/name}, without
+   * the ones a webhook said were removed (#1222). An installation GitHub refuses to list (403 or
+   * 404, such as one suspended or uninstalled a moment ago) reads as having none, so it never takes
+   * the user's other installations down with it.
+   */
   private Map<Long, String> repositories(String userAuth, long installationId) {
     var repositories = new HashMap<Long, String>();
-    for (var repo :
-        allPages(
-            page ->
-                userClient
-                    .listRepositories(userAuth, ACCEPT, installationId, PER_PAGE, page)
-                    .repositories())) {
+    List<GitHubInstallationClient.InstallationRepositoriesResponse.Repository> listed;
+    try {
+      listed =
+          allPages(
+              page ->
+                  userClient
+                      .listRepositories(userAuth, ACCEPT, installationId, PER_PAGE, page)
+                      .repositories());
+    } catch (WebApplicationException e) {
+      var status = e.getResponse().getStatus();
+      if (status == 403 || status == 404) {
+        log.info(
+            "GitHub refused to list installation {} ({}); skipping it", installationId, status);
+        return repositories;
+      }
+      throw e;
+    }
+    for (var repo : listed) {
       if (repo.id() > 0
           && repo.name() != null
           && repo.owner() != null
-          && repo.owner().login() != null) {
+          && repo.owner().login() != null
+          && !removedRepositories.contains(new RepoScope(installationId, repo.id()))) {
         repositories.putIfAbsent(repo.id(), repo.owner().login() + "/" + repo.name());
       }
     }
     return repositories;
+  }
+
+  /**
+   * Applies an installation change from the webhook (#1222): a gone installation and a removed
+   * repository are left out of every scope from now on, until unsuspended or added again, and every
+   * cached scope is dropped so the change is served at once. The lists are in memory only: after a
+   * restart GitHub's own answer, which has caught up by then, is all that is needed.
+   */
+  void onInstallationChange(@Observes InstallationChange change) {
+    var installationId = change.installationId();
+    switch (change.kind()) {
+      case GONE -> goneInstallations.add(installationId);
+      case BACK -> goneInstallations.remove(installationId);
+      case REPOSITORIES_REMOVED ->
+          change
+              .repositories()
+              .forEach(r -> removedRepositories.add(new RepoScope(installationId, r.id())));
+      case REPOSITORIES_ADDED ->
+          change
+              .repositories()
+              .forEach(r -> removedRepositories.remove(new RepoScope(installationId, r.id())));
+      case PERMISSIONS, REPOSITORY_RENAMED -> {
+        // Nothing to remember: what a login may see, or a name, changed; the cleared cache
+        // re-reads it.
+      }
+    }
+    cache.clear();
   }
 
   /**

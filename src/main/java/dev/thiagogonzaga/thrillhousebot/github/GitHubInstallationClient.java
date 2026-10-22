@@ -80,7 +80,11 @@ public interface GitHubInstallationClient {
       @PathParam("org") String org,
       @PathParam("username") String username);
 
-  record Installation(long id, Account account) {
+  /**
+   * An installation of the App; {@code suspendedAt} is set while its owner has it suspended, and
+   * such an installation is not served (#1222).
+   */
+  record Installation(long id, Account account, @JsonProperty("suspended_at") String suspendedAt) {
     public record Account(String login, String type) {}
   }
 

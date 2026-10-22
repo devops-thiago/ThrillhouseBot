@@ -306,7 +306,7 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
 
   private static GitHubInstallationClient.Installation installation(long id, String account) {
     return new GitHubInstallationClient.Installation(
-        id, new GitHubInstallationClient.Installation.Account(account, "Organization"));
+        id, new GitHubInstallationClient.Installation.Account(account, "Organization"), null);
   }
 
   private static InstallationRepositoriesResponse repositories(Repo... repos) {

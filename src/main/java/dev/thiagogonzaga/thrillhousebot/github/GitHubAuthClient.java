@@ -25,6 +25,7 @@ import com.nimbusds.jwt.SignedJWT;
 import dev.thiagogonzaga.thrillhousebot.config.RsaPrivateKeyParser;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import java.security.interfaces.RSAPrivateKey;
 import java.time.Duration;
@@ -256,6 +257,16 @@ public class GitHubAuthClient {
    * out a reference to an overridable method — CDI subclasses this bean. For the same reason
    * everything it reaches is private, and the public token methods only delegate to it.
    */
+  /**
+   * Drops a gone installation's cached token (#1222), so nothing keeps calling GitHub with it after
+   * the installation was uninstalled or suspended.
+   */
+  void onInstallationChange(@Observes InstallationChange change) {
+    if (change.kind() == InstallationChange.Kind.GONE) {
+      tokenCache.remove(change.installationId());
+    }
+  }
+
   Optional<String> refreshedAuthHeader(String deadAuthHeader) {
     return mintedReplacementFor(deadAuthHeader);
   }

@@ -98,6 +98,23 @@ class DashboardWebSocketKeepAliveTest {
   }
 
   @Test
+  void anInstallationChangeRefreshesTheConnectionsAtOnce() {
+    SessionEventBroadcaster broadcaster = mock(SessionEventBroadcaster.class);
+    var keepAlive =
+        new DashboardWebSocketKeepAlive(
+            mock(Vertx.class), broadcaster, mock(ThrillhouseConfig.class));
+
+    keepAlive.onInstallationChange(
+        new dev.thiagogonzaga.thrillhousebot.github.InstallationChange(
+            dev.thiagogonzaga.thrillhousebot.github.InstallationChange.Kind.GONE,
+            10L,
+            java.util.List.of()));
+
+    verify(broadcaster, timeout(5_000)).refreshReaders();
+    keepAlive.onStop(mock(ShutdownEvent.class));
+  }
+
+  @Test
   void aRefreshAfterShutdownIsSkippedQuietly() {
     SessionEventBroadcaster broadcaster = mock(SessionEventBroadcaster.class);
     var keepAlive =

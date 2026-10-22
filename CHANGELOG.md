@@ -11,6 +11,13 @@ without it those counters stay hidden and nothing else changes.
 
 ### Changed
 
+- The bot follows installation and repository events. Uninstalling or suspending the App, or
+  removing a repository from an installation, stops the dashboard serving it at once instead of
+  after its cache expired; unsuspending or adding it back serves it again. A renamed or
+  transferred repository's stored rows show its new name. The App now subscribes to the
+  **Repository** event; an existing App must tick it under Permissions & events. Purging an
+  installation's rows by installation id is documented in `docs/OPERATIONS.md`. (#1222)
+
 - Flyway now owns the database schema. Migrations in `src/main/resources/db/migration` run at
   startup, and Hibernate only validates the entities against them instead of updating the schema
   itself. A database created before this release has the tables but no history; on its first
