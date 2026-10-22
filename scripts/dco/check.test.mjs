@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -297,4 +297,44 @@ test('remediation output identifies the certifying commit', async () => {
   assert.equal(result.failures.length, 0);
   assert.equal(result.accepted.find(c => c.sha === squash).remediation, repair);
   assert.ok(f.output.find(line => line.includes(squash)).includes(`remediation ${repair}`));
+});
+
+test('changelog union proof is explicit and ignores untracked local attributes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dco-union-'));
+  try {
+    const git = new Git(dir); const run = (...args) => git.run(...args);
+    run('init', '-b', 'main'); run('config', 'user.name', 'Alice'); run('config', 'user.email', 'alice@example.org'); run('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(dir, 'CHANGELOG.md'), 'base\n'); run('add', '.'); run('commit', '-s', '-m', 'base'); const b = run('rev-parse', 'HEAD');
+    run('checkout', '-b', 'topic'); writeFileSync(join(dir, 'CHANGELOG.md'), 'base\ntopic entry\n'); run('add', '.'); run('commit', '-s', '-m', 'topic entry');
+    run('checkout', 'main'); writeFileSync(join(dir, 'CHANGELOG.md'), 'base\nmain entry\n'); run('add', '.'); run('commit', '-s', '-m', 'main entry');
+    writeFileSync(join(dir, '.git/info/attributes'), 'CHANGELOG.md merge=union\n');
+    run('merge', '--no-ff', '-m', 'keep both entries', 'topic'); const merged = run('rev-parse', 'HEAD'); const parents = git.parents(merged);
+    assert.throws(() => git.mergeTree(...parents)); // Default proof must not inherit .git/info/attributes.
+    assert.equal(git.mergeTree(...parents, 'changelog-union'), git.tree(merged));
+    const checker = new DcoChecker(git, { commit: async () => { throw new Error('No API call expected'); } }, repo, () => {});
+    const valid = await checker.check(b, merged, owner);
+    assert.equal(valid.failures.length, 0);
+    assert.equal(valid.accepted.find(c => c.sha === merged).mergePolicy, 'changelog-union');
+    writeFileSync(join(dir, 'CHANGELOG.md'), 'base\nmain entry\ntopic entry\nuncertified extra entry\n'); run('add', '.'); run('commit', '--amend', '-m', 'extra edit');
+    assert.equal((await checker.check(b, run('rev-parse', 'HEAD'), owner)).failures.length, 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+for (const file of ['other.txt', 'docs/CHANGELOG.md', 'changelog.md']) test(`a local union driver cannot certify changes in ${file}`, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dco-untrusted-attrs-'));
+  try {
+    const git = new Git(dir); const run = (...args) => git.run(...args);
+    run('init', '-b', 'main'); run('config', 'user.name', 'Alice'); run('config', 'user.email', 'alice@example.org'); run('config', 'commit.gpgsign', 'false');
+    mkdirSync(join(dir, 'docs'), { recursive: true });
+    writeFileSync(join(dir, file), 'base\n'); run('add', '.'); run('commit', '-s', '-m', 'base'); const b = run('rev-parse', 'HEAD');
+    run('checkout', '-b', 'topic'); writeFileSync(join(dir, file), 'base\ntopic\n'); run('add', '.'); run('commit', '-s', '-m', 'topic');
+    run('checkout', 'main'); writeFileSync(join(dir, file), 'base\nmain\n'); run('add', '.'); run('commit', '-s', '-m', 'main');
+    writeFileSync(join(dir, '.git/info/attributes'), '* merge=union\n'); run('merge', '--no-ff', '-m', 'untrusted union', 'topic'); const merged = run('rev-parse', 'HEAD');
+    const checker = new DcoChecker(git, { commit: async () => { throw new Error('No API call expected'); } }, repo, () => {});
+    assert.equal((await checker.check(b, merged, owner)).failures.length, 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('unknown reconstruction policies are rejected', () => {
+  assert.throws(() => new Git().mergeTree(base, source, 'all-files-union'), /Unknown merge proof policy/);
 });
