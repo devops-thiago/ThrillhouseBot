@@ -35,8 +35,7 @@ import java.time.Instant;
  * is read back into a prompt, and never interpreted. Retraction clears {@link #active} instead of
  * deleting the row, so who taught what, where, and who took it back stays auditable.
  *
- * <p>Schema is managed like every other table here (Hibernate schema update; there is no Flyway in
- * this project), so upgrading creates the table on first start.
+ * <p>The table is created by the Flyway migrations like every other table here (#22).
  */
 @Entity
 @Table(

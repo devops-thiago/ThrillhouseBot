@@ -60,8 +60,8 @@ public class ReviewSession extends PanacheEntity {
    * the dashboard can flag under-reported spend. Cleared by {@link SessionCostBackfill} once
    * pricing is added and the cost is recomputed.
    *
-   * <p>{@code default false} is required so schema-update can add this NOT NULL column to a
-   * populated Postgres table (without it, existing rows are null and the ALTER fails).
+   * <p>{@code default false} let the NOT NULL column be added to a populated table; the V1
+   * migration keeps it (#22).
    */
   @Column(nullable = false, columnDefinition = "boolean not null default false")
   boolean pricingMissing;

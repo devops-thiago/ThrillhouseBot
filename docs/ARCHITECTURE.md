@@ -550,8 +550,10 @@ does not lose it. On startup `InterruptedSessionReconciler` marks every session 
 | `FindingFeedback` | `finding_feedback` | 👍/👎 reactions and reply signals on findings. See [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/). |
 | `ReviewLearning` | `review_learning` | Review learnings, scoped to installation and repository. A retracted row stays, with `active` cleared. |
 
-Production uses PostgreSQL (`DATABASE_URL`); dev mode uses in-memory H2. There are no migration
-scripts: Hibernate updates the schema in production and drops and recreates it in dev.
+Production uses PostgreSQL (`DATABASE_URL`); dev mode and the tests use in-memory H2 in PostgreSQL
+mode. Flyway runs the scripts in `src/main/resources/db/migration` at boot, and Hibernate only
+validates the entities against the result. A database created before migrations were adopted is
+baselined at V1, the v0.8.0 schema.
 
 ## Dashboard and notifications
 

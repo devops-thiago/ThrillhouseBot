@@ -58,12 +58,10 @@ Three notes on that table:
   before the release, so the notes always say whether a release needs any.
   The 0.6.8 notes list the two events it needed; the 0.7.0 notes say that no
   new permission is needed.
-- The schema has no migration scripts. On startup the production profile lets
-  Hibernate update it in place (`schema-management.strategy=update`), which
-  adds tables and columns and never drops or renames them. A change that
-  needs more than that comes with a manual step in the release notes. Going
-  back to an older release after its schema was updated is not supported, so
-  back up the database before you upgrade.
+- Schema changes are Flyway migrations that run on startup. A released
+  migration is never edited, and a database from before v0.9.0 is baselined
+  at the v0.8.0 schema. Going back to an older release after its schema was
+  migrated is not supported, so back up the database before you upgrade.
 - Quarkus's own `quarkus.*` properties follow Quarkus and can change when the
   Quarkus version does. Only the ones the README documents are covered.
 
