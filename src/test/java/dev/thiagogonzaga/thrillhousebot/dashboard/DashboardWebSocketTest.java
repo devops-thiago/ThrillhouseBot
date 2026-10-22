@@ -223,9 +223,7 @@ class DashboardWebSocketTest {
     var session = sessionWithTicket("ws-broken", "broken-token");
     when(session.isOpen()).thenReturn(true);
     webSocket.onOpen(session);
-    org.mockito.Mockito.doThrow(new java.io.IOException("gone"))
-        .when(session)
-        .close(any(CloseReason.class));
+    doThrow(new java.io.IOException("gone")).when(session).close(any(CloseReason.class));
 
     assertDoesNotThrow(() -> broadcaster.refreshReaders());
     assertEquals(0, broadcaster.getConnectedCount());

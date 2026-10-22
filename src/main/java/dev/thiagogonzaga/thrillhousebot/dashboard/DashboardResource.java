@@ -58,6 +58,7 @@ public class DashboardResource {
   private static final String KEY_COUNT = "count";
   private static final String KEY_SINCE = "since";
   private static final String KEY_TOTAL_EVENTS = "totalEvents";
+  private static final String KEY_REPOSITORIES = "repositories";
 
   /** Named parameter of the period start in every time-bounded query. */
   private static final String PARAM_SINCE = "since";
@@ -164,7 +165,7 @@ public class DashboardResource {
                         i.id(),
                         "account",
                         i.account(),
-                        "repositories",
+                        KEY_REPOSITORIES,
                         i.repositories().size(),
                         "installationWide",
                         i.installationWide()))
@@ -388,7 +389,7 @@ public class DashboardResource {
       var recent = findingFeedbackService.listRecent(repoScope.get(), 50);
       return Response.ok(
               Map.of(
-                  "repositories",
+                  KEY_REPOSITORIES,
                   List.of(
                       feedbackRow(
                           summary.repository(),
@@ -416,7 +417,7 @@ public class DashboardResource {
     rows.sort(
         Comparator.comparingLong((Map<String, Object> row) -> (Long) row.get(KEY_TOTAL_EVENTS))
             .reversed());
-    return Response.ok(Map.of("repositories", rows)).build();
+    return Response.ok(Map.of(KEY_REPOSITORIES, rows)).build();
   }
 
   private static Map<String, Object> feedbackRow(
@@ -534,8 +535,8 @@ public class DashboardResource {
     params.put(PARAM_SINCE, since);
     var where = FIELD_TIMESTAMP + " > :since AND " + scope.where(null, params);
     if (status != null) {
-      where += " AND " + FIELD_STATUS + " = :status";
-      params.put("status", status);
+      where += " AND " + FIELD_STATUS + " = :" + FIELD_STATUS;
+      params.put(FIELD_STATUS, status);
     }
     return nullSafeCount(reviewSessionRepository.count(where, params));
   }

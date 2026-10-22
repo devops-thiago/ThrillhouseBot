@@ -112,7 +112,7 @@ class DashboardWebSocketKeepAliveTest {
   }
 
   /** Polls {@code condition} for up to five seconds, failing if it never holds. */
-  private static void await(java.util.function.BooleanSupplier condition) throws Exception {
+  private static void await(java.util.function.BooleanSupplier condition) {
     var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
     while (!condition.getAsBoolean()) {
       if (System.nanoTime() > deadline) {

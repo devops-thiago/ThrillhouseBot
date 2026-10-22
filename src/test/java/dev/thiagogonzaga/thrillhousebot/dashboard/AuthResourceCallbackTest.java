@@ -392,7 +392,7 @@ class AuthResourceCallbackTest {
 
   @Test
   void meEndsTheSessionWhenGitHubRejectsItsToken() {
-    when(fixtureContext.accessChecker.checkAccess(eq("testuser"), eq("gho_secret")))
+    when(fixtureContext.accessChecker.checkAccess("testuser", "gho_secret"))
         .thenReturn(DashboardAccessChecker.AccessDecision.TOKEN_REJECTED);
     var sessionId =
         fixtureContext.sessionStore.createSession("testuser", "gho_secret", "https://a.co", "Test");
