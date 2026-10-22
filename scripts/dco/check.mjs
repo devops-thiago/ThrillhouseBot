@@ -1,5 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -21,7 +23,25 @@ export class Git {
   }
   parents(sha) { return this.run('show', '-s', '--format=%P', sha).split(' ').filter(Boolean); }
   tree(sha) { return this.run('rev-parse', `${sha}^{tree}`); }
-  mergeTree(parent, head) { return this.run('merge-tree', '--write-tree', parent, head).split('\n')[0]; }
+  mergeTree(parent, head, policy = 'default') {
+    if (!['default', 'changelog-union'].includes(policy)) throw new Error('Unknown merge proof policy');
+    const objects = this.run('rev-parse', '--path-format=absolute', '--git-path', 'objects');
+    const scratch = mkdtempSync(join(tmpdir(), 'dco-merge-proof-'));
+    // A proof must not depend on developer-local drivers, attributes or templates.
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+      GIT_ATTR_NOSYSTEM: '1', GIT_CONFIG_COUNT: '0', GIT_ALTERNATE_OBJECT_DIRECTORIES: JSON.stringify(objects) };
+    for (const key of ['GIT_DIR', 'GIT_COMMON_DIR', 'GIT_WORK_TREE', 'GIT_OBJECT_DIRECTORY', 'GIT_INDEX_FILE', 'GIT_ATTR_SOURCE', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG', 'GIT_SHALLOW_FILE']) delete env[key];
+    const run = (...args) => execFileSync('git', ['--git-dir', scratch, ...args], {
+      cwd: this.cwd, env, encoding: 'utf8', timeout: 60000, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    try {
+      run('init', '--bare', '--quiet', '--template=');
+      mkdirSync(join(scratch, 'info'), { recursive: true });
+      // The repository's keep-both changelog policy is the only alternate proof.
+      if (policy === 'changelog-union') writeFileSync(join(scratch, 'info', 'attributes'), '/CHANGELOG.md merge=union\n');
+      return run('-c', 'core.attributesFile=/dev/null', '-c', 'core.ignorecase=false', 'merge-tree', '--write-tree', parent, head).split('\n')[0];
+    } finally { rmSync(scratch, { recursive: true, force: true }); }
+  }
   fetchPull(number, expected) {
     // Git objects are content-addressed. A locally present API-pinned head already
     // supplies exactly the same evidence; never replace it with a moving branch tip.
@@ -101,8 +121,11 @@ export class DcoChecker {
   }
   automaticMerge(sha, parents) {
     if (parents.length !== 2) return false;
-    try { return this.git.mergeTree(parents[0], parents[1]) === this.git.tree(sha); }
-    catch { return false; } // A conflict or unreadable tree needs certification.
+    for (const policy of ['default', 'changelog-union']) {
+      try { if (this.git.mergeTree(parents[0], parents[1], policy) === this.git.tree(sha)) return policy; }
+      catch { /* A conflict or unreadable tree proves nothing under this policy. */ }
+    }
+    return false;
   }
   async validate(sha, opener, stack = new Set()) {
     if (!SHA.test(sha)) throw new Error('Invalid commit SHA');
@@ -112,7 +135,8 @@ export class DcoChecker {
     if (remediation) return remediation;
     const parents = this.git.parents(sha);
     if (parents.length > 1) {
-      if (this.automaticMerge(sha, parents)) return { sha, method: 'unchanged-automatic-merge' };
+      const mergePolicy = this.automaticMerge(sha, parents);
+      if (mergePolicy) return { sha, method: 'unchanged-automatic-merge', mergePolicy };
       throw new Error('Merge lacks author certification and unchanged automatic-merge evidence');
     }
     if (await this.bot(sha, opener)) return { sha, method: 'authenticated-bot-pr' };
@@ -179,7 +203,7 @@ export class DcoChecker {
       try {
         const result = await this.validate(sha, opener);
         accepted.push(result);
-        this.log(`ok ${sha}: ${result.method}${result.pull ? ` (source PR #${result.pull})` : ''}${result.remediation ? ` (remediation ${result.remediation})` : ''}`);
+        this.log(`ok ${sha}: ${result.method}${result.pull ? ` (source PR #${result.pull})` : ''}${result.remediation ? ` (remediation ${result.remediation})` : ''}${result.mergePolicy ? ` (merge policy ${result.mergePolicy})` : ''}`);
       } catch (error) {
         failures.push({ sha, reason: error.message });
         this.log(`::error::DCO ${sha}: ${safe(error.message)}. Supply complete source evidence or an author-signed DCO-Remediation commit; do not rewrite shared history.`);

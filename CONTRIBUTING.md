@@ -187,6 +187,14 @@ establish certification. Unavailable evidence fails the check. A bot exemption c
 through its authenticated original bot PR; a bot-shaped email alone never
 exempts a commit in a human release PR.
 
+Merge reconstruction runs in an isolated temporary repository, so local Git
+attributes and custom drivers cannot change the proof. It first tries Git's
+default merge, then the repository's keep-both policy for the root
+`CHANGELOG.md` only (`merge=union`). Either result must match the complete
+recorded tree exactly. Other files and extra merge-only edits are still
+checked. The evidence report names the policy that reproduced each merge.
+These proof settings do not change how contributors merge branches.
+
 For incomplete evidence in shared history, the affected author can add a new,
 cryptographically signed and signed-off commit containing one trailer for each
 full commit SHA they explicitly certify:
