@@ -570,6 +570,11 @@ live `fence(...)` (#604).
   (`quarkus.native.additional-build-args` in `application.properties`). Add a new one there.
 - Classpath resources read at run time must be listed in `quarkus.native.resources.includes`
   (e.g. the jtokkit BPE table `TokenCounter` loads).
+- The binary keeps the builder JDK's blocked-certificate list, and runtime security properties
+  such as `com.sun.net.ssl.checkRevocation` have no effect on it. Until a Mandrel release ships
+  the CVE-2026-91403 list, the `native` profile mounts `src/main/docker/security/blocked.certs`
+  over the builder's copy, `Dockerfile.multistage` copies it in, and the `native-build` job
+  checks its fingerprints are in the binary (#1215). Remove all three once Mandrel carries it.
 - `nativeimage/NativeImageIT` (under `src/test/java/`) is a `@QuarkusIntegrationTest` that
   failsafe runs against the native binary under `-Pnative` (#671): boot past
   `StartupConfigValidator`, readiness over PostgreSQL, and webhook HMAC and Jackson binding.

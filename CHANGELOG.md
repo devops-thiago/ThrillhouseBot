@@ -4,6 +4,14 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Security
+
+- The native image blocks the eight compromised eMudhra intermediate CA certificates of
+  CVE-2026-91403. A native binary keeps the blocked-certificate list of the JDK it was built
+  with, and no Mandrel release carries the updated list yet, so the build replaces it with
+  OpenJDK's updated `blocked.certs`. Runtime revocation flags have no effect on the native
+  binary. CI checks that every fingerprint of the list is in the binary. (#1215)
+
 ## [0.8.0] - 2026-10-21
 
 This release adds suggestion verification, an optional summary check, response repair,
