@@ -34,6 +34,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -224,28 +225,35 @@ public class DashboardAccessChecker {
         allPages(
             page ->
                 userClient.listInstallations(userAuth, ACCEPT, PER_PAGE, page).installations())) {
-      var account = installation.account();
-      if (account == null
-          || account.login() == null
-          || owner.filter(o -> !o.equalsIgnoreCase(account.login())).isPresent()
-          || !allowedAccounts.allows(account.login())
-          || installation.suspendedAt() != null
-          || goneInstallations.contains(installation.id())) {
-        continue;
-      }
-      var repositories = repositories(userAuth, installation.id());
-      if (repositories.isEmpty()) {
-        continue;
-      }
-      installations.put(
-          installation.id(),
-          new RepositoryScope.Installation(
+      if (served(installation, owner)) {
+        var repositories = repositories(userAuth, installation.id());
+        if (!repositories.isEmpty()) {
+          installations.put(
               installation.id(),
-              account.login(),
-              installationWide(installation, login),
-              repositories));
+              new RepositoryScope.Installation(
+                  installation.id(),
+                  installation.account().login(),
+                  installationWide(installation, login),
+                  repositories));
+        }
+      }
     }
     return new RepositoryScope(installations);
+  }
+
+  /**
+   * Whether the dashboard serves this installation at all: it names its account, the account is the
+   * configured owner (when set) and allowed, and it is neither suspended nor gone (#1222).
+   */
+  private boolean served(
+      GitHubInstallationClient.Installation installation, Optional<String> owner) {
+    var account = installation.account();
+    return account != null
+        && account.login() != null
+        && owner.filter(o -> !o.equalsIgnoreCase(account.login())).isEmpty()
+        && allowedAccounts.allows(account.login())
+        && installation.suspendedAt() == null
+        && !goneInstallations.contains(installation.id());
   }
 
   /**

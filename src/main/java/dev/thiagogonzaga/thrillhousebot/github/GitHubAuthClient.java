@@ -237,6 +237,16 @@ public class GitHubAuthClient {
   }
 
   /**
+   * Drops a gone installation's cached token (#1222), so nothing keeps calling GitHub with it after
+   * the installation was uninstalled or suspended.
+   */
+  void onInstallationChange(@Observes InstallationChange change) {
+    if (change.kind() == InstallationChange.Kind.GONE) {
+      tokenCache.remove(change.installationId());
+    }
+  }
+
+  /**
    * The header to repeat a call with after GitHub answered it {@code 401 Bad credentials}, or empty
    * when {@code deadAuthHeader} is not one this process issued and so names no installation.
    *
@@ -257,16 +267,6 @@ public class GitHubAuthClient {
    * out a reference to an overridable method — CDI subclasses this bean. For the same reason
    * everything it reaches is private, and the public token methods only delegate to it.
    */
-  /**
-   * Drops a gone installation's cached token (#1222), so nothing keeps calling GitHub with it after
-   * the installation was uninstalled or suspended.
-   */
-  void onInstallationChange(@Observes InstallationChange change) {
-    if (change.kind() == InstallationChange.Kind.GONE) {
-      tokenCache.remove(change.installationId());
-    }
-  }
-
   Optional<String> refreshedAuthHeader(String deadAuthHeader) {
     return mintedReplacementFor(deadAuthHeader);
   }

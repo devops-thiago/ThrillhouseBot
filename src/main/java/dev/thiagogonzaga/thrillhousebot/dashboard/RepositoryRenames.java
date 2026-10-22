@@ -36,6 +36,7 @@ import org.slf4j.LoggerFactory;
 public class RepositoryRenames {
 
   private static final Logger log = LoggerFactory.getLogger(RepositoryRenames.class);
+  private static final String RENAME = "repository = ?1 where repositoryId = ?2";
 
   private final ReviewSessionRepository sessions;
   private final PausedPrRepository pauses;
@@ -61,26 +62,20 @@ public class RepositoryRenames {
     }
     for (var repository : change.repositories()) {
       if (repository.fullName() != null && !repository.fullName().isBlank()) {
+        var fullName = repository.fullName().strip();
+        var renamed = rename(repository.id(), fullName);
         log.info(
-            "Renamed {} stored row(s) of repository {} to {}",
-            rename(repository.id(), repository.fullName().strip()),
-            repository.id(),
-            repository.fullName().strip());
+            "Renamed {} stored row(s) of repository {} to {}", renamed, repository.id(), fullName);
       }
     }
   }
 
   private int rename(long repositoryId, String fullName) {
-    var changed =
-        sessions.update("repository = ?1 where repositoryId = ?2", fullName, repositoryId);
-    changed += pauses.update("repository = ?1 where repositoryId = ?2", fullName, repositoryId);
-    changed += feedback.update("repository = ?1 where repositoryId = ?2", fullName, repositoryId);
+    var changed = sessions.update(RENAME, fullName, repositoryId);
+    changed += pauses.update(RENAME, fullName, repositoryId);
+    changed += feedback.update(RENAME, fullName, repositoryId);
     // Learnings keep their names lower-cased; their dedup keys stay as they were written.
-    changed +=
-        learnings.update(
-            "repository = ?1 where repositoryId = ?2",
-            fullName.toLowerCase(Locale.ROOT),
-            repositoryId);
+    changed += learnings.update(RENAME, fullName.toLowerCase(Locale.ROOT), repositoryId);
     return changed;
   }
 }

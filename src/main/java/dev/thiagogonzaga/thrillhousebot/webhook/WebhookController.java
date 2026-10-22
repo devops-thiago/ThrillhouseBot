@@ -204,9 +204,18 @@ public class WebhookController {
             case "pull_request_review_comment" -> handleReviewComment(payload);
             case "check_suite" -> handleCheckSuite(payload);
             case "status" -> handleStatus(payload);
-            case "installation" -> handleInstallation(payload);
-            case "installation_repositories" -> handleInstallationRepositories(payload);
-            case "repository" -> handleRepository(payload);
+            case "installation" -> {
+              handleInstallation(payload);
+              yield true;
+            }
+            case "installation_repositories" -> {
+              handleInstallationRepositories(payload);
+              yield true;
+            }
+            case "repository" -> {
+              handleRepository(payload);
+              yield true;
+            }
             case "ping" -> {
               log.info("Webhook ping received");
               yield true;
@@ -680,11 +689,11 @@ public class WebhookController {
    * Nothing of a gone installation is served from then on; observers only update memory and the
    * stored rows, so this never calls GitHub before the acknowledgement.
    */
-  private boolean handleInstallation(WebhookPayload payload) {
+  private void handleInstallation(WebhookPayload payload) {
     var installation = payload.installation();
     if (installation == null || installation.id() <= 0 || payload.action() == null) {
       log.debug("Ignoring installation event with no installation or action");
-      return true;
+      return;
     }
     var kind =
         switch (payload.action()) {
@@ -700,15 +709,14 @@ public class WebhookController {
     if (kind != null) {
       installationChanges.fire(new InstallationChange(kind, installation.id(), List.of()));
     }
-    return true;
   }
 
   /** Repositories were added to or removed from an installation (#1222). */
-  private boolean handleInstallationRepositories(WebhookPayload payload) {
+  private void handleInstallationRepositories(WebhookPayload payload) {
     var installation = payload.installation();
     if (installation == null || installation.id() <= 0) {
       log.debug("Ignoring installation_repositories event with no installation");
-      return true;
+      return;
     }
     fireRepositories(
         InstallationChange.Kind.REPOSITORIES_REMOVED,
@@ -716,7 +724,6 @@ public class WebhookController {
         payload.repositoriesRemoved());
     fireRepositories(
         InstallationChange.Kind.REPOSITORIES_ADDED, installation.id(), payload.repositoriesAdded());
-    return true;
   }
 
   private void fireRepositories(
@@ -738,15 +745,15 @@ public class WebhookController {
    * A repository was renamed or transferred (#1222): its stored rows take the new name by
    * repository id, so their history follows it.
    */
-  private boolean handleRepository(WebhookPayload payload) {
+  private void handleRepository(WebhookPayload payload) {
     var repo = payload.repository();
     if (!"renamed".equals(payload.action()) && !"transferred".equals(payload.action())) {
-      return true;
+      return;
     }
     if (unscoped(payload) || repo.fullName() == null) {
       log.debug(
           "Ignoring repository {} event with no repository or installation", payload.action());
-      return true;
+      return;
     }
     log.info("Repository {} {} to {}", repo.id(), payload.action(), repo.fullName());
     installationChanges.fire(
@@ -754,7 +761,6 @@ public class WebhookController {
             InstallationChange.Kind.REPOSITORY_RENAMED,
             payload.installation().id(),
             List.of(new InstallationChange.Repository(repo.id(), repo.fullName()))));
-    return true;
   }
 
   /**
