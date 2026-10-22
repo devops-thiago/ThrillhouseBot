@@ -325,6 +325,30 @@ public class AuthResource {
     };
   }
 
+  /**
+   * Issues the single-use ticket the dashboard's WebSocket presents in its query string (#1223).
+   * Requires the same session and access check as {@code /me}; the ticket expires after {@link
+   * DashboardSessionStore#SOCKET_TICKET_TTL} and is never cached.
+   */
+  @POST
+  @Path("/socket-ticket")
+  @Produces(MediaType.APPLICATION_JSON)
+  public Response socketTicket(@CookieParam(COOKIE_SESSION) String sessionId) {
+    var session = sessionStore.findSession(sessionId);
+    if (session.isEmpty()) {
+      return Response.status(Response.Status.UNAUTHORIZED)
+          .entity(Map.of(KEY_ERROR, MSG_NOT_AUTHENTICATED))
+          .build();
+    }
+    var denial = denialResponse(accessChecker.checkAccess(session.get().login()));
+    if (denial.isPresent()) {
+      return denial.get().build();
+    }
+    return Response.ok(Map.of("ticket", sessionStore.issueSocketTicket(sessionId)))
+        .header("Cache-Control", "no-store")
+        .build();
+  }
+
   @POST
   @Path("/logout")
   public Response logout(@CookieParam(COOKIE_SESSION) String sessionId) {

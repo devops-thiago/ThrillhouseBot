@@ -26,12 +26,15 @@ import jakarta.websocket.server.ServerEndpoint;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@ServerEndpoint(value = "/ws/dashboard", configurator = DashboardWebSocketConfigurator.class)
+@ServerEndpoint("/ws/dashboard")
 @RegisterForReflection
 @ApplicationScoped
 public class DashboardWebSocket {
 
   private static final Logger log = LoggerFactory.getLogger(DashboardWebSocket.class);
+
+  /** Query parameter carrying the ticket from {@code POST /api/auth/socket-ticket}. */
+  static final String TICKET_PARAMETER = "ticket";
 
   private final SessionEventBroadcaster broadcaster;
 
@@ -48,7 +51,7 @@ public class DashboardWebSocket {
   public void onOpen(Session session) {
     var sessionToken = extractSessionToken(session);
     if (sessionToken == null || !sessionValidator.isValidSession(sessionToken)) {
-      log.warn("WebSocket connection rejected: missing/invalid session cookie");
+      log.warn("WebSocket connection rejected: missing, reused or expired ticket");
       try {
         session.close(
             new CloseReason(CloseReason.CloseCodes.VIOLATED_POLICY, "Authentication required"));
@@ -70,38 +73,17 @@ public class DashboardWebSocket {
         broadcaster.getConnectedCount());
   }
 
+  /**
+   * The session this socket was opened for, from the single-use ticket in its query string (#1223).
+   * The query string belongs to this connection alone; the endpoint configuration and its user
+   * properties are shared by every handshake, so nothing identifying is ever read from them.
+   */
   private String extractSessionToken(Session session) {
-    var cookieObj =
-        session.getUserProperties().get(DashboardWebSocketConfigurator.COOKIE_USER_PROPERTY);
-    if (cookieObj instanceof String cookieHeader) {
-      return extractCookieValue(cookieHeader, "thrillhouse_session");
-    }
-
-    var cookieHeaders = session.getRequestParameterMap().get("Cookie");
-    if (cookieHeaders != null) {
-      for (String cookieHeader : cookieHeaders) {
-        String value = extractCookieValue(cookieHeader, "thrillhouse_session");
-        if (value != null && !value.isBlank()) {
-          return value;
-        }
-      }
-    }
-
-    return null;
-  }
-
-  static String extractCookieValue(String cookieHeader, String name) {
-    if (cookieHeader == null || cookieHeader.isBlank()) {
+    var tickets = session.getRequestParameterMap().get(TICKET_PARAMETER);
+    if (tickets == null || tickets.size() != 1) {
       return null;
     }
-    var prefix = name + "=";
-    for (String part : cookieHeader.split(";")) {
-      var trimmed = part.trim();
-      if (trimmed.startsWith(prefix)) {
-        return trimmed.substring(prefix.length());
-      }
-    }
-    return null;
+    return sessionValidator.redeemSocketTicket(tickets.getFirst()).orElse(null);
   }
 
   @OnClose

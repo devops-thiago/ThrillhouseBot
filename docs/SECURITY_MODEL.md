@@ -99,8 +99,10 @@ to the repository (`webhook/ManualReviewAuthorizer`).
 
 Every dashboard API call validates the session and checks repository access
 through `dashboard/DashboardAccessChecker`. The WebSocket closes a connection
-without a valid session, and only forwards events for repositories the session
-may read (`dashboard/DashboardWebSocket`).
+that does not present a valid single-use ticket from `POST /api/auth/socket-ticket`,
+reads nothing identifying from the endpoint configuration that every handshake
+shares, and only forwards events for repositories the session may read
+(`dashboard/DashboardWebSocket`).
 
 ### Economy of mechanism
 

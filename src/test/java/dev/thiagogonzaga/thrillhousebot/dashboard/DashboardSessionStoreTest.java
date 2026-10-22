@@ -119,4 +119,54 @@ class DashboardSessionStoreTest {
 
     assertTrue(store.findSession(freshSessionId).isPresent());
   }
+
+  @Test
+  void aSocketTicketRedeemsOnceForTheSessionThatRequestedIt() {
+    var sessionId = store.createSession("octocat", "token", "https://a.co", "Octocat");
+    var ticket = store.issueSocketTicket(sessionId);
+
+    assertNotEquals(sessionId, ticket);
+    assertEquals(sessionId, store.redeemSocketTicket(ticket).orElseThrow());
+    assertTrue(store.redeemSocketTicket(ticket).isEmpty());
+  }
+
+  @Test
+  void aSocketTicketOutlivesNoSessionThatEndedAfterItWasIssued() {
+    var sessionId = store.createSession("octocat", "token", "https://a.co", "Octocat");
+    var ticket = store.issueSocketTicket(sessionId);
+    store.invalidate(sessionId);
+
+    var redeemed = store.redeemSocketTicket(ticket).orElseThrow();
+    assertTrue(store.findSession(redeemed).isEmpty());
+  }
+
+  @Test
+  void anExpiredSocketTicketIsRefused() {
+    var sessionId = store.createSession("octocat", "token", "https://a.co", "Octocat");
+    var ticket = store.issueSocketTicket(sessionId);
+
+    now.set(now.get().plus(DashboardSessionStore.SOCKET_TICKET_TTL));
+
+    assertTrue(store.redeemSocketTicket(ticket).isEmpty());
+  }
+
+  @Test
+  void aBlankOrUnknownSocketTicketIsRefused() {
+    assertTrue(store.redeemSocketTicket(null).isEmpty());
+    assertTrue(store.redeemSocketTicket(" ").isEmpty());
+    assertTrue(store.redeemSocketTicket("unknown").isEmpty());
+  }
+
+  @Test
+  void expiredSocketTicketsAreSweptOnceTheMapIsLarge() {
+    var sessionId = store.createSession("octocat", "token", "https://a.co", "Octocat");
+    for (int i = 0; i < DashboardSessionStore.SWEEP_THRESHOLD; i++) {
+      store.issueSocketTicket(sessionId);
+    }
+    now.set(now.get().plus(DashboardSessionStore.SOCKET_TICKET_TTL).plusMillis(1));
+    var fresh = store.issueSocketTicket(sessionId);
+
+    assertEquals(1, store.socketTicketCount());
+    assertEquals(sessionId, store.redeemSocketTicket(fresh).orElseThrow());
+  }
 }
