@@ -8,7 +8,7 @@
 
     <groupId>dev.thiagogonzaga.thrillhousebot</groupId>
     <artifactId>thrillhousebot</artifactId>
-    <version>0.8.1-SNAPSHOT</version>
+    <version>0.8.0</version>
 
     <properties>
         <compiler-plugin.version>3.16.0</compiler-plugin.version>
@@ -17,7 +17,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <!-- Fixed archive entry timestamps so the JVM build is reproducible -->
-        <project.build.outputTimestamp>2026-10-22T10:24:23Z</project.build.outputTimestamp>
+        <project.build.outputTimestamp>2026-01-01T00:00:00Z</project.build.outputTimestamp>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.version>3.40.1</quarkus.platform.version>
