@@ -20,7 +20,7 @@ function authState(overrides: Partial<ReturnType<typeof useAuth>>) {
     user: null,
     loading: false,
     accessDenied: false,
-    notConfigured: false,
+    unavailable: false,
     login: vi.fn(),
     logout: vi.fn(),
     isAuthenticated: false,
@@ -63,7 +63,7 @@ describe('LoginPage', () => {
 
   it.each([
     ['access is denied', { accessDenied: true }, 'Access denied'],
-    ['the dashboard is not configured', { notConfigured: true }, 'Dashboard not configured'],
+    ['GitHub could not check access', { unavailable: true }, 'Access check unavailable'],
   ])('does not redirect when %s', (_label, overrides, heading) => {
     vi.mocked(useAuth).mockReturnValue(authState(overrides));
 

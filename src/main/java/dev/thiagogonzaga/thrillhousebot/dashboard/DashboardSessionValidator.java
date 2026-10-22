@@ -53,10 +53,9 @@ public class DashboardSessionValidator {
   }
 
   public Optional<String> resolveLogin(String sessionId) {
-    return sessionStore
-        .findSession(sessionId)
-        .filter(session -> accessChecker.hasAccess(session.login()))
-        .map(DashboardSessionStore.DashboardSession::login);
+    return resolve(sessionId)
+        .filter(r -> r.resolution().decision() == DashboardAccessChecker.AccessDecision.ALLOWED)
+        .map(Resolved::login);
   }
 
   /**
@@ -64,9 +63,44 @@ public class DashboardSessionValidator {
    * queries by them; {@link RepositoryScope#NONE} for an unknown or expired session.
    */
   public RepositoryScope repositoryScope(String sessionId) {
+    return resolve(sessionId).map(r -> r.resolution().scope()).orElse(RepositoryScope.NONE);
+  }
+
+  /**
+   * The session's current scope for an open live connection: {@link RepositoryScope#NONE} once the
+   * session is gone, its login may read nothing, or GitHub rejected its token; empty when GitHub
+   * could not be asked, so the caller keeps the scope it already had rather than dropping a
+   * connection over a transient outage, the same way a REST request answers 503 and keeps the
+   * session.
+   */
+  public Optional<RepositoryScope> refreshedScope(String sessionId) {
+    var resolved = resolve(sessionId);
+    if (resolved.isPresent()
+        && resolved.get().resolution().decision()
+            == DashboardAccessChecker.AccessDecision.UNAVAILABLE) {
+      return Optional.empty();
+    }
+    return Optional.of(resolved.map(r -> r.resolution().scope()).orElse(RepositoryScope.NONE));
+  }
+
+  /** A session's login and what it may read. */
+  private record Resolved(String login, DashboardAccessChecker.Resolution resolution) {}
+
+  /**
+   * Resolves the session's access with its login's own GitHub token. A token GitHub rejects
+   * (expired or revoked) ends the session, so the dashboard asks the user to sign in again instead
+   * of showing an empty page.
+   */
+  private Optional<Resolved> resolve(String sessionId) {
     return sessionStore
         .findSession(sessionId)
-        .map(session -> accessChecker.repositoryScope(session.login()))
-        .orElse(RepositoryScope.NONE);
+        .map(
+            session -> {
+              var resolution = accessChecker.resolve(session.login(), session.accessToken());
+              if (resolution.decision() == DashboardAccessChecker.AccessDecision.TOKEN_REJECTED) {
+                sessionStore.invalidate(sessionId);
+              }
+              return new Resolved(session.login(), resolution);
+            });
   }
 }

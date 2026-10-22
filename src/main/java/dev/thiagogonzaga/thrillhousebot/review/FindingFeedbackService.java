@@ -20,7 +20,9 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -182,14 +184,23 @@ public class FindingFeedbackService {
   }
 
   /**
-   * Per-repository counts for the given repositories of one installation, ordered by total events
-   * descending; a repository with no feedback is absent. Keyed by repository id, so the caller
-   * labels each with the repository's current name.
+   * Per-repository counts for the given repositories of each installation, in one query, ordered by
+   * total events descending; a repository with no feedback is absent. Keyed by installation and
+   * repository id, so the caller labels each with the repository's current name.
    */
   @Transactional
-  public Map<Long, FeedbackCounts> countsByRepository(
-      long installationId, Collection<Long> repositoryIds) {
-    if (repositoryIds.isEmpty()) {
+  public Map<RepoScope, FeedbackCounts> countsByRepository(
+      Map<Long, ? extends Collection<Long>> repositoryIdsByInstallation) {
+    var installationIds = new ArrayList<Long>();
+    var repositoryIds = new HashSet<Long>();
+    repositoryIdsByInstallation.forEach(
+        (installationId, ids) -> {
+          if (!ids.isEmpty()) {
+            installationIds.add(installationId);
+            repositoryIds.addAll(ids);
+          }
+        });
+    if (installationIds.isEmpty()) {
       return Map.of();
     }
     List<Object[]> rows =
@@ -197,29 +208,38 @@ public class FindingFeedbackService {
             .getEntityManager()
             .createQuery(
                 """
-                select f.repositoryId,
+                select f.installationId,
+                       f.repositoryId,
                        sum(case when f.signal = :useful then 1 else 0 end),
                        sum(case when f.signal = :notUseful then 1 else 0 end),
                        count(f)
                 from FindingFeedback f
-                where f.installationId = :installationId and f.repositoryId in :repositoryIds
-                group by f.repositoryId
-                order by count(f) desc, f.repositoryId
+                where f.installationId in :installationIds and f.repositoryId in :repositoryIds
+                group by f.installationId, f.repositoryId
+                order by count(f) desc, f.installationId, f.repositoryId
                 """,
                 Object[].class)
             .setParameter("useful", FindingFeedback.SIGNAL_USEFUL)
             .setParameter("notUseful", FindingFeedback.SIGNAL_NOT_USEFUL)
-            .setParameter("installationId", installationId)
+            .setParameter("installationIds", installationIds)
             .setParameter("repositoryIds", repositoryIds)
             .getResultList();
-    var counts = new LinkedHashMap<Long, FeedbackCounts>();
+    var counts = new LinkedHashMap<RepoScope, FeedbackCounts>();
     for (var r : rows) {
-      counts.put(
-          ((Number) r[0]).longValue(),
-          new FeedbackCounts(
-              ((Number) r[1]).longValue(),
-              ((Number) r[2]).longValue(),
-              ((Number) r[3]).longValue()));
+      var installationId = ((Number) r[0]).longValue();
+      var repositoryId = ((Number) r[1]).longValue();
+      // The query matches the installation and repository id sets independently, so a row under
+      // one installation whose repository id was only listed for another one can come back; keep
+      // only pairs the caller asked for, so a repository id is counted under its own installation
+      // only.
+      if (repositoryIdsByInstallation.get(installationId).contains(repositoryId)) {
+        counts.put(
+            new RepoScope(installationId, repositoryId),
+            new FeedbackCounts(
+                ((Number) r[2]).longValue(),
+                ((Number) r[3]).longValue(),
+                ((Number) r[4]).longValue()));
+      }
     }
     return counts;
   }

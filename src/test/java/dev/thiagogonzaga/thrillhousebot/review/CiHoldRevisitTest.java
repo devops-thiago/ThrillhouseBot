@@ -137,7 +137,7 @@ class CiHoldRevisitTest {
     assertEquals(PullRequestLabelGate.CHECK_TITLE, update.getValue().title());
     assertTrue(update.getValue().summary().startsWith("PR carries a gated label"));
     assertEquals(DETAILS_URL, update.getValue().detailsUrl());
-    assertEquals(1L, skipEmitter.countsByReason().get("EXCLUDED_LABEL"));
+    assertEquals(1L, skipEmitter.countsByReason(java.util.List.of(123L)).get("EXCLUDED_LABEL"));
     assertTrue(registry.pullRequestsAt("owner", "repo", HEAD).isEmpty());
   }
 
@@ -150,7 +150,8 @@ class CiHoldRevisitTest {
     revisit.revisit(RECHECK);
 
     verifyNoInteractions(reviewPublisher);
-    assertEquals(1L, skipEmitter.countsByReason().get("MISSING_REQUIRED_LABEL"));
+    assertEquals(
+        1L, skipEmitter.countsByReason(java.util.List.of(123L)).get("MISSING_REQUIRED_LABEL"));
     assertTrue(registry.pullRequestsAt("owner", "repo", HEAD).isEmpty());
   }
 

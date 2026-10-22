@@ -262,6 +262,7 @@ public final class ReviewDispatcher {
         && autoReviewRateLimiter.isThrottled(req.owner(), req.repo(), req.prNumber())) {
       skipEmitter.recordSkip(
           ReviewSkipReason.RATE_LIMITED,
+          req.installationId(),
           req.owner(),
           req.repo(),
           req.prNumber(),

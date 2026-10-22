@@ -20,9 +20,10 @@ security limits. To report a vulnerability, see
   webhook use HTTPS by default, with the JDK's certificate and hostname
   verification. The notification webhook refuses a plain `http://` URL unless
   `NOTIFICATIONS_WEBHOOK_ALLOW_HTTP=true` is set.
-- The dashboard is limited to the GitHub App's owner and collaborators on the
-  repositories the App is installed on, and each user sees only the
-  repositories they can access.
+- The dashboard is limited to users who can read a repository where the App is
+  installed, and each user sees only the repositories GitHub lets them read,
+  asked with their own sign-in. Installation-wide counters go to the account
+  itself or, for an organization, its members.
 - Features that send more data to the model or to a third party are off by
   default (CI-failure context, linked-issue context, review learnings, outgoing
   notifications, the security scan).
@@ -90,18 +91,23 @@ The container images run as an unprivileged user (UID 1001 on UBI9-micro,
 ### Fail-safe defaults
 
 `WebhookVerifier` rejects a request when the signature header is missing or
-malformed and when no secret is configured. The dashboard refuses every login
-when the App owner cannot be resolved. Optional context and outgoing
+malformed and when no secret is configured. The dashboard refuses a login it
+has never been able to check with GitHub, keeps a known login's last answer for
+at most 30 minutes while GitHub is unreachable, and ends the session when GitHub
+rejects its token.
+Organization membership is granted only on GitHub's explicit answer. Optional context and outgoing
 notifications are off until enabled, and a manual `/review` needs write access
 to the repository (`webhook/ManualReviewAuthorizer`).
 
 ### Complete mediation
 
 Every dashboard API call validates the session and checks repository access
-through `dashboard/DashboardAccessChecker`. The WebSocket closes a connection
+through `dashboard/DashboardAccessChecker`, which asks GitHub with the user's own
+token and caches the answer for five minutes. The WebSocket closes a connection
 that does not present a valid single-use ticket from `POST /api/auth/socket-ticket`,
 reads nothing identifying from the endpoint configuration that every handshake
-shares, and only forwards events for repositories the session may read
+shares, only forwards events for repositories the session may read, and
+re-checks that access on a worker thread, closing the connection once it is gone
 (`dashboard/DashboardWebSocket`).
 
 ### Economy of mechanism

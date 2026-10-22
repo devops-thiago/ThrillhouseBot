@@ -4,6 +4,8 @@ import { useMemo } from 'react';
 import { api, SessionSummary } from '@/lib/api';
 import { useWebSocket, SessionEvent } from '@/hooks/useWebSocket';
 import { useDashboardFetch } from '@/hooks/useDashboardFetch';
+import { useInstallationFilter } from '@/hooks/useInstallationFilter';
+import { InstallationFilter } from '@/components/InstallationFilter';
 import {
   buildLiveReviews,
   liveReviewProgressMessage,
@@ -13,6 +15,7 @@ import {
 
 export default function OverviewPage() {
   const { events, connected } = useWebSocket();
+  const { installations, installation, setInstallation } = useInstallationFilter();
 
   const lifecycleCount = useMemo(
     () =>
@@ -31,8 +34,8 @@ export default function OverviewPage() {
     error: summaryError,
     retry: retrySummary,
   } = useDashboardFetch<SessionSummary>(
-    () => api().summary(),
-    [lifecycleCount],
+    () => api().summary(installation),
+    [lifecycleCount, installation],
     { keepStaleWhileLoading: true },
   );
 
@@ -49,7 +52,14 @@ export default function OverviewPage() {
 
   return (
     <div>
-      <h1 style={{ marginBottom: '1.5rem' }}>Dashboard Overview</h1>
+      <div style={styles.heading}>
+        <h1>Dashboard Overview</h1>
+        <InstallationFilter
+          installations={installations}
+          value={installation}
+          onChange={setInstallation}
+        />
+      </div>
 
       {summaryError && !summary ? (
         <div style={styles.errorBox}>
@@ -186,6 +196,14 @@ function EventCard({ event }: { event: SessionEvent }) {
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  heading: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '0.75rem',
+    marginBottom: '1.5rem',
+  },
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',

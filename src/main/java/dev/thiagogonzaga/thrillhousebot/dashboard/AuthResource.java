@@ -73,10 +73,9 @@ public class AuthResource {
   private static final String MSG_AUTH_FAILED = "Authentication failed";
   private static final String MSG_AUTH_FAILED_GITHUB = "Failed to authenticate with GitHub";
   private static final String MSG_ACCESS_DENIED =
-      "Access denied — you must be a collaborator on an installed repository";
-  private static final String MSG_OWNER_NOT_CONFIGURED =
-      "Dashboard access control is not configured: the GitHub App owner could not be resolved. "
-          + "Set thrillhousebot.dashboard.github.account-owner to enable access.";
+      "Access denied — you need read access to a repository where the GitHub App is installed";
+  private static final String MSG_ACCESS_UNAVAILABLE =
+      "Could not check your access with GitHub. Try again in a moment.";
 
   private final ThrillhouseConfig config;
   private final DashboardAccessChecker accessChecker;
@@ -239,7 +238,7 @@ public class AuthResource {
             .build();
       }
 
-      var denial = denialResponse(accessChecker.checkAccess(login));
+      var denial = denialResponse(accessChecker.checkAccess(login, accessToken));
       if (denial.isPresent()) {
         return denial.get().cookie(clearedStateCookie).build();
       }
@@ -294,7 +293,7 @@ public class AuthResource {
     }
 
     var user = session.get();
-    var denial = denialResponse(accessChecker.checkAccess(user.login()));
+    var denial = sessionDenial(sessionId, user);
     if (denial.isPresent()) {
       return denial.get().build();
     }
@@ -305,23 +304,40 @@ public class AuthResource {
   }
 
   /**
+   * The access check of an existing session, with the login's own token. A token GitHub rejects
+   * (expired or revoked) ends the session and answers 401, so the dashboard asks the user to sign
+   * in again.
+   */
+  private Optional<Response.ResponseBuilder> sessionDenial(
+      String sessionId, DashboardSessionStore.DashboardSession session) {
+    var decision = accessChecker.checkAccess(session.login(), session.accessToken());
+    if (decision == DashboardAccessChecker.AccessDecision.TOKEN_REJECTED) {
+      sessionStore.invalidate(sessionId);
+    }
+    return denialResponse(decision);
+  }
+
+  /**
    * Maps an access decision to a denial response, or empty when access is granted. Fails closed: a
-   * misconfigured/unresolvable owner yields a 503 with a clear "owner not configured" message
-   * rather than silently granting access, while a known owner with a non-collaborator login yields
-   * a 403.
+   * login that may read nothing gets 403, a rejected token 401, and an unanswered check 503; none
+   * of them is ever an implicit grant.
    */
   private Optional<Response.ResponseBuilder> denialResponse(
       DashboardAccessChecker.AccessDecision decision) {
     return switch (decision) {
       case ALLOWED -> Optional.empty();
-      case NOT_CONFIGURED ->
-          Optional.of(
-              Response.status(Response.Status.SERVICE_UNAVAILABLE)
-                  .entity(Map.of(KEY_ERROR, MSG_OWNER_NOT_CONFIGURED)));
       case DENIED ->
           Optional.of(
               Response.status(Response.Status.FORBIDDEN)
                   .entity(Map.of(KEY_ERROR, MSG_ACCESS_DENIED)));
+      case TOKEN_REJECTED ->
+          Optional.of(
+              Response.status(Response.Status.UNAUTHORIZED)
+                  .entity(Map.of(KEY_ERROR, MSG_SESSION_EXPIRED)));
+      case UNAVAILABLE ->
+          Optional.of(
+              Response.status(Response.Status.SERVICE_UNAVAILABLE)
+                  .entity(Map.of(KEY_ERROR, MSG_ACCESS_UNAVAILABLE)));
     };
   }
 
@@ -340,7 +356,7 @@ public class AuthResource {
           .entity(Map.of(KEY_ERROR, MSG_NOT_AUTHENTICATED))
           .build();
     }
-    var denial = denialResponse(accessChecker.checkAccess(session.get().login()));
+    var denial = sessionDenial(sessionId, session.get());
     if (denial.isPresent()) {
       return denial.get().build();
     }

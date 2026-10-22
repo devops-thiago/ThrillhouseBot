@@ -20,27 +20,48 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.dashboard.DashboardAccessChecker.AccessDecision;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
-import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.Installation;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.InstallationRepositoriesResponse;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubUserClient;
+import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
+/**
+ * Dashboard access from the login's own GitHub token (#1221). GitHub is mocked: {@code acme} (an
+ * organization, installation 10) lets the token read {@code acme/app} (id 100) and {@code acme/lib}
+ * (id 101); {@code alice} (a personal account, installation 20) lets it read {@code alice/site} (id
+ * 200).
+ */
 class DashboardAccessCheckerTest {
+
+  private static final String TOKEN = "gho_alice";
+  private static final String AUTH = "Bearer " + TOKEN;
 
   @Mock ThrillhouseConfig config;
   @Mock ThrillhouseConfig.DashboardConfig dashboardConfig;
   @Mock GitHubAuthClient authClient;
   @Mock GitHubInstallationClient installationClient;
+  @Mock GitHubUserClient userClient;
 
-  private final java.util.concurrent.atomic.AtomicReference<java.time.Instant> now =
-      new java.util.concurrent.atomic.AtomicReference<>(
-          java.time.Instant.parse("2026-06-10T12:00:00Z"));
+  private final AtomicReference<Instant> now =
+      new AtomicReference<>(Instant.parse("2026-06-10T12:00:00Z"));
 
   private DashboardAccessChecker checker;
 
@@ -49,1018 +70,355 @@ class DashboardAccessCheckerTest {
     MockitoAnnotations.openMocks(this);
     when(config.dashboard()).thenReturn(dashboardConfig);
     when(dashboardConfig.accountOwner()).thenReturn(Optional.empty());
-    when(authClient.generateAppJwt()).thenReturn("jwt");
-    when(installationClient.getApp(eq("Bearer jwt"), anyString()))
-        .thenReturn(
-            new GitHubInstallationClient.AppInfo(
-                new GitHubInstallationClient.AppInfo.Owner("myowner", "User")));
-    checker = new DashboardAccessChecker(config, authClient, installationClient, now::get);
+    when(authClient.getAuthHeader(10L)).thenReturn("Bearer acme-installation");
+    stubInstallations(
+        AUTH, installation(10L, "acme", "Organization"), installation(20L, "alice", "User"));
+    stubRepositories(AUTH, 10L, repo(100L, "acme", "app"), repo(101L, "acme", "lib"));
+    stubRepositories(AUTH, 20L, repo(200L, "alice", "site"));
+    stubMembership("alice", 204);
+    checker =
+        new DashboardAccessChecker(config, authClient, installationClient, userClient, now::get);
   }
 
   @Test
-  void shouldDenyEveryUserWhenOwnerCannotBeResolved() {
-    when(installationClient.getApp(anyString(), anyString()))
-        .thenThrow(new RuntimeException("GitHub App unavailable"));
-    // Fail closed: an unresolvable owner must lock the dashboard, not open it to everyone.
-    assertFalse(checker.hasAccess("random-user"));
+  void aLoginSeesEveryRepositoryGitHubLetsItsTokenRead() {
+    var resolution = checker.resolve("alice", TOKEN);
+
+    assertEquals(AccessDecision.ALLOWED, resolution.decision());
+    var scope = resolution.scope();
     assertEquals(
-        DashboardAccessChecker.AccessDecision.NOT_CONFIGURED, checker.checkAccess("random-user"));
+        Map.of(100L, "acme/app", 101L, "acme/lib"), scope.installations().get(10L).repositories());
+    assertEquals(Map.of(200L, "alice/site"), scope.installations().get(20L).repositories());
+    assertEquals("acme", scope.installations().get(10L).account());
+    assertTrue(scope.allows(10L, 100L));
+    assertFalse(scope.allows(20L, 100L), "a repository id under another installation");
   }
 
   @Test
-  void shouldResolveOwnerFromGitHubApp() {
-    assertTrue(checker.hasAccess("myowner"));
-    verify(installationClient).getApp(eq("Bearer jwt"), anyString());
+  void aLoginGitHubShowsNothingIsDenied() {
+    stubInstallations("Bearer gho_outsider");
+
+    assertEquals(AccessDecision.DENIED, checker.checkAccess("outsider", "gho_outsider"));
+    assertSame(RepositoryScope.NONE, checker.repositoryScope("outsider", "gho_outsider"));
   }
 
   @Test
-  void shouldPreferConfiguredAccountOwnerOverApp() {
-    when(dashboardConfig.accountOwner()).thenReturn(Optional.of("override-owner"));
-    assertTrue(checker.hasAccess("override-owner"));
-    verify(installationClient, never()).getApp(anyString(), anyString());
+  void anInstallationWithNoReadableRepositoryGrantsNothing() {
+    stubInstallations("Bearer gho_member", installation(10L, "acme", "Organization"));
+    stubRepositories("Bearer gho_member", 10L);
+    stubMembership("member", 204);
+
+    assertEquals(AccessDecision.DENIED, checker.checkAccess("member", "gho_member"));
   }
 
   @Test
-  void shouldAllowAccountOwner() {
-    assertTrue(checker.hasAccess("myowner"));
-    assertTrue(checker.hasAccess("MyOwner"));
+  void theInjectedCheckerUsesTheWallClock() {
+    var injected = new DashboardAccessChecker(config, authClient, installationClient, userClient);
+
+    assertEquals(AccessDecision.ALLOWED, injected.checkAccess("alice", TOKEN));
   }
 
   @Test
-  void shouldAllowCollaboratorOnInstalledRepo() {
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-
-    Response collaboratorResponse = mock(Response.class);
-    when(collaboratorResponse.getStatus()).thenReturn(204);
-    when(installationClient.checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab")))
-        .thenReturn(collaboratorResponse);
-
-    assertTrue(checker.hasAccess("collab"));
+  void blankLoginsAndTokensAreDeniedWithoutAskingGitHub() {
+    assertEquals(AccessDecision.DENIED, checker.checkAccess(null, TOKEN));
+    assertEquals(AccessDecision.DENIED, checker.checkAccess(" ", TOKEN));
+    assertEquals(AccessDecision.DENIED, checker.checkAccess("alice", null));
+    assertEquals(AccessDecision.DENIED, checker.checkAccess("alice", " "));
+    verifyNoInteractions(userClient, installationClient);
   }
 
   @Test
-  void shouldAllowOwnerAccessToInstalledRepositoryCaseInsensitively() {
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+  void theConfiguredAccountOwnerKeepsOnlyItsInstallation() {
+    when(dashboardConfig.accountOwner()).thenReturn(Optional.of(" ALICE "));
 
-    assertTrue(checker.repositoryScope("MYOWNER").allows("MyOwner/DEMO"));
-    verify(installationClient, never())
-        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
-  }
+    var scope = checker.repositoryScope("alice", TOKEN);
 
-  @SuppressWarnings("unchecked")
-  @Test
-  void shouldIgnoreForeignRepositoryEntriesInCachedSnapshot() throws ReflectiveOperationException {
-    var repoRefClass = Class.forName(DashboardAccessChecker.class.getName() + "$RepoRef");
-    var repoRefConstructor =
-        repoRefClass.getDeclaredConstructor(long.class, String.class, String.class);
-    repoRefConstructor.setAccessible(true);
-    var foreignRepo = repoRefConstructor.newInstance(5L, "other-owner", "demo");
-
-    var snapshotClass = Class.forName(DashboardAccessChecker.class.getName() + "$RepoSnapshot");
-    var snapshotConstructor =
-        snapshotClass.getDeclaredConstructor(
-            String.class, long.class, List.class, String.class, java.time.Instant.class);
-    snapshotConstructor.setAccessible(true);
-    var snapshot =
-        snapshotConstructor.newInstance(
-            "myowner", 99L, List.of(foreignRepo), "Bearer token", now.get());
-    var cacheField = DashboardAccessChecker.class.getDeclaredField("cachedSnapshot");
-    cacheField.setAccessible(true);
-    var cache = (java.util.concurrent.atomic.AtomicReference<Object>) cacheField.get(checker);
-    cache.set(snapshot);
-
-    assertFalse(checker.repositoryScope("myowner").allows("myowner/demo"));
-    verify(installationClient, never())
-        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
+    assertEquals(List.of(20L), scope.sortedInstallations().stream().map(i -> i.id()).toList());
+    verify(userClient, never())
+        .listRepositories(anyString(), anyString(), eq(10L), anyInt(), anyInt());
   }
 
   @Test
-  void shouldAllowCollaboratorAccessToInstalledRepository() {
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    Response collaboratorResponse = mock(Response.class);
-    when(collaboratorResponse.getStatus()).thenReturn(204);
-    when(installationClient.checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab")))
-        .thenReturn(collaboratorResponse);
+  void aBlankAccountOwnerFiltersNothing() {
+    when(dashboardConfig.accountOwner()).thenReturn(Optional.of("  "));
 
-    assertTrue(checker.repositoryScope("collab").allows("myowner/demo"));
+    assertEquals(2, checker.repositoryScope("alice", TOKEN).installations().size());
   }
 
   @Test
-  void shouldDenyNonCollaboratorAccessToInstalledRepository() {
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    Response notCollaborator = mock(Response.class);
-    when(notCollaborator.getStatus()).thenReturn(404);
-    when(installationClient.checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("outsider")))
-        .thenReturn(notCollaborator);
+  void installationWideViewsGoToThePersonalAccountItselfAndToOrganizationMembers() {
+    var scope = checker.repositoryScope("alice", TOKEN);
 
-    assertFalse(checker.repositoryScope("outsider").allows("myowner/demo"));
+    assertTrue(scope.installations().get(20L).installationWide(), "her own account");
+    assertTrue(scope.installations().get(10L).installationWide(), "a member of acme");
+    assertEquals(java.util.Set.of(10L, 20L), scope.installationWideIds());
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {302, 403, 404})
+  void onlyGitHubs204MakesAnOrganizationMember(int status) {
+    stubMembership("alice", status);
+
+    var scope = checker.repositoryScope("alice", TOKEN);
+
+    assertFalse(scope.installations().get(10L).installationWide());
+    assertTrue(scope.allows(10L, 100L), "viewing still follows read access");
   }
 
   @Test
-  void shouldDenyMissingAndForeignRepositoriesWithoutCheckingCollaborator() {
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
+  void aRefusedOrFailedMembershipCheckHidesInstallationWideViews() {
+    when(installationClient.checkOrgMember(anyString(), anyString(), eq("acme"), eq("alice")))
+        .thenThrow(new WebApplicationException(Response.status(403).build()))
+        .thenThrow(new IllegalStateException("timeout"));
 
-    assertFalse(checker.repositoryScope("myowner").allows("myowner/missing"));
-    assertFalse(checker.repositoryScope("myowner").allows("other-owner/demo"));
-    verify(installationClient, never())
-        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
+    assertFalse(
+        checker.repositoryScope("alice", TOKEN).installations().get(10L).installationWide());
+    now.set(now.get().plus(DashboardAccessChecker.SCOPE_CACHE_TTL).plusSeconds(1));
+    assertFalse(
+        checker.repositoryScope("alice", TOKEN).installations().get(10L).installationWide());
   }
 
   @Test
-  void shouldDenyMalformedRepositoryAccessInputs() {
-    assertAll(
-        () -> assertFalse(checker.repositoryScope(null).allows("myowner/demo")),
-        () -> assertFalse(checker.repositoryScope("   ").allows("myowner/demo")));
-    verifyNoInteractions(authClient, installationClient);
+  void aMembershipCheckThatThrowsAnyOtherStatusIsNoMembershipAndWarnsOnce() {
+    when(installationClient.checkOrgMember(anyString(), anyString(), eq("acme"), eq("alice")))
+        .thenThrow(new WebApplicationException(Response.status(404).build()))
+        .thenThrow(new WebApplicationException(Response.status(403).build()))
+        .thenThrow(new WebApplicationException(Response.status(403).build()));
 
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    var scope = checker.repositoryScope("myowner");
-    assertAll(
-        () -> assertFalse(scope.allows(null)),
-        () -> assertFalse(scope.allows("   ")),
-        () -> assertFalse(scope.allows("demo")),
-        () -> assertFalse(scope.allows("/demo")),
-        () -> assertFalse(scope.allows("myowner/")),
-        () -> assertFalse(scope.allows("myowner/demo/extra")));
+    for (var i = 0; i < 3; i++) {
+      now.set(now.get().plus(DashboardAccessChecker.SCOPE_CACHE_TTL).plusSeconds(1));
+      assertFalse(
+          checker.repositoryScope("alice", TOKEN).installations().get(10L).installationWide());
+    }
   }
 
   @Test
-  void shouldDenyRepositoryAccessWhenInstallationIsMissing() {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(List.of());
+  void anotherUsersPersonalAccountIsNotInstallationWide() {
+    stubInstallations("Bearer gho_bob", installation(20L, "alice", "User"));
+    stubRepositories("Bearer gho_bob", 20L, repo(200L, "alice", "site"));
 
-    assertFalse(checker.repositoryScope("myowner").allows("myowner/demo"));
-    verify(authClient, never()).getAuthHeader(anyLong());
+    var scope = checker.repositoryScope("bob", "gho_bob");
+
+    assertFalse(scope.installations().get(20L).installationWide());
+    assertTrue(scope.installationWideIds().isEmpty());
   }
 
   @Test
-  void shouldDenyRepositoryAccessWhenInstallationAuthIsMissing() {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(List.of(installationFor("myowner", 99L)));
-    when(authClient.getAuthHeader(99L)).thenReturn(null);
-    when(installationClient.listInstallationRepositories(isNull(), anyString(), eq(100), eq(1)))
+  void aTokenGitHubRejectsEndsTheSessionAndIsAskedAgain() {
+    when(userClient.listInstallations(eq(AUTH), anyString(), eq(100), eq(1)))
+        .thenThrow(new WebApplicationException(Response.status(401).build()));
+
+    assertEquals(AccessDecision.TOKEN_REJECTED, checker.checkAccess("alice", TOKEN));
+    assertEquals(AccessDecision.TOKEN_REJECTED, checker.checkAccess("alice", TOKEN));
+    verify(userClient, times(2)).listInstallations(eq(AUTH), anyString(), eq(100), eq(1));
+  }
+
+  @Test
+  void aRejectedTokenWhileListingRepositoriesAlsoEndsTheSession() {
+    when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(1)))
+        .thenThrow(new WebApplicationException(Response.status(401).build()));
+
+    assertEquals(AccessDecision.TOKEN_REJECTED, checker.checkAccess("alice", TOKEN));
+  }
+
+  @Test
+  void anUnreachableGitHubDeniesAndIsAskedAgainOnlyAfterABackoff() {
+    when(userClient.listInstallations(eq(AUTH), anyString(), eq(100), eq(1)))
+        .thenThrow(new WebApplicationException(Response.status(502).build()))
+        .thenThrow(new IllegalStateException("connection reset"))
         .thenReturn(
-            new GitHubInstallationClient.InstallationRepositoriesResponse(
-                1, ownerRepos("myowner", "demo")));
+            new GitHubUserClient.UserInstallations(1, List.of(installation(20L, "alice", "User"))));
 
-    assertFalse(checker.repositoryScope("myowner").allows("myowner/demo"));
-    verify(installationClient, never())
-        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
+    assertEquals(AccessDecision.UNAVAILABLE, checker.checkAccess("alice", TOKEN));
+    assertEquals(AccessDecision.UNAVAILABLE, checker.checkAccess("alice", TOKEN), "remembered");
+    verify(userClient, times(1)).listInstallations(eq(AUTH), anyString(), eq(100), eq(1));
+
+    now.set(now.get().plus(DashboardAccessChecker.RETRY_AFTER_ERROR));
+    assertEquals(AccessDecision.UNAVAILABLE, checker.checkAccess("alice", TOKEN));
+    now.set(now.get().plus(DashboardAccessChecker.RETRY_AFTER_ERROR));
+    assertEquals(AccessDecision.ALLOWED, checker.checkAccess("alice", TOKEN));
   }
 
   @Test
-  void shouldDenyRepositoryAccessWhenOwnerCannotBeResolved() {
-    when(installationClient.getApp(anyString(), anyString()))
-        .thenThrow(new RuntimeException("GitHub App unavailable"));
+  void anOutageServesTheLastAnswerGitHubGaveWhileItIsRecent() {
+    var answered = checker.repositoryScope("alice", TOKEN);
+    when(userClient.listInstallations(eq(AUTH), anyString(), eq(100), eq(1)))
+        .thenThrow(new IllegalStateException("GitHub is down"));
 
-    assertFalse(checker.repositoryScope("myowner").allows("myowner/demo"));
-    verify(installationClient, never())
-        .listInstallations(anyString(), anyString(), anyInt(), anyInt());
-  }
+    now.set(now.get().plus(DashboardAccessChecker.SCOPE_CACHE_TTL));
+    assertSame(answered, checker.repositoryScope("alice", TOKEN), "the last answer");
+    assertSame(answered, checker.repositoryScope("alice", TOKEN), "within the backoff");
+    verify(userClient, times(2)).listInstallations(eq(AUTH), anyString(), eq(100), eq(1));
 
-  @Test
-  void shouldDenyUserWhoIsNotCollaborator() {
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-
-    Response notCollaborator = mock(Response.class);
-    when(notCollaborator.getStatus()).thenReturn(404);
-    when(installationClient.checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("outsider")))
-        .thenReturn(notCollaborator);
-
-    assertFalse(checker.hasAccess("outsider"));
-  }
-
-  @Test
-  void shouldFindInstallationBeyondFirstPage() {
-    // A full first page of non-matching installations forces pagination; the owner's installation
-    // only appears on page 2.
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(otherInstallations(0, 100));
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(2)))
-        .thenReturn(List.of(installationFor("myowner", 99L)));
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
-        .thenReturn(
-            new GitHubInstallationClient.InstallationRepositoriesResponse(
-                1, ownerRepos("myowner", "demo")));
-
-    Response collab = mock(Response.class);
-    when(collab.getStatus()).thenReturn(204);
-    when(installationClient.checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab")))
-        .thenReturn(collab);
-
-    assertTrue(checker.hasAccess("collab"));
-    verify(installationClient).listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(2));
-  }
-
-  @Test
-  void shouldFindInstallationOnThirdPageWithoutArbitraryCap() {
-    // Two full pages of non-matching installations precede the owner's; pagination must keep going
-    // with no fixed page ceiling.
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(otherInstallations(0, 100));
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(2)))
-        .thenReturn(otherInstallations(100, 100));
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(3)))
-        .thenReturn(List.of(installationFor("myowner", 99L)));
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
-        .thenReturn(
-            new GitHubInstallationClient.InstallationRepositoriesResponse(
-                1, ownerRepos("myowner", "demo")));
-
-    Response collab = mock(Response.class);
-    when(collab.getStatus()).thenReturn(204);
-    when(installationClient.checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab")))
-        .thenReturn(collab);
-
-    assertTrue(checker.hasAccess("collab"));
-    verify(installationClient).listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(3));
-  }
-
-  @Test
-  void shouldAllowCollaboratorOnRepoBeyondFirstPage() {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(List.of(installationFor("myowner", 99L)));
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-
-    // A full first page of owner repos the user does not collaborate on...
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
-        .thenReturn(
-            new GitHubInstallationClient.InstallationRepositoriesResponse(
-                101, ownerRepos("myowner", repoNames(0, 100))));
-    // ...and the one shared repo only on page 2.
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer inst-token"), anyString(), eq(100), eq(2)))
-        .thenReturn(
-            new GitHubInstallationClient.InstallationRepositoriesResponse(
-                101, ownerRepos("myowner", "special-repo")));
-
-    Response notCollaborator = mock(Response.class);
-    when(notCollaborator.getStatus()).thenReturn(404);
-    when(installationClient.checkCollaborator(
-            anyString(), anyString(), anyString(), anyString(), eq("collab")))
-        .thenReturn(notCollaborator);
-    Response collaborator = mock(Response.class);
-    when(collaborator.getStatus()).thenReturn(204);
-    when(installationClient.checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("special-repo"), eq("collab")))
-        .thenReturn(collaborator);
-
-    assertTrue(checker.hasAccess("collab"));
-    verify(installationClient)
-        .listInstallationRepositories(eq("Bearer inst-token"), anyString(), eq(100), eq(2));
-  }
-
-  @Test
-  void shouldPageReposBeyondUnderReportedTotalCount() {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(List.of(installationFor("myowner", 99L)));
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-
-    // total_count claims a single page, but page 1 is full and a 101st repo exists on page 2.
-    // Pagination must follow the actual rows (a full page means keep going), never the count.
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
-        .thenReturn(
-            new GitHubInstallationClient.InstallationRepositoriesResponse(
-                100, ownerRepos("myowner", repoNames(0, 100))));
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer inst-token"), anyString(), eq(100), eq(2)))
-        .thenReturn(
-            new GitHubInstallationClient.InstallationRepositoriesResponse(
-                100, ownerRepos("myowner", "late-repo")));
-
-    Response notCollaborator = mock(Response.class);
-    when(notCollaborator.getStatus()).thenReturn(404);
-    when(installationClient.checkCollaborator(
-            anyString(), anyString(), anyString(), anyString(), eq("collab")))
-        .thenReturn(notCollaborator);
-    Response collaborator = mock(Response.class);
-    when(collaborator.getStatus()).thenReturn(204);
-    // The only repo the user collaborates on is the one total_count failed to account for.
-    when(installationClient.checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("late-repo"), eq("collab")))
-        .thenReturn(collaborator);
-
-    assertTrue(checker.hasAccess("collab"));
-    verify(installationClient)
-        .listInstallationRepositories(eq("Bearer inst-token"), anyString(), eq(100), eq(2));
-  }
-
-  @Test
-  void shouldDenyWhenPaginationExceedsSafetyCeiling() {
-    // A misbehaving endpoint that always returns a full, non-matching page would loop forever; the
-    // MAX_PAGES ceiling makes the walk fail closed (throw -> caught -> denied) instead of hanging.
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), anyInt()))
-        .thenReturn(otherInstallations(0, 100));
-
-    assertFalse(checker.hasAccess("collab"));
-  }
-
-  @Test
-  void shouldSkipInstallationWithNullAccountWhilePaging() {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(
-            List.of(
-                new GitHubInstallationClient.Installation(1L, null),
-                installationFor("myowner", 99L)));
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
-        .thenReturn(
-            new GitHubInstallationClient.InstallationRepositoriesResponse(
-                1, ownerRepos("myowner", "demo")));
-
-    Response collab = mock(Response.class);
-    when(collab.getStatus()).thenReturn(204);
-    when(installationClient.checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab")))
-        .thenReturn(collab);
-
-    assertTrue(checker.hasAccess("collab"));
-  }
-
-  @Test
-  void shouldDenyWhenInstallationListingIsNull() {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(null);
-
-    assertFalse(checker.hasAccess("collab"));
-  }
-
-  @Test
-  void shouldOnlyConsiderOwnerReposWithCompleteMetadata() {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(List.of(installationFor("myowner", 99L)));
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-
-    // A mix the filter must reject: missing name, missing owner, foreign owner — plus one keeper.
-    var mixed =
-        List.of(
-            new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
-                TestScopes.repositoryId("myowner/" + null),
-                null,
-                new GitHubInstallationClient.InstallationRepositoriesResponse.Repository.Owner(
-                    "myowner")),
-            new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
-                TestScopes.repositoryId("myowner/" + "orphan"), "orphan", null),
-            new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
-                TestScopes.repositoryId("myowner/" + "foreign"),
-                "foreign",
-                new GitHubInstallationClient.InstallationRepositoriesResponse.Repository.Owner(
-                    "other-owner")),
-            new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
-                TestScopes.repositoryId("myowner/" + "demo"),
-                "demo",
-                new GitHubInstallationClient.InstallationRepositoriesResponse.Repository.Owner(
-                    "myowner")));
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
-        .thenReturn(new GitHubInstallationClient.InstallationRepositoriesResponse(4, mixed));
-
-    Response collab = mock(Response.class);
-    when(collab.getStatus()).thenReturn(204);
-    when(installationClient.checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab")))
-        .thenReturn(collab);
-
-    assertTrue(checker.hasAccess("collab"));
-    // Only the fully specified owner repo is collaborator-checked; the rejected entries are not.
-    verify(installationClient)
-        .checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab"));
-    verify(installationClient, never())
-        .checkCollaborator(anyString(), anyString(), eq("other-owner"), anyString(), anyString());
-  }
-
-  @Test
-  void shouldDenyNullLogin() {
-    assertFalse(checker.hasAccess(null));
-  }
-
-  @Test
-  void shouldDenyBlankLogin() {
-    assertFalse(checker.hasAccess("   "));
-  }
-
-  @Test
-  void shouldReevaluateAccessAfterCacheExpiry() {
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    Response collab = mock(Response.class);
-    when(collab.getStatus()).thenReturn(204);
-    when(installationClient.checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab")))
-        .thenReturn(collab);
-
-    checker.seedAccessCache("collab", true, now.get().minus(java.time.Duration.ofMinutes(10)));
-
-    assertTrue(checker.hasAccess("collab"));
-    verify(installationClient, times(1))
-        .checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("collab"));
-  }
-
-  @Test
-  void shouldReturnCachedAccess() {
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    Response collab = mock(Response.class);
-    when(collab.getStatus()).thenReturn(204);
-    when(installationClient.checkCollaborator(
-            anyString(), anyString(), anyString(), anyString(), eq("collab")))
-        .thenReturn(collab);
-
-    assertTrue(checker.hasAccess("collab"));
-    // second call uses cache, no additional collaborator API calls
-    assertTrue(checker.hasAccess("collab"));
-    verify(installationClient, times(1))
-        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), eq("collab"));
-  }
-
-  @Test
-  void shouldReturnCachedDenial() {
-    // A fresh denied cache entry is served from cache without re-evaluating access.
-    checker.seedAccessCache("outsider", false, now.get());
-
-    assertEquals(DashboardAccessChecker.AccessDecision.DENIED, checker.checkAccess("outsider"));
-    assertFalse(checker.hasAccess("outsider"));
-    verify(installationClient, never())
-        .listInstallations(anyString(), anyString(), anyInt(), anyInt());
-  }
-
-  @Test
-  void shouldWarnOnUnexpectedCollaboratorCheckStatus() {
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    Response unexpected = mock(Response.class);
-    when(unexpected.getStatus()).thenReturn(500);
-    when(installationClient.checkCollaborator(
-            anyString(), anyString(), anyString(), anyString(), eq("collab")))
-        .thenReturn(unexpected);
-
-    assertFalse(checker.hasAccess("collab"));
-  }
-
-  @Test
-  void shouldDenyWhenCollaboratorCheckThrowsException() {
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    when(installationClient.checkCollaborator(
-            anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenThrow(new RuntimeException("network error"));
-
-    assertFalse(checker.hasAccess("collab"));
-  }
-
-  @Test
-  void shouldHandleNullRepositoriesResponse() {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(
-            List.of(
-                new GitHubInstallationClient.Installation(
-                    99L, new GitHubInstallationClient.Installation.Account("myowner", "User"))));
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    when(installationClient.listInstallationRepositories(anyString(), anyString(), eq(100), eq(1)))
-        .thenReturn(new GitHubInstallationClient.InstallationRepositoriesResponse(0, null));
-
-    assertFalse(checker.hasAccess("collab"));
-  }
-
-  @Test
-  void shouldSkipInstallationWithNoMatchingAccount() {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(
-            List.of(
-                new GitHubInstallationClient.Installation(
-                    99L,
-                    new GitHubInstallationClient.Installation.Account("other-owner", "User"))));
-
-    assertFalse(checker.hasAccess("collab"));
-  }
-
-  @Test
-  void shouldReturnCachedOwner() {
-    // First call resolves owner from GitHub App
-    assertTrue(checker.hasAccess("myowner"));
-    // Second call should use cached owner; clear the mock so App call would fail if made
-    when(installationClient.getApp(anyString(), anyString()))
-        .thenThrow(new RuntimeException("should not be called"));
-    assertTrue(checker.hasAccess("myowner"));
-  }
-
-  @Test
-  void shouldReturnEmptyOwnerWhenAppHasNullOwner() {
-    when(installationClient.getApp(anyString(), anyString()))
-        .thenReturn(new GitHubInstallationClient.AppInfo(null));
+    now.set(now.get().plus(DashboardAccessChecker.STALE_SCOPE_LIMIT));
     assertEquals(
-        DashboardAccessChecker.AccessDecision.NOT_CONFIGURED, checker.checkAccess("anyone"));
-    assertFalse(checker.hasAccess("anyone"));
+        AccessDecision.UNAVAILABLE,
+        checker.checkAccess("alice", TOKEN),
+        "too old to serve once the outage outlasts the stale limit");
   }
 
   @Test
-  void shouldReturnEmptyOwnerWhenAppOwnerLoginIsBlank() {
-    when(installationClient.getApp(anyString(), anyString()))
+  void aWebErrorWithoutAResponseIsUnavailable() {
+    when(userClient.listInstallations(eq(AUTH), anyString(), eq(100), eq(1)))
+        .thenThrow(new WebApplicationException((Response) null));
+
+    assertEquals(AccessDecision.UNAVAILABLE, checker.checkAccess("alice", TOKEN));
+  }
+
+  @Test
+  void aResolvedScopeIsCachedPerTokenUntilItExpires() {
+    var first = checker.repositoryScope("alice", TOKEN);
+    assertSame(first, checker.repositoryScope("ALICE", TOKEN));
+    verify(userClient, times(1)).listInstallations(eq(AUTH), anyString(), eq(100), eq(1));
+
+    stubInstallations("Bearer gho_new", installation(20L, "alice", "User"));
+    stubRepositories("Bearer gho_new", 20L, repo(200L, "alice", "site"));
+    assertNotSame(first, checker.repositoryScope("alice", "gho_new"), "a new sign-in asks again");
+
+    now.set(now.get().plus(DashboardAccessChecker.SCOPE_CACHE_TTL).plusSeconds(1));
+    checker.repositoryScope("alice", TOKEN);
+    verify(userClient, times(2)).listInstallations(eq(AUTH), anyString(), eq(100), eq(1));
+  }
+
+  @Test
+  void aDeniedAnswerIsCachedToo() {
+    stubInstallations("Bearer gho_outsider");
+
+    checker.checkAccess("outsider", "gho_outsider");
+    checker.checkAccess("outsider", "gho_outsider");
+
+    verify(userClient, times(1))
+        .listInstallations(eq("Bearer gho_outsider"), anyString(), eq(100), eq(1));
+  }
+
+  @Test
+  void incompleteEntriesAreSkipped() {
+    when(userClient.listInstallations(eq(AUTH), anyString(), eq(100), eq(1)))
         .thenReturn(
-            new GitHubInstallationClient.AppInfo(
-                new GitHubInstallationClient.AppInfo.Owner("", "User")));
+            new GitHubUserClient.UserInstallations(
+                3,
+                java.util.Arrays.asList(
+                    new Installation(30L, null),
+                    new Installation(31L, new Installation.Account(null, "User")),
+                    installation(20L, "alice", "User"))));
+    var owner = new InstallationRepositoriesResponse.Repository.Owner("alice");
+    when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(1)))
+        .thenReturn(
+            new InstallationRepositoriesResponse(
+                5,
+                List.of(
+                    new InstallationRepositoriesResponse.Repository(0L, "no-id", owner),
+                    new InstallationRepositoriesResponse.Repository(201L, null, owner),
+                    new InstallationRepositoriesResponse.Repository(202L, "no-owner", null),
+                    new InstallationRepositoriesResponse.Repository(
+                        203L,
+                        "no-login",
+                        new InstallationRepositoriesResponse.Repository.Owner(null)),
+                    new InstallationRepositoriesResponse.Repository(200L, "site", owner),
+                    new InstallationRepositoriesResponse.Repository(200L, "site", owner))));
+
+    var scope = checker.repositoryScope("alice", TOKEN);
+
+    assertEquals(List.of(20L), scope.sortedInstallations().stream().map(i -> i.id()).toList());
+    assertEquals(Map.of(200L, "alice/site"), scope.installations().get(20L).repositories());
+  }
+
+  @Test
+  void pagesAreFollowedUntilAShortOne() {
+    var firstPage =
+        IntStream.rangeClosed(1, 100).mapToObj(i -> repo(1_000L + i, "alice", "repo" + i)).toList();
+    when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(1)))
+        .thenReturn(new InstallationRepositoriesResponse(101, firstPage));
+    when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(2)))
+        .thenReturn(
+            new InstallationRepositoriesResponse(101, List.of(repo(200L, "alice", "site"))));
+
     assertEquals(
-        DashboardAccessChecker.AccessDecision.NOT_CONFIGURED, checker.checkAccess("anyone"));
-    assertFalse(checker.hasAccess("anyone"));
+        101,
+        checker.repositoryScope("alice", TOKEN).installations().get(20L).repositories().size());
   }
 
   @Test
-  void shouldReturnSnapshotFromCacheOnRepoFetchFailure() {
-    when(installationClient.listInstallations(anyString(), anyString(), eq(100), eq(1)))
-        .thenThrow(new RuntimeException("API error"));
+  void aListingThatNeverEndsFailsClosed() {
+    var fullPage =
+        IntStream.rangeClosed(1, 100)
+            .mapToObj(i -> installation(i, "org" + i, "Organization"))
+            .toList();
+    when(userClient.listInstallations(eq(AUTH), anyString(), eq(100), anyInt()))
+        .thenReturn(new GitHubUserClient.UserInstallations(100_000, fullPage));
 
-    assertFalse(checker.hasAccess("collab"));
+    assertEquals(AccessDecision.UNAVAILABLE, checker.checkAccess("alice", TOKEN));
   }
 
   @Test
-  void shouldReturnConfiguredAccountOwnerWithoutCallingGitHubApp() {
-    when(dashboardConfig.accountOwner()).thenReturn(Optional.of("configured-owner"));
+  void anEmptyPageEndsTheListing() {
+    when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(1)))
+        .thenReturn(new InstallationRepositoriesResponse(0, null));
 
-    assertTrue(checker.hasAccess("configured-owner"));
-
-    verify(installationClient, never()).getApp(anyString(), anyString());
+    assertTrue(
+        checker.repositoryScope("alice", TOKEN).installations().get(20L).repositories().isEmpty());
   }
 
   @Test
-  void shouldIgnoreBlankConfiguredAccountOwner() {
-    when(dashboardConfig.accountOwner()).thenReturn(Optional.of("   "));
+  void theSweepKeepsAnEntryThatCanStillServeAsAFallback() {
+    checker.checkAccess("alice", TOKEN);
+    now.set(now.get().plus(DashboardAccessChecker.SCOPE_CACHE_TTL).plusSeconds(1));
+    for (var i = 0; i < DashboardAccessChecker.SCOPE_CACHE_SWEEP_THRESHOLD; i++) {
+      stubInstallations("Bearer s" + i);
+      checker.checkAccess("sweeper" + i, "s" + i);
+    }
+    when(userClient.listInstallations(eq(AUTH), anyString(), eq(100), eq(1)))
+        .thenThrow(new IllegalStateException("GitHub is down"));
 
-    assertTrue(checker.hasAccess("myowner"));
-    verify(installationClient).getApp(eq("Bearer jwt"), anyString());
+    assertEquals(AccessDecision.ALLOWED, checker.checkAccess("alice", TOKEN));
   }
 
   @Test
-  void shouldUseCachedRepoSnapshotWithinTtl() {
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    Response collab = mock(Response.class);
-    when(collab.getStatus()).thenReturn(404);
-    when(installationClient.checkCollaborator(
-            anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenReturn(collab);
+  void theCacheDropsExpiredLoginsOnceItGrows() {
+    // One login GitHub never answered for: its remembered error goes with the rest.
+    when(userClient.listInstallations(eq("Bearer down"), anyString(), eq(100), eq(1)))
+        .thenThrow(new IllegalStateException("GitHub is down"));
+    checker.checkAccess("unanswered", "down");
+    for (var i = 1; i < DashboardAccessChecker.SCOPE_CACHE_SWEEP_THRESHOLD; i++) {
+      stubInstallations("Bearer t" + i);
+      checker.checkAccess("user" + i, "t" + i);
+    }
+    assertEquals(DashboardAccessChecker.SCOPE_CACHE_SWEEP_THRESHOLD, checker.cacheSize());
 
-    assertFalse(checker.hasAccess("outsider"));
-    assertFalse(checker.hasAccess("another-outsider"));
+    now.set(now.get().plus(DashboardAccessChecker.STALE_SCOPE_LIMIT).plus(Duration.ofSeconds(1)));
+    checker.checkAccess("alice", TOKEN);
 
-    verify(installationClient, times(1))
-        .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
+    assertEquals(1, checker.cacheSize());
   }
 
-  @Test
-  void shouldUseCachedRepoSnapshotForSubsequentAccessChecks() {
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    Response collab = mock(Response.class);
-    when(collab.getStatus()).thenReturn(204);
-    when(installationClient.checkCollaborator(
-            anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenReturn(collab);
-
-    assertTrue(checker.hasAccess("collab-one"));
-    assertTrue(checker.hasAccess("collab-two"));
-
-    verify(installationClient, times(1))
-        .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
-  }
-
-  @Test
-  void shouldInvalidateRepoSnapshotCacheWhenOwnerChanges() {
-    // First access check caches a RepoSnapshot for "myowner"
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    Response collab = mock(Response.class);
-    when(collab.getStatus()).thenReturn(204);
-    when(installationClient.checkCollaborator(
-            anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenReturn(collab);
-
-    assertTrue(checker.hasAccess("collab-user"));
-    verify(installationClient, times(1))
-        .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
-
-    // Switch the resolved owner to "newowner" (within repo cache TTL)
-    when(dashboardConfig.accountOwner()).thenReturn(Optional.of("newowner"));
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(List.of(installationFor("newowner", 200L)));
-    when(authClient.getAuthHeader(200L)).thenReturn("Bearer new-inst-token");
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer new-inst-token"), anyString(), eq(100), eq(1)))
+  private void stubInstallations(String auth, Installation... installations) {
+    when(userClient.listInstallations(eq(auth), anyString(), eq(100), eq(1)))
         .thenReturn(
-            new GitHubInstallationClient.InstallationRepositoriesResponse(
-                1, ownerRepos("newowner", "new-repo")));
-
-    // Advance past access cache TTL (5 min) but within repo cache TTL (10 min)
-    // so the per-login result expires and evaluateAccess re-enters installedRepos().
-    now.set(now.get().plus(java.time.Duration.ofMinutes(6)));
-
-    // The snapshot must NOT be reused — repos must be re-fetched for "newowner"
-    assertTrue(checker.hasAccess("collab-user"));
-    verify(installationClient, times(2))
-        .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
+            new GitHubUserClient.UserInstallations(installations.length, List.of(installations)));
   }
 
-  @Test
-  void shouldFailClosedWhenRefetchForNewOwnerFails() {
-    // First access check caches a usable RepoSnapshot for "myowner" (auth + repos present).
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    Response collab = mock(Response.class);
-    when(collab.getStatus()).thenReturn(204);
-    when(installationClient.checkCollaborator(
-            anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenReturn(collab);
-
-    assertTrue(checker.hasAccess("collab-user"));
-
-    // Owner changes to "newowner", but resolving its installation token fails transiently.
-    when(dashboardConfig.accountOwner()).thenReturn(Optional.of("newowner"));
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(List.of(installationFor("newowner", 200L)));
-    when(authClient.getAuthHeader(200L)).thenThrow(new RuntimeException("GitHub unavailable"));
-
-    // Advance past access cache TTL so the per-login result expires and access is re-evaluated.
-    now.set(now.get().plus(java.time.Duration.ofMinutes(6)));
-
-    // The error fallback must NOT serve "myowner"'s cached repos/token for "newowner": a
-    // collaborator of the previous owner must be denied, not authorized against the wrong repos.
-    assertFalse(checker.hasAccess("collab-user"));
-    // "myowner"'s repos are checked only during the first evaluation, never again via the fallback.
-    verify(installationClient, times(1))
-        .checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), anyString(), eq("collab-user"));
-  }
-
-  @Test
-  void shouldReuseCachedSnapshotForSameOwnerWhenRefreshFails() {
-    // First check caches a usable snapshot for "myowner"; the refresh token fails on the next call.
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L))
-        .thenReturn("Bearer inst-token")
-        .thenThrow(new RuntimeException("GitHub unavailable"));
-    Response collab = mock(Response.class);
-    when(collab.getStatus()).thenReturn(204);
-    when(installationClient.checkCollaborator(
-            anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenReturn(collab);
-
-    assertTrue(checker.hasAccess("collab-user"));
-
-    // Advance past both the access cache (5 min) and the repo cache (10 min) so the snapshot is
-    // re-fetched; the re-fetch then fails transiently while the owner is unchanged.
-    now.set(now.get().plus(java.time.Duration.ofMinutes(11)));
-
-    // Graceful degradation: the cached snapshot belongs to the same owner, so it is reused rather
-    // than locking everyone out during a transient GitHub outage.
-    assertTrue(checker.hasAccess("collab-user"));
-  }
-
-  @Test
-  void shouldNotCacheMissingInstallationAndRetryWhenItAppears() {
-    // No matching installation exists yet, so the first lookup resolves no repos.
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(List.of());
-
-    assertFalse(checker.hasAccess("collab-user"));
-    verify(installationClient, times(1))
-        .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
-
-    // The installation now appears for "myowner" with the collaborator's repo.
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    Response collab = mock(Response.class);
-    when(collab.getStatus()).thenReturn(204);
-    when(installationClient.checkCollaborator(
-            anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenReturn(collab);
-
-    // Advance past access cache TTL (5 min) but within repo cache TTL (10 min): the prior negative
-    // (null-auth) snapshot must not be reused — the installation lookup must be retried.
-    now.set(now.get().plus(java.time.Duration.ofMinutes(6)));
-
-    assertTrue(checker.hasAccess("collab-user"));
-    verify(installationClient, times(2))
-        .listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1));
-  }
-
-  private void stubInstalledRepos(String owner, String... repos) {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(List.of(installationFor(owner, 99L)));
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
+  private void stubRepositories(
+      String auth, long installationId, InstallationRepositoriesResponse.Repository... repos) {
+    when(userClient.listRepositories(eq(auth), anyString(), eq(installationId), eq(100), eq(1)))
         .thenReturn(
-            new GitHubInstallationClient.InstallationRepositoriesResponse(
-                repos.length, ownerRepos(owner, repos)));
+            new InstallationRepositoriesResponse(repos.length, new ArrayList<>(List.of(repos))));
   }
 
-  private void stubCollaborator(String repo, String login, int status) {
-    Response response = mock(Response.class);
+  private void stubMembership(String login, int status) {
+    var response = mock(Response.class);
     when(response.getStatus()).thenReturn(status);
-    when(installationClient.checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), eq(repo), eq(login)))
+    when(installationClient.checkOrgMember(
+            eq("Bearer acme-installation"), anyString(), eq("acme"), eq(login)))
         .thenReturn(response);
   }
 
-  @Test
-  void repositoryScopeGivesTheOwnerEveryInstalledRepositoryWithoutCollaboratorChecks() {
-    stubInstalledRepos("myowner", "Alpha", "beta");
-
-    var scope = checker.repositoryScope("MyOwner");
-
-    assertTrue(scope.accountOwner());
-    assertEquals(
-        java.util.Map.of(
-            TestScopes.repositoryId("myowner/Alpha"),
-            "myowner/Alpha",
-            TestScopes.repositoryId("myowner/beta"),
-            "myowner/beta"),
-        scope.repositories(),
-        "names keep GitHub's spelling; ids are what queries match");
-    assertTrue(scope.allows("MYOWNER/alpha"));
-    verify(installationClient, never())
-        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), anyString());
+  private static Installation installation(long id, String account, String type) {
+    return new Installation(id, new Installation.Account(account, type));
   }
 
-  @Test
-  void repositoryScopeSkipsARepositoryWithoutAnIdAndKeepsOneEntryPerId() {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(List.of(installationFor("myowner", 99L)));
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    var owner =
-        new GitHubInstallationClient.InstallationRepositoriesResponse.Repository.Owner("myowner");
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
-        .thenReturn(
-            new GitHubInstallationClient.InstallationRepositoriesResponse(
-                3,
-                List.of(
-                    new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
-                        0L, "no-id", owner),
-                    new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
-                        5L, "demo", owner),
-                    // A repository listed twice, as a page boundary moving mid-listing can do.
-                    new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
-                        5L, "demo", owner))));
-
-    var scope = checker.repositoryScope("myowner");
-
-    assertEquals(java.util.Map.of(5L, "myowner/demo"), scope.repositories());
-    assertFalse(scope.allows("myowner/no-id"));
-  }
-
-  @Test
-  void repositoryScopeGivesACollaboratorOnlyTheirRepositoriesAndCachesTheSet() {
-    stubInstalledRepos("myowner", "alpha", "beta", "gamma");
-    stubCollaborator("alpha", "collab", 204);
-    stubCollaborator("beta", "collab", 404);
-    stubCollaborator("gamma", "collab", 204);
-
-    var scope = checker.repositoryScope("collab");
-    assertFalse(scope.accountOwner());
-    assertEquals(
-        java.util.Set.of("myowner/alpha", "myowner/gamma"),
-        java.util.Set.copyOf(scope.repositories().values()));
-    assertEquals(99L, scope.installationId());
-    assertEquals(
-        java.util.Set.of(
-            TestScopes.repositoryId("myowner/alpha"), TestScopes.repositoryId("myowner/gamma")),
-        scope.repositories().keySet());
-
-    // Later requests and per-repository checks within the TTL reuse the set: no GitHub call.
-    assertSame(scope, checker.repositoryScope("COLLAB"));
-    assertTrue(checker.repositoryScope("collab").allows("myowner/Alpha"));
-    assertFalse(checker.repositoryScope("collab").allows("myowner/beta"));
-    verify(installationClient, times(3))
-        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), eq("collab"));
-
-    now.set(now.get().plus(java.time.Duration.ofMinutes(6)));
-    checker.repositoryScope("collab");
-    verify(installationClient, times(6))
-        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), eq("collab"));
-  }
-
-  @Test
-  void repositoryScopeIsRecomputedWhenTheInstallationSnapshotIsRefreshed() {
-    stubInstalledRepos("myowner", "alpha");
-    stubCollaborator("alpha", "collab", 204);
-    checker.repositoryScope("myowner"); // loads the snapshot at t0
-    now.set(now.get().plus(java.time.Duration.ofMinutes(8)));
-    checker.repositoryScope("collab");
-
-    // At t0+11 the snapshot is reloaded; the collaborator's 3-minute-old set was computed from the
-    // previous one (a repository may have left the installation), so it is recomputed.
-    now.set(now.get().plus(java.time.Duration.ofMinutes(3)));
-    checker.repositoryScope("collab");
-    now.set(now.get().plus(java.time.Duration.ofMinutes(1)));
-    checker.repositoryScope("collab");
-
-    verify(installationClient, times(2))
-        .checkCollaborator(anyString(), anyString(), anyString(), anyString(), eq("collab"));
-  }
-
-  @Test
-  void repositoryScopeFailsClosed() {
-    assertSame(RepositoryScope.NONE, checker.repositoryScope(null));
-    assertSame(RepositoryScope.NONE, checker.repositoryScope("  "));
-
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(List.of());
-    assertSame(RepositoryScope.NONE, checker.repositoryScope("myowner"));
-
-    when(installationClient.getApp(anyString(), anyString()))
-        .thenThrow(new RuntimeException("GitHub App unavailable"));
-    var unresolved = new DashboardAccessChecker(config, authClient, installationClient, now::get);
-    assertSame(RepositoryScope.NONE, unresolved.repositoryScope("myowner"));
-  }
-
-  @Test
-  void repositoryScopeCacheSweepsExpiredLoginsAboveThreshold() {
-    stubInstalledRepos("myowner", "alpha");
-    when(installationClient.checkCollaborator(
-            anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenAnswer(
-            inv -> {
-              Response response = mock(Response.class);
-              when(response.getStatus()).thenReturn(404);
-              return response;
-            });
-    for (var i = 0; i < DashboardAccessChecker.ACCESS_CACHE_SWEEP_THRESHOLD - 1; i++) {
-      checker.repositoryScope("stale-" + i);
-    }
-    assertEquals(DashboardAccessChecker.ACCESS_CACHE_SWEEP_THRESHOLD - 1, checker.scopeCacheSize());
-
-    now.set(now.get().plus(java.time.Duration.ofMinutes(6)));
-    checker.repositoryScope("fresh");
-
-    assertEquals(1, checker.scopeCacheSize());
-  }
-
-  private void stubInstalledRepo(String owner, String repo) {
-    when(installationClient.listInstallations(eq("Bearer jwt"), anyString(), eq(100), eq(1)))
-        .thenReturn(List.of(installationFor(owner, 99L)));
-    when(installationClient.listInstallationRepositories(
-            eq("Bearer inst-token"), anyString(), eq(100), eq(1)))
-        .thenReturn(
-            new GitHubInstallationClient.InstallationRepositoriesResponse(
-                1, ownerRepos(owner, repo)));
-  }
-
-  private static GitHubInstallationClient.Installation installationFor(String login, long id) {
-    return new GitHubInstallationClient.Installation(
-        id, new GitHubInstallationClient.Installation.Account(login, "User"));
-  }
-
-  private static List<GitHubInstallationClient.Installation> otherInstallations(
-      int start, int count) {
-    var installations = new java.util.ArrayList<GitHubInstallationClient.Installation>();
-    for (var i = start; i < start + count; i++) {
-      installations.add(installationFor("other-" + i, i));
-    }
-    return installations;
-  }
-
-  private static List<GitHubInstallationClient.InstallationRepositoriesResponse.Repository>
-      ownerRepos(String owner, String... names) {
-    var repos =
-        new java.util.ArrayList<
-            GitHubInstallationClient.InstallationRepositoriesResponse.Repository>();
-    for (var name : names) {
-      repos.add(
-          new GitHubInstallationClient.InstallationRepositoriesResponse.Repository(
-              TestScopes.repositoryId(owner + "/" + name),
-              name,
-              new GitHubInstallationClient.InstallationRepositoriesResponse.Repository.Owner(
-                  owner)));
-    }
-    return repos;
-  }
-
-  private static String[] repoNames(int start, int count) {
-    var names = new String[count];
-    for (var i = 0; i < count; i++) {
-      names[i] = "repo-" + (start + i);
-    }
-    return names;
-  }
-
-  @Test
-  void sweepShouldEvictExpiredEntriesAboveThreshold() {
-    var expired = now.get().minus(java.time.Duration.ofMinutes(10));
-    for (var i = 0; i < DashboardAccessChecker.ACCESS_CACHE_SWEEP_THRESHOLD; i++) {
-      checker.seedAccessCache("stale-user-" + i, false, expired);
-    }
-    checker.seedAccessCache("fresh-user", true, now.get());
-
-    checker.sweepExpiredAccessEntries();
-
-    assertEquals(1, checker.accessCacheSize());
-    assertTrue(checker.hasAccessCacheEntry("fresh-user"));
-  }
-
-  @Test
-  void sweepShouldNotRunBelowThreshold() {
-    var expired = now.get().minus(java.time.Duration.ofMinutes(10));
-    checker.seedAccessCache("stale-user", false, expired);
-
-    checker.sweepExpiredAccessEntries();
-
-    assertEquals(1, checker.accessCacheSize());
-  }
-
-  @Test
-  void injectConstructorShouldDelegateWithSystemClock() {
-    var productionChecker = new DashboardAccessChecker(config, authClient, installationClient);
-
-    assertFalse(productionChecker.hasAccess(null));
-    assertFalse(productionChecker.hasAccess("   "));
-  }
-
-  @Test
-  void shouldReResolveOwnerAfterOwnerCacheExpiry() {
-    assertTrue(checker.hasAccess("myowner"));
-
-    // Advance past the 1h owner cache TTL — the owner must be re-resolved from the App
-    now.set(now.get().plus(java.time.Duration.ofMinutes(61)));
-    assertTrue(checker.hasAccess("myowner"));
-
-    verify(installationClient, times(2)).getApp(eq("Bearer jwt"), anyString());
-  }
-
-  @Test
-  void shouldNotReResolveOwnerWithinNegativeCacheTtl() {
-    when(installationClient.getApp(anyString(), anyString()))
-        .thenThrow(new RuntimeException("GitHub App unavailable"));
-
-    // A failed resolution is cached briefly so repeated requests do not hammer the App endpoint.
-    assertFalse(checker.hasAccess("random-user"));
-    assertFalse(checker.hasAccess("another-user"));
-    assertEquals(
-        DashboardAccessChecker.AccessDecision.NOT_CONFIGURED, checker.checkAccess("third-user"));
-
-    verify(installationClient, times(1)).getApp(eq("Bearer jwt"), anyString());
-  }
-
-  @Test
-  void shouldRecoverAfterNegativeCacheTtlExpires() {
-    when(installationClient.getApp(anyString(), anyString()))
-        .thenThrow(new RuntimeException("GitHub App unavailable"));
-    assertFalse(checker.hasAccess("myowner"));
-
-    // Once the negative cache lapses and the App becomes resolvable again, access is restored.
-    now.set(now.get().plus(java.time.Duration.ofMinutes(2)));
-    reset(installationClient);
-    when(installationClient.getApp(eq("Bearer jwt"), anyString()))
-        .thenReturn(
-            new GitHubInstallationClient.AppInfo(
-                new GitHubInstallationClient.AppInfo.Owner("myowner", "User")));
-
-    assertEquals(DashboardAccessChecker.AccessDecision.ALLOWED, checker.checkAccess("myowner"));
-  }
-
-  @Test
-  void checkAccessShouldDistinguishAllowedDeniedAndNotConfigured() {
-    assertEquals(DashboardAccessChecker.AccessDecision.ALLOWED, checker.checkAccess("myowner"));
-
-    stubInstalledRepo("myowner", "demo");
-    when(authClient.getAuthHeader(99L)).thenReturn("Bearer inst-token");
-    Response notCollaborator = mock(Response.class);
-    when(notCollaborator.getStatus()).thenReturn(404);
-    when(installationClient.checkCollaborator(
-            eq("Bearer inst-token"), anyString(), eq("myowner"), eq("demo"), eq("outsider")))
-        .thenReturn(notCollaborator);
-    assertEquals(DashboardAccessChecker.AccessDecision.DENIED, checker.checkAccess("outsider"));
-
-    assertEquals(DashboardAccessChecker.AccessDecision.DENIED, checker.checkAccess("  "));
-  }
-
-  @Test
-  void checkAccessShouldReturnNotConfiguredWhenOwnerUnresolvable() {
-    when(installationClient.getApp(anyString(), anyString()))
-        .thenThrow(new RuntimeException("GitHub App unavailable"));
-
-    assertEquals(
-        DashboardAccessChecker.AccessDecision.NOT_CONFIGURED, checker.checkAccess("anyone"));
+  private static InstallationRepositoriesResponse.Repository repo(
+      long id, String owner, String name) {
+    return new InstallationRepositoriesResponse.Repository(
+        id, name, new InstallationRepositoriesResponse.Repository.Owner(owner));
   }
 }

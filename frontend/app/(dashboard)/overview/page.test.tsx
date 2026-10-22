@@ -10,6 +10,16 @@ vi.mock('@/lib/api', () => ({
   api: vi.fn(),
 }));
 
+const installationFilter = vi.hoisted(() => ({
+  installations: [] as { id: number; account: string; repositories: number; installationWide: boolean }[],
+  installation: null as number | null,
+  setInstallation: vi.fn(),
+}));
+
+vi.mock('@/hooks/useInstallationFilter', () => ({
+  useInstallationFilter: () => installationFilter,
+}));
+
 vi.mock('@/hooks/useWebSocket', () => ({
   useWebSocket: vi.fn(),
 }));

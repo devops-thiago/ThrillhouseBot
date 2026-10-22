@@ -4166,7 +4166,7 @@ class ReviewOrchestratorTest {
         verify(commentClient, never())
             .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         // Counted as a structured skip, and the stale check run is concluded as skipped.
-        assertEquals(1L, skipEmitter.countsByReason().get("HEAD_MOVED"));
+        assertEquals(1L, skipEmitter.countsByReason(java.util.List.of(123L)).get("HEAD_MOVED"));
         var updateCaptor =
             ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
         verify(checkRunClient)
@@ -8736,7 +8736,7 @@ class ReviewOrchestratorTest {
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(commentClient, never())
             .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
-        assertEquals(1L, skipEmitter.countsByReason().get("EXCLUDED_LABEL"));
+        assertEquals(1L, skipEmitter.countsByReason(java.util.List.of(123L)).get("EXCLUDED_LABEL"));
         var update = ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
         verify(checkRunClient)
             .updateCheckRun(
@@ -8843,7 +8843,7 @@ class ReviewOrchestratorTest {
                 eq("repo"),
                 eq(1L),
                 argThat(update -> "skipped".equals(update.conclusion())));
-        assertEquals(1L, skipEmitter.countsByReason().get("EXCLUDED_LABEL"));
+        assertEquals(1L, skipEmitter.countsByReason(java.util.List.of(123L)).get("EXCLUDED_LABEL"));
         assertTrue(ciHoldRegistry.pullRequestsAt("owner", "repo", "abcdefgh").isEmpty());
       }
     }
@@ -9502,7 +9502,7 @@ class ReviewOrchestratorTest {
         stubTwoRuns();
 
         assertFalse(orchestrator.review(requestFor("abcdefgh")));
-        assertEquals(1L, skipEmitter.countsByReason().get("HEAD_MOVED"));
+        assertEquals(1L, skipEmitter.countsByReason(java.util.List.of(123L)).get("HEAD_MOVED"));
 
         assertTrue(orchestrator.review(requestFor("d4389d2aa")));
 

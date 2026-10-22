@@ -18,91 +18,103 @@ package dev.thiagogonzaga.thrillhousebot.dashboard;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubUserClient;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import jakarta.ws.rs.WebApplicationException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.IntFunction;
-import java.util.function.Predicate;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Restricts dashboard access to the account owner and repo collaborators. */
+/**
+ * Decides what a dashboard login may read (#1221). GitHub answers with the login's own GitHub App
+ * user access token: the App's installations they can access, and in each the repositories they can
+ * read through any collaborator role, team access or organization base permission. An outside
+ * contributor, a non-member, or an organization member whose base permission is none on a private
+ * repository gets nothing GitHub would not show them.
+ *
+ * <p>A resolved scope is cached per token for {@link #SCOPE_CACHE_TTL}, so dashboard requests and
+ * live events never wait on GitHub. While GitHub cannot be asked, the login keeps the last answer
+ * GitHub gave for up to {@link #STALE_SCOPE_LIMIT}, asked again at most every {@link
+ * #RETRY_AFTER_ERROR}; with no such answer it is denied, and that too is asked again only after
+ * {@link #RETRY_AFTER_ERROR}, so an outage never turns into a GitHub call per request. A token
+ * GitHub rejects ends the dashboard session. With {@code thrillhousebot.dashboard.github
+ * .account-owner} set, only that account's installation is served.
+ */
 @ApplicationScoped
 public class DashboardAccessChecker {
 
   private static final Logger log = LoggerFactory.getLogger(DashboardAccessChecker.class);
   private static final String ACCEPT = "application/vnd.github+json";
-  private static final Duration REPO_CACHE_TTL = Duration.ofMinutes(10);
-  private static final Duration ACCESS_CACHE_TTL = Duration.ofMinutes(5);
-  private static final Duration OWNER_CACHE_TTL = Duration.ofHours(1);
-  private static final Duration OWNER_NEGATIVE_CACHE_TTL = Duration.ofMinutes(1);
-  static final int ACCESS_CACHE_SWEEP_THRESHOLD = 1_000;
+  static final Duration SCOPE_CACHE_TTL = Duration.ofMinutes(5);
+
+  /** How long the last answer GitHub gave is still served while GitHub cannot be asked. */
+  static final Duration STALE_SCOPE_LIMIT = Duration.ofMinutes(30);
+
+  /** How long a GitHub error is remembered before GitHub is asked again. */
+  static final Duration RETRY_AFTER_ERROR = Duration.ofMinutes(1);
+
+  static final int SCOPE_CACHE_SWEEP_THRESHOLD = 1_000;
   private static final int PER_PAGE = 100;
 
   /**
-   * Loud safety valve for the page walk. Pagination terminates on GitHub's short final page, so
-   * this ceiling is only reached if an endpoint misbehaves and never returns one. It sits far above
-   * any real account (100,000 entries); reaching it throws so the walk fails closed and is logged,
-   * rather than spinning a request thread forever or silently dropping data.
+   * Loud safety valve for the page walk. Pagination ends on GitHub's short final page, so this is
+   * only reached if an endpoint never returns one; it throws so the walk fails closed.
    */
   private static final int MAX_PAGES = 1_000;
 
-  /** Outcome of an access check, letting callers distinguish denial from a misconfigured owner. */
+  /** Outcome of resolving a login's access. */
   public enum AccessDecision {
-    /** The login may use the dashboard. */
+    /** The login may read at least one repository. */
     ALLOWED,
-    /** Access control is active but this login is neither the owner nor a collaborator. */
+    /** GitHub answered, and the login may read nothing this dashboard serves. */
     DENIED,
-    /** No account owner is configured or resolvable, so access control cannot be enforced. */
-    NOT_CONFIGURED
+    /** GitHub rejected the login's token: it expired or was revoked, so the session must end. */
+    TOKEN_REJECTED,
+    /** GitHub could not be asked; access is denied until it can. */
+    UNAVAILABLE
   }
+
+  /** A login's access: the decision, and the scope it may read (empty unless allowed). */
+  public record Resolution(AccessDecision decision, RepositoryScope scope) {
+    static final Resolution DENIED = new Resolution(AccessDecision.DENIED, RepositoryScope.NONE);
+  }
+
+  /**
+   * A cached resolution: what to answer until {@code retryAt}, and when GitHub last gave an answer
+   * ({@code answeredAt}, null when it never has) so a stale answer is served only within {@link
+   * #STALE_SCOPE_LIMIT}.
+   */
+  private record CacheEntry(Resolution resolution, Instant answeredAt, Instant retryAt) {}
 
   private final ThrillhouseConfig config;
   private final GitHubAuthClient authClient;
   private final GitHubInstallationClient installationClient;
+  private final GitHubUserClient userClient;
   private final Supplier<Instant> clock;
-
-  private record OwnerCache(String owner, Instant cachedAt) {}
-
-  private final AtomicReference<RepoSnapshot> cachedSnapshot =
-      new AtomicReference<>(new RepoSnapshot(null, 0L, List.of(), null, Instant.EPOCH));
-  private final AtomicReference<OwnerCache> ownerCache =
-      new AtomicReference<>(new OwnerCache(null, Instant.EPOCH));
-
-  static record AccessCacheEntry(boolean allowed, Instant cachedAt) {}
-
-  private record RepoSnapshot(
-      String owner,
-      long installationId,
-      List<RepoRef> repos,
-      String installationAuth,
-      Instant cachedAt) {}
-
-  private record RepoRef(long id, String owner, String name) {}
-
-  private final ConcurrentHashMap<String, AccessCacheEntry> accessCache = new ConcurrentHashMap<>();
-
-  private record ScopeCacheEntry(RepositoryScope scope, RepoSnapshot snapshot, Instant cachedAt) {}
-
-  private final ConcurrentHashMap<String, ScopeCacheEntry> scopeCache = new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
+  private final AtomicBoolean membersPermissionWarned = new AtomicBoolean();
 
   @Inject
   public DashboardAccessChecker(
       ThrillhouseConfig config,
       GitHubAuthClient authClient,
-      @RestClient GitHubInstallationClient installationClient) {
-    this(config, authClient, installationClient, Instant::now);
+      @RestClient GitHubInstallationClient installationClient,
+      @RestClient GitHubUserClient userClient) {
+    this(config, authClient, installationClient, userClient, Instant::now);
   }
 
   /** Visible for tests: allows controlling cache expiry. */
@@ -110,337 +122,231 @@ public class DashboardAccessChecker {
       ThrillhouseConfig config,
       GitHubAuthClient authClient,
       GitHubInstallationClient installationClient,
+      GitHubUserClient userClient,
       Supplier<Instant> clock) {
     this.config = config;
     this.authClient = authClient;
     this.installationClient = installationClient;
+    this.userClient = userClient;
     this.clock = clock;
   }
 
-  public boolean hasAccess(String githubLogin) {
-    return checkAccess(githubLogin) == AccessDecision.ALLOWED;
+  /** Whether {@code login}, holding {@code userToken}, may use the dashboard. */
+  public AccessDecision checkAccess(String login, String userToken) {
+    return resolve(login, userToken).decision();
+  }
+
+  /** The repositories {@code login} may read; {@link RepositoryScope#NONE} unless allowed. */
+  public RepositoryScope repositoryScope(String login, String userToken) {
+    return resolve(login, userToken).scope();
   }
 
   /**
-   * The installed repositories {@code githubLogin} may read: every repository in the installation
-   * snapshot for the account owner, and for anyone else the ones they collaborate on. A
-   * collaborator's set costs one collaborator check per installed repository and is then cached for
-   * {@code ACCESS_CACHE_TTL} (and only while the snapshot it was computed from is current), so a
-   * dashboard request never makes a GitHub call per row. Fails closed to {@link
-   * RepositoryScope#NONE} when the owner or the installation cannot be resolved.
+   * Resolves and caches a login's access. A rejected token is never cached, so the session ends; an
+   * unreachable GitHub falls back as {@link #unavailable} describes.
    */
-  public RepositoryScope repositoryScope(String githubLogin) {
-    if (githubLogin == null || githubLogin.isBlank()) {
-      return RepositoryScope.NONE;
+  public Resolution resolve(String login, String userToken) {
+    if (isBlank(login) || isBlank(userToken)) {
+      return Resolution.DENIED;
     }
-    var accountOwner = accountOwner();
-    if (accountOwner.isEmpty()) {
-      return RepositoryScope.NONE;
+    var key = cacheKey(login, userToken);
+    var now = clock.get();
+    var cached = cache.get(key);
+    if (cached != null && now.isBefore(cached.retryAt())) {
+      return cached.resolution();
     }
-    var snapshot = installedRepos(accountOwner.get());
-    if (snapshot.installationAuth() == null) {
-      return RepositoryScope.NONE;
-    }
-    if (accountOwner.get().equalsIgnoreCase(githubLogin)) {
-      return new RepositoryScope(true, snapshot.installationId(), names(snapshot, repo -> true));
-    }
-    var normalizedLogin = githubLogin.toLowerCase(Locale.ROOT);
-    var cached = scopeCache.get(normalizedLogin);
-    if (cached != null
-        && cached.snapshot() == snapshot
-        && cached.cachedAt().isAfter(clock.get().minus(ACCESS_CACHE_TTL))) {
-      return cached.scope();
-    }
-    var scope =
-        new RepositoryScope(
-            false,
-            snapshot.installationId(),
-            names(snapshot, repo -> hasRepoAccess(snapshot.installationAuth(), repo, githubLogin)));
-    scopeCache.put(normalizedLogin, new ScopeCacheEntry(scope, snapshot, clock.get()));
-    sweepExpiredScopeEntries();
-    return scope;
-  }
-
-  /**
-   * The snapshot's repositories owned by its account (never a foreign entry) that pass, by
-   * repository id.
-   */
-  private static Map<Long, String> names(RepoSnapshot snapshot, Predicate<RepoRef> readable) {
-    return snapshot.repos().stream()
-        .filter(repo -> repo.owner().equalsIgnoreCase(snapshot.owner()))
-        .filter(readable)
-        .collect(
-            Collectors.toUnmodifiableMap(
-                RepoRef::id, repo -> repo.owner() + "/" + repo.name(), (first, second) -> first));
-  }
-
-  /** Same bounded sweep as {@link #sweepExpiredAccessEntries()}, for the per-login scope cache. */
-  void sweepExpiredScopeEntries() {
-    if (scopeCache.size() < ACCESS_CACHE_SWEEP_THRESHOLD) {
-      return;
-    }
-    var cutoff = clock.get().minus(ACCESS_CACHE_TTL);
-    scopeCache.entrySet().removeIf(entry -> !entry.getValue().cachedAt().isAfter(cutoff));
-  }
-
-  /** Visible for tests that assert the scope cache stays bounded. */
-  int scopeCacheSize() {
-    return scopeCache.size();
-  }
-
-  /**
-   * Resolves whether {@code githubLogin} may use the dashboard. Fails closed: when no account owner
-   * can be determined the result is {@link AccessDecision#NOT_CONFIGURED} (deny), never an implicit
-   * grant. The underlying misconfiguration is logged once per resolution attempt in {@link
-   * #accountOwner()}, so this method does not log per call.
-   */
-  public AccessDecision checkAccess(String githubLogin) {
-    if (githubLogin == null || githubLogin.isBlank()) {
-      return AccessDecision.DENIED;
-    }
-
-    Optional<String> owner = accountOwner();
-    if (owner.isEmpty()) {
-      return AccessDecision.NOT_CONFIGURED;
-    }
-
-    var normalizedLogin = githubLogin.toLowerCase(Locale.ROOT);
-    var cached = accessCache.get(normalizedLogin);
-    if (cached != null) {
-      if (cached.cachedAt().isAfter(clock.get().minus(ACCESS_CACHE_TTL))) {
-        return cached.allowed() ? AccessDecision.ALLOWED : AccessDecision.DENIED;
+    Resolution resolution;
+    try {
+      var scope = fetchScope(login, "Bearer " + userToken);
+      resolution =
+          new Resolution(
+              scope.isEmpty() ? AccessDecision.DENIED : AccessDecision.ALLOWED,
+              scope.isEmpty() ? RepositoryScope.NONE : scope);
+    } catch (WebApplicationException e) {
+      if (e.getResponse().getStatus() == 401) {
+        log.info("GitHub rejected the dashboard token of {}; ending the session", login);
+        cache.remove(key);
+        return new Resolution(AccessDecision.TOKEN_REJECTED, RepositoryScope.NONE);
       }
-      accessCache.remove(normalizedLogin, cached);
+      return unavailable(key, cached, login, e);
+    } catch (RuntimeException e) {
+      return unavailable(key, cached, login, e);
     }
-
-    var allowed = evaluateAccess(githubLogin, owner.get());
-    accessCache.put(normalizedLogin, new AccessCacheEntry(allowed, clock.get()));
-    sweepExpiredAccessEntries();
-    if (!allowed) {
-      log.warn("Dashboard access denied for GitHub user {}", githubLogin);
+    cache.put(key, new CacheEntry(resolution, now, now.plus(SCOPE_CACHE_TTL)));
+    sweepExpiredEntries();
+    if (resolution.decision() == AccessDecision.DENIED) {
+      log.warn("Dashboard access denied for GitHub user {}", login);
     }
-    return allowed ? AccessDecision.ALLOWED : AccessDecision.DENIED;
+    return resolution;
   }
 
   /**
-   * The evict-on-read above only replaces entries for logins that come back; without this sweep the
-   * cache keeps one entry forever per login that never returns (including denied ones).
+   * GitHub could not be asked: serve the last answer it gave while that is recent enough, or deny,
+   * and remember either for {@link #RETRY_AFTER_ERROR} so the next requests do not ask again.
    */
-  void sweepExpiredAccessEntries() {
-    if (accessCache.size() < ACCESS_CACHE_SWEEP_THRESHOLD) {
-      return;
+  private Resolution unavailable(String key, CacheEntry cached, String login, RuntimeException e) {
+    var now = clock.get();
+    var stale =
+        cached != null
+            && cached.answeredAt() != null
+            && cached.answeredAt().isAfter(now.minus(STALE_SCOPE_LIMIT));
+    var resolution =
+        stale
+            ? cached.resolution()
+            : new Resolution(AccessDecision.UNAVAILABLE, RepositoryScope.NONE);
+    log.warn(
+        "Could not resolve dashboard access for {}{}: {}",
+        login,
+        stale ? "; serving its last known access" : "",
+        e.getMessage());
+    cache.put(
+        key,
+        new CacheEntry(
+            resolution, stale ? cached.answeredAt() : null, now.plus(RETRY_AFTER_ERROR)));
+    return resolution;
+  }
+
+  private RepositoryScope fetchScope(String login, String userAuth) {
+    var owner = config.dashboard().accountOwner().map(String::strip).filter(s -> !s.isEmpty());
+    var installations = new HashMap<Long, RepositoryScope.Installation>();
+    for (var installation :
+        allPages(
+            page ->
+                userClient.listInstallations(userAuth, ACCEPT, PER_PAGE, page).installations())) {
+      var account = installation.account();
+      if (account == null
+          || account.login() == null
+          || owner.filter(o -> !o.equalsIgnoreCase(account.login())).isPresent()) {
+        continue;
+      }
+      var repositories = repositories(userAuth, installation.id());
+      installations.put(
+          installation.id(),
+          new RepositoryScope.Installation(
+              installation.id(),
+              account.login(),
+              installationWide(installation, login),
+              repositories));
     }
-    var cutoff = clock.get().minus(ACCESS_CACHE_TTL);
-    accessCache.entrySet().removeIf(entry -> !entry.getValue().cachedAt().isAfter(cutoff));
+    return new RepositoryScope(installations);
   }
 
-  /** Seeds access cache state for tests without exposing the backing map. */
-  void seedAccessCache(String githubLogin, boolean allowed, Instant cachedAt) {
-    accessCache.put(githubLogin.toLowerCase(Locale.ROOT), new AccessCacheEntry(allowed, cachedAt));
-  }
-
-  /** Visible for tests that assert access cache lifecycle. */
-  int accessCacheSize() {
-    return accessCache.size();
-  }
-
-  /** Visible for tests that assert a specific cached login remains present. */
-  boolean hasAccessCacheEntry(String githubLogin) {
-    return accessCache.containsKey(githubLogin.toLowerCase(Locale.ROOT));
-  }
-
-  private boolean evaluateAccess(String githubLogin, String accountOwner) {
-    if (accountOwner.equalsIgnoreCase(githubLogin)) {
-      return true;
-    }
-
-    var snapshot = installedRepos(accountOwner);
-    if (snapshot.installationAuth() == null || snapshot.repos().isEmpty()) {
-      return false;
-    }
-
-    for (RepoRef repo : snapshot.repos()) {
-      if (hasRepoAccess(snapshot.installationAuth(), repo, githubLogin)) {
-        return true;
+  /** The repositories of one installation the user can read, by id, as {@code owner/name}. */
+  private Map<Long, String> repositories(String userAuth, long installationId) {
+    var repositories = new HashMap<Long, String>();
+    for (var repo :
+        allPages(
+            page ->
+                userClient
+                    .listRepositories(userAuth, ACCEPT, installationId, PER_PAGE, page)
+                    .repositories())) {
+      if (repo.id() > 0
+          && repo.name() != null
+          && repo.owner() != null
+          && repo.owner().login() != null) {
+        repositories.putIfAbsent(repo.id(), repo.owner().login() + "/" + repo.name());
       }
     }
-    return false;
+    return repositories;
   }
 
-  private boolean hasRepoAccess(String auth, RepoRef repo, String githubLogin) {
+  /**
+   * Whether the login may see views that span the installation: the account itself on a personal
+   * account, and a member of the organization on an organization. Membership is granted only on
+   * GitHub's 204; without the App's Organization → Members: read permission GitHub answers 403 and
+   * the views stay hidden.
+   */
+  private boolean installationWide(
+      GitHubInstallationClient.Installation installation, String login) {
+    var account = installation.account();
+    if (!"Organization".equalsIgnoreCase(account.type())) {
+      return account.login().equalsIgnoreCase(login);
+    }
     try (var response =
-        installationClient.checkCollaborator(
-            auth, ACCEPT, repo.owner(), repo.name(), githubLogin)) {
+        installationClient.checkOrgMember(
+            authClient.getAuthHeader(installation.id()), ACCEPT, account.login(), login)) {
       var status = response.getStatus();
-      if (status == 204) {
-        return true;
+      if (status == 403) {
+        warnMembersPermission(account.login());
       }
-      if (status != 404) {
-        log.warn(
-            "Unexpected collaborator check status {} for {}/{} user {}",
-            status,
-            repo.owner(),
-            repo.name(),
-            githubLogin);
+      return status == 204;
+    } catch (WebApplicationException e) {
+      if (e.getResponse().getStatus() == 403) {
+        warnMembersPermission(account.login());
       }
       return false;
     } catch (RuntimeException e) {
       log.warn(
-          "Collaborator check failed for {}/{} user {}: {}",
-          repo.owner(),
-          repo.name(),
-          githubLogin,
-          e.getMessage());
+          "Could not check membership of {} in {}: {}", login, account.login(), e.getMessage());
       return false;
     }
   }
 
-  private RepoSnapshot installedRepos(String accountOwner) {
-    var snapshot = cachedSnapshot.get();
-    if (snapshot.cachedAt().isAfter(clock.get().minus(REPO_CACHE_TTL))
-        && snapshot.installationAuth() != null
-        && accountOwner.equalsIgnoreCase(snapshot.owner())) {
-      return snapshot;
+  private void warnMembersPermission(String org) {
+    if (membersPermissionWarned.compareAndSet(false, true)) {
+      log.warn(
+          "GitHub refused the organization membership check for {}; approve the App's"
+              + " Organization -> Members: read permission to show installation-wide dashboard"
+              + " views to its members",
+          org);
     }
-
-    var repos = new ArrayList<RepoRef>();
-    long installationId = 0L;
-    String installationAuth = null;
-    try {
-      var jwt = "Bearer " + authClient.generateAppJwt();
-      var matchingInstallation = findInstallation(jwt, accountOwner);
-      if (matchingInstallation.isPresent()) {
-        installationId = matchingInstallation.get().id();
-        installationAuth = authClient.getAuthHeader(installationId);
-        collectInstalledRepos(installationAuth, accountOwner, repos);
-      }
-    } catch (RuntimeException e) {
-      log.warn("Failed to list installed repositories for {}: {}", accountOwner, e.getMessage());
-      // Fall back to the cached snapshot only if it was resolved for the same owner; a previous
-      // owner's snapshot must not be reused.
-      var previous = cachedSnapshot.get();
-      return accountOwner.equalsIgnoreCase(previous.owner())
-          ? previous
-          : new RepoSnapshot(accountOwner, 0L, List.of(), null, Instant.EPOCH);
-    }
-
-    var updated =
-        new RepoSnapshot(
-            accountOwner, installationId, List.copyOf(repos), installationAuth, clock.get());
-    cachedSnapshot.set(updated);
-    log.info("Loaded {} installed repos for dashboard access control", repos.size());
-    return updated;
   }
 
   /**
-   * Pages through the app's installations until the one matching {@code accountOwner} is found,
-   * stopping as soon as it matches or the listing ends.
+   * Walks 1-based pages until GitHub's short final page or an empty one. Exceeding {@link
+   * #MAX_PAGES} throws, so a listing that never ends fails closed instead of spinning.
    */
-  private Optional<GitHubInstallationClient.Installation> findInstallation(
-      String jwt, String accountOwner) {
-    var match = new AtomicReference<GitHubInstallationClient.Installation>();
-    paginate(
-        page -> installationClient.listInstallations(jwt, ACCEPT, PER_PAGE, page),
-        installations -> {
-          var found =
-              installations.stream()
-                  .filter(
-                      i ->
-                          i.account() != null && accountOwner.equalsIgnoreCase(i.account().login()))
-                  .findFirst();
-          found.ifPresent(match::set);
-          return found.isPresent();
-        });
-    return Optional.ofNullable(match.get());
-  }
-
-  /** Collects every repository owned by {@code accountOwner} that the installation can access. */
-  private void collectInstalledRepos(
-      String installationAuth, String accountOwner, List<RepoRef> repos) {
-    paginate(
-        page ->
-            installationClient
-                .listInstallationRepositories(installationAuth, ACCEPT, PER_PAGE, page)
-                .repositories(),
-        pageRepos -> {
-          collectOwnerRepos(pageRepos, accountOwner, repos);
-          return false;
-        });
-  }
-
-  /**
-   * Walks 1-based pages from {@code fetchPage}, handing each non-empty page to {@code consumePage}.
-   * The walk ends when a page is shorter than {@code PER_PAGE} (GitHub's marker for the final
-   * page), when a page is empty or null, or when {@code consumePage} returns {@code true} to stop
-   * early. Termination follows the rows actually returned rather than any separately reported
-   * total, so it can never under-fetch. {@code MAX_PAGES} guards against an endpoint that never
-   * serves a short page; exceeding it throws rather than looping forever or returning a partial
-   * result.
-   */
-  private <T> void paginate(IntFunction<List<T>> fetchPage, Predicate<List<T>> consumePage) {
+  private static <T> List<T> allPages(IntFunction<List<T>> fetch) {
+    var all = new ArrayList<T>();
     for (var page = 1; page <= MAX_PAGES; page++) {
-      var items = fetchPage.apply(page);
+      var items = fetch.apply(page);
       if (items == null || items.isEmpty()) {
-        return;
+        return all;
       }
-      if (consumePage.test(items)) {
-        return;
-      }
+      all.addAll(items);
       if (items.size() < PER_PAGE) {
-        return;
+        return all;
       }
     }
     throw new IllegalStateException(
         "GitHub pagination exceeded " + MAX_PAGES + " pages; aborting to avoid an unbounded fetch");
   }
 
-  private void collectOwnerRepos(
-      List<GitHubInstallationClient.InstallationRepositoriesResponse.Repository> pageRepos,
-      String accountOwner,
-      List<RepoRef> repos) {
-    for (var repo : pageRepos) {
-      if (repo.owner() != null
-          && accountOwner.equalsIgnoreCase(repo.owner().login())
-          && repo.name() != null
-          && repo.id() > 0) {
-        repos.add(new RepoRef(repo.id(), repo.owner().login(), repo.name()));
-      }
-    }
+  /**
+   * Cache key per login and token, hashed so the map never holds a second copy of the token. A new
+   * login, with a new token, is resolved afresh.
+   */
+  private static String cacheKey(String login, String userToken) {
+    return UUID.nameUUIDFromBytes(
+            (login.toLowerCase(Locale.ROOT) + "\n" + userToken).getBytes(StandardCharsets.UTF_8))
+        .toString();
   }
 
-  private Optional<String> accountOwner() {
-    var configured = config.dashboard().accountOwner().filter(s -> !s.isBlank());
-    if (configured.isPresent()) {
-      return configured;
+  /**
+   * Drops entries once the cache grows: expired ones that can no longer serve as a stale fallback,
+   * so logins that never return do not stay.
+   */
+  void sweepExpiredEntries() {
+    if (cache.size() < SCOPE_CACHE_SWEEP_THRESHOLD) {
+      return;
     }
+    var now = clock.get();
+    var staleCutoff = now.minus(STALE_SCOPE_LIMIT);
+    cache
+        .entrySet()
+        .removeIf(
+            entry ->
+                !now.isBefore(entry.getValue().retryAt())
+                    && (entry.getValue().answeredAt() == null
+                        || !entry.getValue().answeredAt().isAfter(staleCutoff)));
+  }
 
-    var cached = ownerCache.get();
-    var ttl = cached.owner() != null ? OWNER_CACHE_TTL : OWNER_NEGATIVE_CACHE_TTL;
-    if (cached.cachedAt().isAfter(clock.get().minus(ttl))) {
-      return Optional.ofNullable(cached.owner());
-    }
+  /** Visible for tests that assert the cache stays bounded. */
+  int cacheSize() {
+    return cache.size();
+  }
 
-    String resolved = null;
-    try {
-      var jwt = "Bearer " + authClient.generateAppJwt();
-      var app = installationClient.getApp(jwt, ACCEPT);
-      if (app.owner() != null && app.owner().login() != null && !app.owner().login().isBlank()) {
-        resolved = app.owner().login();
-        log.info("Resolved dashboard account owner from GitHub App: {}", resolved);
-      } else {
-        log.warn(
-            "GitHub App returned no owner login; dashboard access stays denied until "
-                + "thrillhousebot.dashboard.github.account-owner is set");
-      }
-    } catch (RuntimeException e) {
-      log.warn(
-          "Failed to resolve dashboard account owner from GitHub App ({}); access stays denied "
-              + "until thrillhousebot.dashboard.github.account-owner is set",
-          e.getMessage());
-    }
-
-    // Failures are cached too, briefly (OWNER_NEGATIVE_CACHE_TTL).
-    ownerCache.set(new OwnerCache(resolved, clock.get()));
-    return Optional.ofNullable(resolved);
+  private static boolean isBlank(String value) {
+    return value == null || value.isBlank();
   }
 }

@@ -87,6 +87,221 @@ class DashboardResourceTest extends ReviewSessionTestSupport {
     tx.commit();
   }
 
+  /** Two installations: acme (id 4242, installation-wide) and globex (id 4343, not). */
+  private static final RepositoryScope TWO_INSTALLATIONS =
+      new RepositoryScope(
+          Map.of(
+              4242L,
+              new RepositoryScope.Installation(
+                  4242L, "acme", true, Map.of(TestScopes.repositoryId("acme/app"), "acme/app")),
+              4343L,
+              new RepositoryScope.Installation(
+                  4343L,
+                  "globex",
+                  false,
+                  Map.of(TestScopes.repositoryId("globex/app"), "globex/app"))));
+
+  private static final String TWO_TOKEN = "two-installations-token";
+  private static final String EMPTY_TOKEN = "empty-scope-token";
+
+  @Inject dev.thiagogonzaga.thrillhousebot.review.ReviewSkipEmitter skipEmitter;
+
+  private void stubTwoInstallations() {
+    when(sessionValidator.repositoryScope(TWO_TOKEN)).thenReturn(TWO_INSTALLATIONS);
+  }
+
+  private ReviewSession persistIn(long installationId, String repo, int prNumber) throws Exception {
+    tx.begin();
+    var s =
+        ReviewSession.create(
+            new RepoScope(installationId, TestScopes.repositoryId(repo)),
+            repo,
+            prNumber,
+            "PR",
+            "sha");
+    s.setStatus(ReviewSession.STATUS_COMPLETED);
+    s.setModel("deepseek-chat");
+    s.setCost(1.0);
+    s.persist();
+    tx.commit();
+    return s;
+  }
+
+  @Test
+  void aLoginThatMayReadNothingSeesNothingOnAnyEndpoint() throws Exception {
+    when(sessionValidator.repositoryScope(EMPTY_TOKEN)).thenReturn(RepositoryScope.NONE);
+    persistIn(TestScopes.INSTALLATION_ID, "owner/repo", 1);
+
+    for (var path : List.of("/sessions", "/summary", "/costs", "/tokens", "/feedback")) {
+      var body = given().cookie(COOKIE_NAME, EMPTY_TOKEN).when().get(path).then().statusCode(200);
+      switch (path) {
+        case "/sessions" -> body.body("total", equalTo(0)).body("sessions", hasSize(0));
+        case "/summary" ->
+            body.body("totalReviews", equalTo(0)).body("skippedReviewsByReason", anEmptyMap());
+        case "/feedback" -> body.body("repositories", hasSize(0));
+        default -> body.body("byModel", hasSize(0));
+      }
+    }
+    given()
+        .cookie(COOKIE_NAME, EMPTY_TOKEN)
+        .when()
+        .get("/installations")
+        .then()
+        .statusCode(200)
+        .body("installations", hasSize(0));
+    given()
+        .cookie(COOKIE_NAME, EMPTY_TOKEN)
+        .queryParam("repository", "owner/repo")
+        .when()
+        .get("/learnings")
+        .then()
+        .statusCode(403);
+  }
+
+  @Test
+  void theInstallationFilterNarrowsEveryViewToOneInstallation() throws Exception {
+    stubTwoInstallations();
+    persistIn(4242L, "acme/app", 1);
+    var globex = persistIn(4343L, "globex/app", 2);
+
+    given()
+        .cookie(COOKIE_NAME, TWO_TOKEN)
+        .when()
+        .get("/sessions")
+        .then()
+        .statusCode(200)
+        .body("total", equalTo(2));
+    given()
+        .cookie(COOKIE_NAME, TWO_TOKEN)
+        .queryParam("installation", 4343)
+        .when()
+        .get("/sessions")
+        .then()
+        .statusCode(200)
+        .body("total", equalTo(1))
+        .body("sessions[0].id", equalTo(globex.id.intValue()));
+    given()
+        .cookie(COOKIE_NAME, TWO_TOKEN)
+        .queryParam("installation", 4343)
+        .when()
+        .get("/summary")
+        .then()
+        .statusCode(200)
+        .body("totalReviews", equalTo(1));
+    given()
+        .cookie(COOKIE_NAME, TWO_TOKEN)
+        .queryParam("installation", 4343)
+        .when()
+        .get("/costs")
+        .then()
+        .statusCode(200)
+        .body("totalCost", is(1.0f));
+    given()
+        .cookie(COOKIE_NAME, TWO_TOKEN)
+        .queryParam("installation", 9999)
+        .when()
+        .get("/sessions")
+        .then()
+        .statusCode(200)
+        .body("total", equalTo(0));
+    given()
+        .cookie(COOKIE_NAME, TWO_TOKEN)
+        .queryParam("installation", 4242)
+        .queryParam("repository", "globex/app")
+        .when()
+        .get("/sessions")
+        .then()
+        .statusCode(403);
+  }
+
+  @Test
+  void theInstallationsAreListedForTheFilter() {
+    stubTwoInstallations();
+
+    given()
+        .cookie(COOKIE_NAME, TWO_TOKEN)
+        .when()
+        .get("/installations")
+        .then()
+        .statusCode(200)
+        .body("installations", hasSize(2))
+        .body("installations[0].id", equalTo(4242))
+        .body("installations[0].account", equalTo("acme"))
+        .body("installations[0].repositories", equalTo(1))
+        .body("installations[0].installationWide", equalTo(true))
+        .body("installations[1].account", equalTo("globex"))
+        .body("installations[1].installationWide", equalTo(false));
+    given().when().get("/installations").then().statusCode(401);
+  }
+
+  @Test
+  void skipCountersShowOnlyInstallationsWhoseWideViewsTheLoginMaySee() {
+    stubTwoInstallations();
+    skipEmitter.recordSkip(
+        dev.thiagogonzaga.thrillhousebot.review.ReviewSkipReason.DRAFT,
+        4242L,
+        "acme",
+        "app",
+        1,
+        "d");
+    skipEmitter.recordSkip(
+        dev.thiagogonzaga.thrillhousebot.review.ReviewSkipReason.PAUSED,
+        4343L,
+        "globex",
+        "app",
+        1,
+        "p");
+
+    given()
+        .cookie(COOKIE_NAME, TWO_TOKEN)
+        .when()
+        .get("/summary")
+        .then()
+        .statusCode(200)
+        .body("skippedReviewsByReason.DRAFT", equalTo(1))
+        .body("skippedReviewsByReason.PAUSED", nullValue());
+  }
+
+  @Test
+  void feedbackFromSeveralInstallationsIsListedMostFirst() {
+    stubTwoInstallations();
+    for (var i = 0; i < 2; i++) {
+      findingFeedbackService.recordFeedback(
+          new FindingFeedbackService.FeedbackInput(
+              new RepoScope(4343L, TestScopes.repositoryId("globex/app")),
+              "globex/app",
+              1,
+              500L + i,
+              1,
+              FindingFeedback.SIGNAL_USEFUL,
+              FindingFeedback.SOURCE_REACTION,
+              "u" + i,
+              900L + i));
+    }
+    findingFeedbackService.recordFeedback(
+        new FindingFeedbackService.FeedbackInput(
+            new RepoScope(4242L, TestScopes.repositoryId("acme/app")),
+            "acme/app",
+            1,
+            600L,
+            1,
+            FindingFeedback.SIGNAL_NOT_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "u9",
+            950L));
+
+    given()
+        .cookie(COOKIE_NAME, TWO_TOKEN)
+        .when()
+        .get("/feedback")
+        .then()
+        .statusCode(200)
+        .body("repositories", hasSize(2))
+        .body("repositories[0].repository", equalTo("globex/app"))
+        .body("repositories[0].totalEvents", equalTo(2))
+        .body("repositories[1].repository", equalTo("acme/app"));
+  }
+
   @Test
   void shouldReturnUnauthorizedForGetSessionWithoutCookie() {
     given().when().get("/sessions/99999").then().statusCode(401);

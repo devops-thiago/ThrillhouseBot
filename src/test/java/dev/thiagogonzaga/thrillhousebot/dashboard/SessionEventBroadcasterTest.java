@@ -693,6 +693,16 @@ class SessionEventBroadcasterTest {
   }
 
   @Test
+  void aReaderFixedAtOpenSurvivesARefresh() {
+    var remote = mock(RemoteEndpoint.Async.class);
+    broadcaster.addSession(openSession(remote), READ_ALL);
+
+    broadcaster.refreshReaders();
+
+    assertEquals(1, broadcaster.getConnectedCount());
+  }
+
+  @Test
   void theSameRepositoryNameUnderAnotherInstallationGetsNoEventsOrReplays() {
     var otherInstallation = new RepoScope(2L, TEST_REPO.repositoryId());
     var liveRemote = mock(RemoteEndpoint.Async.class);

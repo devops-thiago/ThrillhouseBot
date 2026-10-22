@@ -4,6 +4,11 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+The dashboard now serves every installation of the GitHub App, and shows each user the
+repositories GitHub lets them read. Approve the new App permission **Organization → Members:
+read** on each installation so organization members see the installation-wide skip counters;
+without it those counters stay hidden and nothing else changes.
+
 ### Changed
 
 - Flyway now owns the database schema. Migrations in `src/main/resources/db/migration` run at
@@ -20,6 +25,16 @@ All notable changes to ThrillhouseBot.
   which is still honored. The repository configuration caches are keyed by installation too.
   (#1220)
 ### Security
+
+- Dashboard access is decided by GitHub with the user's own sign-in: the App's installations
+  they can access and the repositories they can read there, across every installation. An
+  outside contributor or a non-member sees nothing, an organization member whose base
+  permission is none does not see a private repository, and a token GitHub rejects ends the
+  session. The installation-wide skip counters go to the account itself or to organization
+  members, per installation. `thrillhousebot.dashboard.github.account-owner` is now optional and
+  limits the dashboard to one account; the "not configured" error is gone. The live feed
+  follows a change in access within five minutes. Acting through the bot (`/review`, decline
+  learnings, finding feedback) needs write, maintain or admin. (#1221)
 
 - The dashboard WebSocket no longer takes its session from the endpoint configuration that every
   handshake shares. After any user had connected, a socket opened without a session cookie was

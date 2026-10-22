@@ -21,23 +21,21 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const { user, loading, accessDenied, notConfigured, logout } = useAuth();
+  const { user, loading, accessDenied, unavailable, logout } = useAuth();
 
   useEffect(() => {
-    if (!loading && !user && !accessDenied && !notConfigured) {
+    if (!loading && !user && !accessDenied && !unavailable) {
       window.location.replace("/dashboard/");
     }
-  }, [loading, user, accessDenied, notConfigured]);
+  }, [loading, user, accessDenied, unavailable]);
 
-  if (!loading && notConfigured) {
+  if (!loading && unavailable) {
     return (
       <div style={styles.deniedPage}>
         <div style={styles.deniedCard}>
-          <h1 style={{ marginTop: 0 }}>Dashboard not configured</h1>
+          <h1 style={{ marginTop: 0 }}>Access check unavailable</h1>
           <p style={{ color: "var(--text-muted)" }}>
-            Dashboard access control is not configured: the GitHub App owner could not be
-            resolved. An administrator must set{" "}
-            <code>thrillhousebot.dashboard.github.account-owner</code> before anyone can sign in.
+            GitHub could not be reached to check your access. Try again in a moment.
           </p>
           <button type="button" onClick={logout} style={styles.logoutBtn}>
             Log out

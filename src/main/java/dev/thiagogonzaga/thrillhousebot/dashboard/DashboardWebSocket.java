@@ -23,6 +23,7 @@ import jakarta.websocket.OnClose;
 import jakarta.websocket.OnOpen;
 import jakarta.websocket.Session;
 import jakarta.websocket.server.ServerEndpoint;
+import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -63,12 +64,7 @@ public class DashboardWebSocket {
 
     // Live events are scoped like the REST endpoints: only repositories this login can read, and
     // nothing once the dashboard session is logged out or expires.
-    var scope = sessionValidator.repositoryScope(sessionToken);
-    broadcaster.addSession(
-        session,
-        (installationId, repositoryId) ->
-            scope.allows(installationId, repositoryId)
-                && sessionValidator.isSessionOpen(sessionToken));
+    broadcaster.addSession(session, new ScopedReader(sessionToken, sessionValidator));
     log.info(
         "Dashboard WebSocket connected: {} (total: {})",
         session.getId(),
@@ -86,6 +82,44 @@ public class DashboardWebSocket {
       return null;
     }
     return sessionValidator.redeemSocketTicket(tickets.getFirst()).orElse(null);
+  }
+
+  /**
+   * One connection's view of what its login may read. The scope is read from memory on every event;
+   * {@link #refresh} re-resolves it on the keepalive worker (#1221), which asks GitHub only once
+   * the cached scope has expired, so lost access stops live events within that lifetime.
+   */
+  static final class ScopedReader implements SessionEventBroadcaster.RepositoryReader {
+    private final String sessionToken;
+    private final DashboardSessionValidator sessionValidator;
+    private final AtomicReference<RepositoryScope> scope;
+
+    ScopedReader(String sessionToken, DashboardSessionValidator sessionValidator) {
+      this.sessionToken = sessionToken;
+      this.sessionValidator = sessionValidator;
+      this.scope = new AtomicReference<>(sessionValidator.repositoryScope(sessionToken));
+    }
+
+    @Override
+    public boolean canRead(Long installationId, Long repositoryId) {
+      return scope.get().allows(installationId, repositoryId)
+          && sessionValidator.isSessionOpen(sessionToken);
+    }
+
+    /**
+     * Keeps the last known scope while GitHub cannot be asked, so a transient outage never closes a
+     * connection whose session survives it.
+     */
+    @Override
+    public boolean refresh() {
+      if (!sessionValidator.isSessionOpen(sessionToken)) {
+        scope.set(RepositoryScope.NONE);
+        return false;
+      }
+      var current = sessionValidator.refreshedScope(sessionToken).orElseGet(scope::get);
+      scope.set(current);
+      return !current.isEmpty();
+    }
   }
 
   @OnClose

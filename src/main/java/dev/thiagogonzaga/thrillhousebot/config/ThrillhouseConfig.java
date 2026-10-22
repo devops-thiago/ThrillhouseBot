@@ -963,9 +963,9 @@ public interface ThrillhouseConfig {
     String oauthUrl();
 
     /**
-     * Login of the account that owns the GitHub App. The dashboard shows that account every
-     * installed repository and limits everyone else to the repositories they collaborate on. Unset
-     * resolves it from the App ({@code GET /app}).
+     * Optional. When set, the dashboard serves only the installation on this account. Unset serves
+     * every installation the signed-in user can access. Either way a user sees only the
+     * repositories GitHub lets them read.
      */
     @WithName("github.account-owner")
     Optional<String> accountOwner();

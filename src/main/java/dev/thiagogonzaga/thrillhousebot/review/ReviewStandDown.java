@@ -80,7 +80,12 @@ public class ReviewStandDown {
   private void apply(PrePublishGuard.Review review, PrePublishGuard.StandDown standDown) {
     var req = review.req();
     skipEmitter.recordSkip(
-        standDown.reason(), req.owner(), req.repo(), req.prNumber(), standDown.skipDetail());
+        standDown.reason(),
+        req.installationId(),
+        req.owner(),
+        req.repo(),
+        req.prNumber(),
+        standDown.skipDetail());
     if (review.checkRunId() <= 0) {
       return;
     }

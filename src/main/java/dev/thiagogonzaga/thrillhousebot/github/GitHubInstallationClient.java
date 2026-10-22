@@ -28,12 +28,6 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 public interface GitHubInstallationClient {
 
   @GET
-  @Path("/app")
-  @Produces(MediaType.APPLICATION_JSON)
-  AppInfo getApp(
-      @HeaderParam("Authorization") String authorization, @HeaderParam("Accept") String accept);
-
-  @GET
   @Path("/app/installations")
   @Produces(MediaType.APPLICATION_JSON)
   List<Installation> listInstallations(
@@ -50,15 +44,6 @@ public interface GitHubInstallationClient {
       @HeaderParam("Accept") String accept,
       @QueryParam("per_page") @DefaultValue("100") int perPage,
       @QueryParam("page") @DefaultValue("1") int page);
-
-  @GET
-  @Path("/repos/{owner}/{repo}/collaborators/{username}")
-  Response checkCollaborator(
-      @HeaderParam("Authorization") String authorization,
-      @HeaderParam("Accept") String accept,
-      @PathParam("owner") String owner,
-      @PathParam("repo") String repo,
-      @PathParam("username") String username);
 
   @GET
   @Path("/repos/{owner}/{repo}/collaborators/{username}/permission")
@@ -83,15 +68,23 @@ public interface GitHubInstallationClient {
       @PathParam("owner") String owner,
       @PathParam("repo") String repo);
 
+  /**
+   * Whether {@code username} is a member of {@code org}: 204 when they are. Needs the App's
+   * Organization → Members: read permission; without it GitHub answers 403 (#1221).
+   */
+  @GET
+  @Path("/orgs/{org}/members/{username}")
+  Response checkOrgMember(
+      @HeaderParam("Authorization") String authorization,
+      @HeaderParam("Accept") String accept,
+      @PathParam("org") String org,
+      @PathParam("username") String username);
+
   record Installation(long id, Account account) {
     public record Account(String login, String type) {}
   }
 
   record CollaboratorPermission(String permission, @JsonProperty("role_name") String roleName) {}
-
-  record AppInfo(Owner owner) {
-    public record Owner(String login, String type) {}
-  }
 
   record InstallationRepositoriesResponse(
       @JsonProperty("total_count") int totalCount, List<Repository> repositories) {

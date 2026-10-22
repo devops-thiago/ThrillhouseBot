@@ -24,6 +24,7 @@ import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -112,7 +113,7 @@ class FindingFeedbackServiceTest {
   }
 
   @Test
-  void countsByRepositoryOrderByTotalEventsWithinTheInstallation() {
+  void countsByRepositoryOrderByTotalEventsInOneQuery() {
     service.recordFeedback(
         new FindingFeedbackService.FeedbackInput(
             TestScopes.scope("a/one"),
@@ -149,12 +150,77 @@ class FindingFeedbackServiceTest {
 
     var one = TestScopes.repositoryId("a/one");
     var two = TestScopes.repositoryId("b/two");
-    var counts = service.countsByRepository(TestScopes.INSTALLATION_ID, List.of(one, two, 999L));
-    assertEquals(List.of(two, one), List.copyOf(counts.keySet()));
-    assertEquals(new FindingFeedbackService.FeedbackCounts(1, 1, 2), counts.get(two));
-    assertEquals(new FindingFeedbackService.FeedbackCounts(1, 0, 1), counts.get(one));
-    assertTrue(service.countsByRepository(TestScopes.INSTALLATION_ID, List.of()).isEmpty());
-    assertTrue(service.countsByRepository(2L, List.of(one, two)).isEmpty());
+    var inst = TestScopes.INSTALLATION_ID;
+    var counts = service.countsByRepository(Map.of(inst, List.of(one, two, 999L), 2L, List.of()));
+    assertEquals(
+        List.of(new RepoScope(inst, two), new RepoScope(inst, one)), List.copyOf(counts.keySet()));
+    assertEquals(
+        new FindingFeedbackService.FeedbackCounts(1, 1, 2), counts.get(new RepoScope(inst, two)));
+    assertEquals(
+        new FindingFeedbackService.FeedbackCounts(1, 0, 1), counts.get(new RepoScope(inst, one)));
+    assertTrue(service.countsByRepository(Map.of()).isEmpty());
+    assertTrue(service.countsByRepository(Map.of(inst, List.of())).isEmpty());
+    assertTrue(service.countsByRepository(Map.of(2L, List.of(one, two))).isEmpty());
+  }
+
+  @Test
+  void countsOfSeveralInstallationsComeFromOneQueryAndNeverCross() {
+    var ours = TestScopes.scope("acme/app");
+    var theirs = new RepoScope(2L, TestScopes.repositoryId("globex/app"));
+    for (var i = 0; i < 2; i++) {
+      service.recordFeedback(
+          new FindingFeedbackService.FeedbackInput(
+              theirs,
+              "globex/app",
+              1,
+              700L + i,
+              1,
+              FindingFeedback.SIGNAL_NOT_USEFUL,
+              FindingFeedback.SOURCE_REACTION,
+              "u" + i,
+              800L + i));
+    }
+    service.recordFeedback(
+        new FindingFeedbackService.FeedbackInput(
+            ours,
+            "acme/app",
+            1,
+            710L,
+            1,
+            FindingFeedback.SIGNAL_USEFUL,
+            FindingFeedback.SOURCE_REACTION,
+            "u9",
+            810L));
+
+    var counts =
+        service.countsByRepository(
+            Map.of(
+                ours.installationId(),
+                List.of(ours.repositoryId(), theirs.repositoryId()),
+                theirs.installationId(),
+                List.of(theirs.repositoryId())));
+
+    assertEquals(List.of(theirs, ours), List.copyOf(counts.keySet()));
+    assertEquals(new FindingFeedbackService.FeedbackCounts(0, 2, 2), counts.get(theirs));
+    assertEquals(
+        Map.of(ours, new FindingFeedbackService.FeedbackCounts(1, 0, 1)),
+        service.countsByRepository(
+            Map.of(
+                ours.installationId(),
+                List.of(ours.repositoryId()),
+                theirs.installationId(),
+                List.of(ours.repositoryId()))),
+        "a repository id is counted under its own installation only");
+    assertTrue(
+        service
+            .countsByRepository(
+                Map.of(
+                    ours.installationId(),
+                    List.of(theirs.repositoryId()),
+                    theirs.installationId(),
+                    List.of(ours.repositoryId())))
+            .isEmpty(),
+        "ids that only match across installations count nothing");
   }
 
   @Test
@@ -221,7 +287,9 @@ class FindingFeedbackServiceTest {
     assertEquals(0, service.summarize(ours, "owner/repo").totalEvents());
     assertTrue(service.listRecent(ours, 10).isEmpty());
     assertTrue(
-        service.countsByRepository(ours.installationId(), List.of(ours.repositoryId())).isEmpty());
+        service
+            .countsByRepository(Map.of(ours.installationId(), List.of(ours.repositoryId())))
+            .isEmpty());
     assertEquals(1, service.summarize(theirs, "owner/repo").totalEvents());
   }
 

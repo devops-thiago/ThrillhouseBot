@@ -21,6 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReactionClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
+import dev.thiagogonzaga.thrillhousebot.github.RepositoryPermissions;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -58,7 +59,6 @@ public class FindingFeedbackCaptureService {
   private static final String CONTENT_PLUS_ONE = "+1";
   private static final String CONTENT_MINUS_ONE = "-1";
   private static final int MAX_CONCURRENT_CAPTURES = 8;
-  private static final Set<String> WRITE_PERMISSIONS = Set.of("admin", "maintain", "write");
   private static final Set<String> WRITE_CAPABLE_ASSOCIATIONS =
       Set.of("OWNER", "MEMBER", "COLLABORATOR");
 
@@ -398,11 +398,8 @@ public class FindingFeedbackCaptureService {
         login.toLowerCase(Locale.ROOT),
         ignored -> {
           try {
-            var permission =
-                installationClient.collaboratorPermission(auth, ACCEPT, owner, repo, login);
-            var level = permission == null ? null : permission.permission();
-            return level != null
-                && WRITE_PERMISSIONS.contains(level.strip().toLowerCase(Locale.ROOT));
+            return RepositoryPermissions.canAct(
+                installationClient.collaboratorPermission(auth, ACCEPT, owner, repo, login));
           } catch (RuntimeException e) {
             log.debug(
                 "Failed to verify feedback actor @{} on {}/{}; ignoring signal",
