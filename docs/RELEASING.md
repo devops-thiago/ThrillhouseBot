@@ -204,9 +204,10 @@ A maintainer merges the bump pull request. Two `main` rules affect how:
   `frontend`, `trivy`, `dependency-review`) stay pending. Close and reopen the
   pull request to start them. Pushing a commit also works but dismisses your
   approval (`dismiss_stale_reviews_on_push`).
-- Squash-merge it. The bump commit is made by `github-actions[bot]` and is
-  unsigned. A squash merge creates a commit that GitHub signs, which satisfies
-  the `required_signatures` rule.
+- Squash-merge it. The bump commit is made by `github-actions[bot]`. It carries
+  a `Signed-off-by` trailer for that address, which the DCO check accepts, but
+  no cryptographic signature. A squash merge creates a commit that GitHub signs,
+  which satisfies the `required_signatures` rule.
 
 To have the checks start without closing and reopening, open the pull request
 with a GitHub App token or a PAT instead of the default `GITHUB_TOKEN`; a pull

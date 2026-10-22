@@ -470,7 +470,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           BRANCH="chore/bump-${NEXT}"
           git checkout -b "$BRANCH"
-          git commit -am "chore: bump version to ${NEXT} after ${TAG}"
+          # The DCO check accepts a bot commit only when it is signed off or carries a
+          # verified signature. A commit pushed with GITHUB_TOKEN is unsigned, so sign it off.
+          git commit -s -am "chore: bump version to ${NEXT} after ${TAG}"
           git push -f origin "$BRANCH"
           # Branch on the outcome instead of masking every failure: success or an
           # already-existing PR is fine; anything else (e.g. the "Allow GitHub

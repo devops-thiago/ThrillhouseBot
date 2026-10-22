@@ -13,6 +13,9 @@ All notable changes to ThrillhouseBot.
   `POST /api/auth/socket-ticket` and opens the socket with it in the query string; the ticket
   expires after 30 seconds and works once. The session cookie is no longer accepted as a query
   parameter. (#1223)
+### Fixed
+
+- The version bump pull request opened after a release now passes the DCO check. Its commit was not signed off, and the check accepts an unsigned bot commit only when it has a verified signature (#1226).
 
 ## [0.8.0] - 2026-10-21
 
