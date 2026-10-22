@@ -11,7 +11,11 @@ squash-merged straight into `main`.
 
 Pull requests are squash-merged into `main` and into release branches. The only
 rebase merge is the release pull request from `release/vX.Y.Z` into `main`, so
-that each change keeps its own commit on `main`.
+that each change keeps its own commit on `main`. Preserve a DCO sign-off
+matching the resulting squash commit's author. GitHub's verified signature
+alone does not satisfy DCO. Check the complete release range before marking
+the release pull request ready: the DCO job checks its history again, including
+commits from bot-authored pull requests.
 
 1. Create `release/vX.Y.Z` from `main`. The `release` ruleset protects every
    `release/**` branch: changes go in through pull requests, squash-merged,
