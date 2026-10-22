@@ -106,12 +106,17 @@ public class DashboardWebSocket {
           && sessionValidator.isSessionOpen(sessionToken);
     }
 
+    /**
+     * Keeps the last known scope while GitHub cannot be asked, so a transient outage never closes a
+     * connection whose session survives it.
+     */
     @Override
     public boolean refresh() {
-      var current =
-          sessionValidator.isSessionOpen(sessionToken)
-              ? sessionValidator.repositoryScope(sessionToken)
-              : RepositoryScope.NONE;
+      if (!sessionValidator.isSessionOpen(sessionToken)) {
+        scope.set(RepositoryScope.NONE);
+        return false;
+      }
+      var current = sessionValidator.refreshedScope(sessionToken).orElseGet(scope::get);
       scope.set(current);
       return !current.isEmpty();
     }

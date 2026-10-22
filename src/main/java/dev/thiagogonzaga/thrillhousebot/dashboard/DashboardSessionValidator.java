@@ -66,6 +66,23 @@ public class DashboardSessionValidator {
     return resolve(sessionId).map(r -> r.resolution().scope()).orElse(RepositoryScope.NONE);
   }
 
+  /**
+   * The session's current scope for an open live connection: {@link RepositoryScope#NONE} once the
+   * session is gone, its login may read nothing, or GitHub rejected its token; empty when GitHub
+   * could not be asked, so the caller keeps the scope it already had rather than dropping a
+   * connection over a transient outage, the same way a REST request answers 503 and keeps the
+   * session.
+   */
+  public Optional<RepositoryScope> refreshedScope(String sessionId) {
+    var resolved = resolve(sessionId);
+    if (resolved.isPresent()
+        && resolved.get().resolution().decision()
+            == DashboardAccessChecker.AccessDecision.UNAVAILABLE) {
+      return Optional.empty();
+    }
+    return Optional.of(resolved.map(r -> r.resolution().scope()).orElse(RepositoryScope.NONE));
+  }
+
   /** A session's login and what it may read. */
   private record Resolved(String login, DashboardAccessChecker.Resolution resolution) {}
 

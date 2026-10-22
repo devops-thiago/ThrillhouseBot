@@ -177,9 +177,10 @@ class DashboardWebSocketTest {
   @Test
   void aConnectionFollowsItsLoginsAccessAndClosesOnceItIsGone() throws Exception {
     when(sessionValidator.repositoryScope("moving-token"))
-        .thenReturn(TestScopes.readable(false, "acme/allowed"))
-        .thenReturn(TestScopes.readable(false, "acme/secret"))
-        .thenReturn(RepositoryScope.NONE);
+        .thenReturn(TestScopes.readable(false, "acme/allowed"));
+    when(sessionValidator.refreshedScope("moving-token"))
+        .thenReturn(Optional.of(TestScopes.readable(false, "acme/secret")))
+        .thenReturn(Optional.of(RepositoryScope.NONE));
     when(sessionValidator.isSessionOpen("moving-token")).thenReturn(true);
     var remote = mock(jakarta.websocket.RemoteEndpoint.Async.class);
     var session = sessionWithTicket("ws-moving", "moving-token");
@@ -213,12 +214,33 @@ class DashboardWebSocketTest {
     broadcaster.refreshReaders();
 
     verify(session).close(any(CloseReason.class));
-    verify(sessionValidator, times(1)).repositoryScope("gone-token");
+    verify(sessionValidator, never()).refreshedScope("gone-token");
+  }
+
+  @Test
+  void aGitHubOutageKeepsTheConnectionOnItsLastKnownScope() throws Exception {
+    when(sessionValidator.repositoryScope("outage-token"))
+        .thenReturn(TestScopes.readable(false, "acme/allowed"));
+    when(sessionValidator.refreshedScope("outage-token")).thenReturn(Optional.empty());
+    when(sessionValidator.isSessionOpen("outage-token")).thenReturn(true);
+    var remote = mock(jakarta.websocket.RemoteEndpoint.Async.class);
+    var session = sessionWithTicket("ws-outage", "outage-token");
+    when(session.isOpen()).thenReturn(true);
+    when(session.getAsyncRemote()).thenReturn(remote);
+    webSocket.onOpen(session);
+
+    broadcaster.refreshReaders();
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(review(4L, "acme/allowed")));
+
+    verify(session, never()).close(any(CloseReason.class));
+    verify(remote).sendText(anyString(), any());
   }
 
   @Test
   void aCloseThatFailsStillDropsTheConnection() throws Exception {
     when(sessionValidator.repositoryScope("broken-token")).thenReturn(RepositoryScope.NONE);
+    when(sessionValidator.refreshedScope("broken-token"))
+        .thenReturn(Optional.of(RepositoryScope.NONE));
     when(sessionValidator.isSessionOpen("broken-token")).thenReturn(true);
     var session = sessionWithTicket("ws-broken", "broken-token");
     when(session.isOpen()).thenReturn(true);

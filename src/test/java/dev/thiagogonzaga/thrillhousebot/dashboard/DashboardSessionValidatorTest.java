@@ -128,6 +128,17 @@ class DashboardSessionValidatorTest {
 
     assertFalse(validator.isValidSession(sessionId));
     assertTrue(validator.isSessionOpen(sessionId));
+    assertTrue(validator.refreshedScope(sessionId).isEmpty(), "keep what the socket had");
+  }
+
+  @Test
+  void aRefreshedScopeIsTheCurrentAnswerOrNothingOnceTheSessionIsGone() {
+    var sessionId = sessionStore.createSession("octocat", "gho_secret", "https://a.co", "Octocat");
+    var scope = TestScopes.readable(false, "owner/repo");
+    when(accessChecker.resolve("octocat", "gho_secret")).thenReturn(allowed(scope));
+
+    assertEquals(Optional.of(scope), validator.refreshedScope(sessionId));
+    assertEquals(Optional.of(RepositoryScope.NONE), validator.refreshedScope("unknown"));
   }
 
   private static DashboardAccessChecker.Resolution allowed(RepositoryScope scope) {
