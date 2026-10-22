@@ -22,7 +22,7 @@ import jakarta.transaction.Transactional;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -191,49 +191,53 @@ public class FindingFeedbackService {
   @Transactional
   public Map<RepoScope, FeedbackCounts> countsByRepository(
       Map<Long, ? extends Collection<Long>> repositoryIdsByInstallation) {
-    var terms = new ArrayList<String>();
-    var params = new HashMap<String, Object>();
-    repositoryIdsByInstallation.entrySet().stream()
-        .filter(entry -> !entry.getValue().isEmpty())
-        .sorted(Map.Entry.comparingByKey())
-        .forEach(
-            entry -> {
-              var index = terms.size();
-              terms.add(
-                  "(f.installationId = :installation"
-                      + index
-                      + " and f.repositoryId in :repositories"
-                      + index
-                      + ")");
-              params.put("installation" + index, entry.getKey());
-              params.put("repositories" + index, entry.getValue());
-            });
-    if (terms.isEmpty()) {
+    var installationIds = new ArrayList<Long>();
+    var repositoryIds = new HashSet<Long>();
+    repositoryIdsByInstallation.forEach(
+        (installationId, ids) -> {
+          if (!ids.isEmpty()) {
+            installationIds.add(installationId);
+            repositoryIds.addAll(ids);
+          }
+        });
+    if (installationIds.isEmpty()) {
       return Map.of();
     }
-    var query =
+    List<Object[]> rows =
         repository
             .getEntityManager()
             .createQuery(
-                "select f.installationId, f.repositoryId,"
-                    + " sum(case when f.signal = :useful then 1 else 0 end),"
-                    + " sum(case when f.signal = :notUseful then 1 else 0 end), count(f)"
-                    + " from FindingFeedback f where "
-                    + String.join(" or ", terms)
-                    + " group by f.installationId, f.repositoryId"
-                    + " order by count(f) desc, f.installationId, f.repositoryId",
+                """
+                select f.installationId,
+                       f.repositoryId,
+                       sum(case when f.signal = :useful then 1 else 0 end),
+                       sum(case when f.signal = :notUseful then 1 else 0 end),
+                       count(f)
+                from FindingFeedback f
+                where f.installationId in :installationIds and f.repositoryId in :repositoryIds
+                group by f.installationId, f.repositoryId
+                order by count(f) desc, f.installationId, f.repositoryId
+                """,
                 Object[].class)
             .setParameter("useful", FindingFeedback.SIGNAL_USEFUL)
-            .setParameter("notUseful", FindingFeedback.SIGNAL_NOT_USEFUL);
-    params.forEach(query::setParameter);
+            .setParameter("notUseful", FindingFeedback.SIGNAL_NOT_USEFUL)
+            .setParameter("installationIds", installationIds)
+            .setParameter("repositoryIds", repositoryIds)
+            .getResultList();
     var counts = new LinkedHashMap<RepoScope, FeedbackCounts>();
-    for (var r : query.getResultList()) {
-      counts.put(
-          new RepoScope(((Number) r[0]).longValue(), ((Number) r[1]).longValue()),
-          new FeedbackCounts(
-              ((Number) r[2]).longValue(),
-              ((Number) r[3]).longValue(),
-              ((Number) r[4]).longValue()));
+    for (var r : rows) {
+      var installationId = ((Number) r[0]).longValue();
+      var repositoryId = ((Number) r[1]).longValue();
+      // The query matches each id list on its own; keep only pairs the caller asked for, so a
+      // repository id is counted under its own installation only.
+      if (repositoryIdsByInstallation.get(installationId).contains(repositoryId)) {
+        counts.put(
+            new RepoScope(installationId, repositoryId),
+            new FeedbackCounts(
+                ((Number) r[2]).longValue(),
+                ((Number) r[3]).longValue(),
+                ((Number) r[4]).longValue()));
+      }
     }
     return counts;
   }

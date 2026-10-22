@@ -205,8 +205,22 @@ class FindingFeedbackServiceTest {
     assertEquals(
         Map.of(ours, new FindingFeedbackService.FeedbackCounts(1, 0, 1)),
         service.countsByRepository(
-            Map.of(ours.installationId(), List.of(theirs.repositoryId(), ours.repositoryId()))),
+            Map.of(
+                ours.installationId(),
+                List.of(ours.repositoryId()),
+                theirs.installationId(),
+                List.of(ours.repositoryId()))),
         "a repository id is counted under its own installation only");
+    assertTrue(
+        service
+            .countsByRepository(
+                Map.of(
+                    ours.installationId(),
+                    List.of(theirs.repositoryId()),
+                    theirs.installationId(),
+                    List.of(ours.repositoryId())))
+            .isEmpty(),
+        "ids that only match across installations count nothing");
   }
 
   @Test
