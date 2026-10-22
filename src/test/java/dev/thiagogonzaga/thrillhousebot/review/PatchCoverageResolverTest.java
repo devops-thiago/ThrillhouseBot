@@ -25,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.github.ArtifactZipFetcher;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubActionsClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import jakarta.ws.rs.core.Response;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -92,7 +93,19 @@ class PatchCoverageResolverTest {
 
   private static ReviewOrchestrator.ReviewRequest request() {
     return new ReviewOrchestrator.ReviewRequest(
-        "o", "r", 7, HEAD_SHA, "title", "body", "basesha", "main", 1L, false, "main", false);
+        "o",
+        "r",
+        7,
+        HEAD_SHA,
+        "title",
+        "body",
+        "basesha",
+        "main",
+        1L,
+        TestScopes.REPOSITORY_ID,
+        false,
+        "main",
+        false);
   }
 
   private static RepoSettings settingsNaming(String artifact) {
@@ -179,10 +192,34 @@ class PatchCoverageResolverTest {
 
       var noSha =
           new ReviewOrchestrator.ReviewRequest(
-              "o", "r", 7, null, "title", "body", "basesha", "main", 1L, false, "main", false);
+              "o",
+              "r",
+              7,
+              null,
+              "title",
+              "body",
+              "basesha",
+              "main",
+              1L,
+              TestScopes.REPOSITORY_ID,
+              false,
+              "main",
+              false);
       var blankSha =
           new ReviewOrchestrator.ReviewRequest(
-              "o", "r", 7, "  ", "title", "body", "basesha", "main", 1L, false, "main", false);
+              "o",
+              "r",
+              7,
+              "  ",
+              "title",
+              "body",
+              "basesha",
+              "main",
+              1L,
+              TestScopes.REPOSITORY_ID,
+              false,
+              "main",
+              false);
       assertEquals(
           PatchCoverageResolver.Resolution.NONE,
           resolver(true).resolve("token", noSha, settingsNaming(ARTIFACT), changedFile()),

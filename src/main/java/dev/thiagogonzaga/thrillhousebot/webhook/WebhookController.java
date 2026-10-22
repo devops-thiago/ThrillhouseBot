@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
 import dev.thiagogonzaga.thrillhousebot.review.CiHoldRegistry;
 import dev.thiagogonzaga.thrillhousebot.review.CiHoldRevisit;
@@ -219,7 +220,7 @@ public class WebhookController {
       case "opened", "reopened", ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW -> {
         var pr = payload.pullRequest();
         var repo = payload.repository();
-        if (pr == null || repo == null || payload.installation() == null) {
+        if (pr == null || unscoped(payload)) {
           log.debug("Ignoring pull_request with missing pull_request, repository, or installation");
           yield true;
         }
@@ -228,7 +229,8 @@ public class WebhookController {
           yield true;
         }
 
-        if (prPauseService.isPaused(repo.owner().login(), repo.name(), pr.number())) {
+        if (prPauseService.isPaused(
+            scope(payload), repo.owner().login(), repo.name(), pr.number())) {
           skipEmitter.recordSkip(
               ReviewSkipReason.PAUSED,
               repo.owner().login(),
@@ -277,6 +279,7 @@ public class WebhookController {
                     pr.base().sha(),
                     repo.defaultBranch(),
                     payload.installation().id(),
+                    repo.id(),
                     false,
                     pr.base().ref()));
         if (!queued) {
@@ -366,7 +369,7 @@ public class WebhookController {
    */
   private boolean handleCommentCommand(WebhookPayload payload, CommentCommand command) {
     var repo = payload.repository();
-    if (repo == null || payload.installation() == null) {
+    if (unscoped(payload)) {
       log.debug("Ignoring {} command with missing repository or installation", command);
       return true;
     }
@@ -385,6 +388,7 @@ public class WebhookController {
             payload.issue().number(),
             repo.defaultBranch(),
             payload.installation().id(),
+            repo.id(),
             payload.comment().user().login(),
             payload.comment().authorAssociation(),
             payload.comment().id(),
@@ -404,11 +408,12 @@ public class WebhookController {
       return true;
     }
     var repo = payload.repository();
-    if (repo == null || payload.installation() == null) {
+    if (unscoped(payload)) {
       log.debug("Ignoring bot mention with missing repository or installation");
       return true;
     }
-    if (prPauseService.isPaused(repo.owner().login(), repo.name(), payload.issue().number())) {
+    if (prPauseService.isPaused(
+        scope(payload), repo.owner().login(), repo.name(), payload.issue().number())) {
       log.info(
           "Skipping conversational mention on paused PR #{} in {}",
           payload.issue().number(),
@@ -463,7 +468,7 @@ public class WebhookController {
 
     var pr = payload.pullRequest();
     var repo = payload.repository();
-    if (pr == null || repo == null || payload.installation() == null) {
+    if (pr == null || unscoped(payload)) {
       log.debug("Ignoring review comment with missing pull_request, repository, or installation");
       return true;
     }
@@ -476,7 +481,7 @@ public class WebhookController {
     // conversational replies — reactions are not delivered as a webhook event for GitHub Apps.
     if (isReply) {
       findingFeedbackCapture.scheduleCaptureOnReviewReply(
-          payload.installation().id(),
+          scope(payload),
           repo.owner().login(),
           repo.name(),
           pr.number(),
@@ -494,7 +499,7 @@ public class WebhookController {
       return true;
     }
 
-    if (prPauseService.isPaused(repo.owner().login(), repo.name(), pr.number())) {
+    if (prPauseService.isPaused(scope(payload), repo.owner().login(), repo.name(), pr.number())) {
       log.info(
           "Skipping conversational review-thread reply on paused PR #{} in {}",
           pr.number(),
@@ -577,11 +582,7 @@ public class WebhookController {
    */
   private boolean recheckHeldVerdicts(WebhookPayload payload, String headSha, String source) {
     var repo = payload.repository();
-    if (headSha == null
-        || headSha.isBlank()
-        || repo == null
-        || repo.owner() == null
-        || payload.installation() == null) {
+    if (headSha == null || headSha.isBlank() || unscoped(payload) || repo.owner() == null) {
       log.debug("Ignoring {} event with missing head sha, repository, or installation", source);
       return true;
     }
@@ -605,7 +606,7 @@ public class WebhookController {
           source);
       var task =
           new CiHoldRevisit.Recheck(
-              owner, repo.name(), prNumber, headSha, payload.installation().id());
+              owner, repo.name(), prNumber, headSha, payload.installation().id(), repo.id());
       if (!reviewDispatcher.dispatchCiRecheck(task)) {
         queued = false;
       }
@@ -621,7 +622,7 @@ public class WebhookController {
    *     true} when the command was handled without dispatching (paused or unauthorized).
    */
   private boolean handleReviewCommand(CommentCommandService.CommandContext ctx) {
-    if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
+    if (prPauseService.isPaused(ctx.scope(), ctx.owner(), ctx.repo(), ctx.prNumber())) {
       log.info(
           "Ignoring /review on paused PR #{} in {}/{}", ctx.prNumber(), ctx.owner(), ctx.repo());
       commentCommandService.notifyPaused(ctx);
@@ -647,6 +648,26 @@ public class WebhookController {
             "",
             ctx.defaultBranch(),
             ctx.installationId(),
+            ctx.repositoryId(),
             true));
+  }
+
+  /**
+   * Whether the payload lacks the repository or installation that scope everything the bot stores
+   * (#1220); such an event is ignored rather than handled unscoped.
+   */
+  private static boolean unscoped(WebhookPayload payload) {
+    return payload.repository() == null
+        || payload.repository().id() <= 0
+        || payload.installation() == null
+        || payload.installation().id() <= 0;
+  }
+
+  /**
+   * The installation and repository a payload belongs to. Called only after the payload's
+   * repository and installation were checked to be present.
+   */
+  private static RepoScope scope(WebhookPayload payload) {
+    return new RepoScope(payload.installation().id(), payload.repository().id());
   }
 }

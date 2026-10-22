@@ -94,7 +94,7 @@ public class LearningCommands {
   }
 
   private String list(CommentCommandService.CommandContext ctx) {
-    var active = learnings.list(ctx.installationId(), ctx.owner(), ctx.repo());
+    var active = learnings.list(ctx.scope());
     if (active.isEmpty()) {
       return "🧠 ThrillhouseBot has no active learnings for this repository.";
     }
@@ -172,7 +172,7 @@ public class LearningCommands {
     }
     // At most 18 digits, so the id always fits a long.
     long id = Long.parseLong(matcher.group(1));
-    var outcome = learnings.forget(ctx.installationId(), ctx.owner(), ctx.repo(), id, ctx.login());
+    var outcome = learnings.forget(ctx.scope(), id, ctx.login());
     log.info("/forget {} on {}/{} by @{}: {}", id, ctx.owner(), ctx.repo(), ctx.login(), outcome);
     return switch (outcome) {
       case RETRACTED ->
@@ -192,7 +192,7 @@ public class LearningCommands {
     }
     var outcome =
         learnings.rememberConvention(
-            ctx.installationId(),
+            ctx.scope(),
             ctx.owner(),
             ctx.repo(),
             ctx.prNumber(),

@@ -618,6 +618,15 @@ portable between PostgreSQL and H2, and give a new NOT NULL column on an existin
 default or a backfill in the same script. A database from before Flyway is baselined at V1, the
 v0.8.0 schema (`SchemaMigrationTest`).
 
+Every stored row is scoped by installation id and numeric repository id (`github/RepoScope`,
+#1220), taken from the signed webhook payload, and every reader takes a `RepoScope` (or, on the
+dashboard, the `RepositoryScope` ids). Never add a reader that matches the `owner/repo` string
+alone: a rename changes it, and the same name can exist under another installation. Rows from
+before #1220 are filled at startup by `dashboard/ScopeBackfill`; one it cannot match keeps null
+ids and is never read, except a legacy pause, which `PrPauseService` honors by its exact name. The
+startup maintenance passes (`InterruptedSessionReconciler`, `SessionCostBackfill`) read every
+session by design. The repository configuration caches are keyed by installation too.
+
 Entities: `ReviewSession` (dashboard), `PausedPr` (webhook), `FindingFeedback` (review, table
 `finding_feedback`, 👍/👎 signals) and `ReviewLearning` (review, table `review_learning`, #38).
 `ReviewSession.aiResponseJson` is more than a dashboard field: it is the record every follow-up

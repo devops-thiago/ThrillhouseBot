@@ -98,7 +98,10 @@ public class InstructionsResolver {
    */
   public ResolvedInstructions resolve(
       String owner, String repo, String defaultBranch, long installationId) {
-    var cacheKey = owner + "/" + repo + "|" + String.join(";", fallbackChain);
+    // Keyed by installation too (#1220): a repository of the same name under another installation
+    // has its own configuration.
+    var cacheKey =
+        installationId + ":" + owner + "/" + repo + "|" + String.join(";", fallbackChain);
 
     var cached = cache.get(cacheKey);
     if (cached != null) {

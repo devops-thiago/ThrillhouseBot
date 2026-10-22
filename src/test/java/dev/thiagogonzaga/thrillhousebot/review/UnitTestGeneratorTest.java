@@ -30,8 +30,10 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.PullReque
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver.ResolvedInstructions;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.UnitTestAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.UnitTestAssistantPrompts;
@@ -161,7 +163,7 @@ class UnitTestGeneratorTest {
   }
 
   private String generate() {
-    return generator.generate("owner", "repo", 7, "main", 12345L, AUTH);
+    return generator.generate("owner", "repo", 7, "main", 12345L, TestScopes.REPOSITORY_ID, AUTH);
   }
 
   @Test
@@ -575,7 +577,8 @@ class UnitTestGeneratorTest {
 
   /** The PR's persisted prior review rounds, newest first, as the persistence returns them. */
   private void priorRounds(String... responseJson) {
-    when(sessionPersistence.findAllPriorAiResponseJsons("owner/repo", 7, -1L))
+    when(sessionPersistence.findAllPriorAiResponseJsons(
+            new RepoScope(12345L, TestScopes.REPOSITORY_ID), 7, -1L))
         .thenReturn(List.of(responseJson));
   }
 

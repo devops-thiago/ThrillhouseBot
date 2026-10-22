@@ -235,6 +235,16 @@ first start Flyway records it as version 1, the v0.8.0 schema
 migrations. Upgrade such a database from v0.8.x; an older one should first be
 started once on v0.8.x so that its schema reaches the v0.8.0 shape.
 
+From v0.9.0 every stored row carries the GitHub App installation id and the
+repository's numeric id. On the first start after the upgrade the bot fills them
+in for existing rows, matching each `owner/repo` to the installations it can
+see, and logs `Scope backfill: matched N repository name(s) and filled M
+row(s)`. Rows of a repository it cannot match (deleted, transferred to another
+account, or no longer installed) stay hidden from the dashboard and from later
+reviews; the bot tries them again on every start. A pause it cannot match is
+still honored, and `/resume` lifts it. If GitHub cannot be reached, nothing is
+written and the next start tries again.
+
 To upgrade:
 
 1. Read the release's section in

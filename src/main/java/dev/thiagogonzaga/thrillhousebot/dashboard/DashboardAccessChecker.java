@@ -25,8 +25,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntFunction;
@@ -76,16 +76,20 @@ public class DashboardAccessChecker {
   private record OwnerCache(String owner, Instant cachedAt) {}
 
   private final AtomicReference<RepoSnapshot> cachedSnapshot =
-      new AtomicReference<>(new RepoSnapshot(null, List.of(), null, Instant.EPOCH));
+      new AtomicReference<>(new RepoSnapshot(null, 0L, List.of(), null, Instant.EPOCH));
   private final AtomicReference<OwnerCache> ownerCache =
       new AtomicReference<>(new OwnerCache(null, Instant.EPOCH));
 
   static record AccessCacheEntry(boolean allowed, Instant cachedAt) {}
 
   private record RepoSnapshot(
-      String owner, List<RepoRef> repos, String installationAuth, Instant cachedAt) {}
+      String owner,
+      long installationId,
+      List<RepoRef> repos,
+      String installationAuth,
+      Instant cachedAt) {}
 
-  private record RepoRef(String owner, String name) {}
+  private record RepoRef(long id, String owner, String name) {}
 
   private final ConcurrentHashMap<String, AccessCacheEntry> accessCache = new ConcurrentHashMap<>();
 
@@ -118,31 +122,6 @@ public class DashboardAccessChecker {
   }
 
   /**
-   * Checks access to one installed repository rather than treating access to any installation as
-   * account-wide data access. The requested repository must belong to the configured account and be
-   * present in the current installation snapshot, and the login must be the account owner or a
-   * collaborator on it (answered from {@link #repositoryScope}, so repeated checks within its TTL
-   * cost no GitHub call).
-   */
-  public boolean hasRepositoryAccess(String githubLogin, String repository) {
-    if (githubLogin == null || githubLogin.isBlank() || repository == null) {
-      return false;
-    }
-    var separator = repository.indexOf('/');
-    if (separator <= 0
-        || separator != repository.lastIndexOf('/')
-        || separator == repository.length() - 1) {
-      return false;
-    }
-    var accountOwner = accountOwner();
-    if (accountOwner.isEmpty()
-        || !accountOwner.get().equalsIgnoreCase(repository.substring(0, separator))) {
-      return false;
-    }
-    return repositoryScope(githubLogin).allows(repository);
-  }
-
-  /**
    * The installed repositories {@code githubLogin} may read: every repository in the installation
    * snapshot for the account owner, and for anyone else the ones they collaborate on. A
    * collaborator's set costs one collaborator check per installed repository and is then cached for
@@ -163,7 +142,7 @@ public class DashboardAccessChecker {
       return RepositoryScope.NONE;
     }
     if (accountOwner.get().equalsIgnoreCase(githubLogin)) {
-      return new RepositoryScope(true, fullNames(snapshot, repo -> true));
+      return new RepositoryScope(true, snapshot.installationId(), names(snapshot, repo -> true));
     }
     var normalizedLogin = githubLogin.toLowerCase(Locale.ROOT);
     var cached = scopeCache.get(normalizedLogin);
@@ -175,20 +154,24 @@ public class DashboardAccessChecker {
     var scope =
         new RepositoryScope(
             false,
-            fullNames(
-                snapshot, repo -> hasRepoAccess(snapshot.installationAuth(), repo, githubLogin)));
+            snapshot.installationId(),
+            names(snapshot, repo -> hasRepoAccess(snapshot.installationAuth(), repo, githubLogin)));
     scopeCache.put(normalizedLogin, new ScopeCacheEntry(scope, snapshot, clock.get()));
     sweepExpiredScopeEntries();
     return scope;
   }
 
-  /** The snapshot's repositories owned by its account (never a foreign entry) that pass. */
-  private static Set<String> fullNames(RepoSnapshot snapshot, Predicate<RepoRef> readable) {
+  /**
+   * The snapshot's repositories owned by its account (never a foreign entry) that pass, by
+   * repository id.
+   */
+  private static Map<Long, String> names(RepoSnapshot snapshot, Predicate<RepoRef> readable) {
     return snapshot.repos().stream()
         .filter(repo -> repo.owner().equalsIgnoreCase(snapshot.owner()))
         .filter(readable)
-        .map(repo -> repo.owner() + "/" + repo.name())
-        .collect(Collectors.toUnmodifiableSet());
+        .collect(
+            Collectors.toUnmodifiableMap(
+                RepoRef::id, repo -> repo.owner() + "/" + repo.name(), (first, second) -> first));
   }
 
   /** Same bounded sweep as {@link #sweepExpiredAccessEntries()}, for the per-login scope cache. */
@@ -321,12 +304,14 @@ public class DashboardAccessChecker {
     }
 
     var repos = new ArrayList<RepoRef>();
+    long installationId = 0L;
     String installationAuth = null;
     try {
       var jwt = "Bearer " + authClient.generateAppJwt();
       var matchingInstallation = findInstallation(jwt, accountOwner);
       if (matchingInstallation.isPresent()) {
-        installationAuth = authClient.getAuthHeader(matchingInstallation.get().id());
+        installationId = matchingInstallation.get().id();
+        installationAuth = authClient.getAuthHeader(installationId);
         collectInstalledRepos(installationAuth, accountOwner, repos);
       }
     } catch (RuntimeException e) {
@@ -336,10 +321,12 @@ public class DashboardAccessChecker {
       var previous = cachedSnapshot.get();
       return accountOwner.equalsIgnoreCase(previous.owner())
           ? previous
-          : new RepoSnapshot(accountOwner, List.of(), null, Instant.EPOCH);
+          : new RepoSnapshot(accountOwner, 0L, List.of(), null, Instant.EPOCH);
     }
 
-    var updated = new RepoSnapshot(accountOwner, List.copyOf(repos), installationAuth, clock.get());
+    var updated =
+        new RepoSnapshot(
+            accountOwner, installationId, List.copyOf(repos), installationAuth, clock.get());
     cachedSnapshot.set(updated);
     log.info("Loaded {} installed repos for dashboard access control", repos.size());
     return updated;
@@ -414,8 +401,9 @@ public class DashboardAccessChecker {
     for (var repo : pageRepos) {
       if (repo.owner() != null
           && accountOwner.equalsIgnoreCase(repo.owner().login())
-          && repo.name() != null) {
-        repos.add(new RepoRef(repo.owner().login(), repo.name()));
+          && repo.name() != null
+          && repo.id() > 0) {
+        repos.add(new RepoRef(repo.id(), repo.owner().login(), repo.name()));
       }
     }
   }

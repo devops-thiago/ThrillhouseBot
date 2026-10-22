@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
@@ -25,6 +26,8 @@ import org.junit.jupiter.api.Test;
 
 @QuarkusTest
 class PrPauseServiceTest {
+
+  private static final RepoScope SCOPE = new RepoScope(1L, 70L);
 
   @Inject PrPauseService service;
   @Inject UserTransaction tx;
@@ -38,37 +41,70 @@ class PrPauseServiceTest {
 
   @Test
   void pauseThenIsPausedReturnsTrue() {
-    assertFalse(service.isPaused("owner", "repo", 7));
-    service.pause("owner", "repo", 7);
-    assertTrue(service.isPaused("owner", "repo", 7));
+    assertFalse(service.isPaused(SCOPE, "owner", "repo", 7));
+    service.pause(SCOPE, "owner", "repo", 7);
+    assertTrue(service.isPaused(SCOPE, "owner", "repo", 7));
   }
 
   @Test
   void resumeClearsPause() {
-    service.pause("owner", "repo", 7);
-    assertTrue(service.resume("owner", "repo", 7));
-    assertFalse(service.isPaused("owner", "repo", 7));
+    service.pause(SCOPE, "owner", "repo", 7);
+    assertTrue(service.resume(SCOPE, "owner", "repo", 7));
+    assertFalse(service.isPaused(SCOPE, "owner", "repo", 7));
   }
 
   @Test
   void resumeReturnsFalseWhenNotPaused() {
-    assertFalse(service.resume("owner", "repo", 7));
+    assertFalse(service.resume(SCOPE, "owner", "repo", 7));
   }
 
   @Test
-  void pauseIsIdempotent() {
-    service.pause("owner", "repo", 7);
-    service.pause("owner", "repo", 7);
+  void pauseIsIdempotentAndStoresTheScope() {
+    service.pause(SCOPE, "owner", "repo", 7);
+    service.pause(SCOPE, "owner", "repo", 7);
 
-    assertTrue(service.isPaused("owner", "repo", 7));
-    assertEquals(1, PausedPr.count("repository = ?1 and prNumber = ?2", "owner/repo", 7));
+    assertTrue(service.isPaused(SCOPE, "owner", "repo", 7));
+    assertEquals(
+        1,
+        PausedPr.count(
+            "installationId = ?1 and repositoryId = ?2 and repository = ?3 and prNumber = ?4",
+            1L,
+            70L,
+            "owner/repo",
+            7));
   }
 
   @Test
-  void pauseIsScopedPerPr() {
-    service.pause("owner", "repo", 7);
+  void pauseIsScopedPerPrRepositoryAndInstallation() {
+    service.pause(SCOPE, "owner", "repo", 7);
 
-    assertFalse(service.isPaused("owner", "repo", 8));
-    assertFalse(service.isPaused("other", "repo", 7));
+    assertFalse(service.isPaused(SCOPE, "owner", "repo", 8));
+    assertFalse(service.isPaused(new RepoScope(1L, 71L), "owner", "repo", 7), "re-created");
+    assertFalse(service.isPaused(new RepoScope(2L, 70L), "owner", "repo", 7), "installation");
+  }
+
+  @Test
+  void aRenamedRepositoryStaysPaused() {
+    service.pause(SCOPE, "owner", "old-name", 7);
+
+    assertTrue(service.isPaused(SCOPE, "owner", "new-name", 7));
+    assertTrue(service.resume(SCOPE, "owner", "new-name", 7));
+  }
+
+  @Test
+  void anUnmatchedLegacyPauseIsHonoredAndLiftedByItsExactName() throws Exception {
+    tx.begin();
+    var legacy = new PausedPr();
+    legacy.repository = "owner/repo";
+    legacy.prNumber = 7;
+    legacy.persist();
+    tx.commit();
+
+    assertTrue(service.isPaused(SCOPE, "owner", "repo", 7));
+    assertFalse(service.isPaused(SCOPE, "Owner", "Repo", 7), "matched by its exact name only");
+    assertFalse(service.isPaused(SCOPE, "owner", "repo", 8));
+    assertTrue(service.resume(SCOPE, "owner", "repo", 7));
+    assertFalse(service.isPaused(SCOPE, "owner", "repo", 7));
+    assertEquals(0, PausedPr.count());
   }
 }

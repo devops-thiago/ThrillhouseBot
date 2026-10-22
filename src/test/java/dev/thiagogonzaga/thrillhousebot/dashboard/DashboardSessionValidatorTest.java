@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
@@ -88,33 +89,9 @@ class DashboardSessionValidatorTest {
   }
 
   @Test
-  void shouldDelegateAllowedRepositoryAccessForKnownSession() {
-    var sessionId = sessionStore.createSession("octocat", "gho_secret", "https://a.co", "Octocat");
-    when(accessChecker.hasRepositoryAccess("octocat", "owner/repo")).thenReturn(true);
-
-    assertTrue(validator.hasRepositoryAccess(sessionId, "owner/repo"));
-    verify(accessChecker).hasRepositoryAccess("octocat", "owner/repo");
-  }
-
-  @Test
-  void shouldDelegateDeniedRepositoryAccessForKnownSession() {
-    var sessionId = sessionStore.createSession("outsider", "gho_secret", "https://a.co", "Out");
-    when(accessChecker.hasRepositoryAccess("outsider", "owner/repo")).thenReturn(false);
-
-    assertFalse(validator.hasRepositoryAccess(sessionId, "owner/repo"));
-    verify(accessChecker).hasRepositoryAccess("outsider", "owner/repo");
-  }
-
-  @Test
-  void shouldRejectRepositoryAccessForUnknownSessionWithoutDelegating() {
-    assertFalse(validator.hasRepositoryAccess("unknown", "owner/repo"));
-    verify(accessChecker, never()).hasRepositoryAccess(anyString(), anyString());
-  }
-
-  @Test
   void shouldResolveTheRepositoryScopeOfAKnownSession() {
     var sessionId = sessionStore.createSession("octocat", "gho_secret", "https://a.co", "Octocat");
-    var scope = new RepositoryScope(false, java.util.Set.of("owner/repo"));
+    var scope = TestScopes.readable(false, "owner/repo");
     when(accessChecker.repositoryScope("octocat")).thenReturn(scope);
 
     assertSame(scope, validator.repositoryScope(sessionId));

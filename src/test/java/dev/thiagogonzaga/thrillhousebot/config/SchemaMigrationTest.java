@@ -30,7 +30,8 @@ import org.junit.jupiter.api.Test;
 /**
  * Runs the shipped migrations the way production does (#22): on an empty database, and on a
  * database that Hibernate created before Flyway was adopted, which has the v0.8.0 tables but no
- * history table and must be baselined instead of having V1 run against it.
+ * history table and must be baselined instead of having V1 run against it. Later migrations then
+ * run on top of the baseline and keep its rows (#1220).
  */
 class SchemaMigrationTest {
 
@@ -42,12 +43,12 @@ class SchemaMigrationTest {
 
     var result = flyway.migrate();
 
-    assertEquals(1, result.migrationsExecuted);
+    assertEquals(2, result.migrationsExecuted);
     assertEquals(MigrationState.SUCCESS, flyway.info().current().getState());
   }
 
   @Test
-  void aDatabaseFromBeforeFlywayIsBaselinedAndV1IsSkipped() throws Exception {
+  void aDatabaseFromBeforeFlywayIsBaselinedThenScopedAndV1IsSkipped() throws Exception {
     var url = freshDatabase();
     try (var connection = DriverManager.getConnection(url, "sa", "");
         var statement = connection.createStatement()) {
@@ -59,14 +60,23 @@ class SchemaMigrationTest {
 
     var result = flyway.migrate();
 
-    assertEquals(0, result.migrationsExecuted);
+    assertEquals(1, result.migrationsExecuted, "only V2 runs on a baselined database");
+    var baseline = flyway.info().applied()[0];
+    assertEquals(MigrationVersion.fromVersion("1"), baseline.getVersion());
+    assertEquals(MigrationState.BASELINE, baseline.getState());
     var current = flyway.info().current();
-    assertEquals(MigrationVersion.fromVersion("1"), current.getVersion());
-    assertEquals(MigrationState.BASELINE, current.getState());
+    assertEquals(MigrationVersion.fromVersion("2"), current.getVersion());
+    assertEquals(MigrationState.SUCCESS, current.getState());
     try (var connection = DriverManager.getConnection(url, "sa", "");
-        var rows = connection.createStatement().executeQuery("SELECT count(*) FROM pausedpr")) {
+        var rows =
+            connection
+                .createStatement()
+                .executeQuery(
+                    "SELECT count(*), count(installationid), count(repositoryid) FROM pausedpr")) {
       assertTrue(rows.next());
       assertEquals(1, rows.getInt(1), "baselining must keep the existing rows");
+      assertEquals(0, rows.getInt(2), "an existing row is left for the backfill to scope");
+      assertEquals(0, rows.getInt(3));
     }
   }
 

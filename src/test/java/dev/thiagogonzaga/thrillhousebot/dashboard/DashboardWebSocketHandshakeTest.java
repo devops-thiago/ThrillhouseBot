@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.common.http.TestHTTPResource;
 import io.quarkus.test.junit.QuarkusTest;
@@ -39,7 +40,6 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -75,9 +75,9 @@ class DashboardWebSocketHandshakeTest {
     when(accessChecker.checkAccess(anyString()))
         .thenReturn(DashboardAccessChecker.AccessDecision.ALLOWED);
     when(accessChecker.repositoryScope("alice"))
-        .thenReturn(new RepositoryScope(false, Set.of("acme/alice-repo")));
+        .thenReturn(TestScopes.readable(false, "acme/alice-repo"));
     when(accessChecker.repositoryScope("bob"))
-        .thenReturn(new RepositoryScope(false, Set.of("acme/bob-repo")));
+        .thenReturn(TestScopes.readable(false, "acme/bob-repo"));
   }
 
   @AfterEach
@@ -178,7 +178,7 @@ class DashboardWebSocketHandshakeTest {
   }
 
   private static ReviewSession review(long id, String repository) {
-    var review = ReviewSession.create(repository, 7, "PR", "sha");
+    var review = ReviewSession.create(TestScopes.scope(repository), repository, 7, "PR", "sha");
     review.id = id;
     return review;
   }

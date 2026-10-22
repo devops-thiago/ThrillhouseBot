@@ -71,6 +71,7 @@ public record WebhookPayload(
   @RegisterForReflection
   @JsonIgnoreProperties(ignoreUnknown = true)
   public record Repository(
+      long id,
       @JsonProperty("full_name") String fullName,
       String name,
       @JsonProperty("default_branch") String defaultBranch,

@@ -41,7 +41,7 @@ import java.time.Instant;
 @Table(
     name = "review_learning",
     indexes = {
-      @Index(name = "idx_reviewlearning_scope", columnList = "installationId, repository, active")
+      @Index(name = "idx_reviewlearning_scope", columnList = "installationId, repositoryId, active")
     },
     uniqueConstraints = {
       @UniqueConstraint(
@@ -69,6 +69,14 @@ public class ReviewLearning extends PanacheEntity {
   /** GitHub App installation the learning was captured under; reads are scoped to it. */
   @Column(nullable = false)
   long installationId;
+
+  /**
+   * GitHub's numeric id of the repository; reads are scoped to it together with {@link
+   * #installationId}, so a renamed repository keeps its learnings and a re-created one with the
+   * same name does not inherit them. {@code null} on a row written before #1220 that the startup
+   * backfill could not match; such a row is never read.
+   */
+  @Column Long repositoryId;
 
   /** Repository in {@code owner/repo} form, lower-cased so lookups are case-insensitive. */
   @Column(nullable = false, length = 255)

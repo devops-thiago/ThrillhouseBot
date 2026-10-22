@@ -36,6 +36,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -856,7 +857,8 @@ class SummaryAcrossRoundsTest {
           BOT);
 
   private static final ReviewOrchestrator.ReviewRequest REQUEST =
-      new ReviewOrchestrator.ReviewRequest("o", "r", 1, "sha", "t", "", "base", "main", 9L, false);
+      new ReviewOrchestrator.ReviewRequest(
+          "o", "r", 1, "sha", "t", "", "base", "main", 9L, TestScopes.REPOSITORY_ID, false);
 
   /** Runs the post-review thread resolution for {@code result} over {@code threads}. */
   private void resolveThreads(

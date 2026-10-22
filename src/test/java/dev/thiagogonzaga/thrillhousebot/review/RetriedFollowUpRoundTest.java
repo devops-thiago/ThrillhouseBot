@@ -37,6 +37,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FakeTokenStream;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
@@ -284,7 +285,9 @@ class RetriedFollowUpRoundTest {
             Set.of(),
             FollowUpAnalyzer.openEarlierRoundFindings(
                 ctx.priorAiResponses(), ctx.lineResolver(), Map.of(), threads, BOT));
-    var session = ReviewSession.create("owner/repo", 146, "Cold chain", "1d16c26");
+    var session =
+        ReviewSession.create(
+            TestScopes.scope("owner/repo"), "owner/repo", 146, "Cold chain", "1d16c26");
     session.id = 5428L;
 
     var response =
@@ -357,7 +360,9 @@ class RetriedFollowUpRoundTest {
     postedThreads(threads, roundOne, 100);
     postedThreads(threads, roundTwo, 200);
     var ctx = context(List.of(roundTwo, roundOne), threads);
-    var session = ReviewSession.create("owner/repo", 146, "Cold chain", "1d16c26");
+    var session =
+        ReviewSession.create(
+            TestScopes.scope("owner/repo"), "owner/repo", 146, "Cold chain", "1d16c26");
     session.id = 5429L;
 
     var response =

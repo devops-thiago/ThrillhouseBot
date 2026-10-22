@@ -33,6 +33,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import java.util.ArrayList;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
@@ -67,7 +68,7 @@ class ReviewDispatcherTest {
   }
 
   private static CiHoldRevisit.Recheck recheck(int prNumber, String sha) {
-    return new CiHoldRevisit.Recheck("owner", "repo", prNumber, sha, 1L);
+    return new CiHoldRevisit.Recheck("owner", "repo", prNumber, sha, 1L, TestScopes.REPOSITORY_ID);
   }
 
   /** Blocks the orchestrator's review until {@code release} is counted down. */
@@ -253,7 +254,7 @@ class ReviewDispatcherTest {
   void shouldDispatchManualReviewWithEmptySha() {
     var req =
         new ReviewOrchestrator.ReviewRequest(
-            "owner", "repo", 3, "", "(manual)", "", "", "main", 1L, true);
+            "owner", "repo", 3, "", "(manual)", "", "", "main", 1L, TestScopes.REPOSITORY_ID, true);
 
     dispatcher.dispatch(req);
 
@@ -553,7 +554,17 @@ class ReviewDispatcherTest {
   void shouldNotRecordCompletionForManualReview() {
     var req =
         new ReviewOrchestrator.ReviewRequest(
-            "owner", "repo", 14, "", "(manual)", "", "", "main", 1L, true);
+            "owner",
+            "repo",
+            14,
+            "",
+            "(manual)",
+            "",
+            "",
+            "main",
+            1L,
+            TestScopes.REPOSITORY_ID,
+            true);
     when(orchestrator.review(req)).thenReturn(true);
 
     dispatcher.dispatch(req);
@@ -628,7 +639,17 @@ class ReviewDispatcherTest {
     var release = new CountDownLatch(1);
     var manualReq =
         new ReviewOrchestrator.ReviewRequest(
-            "owner", "repo", 18, "", "(manual)", "", "", "main", 1L, true);
+            "owner",
+            "repo",
+            18,
+            "",
+            "(manual)",
+            "",
+            "",
+            "main",
+            1L,
+            TestScopes.REPOSITORY_ID,
+            true);
     doAnswer(
             invocation -> {
               started.countDown();
@@ -640,7 +661,17 @@ class ReviewDispatcherTest {
 
     dispatcher.dispatch(
         new ReviewOrchestrator.ReviewRequest(
-            "owner", "repo", 18, "", "(manual)", "", "", "main", 1L, true));
+            "owner",
+            "repo",
+            18,
+            "",
+            "(manual)",
+            "",
+            "",
+            "main",
+            1L,
+            TestScopes.REPOSITORY_ID,
+            true));
     assertTrue(started.await(2, TimeUnit.SECONDS));
     dispatcher.dispatch(manualReq);
     release.countDown();
@@ -883,12 +914,32 @@ class ReviewDispatcherTest {
 
   private static ReviewOrchestrator.ReviewRequest manualRequest(int prNumber) {
     return new ReviewOrchestrator.ReviewRequest(
-        "owner", "repo", prNumber, "", "(manual review)", "", "", "main", 1L, true);
+        "owner",
+        "repo",
+        prNumber,
+        "",
+        "(manual review)",
+        "",
+        "",
+        "main",
+        1L,
+        TestScopes.REPOSITORY_ID,
+        true);
   }
 
   private static ReviewOrchestrator.ReviewRequest reviewRequest(
       String owner, String repo, int prNumber, String sha) {
     return new ReviewOrchestrator.ReviewRequest(
-        owner, repo, prNumber, sha, "title", "", "base", "main", 1L, false);
+        owner,
+        repo,
+        prNumber,
+        sha,
+        "title",
+        "",
+        "base",
+        "main",
+        1L,
+        TestScopes.REPOSITORY_ID,
+        false);
   }
 }

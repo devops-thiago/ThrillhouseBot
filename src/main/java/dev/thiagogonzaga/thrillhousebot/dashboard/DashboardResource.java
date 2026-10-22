@@ -57,10 +57,11 @@ public class DashboardResource {
   private static final String KEY_SINCE = "since";
 
   /**
-   * Restricts a query to the caller's {@link RepositoryScope} (bound as {@code ?2}, lower-cased).
-   * Filtering in the query rather than after it keeps paging, totals and aggregates exact.
+   * Restricts a query to the caller's {@link RepositoryScope}: its installation id bound as {@code
+   * ?2} and its repository ids as {@code ?3} (#1220). Filtering in the query rather than after it
+   * keeps paging, totals and aggregates exact, and a row with no ids never matches.
    */
-  private static final String JPQL_IN_SCOPE = "lower(s." + FIELD_REPOSITORY + ") IN ?2";
+  private static final String JPQL_IN_SCOPE = "s.installationId = ?2 AND s.repositoryId IN ?3";
 
   private static final String JPQL_FROM_IN_SCOPE_SINCE =
       "FROM ReviewSession s WHERE s." + FIELD_TIMESTAMP + " > ?1 AND " + JPQL_IN_SCOPE;
@@ -136,11 +137,6 @@ public class DashboardResource {
         .build();
   }
 
-  /** The scope's repositories as the {@code ?2} parameter of {@link #JPQL_IN_SCOPE}. */
-  private static List<String> scopeParameter(RepositoryScope scope) {
-    return List.copyOf(scope.repositories());
-  }
-
   @GET
   @Path("/sessions")
   public Response listSessions(
@@ -167,11 +163,14 @@ public class DashboardResource {
     Sort newestFirst = Sort.descending(FIELD_TIMESTAMP);
     var readable =
         repository != null && !repository.isBlank()
-            ? List.of(RepositoryScope.normalize(repository))
-            : scopeParameter(scope);
+            ? scope.scopeOf(repository).map(r -> List.of(r.repositoryId())).orElse(List.of())
+            : scope.repositoryIds();
     PanacheQuery<ReviewSession> query =
         reviewSessionRepository.find(
-            "lower(" + FIELD_REPOSITORY + ") IN ?1", newestFirst, readable);
+            "installationId = ?1 AND repositoryId IN ?2",
+            newestFirst,
+            scope.installationId(),
+            readable);
     var sessions = query.page(page, size).list();
 
     var total = query.count();
@@ -194,7 +193,9 @@ public class DashboardResource {
     // A session from a repository the caller cannot read answers exactly like a missing one, so
     // ids do not reveal which other repositories have reviews.
     if (session == null
-        || !sessionValidator.repositoryScope(sessionToken).allows(session.getRepository())) {
+        || !sessionValidator
+            .repositoryScope(sessionToken)
+            .allows(session.getInstallationId(), session.getRepositoryId())) {
       return Response.status(Response.Status.NOT_FOUND)
           .entity(Map.of(KEY_ERROR, MSG_SESSION_NOT_FOUND))
           .build();
@@ -243,12 +244,10 @@ public class DashboardResource {
           default -> Instant.now().minus(30, ChronoUnit.DAYS);
         });
 
+    var scope = sessionValidator.repositoryScope(sessionToken);
     List<Map<String, Object>> rows =
         reviewSessionRepository
-            .find(
-                JPQL_COSTS_BY_MODEL,
-                since,
-                scopeParameter(sessionValidator.repositoryScope(sessionToken)))
+            .find(JPQL_COSTS_BY_MODEL, since, scope.installationId(), scope.repositoryIds())
             .project(Map.class)
             .list();
 
@@ -286,12 +285,10 @@ public class DashboardResource {
           default -> Instant.now().minus(30, ChronoUnit.DAYS);
         });
 
+    var scope = sessionValidator.repositoryScope(sessionToken);
     List<Map<String, Object>> rows =
         reviewSessionRepository
-            .find(
-                JPQL_TOKENS_BY_MODEL,
-                since,
-                scopeParameter(sessionValidator.repositoryScope(sessionToken)))
+            .find(JPQL_TOKENS_BY_MODEL, since, scope.installationId(), scope.repositoryIds())
             .project(Map.class)
             .list();
 
@@ -326,50 +323,56 @@ public class DashboardResource {
     if (!isValidSession(sessionToken)) {
       return unauthorizedResponse();
     }
+    var scope = sessionValidator.repositoryScope(sessionToken);
     if (repository != null && !repository.isBlank()) {
-      var normalizedRepository = repository.strip();
-      if (!sessionValidator.hasRepositoryAccess(sessionToken, normalizedRepository)) {
+      var repoScope = scope.scopeOf(repository);
+      if (repoScope.isEmpty()) {
         return repositoryDeniedResponse();
       }
-      var summary = findingFeedbackService.summarize(normalizedRepository);
-      var recent = findingFeedbackService.listRecent(normalizedRepository, 50);
+      var summary =
+          findingFeedbackService.summarize(
+              repoScope.get(), scope.repositories().get(repoScope.get().repositoryId()));
+      var recent = findingFeedbackService.listRecent(repoScope.get(), 50);
       return Response.ok(
               Map.of(
                   "repositories",
                   List.of(
-                      Map.of(
-                          FIELD_REPOSITORY,
+                      feedbackRow(
                           summary.repository(),
-                          "usefulCount",
                           summary.usefulCount(),
-                          "notUsefulCount",
                           summary.notUsefulCount(),
-                          "totalEvents",
                           summary.totalEvents())),
                   "recent",
                   recent))
           .build();
     }
-    var scope = sessionValidator.repositoryScope(sessionToken);
-    var summaries =
-        findingFeedbackService.summarizeAll().stream()
-            .filter(s -> scope.allows(s.repository()))
-            .toList();
     var rows =
-        summaries.stream()
+        findingFeedbackService
+            .countsByRepository(scope.installationId(), scope.repositoryIds())
+            .entrySet()
+            .stream()
             .map(
-                s ->
-                    Map.<String, Object>of(
-                        FIELD_REPOSITORY,
-                        s.repository(),
-                        "usefulCount",
-                        s.usefulCount(),
-                        "notUsefulCount",
-                        s.notUsefulCount(),
-                        "totalEvents",
-                        s.totalEvents()))
+                e ->
+                    feedbackRow(
+                        scope.repositories().get(e.getKey()),
+                        e.getValue().usefulCount(),
+                        e.getValue().notUsefulCount(),
+                        e.getValue().totalEvents()))
             .toList();
     return Response.ok(Map.of("repositories", rows)).build();
+  }
+
+  private static Map<String, Object> feedbackRow(
+      String repository, long usefulCount, long notUsefulCount, long totalEvents) {
+    return Map.of(
+        FIELD_REPOSITORY,
+        repository,
+        "usefulCount",
+        usefulCount,
+        "notUsefulCount",
+        notUsefulCount,
+        "totalEvents",
+        totalEvents);
   }
 
   /**
@@ -393,7 +396,8 @@ public class DashboardResource {
           .build();
     }
     var normalizedRepository = repository.strip();
-    if (!sessionValidator.hasRepositoryAccess(sessionToken, normalizedRepository)) {
+    var repoScope = sessionValidator.repositoryScope(sessionToken).scopeOf(normalizedRepository);
+    if (repoScope.isEmpty()) {
       return repositoryDeniedResponse();
     }
     return Response.ok(
@@ -402,7 +406,7 @@ public class DashboardResource {
                 normalizedRepository,
                 "learnings",
                 reviewLearningService.listForAudit(
-                    normalizedRepository, ReviewLearningService.MAX_AUDIT_ROWS)))
+                    repoScope.get(), ReviewLearningService.MAX_AUDIT_ROWS)))
         .build();
   }
 
@@ -415,15 +419,16 @@ public class DashboardResource {
 
     var since = Instant.now().minus(30, ChronoUnit.DAYS);
     var scope = sessionValidator.repositoryScope(sessionToken);
-    var readable = scopeParameter(scope);
+    var installationId = scope.installationId();
+    var readable = scope.repositoryIds();
 
-    var totalReviews = countInScopeSince(null, since, readable);
-    var completedReviews = countInScopeSince(STATUS_COMPLETED, since, readable);
-    var failedReviews = countInScopeSince(STATUS_FAILED, since, readable);
+    var totalReviews = countInScopeSince(null, since, scope);
+    var completedReviews = countInScopeSince(STATUS_COMPLETED, since, scope);
+    var failedReviews = countInScopeSince(STATUS_FAILED, since, scope);
 
     var costRow =
         reviewSessionRepository
-            .find(JPQL_SUMMARY_TOTAL_COST, since, readable)
+            .find(JPQL_SUMMARY_TOTAL_COST, since, installationId, readable)
             .project(Map.class)
             .singleResult();
     var totalCost = extractTotalCost(costRow, KEY_TOTAL_COST);
@@ -436,6 +441,7 @@ public class DashboardResource {
                     + " GROUP BY s.model"
                     + " ORDER BY COUNT(s) DESC",
                 since,
+                installationId,
                 readable)
             .project(Map.class)
             .firstResult();
@@ -463,14 +469,20 @@ public class DashboardResource {
   }
 
   /** Sessions since {@code since} in the caller's scope, optionally of one status only. */
-  private long countInScopeSince(String status, Instant since, List<String> readable) {
-    var where = FIELD_TIMESTAMP + " > ?1 AND lower(" + FIELD_REPOSITORY + ") IN ?2";
+  private long countInScopeSince(String status, Instant since, RepositoryScope scope) {
+    var where = FIELD_TIMESTAMP + " > ?1 AND installationId = ?2 AND repositoryId IN ?3";
     if (status == null) {
-      return nullSafeCount(reviewSessionRepository.count(where, since, readable));
+      return nullSafeCount(
+          reviewSessionRepository.count(
+              where, since, scope.installationId(), scope.repositoryIds()));
     }
     return nullSafeCount(
         reviewSessionRepository.count(
-            where + " AND " + FIELD_STATUS + " = ?3", since, readable, status));
+            where + " AND " + FIELD_STATUS + " = ?4",
+            since,
+            scope.installationId(),
+            scope.repositoryIds(),
+            status));
   }
 
   static String extractTopModel(Map<?, ?> modelRow) {

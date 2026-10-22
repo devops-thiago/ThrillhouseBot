@@ -12,6 +12,13 @@ All notable changes to ThrillhouseBot.
   start it is recorded as version 1, the v0.8.0 schema, and only later migrations run. Upgrade
   from v0.8.x. The dev and test databases are in-memory H2 in PostgreSQL mode, built from the
   same migrations. (#22)
+- Stored reviews, pauses, finding feedback and learnings are scoped by GitHub App installation
+  and the repository's numeric id instead of the `owner/repo` name. A repository of the same name
+  under another installation, or one deleted and re-created, no longer sees another's history,
+  and a renamed repository keeps its own. On the first start after the upgrade the bot fills the
+  ids in for existing rows; rows of a repository it cannot match stay hidden, except a pause,
+  which is still honored. The repository configuration caches are keyed by installation too.
+  (#1220)
 ### Security
 
 - The dashboard WebSocket no longer takes its session from the endpoint configuration that every
@@ -21,6 +28,9 @@ All notable changes to ThrillhouseBot.
   `POST /api/auth/socket-ticket` and opens the socket with it in the query string; the ticket
   expires after 30 seconds and works once. The session cookie is no longer accepted as a query
   parameter. (#1223)
+- A session link posted on GitHub (`/session/<id>`) now redirects to the session's page only for
+  a dashboard login that may read it; anyone else is sent to the sessions list, so the link no
+  longer reveals the session's numeric id. (#1220)
 ### Fixed
 
 - The version bump pull request opened after a release now passes the DCO check. Its commit was not signed off, and the check accepts an unsigned bot commit only when it has a verified signature (#1226).

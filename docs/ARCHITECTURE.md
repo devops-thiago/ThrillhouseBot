@@ -555,6 +555,16 @@ mode. Flyway runs the scripts in `src/main/resources/db/migration` at boot, and 
 validates the entities against the result. A database created before migrations were adopted is
 baselined at V1, the v0.8.0 schema.
 
+Every row carries the GitHub App installation id and GitHub's numeric repository id it was stored
+under (#1220), both from the signed webhook payload, and every read matches both (`RepoScope`).
+A repository of the same name under another installation, or one deleted and re-created, never
+sees another's rows; a renamed repository keeps its own. Rows stored before v0.9.0 are filled at
+startup by `ScopeBackfill`, which matches each `owner/repo` to the App's installations and their
+repositories, following GitHub's redirect for a renamed one. A row it cannot match keeps a null
+scope and is never read, except a pause, which is still honored and lifted by its exact name so
+that a pause a maintainer asked for is not silently dropped. The two startup maintenance passes,
+`InterruptedSessionReconciler` and `SessionCostBackfill`, read every session by design.
+
 ## Dashboard and notifications
 
 The dashboard backend (`dashboard/`) serves the Next.js static export under `/dashboard/`, a
@@ -566,15 +576,16 @@ events to a client that connects late. A browser cannot send a header the server
 WebSocket connection, and the endpoint configuration is shared by every handshake, so the socket
 authenticates with a single-use ticket in its query string: the page fetches it from
 `POST /api/auth/socket-ticket` with its session cookie just before connecting, the ticket expires
-after 30 seconds, and `onOpen` redeems it once. Check runs link to `/session/<id>`, which redirects to the
-session page.
+after 30 seconds, and `onOpen` redeems it once. Check runs link to `/session/<id>`, which redirects
+a login that may read the session to the session page, and anyone else to the sessions list.
 
 Every endpoint and the WebSocket are scoped per repository. `DashboardAccessChecker` resolves a
 login's `RepositoryScope` once per request from the cached installation snapshot: the account
 owner gets every installed repository, anyone else only the installed repositories they
 collaborate on (one collaborator check per repository, cached for five minutes and only while
-the snapshot it came from is current). Session lists, paging totals, costs, tokens, the summary
-and feedback are filtered by that set in the query; `?repository=` naming a repository outside it
+the snapshot it came from is current). The scope holds the installation id and each repository's
+numeric id. Session lists, paging totals, costs, tokens, the summary, feedback and learnings are
+filtered by those ids in the query, so a row with no ids is never served; `?repository=` naming a repository outside it
 answers 403; a session id from one answers 404, the same as a missing id. The installation-wide
 skip counters in the summary go to the owner only. A WebSocket connection takes the scope it had
 when it opened and receives only events, and late-join replays, of those repositories, until the

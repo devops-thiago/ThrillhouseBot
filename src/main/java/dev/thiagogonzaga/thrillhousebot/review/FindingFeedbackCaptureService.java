@@ -20,6 +20,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReactionClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -125,7 +126,7 @@ public class FindingFeedbackCaptureService {
    * already used internally — rather than as three more positional parameters (java:S107).
    */
   public void scheduleCaptureOnReviewReply(
-      long installationId,
+      RepoScope scope,
       String owner,
       String repo,
       int prNumber,
@@ -135,7 +136,7 @@ public class FindingFeedbackCaptureService {
       captureExecutor.execute(
           () -> {
             try {
-              captureOnReviewReply(installationId, owner, repo, prNumber, rootCommentId, reply);
+              captureOnReviewReply(scope, owner, repo, prNumber, rootCommentId, reply);
             } catch (RuntimeException e) {
               log.warn(
                   "Finding feedback capture failed for {}/{} #{} comment {} (continuing)",
@@ -164,6 +165,7 @@ public class FindingFeedbackCaptureService {
    */
   public void captureOnPriorFindings(
       String auth,
+      RepoScope scope,
       String owner,
       String repo,
       int prNumber,
@@ -184,7 +186,7 @@ public class FindingFeedbackCaptureService {
       var permissionCache = new HashMap<String, Boolean>();
       for (var comment : candidates) {
         captureReactions(
-            auth, owner, repo, prNumber, comment.id(), comment.body(), permissionCache);
+            auth, scope, owner, repo, prNumber, comment.id(), comment.body(), permissionCache);
       }
     } catch (RuntimeException e) {
       log.warn(
@@ -200,7 +202,7 @@ public class FindingFeedbackCaptureService {
   public record ReviewReply(String authorLogin, String authorAssociation, String body) {}
 
   void captureOnReviewReply(
-      long installationId,
+      RepoScope scope,
       String owner,
       String repo,
       int prNumber,
@@ -208,7 +210,7 @@ public class FindingFeedbackCaptureService {
       String replyAuthorLogin,
       String replyBody) {
     captureOnReviewReply(
-        installationId,
+        scope,
         owner,
         repo,
         prNumber,
@@ -217,7 +219,7 @@ public class FindingFeedbackCaptureService {
   }
 
   void captureOnReviewReply(
-      long installationId,
+      RepoScope scope,
       String owner,
       String repo,
       int prNumber,
@@ -225,7 +227,7 @@ public class FindingFeedbackCaptureService {
       ReviewReply reply) {
     var replyAuthorLogin = reply.authorLogin();
     var replyBody = reply.body();
-    var auth = authClient.getAuthHeader(installationId);
+    var auth = authClient.getAuthHeader(scope.installationId());
     var permissionCache = new HashMap<String, Boolean>();
     if (!mayHoldWriteAccess(reply.authorAssociation())
         || !hasWriteAccess(auth, owner, repo, replyAuthorLogin, permissionCache)) {
@@ -239,9 +241,12 @@ public class FindingFeedbackCaptureService {
     if (findingIndex.isEmpty()) {
       return;
     }
-    captureReactions(auth, owner, repo, prNumber, rootCommentId, root.body(), permissionCache);
+    captureReactions(
+        auth, scope, owner, repo, prNumber, rootCommentId, root.body(), permissionCache);
     captureReplyHeuristic(
-        owner, repo, prNumber, rootCommentId, findingIndex.getAsInt(), replyAuthorLogin, replyBody);
+        new ReplyFeedback(scope, owner, repo, prNumber, rootCommentId, findingIndex.getAsInt()),
+        replyAuthorLogin,
+        replyBody);
   }
 
   private GitHubReviewClient.PullRequestComment fetchRootComment(
@@ -260,12 +265,19 @@ public class FindingFeedbackCaptureService {
   }
 
   void captureReactions(
-      String auth, String owner, String repo, int prNumber, long commentId, String commentBody) {
-    captureReactions(auth, owner, repo, prNumber, commentId, commentBody, new HashMap<>());
+      String auth,
+      RepoScope scope,
+      String owner,
+      String repo,
+      int prNumber,
+      long commentId,
+      String commentBody) {
+    captureReactions(auth, scope, owner, repo, prNumber, commentId, commentBody, new HashMap<>());
   }
 
   private void captureReactions(
       String auth,
+      RepoScope scope,
       String owner,
       String repo,
       int prNumber,
@@ -279,6 +291,7 @@ public class FindingFeedbackCaptureService {
     var ctx =
         new ReactionPollContext(
             auth,
+            scope,
             owner,
             repo,
             owner + "/" + repo,
@@ -292,6 +305,7 @@ public class FindingFeedbackCaptureService {
 
   private record ReactionPollContext(
       String auth,
+      RepoScope scope,
       String owner,
       String repo,
       String repoKey,
@@ -354,6 +368,7 @@ public class FindingFeedbackCaptureService {
       }
       feedbackService.recordFeedback(
           new FindingFeedbackService.FeedbackInput(
+              ctx.scope(),
               ctx.repoKey(),
               ctx.prNumber(),
               ctx.commentId(),
@@ -405,14 +420,16 @@ public class FindingFeedbackCaptureService {
         && WRITE_CAPABLE_ASSOCIATIONS.contains(authorAssociation.strip().toUpperCase(Locale.ROOT));
   }
 
-  void captureReplyHeuristic(
+  /** The finding root a reply answered, and where it lives. */
+  record ReplyFeedback(
+      RepoScope scope,
       String owner,
       String repo,
       int prNumber,
       long rootCommentId,
-      int findingIndex,
-      String replyAuthorLogin,
-      String replyBody) {
+      int findingIndex) {}
+
+  void captureReplyHeuristic(ReplyFeedback target, String replyAuthorLogin, String replyBody) {
     if (replyAuthorLogin == null
         || replyAuthorLogin.isBlank()
         || botIdentity.matches(replyAuthorLogin)
@@ -423,10 +440,11 @@ public class FindingFeedbackCaptureService {
     }
     feedbackService.recordFeedback(
         new FindingFeedbackService.FeedbackInput(
-            owner + "/" + repo,
-            prNumber,
-            rootCommentId,
-            findingIndex,
+            target.scope(),
+            target.owner() + "/" + target.repo(),
+            target.prNumber(),
+            target.rootCommentId(),
+            target.findingIndex(),
             FindingFeedback.SIGNAL_NOT_USEFUL,
             FindingFeedback.SOURCE_REPLY_HEURISTIC,
             replyAuthorLogin,

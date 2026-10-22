@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -26,9 +27,13 @@ import java.util.function.Consumer;
 @ApplicationScoped
 public class ReviewSessionPersistence {
 
-  /** The completed prior rounds of a pull request that persisted a response, newest first. */
+  /**
+   * The completed prior rounds of a pull request that persisted a response, newest first. Matched
+   * by installation and repository id (#1220), so a renamed repository keeps its history and a
+   * repository of the same name under another installation never contributes to it.
+   */
   private static final String PRIOR_ROUNDS_QUERY =
-      "repository = ?1 and prNumber = ?2 and id <> ?3 and status = ?4"
+      "installationId = ?1 and repositoryId = ?2 and prNumber = ?3 and id <> ?4 and status = ?5"
           + " and aiResponseJson is not null order by id desc";
 
   private final ReviewSessionRepository repository;
@@ -49,11 +54,12 @@ public class ReviewSessionPersistence {
    */
   @Transactional
   public Optional<String> findPreviousAiResponseJson(
-      String repository, int prNumber, long excludeSessionId) {
+      RepoScope scope, int prNumber, long excludeSessionId) {
     return this.repository
         .find(
             PRIOR_ROUNDS_QUERY,
-            repository,
+            scope.installationId(),
+            scope.repositoryId(),
             prNumber,
             excludeSessionId,
             ReviewSession.STATUS_COMPLETED)
@@ -68,11 +74,12 @@ public class ReviewSessionPersistence {
    */
   @Transactional
   public List<String> findAllPriorAiResponseJsons(
-      String repository, int prNumber, long excludeSessionId) {
+      RepoScope scope, int prNumber, long excludeSessionId) {
     return this.repository
         .find(
             PRIOR_ROUNDS_QUERY,
-            repository,
+            scope.installationId(),
+            scope.repositoryId(),
             prNumber,
             excludeSessionId,
             ReviewSession.STATUS_COMPLETED)
@@ -88,12 +95,12 @@ public class ReviewSessionPersistence {
    * aligned.
    */
   @Transactional
-  public List<String> findAllPriorCommitShas(
-      String repository, int prNumber, long excludeSessionId) {
+  public List<String> findAllPriorCommitShas(RepoScope scope, int prNumber, long excludeSessionId) {
     return this.repository
         .find(
             PRIOR_ROUNDS_QUERY,
-            repository,
+            scope.installationId(),
+            scope.repositoryId(),
             prNumber,
             excludeSessionId,
             ReviewSession.STATUS_COMPLETED)

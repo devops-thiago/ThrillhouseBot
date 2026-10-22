@@ -15,23 +15,33 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Persists and aggregates {@link FindingFeedback} rows. Short DB transactions only — never spans a
  * GitHub API call. Idempotent inserts: duplicate reaction ids or the same (comment, reactor,
  * signal, source) are ignored via pre-insert existence checks.
  *
- * <p>{@link #summarize(String)} is the seam a future learnings {@code ContextProvider} (#38) will
- * read; it does not feed prompts yet.
+ * <p>{@link #summarize} is the seam a future learnings {@code ContextProvider} (#38) will read; it
+ * does not feed prompts yet.
+ *
+ * <p>Every row carries the installation and repository id it was given under, and every read
+ * matches them (#1220). A row from before #1220 that the startup backfill could not match has no
+ * ids and is never read.
  */
 @ApplicationScoped
 public class FindingFeedbackService {
+
+  private static final String SCOPE = "installationId = ?1 and repositoryId = ?2";
 
   private final FindingFeedbackRepository repository;
 
@@ -49,6 +59,7 @@ public class FindingFeedbackService {
 
   /** Input for {@link #recordFeedback(FeedbackInput)}. */
   public record FeedbackInput(
+      RepoScope scope,
       String repositoryKey,
       int prNumber,
       long githubCommentId,
@@ -62,6 +73,7 @@ public class FindingFeedbackService {
   @Transactional
   public boolean recordFeedback(FeedbackInput input) {
     if (input == null
+        || input.scope() == null
         || input.repositoryKey() == null
         || input.repositoryKey().isBlank()
         || input.signal() == null
@@ -85,6 +97,8 @@ public class FindingFeedbackService {
       return false;
     }
     var row = new FindingFeedback();
+    row.installationId = input.scope().installationId();
+    row.repositoryId = input.scope().repositoryId();
     row.repository = input.repositoryKey().strip();
     row.prNumber = input.prNumber();
     row.githubCommentId = input.githubCommentId();
@@ -114,39 +128,40 @@ public class FindingFeedbackService {
       Long githubReactionId,
       Instant createdAt) {}
 
-  /** Aggregated 👍/👎-style preferences for {@code owner/repo}. */
+  /**
+   * Aggregated 👍/👎-style preferences for one repository, labelled {@code repositoryName} (its
+   * current {@code owner/repo} name, which a rename may have changed since the rows were stored).
+   */
   @Transactional
-  public FeedbackPreferenceSummary summarize(String repositoryKey) {
-    if (repositoryKey == null || repositoryKey.isBlank()) {
-      return new FeedbackPreferenceSummary("", 0, 0, 0);
-    }
-    var key = repositoryKey.strip();
-    // Match stored webhook casing case-insensitively so dashboard filters like Owner/Repo work.
+  public FeedbackPreferenceSummary summarize(RepoScope scope, String repositoryName) {
     long useful =
         repository.count(
-            "lower(repository) = lower(?1) and signal = ?2", key, FindingFeedback.SIGNAL_USEFUL);
+            SCOPE + " and signal = ?3",
+            scope.installationId(),
+            scope.repositoryId(),
+            FindingFeedback.SIGNAL_USEFUL);
     long notUseful =
         repository.count(
-            "lower(repository) = lower(?1) and signal = ?2",
-            key,
+            SCOPE + " and signal = ?3",
+            scope.installationId(),
+            scope.repositoryId(),
             FindingFeedback.SIGNAL_NOT_USEFUL);
-    var storedKey =
-        repository
-            .find("lower(repository) = lower(?1) order by repository", key)
-            .firstResultOptional()
-            .map(f -> f.repository)
-            .orElse(key);
-    return new FeedbackPreferenceSummary(storedKey, useful, notUseful, useful + notUseful);
+    return new FeedbackPreferenceSummary(repositoryName, useful, notUseful, useful + notUseful);
   }
 
-  /** Newest events for a repository (dashboard detail); empty when the key is blank. */
+  /**
+   * Newest events for a repository (dashboard detail); empty when {@code limit} is not positive.
+   */
   @Transactional
-  public List<FeedbackEvent> listRecent(String repositoryKey, int limit) {
-    if (repositoryKey == null || repositoryKey.isBlank() || limit <= 0) {
+  public List<FeedbackEvent> listRecent(RepoScope scope, int limit) {
+    if (limit <= 0) {
       return List.of();
     }
     return repository
-        .find("lower(repository) = lower(?1) order by createdAt desc", repositoryKey.strip())
+        .find(
+            SCOPE + " order by createdAt desc, id desc",
+            scope.installationId(),
+            scope.repositoryId())
         .page(0, Math.min(limit, 100))
         .list()
         .stream()
@@ -166,34 +181,49 @@ public class FindingFeedbackService {
         .toList();
   }
 
-  /** Per-repository summaries ordered by total events descending (dashboard / ops). */
+  /**
+   * Per-repository counts for the given repositories of one installation, ordered by total events
+   * descending; a repository with no feedback is absent. Keyed by repository id, so the caller
+   * labels each with the repository's current name.
+   */
   @Transactional
-  public List<FeedbackPreferenceSummary> summarizeAll() {
+  public Map<Long, FeedbackCounts> countsByRepository(
+      long installationId, Collection<Long> repositoryIds) {
+    if (repositoryIds.isEmpty()) {
+      return Map.of();
+    }
     List<Object[]> rows =
         repository
             .getEntityManager()
             .createQuery(
                 """
-                select f.repository,
+                select f.repositoryId,
                        sum(case when f.signal = :useful then 1 else 0 end),
                        sum(case when f.signal = :notUseful then 1 else 0 end),
                        count(f)
                 from FindingFeedback f
-                group by f.repository
-                order by count(f) desc
+                where f.installationId = :installationId and f.repositoryId in :repositoryIds
+                group by f.repositoryId
+                order by count(f) desc, f.repositoryId
                 """,
                 Object[].class)
             .setParameter("useful", FindingFeedback.SIGNAL_USEFUL)
             .setParameter("notUseful", FindingFeedback.SIGNAL_NOT_USEFUL)
+            .setParameter("installationId", installationId)
+            .setParameter("repositoryIds", repositoryIds)
             .getResultList();
-    return rows.stream()
-        .map(
-            r ->
-                new FeedbackPreferenceSummary(
-                    (String) r[0],
-                    ((Number) r[1]).longValue(),
-                    ((Number) r[2]).longValue(),
-                    ((Number) r[3]).longValue()))
-        .toList();
+    var counts = new LinkedHashMap<Long, FeedbackCounts>();
+    for (var r : rows) {
+      counts.put(
+          ((Number) r[0]).longValue(),
+          new FeedbackCounts(
+              ((Number) r[1]).longValue(),
+              ((Number) r[2]).longValue(),
+              ((Number) r[3]).longValue()));
+    }
+    return counts;
   }
+
+  /** Useful, not-useful and total feedback events of one repository. */
+  public record FeedbackCounts(long usefulCount, long notUsefulCount, long totalEvents) {}
 }

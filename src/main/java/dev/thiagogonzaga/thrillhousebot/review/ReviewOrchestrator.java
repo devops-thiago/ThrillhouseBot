@@ -135,6 +135,8 @@ public class ReviewOrchestrator {
    * @param baseSha base branch SHA (for comparison)
    * @param defaultBranch repo default branch name
    * @param installationId GitHub App installation ID
+   * @param repositoryId GitHub's numeric repository id from the webhook payload; with {@code
+   *     installationId} it scopes every stored row of the review (#1220)
    * @param isManualTrigger {@code true} when triggered by a /review command
    * @param baseRef PR base/target branch name, used to resolve required CI checks without an extra
    *     PR fetch; may be empty until {@link ReviewContextLoader#resolveMissingPrDetails} fills it
@@ -153,9 +155,15 @@ public class ReviewOrchestrator {
       String baseSha,
       String defaultBranch,
       long installationId,
+      long repositoryId,
       boolean isManualTrigger,
       String baseRef,
       boolean forceSummary) {
+
+    /** The installation and repository every row this review stores is scoped to. */
+    public RepoScope scope() {
+      return new RepoScope(installationId, repositoryId);
+    }
 
     /**
      * Back-compat convenience for callers that carry the base ref but never force the summary — the
@@ -172,6 +180,7 @@ public class ReviewOrchestrator {
         String baseSha,
         String defaultBranch,
         long installationId,
+        long repositoryId,
         boolean isManualTrigger,
         String baseRef) {
       this(
@@ -184,6 +193,7 @@ public class ReviewOrchestrator {
           baseSha,
           defaultBranch,
           installationId,
+          repositoryId,
           isManualTrigger,
           baseRef,
           false);
@@ -205,6 +215,7 @@ public class ReviewOrchestrator {
         String baseSha,
         String defaultBranch,
         long installationId,
+        long repositoryId,
         boolean isManualTrigger) {
       this(
           owner,
@@ -216,6 +227,7 @@ public class ReviewOrchestrator {
           baseSha,
           defaultBranch,
           installationId,
+          repositoryId,
           isManualTrigger,
           "");
     }
@@ -287,7 +299,11 @@ public class ReviewOrchestrator {
 
     ReviewSession session =
         ReviewSession.create(
-            repository, request.prNumber(), request.prTitle(), request.commitSha());
+            request.scope(),
+            repository,
+            request.prNumber(),
+            request.prTitle(),
+            request.commitSha());
     sessionPersistence.create(session);
     broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(session));
 
@@ -460,7 +476,12 @@ public class ReviewOrchestrator {
           "capture finding feedback",
           () ->
               findingFeedbackCapture.captureOnPriorFindings(
-                  auth, doneReq.owner(), doneReq.repo(), doneReq.prNumber(), inlineComments));
+                  auth,
+                  doneReq.scope(),
+                  doneReq.owner(),
+                  doneReq.repo(),
+                  doneReq.prNumber(),
+                  inlineComments));
       if (learnings.enabled()) {
         runPostResultStep(
             doneReq,
@@ -469,7 +490,7 @@ public class ReviewOrchestrator {
                 learnings.captureSurvivingDeclines(
                     new ReviewLearnings.DeclineCapture(
                         auth,
-                        doneReq.installationId(),
+                        doneReq.scope(),
                         doneReq.owner(),
                         doneReq.repo(),
                         doneReq.prNumber(),
@@ -538,7 +559,7 @@ public class ReviewOrchestrator {
       ReviewRequest req, ReviewContextLoader.ReviewContext ctx) {
     return learnings.enabled()
         ? learnings.recall(
-            req.installationId(),
+            req.scope(),
             req.owner(),
             req.repo(),
             ctx.reviewableFiles().stream().map(GitHubPullRequestClient.FileDiff::filename).toList())

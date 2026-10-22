@@ -97,7 +97,9 @@ public class RepoSettingsResolver {
     if (!enabled) {
       return RepoSettings.EMPTY;
     }
-    var cacheKey = owner + "/" + repo;
+    // Keyed by installation too (#1220): a repository of the same name under another installation
+    // has its own configuration.
+    var cacheKey = installationId + ":" + owner + "/" + repo;
 
     var cached = cache.get(cacheKey);
     if (cached != null) {

@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import jakarta.websocket.CloseReason;
 import jakarta.websocket.Session;
 import java.util.List;
@@ -155,7 +156,7 @@ class DashboardWebSocketTest {
   @Test
   void liveEventsReachAConnectionOnlyForItsReadableRepositoriesWhileTheSessionIsOpen() {
     when(sessionValidator.repositoryScope("scoped-token"))
-        .thenReturn(new RepositoryScope(false, java.util.Set.of("acme/allowed")));
+        .thenReturn(TestScopes.readable(false, "acme/allowed"));
     when(sessionValidator.isSessionOpen("scoped-token")).thenReturn(true);
     var remote = mock(jakarta.websocket.RemoteEndpoint.Async.class);
     var session = sessionWithTicket("ws-scoped", "scoped-token");
@@ -174,7 +175,7 @@ class DashboardWebSocketTest {
   }
 
   private static ReviewSession review(long id, String repository) {
-    var review = ReviewSession.create(repository, 7, "PR", "sha");
+    var review = ReviewSession.create(TestScopes.scope(repository), repository, 7, "PR", "sha");
     review.id = id;
     return review;
   }

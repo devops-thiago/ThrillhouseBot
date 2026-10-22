@@ -52,7 +52,12 @@ public class CiHoldRevisit {
    * the installation to act as.
    */
   public record Recheck(
-      String owner, String repo, int prNumber, String headSha, long installationId) {}
+      String owner,
+      String repo,
+      int prNumber,
+      String headSha,
+      long installationId,
+      long repositoryId) {}
 
   /** Appended to the refreshed check-run summary while the hold stays. */
   static final String REVISIT_NOTE = "Approval is re-evaluated as the remaining checks complete.";
@@ -126,6 +131,7 @@ public class CiHoldRevisit {
             "",
             "",
             task.installationId(),
+            task.repositoryId(),
             false,
             verdict.baseRef());
     var currentHead = contextLoader.currentHeadSha(auth, req);
