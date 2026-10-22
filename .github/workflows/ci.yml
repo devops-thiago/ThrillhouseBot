@@ -239,6 +239,16 @@ jobs:
       - name: Build native image
         id: build
         run: ./mvnw package -Pnative -DskipTests -Dquarkus.native.container-build=true
+      # The binary keeps the builder JDK's blocked-certificate list, so every fingerprint of
+      # the list the pom mounts over it must be in the binary (#1215).
+      - name: Blocked certificates in the binary
+        id: certs
+        run: |
+          missing=0
+          while read -r fingerprint; do
+            grep -qaF "$fingerprint" target/*-runner || { echo "missing: $fingerprint"; missing=$((missing + 1)); }
+          done < <(grep -E '^[0-9A-F]{64}$' src/main/docker/security/blocked.certs)
+          [ "$missing" -eq 0 ] || { echo "$missing blocked-certificate fingerprint(s) are not in the binary"; exit 1; }
       # failsafe alone, on the binary the step above built: the unit tests already ran in `test`.
       - name: Native integration tests
         id: it
@@ -252,6 +262,7 @@ jobs:
         env:
           ARCH: ${{ matrix.arch }}
           BUILD: ${{ steps.build.outcome }}
+          CERTS: ${{ steps.certs.outcome }}
           IT: ${{ steps.it.outcome }}
         run: |
           {
@@ -260,6 +271,7 @@ jobs:
             echo "| Step | Outcome |"
             echo "|---|---|"
             echo "| Native build | ${BUILD} |"
+            echo "| Blocked certificates | ${CERTS} |"
             echo "| Native integration tests | ${IT} |"
             report=target/failsafe-reports/failsafe-summary.xml
             if [ -f "$report" ]; then
@@ -270,6 +282,8 @@ jobs:
             echo
             if [ "$BUILD" = failure ]; then
               echo "The native compilation failed: look for missing reflection, resource or build-time initialization registration (AGENTS.md, Native image)."
+            elif [ "$CERTS" = failure ]; then
+              echo "The binary does not carry the blocked-certificate list in src/main/docker/security/blocked.certs: check the volume in the native profile of pom.xml."
             elif [ "$IT" = failure ]; then
               echo "The binary built but failed against the integration tests: a native-only failure if the JVM \`test\` job passed."
             fi

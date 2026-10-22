@@ -437,6 +437,10 @@
             <properties>
                 <skipITs>false</skipITs>
                 <quarkus.native.enabled>true</quarkus.native.enabled>
+                <!-- A native image keeps the builder JDK's blocked-certificate list. Mount the
+                     updated list over it for container builds until Mandrel ships it (#1215). -->
+                <quarkus.native.container-runtime-options
+                >--volume=${project.basedir}/src/main/docker/security/blocked.certs:/opt/mandrel/lib/security/blocked.certs:ro</quarkus.native.container-runtime-options>
             </properties>
         </profile>
         <profile>
