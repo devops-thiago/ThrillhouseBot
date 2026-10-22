@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.review.ai.SentenceBreaks;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -808,7 +809,10 @@ final class LinkedIssueCriteria {
         + Objects.requireNonNullElse(finding.description(), "");
   }
 
-  /** The sentences of {@code overview}, never ending inside a {@link #QUOTED} passage. */
+  /**
+   * The sentences of {@code overview}, using {@link SentenceBreaks} for abbreviations and never
+   * ending inside a {@link #QUOTED} passage.
+   */
   private static List<String> sentences(String overview) {
     if (overview == null) {
       return List.of();
@@ -820,7 +824,8 @@ final class LinkedIssueCriteria {
     var end = SENTENCE_END.matcher(text);
     while (end.find()) {
       var at = end.start();
-      if (quotes.stream().noneMatch(q -> q.start() < at && at < q.end())) {
+      if (SentenceBreaks.endsSentenceAt(text, at)
+          && quotes.stream().noneMatch(q -> q.start() < at && at < q.end())) {
         sentences.add(text.substring(from, at));
         from = end.end();
       }
