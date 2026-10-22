@@ -13,6 +13,8 @@ FROM quay.io/quarkus/ubi9-quarkus-mandrel-builder-image@sha256:096586cdc3e62db2a
 COPY --chown=quarkus:quarkus --chmod=0755 mvnw /code/mvnw
 COPY --chown=quarkus:quarkus --chmod=0755 .mvn /code/.mvn
 COPY --chown=quarkus:quarkus --chmod=0644 pom.xml /code/
+# The native image keeps this JDK's blocked-certificate list; use the updated one (#1215).
+COPY --chmod=0644 src/main/docker/security/blocked.certs /opt/mandrel/lib/security/blocked.certs
 USER quarkus
 WORKDIR /code
 RUN ./mvnw -B dependency:go-offline
