@@ -40,8 +40,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -114,10 +115,10 @@ class DashboardWebSocketHandshakeTest {
 
   @Test
   void eachSocketReceivesOnlyTheEventsOfItsOwnUser() throws Exception {
-    var connectedBefore = broadcaster.getConnectedCount();
+    // A started session is replayed to a socket that registers after the broadcast, so no event
+    // is lost to the time the endpoint takes to register the new socket.
     var alice = connect(ticketFor(sessionFor("alice")), null);
     var bob = connect(ticketFor(sessionFor("bob")), null);
-    awaitConnections(connectedBefore + 2);
 
     broadcaster.broadcast(
         SessionEventBroadcaster.SessionEvent.started(review(1L, "acme/alice-repo")));
@@ -126,8 +127,8 @@ class DashboardWebSocketHandshakeTest {
 
     assertTrue(alice.awaitMessage("\"sessionId\":1"));
     assertTrue(bob.awaitMessage("\"sessionId\":2"));
-    assertTrue(alice.messages.stream().noneMatch(m -> m.contains("\"sessionId\":2")));
-    assertTrue(bob.messages.stream().noneMatch(m -> m.contains("\"sessionId\":1")));
+    assertTrue(alice.seen.stream().noneMatch(m -> m.contains("\"sessionId\":2")));
+    assertTrue(bob.seen.stream().noneMatch(m -> m.contains("\"sessionId\":1")));
   }
 
   @Test
@@ -176,13 +177,6 @@ class DashboardWebSocketHandshakeTest {
         .path("ticket");
   }
 
-  private void awaitConnections(int count) throws InterruptedException {
-    for (int i = 0; i < 50 && broadcaster.getConnectedCount() < count; i++) {
-      TimeUnit.MILLISECONDS.sleep(100);
-    }
-    assertEquals(count, broadcaster.getConnectedCount());
-  }
-
   private static ReviewSession review(long id, String repository) {
     var review = ReviewSession.create(repository, 7, "PR", "sha");
     review.id = id;
@@ -227,14 +221,22 @@ class DashboardWebSocketHandshakeTest {
 
   private static final class Connection {
     private final CompletableFuture<CloseReason> closed = new CompletableFuture<>();
-    private final List<String> messages = new CopyOnWriteArrayList<>();
+    private final BlockingQueue<String> messages = new LinkedBlockingQueue<>();
+    private final List<String> seen = new ArrayList<>();
 
+    /** Waits up to five seconds for a message containing {@code fragment}, keeping all it read. */
     private boolean awaitMessage(String fragment) throws InterruptedException {
-      for (int i = 0; i < 50; i++) {
-        if (messages.stream().anyMatch(m -> m.contains(fragment))) {
+      var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      for (var left = deadline - System.nanoTime(); left > 0; left = deadline - System.nanoTime()) {
+        var message = messages.poll(left, TimeUnit.NANOSECONDS);
+        if (message == null) {
+          return false;
+        }
+        seen.add(message);
+        if (message.contains(fragment)) {
+          messages.drainTo(seen);
           return true;
         }
-        TimeUnit.MILLISECONDS.sleep(100);
       }
       return false;
     }
