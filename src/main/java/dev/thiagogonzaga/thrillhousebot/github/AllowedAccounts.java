@@ -55,7 +55,10 @@ public class AllowedAccounts {
             .collect(Collectors.toUnmodifiableSet());
   }
 
-  /** Whether the installation on {@code accountLogin} is served; a missing login never is. */
+  /**
+   * Whether the installation on {@code accountLogin} is served: always when no list is configured,
+   * otherwise only for a listed login, so a missing login is never served once a list is set.
+   */
   public boolean allows(String accountLogin) {
     if (logins.isEmpty()) {
       return true;
