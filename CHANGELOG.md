@@ -9,6 +9,12 @@ repositories GitHub lets them read. Approve the new App permission **Organizatio
 read** on each installation so organization members see the installation-wide skip counters;
 without it those counters stay hidden and nothing else changes.
 
+### Added
+
+- `REVIEW_LABELS_BLOCKED` (`thrillhousebot.review.labels.blocked`) lists labels the bot never
+  suggests, applies or creates, matched ignoring case, such as a team's own `review` label. They
+  are left out of the labels shown to the model and dropped from its suggestions. (#1238)
+
 ### Changed
 
 - Flyway now owns the database schema. Migrations in `src/main/resources/db/migration` run at

@@ -181,6 +181,7 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 |---|---|---|---|
 | `REVIEW_LABELS_ALLOW_CREATE`<br>`thrillhousebot.review.labels.allow-create` | Allow creating a suggested label that does not exist yet. | boolean | `false` |
 | `REVIEW_LABELS_APPLY`<br>`thrillhousebot.review.labels.apply` | Add the labels to the PR instead of suggesting them in a comment. | boolean | `false` |
+| `REVIEW_LABELS_BLOCKED`<br>`thrillhousebot.review.labels.blocked` | Comma-separated label names the bot never suggests, applies or creates, matched ignoring case: labels a team keeps for its own workflow, such as `review`. They are left out of the list the model sees and dropped from its suggestions. | list | _(none)_ |
 | `REVIEW_LABELS_ENABLED`<br>`thrillhousebot.review.labels.enabled` | Suggest PR labels. See [PR labels](https://github.com/devops-thiago/ThrillhouseBot#pr-labels). | boolean | `false` |
 | `REVIEW_LABELS_MAX`<br>`thrillhousebot.review.labels.max-labels` | Most labels applied or suggested per PR. | integer | `3` |
 

@@ -1400,8 +1400,10 @@ lets the bot create it. `REVIEW_LABELS_APPLY` decides what happens next:
   review for a maintainer to apply.
 - `true`: the labels are added to the PR.
 
-`REVIEW_LABELS_MAX` caps the number of labels (default `3`). Labelling never
-blocks or fails a review.
+`REVIEW_LABELS_MAX` caps the number of labels (default `3`).
+`REVIEW_LABELS_BLOCKED` lists labels the bot never suggests, applies or creates
+(comma-separated, case-insensitive), such as a label your team sets by hand to
+ask for a review. Labelling never blocks or fails a review.
 <!-- docs:pr-labels:end -->
 
 ## Observability

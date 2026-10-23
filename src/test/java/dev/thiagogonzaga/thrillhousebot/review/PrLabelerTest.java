@@ -23,6 +23,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubLabelClient;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -88,6 +89,27 @@ class PrLabelerTest {
 
   @Nested
   class Reconcile {
+
+    @Test
+    void aBlockedLabelIsNeverAppliedOrCreatedInAnyCasing() {
+      when(labelsConfig.blocked()).thenReturn(Optional.of(List.of("review")));
+      when(labelsConfig.allowCreate()).thenReturn(true);
+
+      var resolved =
+          labeler.reconcile(
+              List.of("REVIEW", " review ", "bug", "area/api"),
+              List.of(label("bug"), label("Review")));
+
+      assertEquals(List.of("bug", "area/api"), resolved);
+    }
+
+    @Test
+    void withNothingBlockedEverySuggestionIsConsidered() {
+      when(labelsConfig.blocked()).thenReturn(Optional.empty());
+
+      assertEquals(
+          List.of("review"), labeler.reconcile(List.of("review"), List.of(label("review"))));
+    }
 
     @Test
     void shouldMatchCaseInsensitivelyAndKeepRepoCasing() {
@@ -457,6 +479,26 @@ class PrLabelerTest {
       when(labelsConfig.enabled()).thenReturn(false);
       assertTrue(labeler.fetchExistingLabels("token", "octo", "repo").isEmpty());
       verifyNoInteractions(labelClient);
+    }
+
+    @Test
+    void blockedLabelsAreNeverOfferedToTheModel() {
+      when(labelsConfig.blocked()).thenReturn(Optional.of(List.of(" Review ", "", "wip")));
+      when(labelClient.listLabels(
+              anyString(), anyString(), anyString(), anyString(), eq(100), eq(1)))
+          .thenReturn(
+              List.of(
+                  label("bug"),
+                  label("review"),
+                  label("WIP"),
+                  new GitHubLabelClient.Label(null, null, "ededed")));
+
+      var names =
+          labeler.fetchExistingLabels("token", "octo", "repo").stream()
+              .map(GitHubLabelClient.Label::name)
+              .toList();
+
+      assertEquals(java.util.Arrays.asList("bug", null), names);
     }
 
     @Test
