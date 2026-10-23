@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import java.util.List;
@@ -445,6 +446,40 @@ class TestAssertionsTest {
         TestAssertions.quotesIn(
             "the test asserts 'assert(ExcursionDetector.rollingAverage(rs, 3) == 6.0)', the"
                 + " average of the last three; it's 'short'"));
+  }
+
+  /** A contraction's apostrophe opens no span that swallows a backtick quote after it. */
+  @Test
+  void aContractionDoesNotHideABacktickQuote() {
+    assertTrue(
+        TestAssertions.quotesIn(
+                "it's wrong: `assert_eq!(zone(7.1, &t), 2);` isn't what the test expects")
+            .contains("assert_eq!(zone(7.1, &t), 2);"));
+  }
+
+  /** A check inside a loop or a condition keeps the test function it is in. */
+  @Test
+  void aNestedCheckLabelLeadsToItsTestFunction() {
+    var tests =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "c/tests/test_sweep.c",
+                    """
+                    @@ -0,0 +1,9 @@
+                    +static void test_sweep_expires_codes(void)
+                    +{
+                    +    for (int i = 0; i < 3; i++) {
+                    +        if (codes[i].active) {
+                    +            CHECK("sweep_expires_every_code", codes[i].expired);
+                    +        }
+                    +    } while (0);
+                    +    CHECK("sweep_keeps_the_dock_free", dock_free);
+                    +}
+                    """)));
+
+    assertEquals(
+        List.of("test_sweep_expires_codes"), tests.functionsLabelling("sweep_expires_every_code"));
   }
 
   /** Lines 59-71 of c ThrillhouseBot-test#302's {@code c/tests/test_dispenser.c}. */

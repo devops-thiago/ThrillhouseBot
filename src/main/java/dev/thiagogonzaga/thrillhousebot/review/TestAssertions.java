@@ -106,12 +106,23 @@ final class TestAssertions {
   /** An identifier a line holds, the key the patches are indexed by. */
   private static final Pattern IDENTIFIER = Pattern.compile("\\w++");
 
+  /** A quote in a finding's text: one backtick span on one line. */
+  private static final Pattern QUOTE = Pattern.compile("`([^`\\n]++)`");
+
   /**
-   * A quote in a finding's text: one backtick or single-quote span on one line. A finding quotes
-   * code in single quotes too: scala ThrillhouseBot-test#297's wrote the failing assertion as
-   * 'assert(…)' (#1194). A span between two apostrophes of prose is never part of an assertion.
+   * A single-quote span on one line: a finding quotes code that way too, as scala
+   * ThrillhouseBot-test#297's wrote 'assert(…)' (#1194). Read in its own pass, so a span opened by
+   * a contraction's apostrophe cannot swallow a backtick quote; a span between two apostrophes of
+   * prose is never part of an assertion.
    */
-  private static final Pattern QUOTE = Pattern.compile("`([^`\\n]++)`|'([^'\\n]++)'");
+  private static final Pattern SINGLE_QUOTE = Pattern.compile("'([^'\\n]++)'");
+
+  /**
+   * A line opening a block inside a function rather than declaring one: {@code if}, a loop, {@code
+   * switch}, {@code else}, {@code try} or {@code catch}, after a closing brace at most.
+   */
+  private static final Pattern CONTROL_BLOCK =
+      Pattern.compile("^(?:}\\s*+)?+(?:if|else|for|foreach|while|do|switch|try|catch)\\b");
 
   /** A function declared or called on a line: its name, then its argument list opening. */
   private static final Pattern FUNCTION_NAME = Pattern.compile("([A-Za-z_]\\w*+)\\s*+\\(");
@@ -199,7 +210,9 @@ final class TestAssertions {
   }
 
   /**
-   * The test function the line at {@code start} is in, read as {@link #functionsLabelling} does.
+   * The test function the line at {@code start} is in, read as {@link #functionsLabelling} does. A
+   * less-indented line that opens a block inside the function ({@link #CONTROL_BLOCK}) is climbed
+   * past, so a check inside a loop or a condition keeps its function.
    */
   private static Optional<String> enclosingTestFunction(List<PatchLines.Line> lines, int start) {
     var line = lines.get(start);
@@ -211,6 +224,10 @@ final class TestAssertions {
       }
       var text = above.text();
       if (!text.isBlank() && !text.strip().equals("{") && indentOf(text) < indent) {
+        if (CONTROL_BLOCK.matcher(text.strip()).lookingAt()) {
+          indent = indentOf(text);
+          continue;
+        }
         var name = FUNCTION_NAME.matcher(text);
         return name.find() && name.group(1).toLowerCase(Locale.ROOT).contains("test")
             ? Optional.of(name.group(1))
@@ -341,11 +358,13 @@ final class TestAssertions {
    */
   static List<String> quotesIn(String text) {
     var quotes = new ArrayList<String>();
-    var matcher = QUOTE.matcher(text);
-    while (matcher.find()) {
-      String quote = normalized(matcher.group(1) != null ? matcher.group(1) : matcher.group(2));
-      if (quote.length() >= MIN_QUOTE_CHARS) {
-        quotes.add(quote);
+    for (var pattern : List.of(QUOTE, SINGLE_QUOTE)) {
+      var matcher = pattern.matcher(text);
+      while (matcher.find()) {
+        String quote = normalized(matcher.group(1));
+        if (quote.length() >= MIN_QUOTE_CHARS) {
+          quotes.add(quote);
+        }
       }
     }
     return List.copyOf(quotes);
