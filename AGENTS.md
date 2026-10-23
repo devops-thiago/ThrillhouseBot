@@ -147,7 +147,10 @@ same diff.
   (#1169). A repeat at the effort the first call sent is never made. The
   streamed calls repeat in `AiReviewService.runWithRetries`; the blocking review-path calls (finding
   verifier, summary check, response repair) through `ReasoningRepeat.blocking`, which meters both
-  calls and skips the repeat at the spend ceiling. The effort reaches the model through the
+  calls and skips the repeat at the spend ceiling. The on-request commands (through
+  `AbstractPrSuggestionGenerator.callAssistant`) and maintainer replies repeat through
+  `ReasoningRepeat.outsideReview`, metered into a `ReviewTokenLedger.openRun` entry that covers the
+  whole command or reply and is checked against the same ceiling (#1175). The effort reaches the model through the
   `ReasoningRepeat.override` thread-local, which `ReasoningStepDownStreamingModel` and
   `BoundedChatModel` apply; it is not on the `ReviewSessionContext` binding, because binding a
   blocking call would make the listener meter it a second time. `InlinedDeliberationGuard` stops a

@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -38,6 +39,20 @@ class ReviewTokenLedgerTest {
     when(config.review()).thenReturn(review);
     when(review.maxTokensPerReview()).thenReturn(maxTokensPerReview);
     return new ReviewTokenLedger(config);
+  }
+
+  @Test
+  void eachRunGetsItsOwnOpenEntryOnANegativeKey() {
+    var ledger = ledger(0);
+
+    var first = ledger.openRun();
+    var second = ledger.openRun();
+    ledger.recordUsage(first, 10, 5);
+
+    assertTrue(first < 0 && second < 0 && first != Long.MIN_VALUE, "never a session id");
+    assertNotEquals(first, second);
+    assertEquals(15, ledger.tokensSpent(first), "the run's entry is open for recording");
+    assertEquals(0, ledger.tokensSpent(second));
   }
 
   @Test

@@ -16,10 +16,14 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiOk;
+import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiReasonedAway;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import dev.langchain4j.model.output.FinishReason;
+import dev.langchain4j.model.output.TokenUsage;
+import dev.langchain4j.service.Result;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
@@ -32,6 +36,7 @@ import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrDescribeAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrDescribeAssistantPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrSuggestionPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -66,16 +71,22 @@ class PrDescriptionGeneratorTest {
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
   @Mock private PrDescribeAssistant describeAssistant;
+  @Mock private ThrillhouseConfig.AiPricingConfig aiConfig;
+  @Mock private ThrillhouseConfig.AiPricingConfig.ReasoningConfig reasoning;
 
   private final ReviewDiffFormatter diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
 
   private PrDescriptionGenerator generator;
+  private ReviewTokenLedger tokenLedger;
 
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
     lenient().when(config.review()).thenReturn(reviewConfig);
     lenient().when(reviewConfig.maxAiCalls()).thenReturn(6);
+    lenient().when(config.ai()).thenReturn(aiConfig);
+    lenient().when(aiConfig.reasoning()).thenReturn(reasoning);
+    lenient().when(reasoning.effort()).thenReturn("low");
     // Default: budgeting on with ample room, so a normal PR is a single batch and needs no
     // synthesis call — the same shape the command had before batching.
     lenient().when(activeModel.maxInputTokens()).thenReturn(1_000_000);
@@ -87,6 +98,7 @@ class PrDescriptionGeneratorTest {
     lenient()
         .when(repoSettingsResolver.resolve(any(), any(), any(), anyLong()))
         .thenReturn(RepoSettings.EMPTY);
+    tokenLedger = new ReviewTokenLedger(config);
     generator = generatorWith(diffFormatter);
   }
 
@@ -99,7 +111,8 @@ class PrDescriptionGeneratorTest {
         new DiffBudgetPlanner(formatter, new TokenCounter(), config, activeModel),
         activeModel,
         config,
-        describeAssistant);
+        describeAssistant,
+        tokenLedger);
   }
 
   private static FileDiff foo() {
@@ -387,6 +400,72 @@ class PrDescriptionGeneratorTest {
     assertTrue(partials.getValue().contains(PromptTemplateEscaper.fencePrefix()));
     assertTrue(partials.getValue().contains("`retry work`"), partials.getValue());
     assertTrue(partials.getValue().contains("`stream work`"), partials.getValue());
+  }
+
+  // #1175: a command call that spent its whole cap reasoning is repeated once, as on the review
+  // path.
+  @Test
+  void aCallThatReasonedItsCapAwayIsRepeatedOnceAndItsAnswerPosted() {
+    prWithFiles(foo());
+    when(describeAssistant.describe(any(), any(), any(), any()))
+        .thenReturn(aiReasonedAway(1000, 8192), aiOk("### Suggested title\n`feat: do x`"));
+
+    String body = generate();
+
+    assertNotNull(body);
+    assertTrue(body.contains("feat: do x"), body);
+    verify(describeAssistant, times(2)).describe(any(), any(), any(), any());
+    assertEquals(0, tokenLedger.tokensSpent(-1), "the run's entry is dropped when it ends");
+  }
+
+  @Test
+  void noRepeatOnceTheCommandRunReachedTheSpendCeiling() {
+    when(reviewConfig.maxTokensPerReview()).thenReturn(9000L);
+    tokenLedger = new ReviewTokenLedger(config);
+    generator = generatorWith(diffFormatter);
+    prWithFiles(foo());
+    when(describeAssistant.describe(any(), any(), any(), any()))
+        .thenReturn(aiReasonedAway(1000, 8192));
+
+    assertNull(generate());
+    verify(describeAssistant, times(1)).describe(any(), any(), any(), any());
+  }
+
+  @Test
+  void theCeilingCountsEveryCallOfTheCommandRun() {
+    // The cut synthesis call alone (8,692 tokens) stays under the ceiling; with the two batch calls
+    // (3,000 each) the run reaches it, so the cut is not repeated.
+    when(reviewConfig.maxTokensPerReview()).thenReturn(14_000L);
+    tokenLedger = new ReviewTokenLedger(config);
+    generator = generatorWith(diffFormatter);
+    budgetWithDiffRoom(40);
+    prWithFiles(foo(), otherFile());
+    when(describeAssistant.describe(any(), any(), any(), any()))
+        .thenReturn(
+            Result.<String>builder()
+                .content("### Suggested title\n`part`")
+                .finishReason(FinishReason.STOP)
+                .tokenUsage(new TokenUsage(2000, 1000))
+                .build());
+    when(describeAssistant.synthesize(any(), any(), any(), any()))
+        .thenReturn(aiReasonedAway(500, 8192));
+
+    assertNull(generate());
+    verify(describeAssistant, times(1)).synthesize(any(), any(), any(), any());
+  }
+
+  @Test
+  void aCallOutsideACommandRunIsMeteredAsItsOwnRun() {
+    var calls = new java.util.concurrent.atomic.AtomicInteger();
+
+    var answer =
+        generator.callAssistant(
+            "/describe",
+            () -> calls.incrementAndGet() == 1 ? aiReasonedAway(1000, 8192) : aiOk("answer"));
+
+    assertEquals("answer", answer);
+    assertEquals(2, calls.get());
+    assertEquals(0, tokenLedger.tokensSpent(-1));
   }
 
   @Test

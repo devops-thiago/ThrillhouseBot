@@ -47,6 +47,11 @@ without it those counters stay hidden and nothing else changes.
   cap reasoning now says to set `AI_REASONING_ENABLED=true` for a model that reasons by default,
   and the docs recommend it. On `glm-5.3-flash` that took the concise calls from 9 of 12 cut at
   the cap to none, and their output from 94,533 to 6,982 tokens. (#1174)
+- The on-request commands (`/describe`, `/changelog`, `/improve`, `/add-docs`,
+  `/generate-tests`) and the replies to maintainer comments now repeat a call that spent its whole
+  response cap reasoning, once at a lower effort, as review calls do. Each command or reply counts
+  its own calls against `REVIEW_MAX_TOKENS_PER_REVIEW`, and the repeat is skipped once it reaches
+  it. Before, the user got no answer. (#1175)
 ### Security
 
 - `GITHUB_ALLOWED_ACCOUNTS` (`thrillhousebot.github.allowed-accounts`) limits the bot to the

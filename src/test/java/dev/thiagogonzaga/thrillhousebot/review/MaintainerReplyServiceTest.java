@@ -16,12 +16,14 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiOk;
+import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiReasonedAway;
 import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiTruncated;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
@@ -30,6 +32,7 @@ import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReplyAssistant;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TestResponseCaps;
 import dev.thiagogonzaga.thrillhousebot.webhook.ManualReviewAuthorizer;
 import dev.thiagogonzaga.thrillhousebot.webhook.TriggerDetector;
@@ -55,15 +58,25 @@ class MaintainerReplyServiceTest {
   @Mock private ReplyAssistant replyAssistant;
   @Mock private RepoSettingsResolver repoSettingsResolver;
   @Mock private ReviewThreadService reviewThreadService;
+  @Mock private ThrillhouseConfig config;
+  @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
+  @Mock private ThrillhouseConfig.AiPricingConfig aiConfig;
+  @Mock private ThrillhouseConfig.AiPricingConfig.ReasoningConfig reasoning;
 
   // A real TriggerDetector — its bot-login check is the actual logic we want exercised.
   private final TriggerDetector triggerDetector = new TriggerDetector();
 
   private MaintainerReplyService service;
+  private ReviewTokenLedger tokenLedger;
 
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
+    when(config.review()).thenReturn(reviewConfig);
+    when(config.ai()).thenReturn(aiConfig);
+    when(aiConfig.reasoning()).thenReturn(reasoning);
+    when(reasoning.effort()).thenReturn("low");
+    tokenLedger = new ReviewTokenLedger(config);
     service = serviceWith(diffFormatter);
     when(authClient.getAuthHeader(anyLong())).thenReturn(AUTH);
   }
@@ -92,7 +105,9 @@ class MaintainerReplyServiceTest {
         repoSettingsResolver,
         identity,
         TestResponseCaps.defaults(),
-        reviewThreadService);
+        reviewThreadService,
+        config,
+        tokenLedger);
   }
 
   private static GitHubPullRequestClient.FileDiff fileDiff(
@@ -612,6 +627,46 @@ class MaintainerReplyServiceTest {
 
     assertDoesNotThrow(() -> service.handle(reviewThreadTask(false)));
 
+    verify(reviewClient, never())
+        .replyToReviewComment(any(), any(), any(), any(), anyInt(), anyLong(), any());
+  }
+
+  // #1175: a reply that spent its whole cap reasoning is repeated once, as on the review path.
+  @Test
+  void aReplyThatReasonedItsCapAwayIsRepeatedOnceAndPosted() {
+    authorize();
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
+    when(replyAssistant.reply(any(), any(), any(), any(), any()))
+        .thenReturn(aiReasonedAway(1000, 8192), aiOk("Because foo can be null."));
+
+    service.handle(reviewThreadTask(false));
+
+    verify(replyAssistant, times(2)).reply(any(), any(), any(), any(), any());
+    var reply = ArgumentCaptor.forClass(GitHubReviewClient.ReplyToReviewCommentRequest.class);
+    verify(reviewClient)
+        .replyToReviewComment(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), reply.capture());
+    assertEquals("Because foo can be null.", reply.getValue().body());
+    assertEquals(0, tokenLedger.tokensSpent(-1), "the reply's entry is dropped when it ends");
+  }
+
+  @Test
+  void aCutReplyIsNotRepeatedOnceItReachedTheSpendCeiling() {
+    when(reviewConfig.maxTokensPerReview()).thenReturn(9000L);
+    tokenLedger = new ReviewTokenLedger(config);
+    service = serviceWith(diffFormatter);
+    authorize();
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(List.of(comment(99L, null, BOT, "**HIGH — bug**")));
+    when(replyAssistant.reply(any(), any(), any(), any(), any()))
+        .thenReturn(aiReasonedAway(1000, 8192));
+
+    service.handle(reviewThreadTask(false));
+
+    verify(replyAssistant, times(1)).reply(any(), any(), any(), any(), any());
     verify(reviewClient, never())
         .replyToReviewComment(any(), any(), any(), any(), anyInt(), anyLong(), any());
   }

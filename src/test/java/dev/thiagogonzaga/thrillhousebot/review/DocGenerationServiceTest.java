@@ -38,6 +38,7 @@ import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerationParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGeneratorPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
 import java.util.stream.Stream;
@@ -128,7 +129,8 @@ class DocGenerationServiceTest {
         repoSettingsResolver,
         new DiffBudgetPlanner(formatter, new TokenCounter(), config, activeModel),
         activeModel,
-        config);
+        config,
+        mock(ReviewTokenLedger.class));
   }
 
   /** A per-call budget with exactly {@code diffTokens} of room for diff text. */

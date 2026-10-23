@@ -23,7 +23,9 @@ import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningRepeat;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ResponseCaps;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import io.quarkus.logging.Log;
 import java.util.List;
 import java.util.function.Supplier;
@@ -48,8 +50,15 @@ import java.util.function.Supplier;
  * reductions genuinely differ (a union of suggestions, a synthesized description, one merged
  * changelog entry). A command whose reduce costs an extra model call reserves it here, via the
  * {@code reservedCalls} argument, exactly as the review path reserves one for its summary.
+ *
+ * <p>A command's calls are one run in {@link ReviewTokenLedger} ({@link #openRun}), so a call that
+ * spent its whole cap reasoning is repeated once, as on the review path, unless the run's spend has
+ * reached the per-review ceiling (#1175).
  */
 public abstract class AbstractPrSuggestionGenerator {
+
+  /** The ledger key of the command run this thread is in, set by {@link #openRun}. */
+  private static final ThreadLocal<Long> RUN_KEY = new ThreadLocal<>();
 
   /**
    * The PR context a suggestion is generated from. {@code headSha} and {@code reviewableFiles} are
@@ -90,6 +99,7 @@ public abstract class AbstractPrSuggestionGenerator {
   private DiffBudgetPlanner budgetPlanner;
   private ActiveModelSettings activeModel;
   private ThrillhouseConfig config;
+  private ReviewTokenLedger tokenLedger;
 
   /**
    * No-args constructor required so CDI can synthesize the client-proxy subclass for the
@@ -105,7 +115,8 @@ public abstract class AbstractPrSuggestionGenerator {
       RepoSettingsResolver repoSettingsResolver,
       DiffBudgetPlanner budgetPlanner,
       ActiveModelSettings activeModel,
-      ThrillhouseConfig config) {
+      ThrillhouseConfig config,
+      ReviewTokenLedger tokenLedger) {
     this.prClient = prClient;
     this.diffFormatter = diffFormatter;
     this.instructionsResolver = instructionsResolver;
@@ -113,6 +124,35 @@ public abstract class AbstractPrSuggestionGenerator {
     this.budgetPlanner = budgetPlanner;
     this.activeModel = activeModel;
     this.config = config;
+    this.tokenLedger = tokenLedger;
+  }
+
+  /**
+   * Opens the ledger run for one command: every {@link #callAssistant} on this thread until the
+   * returned run is closed meters into it, so the spend ceiling counts the command's calls together
+   * as it counts a review's.
+   */
+  protected Run openRun() {
+    return new Run(tokenLedger, tokenLedger.openRun());
+  }
+
+  /** One command's ledger run; closing it drops the entry. */
+  protected static final class Run implements AutoCloseable {
+
+    private final ReviewTokenLedger ledger;
+    private final long key;
+
+    private Run(ReviewTokenLedger ledger, long key) {
+      this.ledger = ledger;
+      this.key = key;
+      RUN_KEY.set(key);
+    }
+
+    @Override
+    public void close() {
+      RUN_KEY.remove();
+      ledger.clear(key);
+    }
   }
 
   /**
@@ -316,12 +356,25 @@ public abstract class AbstractPrSuggestionGenerator {
    * /improve}, {@code /changelog}, {@code /generate-tests}, {@code /add-docs}), so a truncation
    * here is capped by the active model's {@code max-output-tokens} — the concise-bound calls
    * (summary, verifier, replies) do not come through this path.
+   *
+   * <p>A call that stops at the cap with no content goes through {@link
+   * ReasoningRepeat#outsideReview} and is repeated once at a lower effort. Outside an {@link
+   * #openRun} the call is its own run.
    */
   protected String callAssistant(String command, Supplier<Result<String>> assistantCall) {
+    var runKey = RUN_KEY.get();
+    if (runKey == null) {
+      try (var _ = openRun()) {
+        return callAssistant(command, assistantCall);
+      }
+    }
     try {
       String suggestion =
           AiResponses.textOrThrowOnTruncation(
-              assistantCall.get(), command + " assistant", ResponseCaps.activeCap(activeModel));
+              ReasoningRepeat.outsideReview(
+                  command + " assistant", assistantCall, config, false, tokenLedger, runKey),
+              command + " assistant",
+              ResponseCaps.activeCap(activeModel));
       if (suggestion == null || suggestion.isBlank()) {
         Log.debugf("%s assistant produced an empty suggestion — posting nothing", command);
         return null;

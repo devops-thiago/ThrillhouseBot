@@ -467,7 +467,10 @@ thrillhousebot.ai.models.some-separate-budget-model.separate-output-budget=true
   `AI_REASONING_EFFORT_CONCISE` low and spend effort on `AI_REASONING_EFFORT`.
 - **Reading a cut response.** When a review, summary, verifier, summary-check
   or repair call spends its whole cap reasoning and returns no answer, it is
-  repeated once at a lower effort, and the summary's scope note says so. With
+  repeated once at a lower effort, and the summary's scope note says so. A
+  command such as `/describe` or a reply to a maintainer gets the same one
+  repeat, skipped once that command or reply has spent
+  `REVIEW_MAX_TOKENS_PER_REVIEW`. With
   `AI_REASONING_ENABLED=true` the repeat sends `low`, and a lane already at
   `low` or `none` is not repeated. With it off, nothing was sent and the
   provider's default effort applied, so the repeat sends the lane's effort
