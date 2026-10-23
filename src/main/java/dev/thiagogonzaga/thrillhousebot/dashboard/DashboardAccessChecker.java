@@ -368,8 +368,9 @@ public class DashboardAccessChecker {
 
   /**
    * The scope without the installations and repositories a webhook removed, applied to every fresh
-   * answer: one fetched while a change landed still leaves out what the change removed, and is not
-   * cached, so the next request asks GitHub again.
+   * answer: one fetched while a change landed still leaves out what the change removed. Its cache
+   * entry carries the change count from before the fetch, so it is never served once the change has
+   * landed, and the next request asks GitHub again.
    */
   private RepositoryScope withoutRemoved(RepositoryScope scope) {
     var kept = new HashMap<Long, RepositoryScope.Installation>();
