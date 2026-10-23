@@ -36,7 +36,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -104,9 +103,20 @@ public class DashboardAccessChecker {
   /**
    * A cached resolution: what to answer until {@code retryAt}, and when GitHub last gave an answer
    * ({@code answeredAt}, null when it never has) so a stale answer is served only within {@link
-   * #STALE_SCOPE_LIMIT}.
+   * #STALE_SCOPE_LIMIT}. {@code changes} is the installation-change count when the answer was asked
+   * for; an entry is used only while no change has landed since, so neither an answer that
+   * overlapped a change nor one read in the moment before the change cleared the cache is ever
+   * served after it.
    */
-  private record CacheEntry(Resolution resolution, Instant answeredAt, Instant retryAt) {}
+  private record CacheEntry(
+      Resolution resolution, Instant answeredAt, Instant retryAt, long changes) {}
+
+  /**
+   * How long a webhook's removal of an installation or repository overrides GitHub's own answer.
+   * GitHub catches up within seconds; the bound keeps a lost {@code unsuspend} or {@code added}
+   * delivery from hiding a live installation or repository until a restart.
+   */
+  static final Duration REMOVAL_LIMIT = Duration.ofMinutes(10);
 
   private final ThrillhouseConfig config;
   private final GitHubAuthClient authClient;
@@ -115,8 +125,8 @@ public class DashboardAccessChecker {
   private final AllowedAccounts allowedAccounts;
   private final Supplier<Instant> clock;
   private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
-  private final Set<Long> goneInstallations = ConcurrentHashMap.newKeySet();
-  private final Set<RepoScope> removedRepositories = ConcurrentHashMap.newKeySet();
+  private final Map<Long, Instant> goneInstallations = new ConcurrentHashMap<>();
+  private final Map<RepoScope, Instant> removedRepositories = new ConcurrentHashMap<>();
   private final AtomicLong changeCount = new AtomicLong();
   private final AtomicBoolean membersPermissionWarned = new AtomicBoolean();
 
@@ -166,12 +176,15 @@ public class DashboardAccessChecker {
     }
     var key = cacheKey(login, userToken);
     var now = clock.get();
+    // A webhook change that lands while GitHub is being asked must not be undone by this answer.
+    var changesBefore = changeCount.get();
     var cached = cache.get(key);
+    if (cached != null && cached.changes() != changesBefore) {
+      cached = null;
+    }
     if (cached != null && now.isBefore(cached.retryAt())) {
       return cached.resolution();
     }
-    // A webhook change that lands while GitHub is being asked must not be undone by this answer.
-    var changesBefore = changeCount.get();
     Resolution resolution;
     try {
       var scope = withoutRemoved(fetchScope(login, "Bearer " + userToken));
@@ -185,14 +198,12 @@ public class DashboardAccessChecker {
         cache.remove(key);
         return new Resolution(AccessDecision.TOKEN_REJECTED, RepositoryScope.NONE);
       }
-      return unavailable(key, cached, login, e);
+      return unavailable(key, cached, changesBefore, login, e);
     } catch (RuntimeException e) {
-      return unavailable(key, cached, login, e);
+      return unavailable(key, cached, changesBefore, login, e);
     }
-    if (changeCount.get() == changesBefore) {
-      cache.put(key, new CacheEntry(resolution, now, now.plus(SCOPE_CACHE_TTL)));
-      sweepExpiredEntries();
-    }
+    cache.put(key, new CacheEntry(resolution, now, now.plus(SCOPE_CACHE_TTL), changesBefore));
+    sweepExpiredEntries();
     if (resolution.decision() == AccessDecision.DENIED) {
       log.warn("Dashboard access denied for GitHub user {}", login);
     }
@@ -203,7 +214,8 @@ public class DashboardAccessChecker {
    * GitHub could not be asked: serve the last answer it gave while that is recent enough, or deny,
    * and remember either for {@link #RETRY_AFTER_ERROR} so the next requests do not ask again.
    */
-  private Resolution unavailable(String key, CacheEntry cached, String login, RuntimeException e) {
+  private Resolution unavailable(
+      String key, CacheEntry cached, long changes, String login, RuntimeException e) {
     var now = clock.get();
     var stale =
         cached != null
@@ -221,7 +233,7 @@ public class DashboardAccessChecker {
     cache.put(
         key,
         new CacheEntry(
-            resolution, stale ? cached.answeredAt() : null, now.plus(RETRY_AFTER_ERROR)));
+            resolution, stale ? cached.answeredAt() : null, now.plus(RETRY_AFTER_ERROR), changes));
     return resolution;
   }
 
@@ -260,7 +272,7 @@ public class DashboardAccessChecker {
         && owner.filter(o -> !o.equalsIgnoreCase(account.login())).isEmpty()
         && allowedAccounts.allows(account.login())
         && installation.suspendedAt() == null
-        && !goneInstallations.contains(installation.id());
+        && !removed(goneInstallations, installation.id());
   }
 
   /**
@@ -299,7 +311,7 @@ public class DashboardAccessChecker {
           && repo.name() != null
           && repo.owner() != null
           && repo.owner().login() != null
-          && !removedRepositories.contains(new RepoScope(installationId, repo.id()))) {
+          && !removed(removedRepositories, new RepoScope(installationId, repo.id()))) {
         repositories.putIfAbsent(repo.id(), repo.owner().login() + "/" + repo.name());
       }
     }
@@ -309,18 +321,22 @@ public class DashboardAccessChecker {
   /**
    * Applies an installation change from the webhook (#1222): a gone installation and a removed
    * repository are left out of every scope from now on, until unsuspended or added again, and every
-   * cached scope is dropped so the change is served at once. The lists are in memory only: after a
-   * restart GitHub's own answer, which has caught up by then, is all that is needed.
+   * cached scope is dropped so the change is served at once. The lists are in memory only and each
+   * entry lapses after {@link #REMOVAL_LIMIT}: by then, as after a restart, GitHub's own answer has
+   * caught up, so a lost {@code unsuspend} or {@code added} delivery hides nothing for long.
    */
   void onInstallationChange(@Observes InstallationChange change) {
     var installationId = change.installationId();
     switch (change.kind()) {
-      case GONE -> goneInstallations.add(installationId);
+      case GONE -> goneInstallations.put(installationId, clock.get().plus(REMOVAL_LIMIT));
       case BACK -> goneInstallations.remove(installationId);
       case REPOSITORIES_REMOVED ->
           change
               .repositories()
-              .forEach(r -> removedRepositories.add(new RepoScope(installationId, r.id())));
+              .forEach(
+                  r ->
+                      removedRepositories.put(
+                          new RepoScope(installationId, r.id()), clock.get().plus(REMOVAL_LIMIT)));
       case REPOSITORIES_ADDED ->
           change
               .repositories()
@@ -335,6 +351,22 @@ public class DashboardAccessChecker {
   }
 
   /**
+   * Whether a webhook removed {@code key} within {@link #REMOVAL_LIMIT}; an expired removal is
+   * forgotten, and GitHub's own answer counts again.
+   */
+  private <K> boolean removed(Map<K, Instant> removals, K key) {
+    var until = removals.get(key);
+    if (until == null) {
+      return false;
+    }
+    if (clock.get().isBefore(until)) {
+      return true;
+    }
+    removals.remove(key, until);
+    return false;
+  }
+
+  /**
    * The scope without the installations and repositories a webhook removed, applied to every fresh
    * answer: one fetched while a change landed still leaves out what the change removed, and is not
    * cached, so the next request asks GitHub again.
@@ -345,8 +377,8 @@ public class DashboardAccessChecker {
       var repositories = new HashMap<>(installation.repositories());
       repositories
           .keySet()
-          .removeIf(id -> removedRepositories.contains(new RepoScope(installation.id(), id)));
-      if (!goneInstallations.contains(installation.id()) && !repositories.isEmpty()) {
+          .removeIf(id -> removed(removedRepositories, new RepoScope(installation.id(), id)));
+      if (!removed(goneInstallations, installation.id()) && !repositories.isEmpty()) {
         kept.put(
             installation.id(),
             new RepositoryScope.Installation(

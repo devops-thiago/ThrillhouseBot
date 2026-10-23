@@ -248,6 +248,21 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
+  void aRemovalLapsesSoALostCounterEventHidesNothingForLong() {
+    change(InstallationChange.Kind.GONE, 10L);
+    change(InstallationChange.Kind.REPOSITORIES_REMOVED, 20L, 200L);
+    var hidden = checker.repositoryScope("alice", TOKEN);
+    assertFalse(hidden.allows(10L, 100L));
+    assertFalse(hidden.allows(20L, 200L));
+
+    // No unsuspend or added delivery arrives; GitHub still lists both.
+    now.set(now.get().plus(DashboardAccessChecker.REMOVAL_LIMIT));
+    var back = checker.repositoryScope("alice", TOKEN);
+    assertTrue(back.allows(10L, 100L));
+    assertTrue(back.allows(20L, 200L));
+  }
+
+  @Test
   void aRemovedRepositoryIsHiddenAndServedAgainOnceAdded() {
     change(InstallationChange.Kind.REPOSITORIES_REMOVED, 10L, 100L);
     var removed = checker.repositoryScope("alice", TOKEN);

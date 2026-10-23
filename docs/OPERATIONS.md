@@ -38,7 +38,9 @@ The bot follows GitHub's installation events (#1222). Uninstalling or
 suspending the App on an account stops the dashboard from serving that
 installation at once, and unsuspending brings it back. Removing a repository
 from an installation hides it, and adding it again serves its history again,
-since rows are kept by repository id. Renaming or transferring a repository
+since rows are kept by repository id. The bot remembers a removal for ten
+minutes, long enough for GitHub's own answer to catch up, so a lost unsuspend
+or added delivery hides nothing for longer than that. Renaming or transferring a repository
 updates the name its stored rows show; a transferred repository belongs to
 another installation and starts fresh there. Renames need the App's
 **Repository** event; an App registered before it was in the manifest must
