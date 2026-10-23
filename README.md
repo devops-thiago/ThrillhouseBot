@@ -468,9 +468,11 @@ thrillhousebot.ai.models.some-separate-budget-model.separate-output-budget=true
 - **Reading a cut response.** When a review, summary, verifier, summary-check
   or repair call spends its whole cap reasoning and returns no answer, it is
   repeated once at a lower effort, and the summary's scope note says so. With
-  `AI_REASONING_ENABLED=true` the repeat sends `none`. With it off, nothing was
-  sent and the provider's default effort applied, so the repeat sends the lane's
-  effort (`low` unless set). A model that reasons by default, such as
+  `AI_REASONING_ENABLED=true` the repeat sends `low`, and a lane already at
+  `low` or `none` is not repeated. With it off, nothing was sent and the
+  provider's default effort applied, so the repeat sends the lane's effort
+  (`low` unless set). `AI_REASONING_REPEAT_EFFORT` sets the repeat's effort in
+  both cases; set it to `none` for a provider that honors `none`. A model that reasons by default, such as
   `glm-5.3-flash`, can hit this on most concise calls and bill the cap each
   time; enable reasoning for such a model. If a `none` repeat writes its
   deliberation into the response instead, it is stopped once 8,000 characters

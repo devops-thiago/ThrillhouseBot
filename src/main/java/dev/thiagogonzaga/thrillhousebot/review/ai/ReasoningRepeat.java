@@ -49,25 +49,38 @@ final class ReasoningRepeat {
    * The {@code reasoning_effort} the repeat sends on the given lane, or empty when there is no
    * repeat to make.
    *
-   * <p>With reasoning enabled, the repeat goes out at {@code none}, unless the lane already sends
-   * {@code none} and the repeat would be the identical call. With reasoning off in config nothing
-   * was sent, so the provider's default effort applied, and a model that reasons by default can
-   * spend the cap that way on most calls, as {@code glm-5.3-flash} did on the concise lane in
-   * #1169. The repeat then sends the effort the lane would send with reasoning enabled ({@code low}
-   * unless configured), not {@code none}: that model spent the cap again at {@code none}, while at
-   * {@code low} the same calls answered in under a thousand output tokens.
+   * <p>{@code AI_REASONING_REPEAT_EFFORT} when set. Otherwise, with reasoning enabled, the repeat
+   * goes out at {@code low}, the lowest tier known to be valid wherever reasoning is enabled at all
+   * ({@link ReasoningConfig#DEFAULT_CONCISE_EFFORT}), and a lane that already sends {@code low} or
+   * {@code none} gets no repeat. Not {@code none}: {@code glm-5.3-flash} ignores it and spent the
+   * cap again on 5 of 6 such repeats, while at {@code low} all 6 answered (#1173). Not one tier
+   * down either: where #839 was measured, adjacent tiers barely moved the reasoning length.
+   *
+   * <p>With reasoning off in config nothing was sent, so the provider's default effort applied, and
+   * a model that reasons by default can spend the cap that way on most calls, as {@code
+   * glm-5.3-flash} did on the concise lane in #1169. The repeat then sends the effort the lane
+   * would send with reasoning enabled ({@code low} unless configured).
+   *
+   * <p>A repeat at the effort the first call already sent would be the identical call, so none is
+   * made.
    */
   static Optional<String> effortFor(ThrillhouseConfig config, boolean concise) {
     var reasoning = config.ai().reasoning();
-    if (!reasoning.enabled()) {
+    var first = ChatModelCustomizers.reasoningEffort(config, concise);
+    var configured = reasoning.repeatEffort().map(ReasoningConfig::normalize);
+    if (configured.isPresent()) {
+      return configured.filter(effort -> !first.equals(Optional.of(effort)));
+    }
+    if (first.isEmpty()) {
       return Optional.of(
           concise
               ? ReasoningConfig.resolveConciseEffort(reasoning)
               : ReasoningConfig.normalize(reasoning.effort()));
     }
-    return ChatModelCustomizers.reasoningEffort(config, concise)
-        .filter(effort -> !ReasoningConfig.EFFORT_NONE.equals(effort))
-        .map(effort -> ReasoningConfig.EFFORT_NONE);
+    var floor = ReasoningConfig.ALLOWED_EFFORTS.indexOf(ReasoningConfig.DEFAULT_CONCISE_EFFORT);
+    return ReasoningConfig.ALLOWED_EFFORTS.indexOf(first.get()) > floor
+        ? Optional.of(ReasoningConfig.DEFAULT_CONCISE_EFFORT)
+        : Optional.empty();
   }
 
   /** The effort the lane's first call went out at, as the step-down logs name it. */

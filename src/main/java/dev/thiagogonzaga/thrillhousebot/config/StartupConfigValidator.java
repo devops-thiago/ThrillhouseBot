@@ -492,8 +492,9 @@ public class StartupConfigValidator {
   /**
    * Validated even while reasoning is disabled: an operator who sets an invalid effort value has
    * expressed clear intent, and rejecting the typo at boot beats discovering it when the flag is
-   * later flipped on. The concise lane's own effort ({@code AI_REASONING_EFFORT_CONCISE}, #567) is
-   * held to the same list, and only when set — unset resolves to a valid value by construction.
+   * later flipped on. The concise lane's own effort ({@code AI_REASONING_EFFORT_CONCISE}, #567) and
+   * the repeat's ({@code AI_REASONING_REPEAT_EFFORT}, #1173) are held to the same list, and only
+   * when set — unset resolves to a valid value by construction.
    */
   private static void validateReasoningEffort(
       List<String> problems, ThrillhouseConfig.AiPricingConfig.ReasoningConfig reasoning) {
@@ -506,19 +507,36 @@ public class StartupConfigValidator {
               + " (thrillhousebot.ai.reasoning.effort): "
               + reasoning.effort());
     }
-    reasoning
-        .conciseEffort()
+    validateOptionalEffort(
+        problems,
+        reasoning.conciseEffort(),
+        "AI_REASONING_EFFORT_CONCISE",
+        "thrillhousebot.ai.reasoning.concise-effort");
+    validateOptionalEffort(
+        problems,
+        reasoning.repeatEffort(),
+        "AI_REASONING_REPEAT_EFFORT",
+        "thrillhousebot.ai.reasoning.repeat-effort");
+  }
+
+  private static void validateOptionalEffort(
+      List<String> problems, Optional<String> effort, String variable, String property) {
+    var allowed = ThrillhouseConfig.AiPricingConfig.ReasoningConfig.ALLOWED_EFFORTS;
+    effort
         .filter(
-            effort ->
+            value ->
                 !allowed.contains(
-                    ThrillhouseConfig.AiPricingConfig.ReasoningConfig.normalize(effort)))
+                    ThrillhouseConfig.AiPricingConfig.ReasoningConfig.normalize(value)))
         .ifPresent(
-            effort ->
+            value ->
                 problems.add(
-                    "AI_REASONING_EFFORT_CONCISE must be one of "
+                    variable
+                        + " must be one of "
                         + String.join(", ", allowed)
-                        + " (thrillhousebot.ai.reasoning.concise-effort): "
-                        + effort));
+                        + " ("
+                        + property
+                        + "): "
+                        + value));
   }
 
   /**

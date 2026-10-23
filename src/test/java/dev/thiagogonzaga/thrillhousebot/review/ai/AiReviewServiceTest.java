@@ -1138,12 +1138,12 @@ class AiReviewServiceTest {
   /**
    * #839 — a length stop with no content at all is the reasoning tail exhausting the output cap,
    * not an answer that was too long: the reasoning field carried everything the model produced.
-   * That call is repeated once with reasoning disabled, and the repeat's answer is the review's.
-   * The repeat is told apart on the thread that starts it: the model wrapper reads the session
-   * binding, so the binding is what the stub records at each call.
+   * That call is repeated once at low (#1173), and the repeat's answer is the review's. The repeat
+   * is told apart on the thread that starts it: the model wrapper reads the session binding, so the
+   * binding is what the stub records at each call.
    */
   @Test
-  void aNoContentLengthStopIsRetriedOnceWithReasoningDisabled() {
+  void aNoContentLengthStopIsRetriedOnceAtLowEffort() {
     var starts = new java.util.concurrent.atomic.AtomicInteger();
     var effortPerCall = new java.util.ArrayList<String>();
     ReviewSession session = reviewSession();
@@ -1160,12 +1160,12 @@ class AiReviewServiceTest {
 
     var response = service.review(session, PROMPT_INPUTS);
 
-    assertSame(parsed, response, "the answer of the repeat without reasoning is the review's");
+    assertSame(parsed, response, "the answer of the repeat at low is the review's");
     assertEquals(1, starts.get(), "the exhausted call is not repeated at the same effort");
     assertEquals(
-        java.util.Arrays.asList(null, "none"),
+        java.util.Arrays.asList(null, "low"),
         effortPerCall,
-        "the first call runs at the configured effort, the repeat with reasoning disabled");
+        "the first call runs at the configured effort, the repeat at low");
     assertNull(
         ReasoningRepeat.current(), "the override ends with the call; nothing later inherits it");
     verify(tokenLedger).recordReasoningStepDown(42L);
@@ -1215,8 +1215,12 @@ class AiReviewServiceTest {
     return prose.substring(0, chars);
   }
 
-  /** Stubs the review stream: a no-content cap first, then {@code repeat} for the step-down. */
+  /**
+   * Stubs the review stream: a no-content cap first, then {@code repeat} for the step-down, which
+   * goes out at none so the guard watches it (#893).
+   */
   private java.util.concurrent.atomic.AtomicInteger stubStepDownRepeat(TokenStream repeat) {
+    when(reasoning.repeatEffort()).thenReturn(Optional.of("none"));
     var starts = new java.util.concurrent.atomic.AtomicInteger();
     var calls = new java.util.concurrent.atomic.AtomicInteger();
     when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
@@ -1306,6 +1310,32 @@ class AiReviewServiceTest {
   }
 
   /**
+   * #1173 — a repeat at low keeps its reasoning in the provider's channel, so it is not watched:
+   * prose past the bound is parsed as any other answer.
+   */
+  @Test
+  void aRepeatAtLowIsNotWatchedForItsProse() {
+    ReviewSession session = reviewSession();
+    var content = deliberation(2 * InlinedDeliberationGuard.BOUND_CHARS);
+    var starts = new java.util.concurrent.atomic.AtomicInteger();
+    var calls = new java.util.concurrent.atomic.AtomicInteger();
+    when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
+        .thenAnswer(
+            invocation ->
+                calls.incrementAndGet() == 1
+                    ? TruncatedTokenStream.reasoningExhausted(starts)
+                    : new FakeTokenStream(content, 400));
+    var parsed = new ReviewResponse(List.of(), List.of(), null);
+    when(parser.parse(content)).thenReturn(parsed);
+
+    assertSame(parsed, service.review(session, PROMPT_INPUTS));
+
+    assertEquals(2, calls.get());
+    verify(tokenLedger).recordReasoningStepDown(anyLong());
+    verify(tokenLedger, never()).recordReasoningRepeatStopped(anyLong());
+  }
+
+  /**
    * #893 — only the step-down's repeat is watched: a call at the configured effort that opens with
    * prose past the bound is parsed (and rejected, if it must be) exactly as before.
    */
@@ -1330,6 +1360,7 @@ class AiReviewServiceTest {
    */
   @Test
   void aConciseRepeatThatDeliberatesInContentIsStoppedToo() {
+    when(reasoning.repeatEffort()).thenReturn(Optional.of("none"));
     var starts = new java.util.concurrent.atomic.AtomicInteger();
     var calls = new java.util.concurrent.atomic.AtomicInteger();
     ReviewSession session = reviewSession();
@@ -1444,11 +1475,11 @@ class AiReviewServiceTest {
 
   /**
    * #839 — the final summary call shares the loop, so a no-content cap on the concise lane steps
-   * down the same way; the lane's own effort (low, resolved from the active max — #567) is what is
-   * stepped down from.
+   * down the same way, from the lane's own effort (#567) to low (#1173).
    */
   @Test
-  void aNoContentSummaryCapIsRepeatedWithReasoningDisabledOnTheConciseLane() {
+  void aNoContentSummaryCapIsRepeatedAtLowOnTheConciseLane() {
+    when(reasoning.conciseEffort()).thenReturn(Optional.of("high"));
     var starts = new java.util.concurrent.atomic.AtomicInteger();
     var effortPerCall = new java.util.ArrayList<String>();
     ReviewSession session = reviewSession();
@@ -1469,7 +1500,7 @@ class AiReviewServiceTest {
 
     assertSame(parsed, response);
     assertEquals(1, starts.get());
-    assertEquals(java.util.Arrays.asList(null, "none"), effortPerCall);
+    assertEquals(java.util.Arrays.asList(null, "low"), effortPerCall);
     verify(tokenLedger).recordReasoningStepDown(42L);
   }
 

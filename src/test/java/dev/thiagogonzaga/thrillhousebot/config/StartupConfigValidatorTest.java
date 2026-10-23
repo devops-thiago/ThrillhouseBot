@@ -95,6 +95,7 @@ class StartupConfigValidatorTest {
     private boolean reasoningEnabled = false;
     private String reasoningEffort = "low";
     private Optional<String> conciseReasoningEffort = Optional.empty();
+    private Optional<String> repeatReasoningEffort = Optional.empty();
     private String blockingStrictness = "balanced";
     private double secretScanEntropyThreshold = 3.5;
     private String modelName = "deepseek-chat";
@@ -208,6 +209,11 @@ class StartupConfigValidatorTest {
       return this;
     }
 
+    ConfigBuilder repeatReasoningEffort(Optional<String> v) {
+      this.repeatReasoningEffort = v;
+      return this;
+    }
+
     ConfigBuilder conciseReasoningEffort(Optional<String> v) {
       this.conciseReasoningEffort = v;
       return this;
@@ -253,6 +259,7 @@ class StartupConfigValidatorTest {
       lenient().when(reasoning.enabled()).thenReturn(reasoningEnabled);
       lenient().when(reasoning.effort()).thenReturn(reasoningEffort);
       lenient().when(reasoning.conciseEffort()).thenReturn(conciseReasoningEffort);
+      lenient().when(reasoning.repeatEffort()).thenReturn(repeatReasoningEffort);
       lenient().when(github.appId()).thenReturn(appId);
       lenient().when(github.privateKey()).thenReturn(privateKey);
       lenient().when(github.webhookSecret()).thenReturn(webhookSecret);
@@ -1273,6 +1280,30 @@ class StartupConfigValidatorTest {
   }
 
   @Test
+  void failsFastWhenTheRepeatReasoningEffortIsInvalid() {
+    // The repeat's effort (#1173) rides the same wire, so a typo is refused at boot rather than on
+    // the one repeat that was meant to rescue a cut call.
+    var ex =
+        assertFailsValidation(
+            new ConfigBuilder().repeatReasoningEffort(Optional.of("minimal")).build());
+    assertTrue(
+        ex.getMessage()
+            .contains(
+                "AI_REASONING_REPEAT_EFFORT must be one of none, low, medium, high, xhigh, max"),
+        ex.getMessage());
+    assertTrue(
+        ex.getMessage().contains("(thrillhousebot.ai.reasoning.repeat-effort): minimal"),
+        ex.getMessage());
+  }
+
+  @Test
+  void acceptsEveryRepeatReasoningEffortCaseInsensitivelyWithWhitespace() {
+    for (var effort : new String[] {"none", "LOW", " Medium ", "high", "XHigh", " max "}) {
+      new ConfigBuilder().repeatReasoningEffort(Optional.of(effort)).build().validate();
+    }
+  }
+
+  @Test
   void acceptsEveryConciseReasoningEffortCaseInsensitivelyWithWhitespace() {
     for (var effort : new String[] {"none", "LOW", " Medium ", "high", "XHigh", " max "}) {
       new ConfigBuilder()
@@ -1402,6 +1433,10 @@ class StartupConfigValidatorTest {
       assertEquals(
           Optional.empty(),
           shipped.getOptionalValue("thrillhousebot.ai.reasoning.concise-effort", String.class));
+      assertEquals(
+          Optional.empty(),
+          shipped.getOptionalValue("thrillhousebot.ai.reasoning.repeat-effort", String.class),
+          "the repeat effort is unset too, so the repeat resolves its own default");
     }
 
     @Test

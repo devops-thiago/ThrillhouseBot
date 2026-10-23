@@ -30,6 +30,12 @@ without it those counters stay hidden and nothing else changes.
   ids in for existing rows; rows of a repository it cannot match stay hidden, except a pause,
   which is still honored. The repository configuration caches are keyed by installation too.
   (#1220)
+- With `AI_REASONING_ENABLED=true`, the one repeat of a call that spent its whole response cap
+  reasoning now goes out at `reasoning_effort=low` instead of `none`, and a lane already at `low`
+  or `none` is not repeated. `glm-5.3-flash` ignores `none`, so that repeat spent the cap a
+  second time and was billed in full. The new `AI_REASONING_REPEAT_EFFORT`
+  (`thrillhousebot.ai.reasoning.repeat-effort`) sets the repeat's effort; set it to `none` to keep
+  the previous behavior on a provider that honors it. (#1173)
 ### Security
 
 - `GITHUB_ALLOWED_ACCOUNTS` (`thrillhousebot.github.allowed-accounts`) limits the bot to the

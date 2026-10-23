@@ -170,9 +170,9 @@ public class AiReviewService {
   /**
    * Runs one logical AI call: the transient-failure retry loop at the configured effort, and — once
    * — the same loop again at a lower effort when the first pass ends in a length stop that produced
-   * no content at all (#839). The lower effort is {@code none} when reasoning is enabled, and the
-   * lane's own effort ({@code low} unless configured) when it is off in config and the provider
-   * default reasoned the cap away (#1169); {@link ReasoningRepeat#effortFor} decides.
+   * no content at all (#839). The lower effort is {@code low} when reasoning is enabled (#1173),
+   * and the lane's own effort ({@code low} unless configured) when it is off in config and the
+   * provider default reasoned the cap away (#1169); {@link ReasoningRepeat#effortFor} decides.
    *
    * <p>A length stop comes in two shapes that the retry loop must tell apart. With content, the
    * answer itself outgrew the cap: the identical call would be cut identically, so it is not
@@ -180,26 +180,30 @@ public class AiReviewService {
    * the answer — the reasoning tail spent the whole output allowance, which is a variable-length
    * thing that the identical call may or may not repeat, and that a call without reasoning cannot.
    * Production saw three reviews in a row fail that way at {@code max}, each billed for the full
-   * cap and delivering nothing. The repeat goes straight to {@code none} rather than one tier down:
-   * on the provider where this was measured the tiers barely move the reasoning length, so a tier
-   * down burns the cap a second time. The step-down is per call — the configured effort is not
-   * touched, the next call sends it again — and it is noted on the review's ledger entry so the
-   * posted summary discloses that the review ran with less reasoning. A repeat that also stops at
-   * the cap propagates as before, so the cap is hit at most twice per logical call; a transient
-   * failure on either pass keeps the ordinary {@code max-ai-retries} budget, because a provider
-   * error on the repeat is the same kind of failure it is on any other call and is retried on the
-   * same terms.
+   * cap and delivering nothing. The repeat goes straight down to {@code low} rather than one tier
+   * down: on the provider where this was measured the tiers barely move the reasoning length, so a
+   * tier down burns the cap a second time. Not to {@code none}, which {@code glm-5.3-flash} ignores
+   * (#1173), unless {@code AI_REASONING_REPEAT_EFFORT} asks for it. The step-down is per call — the
+   * configured effort is not touched, the next call sends it again — and it is noted on the
+   * review's ledger entry so the posted summary discloses that the review ran with less reasoning.
+   * A repeat that also stops at the cap propagates as before, so the cap is hit at most twice per
+   * logical call; a transient failure on either pass keeps the ordinary {@code max-ai-retries}
+   * budget, because a provider error on the repeat is the same kind of failure it is on any other
+   * call and is retried on the same terms.
    *
    * <p>The premise holds only where the provider keeps reasoning in its own channel. A model that
    * writes its deliberation into the response once reasoning is disabled makes the repeat the same
-   * call at the same price (#893), so the repeat is watched by an {@link InlinedDeliberationGuard}:
-   * content that runs its bound with no answer begun stops the repeat there, and the call fails
-   * with the first call's truncation, whose report states what the repeat showed. That is noted on
-   * the ledger apart from a repeat that ran, so the posted summary says which one happened.
+   * call at the same price (#893), so a repeat at {@code none} is watched by an {@link
+   * InlinedDeliberationGuard}: content that runs its bound with no answer begun stops the repeat
+   * there, and the call fails with the first call's truncation, whose report states what the repeat
+   * showed. That is noted on the ledger apart from a repeat that ran, so the posted summary says
+   * which one happened.
    *
-   * <p>The repeat's calls are bound as reasoning-disabled on the thread that starts them (see
-   * {@link #streamOnce}); {@link ReasoningStepDownStreamingModel} reads that binding and sends
-   * {@code reasoning_effort=none} on those calls alone.
+   * <p>A repeat at any other tier keeps its reasoning in the provider's channel and is not watched.
+   *
+   * <p>The repeat's effort is set as the {@link ReasoningRepeat#override} on the thread that starts
+   * its calls (see {@link #streamOnce}); {@link ReasoningStepDownStreamingModel} reads it and sends
+   * that {@code reasoning_effort} on those calls alone.
    *
    * <p>The timed-out attempts are counted here rather than inside the loop, so the bound of {@link
    * #MAX_TIMED_OUT_ATTEMPTS} is on the logical call and both passes share it (#862). A call that
@@ -274,9 +278,10 @@ public class AiReviewService {
   /**
    * The effort a no-content length stop's one repeat goes out at, when there is a repeat to make.
    * Empty for a stop with content (the answer was too long — the salvage path's case, never
-   * retried) and when the lane already runs at {@code none} with reasoning enabled (the repeat
-   * would be the identical call); otherwise {@link ReasoningRepeat#effortFor}. The lane matters
-   * because the concise lane resolves its own effort (#567).
+   * retried) and when {@link ReasoningRepeat#effortFor} is empty because there is no lower effort
+   * to repeat at, as for a lane already at {@code low} or {@code none} with reasoning enabled;
+   * otherwise the effort it returns, which is the {@code none} tier only when configured. The lane
+   * matters because the concise lane resolves its own effort (#567).
    */
   private Optional<String> repeatEffort(AiResponseTruncatedException e, ModelLane lane) {
     if (!"".equals(e.partialBody())) {
