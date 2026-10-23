@@ -24,6 +24,7 @@ import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.UnitTestAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.UnitTestAssistantPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.UnitTestGenerationParser;
@@ -143,7 +144,8 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
       UnitTestGenerationParser parser,
       SuggestionFormatter suggestionFormatter,
       ReviewSessionPersistence sessionPersistence,
-      FollowUpAnalyzer followUpAnalyzer) {
+      FollowUpAnalyzer followUpAnalyzer,
+      ReviewTokenLedger tokenLedger) {
     super(
         prClient,
         diffFormatter,
@@ -151,7 +153,8 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
         repoSettingsResolver,
         budgetPlanner,
         activeModel,
-        config);
+        config,
+        tokenLedger);
     this.projectStackResolver = projectStackResolver;
     this.testAssistant = testAssistant;
     this.parser = parser;
@@ -173,6 +176,21 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
    */
   @ActivateRequestContext
   public String generate(
+      String owner,
+      String repo,
+      int prNumber,
+      String defaultBranch,
+      long installationId,
+      long repositoryId,
+      String auth) {
+    try (var _ = openRun()) {
+      return generateInRun(
+          owner, repo, prNumber, defaultBranch, installationId, repositoryId, auth);
+    }
+  }
+
+  /** {@link #generate}'s work, inside its ledger run. */
+  private String generateInRun(
       String owner,
       String repo,
       int prNumber,

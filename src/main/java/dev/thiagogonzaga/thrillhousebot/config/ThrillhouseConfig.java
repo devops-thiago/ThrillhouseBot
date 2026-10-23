@@ -307,7 +307,8 @@ public interface ThrillhouseConfig {
      * Most tokens one review may use across all its calls, as the provider reports them, retries
      * and the summary call included. Once reached, no further call is made: the remaining batches
      * are named as not reviewed, the summary degrades to counts only, and the findings already paid
-     * for are kept. Reviews only. {@code 0} disables it.
+     * for are kept. An on-request command or a maintainer reply that reached it only skips the
+     * repeat of a call that spent its whole cap reasoning. {@code 0} disables it.
      *
      * <p>Complements {@link #maxAiCalls()}, which bounds how many calls are planned but not what
      * they cost: one call against a large-context model can span two orders of magnitude of spend.

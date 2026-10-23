@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.request.ChatRequest;
@@ -275,6 +276,55 @@ class ReasoningRepeatTest {
     assertSame(cut, once(cut, () -> Optional.of("low"), false));
     assertSame(REASONED_AWAY, once(REASONED_AWAY, Optional::empty, false));
     assertSame(REASONED_AWAY, once(REASONED_AWAY, () -> Optional.of("low"), true));
+  }
+
+  @Test
+  void outsideAReviewBothCallsAreMeteredToTheRunAndTheCeilingStopsTheRepeat() {
+    var config = config(false, "low", Optional.empty());
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    lenient().when(config.review()).thenReturn(review);
+    var ledger = new ReviewTokenLedger(config);
+    var run = ledger.openRun();
+    var calls = new AtomicInteger();
+
+    var result =
+        ReasoningRepeat.outsideReview(
+            "/describe assistant",
+            () -> calls.incrementAndGet() == 1 ? REASONED_AWAY : ANSWERED,
+            config,
+            false,
+            ledger,
+            run);
+
+    assertSame(ANSWERED, result);
+    assertEquals(2, calls.get());
+    assertEquals(
+        REASONED_AWAY.tokenUsage().totalTokenCount() + ANSWERED.tokenUsage().totalTokenCount(),
+        ledger.tokensSpent(run),
+        "the cut call was billed too");
+
+    when(review.maxTokensPerReview()).thenReturn(1L);
+    var capped = new ReviewTokenLedger(config);
+    var cappedRun = capped.openRun();
+    assertSame(
+        REASONED_AWAY,
+        ReasoningRepeat.outsideReview(
+            "Maintainer reply", () -> REASONED_AWAY, config, true, capped, cappedRun));
+  }
+
+  @Test
+  void outsideAReviewACallWithNoResultOrUsageRecordsNothing() {
+    var config = config(false, "low", Optional.empty());
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    lenient().when(config.review()).thenReturn(review);
+    var ledger = new ReviewTokenLedger(config);
+    var run = ledger.openRun();
+
+    assertNull(ReasoningRepeat.outsideReview("x", () -> null, config, false, ledger, run));
+    var noUsage = Result.<String>builder().content("a").finishReason(FinishReason.STOP).build();
+    assertSame(
+        noUsage, ReasoningRepeat.outsideReview("x", () -> noUsage, config, false, ledger, run));
+    assertEquals(0, ledger.tokensSpent(run));
   }
 
   private static Optional<String> countRead(AtomicInteger reads, String effort) {

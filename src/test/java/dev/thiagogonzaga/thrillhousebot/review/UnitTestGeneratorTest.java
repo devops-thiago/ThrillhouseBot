@@ -34,6 +34,7 @@ import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.UnitTestAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.UnitTestAssistantPrompts;
@@ -121,7 +122,8 @@ class UnitTestGeneratorTest {
             new UnitTestGenerationParser(new ObjectMapper()),
             new SuggestionFormatter(),
             sessionPersistence,
-            new FollowUpAnalyzer(new ObjectMapper()));
+            new FollowUpAnalyzer(new ObjectMapper()),
+            mock(ReviewTokenLedger.class));
   }
 
   private static FileDiff foo() {
@@ -742,7 +744,8 @@ class UnitTestGeneratorTest {
             new UnitTestGenerationParser(new ObjectMapper()),
             new SuggestionFormatter(),
             sessionPersistence,
-            brokenAnalyzer);
+            brokenAnalyzer,
+            mock(ReviewTokenLedger.class));
     priorRoundFound(finding("critical", "src/Foo.java", 42, "Leaky sink", "d"));
     diffReturns();
     prDetails();

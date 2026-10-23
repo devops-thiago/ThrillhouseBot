@@ -39,7 +39,7 @@ import java.util.function.Supplier;
  * is kept apart from {@link ReviewSessionContext}: binding a session on a blocking call would make
  * the observability listener record its usage on top of the caller's own recording.
  */
-final class ReasoningRepeat {
+public final class ReasoningRepeat {
 
   private static final ThreadLocal<String> EFFORT = new ThreadLocal<>();
 
@@ -184,6 +184,34 @@ final class ReasoningRepeat {
     }
     meter.accept(result);
     return result;
+  }
+
+  /**
+   * {@link #blocking} for a call made outside a review: an on-request command or a maintainer reply
+   * (#1175). Both calls' usage goes to {@code ledgerKey}, the run's entry from {@link
+   * ReviewTokenLedger#openRun}, and the repeat is skipped once that run reached the spend ceiling.
+   * Nothing reports a step-down for these calls, so none is noted.
+   */
+  public static Result<String> outsideReview(
+      String what,
+      Supplier<Result<String>> call,
+      ThrillhouseConfig config,
+      boolean concise,
+      ReviewTokenLedger ledger,
+      long ledgerKey) {
+    return blocking(
+        what,
+        call,
+        () -> effortFor(config, concise),
+        () -> enableHint(config),
+        () -> ledger.ceilingReached(ledgerKey),
+        result -> {
+          var usage = result == null ? null : result.tokenUsage();
+          if (usage != null) {
+            ledger.recordUsage(ledgerKey, usage.inputTokenCount(), usage.outputTokenCount());
+          }
+        },
+        () -> {});
   }
 
   /** Restores the thread's previous override when closed. */

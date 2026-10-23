@@ -21,6 +21,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
@@ -55,11 +56,17 @@ import java.util.concurrent.atomic.LongAdder;
  * onto its plan before clearing the entry. A repeat that was stopped because the model wrote its
  * deliberation into the response (#893) is noted too, and counted apart, so the summary can tell a
  * review produced with reasoning off from one whose repeat delivered nothing.
+ *
+ * <p>An on-request command or a maintainer reply is not a review, but its blocking calls get the
+ * same one repeat (#1175), metered and skipped at the same ceiling. Each such run takes its own
+ * entry through {@link #openRun} and records its calls' {@code Result}-reported usage directly;
+ * those calls are never bound to a session, so the listener does not count them a second time.
  */
 @ApplicationScoped
 public class ReviewTokenLedger {
 
   private final ConcurrentHashMap<Long, Entry> entries = new ConcurrentHashMap<>();
+  private final AtomicLong lastRunKey = new AtomicLong();
   private final long maxTokensPerReview;
 
   /** One review's row: tokens spent so far, and how many calls stepped down and how they ended. */
@@ -77,6 +84,17 @@ public class ReviewTokenLedger {
   /** Opens the ledger entry for a review so its calls' usage is accumulated. Idempotent. */
   public void open(long sessionId) {
     entries.computeIfAbsent(sessionId, id -> new Entry());
+  }
+
+  /**
+   * Opens an entry for a run that is not a review, an on-request command or a maintainer reply, and
+   * returns its key. Keys count down from {@code -1}, so they never meet a session's persisted id
+   * or the {@link #keyFor} sentinel. The caller clears it when the run is done.
+   */
+  public long openRun() {
+    var key = lastRunKey.decrementAndGet();
+    open(key);
+    return key;
   }
 
   /**

@@ -218,7 +218,8 @@ disclosed. A length stop with no content (reasoning used the whole cap) is repea
 lower effort: `low` when reasoning is enabled (no repeat on a lane already at `low` or `none`),
 the lane's effort (`low` unless set) when it is off in config and the provider default reasoned the
 cap away, or `AI_REASONING_REPEAT_EFFORT` when set. The blocking review-path calls (the
-finding verifier, the summary check, response repair) repeat the same way.
+finding verifier, the summary check, response repair) repeat the same way, and so do the
+on-request commands and maintainer replies, whose calls are metered per command or reply.
 Each call is bounded by `AI_TIMEOUT` (default 300 s).
 
 `AI_MAX_CONCURRENT_CALLS` caps model calls in flight across the process (default `0`, no cap); a

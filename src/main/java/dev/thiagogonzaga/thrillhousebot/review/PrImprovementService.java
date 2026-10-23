@@ -28,6 +28,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ImprovementResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrImproveAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrImproveAssistantPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrSuggestionPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
@@ -104,7 +105,8 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
       RepoSettingsResolver repoSettingsResolver,
       DiffBudgetPlanner budgetPlanner,
       ActiveModelSettings activeModel,
-      ThrillhouseConfig config) {
+      ThrillhouseConfig config,
+      ReviewTokenLedger tokenLedger) {
     super(
         prClient,
         diffFormatter,
@@ -112,7 +114,8 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
         repoSettingsResolver,
         budgetPlanner,
         activeModel,
-        config);
+        config,
+        tokenLedger);
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
     this.suggestionFormatter = suggestionFormatter;
@@ -137,6 +140,13 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
    */
   @ActivateRequestContext
   public void handle(ImproveTask task, String auth) {
+    try (var _ = openRun()) {
+      handleInRun(task, auth);
+    }
+  }
+
+  /** {@link #handle}'s work, inside its ledger run. */
+  private void handleInRun(ImproveTask task, String auth) {
     try {
       var inputs =
           loadInputs(
