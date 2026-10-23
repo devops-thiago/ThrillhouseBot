@@ -32,6 +32,32 @@ The bot's state on GitHub (its reviews, summary comments, check runs and
 finding threads) stays on GitHub. A follow-up review reads it back from there,
 so a restart does not lose track of the findings on open pull requests.
 
+## Installations and repositories
+
+The bot follows GitHub's installation events (#1222). Uninstalling or
+suspending the App on an account stops the dashboard from serving that
+installation at once, and unsuspending brings it back. Removing a repository
+from an installation hides it, and adding it again serves its history again,
+since rows are kept by repository id. The bot remembers a removal for ten
+minutes, long enough for GitHub's own answer to catch up, so a lost unsuspend
+or added delivery hides nothing for longer than that. Renaming or transferring a repository
+updates the name its stored rows show; a transferred repository belongs to
+another installation and starts fresh there. Renames need the App's
+**Repository** event; an App registered before it was in the manifest must
+tick it under **Permissions & events → Subscribe to events**.
+
+The bot never deletes stored rows. To purge an installation's data, for example
+after it was uninstalled for good, delete its rows by installation id (the
+`installation.id` of its webhook deliveries, or `installationid` in the tables),
+after taking a backup:
+
+```sql
+DELETE FROM reviewsession    WHERE installationid = 123456;
+DELETE FROM pausedpr         WHERE installationid = 123456;
+DELETE FROM finding_feedback WHERE installationid = 123456;
+DELETE FROM review_learning  WHERE installationid = 123456;
+```
+
 ## Scaling
 
 Run exactly one replica. The in-memory state above is not shared, and on

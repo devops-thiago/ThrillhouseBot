@@ -17,10 +17,14 @@ package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubApiError;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubUserClient;
+import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.WebApplicationException;
 import java.nio.charset.StandardCharsets;
@@ -31,9 +35,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -97,9 +103,21 @@ public class DashboardAccessChecker {
   /**
    * A cached resolution: what to answer until {@code retryAt}, and when GitHub last gave an answer
    * ({@code answeredAt}, null when it never has) so a stale answer is served only within {@link
-   * #STALE_SCOPE_LIMIT}.
+   * #STALE_SCOPE_LIMIT}. {@code changes} is the installation-change count when the answer was asked
+   * for; an entry is used only while no change has landed since, so an answer that overlapped a
+   * change is never served after it. A cached answer is also served without what the removal lists
+   * hold, so one read in the moment before a change cleared the cache still leaves out what the
+   * change removed.
    */
-  private record CacheEntry(Resolution resolution, Instant answeredAt, Instant retryAt) {}
+  private record CacheEntry(
+      Resolution resolution, Instant answeredAt, Instant retryAt, long changes) {}
+
+  /**
+   * How long a webhook's removal of an installation or repository overrides GitHub's own answer.
+   * GitHub catches up within seconds; the bound keeps a lost {@code unsuspend} or {@code added}
+   * delivery from hiding a live installation or repository until a restart.
+   */
+  static final Duration REMOVAL_LIMIT = Duration.ofMinutes(10);
 
   private final ThrillhouseConfig config;
   private final GitHubAuthClient authClient;
@@ -108,6 +126,9 @@ public class DashboardAccessChecker {
   private final AllowedAccounts allowedAccounts;
   private final Supplier<Instant> clock;
   private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
+  private final Map<Long, Instant> goneInstallations = new ConcurrentHashMap<>();
+  private final Map<RepoScope, Instant> removedRepositories = new ConcurrentHashMap<>();
+  private final AtomicLong changeCount = new AtomicLong();
   private final AtomicBoolean membersPermissionWarned = new AtomicBoolean();
 
   @Inject
@@ -156,28 +177,29 @@ public class DashboardAccessChecker {
     }
     var key = cacheKey(login, userToken);
     var now = clock.get();
+    // A webhook change that lands while GitHub is being asked must not be undone by this answer.
+    var changesBefore = changeCount.get();
     var cached = cache.get(key);
+    if (cached != null && cached.changes() != changeCount.get()) {
+      cached = null;
+    }
     if (cached != null && now.isBefore(cached.retryAt())) {
-      return cached.resolution();
+      return withoutRemoved(cached.resolution());
     }
     Resolution resolution;
     try {
-      var scope = fetchScope(login, "Bearer " + userToken);
-      resolution =
-          new Resolution(
-              scope.isEmpty() ? AccessDecision.DENIED : AccessDecision.ALLOWED,
-              scope.isEmpty() ? RepositoryScope.NONE : scope);
+      resolution = withoutRemoved(allowedIn(fetchScope(login, "Bearer " + userToken)));
     } catch (WebApplicationException e) {
       if (e.getResponse().getStatus() == 401) {
         log.info("GitHub rejected the dashboard token of {}; ending the session", login);
         cache.remove(key);
         return new Resolution(AccessDecision.TOKEN_REJECTED, RepositoryScope.NONE);
       }
-      return unavailable(key, cached, login, e);
+      return unavailable(key, cached, changesBefore, login, e);
     } catch (RuntimeException e) {
-      return unavailable(key, cached, login, e);
+      return unavailable(key, cached, changesBefore, login, e);
     }
-    cache.put(key, new CacheEntry(resolution, now, now.plus(SCOPE_CACHE_TTL)));
+    cache.put(key, new CacheEntry(resolution, now, now.plus(SCOPE_CACHE_TTL), changesBefore));
     sweepExpiredEntries();
     if (resolution.decision() == AccessDecision.DENIED) {
       log.warn("Dashboard access denied for GitHub user {}", login);
@@ -189,15 +211,19 @@ public class DashboardAccessChecker {
    * GitHub could not be asked: serve the last answer it gave while that is recent enough, or deny,
    * and remember either for {@link #RETRY_AFTER_ERROR} so the next requests do not ask again.
    */
-  private Resolution unavailable(String key, CacheEntry cached, String login, RuntimeException e) {
+  private Resolution unavailable(
+      String key, CacheEntry cached, long changes, String login, RuntimeException e) {
     var now = clock.get();
+    // The last answer is served only while no change has landed since it was read, the same rule
+    // the cache follows, so an installation removed during the failed ask is never served.
     var stale =
         cached != null
+            && changeCount.get() == changes
             && cached.answeredAt() != null
             && cached.answeredAt().isAfter(now.minus(STALE_SCOPE_LIMIT));
     var resolution =
         stale
-            ? cached.resolution()
+            ? withoutRemoved(cached.resolution())
             : new Resolution(AccessDecision.UNAVAILABLE, RepositoryScope.NONE);
     log.warn(
         "Could not resolve dashboard access for {}{}: {}",
@@ -207,7 +233,7 @@ public class DashboardAccessChecker {
     cache.put(
         key,
         new CacheEntry(
-            resolution, stale ? cached.answeredAt() : null, now.plus(RETRY_AFTER_ERROR)));
+            resolution, stale ? cached.answeredAt() : null, now.plus(RETRY_AFTER_ERROR), changes));
     return resolution;
   }
 
@@ -218,42 +244,173 @@ public class DashboardAccessChecker {
         allPages(
             page ->
                 userClient.listInstallations(userAuth, ACCEPT, PER_PAGE, page).installations())) {
-      var account = installation.account();
-      if (account == null
-          || account.login() == null
-          || owner.filter(o -> !o.equalsIgnoreCase(account.login())).isPresent()
-          || !allowedAccounts.allows(account.login())) {
-        continue;
-      }
-      var repositories = repositories(userAuth, installation.id());
-      installations.put(
-          installation.id(),
-          new RepositoryScope.Installation(
+      if (served(installation, owner)) {
+        var repositories = repositories(userAuth, installation.id());
+        if (!repositories.isEmpty()) {
+          installations.put(
               installation.id(),
-              account.login(),
-              installationWide(installation, login),
-              repositories));
+              new RepositoryScope.Installation(
+                  installation.id(),
+                  installation.account().login(),
+                  installationWide(installation, login),
+                  repositories));
+        }
+      }
     }
     return new RepositoryScope(installations);
   }
 
-  /** The repositories of one installation the user can read, by id, as {@code owner/name}. */
+  /**
+   * Whether the dashboard serves this installation at all: it names its account, the account is the
+   * configured owner (when set) and allowed, and it is neither suspended nor gone (#1222).
+   */
+  private boolean served(
+      GitHubInstallationClient.Installation installation, Optional<String> owner) {
+    var account = installation.account();
+    return account != null
+        && account.login() != null
+        && owner.filter(o -> !o.equalsIgnoreCase(account.login())).isEmpty()
+        && allowedAccounts.allows(account.login())
+        && installation.suspendedAt() == null
+        && !removed(goneInstallations, installation.id());
+  }
+
+  /**
+   * The repositories of one installation the user can read, by id, as {@code owner/name}, without
+   * the ones a webhook said were removed (#1222). An installation GitHub refuses to list (404, or a
+   * 403 that is not throttling, such as one suspended or uninstalled a moment ago) reads as having
+   * none, so it never takes the user's other installations down with it.
+   */
   private Map<Long, String> repositories(String userAuth, long installationId) {
     var repositories = new HashMap<Long, String>();
-    for (var repo :
-        allPages(
-            page ->
-                userClient
-                    .listRepositories(userAuth, ACCEPT, installationId, PER_PAGE, page)
-                    .repositories())) {
+    List<GitHubInstallationClient.InstallationRepositoriesResponse.Repository> listed;
+    try {
+      listed =
+          allPages(
+              page ->
+                  userClient
+                      .listRepositories(userAuth, ACCEPT, installationId, PER_PAGE, page)
+                      .repositories());
+    } catch (WebApplicationException e) {
+      var status = e.getResponse().getStatus();
+      // A 403 can also be GitHub throttling the call; that is not a refusal, so it fails the
+      // resolution like any other error instead of hiding the installation.
+      var refused =
+          status == 404
+              || (status == 403
+                  && GitHubApiError.of(e).map(err -> !err.isThrottled()).orElse(false));
+      if (refused) {
+        log.info(
+            "GitHub refused to list installation {} ({}); skipping it", installationId, status);
+        return repositories;
+      }
+      throw e;
+    }
+    for (var repo : listed) {
       if (repo.id() > 0
           && repo.name() != null
           && repo.owner() != null
-          && repo.owner().login() != null) {
+          && repo.owner().login() != null
+          && !removed(removedRepositories, new RepoScope(installationId, repo.id()))) {
         repositories.putIfAbsent(repo.id(), repo.owner().login() + "/" + repo.name());
       }
     }
     return repositories;
+  }
+
+  /**
+   * Applies an installation change from the webhook (#1222): a gone installation and a removed
+   * repository are left out of every scope from now on, until unsuspended or added again, and every
+   * cached scope is dropped so the change is served at once. The lists are in memory only and each
+   * entry lapses after {@link #REMOVAL_LIMIT}: by then, as after a restart, GitHub's own answer has
+   * caught up, so a lost {@code unsuspend} or {@code added} delivery hides nothing for long.
+   */
+  void onInstallationChange(@Observes InstallationChange change) {
+    var installationId = change.installationId();
+    switch (change.kind()) {
+      case GONE -> goneInstallations.put(installationId, clock.get().plus(REMOVAL_LIMIT));
+      case BACK -> goneInstallations.remove(installationId);
+      case REPOSITORIES_REMOVED ->
+          change
+              .repositories()
+              .forEach(
+                  r ->
+                      removedRepositories.put(
+                          new RepoScope(installationId, r.id()), clock.get().plus(REMOVAL_LIMIT)));
+      case REPOSITORIES_ADDED ->
+          change
+              .repositories()
+              .forEach(r -> removedRepositories.remove(new RepoScope(installationId, r.id())));
+      case PERMISSIONS, REPOSITORY_RENAMED -> {
+        // Nothing to remember: what a login may see, or a name, changed; the cleared cache
+        // re-reads it.
+      }
+    }
+    changeCount.incrementAndGet();
+    cache.clear();
+  }
+
+  /**
+   * Whether a webhook removed {@code key} within {@link #REMOVAL_LIMIT}; an expired removal is
+   * forgotten, and GitHub's own answer counts again.
+   */
+  private <K> boolean removed(Map<K, Instant> removals, K key) {
+    var until = removals.get(key);
+    if (until == null) {
+      return false;
+    }
+    if (clock.get().isBefore(until)) {
+      return true;
+    }
+    removals.remove(key, until);
+    return false;
+  }
+
+  /**
+   * The scope without the installations and repositories a webhook removed, or {@code scope} itself
+   * when it holds none of them.
+   */
+  private RepositoryScope withoutRemoved(RepositoryScope scope) {
+    var kept = new HashMap<Long, RepositoryScope.Installation>();
+    var dropped = false;
+    for (var installation : scope.installations().values()) {
+      var repositories = new HashMap<>(installation.repositories());
+      dropped |=
+          repositories
+              .keySet()
+              .removeIf(id -> removed(removedRepositories, new RepoScope(installation.id(), id)));
+      if (removed(goneInstallations, installation.id()) || repositories.isEmpty()) {
+        dropped = true;
+      } else {
+        kept.put(
+            installation.id(),
+            new RepositoryScope.Installation(
+                installation.id(),
+                installation.account(),
+                installation.installationWide(),
+                repositories));
+      }
+    }
+    return dropped ? new RepositoryScope(kept) : scope;
+  }
+
+  /**
+   * An answer without the installations and repositories a webhook removed, applied to every answer
+   * served: one fetched while a change landed, or read from the cache in the moment before the
+   * change cleared it, still leaves out what the change removed. An allowed answer left with
+   * nothing becomes a denial.
+   */
+  private Resolution withoutRemoved(Resolution resolution) {
+    if (resolution.decision() != AccessDecision.ALLOWED) {
+      return resolution;
+    }
+    var scope = withoutRemoved(resolution.scope());
+    return scope == resolution.scope() ? resolution : allowedIn(scope);
+  }
+
+  /** Access to {@code scope}, or a denial when it holds nothing. */
+  private static Resolution allowedIn(RepositoryScope scope) {
+    return scope.isEmpty() ? Resolution.DENIED : new Resolution(AccessDecision.ALLOWED, scope);
   }
 
   /**

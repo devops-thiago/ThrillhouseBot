@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
 import io.vertx.core.Vertx;
@@ -81,6 +82,14 @@ public class DashboardWebSocketKeepAlive {
       vertx.cancelTimer(timerId);
     }
     refreshExecutor.shutdownNow();
+  }
+
+  /**
+   * An installation change can end what an open connection may read (#1222); re-resolve now rather
+   * than at the next tick. Only submits work, so the webhook never waits on GitHub.
+   */
+  void onInstallationChange(@Observes InstallationChange change) {
+    refreshReaders();
   }
 
   /**

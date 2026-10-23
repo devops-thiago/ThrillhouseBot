@@ -19,6 +19,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import java.util.List;
+import java.util.Objects;
 
 @RegisterForReflection
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -35,7 +36,28 @@ public record WebhookPayload(
     // legacy Commit Status API); null otherwise.
     String sha,
     String state,
-    String context) {
+    String context,
+    // Fields below are populated only on installation_repositories events; empty otherwise.
+    @JsonProperty("repositories_added") List<RepositoryRef> repositoriesAdded,
+    @JsonProperty("repositories_removed") List<RepositoryRef> repositoriesRemoved) {
+
+  public WebhookPayload {
+    // An unmodifiable copy without null entries; empty when the event carries no list.
+    repositoriesAdded =
+        repositoriesAdded == null
+            ? List.of()
+            : List.copyOf(repositoriesAdded.stream().filter(Objects::nonNull).toList());
+    repositoriesRemoved =
+        repositoriesRemoved == null
+            ? List.of()
+            : List.copyOf(repositoriesRemoved.stream().filter(Objects::nonNull).toList());
+  }
+
+  /** A repository as installation_repositories events list it. */
+  @RegisterForReflection
+  @JsonIgnoreProperties(ignoreUnknown = true)
+  public record RepositoryRef(long id, @JsonProperty("full_name") String fullName) {}
+
   @RegisterForReflection
   @JsonIgnoreProperties(ignoreUnknown = true)
   public record PullRequest(

@@ -16,7 +16,8 @@
     "issue_comment",
     "pull_request_review_comment",
     "check_suite",
-    "status"
+    "status",
+    "repository"
   ],
   "default_permissions": {
     "checks": "write",
