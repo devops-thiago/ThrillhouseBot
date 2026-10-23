@@ -104,9 +104,10 @@ public class DashboardAccessChecker {
    * A cached resolution: what to answer until {@code retryAt}, and when GitHub last gave an answer
    * ({@code answeredAt}, null when it never has) so a stale answer is served only within {@link
    * #STALE_SCOPE_LIMIT}. {@code changes} is the installation-change count when the answer was asked
-   * for; an entry is used only while no change has landed since, so neither an answer that
-   * overlapped a change nor one read in the moment before the change cleared the cache is ever
-   * served after it.
+   * for; an entry is used only while no change has landed since, so an answer that overlapped a
+   * change is never served after it. A cached answer is also served without what the removal lists
+   * hold, so one read in the moment before a change cleared the cache still leaves out what the
+   * change removed.
    */
   private record CacheEntry(
       Resolution resolution, Instant answeredAt, Instant retryAt, long changes) {}
@@ -179,19 +180,15 @@ public class DashboardAccessChecker {
     // A webhook change that lands while GitHub is being asked must not be undone by this answer.
     var changesBefore = changeCount.get();
     var cached = cache.get(key);
-    if (cached != null && cached.changes() != changesBefore) {
+    if (cached != null && cached.changes() != changeCount.get()) {
       cached = null;
     }
     if (cached != null && now.isBefore(cached.retryAt())) {
-      return cached.resolution();
+      return withoutRemoved(cached.resolution());
     }
     Resolution resolution;
     try {
-      var scope = withoutRemoved(fetchScope(login, "Bearer " + userToken));
-      resolution =
-          new Resolution(
-              scope.isEmpty() ? AccessDecision.DENIED : AccessDecision.ALLOWED,
-              scope.isEmpty() ? RepositoryScope.NONE : scope);
+      resolution = withoutRemoved(allowedIn(fetchScope(login, "Bearer " + userToken)));
     } catch (WebApplicationException e) {
       if (e.getResponse().getStatus() == 401) {
         log.info("GitHub rejected the dashboard token of {}; ending the session", login);
@@ -226,7 +223,7 @@ public class DashboardAccessChecker {
             && cached.answeredAt().isAfter(now.minus(STALE_SCOPE_LIMIT));
     var resolution =
         stale
-            ? cached.resolution()
+            ? withoutRemoved(cached.resolution())
             : new Resolution(AccessDecision.UNAVAILABLE, RepositoryScope.NONE);
     log.warn(
         "Could not resolve dashboard access for {}{}: {}",
@@ -370,19 +367,21 @@ public class DashboardAccessChecker {
   }
 
   /**
-   * The scope without the installations and repositories a webhook removed, applied to every fresh
-   * answer: one fetched while a change landed still leaves out what the change removed. Its cache
-   * entry carries the change count from before the fetch, so it is never served once the change has
-   * landed, and the next request asks GitHub again.
+   * The scope without the installations and repositories a webhook removed, or {@code scope} itself
+   * when it holds none of them.
    */
   private RepositoryScope withoutRemoved(RepositoryScope scope) {
     var kept = new HashMap<Long, RepositoryScope.Installation>();
+    var dropped = false;
     for (var installation : scope.installations().values()) {
       var repositories = new HashMap<>(installation.repositories());
-      repositories
-          .keySet()
-          .removeIf(id -> removed(removedRepositories, new RepoScope(installation.id(), id)));
-      if (!removed(goneInstallations, installation.id()) && !repositories.isEmpty()) {
+      dropped |=
+          repositories
+              .keySet()
+              .removeIf(id -> removed(removedRepositories, new RepoScope(installation.id(), id)));
+      if (removed(goneInstallations, installation.id()) || repositories.isEmpty()) {
+        dropped = true;
+      } else {
         kept.put(
             installation.id(),
             new RepositoryScope.Installation(
@@ -392,7 +391,26 @@ public class DashboardAccessChecker {
                 repositories));
       }
     }
-    return new RepositoryScope(kept);
+    return dropped ? new RepositoryScope(kept) : scope;
+  }
+
+  /**
+   * An answer without the installations and repositories a webhook removed, applied to every answer
+   * served: one fetched while a change landed, or read from the cache in the moment before the
+   * change cleared it, still leaves out what the change removed. An allowed answer left with
+   * nothing becomes a denial.
+   */
+  private Resolution withoutRemoved(Resolution resolution) {
+    if (resolution.decision() != AccessDecision.ALLOWED) {
+      return resolution;
+    }
+    var scope = withoutRemoved(resolution.scope());
+    return scope == resolution.scope() ? resolution : allowedIn(scope);
+  }
+
+  /** Access to {@code scope}, or a denial when it holds nothing. */
+  private static Resolution allowedIn(RepositoryScope scope) {
+    return scope.isEmpty() ? Resolution.DENIED : new Resolution(AccessDecision.ALLOWED, scope);
   }
 
   /**
