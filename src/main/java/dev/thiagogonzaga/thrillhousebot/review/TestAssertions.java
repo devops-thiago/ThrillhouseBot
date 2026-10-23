@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
@@ -105,8 +106,15 @@ final class TestAssertions {
   /** An identifier a line holds, the key the patches are indexed by. */
   private static final Pattern IDENTIFIER = Pattern.compile("\\w++");
 
-  /** A quote in a finding's text: one backtick span on one line. */
-  private static final Pattern QUOTE = Pattern.compile("`([^`\\n]++)`");
+  /**
+   * A quote in a finding's text: one backtick or single-quote span on one line. A finding quotes
+   * code in single quotes too: scala ThrillhouseBot-test#297's wrote the failing assertion as
+   * 'assert(…)' (#1194). A span between two apostrophes of prose is never part of an assertion.
+   */
+  private static final Pattern QUOTE = Pattern.compile("`([^`\\n]++)`|'([^'\\n]++)'");
+
+  /** A function declared or called on a line: its name, then its argument list opening. */
+  private static final Pattern FUNCTION_NAME = Pattern.compile("([A-Za-z_]\\w*+)\\s*+\\(");
 
   private static final Pattern WHITESPACE = Pattern.compile("\\s++");
 
@@ -164,6 +172,52 @@ final class TestAssertions {
       }
     }
     return List.copyOf(assertions);
+  }
+
+  /**
+   * The test functions that print {@code label}, for a harness whose check macro names each check
+   * with a string the job log then prints: C ThrillhouseBot-test#302 logged "FAIL
+   * rider_limit_rejects_third_code" from {@code CHECK("rider_limit_rejects_third_code", …)} inside
+   * {@code test_rider_limit}, and the finding named the function (#1194). Each changed line holding
+   * the label in double quotes is read up to the nearest line of its hunk indented less, a lone
+   * brace skipped; that line's first function name is kept when it holds "test".
+   */
+  synchronized List<String> functionsLabelling(String label) {
+    var key = lookupKey(label);
+    if (key.isEmpty()) {
+      return List.of();
+    }
+    var quoted = "\"" + label + "\"";
+    var functions = new LinkedHashSet<String>();
+    for (var at : index().getOrDefault(key, List.of())) {
+      var lines = patches.get(at[0]).lines().lines();
+      if (lines.get(at[1]).text().contains(quoted)) {
+        enclosingTestFunction(lines, at[1]).ifPresent(functions::add);
+      }
+    }
+    return List.copyOf(functions);
+  }
+
+  /**
+   * The test function the line at {@code start} is in, read as {@link #functionsLabelling} does.
+   */
+  private static Optional<String> enclosingTestFunction(List<PatchLines.Line> lines, int start) {
+    var line = lines.get(start);
+    int indent = indentOf(line.text());
+    for (int i = start - 1; i >= 0 && i >= start - MAX_BODY_LINES; i--) {
+      var above = lines.get(i);
+      if (above.hunk() != line.hunk()) {
+        break;
+      }
+      var text = above.text();
+      if (!text.isBlank() && !text.strip().equals("{") && indentOf(text) < indent) {
+        var name = FUNCTION_NAME.matcher(text);
+        return name.find() && name.group(1).toLowerCase(Locale.ROOT).contains("test")
+            ? Optional.of(name.group(1))
+            : Optional.empty();
+      }
+    }
+    return Optional.empty();
   }
 
   /** How many patch lines the index has read. */
@@ -289,7 +343,7 @@ final class TestAssertions {
     var quotes = new ArrayList<String>();
     var matcher = QUOTE.matcher(text);
     while (matcher.find()) {
-      String quote = normalized(matcher.group(1));
+      String quote = normalized(matcher.group(1) != null ? matcher.group(1) : matcher.group(2));
       if (quote.length() >= MIN_QUOTE_CHARS) {
         quotes.add(quote);
       }

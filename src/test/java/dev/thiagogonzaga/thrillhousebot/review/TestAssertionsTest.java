@@ -436,4 +436,98 @@ class TestAssertionsTest {
         TestAssertions.quotesIn(
             "`x + 1` and `assert_eq!(zone(7.1,   &t), 2);` and `split\nacross lines here`"));
   }
+
+  /** A finding quotes code in single quotes too, as scala ThrillhouseBot-test#297's did (#1194). */
+  @Test
+  void singleQuotedSpansAreQuotesToo() {
+    assertEquals(
+        List.of("assert(excursiondetector.rollingaverage(rs, 3) == 6.0)"),
+        TestAssertions.quotesIn(
+            "the test asserts 'assert(ExcursionDetector.rollingAverage(rs, 3) == 6.0)', the"
+                + " average of the last three; it's 'short'"));
+  }
+
+  /** Lines 59-71 of c ThrillhouseBot-test#302's {@code c/tests/test_dispenser.c}. */
+  private static final String C_302_TEST =
+      """
+      @@ -0,0 +59,13 @@
+      +static void test_rider_limit(void)
+      +{
+      +    static config_t cfg;
+      +    static dispenser_t d;
+      +    int rc;
+      +
+      +    config_load(&cfg);
+      +    setup(&d, &cfg);
+      +    dispenser_issue(&d, "rider1", "+15550101", "harbor", 100, stub_notify, NULL);
+      +    dispenser_issue(&d, "rider1", "+15550101", "harbor", 101, stub_notify, NULL);
+      +    rc = dispenser_issue(&d, "rider1", "+15550101", "harbor", 102, stub_notify, NULL);
+      +    CHECK("rider_limit_rejects_third_code", rc == DISP_LIMIT);
+      +}
+      """;
+
+  /**
+   * A C harness prints the label its {@code CHECK} macro was given, and a finding names the test
+   * function the check is in (#1194): the label leads to that function, the Allman brace skipped.
+   */
+  @Test
+  void aCheckLabelLeadsToTheTestFunctionThatPrintsIt() {
+    var tests = TestAssertions.of(List.of(file("c/tests/test_dispenser.c", C_302_TEST)));
+
+    assertEquals(
+        List.of("test_rider_limit"), tests.functionsLabelling("rider_limit_rejects_third_code"));
+    assertEquals(List.of(), tests.functionsLabelling("rider_limit_unknown_label"));
+    assertEquals(
+        List.of(), tests.functionsLabelling("stub_notify"), "named, not quoted as a label");
+    assertEquals(List.of(), TestAssertions.NONE.functionsLabelling("--"), "no identifier");
+  }
+
+  /**
+   * The label leads nowhere when the line above it indented less declares no test function, when
+   * its hunk starts before one, or when the line holding it is not quoted as the label.
+   */
+  @Test
+  void aCheckLabelOutsideATestFunctionLeadsNowhere() {
+    var tests =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "c/tests/helpers.c",
+                    """
+                    @@ -0,0 +1,3 @@
+                    +static void setup(void)
+                    +{
+                    +    CHECK("setup_loads_the_config", loaded);
+                    @@ -20,0 +20,1 @@
+                    +    CHECK("orphan_label_at_hunk_start", ok);
+                    """),
+                file(
+                    "c/tests/flat.c",
+                    """
+                    @@ -0,0 +1,3 @@
+                    +CHECK("top_level_label", ok);
+                    +int counter;
+                    +    CHECK("indented_under_a_declaration", ok);
+                    """)));
+
+    assertEquals(List.of(), tests.functionsLabelling("setup_loads_the_config"));
+    assertEquals(List.of(), tests.functionsLabelling("orphan_label_at_hunk_start"));
+    assertEquals(List.of(), tests.functionsLabelling("top_level_label"));
+    assertEquals(List.of(), tests.functionsLabelling("indented_under_a_declaration"));
+  }
+
+  /** The walk up from a label stops after {@link TestAssertions#MAX_BODY_LINES} lines. */
+  @Test
+  void aCheckLabelTooFarBelowItsFunctionLeadsNowhere() {
+    var patch = new StringBuilder("@@ -0,0 +1,202 @@\n+void test_long_body(void) {\n");
+    for (int i = 0; i < TestAssertions.MAX_BODY_LINES; i++) {
+      patch.append("+    step(").append(i).append(");\n");
+    }
+    patch.append("+    CHECK(\"long_body_final_check\", ok);\n");
+
+    assertEquals(
+        List.of(),
+        TestAssertions.of(List.of(file("c/tests/long.c", patch.toString())))
+            .functionsLabelling("long_body_final_check"));
+  }
 }
