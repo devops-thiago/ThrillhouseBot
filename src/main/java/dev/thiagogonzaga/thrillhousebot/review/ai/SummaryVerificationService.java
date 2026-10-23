@@ -189,6 +189,7 @@ public class SummaryVerificationService {
                       diffSlot,
                       material.projectStack()),
               () -> ReasoningRepeat.effortFor(config, true),
+              () -> ReasoningRepeat.enableHint(config),
               () -> tokenLedger.ceilingReached(ledgerSessionId),
               answer -> recordUsage(ledgerSessionId, answer),
               () -> tokenLedger.recordReasoningStepDown(ledgerSessionId));

@@ -226,11 +226,12 @@ public class AiReviewService {
       Log.warnf(
           "AI review for session %d stopped at its response-length cap with no content at"
               + " reasoning_effort=%s (%s): the reasoning tail spent the whole output allowance,"
-              + " so the call is repeated once at reasoning_effort=%s",
+              + " so the call is repeated once at reasoning_effort=%s%s",
           session.id,
           ReasoningRepeat.firstEffort(config, lane == ModelLane.CONCISE),
           describeUsage(e),
-          effort.get());
+          effort.get(),
+          ReasoningRepeat.enableHint(config));
       tokenLedger.recordReasoningStepDown(ReviewTokenLedger.keyFor(session));
       broadcaster.broadcast(
           SessionEventBroadcaster.SessionEvent.retry(

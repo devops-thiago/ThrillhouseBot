@@ -474,7 +474,10 @@ thrillhousebot.ai.models.some-separate-budget-model.separate-output-budget=true
   (`low` unless set). `AI_REASONING_REPEAT_EFFORT` sets the repeat's effort in
   both cases; set it to `none` for a provider that honors `none`. A model that reasons by default, such as
   `glm-5.3-flash`, can hit this on most concise calls and bill the cap each
-  time; enable reasoning for such a model. If a `none` repeat writes its
+  time, so set `AI_REASONING_ENABLED=true` for such a model. Measured on
+  `glm-5.3-flash`, 9 of 12 summary and summary-check calls were cut at the
+  8192-token cap with it off (94,533 output tokens in all) and none with it on
+  (6,982). A line logged for a cut call with reasoning off says the same. If a `none` repeat writes its
   deliberation into the response instead, it is stopped once 8,000 characters
   arrive with no JSON object opened, so the cap is not billed twice. On any
   `finish_reason=length` stop, the log line, the failed check run and the PR

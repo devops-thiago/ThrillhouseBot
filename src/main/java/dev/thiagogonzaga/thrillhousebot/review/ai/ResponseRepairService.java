@@ -260,6 +260,7 @@ public class ResponseRepairService {
                       ? summaryRepairer.repair(contract, error, fenced)
                       : reviewRepairer.repair(contract, error, fenced),
               () -> ReasoningRepeat.effortFor(config, concise),
+              () -> ReasoningRepeat.enableHint(config),
               () -> tokenLedger.ceilingReached(ledgerKey),
               repaired -> recordUsage(ledgerKey, repaired),
               () -> tokenLedger.recordReasoningStepDown(ledgerKey));

@@ -152,6 +152,14 @@ class ReasoningRepeatTest {
   }
 
   @Test
+  void theLogsSuggestEnablingReasoningOnlyWhileItIsOff() {
+    assertEquals("", ReasoningRepeat.enableHint(config(true, "low", Optional.empty())));
+    assertTrue(
+        ReasoningRepeat.enableHint(config(false, "low", Optional.empty()))
+            .contains("set AI_REASONING_ENABLED=true"));
+  }
+
+  @Test
   void anOverrideHoldsForItsScopeNestsAndANullOneSetsNothing() {
     assertNull(ReasoningRepeat.current());
     try (var _ = ReasoningRepeat.override("low")) {
@@ -221,6 +229,7 @@ class ReasoningRepeatTest {
               return effortPerCall.size() == 1 ? REASONED_AWAY : ANSWERED;
             },
             () -> Optional.of("low"),
+            () -> "",
             () -> false,
             metered::add,
             repeats::incrementAndGet);
@@ -247,6 +256,7 @@ class ReasoningRepeatTest {
                   .build();
             },
             () -> Optional.of("none"),
+            () -> "",
             () -> false,
             r -> {},
             () -> {});
@@ -287,6 +297,7 @@ class ReasoningRepeatTest {
               return first;
             },
             effort,
+            () -> "",
             () -> ceilingReached,
             r -> {},
             repeats::incrementAndGet);

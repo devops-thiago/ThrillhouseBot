@@ -1171,6 +1171,12 @@ public interface ThrillhouseConfig {
        * Send a reasoning-effort hint ({@code reasoning_effort}). When {@code false}, no reasoning
        * parameter is sent and the provider default applies, except on the one repeat of a call that
        * spent its whole output cap reasoning, which sends the lane's effort.
+       *
+       * <p>Set it {@code true} for a model that reasons by default. With it off, {@code
+       * glm-5.3-flash} spent the whole 8192-token concise cap on 9 of 12 summary and summary-check
+       * calls before the repeat answered, 94,533 output tokens in all; with it on, the concise lane
+       * sent {@code low} and no call was cut, 6,982 tokens in all (#1174). It stays off by default
+       * because a model with no reasoning parameter may reject the call.
        */
       @WithDefault("false")
       boolean enabled();
