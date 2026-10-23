@@ -130,10 +130,14 @@ final class TestAssertions {
 
   /**
    * Words that open a statement rather than a declaration's type, so the call after one ({@code
-   * else if (…)}, {@code return check(…)}) is not taken for a declared function.
+   * else if (…)}, {@code return check(…)}, {@code with open(…) as fh:}) is not taken for a declared
+   * function, and a statement that only looks like a call ({@code retry: for (;;) {}) is not one.
    */
   private static final Set<String> STATEMENT_WORDS =
-      Set.of("else", "return", "case", "new", "throw", "await", "yield", "do", "not", "and", "or");
+      Set.of(
+          "else", "return", "case", "new", "throw", "await", "yield", "do", "not", "and", "or",
+          "if", "elif", "for", "foreach", "while", "until", "unless", "switch", "with", "catch",
+          "except", "assert", "raise", "lambda", "print");
 
   private static final Pattern WHITESPACE = Pattern.compile("\\s++");
 
@@ -253,7 +257,8 @@ final class TestAssertions {
   /**
    * The function {@code code} declares: its first name before an argument list, when a type or a
    * keyword stands before that name ({@link #DECLARATION_PREFIX}, opened by none of the {@link
-   * #STATEMENT_WORDS}) and the line is not a statement ending in {@code ;}. {@code static void
+   * #STATEMENT_WORDS}), the name is not one of them either, and the line is not a statement ending
+   * in {@code ;}. {@code static void
    * test_rider_limit(void)} declares one; {@code if (…) {}, {@code case (LIMIT):}, {@code
    * for_each_cpu(i, mask) {}, {@code rc = latest_scan(d);} and {@code setup(&d);} do not.
    */
@@ -267,6 +272,7 @@ final class TestAssertions {
     return !prefix.isEmpty()
             && DECLARATION_PREFIX.matcher(prefix).matches()
             && !STATEMENT_WORDS.contains(opening)
+            && !STATEMENT_WORDS.contains(name.group(1))
         ? Optional.of(name.group(1))
         : Optional.empty();
   }

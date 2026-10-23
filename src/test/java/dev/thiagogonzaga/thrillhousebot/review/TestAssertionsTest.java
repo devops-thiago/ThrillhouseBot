@@ -528,6 +528,37 @@ class TestAssertionsTest {
     assertEquals(List.of("test_fleet_pages"), tests.functionsLabelling("fleet_pages_every_dock"));
   }
 
+  /**
+   * A {@code with} block and a labeled loop open blocks inside the function, not declarations, so a
+   * check under either keeps its test function.
+   */
+  @Test
+  void aWithBlockOrALabeledLoopIsClimbedPast() {
+    var tests =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "tests/test_sweep.py",
+                    """
+                    @@ -0,0 +1,3 @@
+                    +    def test_sweep(self):
+                    +        with open(self.path) as fh:
+                    +            check("sweep_reads_every_line", fh.read())
+                    """),
+                file(
+                    "src/test/java/SweepTest.java",
+                    """
+                    @@ -0,0 +1,3 @@
+                    +  void testRetriesTheSweep() {
+                    +    retry: for (;;) {
+                    +      check("sweep_retries_until_done", done);
+                    """)));
+
+    assertEquals(List.of("test_sweep"), tests.functionsLabelling("sweep_reads_every_line"));
+    assertEquals(
+        List.of("testRetriesTheSweep"), tests.functionsLabelling("sweep_retries_until_done"));
+  }
+
   /** A check under a switch's case label or a preprocessor guard keeps its function too. */
   @Test
   void aCheckUnderACaseLabelOrAGuardLeadsToItsTestFunction() {

@@ -1266,6 +1266,46 @@ class CiFailureCitationsTest {
         "the key and the failure are in different sentences");
   }
 
+  /**
+   * A sentence is cut at a stop, a semicolon, a question or an exclamation mark before whitespace,
+   * and at a line break; not at an abbreviation's stop, inside a backtick quote, or at a mark that
+   * ends the text.
+   */
+  @Test
+  void sentencesAreCutWhereOneEndsAndNotAtAbbreviationsOrQuotedCode() {
+    assertEquals(
+        List.of(
+            "the copy fails, i.e. the \"test\" check stops",
+            " why",
+            " now",
+            " run `a(); b()` first",
+            "next line.end"),
+        CiFailureCitations.sentences(
+            "the copy fails, i.e. the \"test\" check stops. why? now! run `a(); b()` first\n"
+                + "next line.end"));
+    assertEquals(
+        List.of("fails", " etc. too"),
+        CiFailureCitations.sentences("fails. etc. too"),
+        "a word that opens the text is read back to its start");
+  }
+
+  /** A failure and a check named in one sentence across an "i.e." still cite the check. */
+  @Test
+  void anAbbreviationDoesNotSplitTheSentenceThatTiesTheCheck() {
+    var finding =
+        new ReviewResponse.Finding(
+            "high",
+            "high",
+            "Dockerfile",
+            4,
+            "COPY dist fails",
+            "The copy step fails at COPY, i.e. the \"test\" check never gets to run the image.",
+            null,
+            null);
+
+    assertTrue(fromJobLog("not ok 1 - test\n").cites(finding));
+  }
+
   /** c ThrillhouseBot-test#302's harness output: its CHECK macro prints the label it was given. */
   private static final String C_302_LOG =
       """
