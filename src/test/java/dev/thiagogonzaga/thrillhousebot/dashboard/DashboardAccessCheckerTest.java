@@ -228,11 +228,17 @@ class DashboardAccessCheckerTest {
 
   @Test
   void anInstallationWhoseLastRepositoryIsRemovedMidFetchIsLeftOut() {
-    when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(1)))
+    // alice's own installation is listed first, so its repositories are read before the
+    // organization's membership check, which is when the removal arrives.
+    stubInstallations(
+        AUTH, installation(20L, "alice", "User"), installation(10L, "acme", "Organization"));
+    var member = mock(Response.class);
+    when(member.getStatus()).thenReturn(204);
+    when(installationClient.checkOrgMember(anyString(), anyString(), eq("acme"), eq("alice")))
         .thenAnswer(
             invocation -> {
               change(InstallationChange.Kind.REPOSITORIES_REMOVED, 20L, 200L);
-              return new InstallationRepositoriesResponse(1, List.of(repo(200L, "alice", "site")));
+              return member;
             });
 
     var scope = checker.repositoryScope("alice", TOKEN);
