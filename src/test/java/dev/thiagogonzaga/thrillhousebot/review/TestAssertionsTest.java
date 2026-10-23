@@ -482,6 +482,34 @@ class TestAssertionsTest {
         List.of("test_sweep_expires_codes"), tests.functionsLabelling("sweep_expires_every_code"));
   }
 
+  /** A check under a switch's case label or a preprocessor guard keeps its function too. */
+  @Test
+  void aCheckUnderACaseLabelOrAGuardLeadsToItsTestFunction() {
+    var tests =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "c/tests/test_expiry.c",
+                    """
+                    @@ -0,0 +1,11 @@
+                    +static void test_expire_codes(void) {
+                    +    switch (rc) {
+                    +    case DISP_LIMIT:
+                    +        CHECK("expiry_rejects_a_fourth_code", ok);
+                    +        break;
+                    +    }
+                    +#ifdef WITH_SWEEP
+                    +    CHECK("expiry_sweeps_with_the_option", swept);
+                    +#endif
+                    +}
+                    """)));
+
+    assertEquals(
+        List.of("test_expire_codes"), tests.functionsLabelling("expiry_rejects_a_fourth_code"));
+    assertEquals(
+        List.of("test_expire_codes"), tests.functionsLabelling("expiry_sweeps_with_the_option"));
+  }
+
   /** Lines 59-71 of c ThrillhouseBot-test#302's {@code c/tests/test_dispenser.c}. */
   private static final String C_302_TEST =
       """

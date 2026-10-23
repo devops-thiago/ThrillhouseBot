@@ -210,9 +210,11 @@ final class TestAssertions {
   }
 
   /**
-   * The test function the line at {@code start} is in, read as {@link #functionsLabelling} does. A
-   * less-indented line that opens a block inside the function ({@link #CONTROL_BLOCK}) is climbed
-   * past, so a check inside a loop or a condition keeps its function.
+   * The test function the line at {@code start} is in, read as {@link #functionsLabelling} does.
+   * Blank lines, a lone brace and preprocessor lines are skipped. A less-indented line that
+   * declares no function, such as a block opened inside the function ({@link #CONTROL_BLOCK}) or a
+   * {@code case} label, is climbed past, so a check inside a loop, a condition or a switch keeps
+   * its function; the walk ends at the first function declared, or at a line in the first column.
    */
   private static Optional<String> enclosingTestFunction(List<PatchLines.Line> lines, int start) {
     var line = lines.get(start);
@@ -223,16 +225,20 @@ final class TestAssertions {
         break;
       }
       var text = above.text();
-      if (!text.isBlank() && !text.strip().equals("{") && indentOf(text) < indent) {
-        if (CONTROL_BLOCK.matcher(text.strip()).lookingAt()) {
-          indent = indentOf(text);
-          continue;
-        }
-        var name = FUNCTION_NAME.matcher(text);
-        return name.find() && name.group(1).toLowerCase(Locale.ROOT).contains("test")
+      var code = text.strip();
+      if (code.isEmpty() || code.equals("{") || code.startsWith("#") || indentOf(text) >= indent) {
+        continue;
+      }
+      var name = FUNCTION_NAME.matcher(text);
+      if (!CONTROL_BLOCK.matcher(code).lookingAt() && name.find()) {
+        return name.group(1).toLowerCase(Locale.ROOT).contains("test")
             ? Optional.of(name.group(1))
             : Optional.empty();
       }
+      if (indentOf(text) == 0) {
+        return Optional.empty();
+      }
+      indent = indentOf(text);
     }
     return Optional.empty();
   }
