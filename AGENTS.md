@@ -141,8 +141,10 @@ same diff.
 - **Length stops.** A length stop with content is not retried: the identical call would be cut
   identically (#495). The response is salvaged or disclosed. A length stop with no content (the
   reasoning spent the cap) is repeated once at the effort `ReasoningRepeat.effortFor` names (#839):
-  `none` with reasoning enabled, and the lane's own effort (`low` unless set) with reasoning off in
-  config, where nothing was sent and the provider default reasoned the cap away (#1169). The
+  `AI_REASONING_REPEAT_EFFORT` when set; otherwise `low` with reasoning enabled, and no repeat on a
+  lane already at `low` or `none` (#1173), and the lane's own effort (`low` unless set) with
+  reasoning off in config, where nothing was sent and the provider default reasoned the cap away
+  (#1169). A repeat at the effort the first call sent is never made. The
   streamed calls repeat in `AiReviewService.runWithRetries`; the blocking review-path calls (finding
   verifier, summary check, response repair) through `ReasoningRepeat.blocking`, which meters both
   calls and skips the repeat at the spend ceiling. The effort reaches the model through the
@@ -641,7 +643,8 @@ by the bot: `ReviewLearningService.retract` clears `active` and records who and 
 |---|---|
 | Default chat memory on AI services | Every call shared one memory id, so each review resent the previous reviews' prompts and answers (#584). |
 | Retrying a length stop that produced content | The identical call is cut identically; salvage what completed instead (#495). |
-| Stepping reasoning down one tier on an empty length stop | Tiers barely move reasoning length on the measured provider, so the cap burned twice. The repeat goes straight to `none` (#839). |
+| Stepping reasoning down one tier on an empty length stop | Tiers barely move reasoning length on the measured provider, so the cap burned twice. The repeat goes straight down (#839). |
+| Repeating at `none` by default when reasoning is enabled | `glm-5.3-flash` ignores `none`: 5 of 6 repeats spent the cap again, while at `low` all 6 answered. The repeat goes out at `low` unless `AI_REASONING_REPEAT_EFFORT` says otherwise (#1173). |
 | Repeating at `none` when reasoning is off in config | `glm-5.3-flash` ignores `none` and spent the 8192-token concise cap again, while at `low` it answered in under a thousand tokens. With nothing sent, the repeat sends the lane's effort instead (#1169). |
 | Sending the concise effort even with reasoning off | A provider or model that does not accept `reasoning_effort` would reject every call; only the repeat of a call that already failed sends it (#1169). |
 | Summary fields on the review call | The hottest call paid input for the summary spec and output for the object, a response cut at its cap lost the summary, and the counts described unverified findings. Now a dedicated summary call on both lanes (#664). |

@@ -1149,9 +1149,9 @@ public interface ThrillhouseConfig {
      */
     interface ReasoningConfig {
       /**
-       * The tier that asks the model not to reason at all. Named because it is also the value one
-       * call steps down to on its own when the reasoning tail spends the whole output allowance
-       * (#839), so the step-down and the configured value can never disagree on the spelling.
+       * The tier that asks the model not to reason at all. Named because the repeat of a call whose
+       * reasoning spent the whole output allowance (#839) is watched for deliberation written into
+       * its response only when it goes out at this tier (#893).
        */
       String EFFORT_NONE = "none";
 
@@ -1208,6 +1208,23 @@ public interface ThrillhouseConfig {
        */
       @WithName("concise-effort")
       Optional<String> conciseEffort();
+
+      /**
+       * Effort for the one repeat of a call that stopped at its response cap with no content, its
+       * reasoning having spent the whole allowance (#839). Same values. Unset means {@code low}
+       * while reasoning is enabled, with no repeat on a lane that already sends {@code low} or
+       * {@code none}; while it is off, the lane's effort as it would go out enabled. A value equal
+       * to what the first call sent makes no repeat.
+       *
+       * <p>Unset does not mean {@code none}: {@code glm-5.3-flash} ignores {@code none}, and 5 of 6
+       * repeats at {@code none} spent the cap again, while at {@code low} all 6 answered in under a
+       * thousand output tokens (#1173). Nor does it mean one tier below the lane: on the provider
+       * #839 was measured on, adjacent tiers barely moved the reasoning length, so {@code xhigh}
+       * after a cut {@code max} call would spend the cap a second time. Set {@code none} for a
+       * provider that honors it.
+       */
+      @WithName("repeat-effort")
+      Optional<String> repeatEffort();
 
       /** An {@link #effort()} value normalized to the lowercase wire value providers expect. */
       static String normalize(String effort) {
