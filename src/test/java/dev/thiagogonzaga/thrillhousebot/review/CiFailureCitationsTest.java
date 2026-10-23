@@ -1289,6 +1289,23 @@ class CiFailureCitationsTest {
         "a word that opens the text is read back to its start");
   }
 
+  /**
+   * Single-quoted code keeps its marks inside one sentence, but only a span that closes on its line
+   * and opens after no letter or digit: a contraction or an unclosed quote still lets it end.
+   */
+  @Test
+  void singleQuotedCodeStaysInOneSentence() {
+    assertEquals(
+        List.of("it fails at 'a(); b()' so the \"test\" check stops", " next"),
+        CiFailureCitations.sentences("it fails at 'a(); b()' so the \"test\" check stops. next"));
+    assertEquals(List.of("it's done", " ok"), CiFailureCitations.sentences("it's done. ok"));
+    assertEquals(List.of("'open", " x"), CiFailureCitations.sentences("'open. x"));
+    assertEquals(List.of("'a", " b", "c'"), CiFailureCitations.sentences("'a. b\nc'"));
+    assertEquals(
+        List.of("'a; b' fails", "next line"),
+        CiFailureCitations.sentences("'a; b' fails\nnext line"));
+  }
+
   /** A failure and a check named in one sentence across an "i.e." still cite the check. */
   @Test
   void anAbbreviationDoesNotSplitTheSentenceThatTiesTheCheck() {

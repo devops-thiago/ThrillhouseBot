@@ -227,7 +227,8 @@ final class TestAssertions {
    * declares no function ({@link #declaredFunction}), such as a block opened inside the function, a
    * {@code case} label, a loop macro or a call, is climbed past, so a check inside a loop, a
    * condition or a switch keeps its function; the walk ends at the first function declared, or at a
-   * line in the first column.
+   * line in the first column. A declaration whose type stands on the line above its name ({@code
+   * static void} over {@code test_rider_limit(void)}) is read with that line.
    */
   private static Optional<String> enclosingTestFunction(List<PatchLines.Line> lines, int start) {
     var line = lines.get(start);
@@ -242,7 +243,7 @@ final class TestAssertions {
       if (code.isEmpty() || code.equals("{") || code.startsWith("#") || indentOf(text) >= indent) {
         continue;
       }
-      var declared = declaredFunction(code);
+      var declared = declaredFunction(code, i > 0 ? lines.get(i - 1) : null, above.hunk());
       if (declared.isPresent()) {
         return declared.filter(name -> name.toLowerCase(Locale.ROOT).contains("test"));
       }
@@ -258,16 +259,20 @@ final class TestAssertions {
    * The function {@code code} declares: its first name before an argument list, when a type or a
    * keyword stands before that name ({@link #DECLARATION_PREFIX}, opened by none of the {@link
    * #STATEMENT_WORDS}), the name is not one of them either, and the line is not a statement ending
-   * in {@code ;}. {@code static void
+   * in {@code ;}. A name opening its line takes its type from the line {@code above} in the same
+   * hunk. {@code static void
    * test_rider_limit(void)} declares one; {@code if (…) {}, {@code case (LIMIT):}, {@code
    * for_each_cpu(i, mask) {}, {@code rc = latest_scan(d);} and {@code setup(&d);} do not.
    */
-  private static Optional<String> declaredFunction(String code) {
+  private static Optional<String> declaredFunction(String code, PatchLines.Line above, int hunk) {
     var name = FUNCTION_NAME.matcher(code);
     if (code.endsWith(";") || !name.find()) {
       return Optional.empty();
     }
     var prefix = code.substring(0, name.start()).strip();
+    if (prefix.isEmpty() && above != null && above.hunk() == hunk) {
+      prefix = above.text().strip();
+    }
     var opening = prefix.split("[^\\w]", 2)[0];
     return !prefix.isEmpty()
             && DECLARATION_PREFIX.matcher(prefix).matches()

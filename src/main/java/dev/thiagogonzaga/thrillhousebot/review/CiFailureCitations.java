@@ -801,8 +801,10 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
 
   /**
    * The finding's sentences and clauses: cut at a line break, and at a stop, a semicolon, a
-   * question or an exclamation mark that whitespace follows, except inside a backtick quote, whose
-   * code may hold "; ", or at the stop closing an abbreviation such as "i.e." (#1194).
+   * question or an exclamation mark that whitespace follows, except inside quoted code, whose code
+   * may hold "; ", or at the stop closing an abbreviation such as "i.e." (#1194). Quoted code is a
+   * backtick span, or a single-quote span closed on the same line whose opening quote follows no
+   * letter or digit, so a contraction's apostrophe quotes nothing.
    */
   static List<String> sentences(String raw) {
     var sentences = new ArrayList<String>();
@@ -816,6 +818,8 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
         start = i + 1;
       } else if (c == '`') {
         inQuote = !inQuote;
+      } else if (!inQuote && opensASingleQuote(raw, i)) {
+        i = raw.indexOf('\'', i + 1);
       } else if (!inQuote && endsASentence(raw, i)) {
         sentences.add(raw.substring(start, i));
         start = i + 1;
@@ -823,6 +827,16 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     }
     sentences.add(raw.substring(start));
     return sentences;
+  }
+
+  /** Whether a single quote at {@code at} opens a span that closes before the line ends. */
+  private static boolean opensASingleQuote(String raw, int at) {
+    if (raw.charAt(at) != '\'' || (at > 0 && Character.isLetterOrDigit(raw.charAt(at - 1)))) {
+      return false;
+    }
+    int close = raw.indexOf('\'', at + 1);
+    int lineEnd = raw.indexOf('\n', at + 1);
+    return close > 0 && (lineEnd < 0 || close < lineEnd);
   }
 
   private static boolean endsASentence(String raw, int at) {

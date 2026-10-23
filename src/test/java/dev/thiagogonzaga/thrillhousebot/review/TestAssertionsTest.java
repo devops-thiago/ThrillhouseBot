@@ -559,6 +559,41 @@ class TestAssertionsTest {
         List.of("testRetriesTheSweep"), tests.functionsLabelling("sweep_retries_until_done"));
   }
 
+  /**
+   * A declaration whose type stands on the line above its name is read with that line; a name that
+   * opens its hunk or its file has no line above to take a type from.
+   */
+  @Test
+  void aDeclarationSplitAcrossTwoLinesLeadsToItsFunction() {
+    var tests =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "c/tests/test_split.c",
+                    """
+                    @@ -0,0 +1,5 @@
+                    +static void
+                    +test_rider_split(void)
+                    +{
+                    +    CHECK("split_declaration_label", ok);
+                    +}
+                    @@ -40,0 +41,2 @@
+                    +run_all_tests(void)
+                    +    CHECK("label_under_a_hunk_opening_name", ok);
+                    """),
+                file(
+                    "c/tests/test_first.c",
+                    """
+                    @@ -0,0 +1,2 @@
+                    +run_first_tests(void)
+                    +    CHECK("label_under_a_file_opening_name", ok);
+                    """)));
+
+    assertEquals(List.of("test_rider_split"), tests.functionsLabelling("split_declaration_label"));
+    assertEquals(List.of(), tests.functionsLabelling("label_under_a_hunk_opening_name"));
+    assertEquals(List.of(), tests.functionsLabelling("label_under_a_file_opening_name"));
+  }
+
   /** A check under a switch's case label or a preprocessor guard keeps its function too. */
   @Test
   void aCheckUnderACaseLabelOrAGuardLeadsToItsTestFunction() {
