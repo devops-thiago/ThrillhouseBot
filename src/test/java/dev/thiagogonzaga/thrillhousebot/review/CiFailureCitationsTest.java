@@ -1336,6 +1336,42 @@ class CiFailureCitationsTest {
             .overviewSentences(List.of(Finding.fromAiResponse(C_302_FINDING))));
   }
 
+  /**
+   * A label of several words leads to its test function too: a C harness printing TAP names the
+   * check "sweep expires every code", and a finding naming only {@code test_sweep} explains it.
+   */
+  @Test
+  void aCheckLabelOfSeveralWordsLeadsToItsTestFunction() {
+    var citations =
+        CiFailureCitations.parse(
+            sectionFromJobLog("not ok 1 - sweep expires every code\n"),
+            List.of(
+                addedAt(
+                    "c/tests/test_sweep.c",
+                    1,
+                    """
+                    static void test_sweep(void)
+                    {
+                        CHECK("sweep expires every code", expired == 3);
+                    }
+                    """)));
+    var finding =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "c/src/sweep.c",
+            12,
+            "Sweep skips the last code",
+            "The loop stops one short, so test_sweep sees two expired codes where it expects three.",
+            null,
+            null);
+
+    assertTrue(
+        citations
+            .overviewSentences(List.of(Finding.fromAiResponse(finding)))
+            .endsWith(", which the finding \"Sweep skips the last code\" explains."));
+  }
+
   /** scala ThrillhouseBot-test#297's sbt output, its level and colours as the job log printed. */
   private static final String SCALA_297_LOG =
       """

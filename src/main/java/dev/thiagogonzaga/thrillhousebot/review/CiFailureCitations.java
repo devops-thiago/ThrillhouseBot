@@ -265,11 +265,11 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
 
     /** Whether the finding names this test, or a test function that prints its name (#1194). */
     boolean namedIn(String raw, String text) {
-      if (name.indexOf(' ') >= 0) {
-        return phrases.stream().anyMatch(text::contains);
-      }
-      return namesIdentifier(raw, name)
-          || functions.stream().anyMatch(function -> namesIdentifier(raw, function));
+      boolean byName =
+          name.indexOf(' ') >= 0
+              ? phrases.stream().anyMatch(text::contains)
+              : namesIdentifier(raw, name);
+      return byName || functions.stream().anyMatch(function -> namesIdentifier(raw, function));
     }
 
     private static boolean namesIdentifier(String raw, String name) {
