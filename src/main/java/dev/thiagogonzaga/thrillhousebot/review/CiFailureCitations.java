@@ -148,10 +148,11 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   private static final String SENTENCE_MARKS = ".!?;";
 
   /**
-   * Abbreviations whose closing stop ends no sentence: "fails at COPY, i.e. the "test" check …".
+   * The dotted abbreviations whose closing stop ends no sentence: "fails at COPY, i.e. the "test"
+   * check …". Only these: a stop after "etc." or "no." ends a sentence as often as not, and a cut
+   * that should not have been made can only lose a tie, never make a wrong one.
    */
-  private static final Set<String> ABBREVIATIONS =
-      Set.of("i.e", "e.g", "etc", "vs", "cf", "no", "approx", "incl", "resp");
+  private static final Set<String> ABBREVIATIONS = Set.of("i.e", "e.g");
 
   /** The apostrophes a contraction is written with, dropped so "doesn't" reads as "doesnt". */
   private static final Pattern APOSTROPHE = Pattern.compile("['\u2019]");
@@ -802,25 +803,21 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   /**
    * The finding's sentences and clauses: cut at a line break, and at a stop, a semicolon, a
    * question or an exclamation mark that whitespace follows, except inside quoted code, whose code
-   * may hold "; ", or at the stop closing an abbreviation such as "i.e." (#1194). Quoted code is a
-   * backtick span, or a single-quote span closed on the same line whose opening quote follows no
-   * letter or digit, so a contraction's apostrophe quotes nothing.
+   * may hold "; ", or at the stop closing "i.e." or "e.g." (#1194). Quoted code is a backtick or
+   * single-quote span that closes on the same line, a single quote opening one only after no letter
+   * or digit, so neither a contraction's apostrophe nor a stray backtick quotes anything.
    */
   static List<String> sentences(String raw) {
     var sentences = new ArrayList<String>();
     int start = 0;
-    boolean inQuote = false;
     for (int i = 0; i < raw.length(); i++) {
       char c = raw.charAt(i);
       if (c == '\n') {
-        inQuote = false;
         sentences.add(raw.substring(start, i));
         start = i + 1;
-      } else if (c == '`') {
-        inQuote = !inQuote;
-      } else if (!inQuote && opensASingleQuote(raw, i)) {
-        i = raw.indexOf('\'', i + 1);
-      } else if (!inQuote && endsASentence(raw, i)) {
+      } else if (opensAQuote(raw, i)) {
+        i = raw.indexOf(c, i + 1);
+      } else if (endsASentence(raw, i)) {
         sentences.add(raw.substring(start, i));
         start = i + 1;
       }
@@ -829,12 +826,17 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     return sentences;
   }
 
-  /** Whether a single quote at {@code at} opens a span that closes before the line ends. */
-  private static boolean opensASingleQuote(String raw, int at) {
-    if (raw.charAt(at) != '\'' || (at > 0 && Character.isLetterOrDigit(raw.charAt(at - 1)))) {
+  /**
+   * Whether a backtick or a single quote at {@code at} opens a span that closes before the line
+   * ends; a single quote right after a letter or digit is an apostrophe and opens none.
+   */
+  private static boolean opensAQuote(String raw, int at) {
+    char quote = raw.charAt(at);
+    if ((quote != '`' && quote != '\'')
+        || (quote == '\'' && at > 0 && Character.isLetterOrDigit(raw.charAt(at - 1)))) {
       return false;
     }
-    int close = raw.indexOf('\'', at + 1);
+    int close = raw.indexOf(quote, at + 1);
     int lineEnd = raw.indexOf('\n', at + 1);
     return close > 0 && (lineEnd < 0 || close < lineEnd);
   }

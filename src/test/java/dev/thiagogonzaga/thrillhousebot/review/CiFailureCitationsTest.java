@@ -1284,9 +1284,17 @@ class CiFailureCitationsTest {
             "the copy fails, i.e. the \"test\" check stops. why? now! run `a(); b()` first\n"
                 + "next line.end"));
     assertEquals(
-        List.of("fails", " etc. too"),
-        CiFailureCitations.sentences("fails. etc. too"),
+        List.of("e.g. this", " that"),
+        CiFailureCitations.sentences("e.g. this. that"),
         "a word that opens the text is read back to its start");
+    assertEquals(
+        List.of("the cp fails, etc", " the \"test\" check goes red too."),
+        CiFailureCitations.sentences("the cp fails, etc. the \"test\" check goes red too."),
+        "only a dotted abbreviation keeps its stop inside the sentence");
+    assertEquals(
+        List.of("the cp fails in `the step", " the \"test\" check goes red"),
+        CiFailureCitations.sentences("the cp fails in `the step. the \"test\" check goes red"),
+        "a backtick with no partner on its line quotes nothing");
   }
 
   /**
