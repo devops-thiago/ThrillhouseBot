@@ -418,6 +418,20 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
+  void anOutageDuringAChangeDoesNotServeTheAnswerFromBeforeIt() {
+    checker.repositoryScope("alice", TOKEN);
+    now.set(now.get().plus(DashboardAccessChecker.SCOPE_CACHE_TTL));
+    when(userClient.listInstallations(eq(AUTH), anyString(), eq(100), eq(1)))
+        .thenAnswer(
+            invocation -> {
+              change(InstallationChange.Kind.GONE, 10L);
+              throw new IllegalStateException("GitHub is down");
+            });
+
+    assertEquals(AccessDecision.UNAVAILABLE, checker.checkAccess("alice", TOKEN));
+  }
+
+  @Test
   void anOutageServesTheLastAnswerGitHubGaveWhileItIsRecent() {
     var answered = checker.repositoryScope("alice", TOKEN);
     when(userClient.listInstallations(eq(AUTH), anyString(), eq(100), eq(1)))

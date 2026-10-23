@@ -217,8 +217,11 @@ public class DashboardAccessChecker {
   private Resolution unavailable(
       String key, CacheEntry cached, long changes, String login, RuntimeException e) {
     var now = clock.get();
+    // The last answer is served only while no change has landed since it was read, the same rule
+    // the cache follows, so an installation removed during the failed ask is never served.
     var stale =
         cached != null
+            && changeCount.get() == changes
             && cached.answeredAt() != null
             && cached.answeredAt().isAfter(now.minus(STALE_SCOPE_LIMIT));
     var resolution =
@@ -298,7 +301,7 @@ public class DashboardAccessChecker {
       var refused =
           status == 404
               || (status == 403
-                  && GitHubApiError.of(e).map(err -> !err.isThrottled()).orElse(true));
+                  && GitHubApiError.of(e).map(err -> !err.isThrottled()).orElse(false));
       if (refused) {
         log.info(
             "GitHub refused to list installation {} ({}); skipping it", installationId, status);
