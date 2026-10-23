@@ -493,6 +493,41 @@ class TestAssertionsTest {
         List.of("test_sweep_expires_codes"), tests.functionsLabelling("sweep_expires_every_code"));
   }
 
+  /**
+   * A less-indented line with an argument list that declares nothing is climbed past: a
+   * parenthesized case label, a loop macro, an else-if after a brace or on its own, and a call,
+   * even one whose name holds "test" (#1194).
+   */
+  @Test
+  void onlyADeclaredFunctionEndsTheLabelWalk() {
+    var tests =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "c/tests/test_fleet.c",
+                    """
+                    @@ -0,0 +1,16 @@
+                    +static void test_fleet_pages(void) {
+                    +    switch (rc) {
+                    +    case (DISP_LIMIT):
+                    +        for_each_dock(d, fleet) {
+                    +        } else if (d->gone) {
+                    +            if (d->busy) {
+                    +            }
+                    +            else if (d->free) {
+                    +                rc = latest_scan(d);
+                    +                {
+                    +                    update_latest_tests(d);
+                    +                        CHECK("fleet_pages_every_dock", rc == 0);
+                    +                }
+                    +            }
+                    +        }
+                    +    }
+                    """)));
+
+    assertEquals(List.of("test_fleet_pages"), tests.functionsLabelling("fleet_pages_every_dock"));
+  }
+
   /** A check under a switch's case label or a preprocessor guard keeps its function too. */
   @Test
   void aCheckUnderACaseLabelOrAGuardLeadsToItsTestFunction() {

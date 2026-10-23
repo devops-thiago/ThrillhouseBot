@@ -25,6 +25,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -118,15 +119,21 @@ final class TestAssertions {
    */
   private static final Pattern SINGLE_QUOTE = Pattern.compile("(?<!\\w)'([^'\\n]++)'");
 
-  /**
-   * A line opening a block inside a function rather than declaring one: {@code if}, a loop, {@code
-   * switch}, {@code else}, {@code try} or {@code catch}, after a closing brace at most.
-   */
-  private static final Pattern CONTROL_BLOCK =
-      Pattern.compile("^(?:}\\s*+)?+(?:if|else|for|foreach|while|do|switch|try|catch)\\b");
-
   /** A function declared or called on a line: its name, then its argument list opening. */
   private static final Pattern FUNCTION_NAME = Pattern.compile("([A-Za-z_]\\w*+)\\s*+\\(");
+
+  /**
+   * What a declaration puts before a function's name: its type and modifiers ({@code static void},
+   * {@code def}, {@code func}, {@code public async Task}), never an assignment or a call.
+   */
+  private static final Pattern DECLARATION_PREFIX = Pattern.compile("[\\w\\s*&<>:\\[\\],.]++");
+
+  /**
+   * Words that open a statement rather than a declaration's type, so the call after one ({@code
+   * else if (…)}, {@code return check(…)}) is not taken for a declared function.
+   */
+  private static final Set<String> STATEMENT_WORDS =
+      Set.of("else", "return", "case", "new", "throw", "await", "yield", "do", "not", "and", "or");
 
   private static final Pattern WHITESPACE = Pattern.compile("\\s++");
 
@@ -213,9 +220,10 @@ final class TestAssertions {
   /**
    * The test function the line at {@code start} is in, read as {@link #functionsLabelling} does.
    * Blank lines, a lone brace and preprocessor lines are skipped. A less-indented line that
-   * declares no function, such as a block opened inside the function ({@link #CONTROL_BLOCK}) or a
-   * {@code case} label, is climbed past, so a check inside a loop, a condition or a switch keeps
-   * its function; the walk ends at the first function declared, or at a line in the first column.
+   * declares no function ({@link #declaredFunction}), such as a block opened inside the function, a
+   * {@code case} label, a loop macro or a call, is climbed past, so a check inside a loop, a
+   * condition or a switch keeps its function; the walk ends at the first function declared, or at a
+   * line in the first column.
    */
   private static Optional<String> enclosingTestFunction(List<PatchLines.Line> lines, int start) {
     var line = lines.get(start);
@@ -230,11 +238,9 @@ final class TestAssertions {
       if (code.isEmpty() || code.equals("{") || code.startsWith("#") || indentOf(text) >= indent) {
         continue;
       }
-      var name = FUNCTION_NAME.matcher(text);
-      if (!CONTROL_BLOCK.matcher(code).lookingAt() && name.find()) {
-        return name.group(1).toLowerCase(Locale.ROOT).contains("test")
-            ? Optional.of(name.group(1))
-            : Optional.empty();
+      var declared = declaredFunction(code);
+      if (declared.isPresent()) {
+        return declared.filter(name -> name.toLowerCase(Locale.ROOT).contains("test"));
       }
       if (indentOf(text) == 0) {
         return Optional.empty();
@@ -242,6 +248,27 @@ final class TestAssertions {
       indent = indentOf(text);
     }
     return Optional.empty();
+  }
+
+  /**
+   * The function {@code code} declares: its first name before an argument list, when a type or a
+   * keyword stands before that name ({@link #DECLARATION_PREFIX}, opened by none of the {@link
+   * #STATEMENT_WORDS}) and the line is not a statement ending in {@code ;}. {@code static void
+   * test_rider_limit(void)} declares one; {@code if (…) {}, {@code case (LIMIT):}, {@code
+   * for_each_cpu(i, mask) {}, {@code rc = latest_scan(d);} and {@code setup(&d);} do not.
+   */
+  private static Optional<String> declaredFunction(String code) {
+    var name = FUNCTION_NAME.matcher(code);
+    if (code.endsWith(";") || !name.find()) {
+      return Optional.empty();
+    }
+    var prefix = code.substring(0, name.start()).strip();
+    var opening = prefix.split("[^\\w]", 2)[0];
+    return !prefix.isEmpty()
+            && DECLARATION_PREFIX.matcher(prefix).matches()
+            && !STATEMENT_WORDS.contains(opening)
+        ? Optional.of(name.group(1))
+        : Optional.empty();
   }
 
   /** How many patch lines the index has read. */
