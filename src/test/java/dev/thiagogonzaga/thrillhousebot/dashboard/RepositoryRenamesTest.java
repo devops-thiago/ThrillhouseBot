@@ -15,13 +15,20 @@
  */
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.review.FindingFeedback;
+import dev.thiagogonzaga.thrillhousebot.review.FindingFeedbackRepository;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearning;
+import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningRepository;
 import dev.thiagogonzaga.thrillhousebot.webhook.PausedPr;
+import dev.thiagogonzaga.thrillhousebot.webhook.PausedPrRepository;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.enterprise.event.Event;
 import jakarta.inject.Inject;
@@ -29,6 +36,7 @@ import jakarta.persistence.EntityManager;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
 
 /** A renamed or transferred repository's stored rows show its new name (#1222). */
 @QuarkusTest
@@ -82,6 +90,27 @@ class RepositoryRenamesTest extends ReviewSessionTestSupport {
     assertEquals(1, PausedPr.count("repository = 'Owner/New'"));
     assertEquals(1, FindingFeedback.count("repository = 'Owner/New'"));
     assertEquals(1, ReviewLearning.count("repository = 'owner/new'"));
+  }
+
+  @Test
+  void aFailedRenameIsLoggedAndDoesNotStopTheOtherObservers() {
+    var sessions = mock(ReviewSessionRepository.class);
+    when(sessions.update(anyString(), ArgumentMatchers.<Object>any()))
+        .thenThrow(new IllegalStateException("database unreachable"));
+    var renames =
+        new RepositoryRenames(
+            sessions,
+            mock(PausedPrRepository.class),
+            mock(FindingFeedbackRepository.class),
+            mock(ReviewLearningRepository.class));
+
+    assertDoesNotThrow(
+        () ->
+            renames.onInstallationChange(
+                new InstallationChange(
+                    InstallationChange.Kind.REPOSITORY_RENAMED,
+                    905L,
+                    List.of(new InstallationChange.Repository(70L, "owner/new")))));
   }
 
   @Test

@@ -19,10 +19,10 @@ import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
 import dev.thiagogonzaga.thrillhousebot.review.FindingFeedbackRepository;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningRepository;
 import dev.thiagogonzaga.thrillhousebot.webhook.PausedPrRepository;
+import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
-import jakarta.transaction.Transactional;
 import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,7 +55,11 @@ public class RepositoryRenames {
     this.learnings = learnings;
   }
 
-  @Transactional
+  /**
+   * Runs on the webhook's thread with the other observers of the same change, so a failed update is
+   * logged, not thrown: it must neither fail the delivery nor stop the dashboard dropping its
+   * cached scopes. Each rename commits in its own transaction.
+   */
   void onInstallationChange(@Observes InstallationChange change) {
     if (change.kind() != InstallationChange.Kind.REPOSITORY_RENAMED) {
       return;
@@ -63,7 +67,17 @@ public class RepositoryRenames {
     for (var repository : change.repositories()) {
       if (repository.fullName() != null && !repository.fullName().isBlank()) {
         var fullName = repository.fullName().strip();
-        var renamed = rename(repository.id(), fullName);
+        int renamed;
+        try {
+          renamed = QuarkusTransaction.requiringNew().call(() -> rename(repository.id(), fullName));
+        } catch (RuntimeException e) {
+          log.warn(
+              "Could not rename the stored rows of repository {} to {}; they keep the old name",
+              repository.id(),
+              fullName,
+              e);
+          continue;
+        }
         log.info(
             "Renamed {} stored row(s) of repository {} to {}", renamed, repository.id(), fullName);
       }
