@@ -40,6 +40,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -116,6 +117,7 @@ public class DashboardAccessChecker {
   private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
   private final Set<Long> goneInstallations = ConcurrentHashMap.newKeySet();
   private final Set<RepoScope> removedRepositories = ConcurrentHashMap.newKeySet();
+  private final AtomicLong changeCount = new AtomicLong();
   private final AtomicBoolean membersPermissionWarned = new AtomicBoolean();
 
   @Inject
@@ -168,9 +170,11 @@ public class DashboardAccessChecker {
     if (cached != null && now.isBefore(cached.retryAt())) {
       return cached.resolution();
     }
+    // A webhook change that lands while GitHub is being asked must not be undone by this answer.
+    var changesBefore = changeCount.get();
     Resolution resolution;
     try {
-      var scope = fetchScope(login, "Bearer " + userToken);
+      var scope = withoutRemoved(fetchScope(login, "Bearer " + userToken));
       resolution =
           new Resolution(
               scope.isEmpty() ? AccessDecision.DENIED : AccessDecision.ALLOWED,
@@ -185,8 +189,10 @@ public class DashboardAccessChecker {
     } catch (RuntimeException e) {
       return unavailable(key, cached, login, e);
     }
-    cache.put(key, new CacheEntry(resolution, now, now.plus(SCOPE_CACHE_TTL)));
-    sweepExpiredEntries();
+    if (changeCount.get() == changesBefore) {
+      cache.put(key, new CacheEntry(resolution, now, now.plus(SCOPE_CACHE_TTL)));
+      sweepExpiredEntries();
+    }
     if (resolution.decision() == AccessDecision.DENIED) {
       log.warn("Dashboard access denied for GitHub user {}", login);
     }
@@ -324,7 +330,33 @@ public class DashboardAccessChecker {
         // re-reads it.
       }
     }
+    changeCount.incrementAndGet();
     cache.clear();
+  }
+
+  /**
+   * The scope without the installations and repositories a webhook removed, applied to every fresh
+   * answer: one fetched while a change landed still leaves out what the change removed, and is not
+   * cached, so the next request asks GitHub again.
+   */
+  private RepositoryScope withoutRemoved(RepositoryScope scope) {
+    var kept = new HashMap<Long, RepositoryScope.Installation>();
+    for (var installation : scope.installations().values()) {
+      var repositories = new HashMap<>(installation.repositories());
+      repositories
+          .keySet()
+          .removeIf(id -> removedRepositories.contains(new RepoScope(installation.id(), id)));
+      if (!goneInstallations.contains(installation.id()) && !repositories.isEmpty()) {
+        kept.put(
+            installation.id(),
+            new RepositoryScope.Installation(
+                installation.id(),
+                installation.account(),
+                installation.installationWide(),
+                repositories));
+      }
+    }
+    return new RepositoryScope(kept);
   }
 
   /**

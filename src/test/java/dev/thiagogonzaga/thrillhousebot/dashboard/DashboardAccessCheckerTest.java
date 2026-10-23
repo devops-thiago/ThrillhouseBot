@@ -205,6 +205,43 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
+  void aChangeLandingWhileGitHubIsAskedIsNotUndoneByThatAnswer() {
+    when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(1)))
+        .thenAnswer(
+            invocation -> {
+              // The webhook arrives while this login's scope is being fetched.
+              change(InstallationChange.Kind.GONE, 10L);
+              change(InstallationChange.Kind.REPOSITORIES_REMOVED, 20L, 201L);
+              return new InstallationRepositoriesResponse(
+                  2, List.of(repo(200L, "alice", "site"), repo(201L, "alice", "blog")));
+            })
+        .thenReturn(new InstallationRepositoriesResponse(1, List.of(repo(200L, "alice", "site"))));
+
+    var during = checker.repositoryScope("alice", TOKEN);
+    assertFalse(during.allows(10L, 100L), "already fetched before the change, still left out");
+    assertFalse(during.allows(20L, 201L));
+    assertTrue(during.allows(20L, 200L));
+
+    checker.repositoryScope("alice", TOKEN);
+    verify(userClient, times(2)).listInstallations(eq(AUTH), anyString(), eq(100), eq(1));
+  }
+
+  @Test
+  void anInstallationWhoseLastRepositoryIsRemovedMidFetchIsLeftOut() {
+    when(userClient.listRepositories(eq(AUTH), anyString(), eq(20L), eq(100), eq(1)))
+        .thenAnswer(
+            invocation -> {
+              change(InstallationChange.Kind.REPOSITORIES_REMOVED, 20L, 200L);
+              return new InstallationRepositoriesResponse(1, List.of(repo(200L, "alice", "site")));
+            });
+
+    var scope = checker.repositoryScope("alice", TOKEN);
+
+    assertFalse(scope.installations().containsKey(20L));
+    assertTrue(scope.allows(10L, 100L));
+  }
+
+  @Test
   void aRemovedRepositoryIsHiddenAndServedAgainOnceAdded() {
     change(InstallationChange.Kind.REPOSITORIES_REMOVED, 10L, 100L);
     var removed = checker.repositoryScope("alice", TOKEN);
