@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubApiError;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubUserClient;
@@ -258,9 +259,9 @@ public class DashboardAccessChecker {
 
   /**
    * The repositories of one installation the user can read, by id, as {@code owner/name}, without
-   * the ones a webhook said were removed (#1222). An installation GitHub refuses to list (403 or
-   * 404, such as one suspended or uninstalled a moment ago) reads as having none, so it never takes
-   * the user's other installations down with it.
+   * the ones a webhook said were removed (#1222). An installation GitHub refuses to list (404, or a
+   * 403 that is not throttling, such as one suspended or uninstalled a moment ago) reads as having
+   * none, so it never takes the user's other installations down with it.
    */
   private Map<Long, String> repositories(String userAuth, long installationId) {
     var repositories = new HashMap<Long, String>();
@@ -274,7 +275,13 @@ public class DashboardAccessChecker {
                       .repositories());
     } catch (WebApplicationException e) {
       var status = e.getResponse().getStatus();
-      if (status == 403 || status == 404) {
+      // A 403 can also be GitHub throttling the call; that is not a refusal, so it fails the
+      // resolution like any other error instead of hiding the installation.
+      var refused =
+          status == 404
+              || (status == 403
+                  && GitHubApiError.of(e).map(err -> !err.isThrottled()).orElse(true));
+      if (refused) {
         log.info(
             "GitHub refused to list installation {} ({}); skipping it", installationId, status);
         return repositories;

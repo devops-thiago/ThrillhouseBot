@@ -238,6 +238,19 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
+  void aThrottled403ListingAnInstallationLeavesAccessUnresolved() {
+    when(userClient.listRepositories(eq(AUTH), anyString(), eq(10L), eq(100), eq(1)))
+        .thenThrow(
+            new WebApplicationException(
+                Response.status(403)
+                    .header("x-ratelimit-remaining", "0")
+                    .entity("{\"message\":\"API rate limit exceeded\"}")
+                    .build()));
+
+    assertEquals(AccessDecision.UNAVAILABLE, checker.checkAccess("alice", TOKEN));
+  }
+
+  @Test
   void aServerErrorListingAnInstallationLeavesAccessUnresolved() {
     when(userClient.listRepositories(eq(AUTH), anyString(), eq(10L), eq(100), eq(1)))
         .thenThrow(new WebApplicationException(Response.status(502).build()));

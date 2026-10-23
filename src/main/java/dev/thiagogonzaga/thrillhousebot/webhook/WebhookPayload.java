@@ -37,7 +37,7 @@ public record WebhookPayload(
     String sha,
     String state,
     String context,
-    // Fields below are populated only on installation_repositories events; null otherwise.
+    // Fields below are populated only on installation_repositories events; empty otherwise.
     @JsonProperty("repositories_added") List<RepositoryRef> repositoriesAdded,
     @JsonProperty("repositories_removed") List<RepositoryRef> repositoriesRemoved) {
 
