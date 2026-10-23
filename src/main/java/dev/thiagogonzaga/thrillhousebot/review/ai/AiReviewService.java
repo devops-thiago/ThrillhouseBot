@@ -278,9 +278,10 @@ public class AiReviewService {
   /**
    * The effort a no-content length stop's one repeat goes out at, when there is a repeat to make.
    * Empty for a stop with content (the answer was too long — the salvage path's case, never
-   * retried) and when {@link ReasoningRepeat#effortFor} names none, as for a lane already at {@code
-   * low} or {@code none} with reasoning enabled; otherwise the effort it names. The lane matters
-   * because the concise lane resolves its own effort (#567).
+   * retried) and when {@link ReasoningRepeat#effortFor} is empty because there is no lower effort
+   * to repeat at, as for a lane already at {@code low} or {@code none} with reasoning enabled;
+   * otherwise the effort it returns, which is the {@code none} tier only when configured. The lane
+   * matters because the concise lane resolves its own effort (#567).
    */
   private Optional<String> repeatEffort(AiResponseTruncatedException e, ModelLane lane) {
     if (!"".equals(e.partialBody())) {
