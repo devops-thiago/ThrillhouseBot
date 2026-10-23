@@ -448,6 +448,17 @@ class TestAssertionsTest {
                 + " average of the last three; it's 'short'"));
   }
 
+  /**
+   * A contraction's apostrophe opens no single-quote span, so a quoted assertion after it reads.
+   */
+  @Test
+  void aContractionDoesNotOpenASingleQuoteSpan() {
+    assertEquals(
+        List.of("assert(zone(x, 7) == 6.0)"),
+        TestAssertions.quotesIn(
+            "Here's a longer explanation of why 'assert(zone(x, 7) == 6.0)' fails at COPY"));
+  }
+
   /** A contraction's apostrophe opens no span that swallows a backtick quote after it. */
   @Test
   void aContractionDoesNotHideABacktickQuote() {

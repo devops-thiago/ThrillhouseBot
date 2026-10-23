@@ -110,12 +110,13 @@ final class TestAssertions {
   private static final Pattern QUOTE = Pattern.compile("`([^`\\n]++)`");
 
   /**
-   * A single-quote span on one line: a finding quotes code that way too, as scala
-   * ThrillhouseBot-test#297's wrote 'assert(…)' (#1194). Read in its own pass, so a span opened by
-   * a contraction's apostrophe cannot swallow a backtick quote; a span between two apostrophes of
-   * prose is never part of an assertion.
+   * A single-quote span on one line: a finding quotes code that way too, as the scala
+   * ThrillhouseBot-test#297 finding wrote 'assert(…)' (#1194). A quote right after a letter or
+   * digit is a contraction's or a possessive's apostrophe and opens no span, so "Here's why
+   * 'assert(…)'" still reads the assertion. Read in its own pass, so no apostrophe swallows a
+   * backtick quote.
    */
-  private static final Pattern SINGLE_QUOTE = Pattern.compile("'([^'\\n]++)'");
+  private static final Pattern SINGLE_QUOTE = Pattern.compile("(?<!\\w)'([^'\\n]++)'");
 
   /**
    * A line opening a block inside a function rather than declaring one: {@code if}, a loop, {@code
