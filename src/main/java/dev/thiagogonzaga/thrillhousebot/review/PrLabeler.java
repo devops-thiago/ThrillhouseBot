@@ -82,6 +82,7 @@ public class PrLabeler {
     if (!enabled()) {
       return List.of();
     }
+    var blocked = blockedLabels();
     var all = new ArrayList<GitHubLabelClient.Label>();
     try {
       List<GitHubLabelClient.Label> page = null;
@@ -92,7 +93,8 @@ public class PrLabeler {
         if (page == null) {
           break;
         }
-        all.addAll(page);
+        // A blocked label is never offered to the model (#1238).
+        page.stream().filter(label -> !isBlocked(label.name(), blocked)).forEach(all::add);
       }
     } catch (RuntimeException e) {
       Log.warn("Failed to fetch repository labels; skipping label suggestions", e);
@@ -197,6 +199,7 @@ public class PrLabeler {
     var canonical = canonicalNames(existing);
     var allowCreate = config.review().labels().allowCreate();
     var max = Math.max(0, config.review().labels().maxLabels());
+    var blocked = blockedLabels();
 
     var result = new ArrayList<String>();
     var seen = new HashSet<String>();
@@ -204,12 +207,31 @@ public class PrLabeler {
       if (result.size() >= max) {
         break;
       }
-      var label = resolveSuggestion(suggestion, canonical, allowCreate, seen);
+      // A blocked label the model suggests anyway is never applied, suggested or created (#1238).
+      var label =
+          isBlocked(suggestion, blocked)
+              ? null
+              : resolveSuggestion(suggestion, canonical, allowCreate, seen);
       if (label != null) {
         result.add(label);
       }
     }
     return result;
+  }
+
+  /** The configured blocked label names, stripped and lower-cased. */
+  private Set<String> blockedLabels() {
+    var blocked = new HashSet<String>();
+    for (var name : config.review().labels().blocked().orElse(List.of())) {
+      if (!name.isBlank()) {
+        blocked.add(name.strip().toLowerCase(Locale.ROOT));
+      }
+    }
+    return blocked;
+  }
+
+  private static boolean isBlocked(String name, Set<String> blocked) {
+    return name != null && blocked.contains(name.strip().toLowerCase(Locale.ROOT));
   }
 
   /**

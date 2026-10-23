@@ -943,6 +943,14 @@ public interface ThrillhouseConfig {
     @WithName("max-labels")
     @WithDefault("3")
     int maxLabels();
+
+    /**
+     * Comma-separated label names the bot never suggests, applies or creates, matched ignoring
+     * case: labels a team keeps for its own workflow, such as {@code review}. They are left out of
+     * the list the model sees and dropped from its suggestions.
+     */
+    @WithName("blocked")
+    Optional<List<String>> blocked();
   }
 
   interface DashboardConfig {
