@@ -43,6 +43,10 @@ without it those counters stay hidden and nothing else changes.
   second time and was billed in full. The new `AI_REASONING_REPEAT_EFFORT`
   (`thrillhousebot.ai.reasoning.repeat-effort`) sets the repeat's effort; set it to `none` to keep
   the previous behavior on a provider that honors it. (#1173)
+- With `AI_REASONING_ENABLED=false`, the warning logged for a call that spent its whole response
+  cap reasoning now says to set `AI_REASONING_ENABLED=true` for a model that reasons by default,
+  and the docs recommend it. On `glm-5.3-flash` that took the concise calls from 9 of 12 cut at
+  the cap to none, and their output from 94,533 to 6,982 tokens. (#1174)
 ### Security
 
 - `GITHUB_ALLOWED_ACCOUNTS` (`thrillhousebot.github.allowed-accounts`) limits the bot to the

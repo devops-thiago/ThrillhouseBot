@@ -89,6 +89,20 @@ final class ReasoningRepeat {
   }
 
   /**
+   * What the step-down logs add when reasoning is off in config: the first call went out at the
+   * provider's default effort, and a model that reasons by default can spend its cap that way on
+   * most calls, so the fix is to send the lane's effort from the first call (#1174). Empty while
+   * reasoning is enabled.
+   */
+  static String enableHint(ThrillhouseConfig config) {
+    return config.ai().reasoning().enabled()
+        ? ""
+        : "; AI_REASONING_ENABLED=false left the first call at the provider's default effort, so"
+            + " set AI_REASONING_ENABLED=true for a model that reasons by default and the lane's"
+            + " effort goes out from the first call";
+  }
+
+  /**
    * Sets {@code effort} as the override for the calls this thread makes until the returned scope is
    * closed; {@code null} sets nothing. The previous value comes back on close, so scopes nest.
    */
@@ -139,12 +153,14 @@ final class ReasoningRepeat {
    * review's spend ceiling stops it. The effort is read only once a repeat is due. The repeat is
    * metered too, and {@code onRepeat} runs before it so the review can disclose it. The caller
    * reads the returned result as it read the first one: a repeat that is cut again is reported like
-   * any other cut answer.
+   * any other cut answer. {@code hint} ends the repeat's log line, as {@link #enableHint} does, and
+   * is read only then.
    */
   static Result<String> blocking(
       String what,
       Supplier<Result<String>> call,
       Supplier<Optional<String>> effortFor,
+      Supplier<String> hint,
       BooleanSupplier ceilingReached,
       Consumer<Result<String>> meter,
       Runnable onRepeat) {
@@ -160,8 +176,8 @@ final class ReasoningRepeat {
     var usage = result.tokenUsage();
     Log.warnf(
         "%s stopped at its response-length cap with no content (%s output tokens): the reasoning"
-            + " spent the whole allowance, so the call is repeated once at reasoning_effort=%s",
-        what, usage == null ? "unknown" : usage.outputTokenCount(), effort.get());
+            + " spent the whole allowance, so the call is repeated once at reasoning_effort=%s%s",
+        what, usage == null ? "unknown" : usage.outputTokenCount(), effort.get(), hint.get());
     onRepeat.run();
     try (var _ = override(effort.get())) {
       result = call.get();
