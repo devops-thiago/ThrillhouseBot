@@ -1436,4 +1436,143 @@ class PromptLabelScrubberTest {
   void anUnclosedBacktickInfoLineStaysByteExact(String text) {
     assertEquals(text, PromptLabelScrubber.scrub(text));
   }
+
+  // #1195, round 19: ThrillhouseBot-test#297 discussion_r4336428935.
+  @Test
+  void theWithheldListReadsAsTheFilesNotShown() {
+    assertEquals(
+        "the PR adds every file in the service (the only file not shown is the README rename)",
+        PromptLabelScrubber.scrub(
+            "the PR adds every file in the service (the withheld list contains only the README"
+                + " rename)"));
+    assertEquals(
+        "The only file not shown is the README rename.",
+        PromptLabelScrubber.scrub("The withheld list contains only the README rename."));
+    assertEquals(
+        "The list of files not shown names it.",
+        PromptLabelScrubber.scrub("The withheld list names it."));
+    assertEquals(
+        "Withheld lists aside, files not shown stay.",
+        PromptLabelScrubber.scrub("Withheld lists aside, withheld paths stay."));
+  }
+
+  // ThrillhouseBot-test#295 discussion_r4336550626.
+  @Test
+  void aWithheldPathReadsAsAFileNotShown() {
+    assertEquals(
+        "The Dockerfile's only file not shown in this change is a README rename, so no unshown"
+            + " source can carry the feature either.",
+        PromptLabelScrubber.scrub(
+            "The Dockerfile's only withheld path in this change is a README rename, so no unshown"
+                + " source can carry the feature either."));
+    assertEquals("File not shown: pom.xml.", PromptLabelScrubber.scrub("Withheld path: pom.xml."));
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "the token is withheld from logs",
+        "The payment is withheld until the list is signed.",
+        "the withheld-path rules in the prompt",
+        "verify the layer before trusting it",
+        "the exact layer to verify is the gateway",
+        "Name the exact layer to verify in the gateway config.",
+        "see `description_gaps` in ReviewResponse",
+        "description_gaps is never null after parsing",
+        "it reads into description_gaps field by field",
+        "see description_gaps.size() for the count",
+        "the summary should carry the total cost",
+        "If the summary should carry the description gap, add it."
+      })
+  void ordinaryWithheldVerifyAndKeyProseStays(String text) {
+    assertEquals(text, PromptLabelScrubber.scrub(text));
+  }
+
+  // ThrillhouseBot-test#293 summary 6315203252.
+  @Test
+  void aCitedResponseKeyReadsAsTheSectionAReaderSees() {
+    assertEquals(
+        "other described behaviors are contradicted or only claimed by the description — see"
+            + " Description vs. Implementation.",
+        PromptLabelScrubber.scrub(
+            "other described behaviors are contradicted or only claimed by the description — see"
+                + " description_gaps."));
+    assertEquals(
+        "Listed in the gaps already addressed, and noted in the status of earlier findings.",
+        PromptLabelScrubber.scrub(
+            "Listed in addressed_gaps, and noted in previous_findings_status."));
+    assertEquals(
+        "See Description vs. Implementation. It lists both.",
+        PromptLabelScrubber.scrub("See description_gaps. It lists both."));
+  }
+
+  // ThrillhouseBot-test#296 discussion_r4336552968.
+  @Test
+  void aClauseRoutingTheGapToTheSummaryGoes() {
+    assertEquals(
+        "This trace inverts the description's claim.",
+        PromptLabelScrubber.scrub(
+            "This trace inverts the description's claim; the summary should carry the description"
+                + " gap."));
+    assertEquals(
+        "This trace inverts the claim. It fails.",
+        PromptLabelScrubber.scrub(
+            "This trace inverts the claim. The summary must list the description gaps. It fails."));
+    assertEquals(
+        "This trace inverts the claim.",
+        PromptLabelScrubber.scrub(
+            "This trace inverts the claim. The summary should carry this description gap."));
+  }
+
+  // ThrillhouseBot-test#292 discussion_r4336427157.
+  @Test
+  void theEchoedLayerImperativeGoesAndWhatItIntroducedOpensTheSentence() {
+    assertEquals(
+        "Sanitization is not shown. Check whether the gateway actually restricts plate to a safe"
+            + " character set.",
+        PromptLabelScrubber.scrub(
+            "Sanitization is not shown. Name the exact layer to verify: check whether the gateway"
+                + " actually restricts plate to a safe character set."));
+    assertEquals(
+        "- Check the gateway.",
+        PromptLabelScrubber.scrub(
+            "- name in the description the exact layer to verify — check the gateway."));
+    assertEquals(
+        "x: Name the exact layer to verify: y",
+        PromptLabelScrubber.scrub("x: Name the exact layer to verify: y"));
+    assertEquals("", PromptLabelScrubber.scrub("Name the exact layer to verify:"));
+  }
+
+  @Test
+  void theNewRulesReachFindingsAndTheSummaryOverview() {
+    var finding =
+        new Finding(
+            RiskLevel.MEDIUM,
+            Confidence.HIGH,
+            "scala/build.sbt",
+            3,
+            "Withheld path is a rename",
+            "the withheld list contains only the README rename",
+            null,
+            null);
+    var scrubbed = PromptLabelScrubber.scrubFindings(List.of(finding)).getFirst();
+    assertEquals("File not shown is a rename", scrubbed.title());
+    assertEquals("the only file not shown is the README rename", scrubbed.description());
+    assertEquals(
+        "See Description vs. Implementation.",
+        PromptLabelScrubber.scrubMarkdown("See description_gaps.", List.of(finding)));
+  }
+
+  @Test
+  void theNewRulesAreIdempotent() {
+    for (var text :
+        List.of(
+            "the withheld list contains only the README rename",
+            "see description_gaps.",
+            "A; the summary should carry the description gap.",
+            "Name the exact layer to verify: check it.")) {
+      var once = PromptLabelScrubber.scrub(text);
+      assertEquals(once, PromptLabelScrubber.scrub(once));
+    }
+  }
 }
