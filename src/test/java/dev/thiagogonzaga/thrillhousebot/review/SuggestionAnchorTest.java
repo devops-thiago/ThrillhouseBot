@@ -312,25 +312,29 @@ class SuggestionAnchorTest {
         finding(
             EXPIRY_TRACKER,
             3,
-            "for (BloodUnit u : units.values()) {\n"
-                + "            if (u.expiresAt().isBefore(limit)) {\n"
-                + "                out.add(u);\n"
-                + "            }\n"
-                + "        }",
-            "for (BloodUnit u : units.values()) {\n"
-                + "            if (!u.expiresAt().isAfter(limit)) {\n"
-                + "                out.add(u);\n"
-                + "            }\n"
-                + "        }");
+            """
+            for (BloodUnit u : units.values()) {
+                        if (u.expiresAt().isBefore(limit)) {
+                            out.add(u);
+                        }
+                    }""",
+            """
+            for (BloodUnit u : units.values()) {
+                        if (!u.expiresAt().isAfter(limit)) {
+                            out.add(u);
+                        }
+                    }""");
 
     var placed = SuggestionAnchor.place(cited, resolver);
 
     assertEquals(
-        "        for (BloodUnit u : units.values()) {\n"
-            + "            if (!u.expiresAt().isAfter(limit)) {\n"
-            + "                out.add(u);\n"
-            + "            }\n"
-            + "        }",
+        """
+                for (BloodUnit u : units.values()) {
+                    if (!u.expiresAt().isAfter(limit)) {
+                        out.add(u);
+                    }
+                }\
+        """,
         placed.suggestionNew());
     assertEquals(cited.suggestionOld(), placed.suggestionOld());
     assertEquals(3, placed.line());
@@ -358,19 +362,39 @@ class SuggestionAnchorTest {
         finding(
             "go/allocator.go",
             3,
-            " for _, v := range vs {\n  unassigned = append(unassigned, v)\n  lane, err :="
-                + " a.Allocate(v)\n  if err != nil {\n   continue\n  }\n  assigned[v.Plate] ="
-                + " lane\n }",
-            " for _, v := range vs {\n  lane, err := a.Allocate(v)\n  if err != nil {\n  "
-                + " unassigned = append(unassigned, v)\n   continue\n  }\n  assigned[v.Plate] ="
-                + " lane\n }");
+            """
+             for _, v := range vs {
+              unassigned = append(unassigned, v)
+              lane, err := a.Allocate(v)
+              if err != nil {
+               continue
+              }
+              assigned[v.Plate] = lane
+             }\
+            """,
+            """
+             for _, v := range vs {
+              lane, err := a.Allocate(v)
+              if err != nil {
+               unassigned = append(unassigned, v)
+               continue
+              }
+              assigned[v.Plate] = lane
+             }\
+            """);
 
     var placed = SuggestionAnchor.place(cited, resolver);
 
     assertEquals(
-        "\tfor _, v := range vs {\n\t\tlane, err := a.Allocate(v)\n\t\tif err != nil {\n"
-            + "\t\t\tunassigned = append(unassigned, v)\n\t\t\tcontinue\n\t\t}\n"
-            + "\t\tassigned[v.Plate] = lane\n\t}",
+        """
+        \tfor _, v := range vs {
+        \t\tlane, err := a.Allocate(v)
+        \t\tif err != nil {
+        \t\t\tunassigned = append(unassigned, v)
+        \t\t\tcontinue
+        \t\t}
+        \t\tassigned[v.Plate] = lane
+        \t}""",
         placed.suggestionNew());
     assertEquals(cited.suggestionOld(), placed.suggestionOld());
     assertEquals(3, placed.line());
