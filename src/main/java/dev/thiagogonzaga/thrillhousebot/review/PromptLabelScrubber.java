@@ -66,6 +66,12 @@ import java.util.regex.Pattern;
  * planner's "no findings in this batch" — are dropped, because a reader sees neither stage. So are
  * the summary call's count of the findings it was shown ("among the three verified above") and the
  * verifier's CI note restated ("confirmed rather than counted"), #1075.
+ *
+ * <p>So do the prompt's terms for the files it did not send ("the withheld list", "a withheld
+ * path"), which read "the files not shown"; a response key cited as a place to look ("see
+ * description_gaps"), which reads as the section a reader sees; a clause routing a gap to the
+ * summary ("the summary should carry the description gap"); and the injection rule's "Name the
+ * exact layer to verify:" echoed as an imperative (#1195).
  */
 public final class PromptLabelScrubber {
 
@@ -455,6 +461,76 @@ public final class PromptLabelScrubber {
           "\\b(confirmed|measured),?\\s+(?:rather\\s+than|instead\\s+of|not)\\s+(?:counted|predicted)\\b",
           Pattern.CASE_INSENSITIVE);
 
+  /**
+   * "the withheld list contains only the README rename" (#1195): the review call's list of files
+   * whose content it was not sent, read as a fact about the pull request. It reads "the only file
+   * not shown is the README rename", or "the only files not shown are …" when {@link #pluralObject}
+   * reads what follows as plural.
+   */
+  private static final Pattern WITHHELD_LIST_ONLY =
+      Pattern.compile(
+          "(?<![\\w-])(the )?withheld list (?:contains|holds|has|shows|lists|names) only ",
+          Pattern.CASE_INSENSITIVE);
+
+  /** "withheld list", "withheld path(s)" anywhere else: the prompt's names for the same list. */
+  private static final Pattern WITHHELD_TERM =
+      Pattern.compile("(?<![\\w-])(withheld) (list|paths?)\\b", Pattern.CASE_INSENSITIVE);
+
+  /**
+   * A response key cited as a place to look (#1195): "see description_gaps", "listed in
+   * addressed_gaps". Only after a citing word, so "description_gaps is never null" about the code
+   * that reads the key stays; {@link #citesKey} decides what may follow it.
+   */
+  private static final Pattern CITED_KEY =
+      Pattern.compile(
+          "\\b((?i:see|in|under|into|per|cf\\.?)) (description_gaps|addressed_gaps"
+              + "|previous_findings_status)(?![\\w\"'(\\[=])");
+
+  /**
+   * A word after a key that makes the sentence about the key itself: "in description_gaps field".
+   */
+  private static final Set<String> KEY_NOUNS =
+      Set.of(
+          "field",
+          "fields",
+          "key",
+          "keys",
+          "property",
+          "array",
+          "arrays",
+          "list",
+          "entry",
+          "entries",
+          "element",
+          "elements",
+          "value",
+          "values",
+          "accessor",
+          "member",
+          "parameter",
+          "component",
+          "column",
+          "json",
+          "schema");
+
+  /**
+   * "the summary should carry the description gap" (#1195): an instruction to the pipeline about
+   * where a gap goes. Only a clause that ends there; {@link #removeClause} decides whether it goes.
+   */
+  private static final Pattern SUMMARY_ROUTING =
+      Pattern.compile(
+          "\\b[Tt]he summary (?:should|must|will|needs to|ought to) (?:carry|list|include|record"
+              + "|hold|note|flag|mention|report|cover) (?:the |this |that |a |an )?description[ _-]"
+              + "gaps?(?=[ \\t]*(?:[.!?\\n]|\\z))");
+
+  /**
+   * "Name the exact layer to verify: check whether …" (#1195): the injection rule's instruction,
+   * echoed as an imperative opening a sentence. It goes, and what it introduced opens the sentence.
+   */
+  private static final Pattern NAME_THE_LAYER =
+      Pattern.compile(
+          "[Nn]ame (?:in the description )?the exact layer to verify[ \\t]*[:—–][ \\t]*(\\p{L})?");
+
   private PromptLabelScrubber() {}
 
   /** {@link #scrub(String, Collection)} for text that names no file of the pull request. */
@@ -720,7 +796,174 @@ public final class PromptLabelScrubber {
                   var phrase = m.group(1).toLowerCase(Locale.ROOT) + " of";
                   return opensSentence(defined, m.start(), 0) ? capitalize(phrase) : phrase;
                 });
-    return removeScratchText(removeSelfRatedConfidence(s), followsCode);
+    s = removeScratchText(removeSelfRatedConfidence(s), followsCode);
+    return removeRoutingNotes(rewriteWithheldTerms(s));
+  }
+
+  /**
+   * Rewrites the prompt's withheld-file vocabulary and the response keys a sentence cites, and
+   * drops the injection rule's echoed imperative (#1195). Ordinary "withheld" ("the token is
+   * withheld from logs") and "verify" stay.
+   */
+  private static String rewriteWithheldTerms(String text) {
+    var s =
+        WITHHELD_LIST_ONLY
+            .matcher(text)
+            .replaceAll(
+                m ->
+                    capitalizeLike(
+                        m.group(),
+                        pluralObject(text, m.end())
+                            ? "the only files not shown are "
+                            : "the only file not shown is "));
+    s =
+        WITHHELD_TERM
+            .matcher(s)
+            .replaceAll(
+                m -> {
+                  var noun = m.group(2).toLowerCase(Locale.ROOT);
+                  var phrase =
+                      switch (noun) {
+                        case "list" -> "list of files not shown";
+                        case "path" -> "file not shown";
+                        default -> "files not shown";
+                      };
+                  return capitalizeLike(m.group(1), phrase);
+                });
+    var keyed = s;
+    s =
+        CITED_KEY
+            .matcher(keyed)
+            .replaceAll(
+                m ->
+                    Matcher.quoteReplacement(
+                        citesKey(keyed, m.end())
+                            ? m.group(1) + " " + keyPhrase(m.group(2))
+                            : m.group()));
+    var named = s;
+    return NAME_THE_LAYER
+        .matcher(named)
+        .replaceAll(
+            m ->
+                Matcher.quoteReplacement(
+                    opensSentence(named, m.start(), 0)
+                        ? (m.group(1) == null ? "" : m.group(1).toUpperCase(Locale.ROOT))
+                        : m.group()));
+  }
+
+  /**
+   * Whether the object starting at {@code from} is plural: it opens with a count above one ("3
+   * renames", "two files"), or its head noun — the last word before a stop or a preposition — ends
+   * in a plural "s" ("renamed files in this PR"). "the README rename", "this" and a file name
+   * ("main.rs") read singular.
+   */
+  private static boolean pluralObject(String text, int from) {
+    var words = OBJECT_WORD.matcher(text.substring(from));
+    String head = null;
+    boolean first = true;
+    while (words.find()) {
+      var word = words.group().toLowerCase(Locale.ROOT);
+      if (first && (PLURAL_COUNTS.contains(word) || (word.matches("\\d+") && !"1".equals(word)))) {
+        return true;
+      }
+      if (!first && OBJECT_ENDS.contains(word)) {
+        break;
+      }
+      first = false;
+      head = word;
+      if (words.end() < text.length() - from
+          && ".,;:)\n".indexOf(text.charAt(from + words.end())) >= 0) {
+        break;
+      }
+    }
+    // A dotted head is a file name ("main.rs"), never a plural noun.
+    return head != null
+        && head.indexOf('.') < 0
+        && head.length() > 2
+        && head.endsWith("s")
+        && !head.endsWith("ss")
+        && !head.endsWith("is")
+        && !head.endsWith("us");
+  }
+
+  /** A word of the object after "contains only": letters, digits, and inner dots or hyphens. */
+  private static final Pattern OBJECT_WORD = Pattern.compile("[\\w']++(?:[.-][\\w']++)*+");
+
+  /** The words that end an object's noun phrase: a preposition or a relative pronoun after it. */
+  private static final Set<String> OBJECT_ENDS =
+      Set.of(
+          "in", "from", "of", "for", "on", "at", "with", "under", "that", "which", "and", "or",
+          "so", "but", "to", "by", "is", "are", "was", "were");
+
+  /** Count words that open a plural object. */
+  private static final Set<String> PLURAL_COUNTS =
+      Set.of("two", "three", "four", "five", "several", "many", "some", "both", "few");
+
+  /** What a reader calls the place a response key names. */
+  private static String keyPhrase(String key) {
+    return switch (key) {
+      case "description_gaps" -> "Description vs. Implementation";
+      case "addressed_gaps" -> "the gaps already addressed";
+      default -> "the status of earlier findings";
+    };
+  }
+
+  /**
+   * Whether the key ending at {@code end} is cited as a place rather than discussed as code: not
+   * followed by a member access ("description_gaps.size()") or a noun naming the key itself.
+   */
+  private static boolean citesKey(String text, int end) {
+    if (end + 1 < text.length()
+        && text.charAt(end) == '.'
+        && Character.isLetterOrDigit(text.charAt(end + 1))) {
+      return false;
+    }
+    int next = skipBlanks(text, end);
+    var word = wordAt(text, next);
+    if (KEY_NOUNS.contains(word)) {
+      return false;
+    }
+    // "description_gaps in ReviewResponse": the key named by the code that owns it.
+    return !(OWNER_LEADS.contains(word)
+        && identifierAt(text, skipBlanks(text, next + word.length())));
+  }
+
+  /** Words that lead from a key to the code that owns it: "in ReviewResponse", "of Summary". */
+  private static final Set<String> OWNER_LEADS = Set.of("in", "of", "on", "from");
+
+  /**
+   * Whether a code identifier starts at {@code start}: a word with a capital, an underscore, or a
+   * dot or parenthesis inside it ("Summary", "ReviewResponse", "pr_purpose",
+   * "Summary.descriptionGaps", "parse()"). "in the summary" names no code.
+   */
+  private static boolean identifierAt(String text, int start) {
+    int end = start;
+    while (end < text.length()
+        && (Character.isLetterOrDigit(text.charAt(end)) || "_.()".indexOf(text.charAt(end)) >= 0)) {
+      end++;
+    }
+    var token = text.substring(start, end);
+    while (!token.isEmpty() && token.charAt(token.length() - 1) == '.') {
+      token = token.substring(0, token.length() - 1);
+    }
+    if (token.isEmpty()) {
+      return false;
+    }
+    if (token.chars().anyMatch(c -> "_.(".indexOf(c) >= 0)) {
+      return true;
+    }
+    return token.chars().anyMatch(Character::isUpperCase);
+  }
+
+  /** Drops each {@link #SUMMARY_ROUTING} clause where {@link #removeClause} lets it go. */
+  private static String removeRoutingNotes(String text) {
+    var m = SUMMARY_ROUTING.matcher(text);
+    var out = new StringBuilder(text.length());
+    int at = 0;
+    while (m.find()) {
+      at = removeClause(text, m.start(), m.end(), at, out, true);
+    }
+    return out.append(text, at, text.length()).toString();
   }
 
   /**
@@ -1104,22 +1347,34 @@ public final class PromptLabelScrubber {
     int at = 0;
     while (m.find()) {
       int clauseEnd = ratingClauseEnd(text, m);
-      if (clauseEnd < 0) {
-        continue;
-      }
-      int blank = skipBlanksBack(text, m.start(), at);
-      if (blank > at && hangsFromSeparator(text, blank, m.start(), at)) {
-        out.append(text, at, skipBlanksBack(text, blank - 1, at));
-        at = clauseEnd;
-      } else if (opensSentence(text, m.start(), at) && endsWithoutGoingOn(text, clauseEnd)) {
-        int end = ratingSentenceEnd(text, clauseEnd);
-        // The last sentence of a line takes the blanks before it, so the line does not end in one.
-        int start = endsLine(text, end) ? blank : m.start();
-        out.append(text, at, start);
-        at = end;
+      if (clauseEnd >= 0) {
+        at = removeClause(text, m.start(), clauseEnd, at, out, endsWithoutGoingOn(text, clauseEnd));
       }
     }
     return out.append(text, at, text.length()).toString();
+  }
+
+  /**
+   * Appends to {@code out} the text from {@code at} up to the clause {@code start}..{@code
+   * clauseEnd} without it where it can go, and returns where the text resumes; {@code at} itself
+   * when it stays. After a semicolon, comma or dash it goes with that separator and the sentence
+   * keeps its end; a sentence that is only the clause ({@code ends}) goes whole with the blanks
+   * after it. Anywhere else the sentence leans on it.
+   */
+  private static int removeClause(
+      String text, int start, int clauseEnd, int at, StringBuilder out, boolean ends) {
+    int blank = skipBlanksBack(text, start, at);
+    if (blank > at && hangsFromSeparator(text, blank, start, at)) {
+      out.append(text, at, skipBlanksBack(text, blank - 1, at));
+      return clauseEnd;
+    }
+    if (opensSentence(text, start, at) && ends) {
+      int end = ratingSentenceEnd(text, clauseEnd);
+      // The last sentence of a line takes the blanks before it, so the line does not end in one.
+      out.append(text, at, endsLine(text, end) ? blank : start);
+      return end;
+    }
+    return at;
   }
 
   /**

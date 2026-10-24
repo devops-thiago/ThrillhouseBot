@@ -87,6 +87,11 @@ without it those counters stay hidden and nothing else changes.
   package.json script `"test":`. It now credits a finding that names the C test function whose
   `CHECK` label the log prints, or quotes a test's assertion in single quotes, and it reads the
   failing test's name from sbt's `[info] - name *** FAILED ***` line. (#1194)
+- Findings and the summary no longer carry the review's internal wording. "The withheld list" and
+  "a withheld path" read as the files not shown, "see description_gaps" points at Description vs.
+  Implementation, a clause such as "the summary should carry the description gap" is dropped, and
+  an opening "Name the exact layer to verify:" is removed so the check it introduced starts the
+  sentence. (#1195)
 - The version bump pull request opened after a release now passes the DCO check. Its commit was not signed off, and the check accepts an unsigned bot commit only when it has a verified signature (#1226).
 
 ## [0.8.0] - 2026-10-21
