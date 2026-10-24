@@ -19,6 +19,7 @@ import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Puts a finding on the code its {@code suggestion_old} quotes, so a suggestion replaces the lines
@@ -38,7 +39,9 @@ import java.util.List;
  *       which the cited line selects) keeps the finding where it is and drops {@code
  *       suggestion_new}, so no suggestion block is posted on lines it does not quote;
  *   <li>a suggestion for markdown table rows whose rows do not keep the quoted row's cell count is
- *       dropped the same way: applied, it shifts every later cell under the wrong column (#964).
+ *       dropped the same way: applied, it shifts every later cell under the wrong column (#964);
+ *   <li>a multi-line suggestion that lost the replaced lines' indentation the way its quote did
+ *       gets it back ({@link SuggestionIndent}, #1197).
  * </ul>
  *
  * <p>{@code suggestion_old} is kept in every case: it is the anchor later rounds locate the finding
@@ -69,6 +72,16 @@ final class SuggestionAnchor {
           range.startLine(),
           range.endLine());
       placed = atLine(finding, range.startLine(), finding.suggestionNew());
+    }
+    String suggestion = placed.suggestionNew();
+    String restored =
+        SuggestionIndent.restore(quote, suggestion, resolver.rightSideLines(placed.file(), range));
+    if (!Objects.equals(restored, suggestion)) {
+      Log.infof(
+          "Finding '%s' (%s:%d) suggests code indented unlike the lines it replaces; restoring"
+              + " their indentation",
+          LogSafe.oneLine(placed.title()), LogSafe.oneLine(placed.file()), placed.line());
+      placed = atLine(placed, placed.line(), restored);
     }
     return changesTableShape(quote, placed.suggestionNew())
         ? withoutSuggestionBlock(placed, "suggests table rows with a different cell count")

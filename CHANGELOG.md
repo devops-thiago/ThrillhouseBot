@@ -90,6 +90,12 @@ without it those counters stay hidden and nothing else changes.
 
 ### Fixed
 
+- A multi-line suggestion that loses the indentation of the lines it replaces gets it back before
+  it is posted, so "Commit suggestion" no longer commits misformatted code. This covers a first
+  line written at column 0 while the following lines keep their indent, and spaces written where
+  the file indents with tabs. A suggestion is rewritten only when its quote of the replaced code
+  shows the same loss, so a deliberate change of indentation, such as a Python dedent, is kept.
+  (#1197)
 - When the PR description is edited between two reviews of the same commit, Description vs.
   Implementation is judged again against the new text. Bullets written against the old description,
   such as "it describes only the tracker feature", are no longer carried over. Linked-issue gaps
