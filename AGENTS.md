@@ -331,7 +331,9 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   (`replacedThisRound`) keeps an `unresolved` status under `REPLACED_NOTE` and is listed as its
   replacement in the still-open set, so "Still present" adds up to the findings carried in and the
   summary folds it into the round's entry as open since an earlier review; the delta section does
-  not count it as new (`FollowUpDeltaSummary.newFindingCount`, #969). The guard also drops a new
+  not count it as new (`FollowUpDeltaSummary.newFindingCount`, #969). The check run's counts line
+  takes its new findings from the same place (`PrSummaryGenerator.CurrentState.newFindings`), so its
+  open total and new count match the summary and the delta (#1199). The guard also drops a new
   listed item restating an open threaded finding. The summary's "Same issue as" note
   (`SummarySurfaceDeduplicator.restatedBy`) uses the same predicate, so the note and the counts
   never disagree (#972). All of them go through `DefectIdentity.sameDefect`, which is symmetric: in

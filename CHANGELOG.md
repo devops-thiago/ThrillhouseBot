@@ -92,6 +92,10 @@ without it those counters stay hidden and nothing else changes.
 
 ### Fixed
 
+- On a follow-up round, the check run's open total and new count now match the summary and the
+  "changes since the last review" section. A finding that replaces an open "Things to double-check"
+  item from an earlier round was counted twice on the check run, once as new and once as still
+  open. (#1199)
 - A "Things to double-check" item about a test file is no longer marked "Same issue as" an inline
   finding on the production code it tests. A test fake that accepts what the real type rejects, and
   a defect in that real type, are now listed as two separate defects even when both titles name the

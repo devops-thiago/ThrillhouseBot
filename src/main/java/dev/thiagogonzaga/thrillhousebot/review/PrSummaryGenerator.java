@@ -380,7 +380,16 @@ public class PrSummaryGenerator {
    * exactly one entry per earlier finding still open, so the "including N" line always equals the
    * still-open set the "Still present" count is taken over.
    */
-  record CurrentState(ReviewResult result, Set<Finding> carried) {}
+  record CurrentState(ReviewResult result, Set<Finding> carried) {
+
+    /**
+     * The entries this round raised that are not open since an earlier review: the round's new
+     * findings, as the delta section and the check run count them (#1199).
+     */
+    List<Finding> newFindings() {
+      return result.findings().stream().filter(f -> !carried.contains(f)).toList();
+    }
+  }
 
   /**
    * The result the summary renders: this round's findings followed by the earlier rounds' findings
