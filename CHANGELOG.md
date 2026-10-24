@@ -92,6 +92,10 @@ without it those counters stay hidden and nothing else changes.
 
 ### Fixed
 
+- A "Things to double-check" item about a test file is no longer marked "Same issue as" an inline
+  finding on the production code it tests. A test fake that accepts what the real type rejects, and
+  a defect in that real type, are now listed as two separate defects even when both titles name the
+  type. (#1198)
 - A multi-line suggestion that loses the indentation of the lines it replaces gets it back before
   it is posted, so "Commit suggestion" no longer commits misformatted code. This covers a first
   line written at column 0 while the following lines keep their indent, and spaces written where
