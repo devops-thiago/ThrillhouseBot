@@ -34,6 +34,7 @@ import org.junit.jupiter.api.Test;
  */
 class SuggestionAnchorTest {
 
+  private static final String EXPIRY_TRACKER = "java/src/main/java/bloodbank/ExpiryTracker.java";
   private static final String REACT_DOC = "docs/CONFIG-REACT.md";
   private static final String REFRESH_ROW =
       "| `VITE_REFRESH_INTERVAL` | How often the desk reloads the loan list. |";
@@ -288,6 +289,117 @@ class SuggestionAnchorTest {
     assertEquals(2, SuggestionAnchor.cellCount("| a \\\\| b |"));
     assertEquals(1, SuggestionAnchor.cellCount("| a \\| b |"));
     assertEquals(1, SuggestionAnchor.cellCount("|"));
+  }
+
+  /**
+   * #1197, ThrillhouseBot-test#293 discussion_r4336454622: the quote and the suggestion both start
+   * at column 0 where ExpiryTracker.java:51 is indented 8 spaces; the later lines keep theirs.
+   */
+  @Test
+  void aJavaSuggestionGetsBackItsFirstLinesIndent() {
+    var resolver =
+        resolver(
+            EXPIRY_TRACKER,
+            "        Instant limit = clock.instant().plus(window);",
+            "        List<BloodUnit> out = new ArrayList<>();",
+            "        for (BloodUnit u : units.values()) {",
+            "            if (u.expiresAt().isBefore(limit)) {",
+            "                out.add(u);",
+            "            }",
+            "        }",
+            "        return out;");
+    var cited =
+        finding(
+            EXPIRY_TRACKER,
+            3,
+            "for (BloodUnit u : units.values()) {\n"
+                + "            if (u.expiresAt().isBefore(limit)) {\n"
+                + "                out.add(u);\n"
+                + "            }\n"
+                + "        }",
+            "for (BloodUnit u : units.values()) {\n"
+                + "            if (!u.expiresAt().isAfter(limit)) {\n"
+                + "                out.add(u);\n"
+                + "            }\n"
+                + "        }");
+
+    var placed = SuggestionAnchor.place(cited, resolver);
+
+    assertEquals(
+        "        for (BloodUnit u : units.values()) {\n"
+            + "            if (!u.expiresAt().isAfter(limit)) {\n"
+            + "                out.add(u);\n"
+            + "            }\n"
+            + "        }",
+        placed.suggestionNew());
+    assertEquals(cited.suggestionOld(), placed.suggestionOld());
+    assertEquals(3, placed.line());
+  }
+
+  /**
+   * #1197, ThrillhouseBot-test#292 discussion_r4336431427: go/allocator.go indents with tabs, and
+   * the quote and the suggestion use one space per level.
+   */
+  @Test
+  void aGoSuggestionGetsItsTabsBack() {
+    var resolver =
+        resolver(
+            "go/allocator.go",
+            "\tvar unassigned []Vehicle // vehicles that could not be given a lane",
+            "\tfor _, v := range vs {",
+            "\t\tunassigned = append(unassigned, v)",
+            "\t\tlane, err := a.Allocate(v)",
+            "\t\tif err != nil {",
+            "\t\t\tcontinue",
+            "\t\t}",
+            "\t\tassigned[v.Plate] = lane",
+            "\t}");
+    var cited =
+        finding(
+            "go/allocator.go",
+            3,
+            " for _, v := range vs {\n  unassigned = append(unassigned, v)\n  lane, err :="
+                + " a.Allocate(v)\n  if err != nil {\n   continue\n  }\n  assigned[v.Plate] ="
+                + " lane\n }",
+            " for _, v := range vs {\n  lane, err := a.Allocate(v)\n  if err != nil {\n  "
+                + " unassigned = append(unassigned, v)\n   continue\n  }\n  assigned[v.Plate] ="
+                + " lane\n }");
+
+    var placed = SuggestionAnchor.place(cited, resolver);
+
+    assertEquals(
+        "\tfor _, v := range vs {\n\t\tlane, err := a.Allocate(v)\n\t\tif err != nil {\n"
+            + "\t\t\tunassigned = append(unassigned, v)\n\t\t\tcontinue\n\t\t}\n"
+            + "\t\tassigned[v.Plate] = lane\n\t}",
+        placed.suggestionNew());
+    assertEquals(cited.suggestionOld(), placed.suggestionOld());
+    assertEquals(3, placed.line());
+  }
+
+  /** #1197 controls: indentation already right, one line, and a Python dedent quoted verbatim. */
+  @Test
+  void aSuggestionIndentedOnPurposeIsLeftAsWritten() {
+    var java =
+        resolver(
+            EXPIRY_TRACKER, "    void f() {", "        int a = 1;", "        int b = 2;", "    }");
+    var matching =
+        finding(
+            EXPIRY_TRACKER,
+            2,
+            "        int a = 1;\n        int b = 2;",
+            "        int a = 2;\n        int b = 3;");
+    var oneLine = finding(EXPIRY_TRACKER, 2, "int a = 1;", "int a = 2;\n        int c = 0;");
+    var python = resolver("a.py", "class C:", "    def helper(self, x):", "        return x");
+    var dedent =
+        finding(
+            "a.py",
+            2,
+            "    def helper(self, x):\n        return x",
+            "def helper(x):\n    return x");
+
+    assertSame(matching, SuggestionAnchor.place(matching, java));
+    assertSame(oneLine, SuggestionAnchor.place(oneLine, java));
+    assertSame(dedent, SuggestionAnchor.place(dedent, python));
   }
 
   private static DiffLineResolver goConfigDoc(String lastRow) {
