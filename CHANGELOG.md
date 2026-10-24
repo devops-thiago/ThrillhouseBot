@@ -82,6 +82,11 @@ without it those counters stay hidden and nothing else changes.
   longer reveals the session's numeric id. (#1220)
 ### Fixed
 
+- The summary's sentence on a failing CI check no longer credits a finding that names the check
+  and a failure in different sentences, or quotes the check's name as a key such as the
+  package.json script `"test":`. It now credits a finding that names the C test function whose
+  `CHECK` label the log prints, or quotes a test's assertion in single quotes, and it reads the
+  failing test's name from sbt's `[info] - name *** FAILED ***` line. (#1194)
 - The version bump pull request opened after a release now passes the DCO check. Its commit was not signed off, and the check accepts an unsigned bot commit only when it has a verified signature (#1226).
 
 ## [0.8.0] - 2026-10-21

@@ -1141,4 +1141,372 @@ class CiFailureCitationsTest {
 
     assertTrue(citations.cites(finding));
   }
+
+  // ---- #1194, round 19: a wrong tie (node, react) and a missing one (c, scala) ----
+
+  /** node ThrillhouseBot-test#299's job log: node --test crashed before any test ran. */
+  private static final String NODE_299_LOG =
+      """
+      # Error: Cannot find module '/home/runner/work/ThrillhouseBot-test/ThrillhouseBot-test/node/test'
+      not ok 1 - test
+        ---
+        failureType: 'testCodeFailure'
+        error: 'test failed'
+      # fail 1
+      """;
+
+  /** node ThrillhouseBot-test#299's Dockerfile finding (4336441186). */
+  private static final ReviewResponse.Finding NODE_299_FINDING =
+      new ReviewResponse.Finding(
+          "high",
+          "medium",
+          "node/Dockerfile",
+          6,
+          "COPY dist and ENTRYPOINT dist/server.js reference nothing the build produces",
+          "The COPY dist ./dist step requires a dist/ directory in the build context, and the"
+              + " ENTRYPOINT [\"node\", \"dist/server.js\"] requires dist/server.js inside the image —"
+              + " but nothing in or around this PR produces it. The node directory is added"
+              + " wholesale by this PR; node/package.json defines only a test script (\"test\":"
+              + " \"node --test test/\"), has no build script and no dependencies, and the"
+              + " implementation files are src/*.js, with no server.js among them. The CI workflow"
+              + " (.github/workflows/node-ci.yml) runs only npm test. As written, docker build fails"
+              + " at COPY (no dist in the context), and even if dist existed the entrypoint targets"
+              + " a file no stage builds.",
+          null,
+          null);
+
+  /**
+   * #1194: node's runner crashed before any test ran, so the log names no test, and the Dockerfile
+   * finding was credited with the failing {@code test} check by a package.json script key quoted in
+   * one sentence and "docker build fails" in another. Neither ties a failure to the check.
+   */
+  @Test
+  void theRound19NodeDockerfileFindingDoesNotExplainTheCrashedTestRun() {
+    var citations = fromJobLog(NODE_299_LOG);
+
+    assertEquals(
+        "CI on this commit fails the check \"test\".",
+        citations.overviewSentences(List.of(Finding.fromAiResponse(NODE_299_FINDING))));
+    assertFalse(citations.cites(NODE_299_FINDING));
+  }
+
+  /** react ThrillhouseBot-test#300's workflow finding (4336451178). */
+  private static final ReviewResponse.Finding REACT_300_FINDING =
+      new ReviewResponse.Finding(
+          "high",
+          "high",
+          ".github/workflows/react-ci.yml",
+          21,
+          "CI copies dist/report.html, but no step builds dist or generates the report",
+          "The test job runs only: 'actions/checkout@v4', 'actions/setup-node@v4', and '- run:"
+              + " npm test' (line 19). It then does '- name: Upload bundle report' / 'run: cp"
+              + " dist/report.html report.html' (line 21). Nothing runs 'npm run build', so does"
+              + " not exist at that point, and even after a build nothing in the reviewed code"
+              + " generates a report.html inside dist — vite build does not emit one by default and"
+              + " no report plugin is configured. The cp fails deterministically on every run ('cp:"
+              + " cannot stat 'dist/report.html': No such file or directory') and the job goes red"
+              + " on every pull request touching react/**.",
+          null,
+          null);
+
+  /**
+   * #1194: react's runner crashed the same way, and the upload step the finding is about was
+   * skipped. "The test job" and "the cp fails" are in different sentences about different steps.
+   */
+  @Test
+  void theRound19ReactWorkflowFindingDoesNotExplainTheCrashedTestRun() {
+    var citations =
+        fromJobLog(
+            """
+            Error: Cannot find module '/home/runner/work/ThrillhouseBot-test/ThrillhouseBot-test/react/test'
+            ✖ test (24.80723ms)
+            ℹ fail 1
+            ✖ failing tests:
+            ✖ test (24.80723ms)
+            """);
+
+    assertEquals(
+        "CI on this commit fails the check \"test\".",
+        citations.overviewSentences(List.of(Finding.fromAiResponse(REACT_300_FINDING))));
+    assertFalse(citations.cites(REACT_300_FINDING));
+  }
+
+  /**
+   * A check named in the same sentence that says it fails still cites it, and a key quoted in that
+   * sentence does not stop a second, quoted mention from naming the check.
+   */
+  @Test
+  void aCheckNamedInTheSentenceThatSaysItFailsIsCited() {
+    var citations = fromJobLog("not ok 1 - test\n");
+    var finding =
+        new ReviewResponse.Finding(
+            "high",
+            "high",
+            "package.json",
+            3,
+            "Test script points at a missing directory",
+            "The script key \"test\": \"node --test test/\" names a directory, so the \"test\""
+                + " check fails before any test runs.",
+            null,
+            null);
+
+    assertTrue(citations.cites(finding));
+    assertFalse(
+        citations.cites(
+            new ReviewResponse.Finding(
+                "high",
+                "high",
+                "package.json",
+                3,
+                "Test script points at a missing directory",
+                "The script key \"test\": \"node --test test/\" names a directory. The build"
+                    + " fails.",
+                null,
+                null)),
+        "the key and the failure are in different sentences");
+  }
+
+  /**
+   * A sentence is cut at a stop, a semicolon, a question or an exclamation mark before whitespace,
+   * and at a line break; not at an abbreviation's stop, inside a backtick quote, or at a mark that
+   * ends the text.
+   */
+  @Test
+  void sentencesAreCutWhereOneEndsAndNotAtAbbreviationsOrQuotedCode() {
+    assertEquals(
+        List.of(
+            "the copy fails, i.e. the \"test\" check stops",
+            " why",
+            " now",
+            " run `a(); b()` first",
+            "next line.end"),
+        CiFailureCitations.sentences(
+            "the copy fails, i.e. the \"test\" check stops. why? now! run `a(); b()` first\n"
+                + "next line.end"));
+    assertEquals(
+        List.of("e.g. this", " that"),
+        CiFailureCitations.sentences("e.g. this. that"),
+        "a word that opens the text is read back to its start");
+    assertEquals(
+        List.of("the cp fails, etc", " the \"test\" check goes red too."),
+        CiFailureCitations.sentences("the cp fails, etc. the \"test\" check goes red too."),
+        "only a dotted abbreviation keeps its stop inside the sentence");
+    assertEquals(
+        List.of("the cp fails in `the step", " the \"test\" check goes red"),
+        CiFailureCitations.sentences("the cp fails in `the step. the \"test\" check goes red"),
+        "a backtick with no partner on its line quotes nothing");
+  }
+
+  /**
+   * Single-quoted code keeps its marks inside one sentence, but only a span that closes on its line
+   * and opens after no letter or digit: a contraction or an unclosed quote still lets it end.
+   */
+  @Test
+  void singleQuotedCodeStaysInOneSentence() {
+    assertEquals(
+        List.of("it fails at 'a(); b()' so the \"test\" check stops", " next"),
+        CiFailureCitations.sentences("it fails at 'a(); b()' so the \"test\" check stops. next"));
+    assertEquals(List.of("it's done", " ok"), CiFailureCitations.sentences("it's done. ok"));
+    assertEquals(List.of("'open", " x"), CiFailureCitations.sentences("'open. x"));
+    assertEquals(List.of("'a", " b", "c'"), CiFailureCitations.sentences("'a. b\nc'"));
+    assertEquals(
+        List.of("'a; b' fails", "next line"),
+        CiFailureCitations.sentences("'a; b' fails\nnext line"));
+  }
+
+  /** A failure and a check named in one sentence across an "i.e." still cite the check. */
+  @Test
+  void anAbbreviationDoesNotSplitTheSentenceThatTiesTheCheck() {
+    var finding =
+        new ReviewResponse.Finding(
+            "high",
+            "high",
+            "Dockerfile",
+            4,
+            "COPY dist fails",
+            "The copy step fails at COPY, i.e. the \"test\" check never gets to run the image.",
+            null,
+            null);
+
+    assertTrue(fromJobLog("not ok 1 - test\n").cites(finding));
+  }
+
+  /** c ThrillhouseBot-test#302's harness output: its CHECK macro prints the label it was given. */
+  private static final String C_302_LOG =
+      """
+      PASS issue_notifies
+      FAIL rider_limit_rejects_third_code
+      PASS no_dock_available
+      """;
+
+  /** Lines 59-71 of c ThrillhouseBot-test#302's {@code c/tests/test_dispenser.c}. */
+  private static final String C_302_TESTS =
+      """
+      static void test_rider_limit(void)
+      {
+          static config_t cfg;
+          static dispenser_t d;
+          int rc;
+
+          config_load(&cfg);
+          setup(&d, &cfg);
+          dispenser_issue(&d, "rider1", "+15550101", "harbor", 100, stub_notify, NULL);
+          dispenser_issue(&d, "rider1", "+15550101", "harbor", 101, stub_notify, NULL);
+          rc = dispenser_issue(&d, "rider1", "+15550101", "harbor", 102, stub_notify, NULL);
+          CHECK("rider_limit_rejects_third_code", rc == DISP_LIMIT);
+      }
+      """;
+
+  /** c ThrillhouseBot-test#302's off-by-one finding (4336472686). */
+  private static final ReviewResponse.Finding C_302_FINDING =
+      new ReviewResponse.Finding(
+          "medium",
+          "high",
+          "c/src/dock.c",
+          64,
+          "Off-by-one lets a rider hold one more code than the configured limit",
+          "The cap check is `if (count_active(d, rider, now) > d->cfg->max_codes_per_rider) return"
+              + " DISP_LIMIT;`. With the default max_codes_per_rider of 2, a rider holding 2 active"
+              + " codes gets 2 > 2 = false and is issued a third. The documented contract says the"
+              + " limit is the number a rider may hold, and the PR's own test test_rider_limit"
+              + " encodes exactly that intent: it issues two codes at now=100 and 101, then asserts"
+              + " the third issuance at now=102 returns DISP_LIMIT. With the current comparison the"
+              + " third call instead proceeds to find a free dock and returns DISP_OK, so that test"
+              + " run will show this in CI. The comparison should be >=, matching what both the"
+              + " documentation and the test expect.",
+          null,
+          null);
+
+  /**
+   * #1194: the c log prints the CHECK label, and the off-by-one finding names the test function
+   * that check is in. With the test file in the diff the label leads to that function, and the
+   * finding explains the failure; without it the sentence states the failure alone.
+   */
+  @Test
+  void theRound19CFindingNamingTheTestFunctionExplainsItsFailingCheck() {
+    var section = sectionFromJobLog(C_302_LOG);
+    var withTests =
+        CiFailureCitations.parse(
+            section, List.of(addedAt("c/tests/test_dispenser.c", 59, C_302_TESTS)));
+
+    assertEquals(
+        "CI on this commit fails the check \"test\" (failing test"
+            + " \"rider_limit_rejects_third_code\"), which the finding \"Off-by-one lets a rider"
+            + " hold one more code than the configured limit\" explains.",
+        withTests.overviewSentences(List.of(Finding.fromAiResponse(C_302_FINDING))));
+    assertEquals(
+        "CI on this commit fails the check \"test\" (failing test"
+            + " \"rider_limit_rejects_third_code\").",
+        CiFailureCitations.parse(section)
+            .overviewSentences(List.of(Finding.fromAiResponse(C_302_FINDING))));
+  }
+
+  /**
+   * A label of several words leads to its test function too: a C harness printing TAP names the
+   * check "sweep expires every code", and a finding naming only {@code test_sweep} explains it.
+   */
+  @Test
+  void aCheckLabelOfSeveralWordsLeadsToItsTestFunction() {
+    var citations =
+        CiFailureCitations.parse(
+            sectionFromJobLog("not ok 1 - sweep expires every code\n"),
+            List.of(
+                addedAt(
+                    "c/tests/test_sweep.c",
+                    1,
+                    """
+                    static void test_sweep(void)
+                    {
+                        CHECK("sweep expires every code", expired == 3);
+                    }
+                    """)));
+    var finding =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            "c/src/sweep.c",
+            12,
+            "Sweep skips the last code",
+            "The loop stops one short, so test_sweep sees two expired codes where it expects three.",
+            null,
+            null);
+
+    assertTrue(
+        citations
+            .overviewSentences(List.of(Finding.fromAiResponse(finding)))
+            .endsWith(", which the finding \"Sweep skips the last code\" explains."));
+  }
+
+  /** scala ThrillhouseBot-test#297's sbt output, its level and colours as the job log printed. */
+  private static final String SCALA_297_LOG =
+      """
+      [info] ColdchainSpec:
+      [info] - rolling average covers exactly the last n readings *** FAILED ***
+      [info]   7.0 did not equal 6.0 (ColdchainSpec.scala:16)
+      [info] - rolling average of nothing is zero
+      [info] *** 1 TEST FAILED ***
+      """;
+
+  /** Lines 14-21 of scala ThrillhouseBot-test#297's {@code ColdchainSpec.scala}. */
+  private static final String SCALA_297_TESTS =
+      """
+        test("rolling average covers exactly the last n readings") {
+          val rs = List(2.0, 4.0, 6.0, 8.0).zipWithIndex.map { case (c, i) => Reading("S1", i.toLong, c) }
+          assert(ExcursionDetector.rollingAverage(rs, 3) == 6.0)
+        }
+
+        test("rolling average of nothing is zero") {
+          assert(ExcursionDetector.rollingAverage(Nil, 3) == 0.0)
+        }
+      """;
+
+  /** scala ThrillhouseBot-test#297's rollingAverage finding (4336444594). */
+  private static final ReviewResponse.Finding SCALA_297_FINDING =
+      new ReviewResponse.Finding(
+          "medium",
+          "medium",
+          "scala/src/main/scala/coldchain/ExcursionDetector.scala",
+          9,
+          "rollingAverage averages the last n-1 readings while its docstring promises the last n",
+          "The scaladoc says '/** Average of the most recent `n` readings. */' but the body is"
+              + " 'val recent = readings.takeRight(n - 1)'. For the input the sibling test supplies"
+              + " — readings (2.0, 4.0, 6.0, 8.0) with n = 3 — this takes the last two elements"
+              + " (6.0, 8.0) and returns 7.0, while the test asserts"
+              + " 'assert(ExcursionDetector.rollingAverage(rs, 3) == 6.0)', the average of the last"
+              + " three; the CI run will confirm whether that test fails as written.",
+          null,
+          null);
+
+  /**
+   * #1194: sbt opens each line with its level, which left the failing test's name read as "[info]";
+   * and the scala finding quotes the test's assertion in single quotes. Both are read now, so the
+   * finding explains the failing test.
+   */
+  @Test
+  void theRound19ScalaFindingQuotingTheAssertionExplainsTheFailingTest() {
+    var citations =
+        CiFailureCitations.parse(
+            sectionFromJobLog(SCALA_297_LOG),
+            List.of(
+                addedAt(
+                    "scala/src/test/scala/coldchain/ColdchainSpec.scala", 14, SCALA_297_TESTS)));
+
+    assertEquals(
+        "CI on this commit fails the check \"test\" (failing test \"rolling average covers"
+            + " exactly the last n readings\"), which the finding \"rollingAverage averages the"
+            + " last n-1 readings while its docstring promises the last n\" explains.",
+        citations.overviewSentences(List.of(Finding.fromAiResponse(SCALA_297_FINDING))));
+    assertTrue(citations.cites(SCALA_297_FINDING));
+  }
+
+  @Test
+  void sbtsLevelIsNotPartOfTheTestName() {
+    assertEquals(
+        "rolling average covers exactly the last n readings",
+        CiFailureCitations.testName(
+            "[info] - rolling average covers exactly the last n readings *** FAILED ***"));
+    assertEquals(
+        "rejects a negative reading",
+        CiFailureCitations.testName("[error] - rejects a negative reading *** FAILED ***"));
+  }
 }
