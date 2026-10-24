@@ -889,7 +889,9 @@ class DescriptionGapCarryoverTest {
     }
 
     @Test
-    void anEditedDescriptionLetsTheCallReleaseADescriptionGapButNotALinkedIssueOne() {
+    void anEditedDescriptionLeavesItsDescriptionGapsToTheCallButCarriesALinkedIssueOne() {
+      // #1196: a description gap is judged afresh against the edited text, so it is neither asked
+      // about nor carried; the linked-issue gap is, and on this head the call cannot resolve it.
       var edited = PR_TEXT + "A retry budget setting caps the attempts.\n";
       var carry =
           DescriptionGapCarryover.of(
@@ -899,16 +901,125 @@ class DescriptionGapCarryoverTest {
               edited,
               true);
 
-      var applied =
-          carry.apply(summary(List.of(), List.of("G1: the description now names it", "G2")));
-
-      assertEquals(List.of(CAP_GAP), applied.descriptionGaps());
-      assertEquals(
-          List.of(CAP_GAP), carry.apply(summary(List.of(), List.of("G1"))).descriptionGaps());
-      // An entry naming nothing carried resolves nothing either.
+      assertEquals(List.of(CAP_GAP), carry.asked());
+      assertTrue(carry.promptSection().contains("G1: " + CAP_GAP));
+      assertFalse(carry.promptSection().contains(UNQUOTED_OMISSION_GAP));
+      for (var addressed : List.of(List.<String>of(), List.of("G1"), List.of("G9"))) {
+        assertEquals(
+            List.of(CAP_GAP), carry.apply(summary(List.of(), addressed)).descriptionGaps());
+      }
+      // A gap the call still finds in the new text it reports again, and that one is listed.
       assertEquals(
           List.of(UNQUOTED_OMISSION_GAP, CAP_GAP),
-          carry.apply(summary(List.of(), List.of("G9"))).descriptionGaps());
+          carry.apply(summary(List.of(UNQUOTED_OMISSION_GAP), List.of())).descriptionGaps());
+    }
+
+    @Test
+    void onAMovedHeadTheEditedDescriptionsLinkedIssueGapCanStillBeResolved() {
+      var carry =
+          DescriptionGapCarryover.of(
+              listingJudgedAgainst(PR_TEXT, UNQUOTED_OMISSION_GAP, CAP_GAP),
+              BOT,
+              LINKED_113,
+              PR_TEXT + "More.\n",
+              false);
+
+      assertEquals(
+          List.of(),
+          carry
+              .apply(summary(List.of(), List.of("G1: store.py now caps listings")))
+              .descriptionGaps());
+    }
+
+    @Test
+    void aRoundWithNoSummaryAnswerKeepsAnEditedDescriptionsGaps() {
+      // No call judged the new text, so nothing was recomputed: the carried gaps stay.
+      var carry =
+          DescriptionGapCarryover.of(
+              listingJudgedAgainst(PR_TEXT, UNQUOTED_OMISSION_GAP, CAP_GAP),
+              BOT,
+              LINKED_113,
+              PR_TEXT + "More.\n",
+              true);
+
+      assertEquals(List.of(UNQUOTED_OMISSION_GAP, CAP_GAP), carry.apply(null).descriptionGaps());
+    }
+
+    /** ThrillhouseBot-test#297's PR text in round 1, when the body was empty. */
+    private static final String SCALA_EMPTY =
+        """
+        Title: feat(scala): add cold-chain excursion tracker
+        Description:
+        """;
+
+    /** The same PR text once the author set the body. */
+    private static final String SCALA_EDITED =
+        SCALA_EMPTY
+            + """
+            Adds a small Scala service that tracks temperature excursions for refrigerated \
+            shipments.
+
+            - Failed alert deliveries are retried up to three times with exponential backoff.
+            - Includes a Dockerfile, CI workflow and `docs/CONFIG-SCALA.md`. The old README moves \
+            to `docs/SCALA-V19.md`.
+
+            Closes #283
+            """;
+
+    private static final String LINKED_283 =
+        """
+        Issues this pull request is linked to: #283
+
+        ### Issue #283: Cold-chain excursion tracker (Scala)
+        Linked by: a closing keyword in the PR body
+        Acceptance criteria (from the issue):
+        - [ ] `POST /readings` rejects batches larger than 500 readings with HTTP 413.
+        """;
+
+    /** Round 1's bullet, summary 6315203824. */
+    private static final String DESCRIBES_ONLY =
+        "The PR description provides no coverage of most of the change set: it describes only the"
+            + " excursion tracker feature while the scope is 16 files including a new Dockerfile,"
+            + " CI workflow, build config, config documentation and a full test suite.";
+
+    private static final String BATCH_GAP =
+        "Linked issue #283: '`POST /readings` rejects batches larger than 500 readings with HTTP"
+            + " 413' — no changed file or finding shows any batch-size limit or 413 handling";
+
+    private static final String BACKOFF_GAP =
+        "The PR description states \"Failed alert deliveries are retried up to three times with"
+            + " exponential backoff\", but AlertGateway.send makes a single attempt.";
+
+    @Test
+    void anEditedBodyIsJudgedAfreshOnTheSameHead() {
+      // #1196, ThrillhouseBot-test#297: round 1 judged an empty body; round 2, on the same head,
+      // read the body the author then set.
+      var carry =
+          DescriptionGapCarryover.of(
+              listingJudgedAgainst(SCALA_EMPTY, DESCRIBES_ONLY),
+              BOT,
+              LINKED_283,
+              SCALA_EDITED,
+              true);
+
+      assertTrue(carry.prTextChanged());
+      assertEquals("", carry.promptSection());
+      assertEquals(
+          List.of(BATCH_GAP, BACKOFF_GAP),
+          carry.apply(summary(List.of(BATCH_GAP, BACKOFF_GAP), List.of())).descriptionGaps());
+    }
+
+    @Test
+    void aClaimCreditedToAnEmptyBodyIsNotCarriedOnceTheBodyExists() {
+      // #1196, ThrillhouseBot-test#298: written against an empty body, which made no such claim.
+      var implied =
+          "The description implies the docker build works out of the box, but the Dockerfile"
+              + " copies a wheel the build never produces.";
+      var carry =
+          DescriptionGapCarryover.of(
+              listingJudgedAgainst(SCALA_EMPTY, implied), BOT, "", SCALA_EDITED, true);
+
+      assertEquals(List.of(), carry.apply(summary(List.of(), List.of())).descriptionGaps());
     }
 
     @Test

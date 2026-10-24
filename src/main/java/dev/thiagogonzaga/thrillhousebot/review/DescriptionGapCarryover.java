@@ -55,10 +55,13 @@ import java.util.stream.IntStream;
  *       call re-evaluates the carried list, since only it reads the current description and file
  *       list, but silence keeps a gap: leaving a gap out of its answer is exactly the failure being
  *       fixed, so it is never read as a resolution. On the head the previous round reviewed that
- *       answer is not taken (#964): nothing the call can read has changed there. The exception is a
- *       PR text edited since that round (#1064, told by the fingerprint the summary comment
- *       carries, {@link #prTextMarker}): the call then reads a new description, and its answer
- *       releases a description gap, never a linked-issue one, which only the code can settle;
+ *       answer is not taken (#964): nothing the call can read has changed there;
+ *   <li>the PR text was edited since the round that listed it (told by the fingerprint the summary
+ *       comment carries, {@link #prTextMarker}) and it is a description gap, not a linked-issue one
+ *       (#1196): it was judged against a description that no longer exists, so the call is not
+ *       asked about it and judges the description afresh, as on a first review. A gap it still
+ *       finds it reports again. A linked-issue gap is carried as before, since only the code can
+ *       settle it;
  *   <li>the PR text changed since the round that listed it and now holds the passage the gap quoted
  *       as missing ("the description never mentions '…'", {@link
  *       DescriptionGapScreen#omissionCovered});
@@ -186,10 +189,23 @@ final class DescriptionGapCarryover {
     }
 
     /**
-     * The summary-call guidance asking which carried gaps are now resolved, with the gaps fenced
-     * and labelled; {@code ""} when nothing is carried, so the call sees no request without data.
+     * The carried gaps put to the summary call and merged with its answer: every one, or only the
+     * linked-issue gaps once the PR text changed (#1196). A description gap judged against the
+     * earlier text is then left to the call to find again in the new one.
+     */
+    List<String> asked() {
+      return prTextChanged()
+          ? gaps.stream().filter(gap -> linkedIssueGap(gap) != null).toList()
+          : gaps;
+    }
+
+    /**
+     * The summary-call guidance asking which carried gaps are now resolved, with the {@link #asked}
+     * gaps fenced and labelled; {@code ""} when none is asked about, so the call sees no request
+     * without data.
      */
     String promptSection() {
+      var gaps = asked();
       if (gaps.isEmpty()) {
         return "";
       }
@@ -210,10 +226,11 @@ final class DescriptionGapCarryover {
 
     /**
      * The summary this round renders and persists: the call's own gaps, their linked-issue numbers
-     * checked, followed by every carried gap the call neither resolved nor reported again. A {@code
-     * null} summary (a degraded round, no summary call answer) keeps the carried gaps in a summary
-     * of their own, so a round that could not re-check them does not erase them either; with
-     * nothing carried it stays {@code null}, the counts-only shape.
+     * checked, followed by every {@link #asked} gap the call neither resolved nor reported again. A
+     * {@code null} summary (a degraded round, no summary call answer) keeps every carried gap in a
+     * summary of its own, an edited description's included, so a round that could not re-check them
+     * does not erase them either; with nothing carried it stays {@code null}, the counts-only
+     * shape.
      */
     ReviewResponse.Summary apply(ReviewResponse.Summary summary) {
       if (summary == null) {
@@ -223,13 +240,20 @@ final class DescriptionGapCarryover {
       // The call saw the first carried gaps as G1…Gk, so in its own gaps a G<n> up to k is one of
       // them even when words follow it (#974), short of a name such as "G1 GC" or "G1-specific";
       // the summary's context-free strip cannot know which labels were issued.
-      var issued = Math.min(gaps.size(), MAX_PROMPTED_GAPS);
+      var asked = asked();
+      if (asked.size() < gaps.size()) {
+        Log.infof(
+            "The PR text changed since the previous round; left %d carried description gap(s) for"
+                + " the summary call to judge against the new text",
+            gaps.size() - asked.size());
+      }
+      var issued = Math.min(asked.size(), MAX_PROMPTED_GAPS);
       var current =
           screened(
               withLinkedIssueNumbers(
                   DescriptionGapLabels.stripIssued(summary.descriptionGaps(), issued),
                   linkedIssues));
-      var merged = screened(merge(current, gaps, resolutions(summary.addressedGaps())));
+      var merged = screened(merge(current, asked, resolutions(summary.addressedGaps())));
       // Nothing to change leaves the call's own summary as it came.
       return merged.equals(summary.descriptionGaps()) && summary.addressedGaps().isEmpty()
           ? summary
@@ -271,33 +295,19 @@ final class DescriptionGapCarryover {
      * read shows a carried gap resolved: on one such head a {@code /review} dropped a still-open
      * acceptance criterion because a test file's name suggested it was covered. A gap whose quoted
      * claim the author has since taken out of the description still leaves, through the screen, and
-     * one whose issue is no longer linked leaves through {@link #stillLinked}.
+     * one whose issue is no longer linked leaves through {@link #stillLinked}. An edited
+     * description changes nothing here: its description gaps are not asked about ({@link #asked}),
+     * and the linked-issue gaps that are can only be settled by the code.
      */
     private List<String> resolutions(List<String> addressed) {
       if (!headUnchanged || addressed.isEmpty()) {
         return addressed;
       }
-      var taken =
-          prTextChanged()
-              ? addressed.stream().filter(this::resolvesOnlyDescriptionGaps).toList()
-              : List.<String>of();
-      if (taken.size() < addressed.size()) {
-        Log.infof(
-            "Kept the carried description gaps on the head the previous round reviewed; ignored %d"
-                + " addressed-gap entry(ies) from the summary call",
-            addressed.size() - taken.size());
-      }
-      return taken;
-    }
-
-    /**
-     * Whether an addressed-gap entry resolves carried gaps and none of them is a linked-issue gap:
-     * an edited description can settle what the description says, not what the code does.
-     */
-    private boolean resolvesOnlyDescriptionGaps(String entry) {
-      var positions = addressedPositions(List.of(entry), gaps);
-      return !positions.isEmpty()
-          && positions.stream().allMatch(i -> linkedIssueGap(gaps.get(i)) == null);
+      Log.infof(
+          "Kept the carried description gaps on the head the previous round reviewed; ignored %d"
+              + " addressed-gap entry(ies) from the summary call",
+          addressed.size());
+      return List.of();
     }
   }
 

@@ -82,6 +82,11 @@ without it those counters stay hidden and nothing else changes.
   longer reveals the session's numeric id. (#1220)
 ### Fixed
 
+- When the PR description is edited between two reviews of the same commit, Description vs.
+  Implementation is judged again against the new text. Bullets written against the old description,
+  such as "it describes only the tracker feature", are no longer carried over. Linked-issue gaps
+  still carry until the code meets them, and a round whose summary call fails keeps every gap.
+  (#1196)
 - The summary's sentence on a failing CI check no longer credits a finding that names the check
   and a failure in different sentences, or quotes the check's name as a key such as the
   package.json script `"test":`. It now credits a finding that names the C test function whose
