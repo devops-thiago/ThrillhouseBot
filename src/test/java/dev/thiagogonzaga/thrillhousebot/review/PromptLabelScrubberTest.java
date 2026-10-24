@@ -1449,6 +1449,35 @@ class PromptLabelScrubberTest {
         "The only file not shown is the README rename.",
         PromptLabelScrubber.scrub("The withheld list contains only the README rename."));
     assertEquals(
+        "the only files not shown are renamed files in this PR.",
+        PromptLabelScrubber.scrub("the withheld list contains only renamed files in this PR."));
+    assertEquals(
+        "the only files not shown are 3 renames",
+        PromptLabelScrubber.scrub("the withheld list has only 3 renames"));
+    assertEquals(
+        "the only files not shown are two lockfiles.",
+        PromptLabelScrubber.scrub("the withheld list has only two lockfiles."));
+    assertEquals(
+        "the only file not shown is this; it is a rename",
+        PromptLabelScrubber.scrub("the withheld list has only this; it is a rename"));
+    assertEquals(
+        "the only file not shown is 1 rename, pom.xml",
+        PromptLabelScrubber.scrub("the withheld list has only 1 rename, pom.xml"));
+    assertEquals(
+        "the only file not shown is the class",
+        PromptLabelScrubber.scrub("the withheld list has only the class"));
+    assertEquals(
+        "the only file not shown is the status page",
+        PromptLabelScrubber.scrub("the withheld list has only the status page"));
+    assertEquals(
+        "the only file not shown is the bus",
+        PromptLabelScrubber.scrub("the withheld list has only the bus"));
+    assertEquals(
+        "the only file not shown is us",
+        PromptLabelScrubber.scrub("the withheld list has only us"));
+    assertEquals(
+        "the only file not shown is ", PromptLabelScrubber.scrub("the withheld list has only "));
+    assertEquals(
         "The list of files not shown names it.",
         PromptLabelScrubber.scrub("The withheld list names it."));
     assertEquals(
@@ -1481,6 +1510,10 @@ class PromptLabelScrubberTest {
         "description_gaps is never null after parsing",
         "it reads into description_gaps field by field",
         "see description_gaps.size() for the count",
+        "see description_gaps in ReviewResponse for the exact field list.",
+        "see description_gaps of Summary.descriptionGaps",
+        "see description_gaps from parse() here",
+        "see description_gaps in pr_purpose too",
         "the summary should carry the total cost",
         "If the summary should carry the description gap, add it."
       })
@@ -1504,6 +1537,12 @@ class PromptLabelScrubberTest {
     assertEquals(
         "See Description vs. Implementation. It lists both.",
         PromptLabelScrubber.scrub("See description_gaps. It lists both."));
+    assertEquals(
+        "See Description vs. Implementation in the summary.",
+        PromptLabelScrubber.scrub("See description_gaps in the summary."));
+    assertEquals(
+        "See Description vs. Implementation in .",
+        PromptLabelScrubber.scrub("See description_gaps in ."));
   }
 
   // ThrillhouseBot-test#296 discussion_r4336552968.

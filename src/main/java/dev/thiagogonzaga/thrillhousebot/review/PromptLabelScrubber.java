@@ -464,7 +464,8 @@ public final class PromptLabelScrubber {
   /**
    * "the withheld list contains only the README rename" (#1195): the review call's list of files
    * whose content it was not sent, read as a fact about the pull request. It reads "the only file
-   * not shown is the README rename".
+   * not shown is the README rename", or "the only files not shown are …" when {@link #pluralObject}
+   * reads what follows as plural.
    */
   private static final Pattern WITHHELD_LIST_ONLY =
       Pattern.compile(
@@ -808,7 +809,13 @@ public final class PromptLabelScrubber {
     var s =
         WITHHELD_LIST_ONLY
             .matcher(text)
-            .replaceAll(m -> capitalizeLike(m.group(), "the only file not shown is "));
+            .replaceAll(
+                m ->
+                    capitalizeLike(
+                        m.group(),
+                        pluralObject(text, m.end())
+                            ? "the only files not shown are "
+                            : "the only file not shown is "));
     s =
         WITHHELD_TERM
             .matcher(s)
@@ -844,6 +851,51 @@ public final class PromptLabelScrubber {
                         : m.group()));
   }
 
+  /**
+   * Whether the object starting at {@code from} is plural: it opens with a count above one ("3
+   * renames", "two files"), or its head noun — the last word before a stop or a preposition — ends
+   * in a plural "s" ("renamed files in this PR"). "the README rename" and "this" read singular.
+   */
+  private static boolean pluralObject(String text, int from) {
+    var words = OBJECT_WORD.matcher(text.substring(from));
+    String head = null;
+    boolean first = true;
+    while (words.find()) {
+      var word = words.group().toLowerCase(Locale.ROOT);
+      if (first && (PLURAL_COUNTS.contains(word) || (word.matches("\\d+") && !"1".equals(word)))) {
+        return true;
+      }
+      if (!first && OBJECT_ENDS.contains(word)) {
+        break;
+      }
+      first = false;
+      head = word;
+      if (words.end() < text.length() - from
+          && ".,;:)\n".indexOf(text.charAt(from + words.end())) >= 0) {
+        break;
+      }
+    }
+    return head != null
+        && head.length() > 2
+        && head.endsWith("s")
+        && !head.endsWith("ss")
+        && !head.endsWith("is")
+        && !head.endsWith("us");
+  }
+
+  /** A word of the object after "contains only": letters, digits, and inner dots or hyphens. */
+  private static final Pattern OBJECT_WORD = Pattern.compile("[\\w'][\\w'.-]*+(?<![.-])");
+
+  /** The words that end an object's noun phrase: a preposition or a relative pronoun after it. */
+  private static final Set<String> OBJECT_ENDS =
+      Set.of(
+          "in", "from", "of", "for", "on", "at", "with", "under", "that", "which", "and", "or",
+          "so", "but", "to", "by", "is", "are", "was", "were");
+
+  /** Count words that open a plural object. */
+  private static final Set<String> PLURAL_COUNTS =
+      Set.of("two", "three", "four", "five", "several", "many", "some", "both", "few");
+
   /** What a reader calls the place a response key names. */
   private static String keyPhrase(String key) {
     return switch (key) {
@@ -863,7 +915,41 @@ public final class PromptLabelScrubber {
         && Character.isLetterOrDigit(text.charAt(end + 1))) {
       return false;
     }
-    return !KEY_NOUNS.contains(wordAt(text, skipBlanks(text, end)));
+    int next = skipBlanks(text, end);
+    var word = wordAt(text, next);
+    if (KEY_NOUNS.contains(word)) {
+      return false;
+    }
+    // "description_gaps in ReviewResponse": the key named by the code that owns it.
+    return !(OWNER_LEADS.contains(word)
+        && identifierAt(text, skipBlanks(text, next + word.length())));
+  }
+
+  /** Words that lead from a key to the code that owns it: "in ReviewResponse", "of Summary". */
+  private static final Set<String> OWNER_LEADS = Set.of("in", "of", "on", "from");
+
+  /**
+   * Whether a code identifier starts at {@code start}: a word with a capital after its first
+   * letter, an underscore, or a dot or parenthesis inside it ("ReviewResponse", "pr_purpose",
+   * "Summary.descriptionGaps", "parse()").
+   */
+  private static boolean identifierAt(String text, int start) {
+    int end = start;
+    while (end < text.length()
+        && (Character.isLetterOrDigit(text.charAt(end)) || "_.()".indexOf(text.charAt(end)) >= 0)) {
+      end++;
+    }
+    var token = text.substring(start, end);
+    while (!token.isEmpty() && token.charAt(token.length() - 1) == '.') {
+      token = token.substring(0, token.length() - 1);
+    }
+    if (token.isEmpty()) {
+      return false;
+    }
+    if (token.chars().anyMatch(c -> "_.(".indexOf(c) >= 0)) {
+      return true;
+    }
+    return token.substring(1).chars().anyMatch(Character::isUpperCase);
   }
 
   /** Drops each {@link #SUMMARY_ROUTING} clause where {@link #removeClause} lets it go. */
