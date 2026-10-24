@@ -62,6 +62,11 @@ import java.util.regex.Pattern;
  *       symbol from its title, and the titles share two content words or a defect class.
  * </ul>
  *
+ * <p>The two arms across files never pair a finding on a test file with one on the code it tests. A
+ * test finding is about the test: its fake, its assertions, what it leaves out. "FakeSink accepts
+ * empty-zone alerts the real WebhookSink rejects" names the type the fake stands in for, and so
+ * does "WebhookSink never delivers alerts", but the two are separate defects (#1198).
+ *
  * <p>Two vetoes come first, whatever the arm. Two titles that each name identifiers (a backticked
  * span, an {@code UPPER_SNAKE} or {@code snake_case} name, a {@code camelCase} name) and share none
  * are never the same defect. Nor are two titles that each name a defect class (a race, an
@@ -154,10 +159,13 @@ final class DefectIdentity {
     if (namesDifferentIdentifiers(a.title(), b.title()) || classesConflict(a.title(), b.title())) {
       return false;
     }
-    return (FilePaths.same(a.file(), b.file()) && sameDefectInFile(a, b))
-        || sharesSubject(a, b)
-        || citesLocation(a, b)
-        || citesLocation(b, a);
+    if (FilePaths.same(a.file(), b.file()) && sameDefectInFile(a, b)) {
+      return true;
+    }
+    if (ReviewDiffFormatter.isTestFile(a.file()) != ReviewDiffFormatter.isTestFile(b.file())) {
+      return false;
+    }
+    return sharesSubject(a, b) || citesLocation(a, b) || citesLocation(b, a);
   }
 
   /** The arms that need both findings in one file. */

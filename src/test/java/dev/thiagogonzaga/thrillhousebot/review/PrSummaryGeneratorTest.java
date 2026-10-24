@@ -233,6 +233,52 @@ class PrSummaryGeneratorTest {
   }
 
   @Test
+  void doubleCheckBulletAboutATestDoubleIsNotCrossReferencedToTheRealType() {
+    // #1198, ThrillhouseBot-test#296: the titles share WebhookSink and "alerts", but the item is
+    // the test fake's fidelity and the thread the real sink's delivery.
+    var inline =
+        new Finding(
+            RiskLevel.HIGH,
+            Confidence.HIGH,
+            "rust/src/sink.rs",
+            27,
+            "WebhookSink never delivers alerts; sent counter counts undelivered alerts",
+            "WebhookSink::send (lines 27-36) only builds a payload string and returns it.",
+            null,
+            null);
+    var fake =
+        new Finding(
+            RiskLevel.MEDIUM,
+            Confidence.LOW,
+            "rust/tests/ingester_tests.rs",
+            34,
+            "FakeSink accepts empty-zone alerts the real WebhookSink rejects",
+            "The real collaborator contradicts this: rust/src/sink.rs lines 28-30 return"
+                + " Err(SinkError::EmptyZone).",
+            null,
+            null);
+    var result =
+        new ReviewResult(
+            List.of(inline, fake),
+            0,
+            1,
+            1,
+            0,
+            RiskLevel.HIGH,
+            ReviewState.COMMENT,
+            true,
+            "",
+            List.of(),
+            List.of(),
+            0);
+
+    var summary = generator.generate(1, 30, 4, List.of(), null, result);
+
+    assertTrue(summary.contains("FakeSink accepts empty-zone alerts"), summary);
+    assertFalse(summary.contains("Same issue as the inline finding"), summary);
+  }
+
+  @Test
   void twoInlineFindingsOnOneDefectAreBothKept() {
     // The same root cause filed from two angles stays as two findings: the list drives the risk
     // counts, the verdict, the inline threads and the backstop, so nothing here may edit it.

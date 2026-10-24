@@ -342,7 +342,9 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   named after (common prose) pairs only when one description also names a symbol of the other's
   title; or a description citing the other's `file:line` and naming a symbol of its title. A qualified
   citation must match its directory too; a shared basename alone cannot bind another directory
-  (#1100). Two
+  (#1100). The arms across files never pair a finding on a test file with one on production code
+  (`ReviewDiffFormatter.isTestFile`): a test double's fidelity is not the defect of the type it
+  stands in for (#1198). Two
   vetoes come first: titles naming different identifiers (`namesDifferentIdentifiers`), and titles
   naming disjoint defect classes (`classesConflict`: a race is not an off-by-one, #964). A key
   named only in a description, or common title words, are not identity (`DefectIdentityTest`).
