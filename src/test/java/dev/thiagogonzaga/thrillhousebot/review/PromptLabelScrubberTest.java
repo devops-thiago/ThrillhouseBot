@@ -1473,6 +1473,12 @@ class PromptLabelScrubberTest {
         "the only files not shown are the lock-files.",
         PromptLabelScrubber.scrub("the withheld list has only the lock-files."));
     assertEquals(
+        "the only file not shown is src/main.rs",
+        PromptLabelScrubber.scrub("the withheld list has only src/main.rs"));
+    assertEquals(
+        "the only file not shown is main.rs",
+        PromptLabelScrubber.scrub("the withheld list has only main.rs"));
+    assertEquals(
         "the only file not shown is web.config.",
         PromptLabelScrubber.scrub("the withheld list has only web.config."));
     assertEquals(
@@ -1525,6 +1531,9 @@ class PromptLabelScrubberTest {
         "see description_gaps in ReviewResponse for the exact field list.",
         "see description_gaps of Summary.descriptionGaps",
         "see description_gaps from parse() here",
+        "see description_gaps of Summary",
+        "Listed in addressed_gaps of Summary.",
+        "see description_gaps in parseGaps",
         "see description_gaps in pr_purpose too",
         "the summary should carry the total cost",
         "If the summary should carry the description gap, add it."

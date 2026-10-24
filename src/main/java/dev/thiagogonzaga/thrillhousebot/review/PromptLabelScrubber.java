@@ -854,7 +854,8 @@ public final class PromptLabelScrubber {
   /**
    * Whether the object starting at {@code from} is plural: it opens with a count above one ("3
    * renames", "two files"), or its head noun — the last word before a stop or a preposition — ends
-   * in a plural "s" ("renamed files in this PR"). "the README rename" and "this" read singular.
+   * in a plural "s" ("renamed files in this PR"). "the README rename", "this" and a file name
+   * ("main.rs") read singular.
    */
   private static boolean pluralObject(String text, int from) {
     var words = OBJECT_WORD.matcher(text.substring(from));
@@ -875,7 +876,9 @@ public final class PromptLabelScrubber {
         break;
       }
     }
+    // A dotted head is a file name ("main.rs"), never a plural noun.
     return head != null
+        && head.indexOf('.') < 0
         && head.length() > 2
         && head.endsWith("s")
         && !head.endsWith("ss")
@@ -929,9 +932,9 @@ public final class PromptLabelScrubber {
   private static final Set<String> OWNER_LEADS = Set.of("in", "of", "on", "from");
 
   /**
-   * Whether a code identifier starts at {@code start}: a word with a capital after its first
-   * letter, an underscore, or a dot or parenthesis inside it ("ReviewResponse", "pr_purpose",
-   * "Summary.descriptionGaps", "parse()").
+   * Whether a code identifier starts at {@code start}: a word with a capital, an underscore, or a
+   * dot or parenthesis inside it ("Summary", "ReviewResponse", "pr_purpose",
+   * "Summary.descriptionGaps", "parse()"). "in the summary" names no code.
    */
   private static boolean identifierAt(String text, int start) {
     int end = start;
@@ -949,7 +952,7 @@ public final class PromptLabelScrubber {
     if (token.chars().anyMatch(c -> "_.(".indexOf(c) >= 0)) {
       return true;
     }
-    return token.substring(1).chars().anyMatch(Character::isUpperCase);
+    return token.chars().anyMatch(Character::isUpperCase);
   }
 
   /** Drops each {@link #SUMMARY_ROUTING} clause where {@link #removeClause} lets it go. */
