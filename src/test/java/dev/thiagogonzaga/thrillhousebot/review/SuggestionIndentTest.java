@@ -33,6 +33,10 @@ class SuggestionIndentTest {
     var oneLine = "a();";
     assertSame(
         oneLine, SuggestionIndent.restore("a();\n  b();", oneLine, List.of("  a();", "  b();")));
+    var withNewline = "a();\n";
+    assertSame(
+        withNewline,
+        SuggestionIndent.restore("a();\n  b();", withNewline, List.of("  a();", "  b();")));
   }
 
   @Test
@@ -122,5 +126,25 @@ class SuggestionIndentTest {
     assertSame(odd, SuggestionIndent.restore(quote, odd, TABBED));
     var tabbed = "  if ok {\n\t\treturn\n  }";
     assertSame(tabbed, SuggestionIndent.restore(quote, tabbed, TABBED));
+  }
+
+  @Test
+  void aSuggestionWrittenAtAnotherScaleThanTheQuoteIsNotConvertedToTabs() {
+    // allocator.go's quote at one space per level; the suggestion at four, from column 0.
+    var quote = " for _, v := range vs {\n  unassigned = append(unassigned, v)\n }";
+    var replaced =
+        List.of("\tfor _, v := range vs {", "\t\tunassigned = append(unassigned, v)", "\t}");
+    var fourSpaces = "for _, v := range vs {\n    unassigned = append(unassigned, v)\n}";
+    assertSame(fourSpaces, SuggestionIndent.restore(quote, fourSpaces, replaced));
+    // Starting where the quote starts but stepping four spaces per level.
+    var jumps = " for _, v := range vs {\n     unassigned = append(unassigned, v)\n }";
+    assertSame(jumps, SuggestionIndent.restore(quote, jumps, replaced));
+  }
+
+  @Test
+  void aSuggestionWithNoNewlineIsOneLine() {
+    var bareReturns = "x\r    y";
+    assertSame(
+        bareReturns, SuggestionIndent.restore("x\n    y", bareReturns, List.of("    x", "    y")));
   }
 }
