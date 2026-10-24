@@ -419,9 +419,11 @@ Because the edit replaces the whole body, each round renders the PR as it stands
 Key Findings and "Things to double-check" cover the round's new findings plus every earlier finding
 still open, tagged as open since an earlier review. Description gaps the previous summary listed
 are passed to the summary call (`DescriptionGapCarryover`). On a changed head, the call can mark
-a gap addressed. On an unchanged head, that answer cannot clear a gap unless the PR description
-changed since the summary that listed it; then only description gaps can leave, never linked-issue
-gaps. A quoted omission also leaves when the edited description now contains the quoted passage.
+a gap addressed. On an unchanged head, that answer cannot clear a gap. When the PR description
+changed since the summary that listed the gaps, only the linked-issue gaps are carried and put to
+the call. The description gaps are judged again against the new text, as on a first review, and
+stay only if the call reports them again. A round with no summary answer keeps them all, except a
+quoted omission the edited description now contains.
 The current round's matching finding replaces its gap entry, and gaps tied to an issue that is no
 longer linked are removed. When the summary call returns no overview on an unchanged head, the
 previous round's overview is reused (`PriorOverviewCarryover`).
