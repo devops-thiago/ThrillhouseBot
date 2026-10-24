@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.TreeSet;
 import java.util.stream.Stream;
 
 /**
@@ -46,7 +47,9 @@ final class SuggestionIndent {
    * carry it the same way. A single-line suggestion is never changed. {@code quote} is not null.
    */
   static String restore(String quote, String suggestion, List<String> replaced) {
-    if (suggestion == null || suggestion.lines().count() < 2) {
+    // Lines are split on '\n' below, so a suggestion with no '\n' is one line however lines() reads
+    // a bare '\r'.
+    if (suggestion == null || suggestion.indexOf('\n') < 0 || suggestion.lines().count() < 2) {
       return suggestion;
     }
     List<String> quoted = quote.lines().filter(line -> !line.isBlank()).toList();
@@ -59,7 +62,9 @@ final class SuggestionIndent {
           : suggestion;
     }
     OptionalInt width = spacesPerTab(quoted, replaced);
-    return width.isPresent() ? withTabs(suggestion, width.getAsInt()) : suggestion;
+    return width.isPresent()
+        ? withTabs(suggestion, width.getAsInt(), indent(quoted.getFirst()))
+        : suggestion;
   }
 
   /** Whether the quote's first line is indented less than the replaced one and the rest match. */
@@ -141,23 +146,49 @@ final class SuggestionIndent {
   }
 
   /**
-   * {@code suggestion} with each line's leading spaces turned into one tab per {@code width}, or
-   * unchanged when a line's indent is not spaces only or not a whole number of tabs.
+   * {@code suggestion} with each line's leading spaces turned into one tab per {@code width}, when
+   * it is written at the quote's scale: its first non-blank line indented as the quote's ({@code
+   * quotedFirst}), and its levels {@code width} spaces apart, so every indent is a whole number of
+   * tabs. Unchanged otherwise, or when a line's indent is not spaces only: a suggestion at four
+   * spaces per level over a quote at one would come out with four times the tabs it needs.
    */
-  private static String withTabs(String suggestion, int width) {
+  private static String withTabs(String suggestion, int width, String quotedFirst) {
     String[] lines = suggestion.split("\n", -1);
+    var levels = new TreeSet<Integer>();
+    String first = null;
+    for (String line : lines) {
+      if (!line.isBlank()) {
+        first = first == null ? indent(line) : first;
+        levels.add(indent(line).length());
+      }
+    }
+    if (!quotedFirst.equals(first) || !stepsBy(levels, width)) {
+      return suggestion;
+    }
     for (int i = 0; i < lines.length; i++) {
       String line = lines[i];
       if (line.isBlank()) {
         continue;
       }
       String spaces = indent(line);
-      if (!consistsOf(spaces, ' ') || spaces.length() % width != 0) {
+      if (!consistsOf(spaces, ' ')) {
         return suggestion;
       }
       lines[i] = "\t".repeat(spaces.length() / width) + line.substring(spaces.length());
     }
     return String.join("\n", lines);
+  }
+
+  /** Whether each of {@code levels} after the least is {@code width} more than the one before. */
+  private static boolean stepsBy(TreeSet<Integer> levels, int width) {
+    int previous = levels.first();
+    for (int level : levels.tailSet(previous, false)) {
+      if (level - previous != width) {
+        return false;
+      }
+      previous = level;
+    }
+    return true;
   }
 
   private static boolean consistsOf(String text, char c) {
