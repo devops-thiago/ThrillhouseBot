@@ -16,6 +16,8 @@
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import dev.langchain4j.exception.HttpException;
+import dev.langchain4j.exception.InternalServerException;
+import dev.langchain4j.exception.ModelNotFoundException;
 import dev.langchain4j.exception.RateLimitException;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingHandle;
@@ -58,6 +60,8 @@ public class AiReviewService {
   private static final Duration MAX_BACKOFF = Duration.ofSeconds(30);
 
   private static final int TOO_MANY_REQUESTS = 429;
+
+  private static final int FIRST_SERVER_ERROR = 500;
 
   /**
    * How many attempts of one logical call may end at the streaming deadline (#862): the first and
@@ -120,7 +124,8 @@ public class AiReviewService {
 
   /** Single-call review (normal-size PRs): streams tokens to the dashboard as they arrive. */
   public ReviewResponse review(ReviewSession session, PromptInputs inputs) {
-    return runWithRetries(session, () -> reviewStream(inputs), true, ModelLane.ACTIVE);
+    return runWithRetries(
+        session, () -> reviewStream(inputs), true, ModelLane.ACTIVE, routedModel(session));
   }
 
   /**
@@ -134,7 +139,8 @@ public class AiReviewService {
       ReviewSession session, PromptInputs inputs, int batchIndex, int batchCount) {
     broadcaster.broadcast(
         SessionEventBroadcaster.SessionEvent.batch(session, batchIndex, batchCount));
-    return runWithRetries(session, () -> reviewStream(inputs), false, ModelLane.ACTIVE);
+    return runWithRetries(
+        session, () -> reviewStream(inputs), false, ModelLane.ACTIVE, routedModel(session));
   }
 
   /**
@@ -160,7 +166,8 @@ public class AiReviewService {
                 inputs.previousFindings(),
                 inputs.repoInstructions()),
         false,
-        ModelLane.CONCISE);
+        ModelLane.CONCISE,
+        null);
   }
 
   private TokenStream reviewStream(PromptInputs inputs) {
@@ -214,10 +221,13 @@ public class AiReviewService {
       ReviewSession session,
       Supplier<TokenStream> streamFactory,
       boolean broadcastTokens,
-      ModelLane lane) {
+      ModelLane lane,
+      String firstModel) {
     var timeouts = new TimeoutBudget();
+    var model = new CallModel(firstModel, fallbackModel());
     try {
-      return attemptWithRetries(session, streamFactory, broadcastTokens, lane, null, timeouts);
+      return attemptWithRetries(
+          session, streamFactory, broadcastTokens, lane, null, timeouts, model);
     } catch (AiResponseTruncatedException e) {
       var effort = repeatEffort(e, lane);
       if (effort.isEmpty()) {
@@ -237,8 +247,22 @@ public class AiReviewService {
           SessionEventBroadcaster.SessionEvent.retry(
               session, 1, config.review().maxAiRetries(), REASONING_STEP_DOWN_REASON));
       return repeatAtLowerEffort(
-          session, streamFactory, broadcastTokens, lane, timeouts, e, effort.get());
+          session, streamFactory, broadcastTokens, lane, timeouts, model, e, effort.get());
     }
+  }
+
+  /**
+   * The model the review was routed to (#43), or {@code null} for {@code AI_MODEL}. Read only by
+   * {@link #review} and {@link #reviewBatch}, which pass it to {@link #runWithRetries} as the first
+   * model; every other call passes {@code null}, so routing follows the call, not the lane or the
+   * ledger entry's lifetime.
+   */
+  private String routedModel(ReviewSession session) {
+    return tokenLedger.routedModel(ReviewTokenLedger.keyFor(session)).orElse(null);
+  }
+
+  private String fallbackModel() {
+    return config.ai().routing().fallbackModel().filter(m -> !m.isBlank()).orElse(null);
   }
 
   /**
@@ -253,10 +277,12 @@ public class AiReviewService {
       boolean broadcastTokens,
       ModelLane lane,
       TimeoutBudget timeouts,
+      CallModel model,
       AiResponseTruncatedException firstStop,
       String effort) {
     try {
-      return attemptWithRetries(session, streamFactory, broadcastTokens, lane, effort, timeouts);
+      return attemptWithRetries(
+          session, streamFactory, broadcastTokens, lane, effort, timeouts, model);
     } catch (InlinedDeliberationGuard.Stopped stopped) {
       tokenLedger.recordReasoningRepeatStopped(ReviewTokenLedger.keyFor(session));
       var report = firstStop.report().withInlinedDeliberation(stopped.chars());
@@ -305,9 +331,11 @@ public class AiReviewService {
       boolean broadcastTokens,
       ModelLane lane,
       String reasoningEffort,
-      TimeoutBudget timeouts) {
+      TimeoutBudget timeouts,
+      CallModel model) {
     var maxAttempts = config.review().maxAiRetries();
     RuntimeException lastFailure = null;
+    var fellBack = false;
 
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
       // Spend-ceiling gate, before EVERY attempt: a retry is a fresh billed call, and the previous
@@ -320,12 +348,24 @@ public class AiReviewService {
         broadcaster.broadcast(
             SessionEventBroadcaster.SessionEvent.retry(
                 session, attempt, maxAttempts, retryFailureReason(lastFailure)));
-        sleep(retryDelay(session, attempt, maxAttempts, lastFailure));
+        // The first attempt on the fallback model goes to other capacity, so a throttle on the
+        // previous model is no reason to wait out the throttle ceiling before it.
+        sleep(
+            fellBack
+                ? backoffDelay(attempt)
+                : retryDelay(session, attempt, maxAttempts, lastFailure));
       }
 
       try {
         var answer =
-            streamOnce(session, streamFactory, attempt, broadcastTokens, lane, reasoningEffort);
+            streamOnce(
+                session,
+                streamFactory,
+                attempt,
+                broadcastTokens,
+                lane,
+                reasoningEffort,
+                model.current());
         return lane == ModelLane.CONCISE
             ? withReadFileSummaries(session, answer)
             : answer.response();
@@ -360,11 +400,62 @@ public class AiReviewService {
             SessionEventBroadcaster.SessionEvent.streamFailed(
                 session, attempt, maxAttempts, sanitize(e)));
         failIfTimeoutBudgetSpent(session, attempt, maxAttempts, e, timeouts);
+        fellBack = attempt < maxAttempts && fellBackOn(session, attempt, maxAttempts, model, e);
       }
     }
 
     throw new AiReviewException(
         "AI review failed after " + maxAttempts + " attempts", maxAttempts, lastFailure);
+  }
+
+  /**
+   * Moves the call's remaining attempts to the fallback model when {@code failure} is a provider
+   * error or a rate limit and the call is not already there (#43). Returns whether it moved.
+   */
+  private static boolean fellBackOn(
+      ReviewSession session,
+      int attempt,
+      int maxAttempts,
+      CallModel model,
+      RuntimeException failure) {
+    if (!isProviderFailure(failure) || !model.fallBack()) {
+      return false;
+    }
+    Log.warnf(
+        "AI review attempt %d/%d for session %d failed with a provider error or rate limit; the"
+            + " remaining attempts go to the fallback model %s (AI_FALLBACK_MODEL)",
+        attempt, maxAttempts, session.id, model.current());
+    return true;
+  }
+
+  /**
+   * The model one logical call's attempts go to (#43): {@code null} for the lane's configured
+   * model, or the routed model, until a provider failure moves it to the fallback model, where it
+   * stays for the rest of the call, the lower-effort repeat included. Not thread safe, like {@link
+   * TimeoutBudget}: one call's attempts run one after another on a single thread.
+   */
+  private static final class CallModel {
+
+    private String current;
+    private final String fallback;
+
+    CallModel(String first, String fallback) {
+      this.current = first;
+      this.fallback = fallback;
+    }
+
+    String current() {
+      return current;
+    }
+
+    /** Moves to the fallback model; false when there is none or the call is already on it. */
+    boolean fallBack() {
+      if (fallback == null || fallback.equals(current)) {
+        return false;
+      }
+      current = fallback;
+      return true;
+    }
   }
 
   /**
@@ -711,9 +802,11 @@ public class AiReviewService {
       int attempt,
       boolean broadcastTokens,
       ModelLane lane,
-      String reasoningEffort) {
+      String reasoningEffort,
+      String model) {
     try (var _ = callGate.acquire("AI review call for session " + session.id)) {
-      return streamInSlot(session, streamFactory, attempt, broadcastTokens, lane, reasoningEffort);
+      return streamInSlot(
+          session, streamFactory, attempt, broadcastTokens, lane, reasoningEffort, model);
     }
   }
 
@@ -723,7 +816,8 @@ public class AiReviewService {
       int attempt,
       boolean broadcastTokens,
       ModelLane lane,
-      String reasoningEffort) {
+      String reasoningEffort,
+      String model) {
     var result = new CompletableFuture<Answer>();
     var buffer = new StreamBuffer();
     var chunkCount = new AtomicInteger();
@@ -741,13 +835,15 @@ public class AiReviewService {
 
     // The binding travels on this thread into the model's chat call, where the observability
     // listener reads the session off it; the step-down model reads the reasoning override (#839)
-    // the same way. Both run before the stream returns, on this same thread.
+    // and the model override (#43) the same way. All run before the stream returns, on this same
+    // thread.
     ReviewSessionContext.bind(session.id, attempt);
     var callId = ReviewSessionContext.currentCallId();
     var deadline = streamTimeout();
     TokenStream stream = null;
     try {
-      try (var _ = ReasoningRepeat.override(reasoningEffort)) {
+      try (var _ = ReasoningRepeat.override(reasoningEffort);
+          var _ = ModelOverride.override(model)) {
         stream = streamFactory.get();
 
         stream
@@ -1014,6 +1110,21 @@ public class AiReviewService {
    */
   static boolean isThrottle(Throwable failure) {
     return Throwables.findCause(failure, AiReviewService::namesAThrottle).isPresent();
+  }
+
+  /**
+   * Whether a failure is one the fallback model can help with (#43): a {@linkplain #isThrottle
+   * throttle}, a server error (HTTP 5xx), or the provider not knowing the model. Visible for tests.
+   */
+  static boolean isProviderFailure(Throwable failure) {
+    return isThrottle(failure)
+        || Throwables.findCause(failure, AiReviewService::namesAServerFailure).isPresent();
+  }
+
+  private static boolean namesAServerFailure(Throwable cause) {
+    return cause instanceof InternalServerException
+        || cause instanceof ModelNotFoundException
+        || (cause instanceof HttpException http && http.statusCode() >= FIRST_SERVER_ERROR);
   }
 
   private static boolean namesAThrottle(Throwable cause) {

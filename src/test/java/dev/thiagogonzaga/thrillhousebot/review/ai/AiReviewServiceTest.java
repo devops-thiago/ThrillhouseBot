@@ -22,6 +22,7 @@ import static org.mockito.Mockito.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.exception.HttpException;
 import dev.langchain4j.exception.InternalServerException;
+import dev.langchain4j.exception.ModelNotFoundException;
 import dev.langchain4j.exception.RateLimitException;
 import dev.langchain4j.model.chat.response.StreamingHandle;
 import dev.langchain4j.model.output.TokenUsage;
@@ -32,6 +33,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -73,6 +75,9 @@ class AiReviewServiceTest {
 
   @Mock private ThrillhouseConfig.AiPricingConfig.ReasoningConfig reasoning;
 
+  /** No routed or fallback model unless a test says so (#43). */
+  @Mock private ThrillhouseConfig.AiPricingConfig.RoutingConfig routing;
+
   @Mock private SessionEventBroadcaster broadcaster;
 
   @Mock private ReviewTokenLedger tokenLedger;
@@ -102,6 +107,7 @@ class AiReviewServiceTest {
     // Reasoning on at max, the production shape behind #839; the concise lane resolves to low.
     lenient().when(config.ai()).thenReturn(aiConfig);
     lenient().when(aiConfig.reasoning()).thenReturn(reasoning);
+    lenient().when(aiConfig.routing()).thenReturn(routing);
     lenient().when(reasoning.enabled()).thenReturn(true);
     lenient().when(reasoning.effort()).thenReturn("max");
     lenient().when(reasoning.conciseEffort()).thenReturn(Optional.empty());
@@ -1864,6 +1870,146 @@ class AiReviewServiceTest {
     assertInstanceOf(AiReviewException.class, thrown.get());
     assertEquals("Retry delay interrupted", thrown.get().getMessage());
     assertTrue(stillInterrupted.get(), "the interrupt flag must survive the wrapped exception");
+  }
+
+  /** The model override each review stream was opened under (#43), in order. */
+  private List<String> recordReviewModels(TokenStream first, TokenStream... then) {
+    var models = new CopyOnWriteArrayList<String>();
+    var streams = new ArrayDeque<TokenStream>();
+    streams.add(first);
+    streams.addAll(List.of(then));
+    when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
+        .thenAnswer(
+            inv -> {
+              models.add(String.valueOf(ModelOverride.current()));
+              return streams.size() > 1 ? streams.poll() : streams.peek();
+            });
+    return models;
+  }
+
+  @Test
+  void aRoutedReviewCallGoesToTheRoutedModelAndTheSummaryDoesNot() {
+    // #43: the route is the review's, decided once and read off the ledger by every review call.
+    when(tokenLedger.routedModel(42L)).thenReturn(Optional.of("cheap"));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var models =
+        recordReviewModels(
+            new FakeTokenStream("{\"findings\":[]}"), new FakeTokenStream("{\"findings\":[]}"));
+    var summaryModels = new CopyOnWriteArrayList<String>();
+    when(prSummarizer.summarizeStream(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenAnswer(
+            inv -> {
+              summaryModels.add(String.valueOf(ModelOverride.current()));
+              return new FakeTokenStream("{\"summary\":{}}");
+            });
+    when(parser.parseSummary(anyString()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    service.review(reviewSession(), PROMPT_INPUTS);
+    service.reviewBatch(reviewSession(), PROMPT_INPUTS, 1, 2);
+    service.summarize(
+        reviewSession(), new AiReviewService.SummaryInputs("ctx", "[]", "files", "", ""));
+
+    assertEquals(List.of("cheap", "cheap"), models);
+    assertEquals(List.of("null"), summaryModels, "the summary keeps the concise model");
+    assertNull(ModelOverride.current(), "no override outlives the call");
+  }
+
+  @Test
+  void aRateLimitMovesTheRemainingAttemptsToTheFallbackModelWithoutTheThrottleWait() {
+    when(routing.fallbackModel()).thenReturn(Optional.of("backup"));
+    when(reviewConfig.maxAiRetries()).thenReturn(3);
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var models =
+        recordReviewModels(
+            new ErrorTokenStream(new RateLimitException(new HttpException(429, "slow down"))),
+            new ErrorTokenStream(new HttpException(503, "Service Unavailable")),
+            new FakeTokenStream("{\"findings\":[]}"));
+    var slept = new CopyOnWriteArrayList<Duration>();
+    var spiedService = spy(service);
+    doAnswer(
+            invocation -> {
+              slept.add(invocation.getArgument(0));
+              return null;
+            })
+        .when(spiedService)
+        .sleep(any(Duration.class));
+
+    spiedService.review(reviewSession(), PROMPT_INPUTS);
+
+    assertEquals(List.of("null", "backup", "backup"), models, "once moved, the call stays");
+    assertEquals(
+        List.of(Duration.ofMillis(1), Duration.ofMillis(2)),
+        slept,
+        "the first fallback attempt goes to other capacity, so no 30 s throttle wait");
+  }
+
+  @Test
+  void aFailureThatIsNotTheProvidersKeepsTheFirstModel() {
+    when(routing.fallbackModel()).thenReturn(Optional.of("backup"));
+    when(reviewConfig.maxAiRetries()).thenReturn(2);
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var models =
+        recordReviewModels(
+            new ErrorTokenStream(new RuntimeException("connection reset")),
+            new FakeTokenStream("{\"findings\":[]}"));
+
+    service.review(reviewSession(), PROMPT_INPUTS);
+
+    assertEquals(List.of("null", "null"), models);
+  }
+
+  @Test
+  void aProviderFailureWithNoFallbackOrNoAttemptLeftStaysPut() {
+    when(reviewConfig.maxAiRetries()).thenReturn(2);
+    var models =
+        recordReviewModels(new ErrorTokenStream(new HttpException(500, "Internal Server Error")));
+
+    assertThrows(AiReviewException.class, () -> service.review(reviewSession(), PROMPT_INPUTS));
+    assertEquals(List.of("null", "null"), models, "no fallback configured");
+
+    when(routing.fallbackModel()).thenReturn(Optional.of("backup"));
+    when(reviewConfig.maxAiRetries()).thenReturn(1);
+    assertThrows(AiReviewException.class, () -> service.review(reviewSession(), PROMPT_INPUTS));
+    assertEquals(List.of("null", "null", "null"), models, "the last attempt has nothing to move");
+  }
+
+  @Test
+  void aBlankFallbackModelIsNoFallback() {
+    when(routing.fallbackModel()).thenReturn(Optional.of("  "));
+    when(reviewConfig.maxAiRetries()).thenReturn(2);
+    var models = recordReviewModels(new ErrorTokenStream(new HttpException(503, "Unavailable")));
+
+    assertThrows(AiReviewException.class, () -> service.review(reviewSession(), PROMPT_INPUTS));
+
+    assertEquals(List.of("null", "null"), models);
+  }
+
+  @Test
+  void aRoutedCallFallsBackFromTheRoutedModel() {
+    when(tokenLedger.routedModel(42L)).thenReturn(Optional.of("cheap"));
+    when(routing.fallbackModel()).thenReturn(Optional.of("cheap"));
+    when(reviewConfig.maxAiRetries()).thenReturn(2);
+    var models =
+        recordReviewModels(new ErrorTokenStream(new ModelNotFoundException("no such model")));
+
+    assertThrows(AiReviewException.class, () -> service.review(reviewSession(), PROMPT_INPUTS));
+
+    assertEquals(
+        List.of("cheap", "cheap"), models, "a fallback that is the current model moves nothing");
+  }
+
+  @Test
+  void providerFailuresAreThrottlesServerErrorsAndUnknownModels() {
+    assertTrue(AiReviewService.isProviderFailure(new RateLimitException("slow down")));
+    assertTrue(
+        AiReviewService.isProviderFailure(
+            new AiReviewException("wrapped", 1, new InternalServerException("boom"))));
+    assertTrue(AiReviewService.isProviderFailure(new HttpException(502, "Bad Gateway")));
+    assertTrue(AiReviewService.isProviderFailure(new ModelNotFoundException("gone")));
+    assertFalse(AiReviewService.isProviderFailure(new HttpException(400, "Bad Request")));
+    assertFalse(AiReviewService.isProviderFailure(new RuntimeException("connection reset")));
   }
 
   /** Runs a two-attempt review whose first stream is {@code failing}; returns the waits between. */

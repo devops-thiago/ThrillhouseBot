@@ -213,6 +213,7 @@ public class FindingPipeline {
   private final ReviewDimensionRouter dimensionRouter;
   private final SecurityScan securityScan;
   private final SummaryVerificationService summaryVerification;
+  private final ModelRouter modelRouter;
 
   @Inject
   public FindingPipeline(
@@ -228,7 +229,8 @@ public class FindingPipeline {
       TruncatedResponseSalvager salvager,
       ReviewDimensionRouter dimensionRouter,
       SecurityScan securityScan,
-      SummaryVerificationService summaryVerification) {
+      SummaryVerificationService summaryVerification,
+      ModelRouter modelRouter) {
     this.aiReviewService = aiReviewService;
     this.findingScreen = findingScreen;
     this.deduplicator = deduplicator;
@@ -242,6 +244,7 @@ public class FindingPipeline {
     this.dimensionRouter = dimensionRouter;
     this.securityScan = securityScan;
     this.summaryVerification = summaryVerification;
+    this.modelRouter = modelRouter;
   }
 
   /**
@@ -265,6 +268,10 @@ public class FindingPipeline {
     // entry exists exactly while its provider callbacks may land and never outlives the review.
     tokenLedger.open(ledgerSessionId(session));
     try {
+      // Decided once for the whole review (#43), so every batch goes to the same model.
+      modelRouter
+          .route(ctx.reviewableFiles())
+          .ifPresent(model -> tokenLedger.routeTo(ledgerSessionId(session), model));
       var response = runWithLedger(session, promptInputs, ctx, plan, lineResolver, evidence);
       // A call that had to run with reasoning disabled (#839), or whose repeat was stopped because
       // the model wrote its deliberation into the response (#893), is noted on the ledger entry

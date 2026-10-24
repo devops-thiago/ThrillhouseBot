@@ -397,6 +397,35 @@ or API code fits more diff per call. Every routed prompt opens with the same
 ~7,000-token core, so a provider's prompt cache still matches across batches and
 reviews. With routing off, the prompts are unchanged from earlier releases.
 
+### Model routing and fallback
+
+Every review call goes to `AI_MODEL` unless one of two optional models is set.
+
+- `AI_ROUTING_LOW_RISK_MODEL` reviews low-risk pull requests with a cheaper
+  model. A pull request touching an `AI_ROUTING_HIGH_RISK_PATHS` file
+  (workflows, SQL, migrations, `auth/`, `security/` and Dockerfiles by default)
+  is never low risk, even when that file also matches a low-risk glob. Otherwise
+  it is low risk when every reviewable file matches `AI_ROUTING_LOW_RISK_PATHS`
+  (docs, text and lockfiles by default), or when it changes at most
+  `AI_ROUTING_LOW_RISK_MAX_CHANGED_LINES` lines (default `100`; `0` routes by
+  paths alone).
+  The decision is made once per review and logged at INFO; only the review calls
+  are routed, while the summary call, the verifier and the commands keep their
+  models.
+- `AI_FALLBACK_MODEL` takes over a review or summary call after an attempt fails
+  with a provider error (HTTP 5xx, an unknown model) or a rate limit. The
+  call's remaining retries go to the fallback model, with no 30-second throttle
+  wait before the first one.
+
+Both models are sent on the same provider (`AI_BASE_URL`, `AI_API_KEY`) by
+overriding the request's model name, and cost is recorded under the model that
+answered, so add a pricing entry for each. They run under `AI_MODEL`'s token
+budget and generation settings: the bot refuses to start when either names
+`AI_MODEL` itself, or declares a per-model `max-input-tokens` below the
+review's effective per-call budget. A routed model with neither a per-model nor
+a pricing entry is logged as a startup warning, so a typo in its name shows at
+boot rather than as failed reviews.
+
 ### Per-model AI settings
 
 Model-specific settings live under `thrillhousebot.ai.models.<model>.*`, keyed by

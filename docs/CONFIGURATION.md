@@ -80,6 +80,16 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 | `AI_REASONING_ENABLED`<br>`thrillhousebot.ai.reasoning.enabled` | Send a reasoning-effort hint (`reasoning_effort`). When `false`, no reasoning parameter is sent and the provider default applies, except on the one repeat of a call that spent its whole output cap reasoning, which sends the lane's effort. | boolean | `false` |
 | `AI_REASONING_REPEAT_EFFORT`<br>`thrillhousebot.ai.reasoning.repeat-effort` | Effort for the one repeat of a call that stopped at its response cap with no content, its reasoning having spent the whole allowance (#839). Same values. Unset means `low` while reasoning is enabled, with no repeat on a lane that already sends `low` or `none`; while it is off, the lane's effort as it would go out enabled. A value equal to what the first call sent makes no repeat. | string | _(none)_ |
 
+## `thrillhousebot.ai.routing`
+
+| Variable | Description | Type | Default |
+|---|---|---|---|
+| `AI_FALLBACK_MODEL`<br>`thrillhousebot.ai.routing.fallback-model` | Secondary model for the streamed review and summary calls. When an attempt fails with a provider error (HTTP 5xx, an unknown model) or a rate limit, the call's remaining retries go to this model instead. Unset keeps every retry on the first model. | string | _(none)_ |
+| `AI_ROUTING_HIGH_RISK_PATHS`<br>`thrillhousebot.ai.routing.high-risk-paths` | Comma-separated gitignore-style globs of high-risk files, under the new or the old name of a renamed file. A pull request touching one is never routed to the low-risk model, however small it is and even when the file also matches `AI_ROUTING_LOW_RISK_PATHS`. | list | `.github/workflows/`, `**/*.sql`, `**/migrations/`, `**/auth/`, `**/security/`, `**/Dockerfile` |
+| `AI_ROUTING_LOW_RISK_MAX_CHANGED_LINES`<br>`thrillhousebot.ai.routing.low-risk-max-changed-lines` | Most changed lines (additions plus deletions over the reviewable files) a pull request may have to count as low risk by size. `0` routes by paths alone; a negative value is rejected at boot. | integer | `100` |
+| `AI_ROUTING_LOW_RISK_MODEL`<br>`thrillhousebot.ai.routing.low-risk-model` | Cheaper model for low-risk pull requests: those that touch no `AI_ROUTING_HIGH_RISK_PATHS` file and either have every reviewable file matching `AI_ROUTING_LOW_RISK_PATHS` or change at most `AI_ROUTING_LOW_RISK_MAX_CHANGED_LINES` lines. Only the review calls are routed; the summary call, the verifier and the commands keep their own models. Unset turns routing off. | string | _(none)_ |
+| `AI_ROUTING_LOW_RISK_PATHS`<br>`thrillhousebot.ai.routing.low-risk-paths` | Comma-separated gitignore-style globs of low-risk files (docs, text, lockfiles). A pull request whose every reviewable file matches is routed to `AI_ROUTING_LOW_RISK_MODEL` whatever its size, unless one of them also matches `AI_ROUTING_HIGH_RISK_PATHS`. Same pattern syntax as `THRILLHOUSEBOT_REVIEW_IGNORED_FILES`. | list | `**/*.md`, `**/*.mdx`, `**/*.rst`, `**/*.txt`, `**/*.adoc`, `docs/`, `**/*.lock`, `**/go.sum` |
+
 ## `thrillhousebot.dashboard`
 
 | Variable | Description | Type | Default |

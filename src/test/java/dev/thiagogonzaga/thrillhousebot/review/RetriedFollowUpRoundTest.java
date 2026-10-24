@@ -145,6 +145,8 @@ class RetriedFollowUpRoundTest {
     when(config.review()).thenReturn(reviewConfig);
     when(config.ai()).thenReturn(aiConfig);
     when(aiConfig.reasoning()).thenReturn(reasoning);
+    when(aiConfig.routing())
+        .thenReturn(mock(ThrillhouseConfig.AiPricingConfig.RoutingConfig.class));
     when(reasoning.conciseEffort()).thenReturn(Optional.empty());
     when(reviewConfig.maxAiRetries()).thenReturn(5);
     when(reviewConfig.aiRetryBaseDelayMs()).thenReturn(1L);
@@ -198,7 +200,8 @@ class RetriedFollowUpRoundTest {
             new TruncatedResponseSalvager(mapper),
             ReviewDimensionRouter.disabled(),
             scan,
-            SummaryVerificationService.disabled());
+            SummaryVerificationService.disabled(),
+            mock(ModelRouter.class));
     verdictBuilder =
         new VerdictBuilder(
             new PrSummaryGenerator(false), analyzer, BOT, BlockingStrictness.BALANCED);

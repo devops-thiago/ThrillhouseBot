@@ -15,6 +15,13 @@ without it those counters stay hidden and nothing else changes.
   suggests, applies or creates, matched ignoring case, such as a team's own `review` label. They
   are left out of the labels shown to the model and dropped from its suggestions. (#1238)
 
+- **Risk-based model routing and fallback** (#43). `AI_ROUTING_LOW_RISK_MODEL` sends the review
+  calls of a low-risk pull request (no high-risk path, which wins over an overlapping low-risk glob,
+  and either only docs, text or lockfiles or a small change) to a cheaper model, and
+  `AI_FALLBACK_MODEL` takes over a review or summary call's remaining retries after a provider error
+  or rate limit. Both are off by default and use the same provider; the paths and the size threshold
+  are configurable.
+
 ### Changed
 
 - The bot follows installation and repository events. Uninstalling or suspending the App, or
@@ -80,6 +87,7 @@ without it those counters stay hidden and nothing else changes.
 - A session link posted on GitHub (`/session/<id>`) now redirects to the session's page only for
   a dashboard login that may read it; anyone else is sent to the sessions list, so the link no
   longer reveals the session's numeric id. (#1220)
+
 ### Fixed
 
 - When the PR description is edited between two reviews of the same commit, Description vs.
