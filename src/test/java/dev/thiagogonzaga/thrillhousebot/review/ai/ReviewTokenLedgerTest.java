@@ -25,6 +25,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -67,6 +68,23 @@ class ReviewTokenLedgerTest {
 
     assertEquals(375L, ledger.tokensSpent(1L));
     assertEquals(10L, ledger.tokensSpent(2L));
+  }
+
+  /** #43 — the routed model follows the entry's lifecycle like the other notes. */
+  @Test
+  void holdsTheRoutedModelForAnOpenSessionOnly() {
+    var ledger = ledger(0);
+    ledger.open(1L);
+
+    assertEquals(Optional.empty(), ledger.routedModel(1L), "unrouted by default");
+    ledger.routeTo(1L, "cheap");
+    assertEquals(Optional.of("cheap"), ledger.routedModel(1L));
+
+    ledger.routeTo(2L, "cheap");
+    assertEquals(Optional.empty(), ledger.routedModel(2L), "a session never opened keeps none");
+
+    ledger.clear(1L);
+    assertEquals(Optional.empty(), ledger.routedModel(1L), "the route goes with the entry");
   }
 
   /** #839 — the step-down note follows the entry's lifecycle exactly as the usage does. */

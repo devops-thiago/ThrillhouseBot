@@ -129,6 +129,7 @@ public class StartupConfigValidator {
     validateReasoningEffort(problems, config.ai().reasoning());
     validateConciseResponseCap(problems);
     validateModelCallCeiling(problems, config.ai());
+    validateModelRouting(problems);
     problems.addAll(NotificationSettings.problems(config.notifications().webhook()));
 
     if (!problems.isEmpty()) {
@@ -141,6 +142,7 @@ public class StartupConfigValidator {
     logNotificationStatus();
     logActiveModelStatus();
     logConciseModelStatus();
+    logModelRoutingStatus();
     warnUnmappedModelEnvVars(System.getenv());
     log.info(
         "Configuration validated: GitHub App id, private key, webhook secret, and AI API key are"
@@ -540,6 +542,57 @@ public class StartupConfigValidator {
   }
 
   /**
+   * Holds the routed models (#43) to what the review plan assumes. A negative size threshold is a
+   * typo. A routed model that is {@code AI_MODEL} itself routes nothing. A routed model is sent the
+   * prompt the plan sized for the active model, so one whose declared {@code max-input-tokens} is
+   * below the effective per-call budget would be refused for length on a call that fits.
+   */
+  private void validateModelRouting(List<String> problems) {
+    var routing = config.ai().routing();
+    if (routing.lowRiskMaxChangedLines() < 0) {
+      problems.add(
+          "AI_ROUTING_LOW_RISK_MAX_CHANGED_LINES must be >= 0, where 0 routes by paths alone"
+              + " (thrillhousebot.ai.routing.low-risk-max-changed-lines): "
+              + routing.lowRiskMaxChangedLines());
+    }
+    validateRoutedModel(problems, "AI_ROUTING_LOW_RISK_MODEL", routing.lowRiskModel());
+    validateRoutedModel(problems, "AI_FALLBACK_MODEL", routing.fallbackModel());
+  }
+
+  private void validateRoutedModel(List<String> problems, String envVar, Optional<String> model) {
+    var name = model.filter(m -> !m.isBlank());
+    if (name.isEmpty()) {
+      return;
+    }
+    if (name.get().equals(activeModel.modelName())) {
+      problems.add(
+          envVar
+              + " names the active model '"
+              + name.get()
+              + "' (AI_MODEL); leave it unset or name another model");
+      return;
+    }
+    var budget = activeModel.maxInputTokens();
+    Optional.ofNullable(config.ai().models().get(name.get()))
+        .flatMap(ThrillhouseConfig.AiPricingConfig.ModelSettings::maxInputTokens)
+        .filter(cap -> budget > 0 && cap < budget)
+        .ifPresent(
+            cap ->
+                problems.add(
+                    envVar
+                        + " model '"
+                        + name.get()
+                        + "' declares max-input-tokens="
+                        + cap
+                        + ", below the review's effective per-call budget of "
+                        + budget
+                        + " tokens sized for the active model '"
+                        + activeModel.modelName()
+                        + "': its calls would be refused for length. Lower"
+                        + " REVIEW_MAX_INPUT_TOKENS or route to a model with a larger window."));
+  }
+
+  /**
    * Rejects a degenerate response cap for the {@code concise} named model (the summary, verifier,
    * and reply calls — #498) at boot, the same fail-fast contract as the other budget keys. Empty is
    * allowed: an operator who clears {@code REVIEW_CONCISE_MAX_OUTPUT_TOKENS} drops the cap and the
@@ -829,6 +882,62 @@ public class StartupConfigValidator {
           conciseReasoningEffortBanner(),
           activeModel.modelName());
     }
+  }
+
+  private void logModelRoutingStatus() {
+    var routing = config.ai().routing();
+    routing
+        .lowRiskModel()
+        .filter(m -> !m.isBlank())
+        .ifPresent(
+            m ->
+                log.info(
+                    "Risk-based model routing on: low-risk pull requests are reviewed by '{}'"
+                        + " (AI_ROUTING_LOW_RISK_MODEL), the rest by '{}'.",
+                    m,
+                    activeModel.modelName()));
+    routing
+        .fallbackModel()
+        .filter(m -> !m.isBlank())
+        .ifPresent(
+            m ->
+                log.info(
+                    "Fallback model on: after a provider error or rate limit, a review or summary"
+                        + " call's remaining retries go to '{}' (AI_FALLBACK_MODEL).",
+                    m));
+    unknownRoutedModelWarnings().forEach(log::warn);
+  }
+
+  /**
+   * Warnings for a routed model (#43) that names neither a per-model entry nor a pricing entry. The
+   * provider is the only authority on model names, so such a model still boots, but a typo would
+   * otherwise surface only at review time, as every routed attempt failing on an unknown model, and
+   * its cost would go unrecorded. Package-private so the rule is testable without a log appender.
+   */
+  List<String> unknownRoutedModelWarnings() {
+    var routing = config.ai().routing();
+    var warnings = new ArrayList<String>();
+    unknownRoutedModelWarning("AI_ROUTING_LOW_RISK_MODEL", routing.lowRiskModel())
+        .ifPresent(warnings::add);
+    unknownRoutedModelWarning("AI_FALLBACK_MODEL", routing.fallbackModel())
+        .ifPresent(warnings::add);
+    return List.copyOf(warnings);
+  }
+
+  private Optional<String> unknownRoutedModelWarning(String envVar, Optional<String> model) {
+    return model
+        .filter(m -> !m.isBlank())
+        .filter(m -> !config.ai().models().containsKey(m) && !config.ai().pricing().containsKey(m))
+        .map(
+            m ->
+                envVar
+                    + " model '"
+                    + m
+                    + "' has no per-model or pricing entry. Check the name: the provider rejects an"
+                    + " unknown model only at review time, and its cost is not recorded without a"
+                    + " pricing entry (thrillhousebot.ai.pricing.\""
+                    + m
+                    + "\".input-per-1k=...).");
   }
 
   /**

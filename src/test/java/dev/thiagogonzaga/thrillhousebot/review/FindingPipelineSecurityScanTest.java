@@ -121,7 +121,8 @@ class FindingPipelineSecurityScanTest {
             new TruncatedResponseSalvager(new ObjectMapper()),
             ReviewDimensionRouter.disabled(),
             new SecurityScan(true, true, 3.5, List.of()),
-            SummaryVerificationService.disabled());
+            SummaryVerificationService.disabled(),
+            mock(ModelRouter.class));
   }
 
   private static ReviewSession session() {

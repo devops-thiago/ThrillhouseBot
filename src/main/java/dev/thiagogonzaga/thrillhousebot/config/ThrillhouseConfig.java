@@ -1111,6 +1111,67 @@ public interface ThrillhouseConfig {
 
     ReasoningConfig reasoning();
 
+    RoutingConfig routing();
+
+    /**
+     * Risk-based model routing and provider fallback for the review calls (#43). Off by default:
+     * with neither model set, every call goes to {@code AI_MODEL} exactly as before.
+     *
+     * <p>Both models are sent on the same provider ({@code AI_BASE_URL}, {@code AI_API_KEY}) by
+     * overriding the request's {@code model} per call, and both run under the active model's budget
+     * and generation settings. The validator refuses one whose per-model {@code max-input-tokens}
+     * is below the review's effective budget, since the plan is sized for the active model, and
+     * warns about one with neither a per-model nor a pricing entry, which is likely a typo.
+     */
+    interface RoutingConfig {
+
+      /**
+       * Cheaper model for low-risk pull requests: those that touch no {@code
+       * AI_ROUTING_HIGH_RISK_PATHS} file and either have every reviewable file matching {@code
+       * AI_ROUTING_LOW_RISK_PATHS} or change at most {@code AI_ROUTING_LOW_RISK_MAX_CHANGED_LINES}
+       * lines. Only the review calls are routed; the summary call, the verifier and the commands
+       * keep their own models. Unset turns routing off.
+       */
+      @WithName("low-risk-model")
+      Optional<String> lowRiskModel();
+
+      /**
+       * Most changed lines (additions plus deletions over the reviewable files) a pull request may
+       * have to count as low risk by size. {@code 0} routes by paths alone; a negative value is
+       * rejected at boot.
+       */
+      @WithDefault("100")
+      @WithName("low-risk-max-changed-lines")
+      int lowRiskMaxChangedLines();
+
+      /**
+       * Comma-separated gitignore-style globs of low-risk files (docs, text, lockfiles). A pull
+       * request whose every reviewable file matches is routed to {@code AI_ROUTING_LOW_RISK_MODEL}
+       * whatever its size, unless one of them also matches {@code AI_ROUTING_HIGH_RISK_PATHS}. Same
+       * pattern syntax as {@code THRILLHOUSEBOT_REVIEW_IGNORED_FILES}.
+       */
+      @WithDefault("**/*.md,**/*.mdx,**/*.rst,**/*.txt,**/*.adoc,docs/,**/*.lock,**/go.sum")
+      @WithName("low-risk-paths")
+      List<String> lowRiskPaths();
+
+      /**
+       * Comma-separated gitignore-style globs of high-risk files, under the new or the old name of
+       * a renamed file. A pull request touching one is never routed to the low-risk model, however
+       * small it is and even when the file also matches {@code AI_ROUTING_LOW_RISK_PATHS}.
+       */
+      @WithDefault(".github/workflows/,**/*.sql,**/migrations/,**/auth/,**/security/,**/Dockerfile")
+      @WithName("high-risk-paths")
+      List<String> highRiskPaths();
+
+      /**
+       * Secondary model for the streamed review and summary calls. When an attempt fails with a
+       * provider error (HTTP 5xx, an unknown model) or a rate limit, the call's remaining retries
+       * go to this model instead. Unset keeps every retry on the first model.
+       */
+      @WithName("fallback-model")
+      Optional<String> fallbackModel();
+    }
+
     /**
      * Prices used for cost tracking, keyed by model name (the {@code AI_MODEL} value) like the
      * per-model settings. {@code application.properties} ships prices for the models it knows. When

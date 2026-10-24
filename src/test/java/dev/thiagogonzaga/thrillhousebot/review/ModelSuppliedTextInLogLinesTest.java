@@ -375,7 +375,8 @@ class ModelSuppliedTextInLogLinesTest {
             new TruncatedResponseSalvager(new ObjectMapper()),
             ReviewDimensionRouter.disabled(),
             SecurityScan.disabled(),
-            SummaryVerificationService.disabled());
+            SummaryVerificationService.disabled(),
+            mock(ModelRouter.class));
     var response = response(finding(FORGED_PATH, 1, FORGED_TITLE, null));
     var resolver = new DiffLineResolver(Map.of(FORGED_PATH, "@@ -0,0 +1,1 @@\n+var a = 1;\n"));
 

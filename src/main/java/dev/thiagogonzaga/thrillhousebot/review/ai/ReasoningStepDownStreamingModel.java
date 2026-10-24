@@ -47,6 +47,9 @@ import java.util.function.Supplier;
  * parameters object would be flattened away. Everything else about the call is untouched: the
  * delegate's own {@code chat} runs its listeners, so the observability listener and the token
  * ledger see the stepped-down call exactly as any other.
+ *
+ * <p>A {@linkplain ModelOverride model override} (#43) rides the same thread and is applied the
+ * same way, after the effort: a routed or fallback call goes out with that model name.
  */
 final class ReasoningStepDownStreamingModel implements StreamingChatModel {
 
@@ -58,7 +61,7 @@ final class ReasoningStepDownStreamingModel implements StreamingChatModel {
 
   @Override
   public void chat(ChatRequest request, StreamingChatResponseHandler handler) {
-    delegate.chat(ReasoningRepeat.applied(request), handler);
+    delegate.chat(ModelOverride.applied(ReasoningRepeat.applied(request)), handler);
   }
 
   /** The delegate's defaults: this wrapper adds nothing a caller could read off the model. */

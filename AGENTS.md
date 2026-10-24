@@ -244,6 +244,16 @@ same diff.
   requirement; ambiguous image requirements conservatively abstain.
   The check runs in `finish`, after calibration and before linked-issue
   evidence floors and the deterministic scan. Scan findings never pass through it.
+- **Routed and fallback calls change only the model name** (#43). `ModelRouter` decides the
+  review's model once, in `FindingPipeline.run`, and notes it on the `ReviewTokenLedger` entry;
+  only `AiReviewService.review` and `reviewBatch` read it and pass it to `runWithRetries` as the
+  first model (every other call passes none, whatever its lane), and `AiReviewService` moves a streamed call's
+  remaining attempts to `AI_FALLBACK_MODEL` after a provider failure (`isProviderFailure`) and
+  keeps it there for the lower-effort repeat too. The model reaches the wire through the
+  `ModelOverride` thread-local, applied by `ReasoningStepDownStreamingModel` after the effort, on
+  the same provider client. Budget and generation settings stay the active model's, so
+  `StartupConfigValidator` refuses a routed model whose declared input cap is below the budget.
+  The blocking calls (verifier, summary check, repair, commands, replies) are never routed.
 - **AI services are stateless.** Every `@RegisterAiService` sets
   `NoChatMemoryProviderSupplier`. Review state travels in the previous-findings section, never in
   chat history.

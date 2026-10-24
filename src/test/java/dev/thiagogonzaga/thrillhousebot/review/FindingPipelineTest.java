@@ -28,6 +28,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -62,6 +63,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -79,6 +81,7 @@ class FindingPipelineTest {
   @Mock private FollowUpAnalyzer followUpAnalyzer;
   @Mock private DiffBudgetPlanner budgetPlanner;
   @Mock private ReviewTokenLedger tokenLedger;
+  @Mock private ModelRouter modelRouter;
 
   private FindingPipeline pipeline;
 
@@ -107,7 +110,8 @@ class FindingPipelineTest {
                 new ObjectMapper()),
             ReviewDimensionRouter.disabled(),
             SecurityScan.disabled(),
-            SummaryVerificationService.disabled());
+            SummaryVerificationService.disabled(),
+            modelRouter);
     when(quoteValidator.validate(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(frameworkFilter.filter(any(), any())).thenAnswer(inv -> inv.getArgument(0));
     when(deduplicator.dedupe(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -427,6 +431,46 @@ class FindingPipelineTest {
         List.of("Unrelated defect elsewhere"),
         result.findings().stream().map(ReviewResponse.Finding::title).toList(),
         "a third lower-confidence item on the twice-dispositioned anchor must not be raised");
+  }
+
+  /**
+   * #43 — the route is decided once per review, from the reviewable files, and noted on the ledger
+   * entry every review call reads it from; an unrouted review notes nothing.
+   */
+  @Test
+  void theReviewsRouteIsNotedOnTheLedgerBeforeTheCalls() {
+    var session = persistedSession();
+    var ctx = litigatedContext(List.of(), List.of());
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(
+            new ReviewResponse(
+                List.of(),
+                List.of(),
+                new ReviewResponse.Summary(0, 0, 0, 0, 0, "ok", "does things", List.of())));
+    when(modelRouter.route(ctx.reviewableFiles())).thenReturn(Optional.of("cheap"));
+
+    pipeline.run(
+        session,
+        template,
+        ctx,
+        singleBatchPlan(batch("a.java"), List.of()),
+        new DiffLineResolver(Map.of()),
+        ReviewEvidence.NONE);
+
+    var order = inOrder(tokenLedger, aiReviewService);
+    order.verify(tokenLedger).routeTo(42L, "cheap");
+    order.verify(aiReviewService).review(eq(session), any());
+
+    when(modelRouter.route(ctx.reviewableFiles())).thenReturn(Optional.empty());
+    pipeline.run(
+        session,
+        template,
+        ctx,
+        singleBatchPlan(batch("a.java"), List.of()),
+        new DiffLineResolver(Map.of()),
+        ReviewEvidence.NONE);
+    verify(tokenLedger, times(1)).routeTo(anyLong(), any());
   }
 
   /**
@@ -2890,7 +2934,8 @@ class FindingPipelineTest {
                 new ObjectMapper()),
             ReviewDimensionRouter.disabled(),
             SecurityScan.disabled(),
-            SummaryVerificationService.disabled());
+            SummaryVerificationService.disabled(),
+            mock(ModelRouter.class));
     var session = persistedSession();
     var ctx = reviewContext();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
@@ -2954,7 +2999,8 @@ class FindingPipelineTest {
                 new ObjectMapper()),
             ReviewDimensionRouter.disabled(),
             SecurityScan.disabled(),
-            SummaryVerificationService.disabled());
+            SummaryVerificationService.disabled(),
+            mock(ModelRouter.class));
     var session = persistedSession();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
@@ -3107,7 +3153,8 @@ class FindingPipelineTest {
                 new ObjectMapper()),
             ReviewDimensionRouter.disabled(),
             SecurityScan.disabled(),
-            SummaryVerificationService.disabled());
+            SummaryVerificationService.disabled(),
+            mock(ModelRouter.class));
     var session =
         ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 1, "PR", "sha");
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
@@ -3205,7 +3252,8 @@ class FindingPipelineTest {
             new ObjectMapper()),
         new ReviewDimensionRouter(true),
         SecurityScan.disabled(),
-        SummaryVerificationService.disabled());
+        SummaryVerificationService.disabled(),
+        mock(ModelRouter.class));
   }
 
   private static String routedPromptFor(DiffBudgetPlanner.DiffBatch batch) {
@@ -4526,7 +4574,8 @@ class FindingPipelineTest {
             new ObjectMapper()),
         ReviewDimensionRouter.disabled(),
         SecurityScan.disabled(),
-        summaryVerification);
+        summaryVerification,
+        mock(ModelRouter.class));
   }
 
   private static ReviewResponse.Summary summaryWithPurpose(String purpose) {
