@@ -24,6 +24,8 @@ without it those counters stay hidden and nothing else changes.
 
 ### Changed
 
+- The Docker test image workflow builds the native variant for arm64 as well as amd64, each on a
+  runner of its own architecture, and publishes one multi-arch tag. The JVM variant stays amd64.
 - The bot follows installation and repository events. Uninstalling or suspending the App, or
   removing a repository from an installation, stops the dashboard serving it at once instead of
   after its cache expired; unsuspending or adding it back serves it again. A renamed or

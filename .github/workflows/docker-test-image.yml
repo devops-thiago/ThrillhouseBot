@@ -11,7 +11,7 @@ on:
         type: string
         default: ""
       variant:
-        description: "jvm = fast behavior testing; native = production-like (amd64 only)"
+        description: "jvm = fast behavior testing (amd64); native = production-like (amd64 and arm64)"
         required: true
         type: choice
         options:
@@ -35,16 +35,16 @@ env:
   IMAGE: ghcr.io/devops-thiago/thrillhousebot
 
 jobs:
-  build-push:
+  # Resolves the commit every other job builds: the selected branch, or a same-repo PR head.
+  source:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-      pull-requests: write
+      pull-requests: read
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
 
       - name: Check out PR head
         if: inputs.pr_number != ''
@@ -66,6 +66,81 @@ jobs:
             exit 1
           fi
           gh pr checkout "$PR"
+
+      - name: Resolve commit
+        id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  # One native binary per architecture, each on a runner of that architecture.
+  native-build:
+    needs: [source]
+    if: inputs.variant == 'native'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: "25"
+          distribution: "temurin"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-${{ matrix.arch }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-m2
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build dashboard
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+          mkdir -p ../src/main/resources/META-INF/resources/dashboard
+          cp -a out/. ../src/main/resources/META-INF/resources/dashboard/
+        working-directory: frontend
+
+      - name: Package (native ${{ matrix.arch }})
+        run: ./mvnw -B package -Pnative -DskipTests -Dquarkus.native.container-build=true
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-native-${{ matrix.arch }}
+          path: target/*-runner
+          retention-days: 1
+
+  build-push:
+    needs: [source, native-build]
+    # native-build is skipped for the jvm variant; run then too, but never after it failed.
+    if: >-
+      always() && needs.source.result == 'success' &&
+      (needs.native-build.result == 'success' ||
+       (inputs.variant == 'jvm' && needs.native-build.result == 'skipped'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
 
       - name: Derive tags
         id: tags
@@ -134,23 +209,27 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        if: inputs.variant == 'jvm'
         with:
           java-version: "25"
           distribution: "temurin"
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: inputs.variant == 'jvm'
         with:
           path: ~/.m2
           key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           restore-keys: ${{ runner.os }}-m2
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: inputs.variant == 'jvm'
         with:
           node-version: "22"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
       - name: Build dashboard
+        if: inputs.variant == 'jvm'
         run: |
           npm ci --ignore-scripts
           npm run build
@@ -162,12 +241,21 @@ jobs:
         if: inputs.variant == 'jvm'
         run: ./mvnw -B package -DskipTests -Dquarkus.package.jar.type=mutable-jar
 
-      - name: Package (native amd64)
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: inputs.variant == 'native'
-        run: |
-          ./mvnw -B package -Pnative -DskipTests -Dquarkus.native.container-build=true
-          mkdir -p target/amd64
-          cp -f target/*-runner target/amd64/
+        with:
+          name: test-native-amd64
+          path: target/amd64/
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.variant == 'native'
+        with:
+          name: test-native-arm64
+          path: target/arm64/
+
+      - name: Make the native binaries executable
+        if: inputs.variant == 'native'
+        run: chmod +x target/amd64/*-runner target/arm64/*-runner
 
       - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
 
@@ -184,7 +272,7 @@ jobs:
           context: .
           file: ${{ inputs.variant == 'native' && 'src/main/docker/Dockerfile.runtime' || 'src/main/docker/Dockerfile.jvm' }}
           push: true
-          platforms: linux/amd64
+          platforms: ${{ inputs.variant == 'native' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           tags: ${{ steps.tags.outputs.list }}
           cache-from: type=gha,scope=docker-test-${{ inputs.variant }}
           cache-to: type=gha,mode=max,scope=docker-test-${{ inputs.variant }}
@@ -201,9 +289,10 @@ jobs:
           PRIMARY: ${{ steps.tags.outputs.primary }}
           TAGS: ${{ steps.tags.outputs.list }}
           VARIANT: ${{ inputs.variant }}
+          ARCHES: ${{ inputs.variant == 'native' && 'amd64 and arm64' || 'amd64' }}
         run: |
           body=$(cat <<EOF
-          Test image ready (\`${VARIANT}\`, amd64).
+          Test image ready (\`${VARIANT}\`, ${ARCHES}).
 
           \`\`\`bash
           docker pull ${PRIMARY}
