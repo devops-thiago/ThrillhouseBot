@@ -62,6 +62,15 @@ class SuggestionIndentTest {
     var blankFirst = "\n    y();";
     assertSame(blankFirst, SuggestionIndent.restore(lostFirst, blankFirst, replaced));
 
+    // The quote lost its first line's indent, but the suggestion dedents its body too: a Python
+    // helper moved to module level is left as written.
+    var moved = "def helper(x):\n    return x";
+    assertSame(
+        moved,
+        SuggestionIndent.restore(
+            "def helper(self, x):\n        return x",
+            moved,
+            List.of("    def helper(self, x):", "        return x")));
     // A later quoted line differs too, so it is not the first-line loss.
     var shifted = "z();\n  y();";
     assertSame(shifted, SuggestionIndent.restore("x();\n  y();", shifted, replaced));

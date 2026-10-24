@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.stream.Stream;
 
 /**
  * Gives a multi-line suggestion back the indentation of the lines it replaces (#1197).
@@ -53,8 +54,9 @@ final class SuggestionIndent {
       return suggestion;
     }
     if (onlyTheFirstLineLostIndent(quoted, replaced)) {
-      return withFirstLineIndent(
-          suggestion, indent(quoted.getFirst()), indent(replaced.getFirst()));
+      return keepsTheQuotedDepth(suggestion, quoted)
+          ? withFirstLineIndent(suggestion, indent(quoted.getFirst()), indent(replaced.getFirst()))
+          : suggestion;
     }
     OptionalInt width = spacesPerTab(quoted, replaced);
     return width.isPresent() ? withTabs(suggestion, width.getAsInt()) : suggestion;
@@ -73,6 +75,26 @@ final class SuggestionIndent {
       }
     }
     return true;
+  }
+
+  /**
+   * Whether no later line of {@code suggestion} sits shallower than every later quoted line. A
+   * suggestion that lost only its first line's indent keeps the rest at the replaced depth; one
+   * whose later lines are dedented too, such as a Python helper moved to module level, changes the
+   * indentation on purpose and is not rewritten.
+   */
+  private static boolean keepsTheQuotedDepth(String suggestion, List<String> quoted) {
+    int quotedDepth = laterLinesDepth(quoted.stream().skip(1));
+    int suggestedDepth =
+        laterLinesDepth(suggestion.lines().skip(1).filter(line -> !line.isBlank()));
+    return suggestedDepth >= quotedDepth;
+  }
+
+  /**
+   * The least indent among {@code lines}, all non-blank, or {@code MAX_VALUE} when there are none.
+   */
+  private static int laterLinesDepth(Stream<String> lines) {
+    return lines.mapToInt(line -> indent(line).length()).min().orElse(Integer.MAX_VALUE);
   }
 
   /**
