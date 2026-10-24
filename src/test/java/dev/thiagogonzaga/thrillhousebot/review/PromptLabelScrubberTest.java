@@ -1464,6 +1464,18 @@ class PromptLabelScrubberTest {
         "the only file not shown is 1 rename, pom.xml",
         PromptLabelScrubber.scrub("the withheld list has only 1 rename, pom.xml"));
     assertEquals(
+        "the only files not shown are the renames.",
+        PromptLabelScrubber.scrub("the withheld list has only the renames."));
+    assertEquals(
+        "the only file not shown is the PR's status.",
+        PromptLabelScrubber.scrub("the withheld list contains only the PR's status."));
+    assertEquals(
+        "the only files not shown are the lock-files.",
+        PromptLabelScrubber.scrub("the withheld list has only the lock-files."));
+    assertEquals(
+        "the only file not shown is web.config.",
+        PromptLabelScrubber.scrub("the withheld list has only web.config."));
+    assertEquals(
         "the only file not shown is the class",
         PromptLabelScrubber.scrub("the withheld list has only the class"));
     assertEquals(

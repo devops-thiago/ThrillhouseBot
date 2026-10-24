@@ -884,7 +884,7 @@ public final class PromptLabelScrubber {
   }
 
   /** A word of the object after "contains only": letters, digits, and inner dots or hyphens. */
-  private static final Pattern OBJECT_WORD = Pattern.compile("[\\w'][\\w'.-]*+(?<![.-])");
+  private static final Pattern OBJECT_WORD = Pattern.compile("[\\w']++(?:[.-][\\w']++)*+");
 
   /** The words that end an object's noun phrase: a preposition or a relative pronoun after it. */
   private static final Set<String> OBJECT_ENDS =
