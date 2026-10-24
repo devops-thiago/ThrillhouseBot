@@ -102,10 +102,11 @@ final class SuggestionIndent {
       if (!consistsOf(spaces, ' ') || !consistsOf(tabs, '\t')) {
         return OptionalInt.empty();
       }
+      if (tabs.isEmpty() != spaces.isEmpty()) {
+        // Indented on one side only: no number of spaces per tab maps one onto the other.
+        return OptionalInt.empty();
+      }
       if (tabs.isEmpty()) {
-        if (!spaces.isEmpty()) {
-          return OptionalInt.empty();
-        }
         continue;
       }
       if (spaces.length() % tabs.length() != 0

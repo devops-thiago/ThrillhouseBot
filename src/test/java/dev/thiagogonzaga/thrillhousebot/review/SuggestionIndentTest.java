@@ -93,6 +93,14 @@ class SuggestionIndentTest {
         suggestion,
         SuggestionIndent.restore(
             " func f() {\n  return", suggestion, List.of("func f() {", "\treturn")));
+    // A quoted line at column 0 over a tab-indented one: no width holds for that pair.
+    assertSame(
+        suggestion,
+        SuggestionIndent.restore("a\n  b\n  c", suggestion, List.of("\t\t\ta", "\tb", "\tc")));
+    // Both losses at once: the first line at column 0 and spaces for tabs. Left as written rather
+    // than converted with the first line still at column 0.
+    var both = "for {\n  b\n  c";
+    assertSame(both, SuggestionIndent.restore(both, both, List.of("\tfor {", "\tb", "\tc")));
     // Every line at column 0: nothing to convert.
     var flat = "a()\nb()";
     assertSame(flat, SuggestionIndent.restore("a()\nb()", flat, List.of("a()", "b()")));
