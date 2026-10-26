@@ -52,7 +52,7 @@ public record ReviewResponse(
     this(findings, previousFindingsStatus, summary, List.of());
   }
 
-  /** A response with no criterion verdicts, as every rebuilt round is. */
+  /** A response with no criterion verdicts, which a rebuild through this constructor drops. */
   public ReviewResponse(
       List<Finding> findings,
       List<PreviousFindingStatus> previousFindingsStatus,
