@@ -31,9 +31,10 @@ import org.jboss.logging.Logger;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@code OTEL_SDK_DISABLED=true} wins over {@code PROMETHEUS_METRICS_ENABLED=true} (#45): the SDK
- * is never built, so the registrar never registers a reader and the scrape endpoint answers 404.
- * The README, the configuration reference and the switch's {@code # doc:} line all state this.
+ * {@code OTEL_SDK_DISABLED=true} wins over {@code PROMETHEUS_METRICS_ENABLED=true} (#45): Quarkus
+ * still injects an {@link OpenTelemetrySdk}, but a disabled one with no Prometheus reader
+ * registered, so the scrape endpoint answers 404. The README, the configuration reference and the
+ * switch's {@code # doc:} line all state this.
  *
  * <p>The OTLP metric and log exporters are built into the image (#1262), so the same switch must
  * keep them from sending anything: with an OTLP receiver configured and log export switched on, the
