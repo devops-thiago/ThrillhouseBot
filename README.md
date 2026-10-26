@@ -1472,6 +1472,16 @@ Prometheus endpoint on, served on `/metrics` too. Turn them off with
 Log records stay on the console. Set `OTEL_LOGS_ENABLED=true` to export them
 over OTLP to the same endpoint as well.
 
+OTLP export is at-least-once: when an export fails after the collector has
+received it, Quarkus sends the batch again (up to three attempts, not logged),
+so a span or metric point can reach the backend twice. Quarkus also uses the
+export timeout as the connection's idle timeout, and below the collector's
+60-second HTTP/2 keep-alive that closes a connection right after an export
+written after a quiet spell, which duplicates it
+([quarkusio/quarkus#57107](https://github.com/quarkusio/quarkus/issues/57107)).
+`OTEL_EXPORTER_TIMEOUT` therefore defaults to `65s` for traces, metrics and
+logs; keep it above 60 seconds.
+
 ### Prometheus
 
 With `PROMETHEUS_METRICS_ENABLED=true`, the same metrics are also served in

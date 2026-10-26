@@ -92,6 +92,12 @@ without it those counters stay hidden and nothing else changes.
 
 ### Fixed
 
+- Spans and metric points exported after a quiet spell are no longer sent to the collector twice.
+  Quarkus used the 10-second export timeout as the connection's idle timeout and closed a connection
+  right after writing a new export, which its retry then sent again
+  ([quarkusio/quarkus#57107](https://github.com/quarkusio/quarkus/issues/57107)). The timeout now
+  defaults to 65 seconds for traces, metrics and logs, above the collector's 60-second keep-alive,
+  and `OTEL_EXPORTER_TIMEOUT` sets it. (#1268)
 - Metrics are exported over OTLP, as the README describes. Before, only traces were, and the
   metrics reached only the Prometheus endpoint. `OTEL_EXPORTER_ENDPOINT` now sets the endpoint for
   every signal, so metrics go where traces already went; a Quarkus per-signal variable such as
