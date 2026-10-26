@@ -1193,6 +1193,105 @@ class SummaryAcrossRoundsTest {
     var delta = FollowUpDeltaSummary.render(result, List.of(NEW_IN_ROUND_TWO)).orElseThrow();
     assertTrue(delta.contains("- **New findings this round:** 1"), delta);
     assertTrue(delta.contains("- **Previous findings still open:** 4"), delta);
+    // #1199: the check run counts the same five open, one of them new, not the replacement twice.
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(
+        checkSummary.startsWith(
+            "5 open findings: 1 new (0 critical, 0 high, 0 medium, 1 low), 4 still open"),
+        checkSummary);
+  }
+
+  /**
+   * #1199, ThrillhouseBot-test#296 round 2: an inline finding on the line of round one's open
+   * double-check item, about the same query. It replaces the item, as the summary and the delta
+   * already counted it, and the check run now agrees: still open, not new.
+   */
+  @Test
+  void theCheckRunCountsAReplacementAsTheSummaryAndTheDeltaDo() {
+    // The file and quote are this test's diff, so the backstop holds the item as present.
+    var query = "log(user.name());";
+    var item =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            FILE,
+            38,
+            "Quote-doubling SQL escaping is dialect-sensitive for untrusted zone values",
+            "escape_literal (lines 15-17, value.replace('\\'', \"''\")) doubles single quotes,"
+                + " which is sufficient inside a standard SQL string literal. But line 38 still"
+                + " builds the query by concatenation — \"SELECT temp_c FROM readings WHERE zone ="
+                + " '{}' AND sensor_id = '{}' ...\" — from zone and sensor_id that arrive"
+                + " unvalidated from unauthenticated TCP (parse_line checks only sensor_id length;"
+                + " zone is unrestricted). Under MySQL's default backslash-escape mode, a zone"
+                + " value ending in a backslash escapes the closing quote and breaks out of the"
+                + " literal, since doubling quotes does not help. Please verify which dialect/mode"
+                + " the backing database runs with (no driver is named anywhere in the diff — the"
+                + " Db trait takes raw SQL strings), or switch to parameterized queries. Note the"
+                + " in-diff comment on line 34 attributes safety to parse_line's validation of"
+                + " sensor ids, a length-only check that is not the escaping mechanism.",
+            query,
+            null);
+    var inline =
+        new ReviewResponse.Finding(
+            "high",
+            "low",
+            FILE,
+            38,
+            "history_for interpolates sensor_id unescaped into SQL, unlike record()",
+            "record() escapes both fields before interpolation: line 26 `let zone ="
+                + " escape_literal(zone);` and line 27 `let sensor = escape_literal(sensor_id);`."
+                + " history_for escapes only the zone (line 37 `let zone = escape_literal(zone);`)"
+                + " and interpolates sensor_id raw into `\"SELECT temp_c FROM readings WHERE zone ="
+                + " '{}' AND sensor_id = '{}' ORDER BY epoch DESC LIMIT {}\"` on lines 38-40. The"
+                + " value is unauthenticated network input: main.rs binds `0.0.0.0:8088` (main.rs"
+                + " line 43) and feeds every connection to ingest_batch, which calls history_for"
+                + " with `&r.sensor_id`. parse_line (rust/src/reading.rs lines 29-31) validates"
+                + " only length and non-emptiness — `if sensor_id.is_empty() || sensor_id.len() >"
+                + " 64 { return None; }` — so a sensor_id containing a single quote passes, e.g."
+                + " the TCP body line `x' OR 1=1 -- ,north,70.0,1000` produces WHERE zone ="
+                + " 'north' AND sensor_id = 'x' OR 1=1 -- ' ..., escaping the literal and"
+                + " rewriting the query. The comment on line 35, 'Sensor ids are validated by"
+                + " `parse_line` before they get here', points at a length-only check that is not"
+                + " any escaping mechanism, and history_for performs no escaping at all on this"
+                + " field. The only in-diff Db implementation (LogDb in main.rs) logs the string,"
+                + " so whether a real database executes the attacker-controlled query depends on"
+                + " the production Db implementation not shown in this diff — but the query string"
+                + " itself is constructed from unescaped untrusted input, which record() shows the"
+                + " module knows how to avoid.",
+            query,
+            null);
+    var roundOne = new ReviewResponse(List.of(CRITICAL, HIGH, item), List.of(), null);
+    var priors = List.of(allUnresolved(List.of(NEW_IN_ROUND_TWO), 3), roundOne);
+    var first = publishFirstRound(roundOne);
+
+    var result =
+        builder.build(
+            followUp(priors, List.of()),
+            new ReviewResponse(
+                List.of(inline, LOW_NOTE),
+                List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+                null),
+            CI_CLEAR,
+            plan);
+    var edited = publishFollowUp(result, first);
+
+    // The chosen classification: the inline finding replaces the item and carries it.
+    assertTrue(lists(result, inline));
+    assertFalse(lists(result, item));
+    assertEquals(4, result.unresolvedPreviousCount());
+    // Summary: five listed (the round's two and three other carried), the item once, as `inline`.
+    assertRisk(edited, 1, 2, 1, 1);
+    assertTrue(edited.contains("| ⚠️ Still present | 4 |"), edited);
+    // Delta: one new, four still open.
+    var delta = FollowUpDeltaSummary.render(result, List.of(NEW_IN_ROUND_TWO)).orElseThrow();
+    assertTrue(delta.contains("- **New findings this round:** 1"), delta);
+    assertTrue(delta.contains("- **Previous findings still open:** 4"), delta);
+    // Check run: the same five open, one new (LOW_NOTE), four still open.
+    var checkSummary = VerdictBuilder.checkSummaryForResult(result);
+    assertTrue(
+        checkSummary.startsWith(
+            "5 open findings: 1 new (0 critical, 0 high, 0 medium, 1 low), 4 still open"),
+        checkSummary);
   }
 
   /** The same promotion of an item the model still reports on by id: its status is not counted. */
