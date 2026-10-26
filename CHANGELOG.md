@@ -102,6 +102,12 @@ without it those counters stay hidden and nothing else changes.
   with `OTEL_LOGS_ENABLED=true`, off by default. A deployment that set only
   `QUARKUS_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` now also sends metrics to `OTEL_EXPORTER_ENDPOINT`
   (default `http://localhost:4317`): set that variable to the collector too. (#1262)
+- A review's spans share one trace. Each review runs in a `review` span that links to the webhook
+  delivery that started it, or to every delivery a coalesced review serves, including a `/review`
+  the running review answers, and its model calls,
+  multi-call batches included, are spans in that trace. Before, every model call of a review
+  started a trace of its own. Commands, maintainer replies and notifications stay in their
+  delivery's trace. (#1263)
 - On a follow-up round, the check run's open total and new count now match the summary and the
   "changes since the last review" section. A finding that replaces an open "Things to double-check"
   item from an earlier round was counted twice on the check run, once as new and once as still
