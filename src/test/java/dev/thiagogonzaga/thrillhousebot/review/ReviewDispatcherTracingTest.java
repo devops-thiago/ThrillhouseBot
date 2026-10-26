@@ -184,6 +184,15 @@ class ReviewDispatcherTracingTest {
   }
 
   @Test
+  void aReviewWithNoHeadShaHasNoRevisionAttribute() {
+    doAnswer(invocation -> true).when(orchestrator).review(any());
+
+    dispatchUnder("POST /api/webhook", request(6, null));
+
+    assertNull(attribute(awaitSpan(ReviewDispatcher.REVIEW_SPAN), "vcs.ref.head.revision"));
+  }
+
+  @Test
   void aFailedReviewMarksItsSpanFailed() {
     doThrow(new IllegalStateException("boom")).when(orchestrator).review(any());
 
