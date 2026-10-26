@@ -96,8 +96,12 @@ without it those counters stay hidden and nothing else changes.
   metrics reached only the Prometheus endpoint. `OTEL_EXPORTER_ENDPOINT` now sets the endpoint for
   every signal, so metrics go where traces already went; a Quarkus per-signal variable such as
   `QUARKUS_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` still overrides it. Quarkus's JVM and HTTP server
-  metrics are exported too. Log records can be exported with `OTEL_LOGS_ENABLED=true`, off by
-  default. (#1262)
+  metrics are exported too, and with `PROMETHEUS_METRICS_ENABLED=true` they also appear on
+  `/metrics` (`jvm.*`, `http.server.request.duration`); `QUARKUS_OTEL_INSTRUMENT_JVM_METRICS=false`
+  and `QUARKUS_OTEL_INSTRUMENT_HTTP_SERVER_METRICS=false` turn them off. Log records can be exported
+  with `OTEL_LOGS_ENABLED=true`, off by default. A deployment that set only
+  `QUARKUS_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` now also sends metrics to `OTEL_EXPORTER_ENDPOINT`
+  (default `http://localhost:4317`): set that variable to the collector too. (#1262)
 - On a follow-up round, the check run's open total and new count now match the summary and the
   "changes since the last review" section. A finding that replaces an open "Things to double-check"
   item from an earlier round was counted twice on the check run, once as new and once as still

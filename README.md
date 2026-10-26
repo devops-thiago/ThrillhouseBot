@@ -1464,7 +1464,8 @@ endpoints report `unknown`; set `AI_PROVIDER` to name them (a local `ollama` or
 `vllm` server, a proxy, a gateway).
 
 Quarkus also records JVM metrics (`jvm.*`) and HTTP server metrics
-(`http.server.request.duration`). Turn them off with
+(`http.server.request.duration`). They are exported over OTLP and, with the
+Prometheus endpoint on, served on `/metrics` too. Turn them off with
 `QUARKUS_OTEL_INSTRUMENT_JVM_METRICS=false` and
 `QUARKUS_OTEL_INSTRUMENT_HTTP_SERVER_METRICS=false`.
 

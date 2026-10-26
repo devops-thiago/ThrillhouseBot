@@ -62,6 +62,8 @@ final class OtlpReceiver {
       var receiver = new OtlpReceiver(server);
       server.createContext("/", receiver::accept);
       server.start();
+      // A test profile has no teardown, so the receiver stops with the test JVM.
+      Runtime.getRuntime().addShutdownHook(new Thread(() -> server.stop(0)));
       return receiver;
     } catch (IOException e) {
       throw new UncheckedIOException(e);
