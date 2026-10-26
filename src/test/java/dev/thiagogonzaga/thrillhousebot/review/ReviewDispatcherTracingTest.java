@@ -182,13 +182,14 @@ class ReviewDispatcherTracingTest {
   /** A covered {@code /review} past the link limit is counted on the running review, not linked. */
   @Test
   void aCoveredManualReviewPastTheLinkLimitIsOnlyCounted() throws InterruptedException {
-    var started = new CountDownLatch(2);
+    var firstStarted = new CountDownLatch(1);
+    var secondStarted = new CountDownLatch(1);
     var release = new CountDownLatch(1);
     var releaseSecond = new CountDownLatch(1);
     doAnswer(
             invocation -> {
-              var first = started.getCount() == 2;
-              started.countDown();
+              var first = firstStarted.getCount() == 1;
+              (first ? firstStarted : secondStarted).countDown();
               (first ? release : releaseSecond).await(5, TimeUnit.SECONDS);
               return true;
             })
@@ -198,12 +199,14 @@ class ReviewDispatcherTracingTest {
     when(coverage.currentHead(any())).thenReturn(Optional.of(last));
 
     dispatchUnder("delivery 0", request(13, "sha0"));
+    // The deliveries below must coalesce behind the running first review, not into its batch.
+    assertTrue(firstStarted.await(5, TimeUnit.SECONDS));
     var coalesced = new ArrayList<SpanContext>();
     for (int i = 1; i <= ReviewDispatcher.MAX_LINKED_TRIGGERS + 1; i++) {
       coalesced.add(dispatchUnder("delivery " + i, request(13, "sha" + i)));
     }
     release.countDown();
-    assertTrue(started.await(5, TimeUnit.SECONDS));
+    assertTrue(secondStarted.await(5, TimeUnit.SECONDS));
     dispatchUnder("issue_comment /review", manual(13));
     releaseSecond.countDown();
 
