@@ -263,8 +263,9 @@ same diff.
   `FindingPipeline.runMultiCall` are wrapped with `Context.taskWrapping`; a new executor on the
   review path needs the same. `ReviewDispatcher` runs each review and CI re-evaluation in a root
   span (`review`, `review.ci-recheck`) that links to the span current at each `dispatch` it
-  serves, coalesced ones included (at most `MAX_LINKED_TRIGGERS`), rather than continuing the
-  webhook's trace: the review outlives the delivery's 200 by minutes.
+  serves, coalesced ones and a `/review` the running review covers included, rather than continuing
+  the webhook's trace: the review outlives the delivery's 200 by minutes. Links stop at
+  `MAX_LINKED_TRIGGERS`; `thrillhouse.review.requests` counts every request the run serves.
 
 ## Follow-up round invariants
 

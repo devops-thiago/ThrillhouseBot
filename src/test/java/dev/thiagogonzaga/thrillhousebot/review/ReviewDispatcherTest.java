@@ -36,8 +36,10 @@ import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanContext;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -858,7 +860,7 @@ class ReviewDispatcherTest {
   @Test
   void shouldRunManualReviewWhenTheRunningReviewEndedAfterTheHeadWasRead() {
     var state = new ReviewDispatcher.PerPrState();
-    state.beginReview("sha1");
+    beginReview(state, "sha1");
     state.endReview();
 
     var result = state.onDispatch(manualRequest(36), "sha1", SpanContext.getInvalid());
@@ -872,7 +874,7 @@ class ReviewDispatcherTest {
     var state = new ReviewDispatcher.PerPrState();
     state.onDispatch(reviewRequest("owner", "repo", 39, "sha2"), SpanContext.getInvalid());
     state.takeNext();
-    state.beginReview("sha2");
+    beginReview(state, "sha2");
 
     var result = state.onDispatch(manualRequest(39), "sha1", SpanContext.getInvalid());
 
@@ -922,7 +924,7 @@ class ReviewDispatcherTest {
     var state = new ReviewDispatcher.PerPrState();
     state.onDispatch(reviewRequest("owner", "repo", 37, "sha1"), SpanContext.getInvalid());
     state.takeNext();
-    state.beginReview("sha1");
+    beginReview(state, "sha1");
     state.onDispatch(reviewRequest("owner", "repo", 37, "sha2"), SpanContext.getInvalid());
 
     var result = state.onDispatch(manualRequest(37), "sha1", SpanContext.getInvalid());
@@ -934,7 +936,7 @@ class ReviewDispatcherTest {
   @Test
   void shouldRetryManualReviewOnARetiredState() {
     var state = new ReviewDispatcher.PerPrState();
-    state.beginReview("sha1");
+    beginReview(state, "sha1");
     state.markRetired();
 
     var result = state.onDispatch(manualRequest(38), "sha1", SpanContext.getInvalid());
@@ -946,9 +948,15 @@ class ReviewDispatcherTest {
   @Test
   void shouldTreatAMissingHeadUnderReviewAsUnresolved() {
     var state = new ReviewDispatcher.PerPrState();
-    state.beginReview(null);
+    beginReview(state, null);
 
     assertEquals("", state.reviewingSha());
+  }
+
+  /** Marks a review of {@code headSha} running, with no span and no requests counted. */
+  private static void beginReview(ReviewDispatcher.PerPrState state, String headSha) {
+    state.beginReview(
+        headSha, Span.getInvalid(), new ReviewDispatcher.PerPrState.Served(List.of(), 0));
   }
 
   private static ReviewOrchestrator.ReviewRequest manualRequest(int prNumber) {

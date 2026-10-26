@@ -93,7 +93,8 @@ without it those counters stay hidden and nothing else changes.
 ### Fixed
 
 - A review's spans share one trace. Each review runs in a `review` span that links to the webhook
-  delivery that started it, or to every delivery a coalesced review serves, and its model calls,
+  delivery that started it, or to every delivery a coalesced review serves, including a `/review`
+  the running review answers, and its model calls,
   multi-call batches included, are spans in that trace. Before, every model call of a review
   started a trace of its own. Commands, maintainer replies and notifications stay in their
   delivery's trace. (#1263)

@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.ReviewExecutor;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.StatusCode;
@@ -55,9 +56,15 @@ public final class ReviewDispatcher {
 
   /**
    * At most this many dispatching spans are linked from one run; a burst of coalesced deliveries
-   * past it links the first ones.
+   * past it links the first ones, and {@link #REQUESTS} still counts every one.
    */
   static final int MAX_LINKED_TRIGGERS = 32;
+
+  /**
+   * How many requests a run serves: every coalesced delivery, and every {@code /review} the running
+   * review covers. The links stop at {@link #MAX_LINKED_TRIGGERS}; this count does not.
+   */
+  static final AttributeKey<Long> REQUESTS = AttributeKey.longKey("thrillhouse.review.requests");
 
   static final String REVIEW_SPAN = "review";
   static final String CI_RECHECK_SPAN = "review.ci-recheck";
@@ -143,8 +150,8 @@ public final class ReviewDispatcher {
    * The head a running review of the PR is reviewing, when the PR's current head is that same
    * commit; {@code null} when no review is running, its head is not known, the head moved, or the
    * head could not be read. The read happens outside the state lock, so {@link
-   * PerPrState#onDispatch(ReviewOrchestrator.ReviewRequest, String)} checks the running head again
-   * before dropping the request.
+   * PerPrState#onDispatch(ReviewOrchestrator.ReviewRequest, String, SpanContext)} checks the
+   * running head again before dropping the request.
    */
   private String headUnderReview(PrKey key, ReviewOrchestrator.ReviewRequest req) {
     var state = states.get(key);
@@ -270,15 +277,15 @@ public final class ReviewDispatcher {
       var next = state.takeNext();
       if (next.recheck() != null) {
         var task = next.recheck();
-        inRunSpan(CI_RECHECK_SPAN, key, task.headSha(), next.triggers(), () -> recheckCi(task));
+        inRunSpan(CI_RECHECK_SPAN, key, task.headSha(), next.served(), () -> recheckCi(task));
       } else {
         var batch = next.review();
         inRunSpan(
             REVIEW_SPAN,
             key,
             batch.request().commitSha(),
-            next.triggers(),
-            () -> runReviewBatch(state, batch));
+            next.served(),
+            () -> runReviewBatch(state, batch, next.served()));
       }
 
       if (state.tryRetireIfIdle()) {
@@ -293,7 +300,7 @@ public final class ReviewDispatcher {
    * the spans the run makes, on this thread or handed on with the context, share one trace.
    */
   private void inRunSpan(
-      String name, PrKey key, String headSha, List<SpanContext> triggers, Runnable work) {
+      String name, PrKey key, String headSha, PerPrState.Served served, Runnable work) {
     var builder =
         tracer
             .spanBuilder(name)
@@ -304,7 +311,8 @@ public final class ReviewDispatcher {
     if (headSha != null && !headSha.isBlank()) {
       builder.setAttribute("vcs.ref.head.revision", headSha);
     }
-    triggers.forEach(builder::addLink);
+    builder.setAttribute(REQUESTS, (long) served.requests());
+    served.links().forEach(builder::addLink);
     var span = builder.startSpan();
     try (var _ = span.makeCurrent()) {
       work.run();
@@ -318,7 +326,8 @@ public final class ReviewDispatcher {
     Span.current().recordException(e).setStatus(StatusCode.ERROR);
   }
 
-  private void runReviewBatch(PerPrState state, PerPrState.ReviewBatch batch) {
+  private void runReviewBatch(
+      PerPrState state, PerPrState.ReviewBatch batch, PerPrState.Served served) {
     // Re-check after dispatch: a request can pass the controller gate then reach here once the
     // window closed (coalesce or recordCompletion gap).
     var req = batch.request();
@@ -332,7 +341,7 @@ public final class ReviewDispatcher {
           req.prNumber(),
           "within the auto-review rate window after dispatch (manual /review bypasses)");
     } else {
-      reviewBatch(state, batch);
+      reviewBatch(state, batch, served);
     }
   }
 
@@ -346,9 +355,11 @@ public final class ReviewDispatcher {
     }
   }
 
-  private void reviewBatch(PerPrState state, PerPrState.ReviewBatch batch) {
+  private void reviewBatch(
+      PerPrState state, PerPrState.ReviewBatch batch, PerPrState.Served served) {
     logReviewStart(batch.request(), batch.coalesced(), batch.queueWaitMs());
-    state.beginReview(batch.request().commitSha());
+    // The run's span, current here, also serves a /review this review covers (#1263).
+    state.beginReview(batch.request().commitSha(), Span.current(), served);
     try {
       var surfaced = orchestrator.review(batch.request());
       if (surfaced && !batch.request().isManualTrigger()) {
@@ -448,11 +459,20 @@ public final class ReviewDispatcher {
     /** At most one CI re-evaluation waits per PR; it runs after every queued review (#825). */
     CiHoldRevisit.Recheck pendingRecheck;
 
-    /** The spans the requests the next review serves were dispatched under (#1263). */
-    private final List<SpanContext> reviewTriggers = new ArrayList<>();
+    /** The requests the next review serves, and the spans they were dispatched under (#1263). */
+    private final Triggers reviewTriggers = new Triggers();
 
-    /** The spans the pending CI re-evaluation's requests were dispatched under (#1263). */
-    private final List<SpanContext> recheckTriggers = new ArrayList<>();
+    /** The pending CI re-evaluation's requests and their dispatching spans (#1263). */
+    private final Triggers recheckTriggers = new Triggers();
+
+    /**
+     * The running review's span, invalid while no review runs. A {@code /review} it covers is
+     * linked to it and counted, up to the same limit as the requests it started with (#1263).
+     */
+    private Span reviewingSpan = Span.getInvalid();
+
+    private int reviewingRequests;
+    private int reviewingLinks;
 
     /**
      * The head the orchestrator is reviewing right now, blank for a manual run that resolves its
@@ -473,9 +493,35 @@ public final class ReviewDispatcher {
 
     /**
      * What the worker runs next: a review batch, or a CI re-evaluation when no review waits, with
-     * the spans its requests were dispatched under.
+     * the requests it serves.
      */
-    record Next(ReviewBatch review, CiHoldRevisit.Recheck recheck, List<SpanContext> triggers) {}
+    record Next(ReviewBatch review, CiHoldRevisit.Recheck recheck, Served served) {}
+
+    /**
+     * The requests a run serves: how many, and the spans the first {@link #MAX_LINKED_TRIGGERS} of
+     * them were dispatched under.
+     */
+    record Served(List<SpanContext> links, int requests) {}
+
+    /** The requests queued for one run, gathered under the state lock. */
+    private static final class Triggers {
+      private final List<SpanContext> links = new ArrayList<>();
+      private int requests;
+
+      void add(SpanContext trigger) {
+        requests++;
+        if (trigger.isValid() && links.size() < MAX_LINKED_TRIGGERS) {
+          links.add(trigger);
+        }
+      }
+
+      Served drain() {
+        var served = new Served(List.copyOf(links), requests);
+        links.clear();
+        requests = 0;
+        return served;
+      }
+    }
 
     enum RecheckOutcome {
       /** The state was retired under the caller; look the PR up again. */
@@ -494,7 +540,7 @@ public final class ReviewDispatcher {
           return new DispatchResult(true, false, 0, false);
         }
         latestRequest = req;
-        addTrigger(reviewTriggers, trigger);
+        reviewTriggers.add(trigger);
         if (running) {
           coalesced++;
           return new DispatchResult(false, false, coalesced, false);
@@ -518,6 +564,7 @@ public final class ReviewDispatcher {
             && latestRequest == null
             && reviewingSha != null
             && reviewingSha.equalsIgnoreCase(coveredHead)) {
+          serveFromRunningReview(trigger);
           return new DispatchResult(false, false, 0, true);
         }
         return onDispatch(req, trigger);
@@ -530,15 +577,29 @@ public final class ReviewDispatcher {
       }
     }
 
-    void beginReview(String headSha) {
+    void beginReview(String headSha, Span span, Served served) {
       synchronized (lock) {
         reviewingSha = headSha != null ? headSha : "";
+        reviewingSpan = span;
+        reviewingRequests = served.requests();
+        reviewingLinks = served.links().size();
       }
     }
 
     void endReview() {
       synchronized (lock) {
         reviewingSha = null;
+        reviewingSpan = Span.getInvalid();
+      }
+    }
+
+    /** Counts a covered request on the running review's span and links it (#1263). */
+    private void serveFromRunningReview(SpanContext trigger) {
+      reviewingRequests++;
+      reviewingSpan.setAttribute(REQUESTS, (long) reviewingRequests);
+      if (trigger.isValid() && reviewingLinks < MAX_LINKED_TRIGGERS) {
+        reviewingSpan.addLink(trigger);
+        reviewingLinks++;
       }
     }
 
@@ -548,7 +609,7 @@ public final class ReviewDispatcher {
           return RecheckOutcome.RETRY;
         }
         pendingRecheck = task;
-        addTrigger(recheckTriggers, trigger);
+        recheckTriggers.add(trigger);
         if (running) {
           return RecheckOutcome.QUEUED;
         }
@@ -563,27 +624,15 @@ public final class ReviewDispatcher {
         if (latestRequest == null) {
           var task = pendingRecheck;
           pendingRecheck = null;
-          return new Next(null, task, drain(recheckTriggers));
+          return new Next(null, task, recheckTriggers.drain());
         }
         var req = latestRequest;
         latestRequest = null;
         var batch = new ReviewBatch(req, coalesced, System.currentTimeMillis() - queuedAtMs);
         coalesced = 0;
         queuedAtMs = System.currentTimeMillis();
-        return new Next(batch, null, drain(reviewTriggers));
+        return new Next(batch, null, reviewTriggers.drain());
       }
-    }
-
-    private static void addTrigger(List<SpanContext> triggers, SpanContext trigger) {
-      if (trigger.isValid() && triggers.size() < MAX_LINKED_TRIGGERS) {
-        triggers.add(trigger);
-      }
-    }
-
-    private static List<SpanContext> drain(List<SpanContext> triggers) {
-      var drained = List.copyOf(triggers);
-      triggers.clear();
-      return drained;
     }
 
     boolean tryRetireIfIdle() {
