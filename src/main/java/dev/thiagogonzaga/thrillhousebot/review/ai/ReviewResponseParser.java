@@ -56,6 +56,8 @@ public class ReviewResponseParser {
 
   private static final String LINKED_ISSUE_CRITERIA = "linked_issue_criteria";
 
+  private static final String STATUS = "status";
+
   /** Criterion verdicts read from one answer, at most: an issue lists a handful of criteria. */
   static final int MAX_CRITERION_VERDICTS = 50;
 
@@ -202,7 +204,7 @@ public class ReviewResponseParser {
     var verdicts = new ArrayList<ReviewResponse.CriterionVerdict>();
     for (var element : node) {
       var criterion = textOf(element, "criterion");
-      var status = textOf(element, "status");
+      var status = textOf(element, STATUS);
       if (criterion != null && status != null && verdicts.size() < MAX_CRITERION_VERDICTS) {
         verdicts.add(
             new ReviewResponse.CriterionVerdict(criterion, status, textOf(element, "evidence")));
@@ -612,7 +614,7 @@ public class ReviewResponseParser {
     }
     var normalized = mapper.createArrayNode();
     if (statuses.isObject()) {
-      if (statuses.has("status")) {
+      if (statuses.has(STATUS)) {
         // A bare single status object with id/status fields at the top level
         normalized.add(statuses);
       } else {
@@ -630,7 +632,7 @@ public class ReviewResponseParser {
     if (value.isObject()) {
       item.setAll((ObjectNode) value);
     } else {
-      item.put("status", value.asText());
+      item.put(STATUS, value.asText());
     }
     if (!item.has("id")) {
       item.put("id", parseFindingId(key));

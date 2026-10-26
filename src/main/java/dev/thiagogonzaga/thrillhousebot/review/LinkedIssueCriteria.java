@@ -347,6 +347,20 @@ final class LinkedIssueCriteria {
     }
     var placed = new Placed(keys.getFirst(), criteria(linkedIssues), gaps);
     var judged = Judged.of(verdicts, placed.criteria());
+    placeFindings(placed, findings);
+    // The overview and the walkthrough are written without the diff; a call that read it and judged
+    // the criterion met outweighs them. A finding does not: it quotes the changed line.
+    placeOverview(placed, overview, judged.met());
+    placeWalkthrough(placed, fileSummaries, judged.met());
+    // Last, so a criterion another surface names keeps that line: a finding is the stronger proof.
+    for (var unmet : judged.unmet().entrySet()) {
+      placed.place(unmet.getKey(), unmet.getValue());
+    }
+    return new Lines(List.copyOf(new TreeMap<>(placed.lines()).values()), placed.pointed());
+  }
+
+  /** Places the line of each criterion an open finding citing the issue states unmet. */
+  private static void placeFindings(Placed placed, List<Finding> findings) {
     for (var finding : findings) {
       var text = findingText(finding);
       if (citesIssue(text)
@@ -358,31 +372,31 @@ final class LinkedIssueCriteria {
         placed.pointed().add(finding);
       }
     }
+  }
+
+  /** Places the line of each criterion an overview sentence states unmet, unless judged met. */
+  private static void placeOverview(Placed placed, String overview, Set<Integer> met) {
     for (var sentence : sentences(overview)) {
       for (var at : overviewMatches(sentence, placed.criteria())) {
-        // The overview is written without the diff; a call that read it and judged the criterion
-        // met outweighs it. A finding does not: it quotes the changed line.
-        if (!judged.met().contains(at)) {
-          placed.place(at, " — the overview above reports it unmet");
-        }
+        placed.place(met.contains(at) ? -1 : at, " — the overview above reports it unmet");
       }
     }
+  }
+
+  /** Places the line of each criterion a walkthrough clause states unmet, unless judged met. */
+  private static void placeWalkthrough(
+      Placed placed, Map<String, String> fileSummaries, Set<Integer> met) {
     for (var row : new TreeMap<>(fileSummaries).entrySet()) {
       for (var clause : CLAUSE_SPLIT.split(row.getValue())) {
         var at = clauseMatch(clause, placed.criteria());
         placed.place(
-            judged.met().contains(at) ? -1 : at,
+            met.contains(at) ? -1 : at,
             " — `"
                 + MarkdownSafe.inlineCode(row.getKey())
                 + "`: "
                 + MarkdownSafe.inline(clause.strip()));
       }
     }
-    // Last, so a criterion another surface names keeps that line: a finding is the stronger proof.
-    for (var unmet : judged.unmet().entrySet()) {
-      placed.place(unmet.getKey(), unmet.getValue());
-    }
-    return new Lines(List.copyOf(new TreeMap<>(placed.lines()).values()), placed.pointed());
   }
 
   /**

@@ -162,10 +162,10 @@ class ReviewEvidenceTest {
         new ReviewEvidence(CitedLocationResolver.disabled(), ContextEvidenceResolver.disabled());
     var verdict = new ReviewResponse.CriterionVerdict("c", "unmet", "e");
 
-    evidence.withLearnings(List.of()).criterionVerdicts().record(List.of(verdict));
+    evidence.withLearnings(List.of()).criterionVerdicts().collect(List.of(verdict));
 
     assertEquals(List.of(verdict), evidence.criterionVerdicts().all());
-    ReviewEvidence.NONE.criterionVerdicts().record(List.of(verdict));
+    ReviewEvidence.NONE.criterionVerdicts().collect(List.of(verdict));
     assertEquals(List.of(), ReviewEvidence.NONE.criterionVerdicts().all());
   }
 }

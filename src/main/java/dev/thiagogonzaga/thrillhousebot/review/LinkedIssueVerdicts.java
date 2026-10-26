@@ -43,7 +43,7 @@ public final class LinkedIssueVerdicts {
   }
 
   /** Adds one call's verdicts. */
-  void record(List<ReviewResponse.CriterionVerdict> callVerdicts) {
+  void collect(List<ReviewResponse.CriterionVerdict> callVerdicts) {
     if (keeps) {
       verdicts.addAll(callVerdicts);
     }
