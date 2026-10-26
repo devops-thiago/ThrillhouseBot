@@ -92,6 +92,12 @@ without it those counters stay hidden and nothing else changes.
 
 ### Fixed
 
+- Metrics are exported over OTLP, as the README describes. Before, only traces were, and the
+  metrics reached only the Prometheus endpoint. `OTEL_EXPORTER_ENDPOINT` now sets the endpoint for
+  every signal, so metrics go where traces already went; a Quarkus per-signal variable such as
+  `QUARKUS_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` still overrides it. Quarkus's JVM and HTTP server
+  metrics are exported too. Log records can be exported with `OTEL_LOGS_ENABLED=true`, off by
+  default. (#1262)
 - On a follow-up round, the check run's open total and new count now match the summary and the
   "changes since the last review" section. A finding that replaces an open "Things to double-check"
   item from an earlier round was counted twice on the check run, once as new and once as still

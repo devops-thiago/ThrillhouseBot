@@ -1445,8 +1445,9 @@ ask for a review. Labelling never blocks or fails a review.
 
 ## Observability
 
-Telemetry is exported over OTLP to `OTEL_EXPORTER_ENDPOINT` (default
-`http://localhost:4317`):
+Traces and metrics are exported over OTLP (gRPC) to `OTEL_EXPORTER_ENDPOINT`
+(default `http://localhost:4317`). A Quarkus per-signal variable such as
+`QUARKUS_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` sends that one signal elsewhere.
 
 | Signal | Metric |
 |---|---|
@@ -1461,6 +1462,14 @@ Spans and metrics carry `gen_ai.provider.name`, derived from `AI_BASE_URL`
 (`deepseek`, `openai`, `groq`, `openrouter`, …). Loopback and unrecognized
 endpoints report `unknown`; set `AI_PROVIDER` to name them (a local `ollama` or
 `vllm` server, a proxy, a gateway).
+
+Quarkus also records JVM metrics (`jvm.*`) and HTTP server metrics
+(`http.server.request.duration`). Turn them off with
+`QUARKUS_OTEL_INSTRUMENT_JVM_METRICS=false` and
+`QUARKUS_OTEL_INSTRUMENT_HTTP_SERVER_METRICS=false`.
+
+Log records stay on the console. Set `OTEL_LOGS_ENABLED=true` to export them
+over OTLP to the same endpoint as well.
 
 ### Prometheus
 
