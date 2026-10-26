@@ -15,10 +15,12 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.SentenceBreaks;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -50,7 +52,14 @@ import java.util.regex.Pattern;
  *       ({@link #UNMET}) and quotes a passage of the criterion or shares half its content words;
  *   <li>a negated clause of a walkthrough row ("no lockout for imminent shifts", "the board does
  *       not lock shifts …") whose content words, at least {@value #MIN_SHARED} and more than half
- *       of them, are the criterion's.
+ *       of them, are the criterion's;
+ *   <li>a review call's verdict that the criterion is unmet, when no call judged it met (#1200).
+ *       The review call reads the diff, which the summary call does not, so this is the one source
+ *       that names a criterion nothing the round wrote mentions: on round 19 the issue went unnamed
+ *       on five pull requests of twelve. A criterion a call judged met gets no line from the
+ *       overview or a walkthrough row either, both written without the diff, and a {@code Linked
+ *       issue} gap naming it leaves the section ({@link #withoutMet}); a finding still places its
+ *       line, since it quotes the changed code.
  * </ul>
  *
  * <p>Words match when equal after {@link SummarySurfaceDeduplicator#claim}'s crude stem, or when
@@ -66,6 +75,15 @@ final class LinkedIssueCriteria {
 
   /** Letters a word needs before another word it starts is read as its family. */
   static final int MIN_FAMILY_CHARS = 4;
+
+  /** Characters of a review call's evidence kept in the line it backs. */
+  static final int MAX_EVIDENCE_CHARS = 200;
+
+  /** The status a review call gives a criterion it judged met. */
+  static final String VERDICT_MET = "met";
+
+  /** The status a review call gives a criterion it judged unmet. */
+  static final String VERDICT_UNMET = "unmet";
 
   /** What joins a criterion to the finding that reports it, in the line naming both. */
   static final String FINDING_SEPARATOR = " — reported as a finding: ";
@@ -313,18 +331,22 @@ final class LinkedIssueCriteria {
    * @param findings the pull request's open findings
    * @param overview the summary's "What this PR does" text, {@code null} when none
    * @param fileSummaries the walkthrough notes by path
+   * @param verdicts the review calls' verdicts on the criteria (#1200): one judged unmet and by no
+   *     call met gets a line even when nothing else the round wrote names it
    */
   static Lines unmet(
       String linkedIssues,
       List<String> gaps,
       List<Finding> findings,
       String overview,
-      Map<String, String> fileSummaries) {
+      Map<String, String> fileSummaries,
+      List<ReviewResponse.CriterionVerdict> verdicts) {
     var keys = TicketContextResolver.linkedKeys(linkedIssues);
     if (keys.size() != 1) {
       return Lines.NONE;
     }
     var placed = new Placed(keys.getFirst(), criteria(linkedIssues), gaps);
+    var judged = Judged.of(verdicts, placed.criteria());
     for (var finding : findings) {
       var text = findingText(finding);
       if (citesIssue(text)
@@ -338,20 +360,98 @@ final class LinkedIssueCriteria {
     }
     for (var sentence : sentences(overview)) {
       for (var at : overviewMatches(sentence, placed.criteria())) {
-        placed.place(at, " — the overview above reports it unmet");
+        // The overview is written without the diff; a call that read it and judged the criterion
+        // met outweighs it. A finding does not: it quotes the changed line.
+        if (!judged.met().contains(at)) {
+          placed.place(at, " — the overview above reports it unmet");
+        }
       }
     }
     for (var row : new TreeMap<>(fileSummaries).entrySet()) {
       for (var clause : CLAUSE_SPLIT.split(row.getValue())) {
+        var at = clauseMatch(clause, placed.criteria());
         placed.place(
-            clauseMatch(clause, placed.criteria()),
+            judged.met().contains(at) ? -1 : at,
             " — `"
                 + MarkdownSafe.inlineCode(row.getKey())
                 + "`: "
                 + MarkdownSafe.inline(clause.strip()));
       }
     }
+    // Last, so a criterion another surface names keeps that line: a finding is the stronger proof.
+    for (var unmet : judged.unmet().entrySet()) {
+      placed.place(unmet.getKey(), unmet.getValue());
+    }
     return new Lines(List.copyOf(new TreeMap<>(placed.lines()).values()), placed.pointed());
+  }
+
+  /**
+   * {@code gaps} without the {@code Linked issue} gaps whose criterion a review call of this round
+   * judged met (#1200). A carried gap otherwise leaves only through the summary call, which does
+   * not see the diff, so a criterion a later push implements would stay listed as unmet. A gap
+   * pointing at a finding is kept: the finding is carried on its own and the gap leaves with it.
+   */
+  static List<String> withoutMet(
+      List<String> gaps, String linkedIssues, List<ReviewResponse.CriterionVerdict> verdicts) {
+    if (TicketContextResolver.linkedKeys(linkedIssues).size() != 1) {
+      return gaps;
+    }
+    var criteria = criteria(linkedIssues);
+    var met = Judged.of(verdicts, criteria).met();
+    if (met.isEmpty()) {
+      return gaps;
+    }
+    return gaps.stream()
+        .filter(
+            gap -> {
+              var linked = DescriptionGapCarryover.linkedIssueGap(gap);
+              return linked == null
+                  || pointsAtFinding(gap)
+                  || !met.contains(
+                      sharedHalf(
+                          words(DescriptionGapCarryover.criterionOf(linked.group(2))), criteria));
+            })
+        .toList();
+  }
+
+  /**
+   * The criteria the review calls judged (#1200). A call sees only its own batch of files, so a
+   * criterion one call judges met is met, whatever another judged; one judged unmet by a call and
+   * met by none is unmet, with the first call's evidence. A verdict whose criterion matches none of
+   * the issue's, or whose status is neither, says nothing.
+   *
+   * @param met the criteria some call judged met
+   * @param unmet the line ending of each criterion judged unmet, by position
+   */
+  private record Judged(Set<Integer> met, Map<Integer, String> unmet) {
+
+    static Judged of(List<ReviewResponse.CriterionVerdict> verdicts, List<String> criteria) {
+      var met = new HashSet<Integer>();
+      var unmet = new TreeMap<Integer, String>();
+      for (var verdict : verdicts) {
+        var at = sharedHalf(words(verdict.criterion()), criteria);
+        var status = verdict.status().strip().toLowerCase(Locale.ROOT);
+        if (at >= 0 && VERDICT_MET.equals(status)) {
+          met.add(at);
+        } else if (at >= 0 && VERDICT_UNMET.equals(status)) {
+          unmet.putIfAbsent(at, evidence(verdict.note()));
+        }
+      }
+      unmet.keySet().removeAll(met);
+      return new Judged(met, unmet);
+    }
+
+    /** The line ending naming a call's evidence, or the verdict alone when it gave none. */
+    private static String evidence(String evidence) {
+      var line = MarkdownSafe.oneLine(evidence).strip();
+      if (line.isEmpty()) {
+        return " — the review of the diff found no change that meets it";
+      }
+      if (line.length() > MAX_EVIDENCE_CHARS) {
+        line = line.substring(0, MAX_EVIDENCE_CHARS - 1).strip() + "…";
+      }
+      return " — the review of the diff found it unmet: " + MarkdownSafe.inline(line);
+    }
   }
 
   /**

@@ -101,7 +101,7 @@ class LinkedIssueCriteriaTest {
 
   private static LinkedIssueCriteria.Lines unmet(
       String issues, List<Finding> findings, String overview, Map<String, String> rows) {
-    return LinkedIssueCriteria.unmet(issues, List.of(), findings, overview, rows);
+    return LinkedIssueCriteria.unmet(issues, List.of(), findings, overview, rows, List.of());
   }
 
   @Test
@@ -429,7 +429,8 @@ class LinkedIssueCriteriaTest {
 
     assertEquals(
         LinkedIssueCriteria.Lines.NONE,
-        LinkedIssueCriteria.unmet(ISSUE_256, List.of(gap), List.of(), overview, Map.of()));
+        LinkedIssueCriteria.unmet(
+            ISSUE_256, List.of(gap), List.of(), overview, Map.of(), List.of()));
   }
 
   @Test
@@ -457,7 +458,8 @@ class LinkedIssueCriteriaTest {
             "Serves the endpoints; no rejection of a limit above 100.");
 
     var lines =
-        LinkedIssueCriteria.unmet(ISSUE_267, otherGaps, List.of(LIMIT, second), overview, rows);
+        LinkedIssueCriteria.unmet(
+            ISSUE_267, otherGaps, List.of(LIMIT, second), overview, rows, List.of());
 
     assertEquals(1, lines.lines().size(), lines.lines().toString());
     assertTrue(lines.lines().getFirst().contains(LIMIT.title()), lines.lines().toString());
@@ -468,7 +470,7 @@ class LinkedIssueCriteriaTest {
         List.of("Linked issue #267: `GET /refills/next` rejects a limit above 100 with 413");
     assertEquals(
         LinkedIssueCriteria.Lines.NONE,
-        LinkedIssueCriteria.unmet(ISSUE_267, named, List.of(LIMIT), null, rows));
+        LinkedIssueCriteria.unmet(ISSUE_267, named, List.of(LIMIT), null, rows, List.of()));
   }
 
   @Test
@@ -494,7 +496,7 @@ class LinkedIssueCriteriaTest {
     assertEquals(LinkedIssueCriteria.Lines.NONE, unmet(ISSUE_267, List.of(vague), null, Map.of()));
     assertEquals(
         1,
-        LinkedIssueCriteria.unmet(ISSUE_267, wordless, List.of(LIMIT), null, Map.of())
+        LinkedIssueCriteria.unmet(ISSUE_267, wordless, List.of(LIMIT), null, Map.of(), List.of())
             .lines()
             .size());
   }
@@ -1135,5 +1137,332 @@ class LinkedIssueCriteriaTest {
             fixed,
             sources);
     assertFalse(round2.contains(PrSummaryGenerator.GAPS_HEADING), round2);
+  }
+
+  /** ThrillhouseBot-test#292's issue #281 (go): the batch-size criterion is the one left unmet. */
+  private static final String ISSUE_281 =
+      """
+      Issues this pull request is linked to: #281
+
+      ### Issue #281: Ferry terminal lane allocator
+      Linked by: a closing keyword in the PR body
+      Acceptance criteria (from the issue):
+      - [ ] A vehicle is assigned to the first lane with room for its length, and a repeat request for the same plate returns the same lane while its hold is live
+      - [ ] Holds that pass their expiry are released by a periodic sweep and the lane capacity is freed
+      - [ ] The assigned driver receives an SMS naming the lane, and a missing phone number is reported as an error
+      - [ ] Rejects manifest batches larger than 500 vehicles with HTTP 413
+      """;
+
+  private static final String CRITERION_281_4 =
+      "Rejects manifest batches larger than 500 vehicles with HTTP 413";
+
+  /** ThrillhouseBot-test#294's issue #290 (kotlin). */
+  private static final String ISSUE_290 =
+      """
+      Issues this pull request is linked to: #290
+
+      ### Issue #290: Course enrolment invoicing
+      Linked by: a closing keyword in the PR body
+      Acceptance criteria (from the issue):
+      - [ ] Each household invoice totals the fees of its active enrolments plus VAT for the course country
+      - [ ] Households with two or more enrolled students receive a 10% sibling discount
+      - [ ] Invoices are flagged overdue once the configurable grace period after issue has passed
+      - [ ] An invoice run covering more than 500 enrolments is rejected with HTTP 413
+      """;
+
+  private static ReviewResponse.CriterionVerdict verdict(
+      String criterion, String status, String evidence) {
+    return new ReviewResponse.CriterionVerdict(criterion, status, evidence);
+  }
+
+  @Test
+  void anIssueNamedOnlyInProseIsNotReportedButTheReviewsUnmetVerdictGetsALine() {
+    // Go #292 (#1200): the summary said only "Issue #281 is linked as the feature ticket."
+    var overview =
+        "This pull request adds a new Go service that assigns queued ferry-terminal vehicles to"
+            + " boarding lanes. Issue #281 is linked as the feature ticket.";
+
+    assertEquals(
+        List.of(),
+        LinkedIssueCriteria.unmet(ISSUE_281, List.of(), List.of(), overview, Map.of(), List.of())
+            .lines());
+
+    var lines =
+        LinkedIssueCriteria.unmet(
+            ISSUE_281,
+            List.of(),
+            List.of(),
+            overview,
+            Map.of(),
+            List.of(
+                verdict(
+                    CRITERION_281_4,
+                    "unmet",
+                    "handleManifest in go/handler.go decodes any number of vehicles; nothing"
+                        + " answers 413"),
+                verdict(
+                    "Holds that pass their expiry are released by a periodic sweep and the lane"
+                        + " capacity is freed",
+                    "met",
+                    "sweep() in go/allocator.go")));
+
+    assertEquals(
+        List.of(
+            "Linked issue #281: "
+                + CRITERION_281_4
+                + " — the review of the diff found it unmet: handleManifest in go/handler.go"
+                + " decodes any number of vehicles; nothing answers 413"),
+        lines.lines());
+    assertEquals(Set.of(), lines.pointed());
+  }
+
+  @Test
+  void listingOneUnmetCriterionDoesNotSuppressAnother() {
+    // Kotlin #294 (#1200): the summary listed the sibling-discount criterion; the 500-enrolment
+    // one was missing.
+    var discount =
+        "Linked issue #290: \"Households with two or more enrolled students receive a 10% sibling"
+            + " discount\" — the implemented gate is students > 2 (more than two), and the CI run"
+            + " fails InvoiceServiceTest.twoSiblingsGetTenPercentOff, which bills two students in"
+            + " one household.";
+
+    var lines =
+        LinkedIssueCriteria.unmet(
+            ISSUE_290,
+            List.of(discount),
+            List.of(),
+            null,
+            Map.of(),
+            List.of(
+                verdict(
+                    "Households with two or more enrolled students receive a 10% sibling discount",
+                    "unmet", "InvoiceService.kt applies it above two students"),
+                verdict(
+                    "An invoice run covering more than 500 enrolments is rejected with HTTP 413",
+                    "unmet",
+                    "runInvoices in InvoiceController.kt takes every enrolment")));
+
+    assertEquals(
+        List.of(
+            "Linked issue #290: An invoice run covering more than 500 enrolments is rejected with"
+                + " HTTP 413 — the review of the diff found it unmet: runInvoices in"
+                + " InvoiceController.kt takes every enrolment"),
+        lines.lines());
+  }
+
+  @Test
+  void aCriterionOneBatchJudgesMetIsMetWhateverAnotherJudged() {
+    var unmet = verdict(CRITERION_281_4, "unmet", "batch 1 has no size check");
+    var met = verdict(CRITERION_281_4, "met", "batch 2: maxManifestVehicles = 500, 413");
+    var unclear = verdict(CRITERION_281_4, "unclear", "handler not in this batch");
+
+    assertEquals(List.of(), verdictLines(List.of(unmet, met)));
+    assertEquals(List.of(), verdictLines(List.of(met, unmet)));
+    assertEquals(1, verdictLines(List.of(unclear, unmet)).size());
+    assertEquals(List.of(), verdictLines(List.of(unclear)));
+    // The first unmet verdict's evidence is the one shown.
+    assertTrue(
+        verdictLines(List.of(unmet, verdict(CRITERION_281_4, "unmet", "other")))
+            .getFirst()
+            .endsWith("batch 1 has no size check"));
+  }
+
+  @Test
+  void aVerdictNamingNoCriterionOrWithAnotherStatusSaysNothing() {
+    assertEquals(
+        List.of(),
+        verdictLines(
+            List.of(
+                verdict("Exports a nightly CSV of every lane", "unmet", "no export"),
+                verdict(CRITERION_281_4, "partly", "only some batches"))));
+    // Status is read without regard to case or surrounding blanks.
+    assertEquals(1, verdictLines(List.of(verdict(CRITERION_281_4, " UNMET ", "x"))).size());
+  }
+
+  @Test
+  void aVerdictsEvidenceIsOneEscapedBoundedLineOrTheVerdictAlone() {
+    assertEquals(
+        List.of(
+            "Linked issue #281: "
+                + CRITERION_281_4
+                + " — the review of the diff found no change that meets it"),
+        verdictLines(List.of(verdict(CRITERION_281_4, "unmet", null))));
+
+    var line =
+        verdictLines(List.of(verdict(CRITERION_281_4, "unmet", "`len(v)` | <b>\nnext"))).getFirst();
+    assertTrue(line.endsWith("&#96;len(v)&#96; \\| &lt;b> next"), line);
+
+    var longLine =
+        verdictLines(
+                List.of(
+                    verdict(
+                        CRITERION_281_4,
+                        "unmet",
+                        "x".repeat(LinkedIssueCriteria.MAX_EVIDENCE_CHARS + 50))))
+            .getFirst();
+    assertTrue(longLine.endsWith("x…"), longLine);
+    assertTrue(
+        longLine.length()
+            < ("Linked issue #281: " + CRITERION_281_4).length()
+                + LinkedIssueCriteria.MAX_EVIDENCE_CHARS
+                + 60,
+        longLine);
+  }
+
+  @Test
+  void aMetVerdictOutweighsTheOverviewAndTheWalkthroughButNotAFinding() {
+    var overview =
+        "Adds a small WSGI service under python/ for the garden plots waitlist. However, a"
+            + " high-confidence finding shows the round offers out-of-borough applicants too — the"
+            + " opposite of the issue's 'next in-borough applicant' requirement.";
+    var offerRound =
+        "An offer round offers each vacant plot to the next in-borough applicant in line and"
+            + " records when the offer expires";
+    var met = List.of(verdict(offerRound, "met", "offer_round() filters on borough"));
+
+    assertEquals(1, unmet(ISSUE_256, List.of(), overview, Map.of()).lines().size());
+    assertEquals(
+        List.of(),
+        LinkedIssueCriteria.unmet(ISSUE_256, List.of(), List.of(), overview, Map.of(), met)
+            .lines());
+
+    var row = Map.of("react/src/components/ShiftBoard.tsx", SHIFT_BOARD_ROW);
+    var lockout =
+        "Shifts that start in less than 2 hours are locked: the Sign up button is disabled and"
+            + " the card shows \"Sign-ups closed\".";
+    assertEquals(1, unmet(ISSUE_260, List.of(), null, row).lines().size());
+    assertEquals(
+        List.of(),
+        LinkedIssueCriteria.unmet(
+                ISSUE_260,
+                List.of(),
+                List.of(),
+                null,
+                row,
+                List.of(verdict(lockout, "met", "ShiftBoard disables the button")))
+            .lines());
+
+    // A finding quotes the changed line, so it still places its line over a met verdict.
+    assertEquals(
+        1,
+        LinkedIssueCriteria.unmet(
+                ISSUE_267,
+                List.of(),
+                List.of(LIMIT),
+                null,
+                Map.of(),
+                List.of(verdict(CRITERION_267_4, "met", "clamped")))
+            .lines()
+            .size());
+  }
+
+  @Test
+  void aLinkedIssueGapWhoseCriterionTheReviewJudgedMetLeaves() {
+    var carried =
+        "Linked issue #281: Rejects manifest batches larger than 500 vehicles with HTTP 413 — the"
+            + " review of the diff found it unmet: handleManifest takes any number of vehicles";
+    var description = "The description says the allocator persists holds; nothing stores them.";
+    var pointing =
+        "Linked issue #281: "
+            + CRITERION_281_4
+            + LinkedIssueCriteria.FINDING_SEPARATOR
+            + "**HIGH:** no size limit (`go/handler.go:12`)";
+    var otherCriterion =
+        "Linked issue #281: The assigned driver receives an SMS naming the lane — nothing sends"
+            + " an SMS.";
+    var gaps = List.of(carried, description, pointing, otherCriterion);
+    var met = List.of(verdict(CRITERION_281_4, "met", "maxManifestVehicles = 500"));
+
+    assertEquals(
+        List.of(description, pointing, otherCriterion),
+        LinkedIssueCriteria.withoutMet(gaps, ISSUE_281, met));
+    assertEquals(gaps, LinkedIssueCriteria.withoutMet(gaps, ISSUE_281, List.of()));
+    assertEquals(
+        gaps,
+        LinkedIssueCriteria.withoutMet(
+            gaps, ISSUE_281, List.of(verdict(CRITERION_281_4, "unmet", "x"))));
+    // With two issues linked, which one a gap means is a guess: nothing leaves.
+    var twoIssues = ISSUE_281.replace("linked to: #281", "linked to: #281, #290");
+    assertEquals(gaps, LinkedIssueCriteria.withoutMet(gaps, twoIssues, met));
+  }
+
+  @Test
+  void verdictsAddNothingWhenTwoIssuesAreLinked() {
+    var twoIssues = ISSUE_281.replace("linked to: #281", "linked to: #281, #290");
+    assertEquals(
+        List.of(),
+        LinkedIssueCriteria.unmet(
+                twoIssues,
+                List.of(),
+                List.of(),
+                null,
+                Map.of(),
+                List.of(verdict(CRITERION_281_4, "unmet", "x")))
+            .lines());
+  }
+
+  private static List<String> verdictLines(List<ReviewResponse.CriterionVerdict> verdicts) {
+    return LinkedIssueCriteria.unmet(ISSUE_281, List.of(), List.of(), null, Map.of(), verdicts)
+        .lines();
+  }
+
+  @Test
+  void theSummaryNamesACriterionTheReviewJudgedUnmetAndDropsOneItJudgedMet() {
+    // #1200, end to end: go #292's verdicts reach the rendered section; a gap the summary call
+    // carried for a criterion the review now judges met leaves it.
+    var result =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            RiskLevel.LOW,
+            ReviewState.APPROVE,
+            false,
+            "",
+            List.of(),
+            List.of(),
+            0);
+    var sweep =
+        "Holds that pass their expiry are released by a periodic sweep and the lane capacity is"
+            + " freed";
+    var carried = "Linked issue #281: " + sweep + " — no changed file runs a sweep.";
+    var summary =
+        new ReviewResponse.Summary(
+            0,
+            0,
+            0,
+            0,
+            0,
+            "ok",
+            "Adds a Go lane allocator. Issue #281 is linked as the feature ticket.",
+            List.of(carried));
+
+    var rendered =
+        new PrSummaryGenerator(false)
+            .generate(
+                4,
+                50,
+                0,
+                List.of(),
+                summary,
+                result,
+                new PrSummaryGenerator.DescriptionSources(
+                    "",
+                    Set.of(),
+                    ISSUE_281,
+                    BaseCodeCitations.NONE,
+                    List.of(
+                        verdict(CRITERION_281_4, "unmet", "handleManifest takes any size"),
+                        verdict(sweep, "met", "sweep() in go/allocator.go"))));
+
+    assertTrue(
+        rendered.contains(
+            "- Linked issue #281: "
+                + CRITERION_281_4
+                + " — the review of the diff found it unmet: handleManifest takes any size"),
+        rendered);
+    assertFalse(rendered.contains("no changed file runs a sweep"), rendered);
   }
 }

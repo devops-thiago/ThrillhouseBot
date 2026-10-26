@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
@@ -152,5 +153,19 @@ class ReviewEvidenceTest {
         files,
         () -> new DiffLineResolver(Map.of()),
         new ReviewContextLoader.PrTotals(1, 1, 1));
+  }
+
+  @Test
+  void aReviewsCopiesShareOneCriterionVerdictAccumulatorAndNoneKeepsNothing() {
+    // #1200: the pipeline records on the copy it holds; the orchestrator reads its own.
+    var evidence =
+        new ReviewEvidence(CitedLocationResolver.disabled(), ContextEvidenceResolver.disabled());
+    var verdict = new ReviewResponse.CriterionVerdict("c", "unmet", "e");
+
+    evidence.withLearnings(List.of()).criterionVerdicts().record(List.of(verdict));
+
+    assertEquals(List.of(verdict), evidence.criterionVerdicts().all());
+    ReviewEvidence.NONE.criterionVerdicts().record(List.of(verdict));
+    assertEquals(List.of(), ReviewEvidence.NONE.criterionVerdicts().all());
   }
 }

@@ -92,6 +92,12 @@ without it those counters stay hidden and nothing else changes.
 
 ### Fixed
 
+- On a pull request linked to one issue, Description vs. Implementation now names an acceptance
+  criterion the change does not meet even when no finding or summary sentence mentions it. The
+  review call, which reads the diff, judges each criterion as met, unmet or unclear, and a
+  criterion it judges unmet gets its "Linked issue #N:" line with what the review looked for. In a
+  multi-call review a criterion any batch judges met counts as met, and a criterion judged met
+  leaves the list on a later round, so it is not shown as unmet after a push implements it. (#1200)
 - Metrics are exported over OTLP, as the README describes. Before, only traces were, and the
   metrics reached only the Prometheus endpoint. `OTEL_EXPORTER_ENDPOINT` now sets the endpoint for
   every signal, so metrics go where traces already went; a Quarkus per-signal variable such as

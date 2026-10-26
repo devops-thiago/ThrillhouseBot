@@ -68,6 +68,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -241,6 +242,55 @@ class FindingPipelineTest {
     // #1263: the batches run on their own threads; without the context their model-call spans
     // each started a trace of their own instead of joining the review's.
     assertEquals(List.of(review, review), seen);
+  }
+
+  @Test
+  void eachBatchsCriterionVerdictsAreRecordedForTheVerdict() {
+    // #1200: every batch judges the linked issue's criteria from its own files; all are kept.
+    var session =
+        ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 1, "Big PR", "sha");
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var unmet = new ReviewResponse.CriterionVerdict("c", "unmet", "batch 1");
+    var met = new ReviewResponse.CriterionVerdict("c", "met", "batch 2");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenReturn(
+            new ReviewResponse(List.of(), List.of(), null).withLinkedIssueCriteria(List.of(unmet)));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(
+            new ReviewResponse(List.of(), List.of(), null).withLinkedIssueCriteria(List.of(met)));
+    var evidence =
+        new ReviewEvidence(CitedLocationResolver.disabled(), ContextEvidenceResolver.disabled());
+
+    pipeline.run(
+        session,
+        template,
+        reviewContext(),
+        multiBatchPlan(),
+        new DiffLineResolver(Map.of()),
+        evidence);
+
+    assertEquals(Set.of(unmet, met), Set.copyOf(evidence.criterionVerdicts().all()));
+  }
+
+  @Test
+  void theSingleCallsCriterionVerdictsAreRecordedForTheVerdict() {
+    var session = persistedSession();
+    var verdicts = List.of(new ReviewResponse.CriterionVerdict("c", "unmet", "no size check"));
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(
+            new ReviewResponse(List.of(), List.of(), null).withLinkedIssueCriteria(verdicts));
+    var evidence =
+        new ReviewEvidence(CitedLocationResolver.disabled(), ContextEvidenceResolver.disabled());
+
+    pipeline.run(
+        session,
+        new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", ""),
+        reviewContext(),
+        singleBatchPlan(batch("a.java"), List.of()),
+        new DiffLineResolver(Map.of()),
+        evidence);
+
+    assertEquals(verdicts, evidence.criterionVerdicts().all());
   }
 
   @Test
