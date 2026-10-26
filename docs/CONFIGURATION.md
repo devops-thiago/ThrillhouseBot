@@ -24,6 +24,8 @@ These variables set Quarkus and LangChain4j keys rather than a `thrillhousebot.*
 | `DS_INPUT_PRICE` | Price of 1,000 input tokens on `deepseek-chat`, in US dollars. | `0.00014` | `thrillhousebot.ai.pricing.deepseek-chat.input-per-1k` |
 | `DS_OUTPUT_PRICE` | Price of 1,000 output tokens on `deepseek-chat`, in US dollars. | `0.00028` | `thrillhousebot.ai.pricing.deepseek-chat.output-per-1k` |
 | `OTEL_EXPORTER_ENDPOINT` | OTLP endpoint traces, metrics and logs are exported to. | `http://localhost:4317` | `quarkus.otel.exporter.otlp.endpoint` |
+| `OTEL_HTTP_SERVER_METRICS_ENABLED` | Record Quarkus's HTTP server metrics (`http.server.request.duration`), exported over OTLP and served on `/metrics`. | `true` | `quarkus.otel.instrument.http-server-metrics` |
+| `OTEL_JVM_METRICS_ENABLED` | Record Quarkus's JVM metrics (`jvm.*`), exported over OTLP and served on `/metrics`. | `true` | `quarkus.otel.instrument.jvm-metrics` |
 | `OTEL_LOGS_ENABLED` | Also export the bot's log records over OTLP, beside the console. Off by default, so a collector does not start receiving every log line without an opt-in. | `false` | `quarkus.otel.logs.handler.enabled` |
 | `OTEL_SDK_DISABLED` | Turn telemetry off: nothing is exported over OTLP and the Prometheus endpoint answers 404. | `false` | `quarkus.otel.sdk.disabled` |
 | `PORT` | HTTP port the bot listens on (webhooks, dashboard, health and metrics). | `8080` | `quarkus.http.port` |
