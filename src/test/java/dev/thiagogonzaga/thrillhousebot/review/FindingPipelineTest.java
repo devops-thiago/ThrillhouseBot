@@ -57,6 +57,10 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.SummaryVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenSpendCeilingExceededException;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.api.trace.TraceFlags;
+import io.opentelemetry.api.trace.TraceState;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -64,6 +68,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -202,6 +207,40 @@ class FindingPipelineTest {
         null,
         null,
         null);
+  }
+
+  @Test
+  void multiCallRunsEachBatchInTheReviewsTraceContext() {
+    var session =
+        ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 1, "Big PR", "sha");
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var review =
+        SpanContext.create(
+            "0af7651916cd43dd8448eb211c80319c",
+            "b7ad6b7169203331",
+            TraceFlags.getSampled(),
+            TraceState.getDefault());
+    var seen = new CopyOnWriteArrayList<SpanContext>();
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenAnswer(
+            invocation -> {
+              seen.add(Span.current().getSpanContext());
+              return new ReviewResponse(List.of(), List.of(), null);
+            });
+
+    try (var _ = Span.wrap(review).makeCurrent()) {
+      pipeline.run(
+          session,
+          template,
+          reviewContext(),
+          multiBatchPlan(),
+          new DiffLineResolver(Map.of()),
+          ReviewEvidence.NONE);
+    }
+
+    // #1263: the batches run on their own threads; without the context their model-call spans
+    // each started a trace of their own instead of joining the review's.
+    assertEquals(List.of(review, review), seen);
   }
 
   @Test

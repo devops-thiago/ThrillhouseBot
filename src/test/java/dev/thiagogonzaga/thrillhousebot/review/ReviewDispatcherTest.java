@@ -35,6 +35,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.trace.SpanContext;
 import java.util.ArrayList;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
@@ -65,7 +67,13 @@ class ReviewDispatcherTest {
     reviewExecutor = Executors.newSingleThreadExecutor();
     dispatcher =
         new ReviewDispatcher(
-            reviewExecutor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit, coverage);
+            reviewExecutor,
+            orchestrator,
+            rateLimiter,
+            skipEmitter,
+            ciHoldRevisit,
+            coverage,
+            OpenTelemetry.noop());
   }
 
   private static CiHoldRevisit.Recheck recheck(int prNumber, String sha) {
@@ -218,7 +226,13 @@ class ReviewDispatcherTest {
     doThrow(new RejectedExecutionException("saturated")).when(rejecting).execute(any());
     var saturated =
         new ReviewDispatcher(
-            rejecting, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit, coverage);
+            rejecting,
+            orchestrator,
+            rateLimiter,
+            skipEmitter,
+            ciHoldRevisit,
+            coverage,
+            OpenTelemetry.noop());
 
     assertFalse(saturated.dispatchCiRecheck(recheck(42, "sha1")));
     assertEquals(0, saturated.stateCount());
@@ -360,7 +374,13 @@ class ReviewDispatcherTest {
     doThrow(new RejectedExecutionException("shut down")).when(executor).execute(any());
     dispatcher =
         new ReviewDispatcher(
-            executor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit, coverage);
+            executor,
+            orchestrator,
+            rateLimiter,
+            skipEmitter,
+            ciHoldRevisit,
+            coverage,
+            OpenTelemetry.noop());
 
     dispatcher.dispatch(reviewRequest("owner", "repo", 10, "sha1"));
     verify(orchestrator, after(500).never()).review(any(ReviewOrchestrator.ReviewRequest.class));
@@ -489,7 +509,13 @@ class ReviewDispatcherTest {
     doThrow(new RejectedExecutionException("shut down")).when(executor).execute(any());
     dispatcher =
         new ReviewDispatcher(
-            executor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit, coverage);
+            executor,
+            orchestrator,
+            rateLimiter,
+            skipEmitter,
+            ciHoldRevisit,
+            coverage,
+            OpenTelemetry.noop());
 
     // A rejected task means no review will run, so callers can roll back dedup state.
     assertFalse(dispatcher.dispatch(reviewRequest("owner", "repo", 10, "sha1")));
@@ -515,7 +541,13 @@ class ReviewDispatcherTest {
 
     dispatcher =
         new ReviewDispatcher(
-            executor, orchestrator, rateLimiter, skipEmitter, ciHoldRevisit, coverage);
+            executor,
+            orchestrator,
+            rateLimiter,
+            skipEmitter,
+            ciHoldRevisit,
+            coverage,
+            OpenTelemetry.noop());
 
     dispatcher.dispatch(reviewRequest("owner", "repo", 8, "sha1"));
     dispatcher.dispatch(reviewRequest("owner", "repo", 8, "sha2"));
@@ -829,7 +861,7 @@ class ReviewDispatcherTest {
     state.beginReview("sha1");
     state.endReview();
 
-    var result = state.onDispatch(manualRequest(36), "sha1");
+    var result = state.onDispatch(manualRequest(36), "sha1", SpanContext.getInvalid());
 
     assertFalse(result.covered());
     assertTrue(result.startWorker());
@@ -838,11 +870,11 @@ class ReviewDispatcherTest {
   @Test
   void shouldQueueManualReviewWhenANewerHeadStartedReviewAfterTheHeadWasRead() {
     var state = new ReviewDispatcher.PerPrState();
-    state.onDispatch(reviewRequest("owner", "repo", 39, "sha2"));
+    state.onDispatch(reviewRequest("owner", "repo", 39, "sha2"), SpanContext.getInvalid());
     state.takeNext();
     state.beginReview("sha2");
 
-    var result = state.onDispatch(manualRequest(39), "sha1");
+    var result = state.onDispatch(manualRequest(39), "sha1", SpanContext.getInvalid());
 
     assertFalse(result.covered());
     assertEquals(1, result.coalescedCount());
@@ -879,7 +911,7 @@ class ReviewDispatcherTest {
   void shouldDispatchNormallyWithoutACoveredHead() {
     var state = new ReviewDispatcher.PerPrState();
 
-    var result = state.onDispatch(manualRequest(41), null);
+    var result = state.onDispatch(manualRequest(41), null, SpanContext.getInvalid());
 
     assertFalse(result.covered());
     assertTrue(result.startWorker());
@@ -888,12 +920,12 @@ class ReviewDispatcherTest {
   @Test
   void shouldCoalesceManualReviewWhenAnotherRequestAlreadyWaits() {
     var state = new ReviewDispatcher.PerPrState();
-    state.onDispatch(reviewRequest("owner", "repo", 37, "sha1"));
+    state.onDispatch(reviewRequest("owner", "repo", 37, "sha1"), SpanContext.getInvalid());
     state.takeNext();
     state.beginReview("sha1");
-    state.onDispatch(reviewRequest("owner", "repo", 37, "sha2"));
+    state.onDispatch(reviewRequest("owner", "repo", 37, "sha2"), SpanContext.getInvalid());
 
-    var result = state.onDispatch(manualRequest(37), "sha1");
+    var result = state.onDispatch(manualRequest(37), "sha1", SpanContext.getInvalid());
 
     assertFalse(result.covered());
     assertEquals(2, result.coalescedCount());
@@ -905,7 +937,7 @@ class ReviewDispatcherTest {
     state.beginReview("sha1");
     state.markRetired();
 
-    var result = state.onDispatch(manualRequest(38), "sha1");
+    var result = state.onDispatch(manualRequest(38), "sha1", SpanContext.getInvalid());
 
     assertFalse(result.covered());
     assertTrue(result.removeAndRetry());

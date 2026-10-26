@@ -15,9 +15,15 @@
  */
 package dev.thiagogonzaga.thrillhousebot.config;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.api.trace.TraceFlags;
+import io.opentelemetry.api.trace.TraceState;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -38,6 +44,27 @@ class ReviewExecutorProducerTest {
 
     assertTrue(executor.isShutdown());
     assertTrue(executor.awaitTermination(1, TimeUnit.SECONDS));
+  }
+
+  @Test
+  void shouldRunATaskInTheContextItWasSubmittedIn() throws Exception {
+    var producer = new ReviewExecutorProducer();
+    var executor = producer.reviewExecutor();
+    var webhook =
+        SpanContext.create(
+            "0af7651916cd43dd8448eb211c80319c",
+            "b7ad6b7169203331",
+            TraceFlags.getSampled(),
+            TraceState.getDefault());
+    var seen = new CompletableFuture<SpanContext>();
+
+    try (var _ = Span.wrap(webhook).makeCurrent()) {
+      executor.execute(() -> seen.complete(Span.current().getSpanContext()));
+    }
+
+    // #1263: a command or reply queued from the webhook thread stays in the delivery's trace.
+    assertEquals(webhook, seen.get(5, TimeUnit.SECONDS));
+    producer.shutdown(executor);
   }
 
   @Test

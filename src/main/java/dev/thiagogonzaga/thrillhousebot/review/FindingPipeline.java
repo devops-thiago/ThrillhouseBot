@@ -33,6 +33,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.Throwables;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenSpendCeilingExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager;
+import io.opentelemetry.context.Context;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -491,7 +492,10 @@ public class FindingPipeline {
     }
     var outcomesByIndex = new BatchOutcome[batches.size()];
     var failedIndices = new ArrayList<Integer>();
-    try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+    // The batches run with this thread's OpenTelemetry context, so their model-call spans stay in
+    // the review's trace (#1263).
+    try (ExecutorService executor =
+        Context.taskWrapping(Executors.newVirtualThreadPerTaskExecutor())) {
       var futures =
           IntStream.range(0, batches.size())
               .mapToObj(i -> CompletableFuture.supplyAsync(() -> processBatch(i, run), executor))

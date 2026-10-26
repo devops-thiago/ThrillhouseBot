@@ -1450,7 +1450,7 @@ Telemetry is exported over OTLP to `OTEL_EXPORTER_ENDPOINT` (default
 
 | Signal | Metric |
 |---|---|
-| Traces | One span per LLM call with request and response events |
+| Traces | One trace per review: a `review` span, linked to the webhook delivery that started it, with a span per LLM call (request and response events) inside it |
 | `gen_ai.client.token.usage` | Histogram: input and output tokens |
 | `gen_ai.client.operation.duration` | Histogram: latency in seconds |
 | `thrillhouse.ai.cost.total` | Counter: USD cost by model |

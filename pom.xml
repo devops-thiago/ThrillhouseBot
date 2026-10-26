@@ -264,6 +264,12 @@
             <artifactId>quarkus-junit-mockito</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- In-memory span exporter for the trace-propagation tests (#1263); version from the OTel BOM -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-jacoco</artifactId>

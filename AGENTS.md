@@ -257,6 +257,14 @@ same diff.
 - **AI services are stateless.** Every `@RegisterAiService` sets
   `NoChatMemoryProviderSupplier`. Review state travels in the previous-findings section, never in
   chat history.
+- **Work handed to another thread carries the OpenTelemetry context** (#1263). The model-call
+  spans take their parent from `Context.current()` on the thread that makes the call. The
+  `@ReviewExecutor` (`ReviewExecutorProducer`) and the batch executor in
+  `FindingPipeline.runMultiCall` are wrapped with `Context.taskWrapping`; a new executor on the
+  review path needs the same. `ReviewDispatcher` runs each review and CI re-evaluation in a root
+  span (`review`, `review.ci-recheck`) that links to the span current at each `dispatch` it
+  serves, coalesced ones included (at most `MAX_LINKED_TRIGGERS`), rather than continuing the
+  webhook's trace: the review outlives the delivery's 200 by minutes.
 
 ## Follow-up round invariants
 

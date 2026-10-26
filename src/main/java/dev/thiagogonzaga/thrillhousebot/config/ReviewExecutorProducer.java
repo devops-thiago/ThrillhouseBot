@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.config;
 
+import io.opentelemetry.context.Context;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Disposes;
 import jakarta.enterprise.inject.Produces;
@@ -27,6 +28,10 @@ import org.slf4j.LoggerFactory;
 /**
  * Produces a dedicated executor for blocking review work so webhook handling does not pin {@link
  * java.util.concurrent.ForkJoinPool#commonPool()} threads.
+ *
+ * <p>A task runs with the OpenTelemetry context that was current when it was submitted (#1263), so
+ * the spans a command, a maintainer reply or a notification makes stay in the trace of the webhook
+ * delivery that queued it. A review starts a trace of its own in {@code ReviewDispatcher}.
  */
 @ApplicationScoped
 public class ReviewExecutorProducer {
@@ -37,7 +42,7 @@ public class ReviewExecutorProducer {
   @ApplicationScoped
   @ReviewExecutor
   ExecutorService reviewExecutor() {
-    return Executors.newVirtualThreadPerTaskExecutor();
+    return Context.taskWrapping(Executors.newVirtualThreadPerTaskExecutor());
   }
 
   void shutdown(@Disposes @ReviewExecutor ExecutorService executor) {
