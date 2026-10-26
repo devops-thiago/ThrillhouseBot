@@ -34,7 +34,8 @@ public record ReviewResponse(
     @JsonProperty("closed_earlier_round") List<Finding> closedEarlierRound,
     // The review call's verdict on each acceptance criterion of the linked issue (#1200). Read by
     // ReviewResponseParser on its own, leniently, and taken by FindingPipeline as soon as the call
-    // returns; every later rebuild of the response drops it, and nothing downstream reads it here.
+    // returns. The steps that rebuild the response through the shorter constructors drop it, so
+    // nothing downstream reads it here.
     @JsonInclude(JsonInclude.Include.NON_EMPTY) @JsonProperty("linked_issue_criteria")
         List<CriterionVerdict> linkedIssueCriteria) {
   public ReviewResponse {
