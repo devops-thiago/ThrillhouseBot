@@ -191,9 +191,9 @@ class AiReviewServiceTest {
     var types =
         captor.getAllValues().stream().map(SessionEventBroadcaster.SessionEvent::type).toList();
     assertEquals(List.of("review.reasoning", "review.stream", "review.phase"), types);
-    var reasoning = captor.getAllValues().get(0);
-    assertEquals("Check the null path.", reasoning.data().get("tail"));
-    assertEquals(1, reasoning.data().get("chunkIndex"));
+    var thinking = captor.getAllValues().get(0);
+    assertEquals("Check the null path.", thinking.data().get("tail"));
+    assertEquals(1, thinking.data().get("chunkIndex"));
     assertEquals("verify", captor.getAllValues().get(2).data().get("phase"));
   }
 

@@ -55,7 +55,8 @@ class ChatModelCustomizersTest {
     lenient().when(reasoning.enabled()).thenReturn(reasoningEnabled);
     lenient().when(reasoning.effort()).thenReturn(effort);
     lenient().when(reasoning.conciseEffort()).thenReturn(conciseEffort);
-    lenient().when(config.dashboard()).thenReturn(mock(ThrillhouseConfig.DashboardConfig.class));
+    var dashboard = mock(ThrillhouseConfig.DashboardConfig.class);
+    lenient().when(config.dashboard()).thenReturn(dashboard);
     return config;
   }
 
