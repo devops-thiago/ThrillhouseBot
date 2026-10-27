@@ -21,8 +21,15 @@ function selectedFromUrl(): number | null {
 }
 
 export default function ActivityPage() {
-  const [reviews, dispatch] = useReducer(applyActivityEvent, new Map<number, ActivityState>());
-  const onEvent = useCallback((event: SessionEvent) => dispatch(event), []);
+  const [reviews, dispatch] = useReducer(
+    (state: Map<number, ActivityState>, action: { event: SessionEvent; receivedAt: string }) =>
+      applyActivityEvent(state, action.event, action.receivedAt),
+    new Map<number, ActivityState>(),
+  );
+  const onEvent = useCallback(
+    (event: SessionEvent) => dispatch({ event, receivedAt: new Date().toISOString() }),
+    [],
+  );
   const { connected } = useWebSocket(onEvent);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 

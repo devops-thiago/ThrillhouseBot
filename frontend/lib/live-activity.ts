@@ -18,7 +18,7 @@ export interface ActivityState {
   prTitle: string;
   commitSha: string;
   status: 'running' | 'retrying' | 'completed' | 'failed';
-  /** The steps reached so far, with when each began. */
+  /** The steps reached so far, with when the page learned each began. */
   phases: { phase: PhaseId; at: string }[];
   attempt: number;
   maxAttempts: number;
@@ -35,7 +35,9 @@ export interface ActivityState {
   pricingMissing: boolean;
   findings?: { critical: number; high: number; medium: number; low: number };
   durationMs?: number;
+  /** When the review started: every event of a review carries this time. */
   startedAt: string;
+  /** When the page last received an event for it, which orders the reviews that ended. */
   updatedAt: string;
 }
 
@@ -44,7 +46,7 @@ export const MAX_ENDED_REVIEWS = 10;
 
 const PHASE_IDS = new Set<string>(PHASES.map((p) => p.id));
 
-function fresh(event: SessionEvent): ActivityState {
+function fresh(event: SessionEvent, receivedAt: string): ActivityState {
   return {
     sessionId: event.sessionId,
     repository: event.repository,
@@ -64,17 +66,20 @@ function fresh(event: SessionEvent): ActivityState {
     cost: 0,
     pricingMissing: false,
     startedAt: event.timestamp,
-    updatedAt: event.timestamp,
+    updatedAt: receivedAt,
   };
 }
 
 /**
- * Folds one event into the reviews the page shows. Events arrive oldest first; a reconnect replays
- * an active review's buffered events, which fold to the same state again.
+ * Folds one event, received at `receivedAt`, into the reviews the page shows. Events arrive oldest
+ * first; a reconnect replays an active review's buffered events, which fold to the same state
+ * again. An event's own `timestamp` is its review's start, the same on every event of one review,
+ * so the time it was received is what tells when a review last moved.
  */
 export function applyActivityEvent(
   reviews: Map<number, ActivityState>,
   event: SessionEvent,
+  receivedAt: string,
 ): Map<number, ActivityState> {
   if (event.type === 'keepalive') {
     return reviews;
@@ -88,30 +93,32 @@ export function applyActivityEvent(
   if (current && current.status !== 'running' && current.status !== 'retrying' && event.type !== 'review.started') {
     return reviews;
   }
-  const base = event.type === 'review.started' || !current ? fresh(event) : current;
-  const next = reduce(base, event);
+  const base = event.type === 'review.started' || !current ? fresh(event, receivedAt) : current;
+  const next = reduce(base, event, receivedAt);
   if (next === current) {
     return reviews;
   }
   const updated = new Map(reviews);
-  updated.set(event.sessionId, { ...next, updatedAt: event.timestamp });
+  updated.set(event.sessionId, { ...next, updatedAt: receivedAt });
   return pruneEnded(updated);
 }
 
-function reduce(review: ActivityState, event: SessionEvent): ActivityState {
+function reduce(review: ActivityState, event: SessionEvent, receivedAt: string): ActivityState {
   const data = event.data ?? {};
   switch (event.type) {
     case 'review.started':
       return review;
     case 'review.phase': {
       const phase = String(data.phase ?? '');
-      if (!PHASE_IDS.has(phase) || review.phases.at(-1)?.phase === phase) {
+      // Each step is announced once, so one already recorded is a replay: a reconnect can replay a
+      // buffer whose oldest events were dropped, starting after the review's start.
+      if (!PHASE_IDS.has(phase) || review.phases.some((p) => p.phase === phase)) {
         return review;
       }
       return {
         ...review,
         status: 'running',
-        phases: [...review.phases, { phase: phase as PhaseId, at: event.timestamp }],
+        phases: [...review.phases, { phase: phase as PhaseId, at: receivedAt }],
       };
     }
     case 'review.batch':

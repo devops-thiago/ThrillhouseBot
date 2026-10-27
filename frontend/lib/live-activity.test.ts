@@ -12,12 +12,16 @@ import {
 
 let clock = 0;
 
+function at(second: number): string {
+  return new Date(Date.UTC(2026, 9, 27, 12, 0, second)).toISOString();
+}
+
+/** As the backend sends them: every event of a review carries its start, here one per review. */
 function event(
   type: SessionEvent['type'],
   sessionId: number,
   data: Record<string, unknown> = {},
 ): SessionEvent {
-  clock += 1;
   return {
     type,
     sessionId,
@@ -25,13 +29,17 @@ function event(
     prNumber: 99,
     prTitle: 'Live activity',
     commitSha: 'abc1234',
-    timestamp: new Date(Date.UTC(2026, 9, 27, 12, 0, clock)).toISOString(),
+    timestamp: at(sessionId),
     data,
   };
 }
 
+/** Folds the events as the page receives them, one second apart. */
 function fold(events: SessionEvent[], start = new Map<number, ActivityState>()) {
-  return events.reduce(applyActivityEvent, start);
+  return events.reduce((reviews, e) => {
+    clock += 1;
+    return applyActivityEvent(reviews, e, at(100 + clock));
+  }, start);
 }
 
 describe('applyActivityEvent', () => {
@@ -67,6 +75,36 @@ describe('applyActivityEvent', () => {
     const twice = fold(replay, once);
 
     expect(twice.get(1)!.phases.map((p) => p.phase)).toEqual(['context', 'review']);
+  });
+
+  it('does not step back for a replay that starts after the review began', () => {
+    const live = fold([
+      event('review.started', 1),
+      event('review.phase', 1, { phase: 'context' }),
+      event('review.phase', 1, { phase: 'review' }),
+      event('review.phase', 1, { phase: 'summarize' }),
+    ]);
+    // The server dropped the oldest buffered events, the start and the first step among them.
+    const replayed = fold(
+      [event('review.phase', 1, { phase: 'review' }), event('review.phase', 1, { phase: 'summarize' })],
+      live,
+    );
+
+    expect(replayed.get(1)!.phases.map((p) => p.phase)).toEqual(['context', 'review', 'summarize']);
+    expect(phaseState(replayed.get(1)!, 'summarize')).toBe('current');
+  });
+
+  it('keeps the review that ended last, though it started first', () => {
+    const events: SessionEvent[] = [event('review.started', 1)];
+    for (let id = 2; id <= MAX_ENDED_REVIEWS + 1; id++) {
+      events.push(event('review.started', id), event('review.completed', id));
+    }
+    events.push(event('review.completed', 1));
+
+    const reviews = fold(events);
+
+    expect(reviews.has(1)).toBe(true);
+    expect(reviews.has(2)).toBe(false);
   });
 
   it('ignores an unknown step and a repeat of the current one', () => {
@@ -178,8 +216,8 @@ describe('applyActivityEvent', () => {
   it('leaves the state alone for a keepalive and an event it does not read', () => {
     const reviews = fold([event('review.started', 1)]);
 
-    expect(applyActivityEvent(reviews, event('keepalive', 0))).toBe(reviews);
-    expect(applyActivityEvent(reviews, event('review.started', 1))).not.toBe(reviews);
+    expect(applyActivityEvent(reviews, event('keepalive', 0), at(1))).toBe(reviews);
+    expect(applyActivityEvent(reviews, event('review.started', 1), at(1))).not.toBe(reviews);
   });
 
   it(`keeps only the ${MAX_ENDED_REVIEWS} latest reviews that ended`, () => {
