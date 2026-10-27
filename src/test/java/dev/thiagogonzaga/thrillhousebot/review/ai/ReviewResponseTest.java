@@ -147,4 +147,24 @@ class ReviewResponseTest {
 
     assertEquals("flowchart TD\n A-->B", response.summary().walkthroughDiagram());
   }
+
+  @Test
+  void criterionVerdictsSurviveRecordingTheClosedEarlierRoundAndAreWrittenOnlyWhenPresent()
+      throws Exception {
+    var verdicts = List.of(new ReviewResponse.CriterionVerdict("c", "unmet", "e"));
+    var response = new ReviewResponse(List.of(), List.of(), null).withLinkedIssueCriteria(verdicts);
+
+    assertEquals(verdicts, response.withClosedEarlierRound(List.of()).linkedIssueCriteria());
+    var mapper = new ObjectMapper();
+    assertTrue(mapper.writeValueAsString(response).contains("\"linked_issue_criteria\""));
+    assertFalse(
+        mapper
+            .writeValueAsString(new ReviewResponse(List.of(), List.of(), null))
+            .contains("linked_issue_criteria"));
+    // A rebuilt response carries none, and a null list or element reads as none.
+    var withNull = new ArrayList<ReviewResponse.CriterionVerdict>();
+    withNull.add(null);
+    assertTrue(response.withLinkedIssueCriteria(withNull).linkedIssueCriteria().isEmpty());
+    assertTrue(response.withLinkedIssueCriteria(null).linkedIssueCriteria().isEmpty());
+  }
 }

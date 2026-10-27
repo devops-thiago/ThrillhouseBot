@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import java.util.List;
@@ -30,12 +31,19 @@ public record ReviewResponse(
     // and name them again (#1066). Never written by the model: ReviewResponseParser drops the field
     // from every answer, every lane rebuilds the response through the three-argument constructor
     // before it is persisted, and the orchestrator sets it only after the verdict.
-    @JsonProperty("closed_earlier_round") List<Finding> closedEarlierRound) {
+    @JsonProperty("closed_earlier_round") List<Finding> closedEarlierRound,
+    // The review call's verdict on each acceptance criterion of the linked issue (#1200). Read by
+    // ReviewResponseParser on its own, leniently, and taken by FindingPipeline as soon as the call
+    // returns. The steps that rebuild the response through the shorter constructors drop it, so
+    // nothing downstream reads it here.
+    @JsonInclude(JsonInclude.Include.NON_EMPTY) @JsonProperty("linked_issue_criteria")
+        List<CriterionVerdict> linkedIssueCriteria) {
   public ReviewResponse {
     findings = List.copyOf(findings != null ? findings : List.of());
     previousFindingsStatus =
         List.copyOf(previousFindingsStatus != null ? previousFindingsStatus : List.of());
     closedEarlierRound = List.copyOf(closedEarlierRound != null ? closedEarlierRound : List.of());
+    linkedIssueCriteria = List.copyOf(Summary.withoutNulls(linkedIssueCriteria));
   }
 
   /** A response that closed no earlier round's finding: every model answer and rebuilt round. */
@@ -44,10 +52,37 @@ public record ReviewResponse(
     this(findings, previousFindingsStatus, summary, List.of());
   }
 
+  /** A response with no criterion verdicts, which a rebuild through this constructor drops. */
+  public ReviewResponse(
+      List<Finding> findings,
+      List<PreviousFindingStatus> previousFindingsStatus,
+      Summary summary,
+      List<Finding> closedEarlierRound) {
+    this(findings, previousFindingsStatus, summary, closedEarlierRound, List.of());
+  }
+
   /** This response recording {@code closed} as the earlier rounds' findings it closed. */
   public ReviewResponse withClosedEarlierRound(List<Finding> closed) {
-    return new ReviewResponse(findings, previousFindingsStatus, summary, closed);
+    return new ReviewResponse(
+        findings, previousFindingsStatus, summary, closed, linkedIssueCriteria);
   }
+
+  /** This response carrying {@code verdicts} as its criterion verdicts. */
+  public ReviewResponse withLinkedIssueCriteria(List<CriterionVerdict> verdicts) {
+    return new ReviewResponse(
+        findings, previousFindingsStatus, summary, closedEarlierRound, verdicts);
+  }
+
+  /**
+   * The review call's verdict on one acceptance criterion of the linked issue (#1200).
+   *
+   * @param criterion the criterion as the call copied it from the issue's list
+   * @param status {@code met}, {@code unmet} or {@code unclear}, as the call wrote it
+   * @param note one line on what the call looked for, written as {@code evidence}, or {@code null}
+   */
+  @RegisterForReflection
+  public record CriterionVerdict(
+      String criterion, String status, @JsonProperty("evidence") String note) {}
 
   @RegisterForReflection
   public record Finding(
@@ -175,7 +210,7 @@ public record ReviewResponse(
           addressedGaps);
     }
 
-    private static <T> List<T> withoutNulls(List<T> values) {
+    static <T> List<T> withoutNulls(List<T> values) {
       return values == null ? List.of() : values.stream().filter(Objects::nonNull).toList();
     }
 

@@ -21,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.StringJoiner;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -1483,5 +1484,88 @@ class ReviewResponseParserTest {
             """);
 
     assertTrue(parsed.closedEarlierRound().isEmpty());
+  }
+
+  @Test
+  void criterionVerdictsAreReadBesideTheFindings() {
+    // #1200: the review call's verdict on each linked-issue criterion.
+    var parsed =
+        parser.parse(
+            """
+            {"findings": [], "previous_findings_status": [],
+             "linked_issue_criteria": [
+               {"criterion": "Rejects batches larger than 500 readings with HTTP 413",
+                "status": "unmet", "evidence": "ingest() takes any size"},
+               {"criterion": "Stores each reading", "status": "met"}]}
+            """);
+
+    assertEquals(
+        List.of(
+            new ReviewResponse.CriterionVerdict(
+                "Rejects batches larger than 500 readings with HTTP 413",
+                "unmet",
+                "ingest() takes any size"),
+            new ReviewResponse.CriterionVerdict("Stores each reading", "met", null)),
+        parsed.linkedIssueCriteria());
+  }
+
+  @Test
+  void aMisShapedCriterionVerdictIsSkippedAndNeverCostsTheFindings() {
+    var parsed =
+        parser.parse(
+            """
+            {"findings": [{"risk": "low", "confidence": "high", "file": "a.rs", "line": 1,
+               "title": "t", "description": "d"}],
+             "previous_findings_status": [],
+             "linked_issue_criteria": [
+               "Stores each reading: met",
+               {"criterion": "", "status": "met"},
+               {"criterion": "Stores each reading"},
+               {"criterion": 7, "status": "met"},
+               {"criterion": "Stores each reading", "status": "met", "evidence": 3}]}
+            """);
+
+    assertEquals(1, parsed.findings().size());
+    assertEquals(
+        List.of(new ReviewResponse.CriterionVerdict("Stores each reading", "met", null)),
+        parsed.linkedIssueCriteria());
+    var notAnArray =
+        parser.parse(
+            """
+            {"findings": [], "previous_findings_status": [],
+             "linked_issue_criteria": {"criterion": "x", "status": "met"}}
+            """);
+    assertTrue(notAnArray.linkedIssueCriteria().isEmpty());
+  }
+
+  @Test
+  void criterionVerdictsAreReadUpToTheCap() {
+    var entries = new StringJoiner(",");
+    for (var i = 0; i < ReviewResponseParser.MAX_CRITERION_VERDICTS + 5; i++) {
+      entries.add("{\"criterion\": \"c" + i + "\", \"status\": \"met\"}");
+    }
+    var parsed =
+        parser.parse(
+            "{\"findings\": [], \"previous_findings_status\": [], \"linked_issue_criteria\": ["
+                + entries
+                + "]}");
+
+    assertEquals(ReviewResponseParser.MAX_CRITERION_VERDICTS, parsed.linkedIssueCriteria().size());
+  }
+
+  @Test
+  void theSummaryCallsCriterionVerdictsAreDropped() {
+    // The summary call does not see the diff, so only the review call's verdicts count.
+    var parsed =
+        parser.parseSummary(
+            """
+            {"findings": [], "summary": {"total_findings": 0, "critical": 0, "high": 0,
+               "medium": 0, "low": 0, "overall_assessment": "ok", "pr_purpose": "p",
+               "description_gaps": []},
+             "linked_issue_criteria": [{"criterion": "Stores each reading", "status": "unmet"}]}
+            """);
+
+    assertTrue(parsed.linkedIssueCriteria().isEmpty());
+    assertEquals("p", parsed.summary().prPurpose());
   }
 }

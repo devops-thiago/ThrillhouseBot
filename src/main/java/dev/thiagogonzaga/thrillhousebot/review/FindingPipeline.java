@@ -319,6 +319,8 @@ public class FindingPipeline {
     ReviewResponse aiResponse;
     try {
       aiResponse = aiReviewService.review(session, singleInputs);
+      // #1200: taken here, before any step rebuilds the response without them.
+      evidence.criterionVerdicts().collect(aiResponse.linkedIssueCriteria());
     } catch (AiResponseTruncatedException e) {
       // #580: the call was made and billed, and its body is well-formed up to the cut. Losing the
       // whole review to it would discard exactly the paid work the multi-call lane already keeps.
@@ -1095,6 +1097,8 @@ public class FindingPipeline {
     var batchInputs = run.prompts().forBatch(batch, "");
     var batchResponse =
         aiReviewService.reviewBatch(run.session(), batchInputs, index + 1, batches.size());
+    // #1200: each batch judges the criteria from its own files; LinkedIssueCriteria combines them.
+    run.evidence().criterionVerdicts().collect(batchResponse.linkedIssueCriteria());
     return refineBatchOutcome(index, batch, batchInputs, batchResponse, run);
   }
 
