@@ -92,6 +92,13 @@ without it those counters stay hidden and nothing else changes.
 
 ### Fixed
 
+- Four true summary statements are no longer cut. A description gap that quotes the description
+  with a bracketed ending, such as "follow[s]" for "following", is no longer taken for a misquote.
+  An omission bullet saying the description "provides no coverage of" files the description names
+  is dropped like one that says it "does not mention" them. The summary verification, which reads
+  the diff in batches, now also gets the pull request's file and line totals and the files withheld
+  from review, so it no longer cuts a true file count or a pure rename. A file summary saying a
+  document omits a setting, such as "the missing BLOODBANK_PORT row", keeps it. (#1206)
 - On a pull request linked to one issue, Description vs. Implementation now names an acceptance
   criterion the change does not meet even when no finding or summary sentence mentions it. The
   review call, which reads the diff, judges each criterion as met, unmet or unclear, and a
