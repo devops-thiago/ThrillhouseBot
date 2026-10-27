@@ -371,6 +371,16 @@ public interface ThrillhouseConfig {
     boolean dimensionRoutingEnabled();
 
     /**
+     * Pack a large pull request's files into batches by review priority (#666): build manifests,
+     * then files matching {@code AI_ROUTING_HIGH_RISK_PATHS}, then the rest, then files matching
+     * {@code AI_ROUTING_LOW_RISK_PATHS}, the larger change first within each. When the call cap
+     * leaves files out, the low-risk ones go first. Off, the order is build manifests then size.
+     */
+    @WithDefault("false")
+    @WithName("triage-enabled")
+    boolean triageEnabled();
+
+    /**
      * Check a maintainer's decline against the reviewed code before recording the finding
      * justified. See <a
      * href="https://github.com/devops-thiago/ThrillhouseBot#re-checking-declines">Re-checking

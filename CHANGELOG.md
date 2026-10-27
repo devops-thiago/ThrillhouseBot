@@ -11,6 +11,12 @@ without it those counters stay hidden and nothing else changes.
 
 ### Added
 
+- `REVIEW_TRIAGE_ENABLED` (off by default) packs a large pull request's batches by review
+  priority: build manifests, then files matching `AI_ROUTING_HIGH_RISK_PATHS`, then the rest, then
+  files matching `AI_ROUTING_LOW_RISK_PATHS`, the larger change first within each. When
+  `REVIEW_MAX_AI_CALLS` leaves files out, the low-risk ones go first instead of the smallest. The
+  globs are the ones model routing reads; no model call is made. (#666)
+
 - `REVIEW_LABELS_BLOCKED` (`thrillhousebot.review.labels.blocked`) lists labels the bot never
   suggests, applies or creates, matched ignoring case, such as a team's own `review` label. They
   are left out of the labels shown to the model and dropped from its suggestions. (#1238)

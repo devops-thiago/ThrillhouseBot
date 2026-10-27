@@ -186,6 +186,66 @@ class DiffBudgetPlannerTest {
     assertEquals(List.of("java/src/Mid.java"), plan.omittedFiles());
   }
 
+  /** Turns {@code REVIEW_TRIAGE_ENABLED} on, with the default routing globs in short. */
+  private void triageOn() {
+    var routing = mock(ThrillhouseConfig.AiPricingConfig.RoutingConfig.class);
+    when(reviewConfig.triageEnabled()).thenReturn(true);
+    when(aiConfig.routing()).thenReturn(routing);
+    when(routing.highRiskPaths()).thenReturn(List.of("**/auth/", ".github/workflows/"));
+    when(routing.lowRiskPaths()).thenReturn(List.of("**/*.md", "docs/"));
+  }
+
+  /** Files of three tiers, the low-risk ones the largest, packed one per batch. */
+  private static final List<FileDiff> TIERED =
+      List.of(
+          file("docs/guide.md", 60, patch(6)),
+          file("README.md", 50, patch(6)),
+          file("src/Orders.java", 20, patch(6)),
+          file("src/auth/Login.java", 10, patch(6)),
+          file(".github/workflows/ci.yml", 5, patch(6)));
+
+  @Test
+  void withTriageTheCapLeavesOutTheLowRiskFilesFirst() {
+    // #666: size alone packed the two docs files first and the cap left out the auth change.
+    triageOn();
+    var budget = TIERED.stream().mapToInt(this::sectionTokens).max().orElseThrow();
+
+    var plan = planner.plan(TIERED, budget, 3);
+
+    // Within a tier the larger change still goes first.
+    assertEquals(
+        List.of("src/auth/Login.java", ".github/workflows/ci.yml", "src/Orders.java"),
+        coveredFilenames(plan));
+    assertEquals(List.of("docs/guide.md", "README.md"), plan.omittedFiles());
+    assertEquals(
+        List.of("src/auth/Login.java"),
+        plan.batches().get(0).files().stream().map(FileDiff::filename).toList());
+  }
+
+  @Test
+  void withTriageOffTheOrderIsSizeAsBefore() {
+    var budget = TIERED.stream().mapToInt(this::sectionTokens).max().orElseThrow();
+
+    var plan = planner.plan(TIERED, budget, 3);
+
+    assertEquals(List.of("docs/guide.md", "README.md", "src/Orders.java"), coveredFilenames(plan));
+    assertEquals(List.of("src/auth/Login.java", ".github/workflows/ci.yml"), plan.omittedFiles());
+  }
+
+  @Test
+  void withTriageABuildManifestStillComesFirst() {
+    // #935 holds: the pom is packed ahead of a larger high-risk file.
+    triageOn();
+    var files =
+        List.of(file("src/auth/Login.java", 40, patch(6)), file("java/pom.xml", 2, patch(6)));
+    var budget = files.stream().mapToInt(this::sectionTokens).max().orElseThrow();
+
+    var plan = planner.plan(files, budget, 1);
+
+    assertEquals(List.of("java/pom.xml"), coveredFilenames(plan));
+    assertEquals(List.of("src/auth/Login.java"), plan.omittedFiles());
+  }
+
   @Test
   void oversizedSingleFileIsClippedToFitOneBatch() {
     var big = file("dir/huge.java", 400, patch(400));
