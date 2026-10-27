@@ -426,6 +426,20 @@ review's effective per-call budget. A routed model with neither a per-model nor
 a pricing entry is logged as a startup warning, so a typo in its name shows at
 boot rather than as failed reviews.
 
+### File triage
+
+A pull request too large for one call is split into batches, and
+`REVIEW_MAX_AI_CALLS` caps how many there are. By default, build manifests are
+packed first and then the largest changes, so the cap leaves out the smallest
+files, whatever they are. With `REVIEW_TRIAGE_ENABLED=true`, files are packed by
+review priority instead: build manifests, then files matching
+`AI_ROUTING_HIGH_RISK_PATHS` (under the new or the old name), then the rest,
+then files matching `AI_ROUTING_LOW_RISK_PATHS`, the larger change first within
+each. A high-risk glob wins over a low-risk one, as for model routing. When the
+cap leaves files out, the low-risk ones go first, and they are named in the
+summary as before. The globs are the same ones model routing reads, and
+triage works whether or not a low-risk model is set. No model call is made.
+
 ### Per-model AI settings
 
 Model-specific settings live under `thrillhousebot.ai.models.<model>.*`, keyed by

@@ -254,6 +254,12 @@ same diff.
   the same provider client. Budget and generation settings stay the active model's, so
   `StartupConfigValidator` refuses a routed model whose declared input cap is below the budget.
   The blocking calls (verifier, summary check, repair, commands, replies) are never routed.
+- **File triage orders the packing, nothing else** (#666). With `REVIEW_TRIAGE_ENABLED` on,
+  `DiffBudgetPlanner.renderAndSize` sorts by `FileTriage`'s tier (build manifest, high-risk,
+  normal, low-risk, from the routing globs) before size, so the call cap omits low-risk files
+  first. It runs for the commands' batching too. Off, the sort is the #935 manifest-first one,
+  unchanged. Batches still run in parallel, so the order decides what the cap leaves out, not which
+  call starts first.
 - **AI services are stateless.** Every `@RegisterAiService` sets
   `NoChatMemoryProviderSupplier`. Review state travels in the previous-findings section, never in
   chat history.
