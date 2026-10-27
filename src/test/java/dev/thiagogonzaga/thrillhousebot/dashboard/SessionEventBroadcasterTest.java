@@ -180,6 +180,41 @@ class SessionEventBroadcasterTest {
   }
 
   @Test
+  void eventsRecordedFromSeveralThreadsAtOnceAreAllReplayed() throws Exception {
+    var reviewSession = createReviewSession();
+    reviewSession.id = 95L;
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(reviewSession));
+    // The review thread, its batches and the usage-saving worker all broadcast for one review.
+    try (var pool = java.util.concurrent.Executors.newFixedThreadPool(4)) {
+      var tasks = new java.util.ArrayList<java.util.concurrent.Callable<Void>>();
+      for (var t = 0; t < 4; t++) {
+        tasks.add(
+            () -> {
+              for (var i = 0; i < 50; i++) {
+                broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.progress(reviewSession));
+                broadcaster.broadcast(
+                    SessionEventBroadcaster.SessionEvent.stream(reviewSession, "x", "x", i, i, 1));
+              }
+              return null;
+            });
+      }
+      for (var done : pool.invokeAll(tasks)) {
+        done.get();
+      }
+    }
+
+    var wsSession = mock(jakarta.websocket.Session.class);
+    var asyncRemote = mock(RemoteEndpoint.Async.class);
+    when(wsSession.isOpen()).thenReturn(true);
+    when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
+
+    broadcaster.addSession(wsSession, READ_ALL);
+
+    // started, the 200 usage reports, then the latest output.
+    verify(asyncRemote, times(202)).sendText(anyString(), any());
+  }
+
+  @Test
   void aUsageReportAfterTheReviewEndedDoesNotBringItBack() {
     var reviewSession = createReviewSession();
     reviewSession.id = 96L;

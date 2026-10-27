@@ -141,7 +141,9 @@ public final class SessionEventBroadcaster {
   /** Evicts replay buffers for sessions with no recent activity and no terminal event. */
   public void evictStaleSessionBuffers() {
     var cutoff = Instant.now(clock).minus(MAX_SESSION_BUFFER_AGE);
-    sessionStateById.entrySet().removeIf(entry -> entry.getValue().lastActivityAt.isBefore(cutoff));
+    sessionStateById
+        .entrySet()
+        .removeIf(entry -> entry.getValue().lastActivityAt().isBefore(cutoff));
   }
 
   private String serialize(SessionEvent event) {
@@ -158,37 +160,19 @@ public final class SessionEventBroadcaster {
       return;
     }
 
-    // A usage report can land after its review ended; it must not bring the review back as live.
-    if (SessionEvent.TYPE_PROGRESS.equals(event.type())
-        && !sessionStateById.containsKey(event.sessionId())) {
-      return;
-    }
-
     Instant now = Instant.now(clock);
+    // A usage report is sent from the thread that saved it (#66), so it can land after its review
+    // ended; it updates a review still buffered and never brings back one that ended.
     var state =
-        sessionStateById.computeIfAbsent(
-            event.sessionId(),
-            id -> new SessionState(now, event.installationId(), event.repositoryId()));
-    state.latestEventType = event.type();
-    state.lastActivityAt = now;
-
-    // Each stream event carries the text's tail, so only the latest of each is kept for replay.
-    if (SessionEvent.TYPE_STREAM.equals(event.type())) {
-      state.latestStreamJson = json;
+        SessionEvent.TYPE_PROGRESS.equals(event.type())
+            ? sessionStateById.get(event.sessionId())
+            : sessionStateById.computeIfAbsent(
+                event.sessionId(),
+                id -> new SessionState(now, event.installationId(), event.repositoryId()));
+    if (state == null) {
       return;
     }
-    if (SessionEvent.TYPE_REASONING.equals(event.type())) {
-      state.latestReasoningJson = json;
-      return;
-    }
-
-    if (SessionEvent.TYPE_RETRY.equals(event.type())
-        || SessionEvent.TYPE_STREAM_FAILED.equals(event.type())) {
-      state.latestStreamJson = null;
-      state.latestReasoningJson = null;
-    }
-
-    state.appendBufferedEvent(json, MAX_BUFFERED_EVENTS_PER_SESSION);
+    state.record(event.type(), json, now, MAX_BUFFERED_EVENTS_PER_SESSION);
 
     if (isTerminalReviewEvent(event.type())) {
       sessionStateById.remove(event.sessionId());
@@ -205,22 +189,9 @@ public final class SessionEventBroadcaster {
       return;
     }
 
-    for (var entry : sessionStateById.entrySet()) {
-      var state = entry.getValue();
-      var latestType = state.latestEventType;
-      if (latestType == null
-          || isTerminalReviewEvent(latestType)
-          || !reader.canRead(state.installationId, state.repositoryId)) {
-        continue;
-      }
-
-      state.forEachBuffered(json -> sendText(wsSession, json));
-
-      if (state.latestReasoningJson != null) {
-        sendText(wsSession, state.latestReasoningJson);
-      }
-      if (state.latestStreamJson != null) {
-        sendText(wsSession, state.latestStreamJson);
+    for (var state : sessionStateById.values()) {
+      if (reader.canRead(state.installationId, state.repositoryId)) {
+        state.replayIfActive(json -> sendText(wsSession, json));
       }
     }
   }
@@ -273,10 +244,7 @@ public final class SessionEventBroadcaster {
       List<String> bufferedEventJson,
       String latestStreamJson) {
     var state = new SessionState(lastActivityAt, installationId, repositoryId);
-    state.latestEventType = latestEventType;
-    state.lastActivityAt = lastActivityAt;
-    state.latestStreamJson = latestStreamJson;
-    state.loadBufferedEvents(bufferedEventJson);
+    state.seed(latestEventType, bufferedEventJson, latestStreamJson);
     sessionStateById.put(sessionId, state);
   }
 
@@ -285,16 +253,20 @@ public final class SessionEventBroadcaster {
     return sessionStateById.size();
   }
 
-  /** Per-session replay state tracked while a review is in progress. */
+  /**
+   * Per-session replay state tracked while a review is in progress. The review's thread, its
+   * batches' threads and the thread that saves a call's usage all record into it, and a connecting
+   * client replays it, so every field is read and written under {@link #lock}.
+   */
   private static final class SessionState {
-    private final Object bufferLock = new Object();
+    private final Object lock = new Object();
     private final Deque<String> buffer = new ArrayDeque<>();
     final Long installationId;
     final Long repositoryId;
-    String latestEventType;
-    Instant lastActivityAt;
-    String latestStreamJson;
-    String latestReasoningJson;
+    private String latestEventType;
+    private Instant lastActivityAt;
+    private String latestStreamJson;
+    private String latestReasoningJson;
 
     SessionState(Instant createdAt, Long installationId, Long repositoryId) {
       this.lastActivityAt = createdAt;
@@ -302,8 +274,23 @@ public final class SessionEventBroadcaster {
       this.repositoryId = repositoryId;
     }
 
-    void appendBufferedEvent(String json, int maxSize) {
-      synchronized (bufferLock) {
+    void record(String type, String json, Instant now, int maxSize) {
+      synchronized (lock) {
+        latestEventType = type;
+        lastActivityAt = now;
+        // Each stream event carries the text's tail, so only the latest of each is kept.
+        if (SessionEvent.TYPE_STREAM.equals(type)) {
+          latestStreamJson = json;
+          return;
+        }
+        if (SessionEvent.TYPE_REASONING.equals(type)) {
+          latestReasoningJson = json;
+          return;
+        }
+        if (SessionEvent.TYPE_RETRY.equals(type) || SessionEvent.TYPE_STREAM_FAILED.equals(type)) {
+          latestStreamJson = null;
+          latestReasoningJson = null;
+        }
         buffer.addLast(json);
         while (buffer.size() > maxSize) {
           buffer.removeFirst();
@@ -311,14 +298,32 @@ public final class SessionEventBroadcaster {
       }
     }
 
-    void forEachBuffered(Consumer<String> consumer) {
-      synchronized (bufferLock) {
-        buffer.forEach(consumer);
+    /** Replays the buffered events, then the latest reasoning and output, unless it has ended. */
+    void replayIfActive(Consumer<String> send) {
+      synchronized (lock) {
+        if (latestEventType == null || isTerminalReviewEvent(latestEventType)) {
+          return;
+        }
+        buffer.forEach(send);
+        if (latestReasoningJson != null) {
+          send.accept(latestReasoningJson);
+        }
+        if (latestStreamJson != null) {
+          send.accept(latestStreamJson);
+        }
       }
     }
 
-    void loadBufferedEvents(List<String> events) {
-      synchronized (bufferLock) {
+    Instant lastActivityAt() {
+      synchronized (lock) {
+        return lastActivityAt;
+      }
+    }
+
+    void seed(String latestEventType, List<String> events, String latestStreamJson) {
+      synchronized (lock) {
+        this.latestEventType = latestEventType;
+        this.latestStreamJson = latestStreamJson;
         buffer.addAll(events);
       }
     }
