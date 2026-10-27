@@ -24,6 +24,7 @@ These variables set Quarkus and LangChain4j keys rather than a `thrillhousebot.*
 | `DS_INPUT_PRICE` | Price of 1,000 input tokens on `deepseek-chat`, in US dollars. | `0.00014` | `thrillhousebot.ai.pricing.deepseek-chat.input-per-1k` |
 | `DS_OUTPUT_PRICE` | Price of 1,000 output tokens on `deepseek-chat`, in US dollars. | `0.00028` | `thrillhousebot.ai.pricing.deepseek-chat.output-per-1k` |
 | `OTEL_EXPORTER_ENDPOINT` | OTLP endpoint traces, metrics and logs are exported to. | `http://localhost:4317` | `quarkus.otel.exporter.otlp.endpoint` |
+| `OTEL_EXPORTER_TIMEOUT` | How long one OTLP export may wait for the collector. Keep it above the collector's 60-second HTTP/2 keep-alive: below it, an export after an idle pause can be sent twice. | `65s` | `quarkus.otel.exporter.otlp.traces.timeout`<br>`quarkus.otel.exporter.otlp.metrics.timeout`<br>`quarkus.otel.exporter.otlp.logs.timeout` |
 | `OTEL_HTTP_SERVER_METRICS_ENABLED` | Record Quarkus's HTTP server metrics (`http.server.request.duration`), exported over OTLP and served on `/metrics`. | `true` | `quarkus.otel.instrument.http-server-metrics` |
 | `OTEL_JVM_METRICS_ENABLED` | Record Quarkus's JVM metrics (`jvm.*`), exported over OTLP and served on `/metrics`. | `true` | `quarkus.otel.instrument.jvm-metrics` |
 | `OTEL_LOGS_ENABLED` | Also export the bot's log records over OTLP, beside the console. Off by default, so a collector does not start receiving every log line without an opt-in. | `false` | `quarkus.otel.logs.handler.enabled` |
