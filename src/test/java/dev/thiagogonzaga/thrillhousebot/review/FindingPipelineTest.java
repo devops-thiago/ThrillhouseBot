@@ -4656,8 +4656,11 @@ class FindingPipelineTest {
     // The PR's scope comes ahead of the batches, as the whole diff's header would (#1206).
     assertEquals(
         List.of(
-            "PR scope (whole pull request): 2 files changed, +5 -0\nDirectories touched: 1\n"
-                + "- (repository root): 2 files (+5 -0)\n",
+            """
+            PR scope (whole pull request): 2 files changed, +5 -0
+            Directories touched: 1
+            - (repository root): 2 files (+5 -0)
+            """,
             "### a.java\n",
             "### b.java\n"),
         material.getValue().diffParts());

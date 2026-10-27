@@ -151,12 +151,12 @@ final class OverviewScreen {
 
   /**
    * A clause saying the file leaves something out: "omits", "is missing", "lacks", "undocumented".
-   * The setting it names is the one the patch does not hold.
+   * The setting it names is the one the patch does not hold. One pattern per shape.
    */
-  private static final Pattern ABSENCE =
-      Pattern.compile(
-          "(?i)\\b(?:missing|omit(?:s|ted|ting)?|omission|lacks?|lacking|absent|undocumented"
-              + "|leaves?\\s++out|left\\s++out)\\b");
+  private static final List<Pattern> ABSENCE =
+      List.of(
+          Pattern.compile("(?i)\\b(?:missing|omit(?:s|ted|ting)?|omission|absent|undocumented)\\b"),
+          Pattern.compile("(?i)\\b(?:lacks?|lacking|leaves?\\s++out|left\\s++out)\\b"));
 
   /**
    * A tracker key such as {@code PROJ-123}, in any case ("abcd-12", "Proj-7" are the same keys
@@ -435,8 +435,7 @@ final class OverviewScreen {
       from = cuts.end();
     }
     parts.add(clause.substring(from).strip());
-    // A clause saying the file lacks something names a setting the patch does not hold on purpose.
-    var judgeSettings = !ABSENCE.matcher(clause).find();
+    var settingsPatch = settingsPatch(clause, patch);
     var kept = new StringBuilder();
     var dropped = 0;
     var previousDropped = false;
@@ -450,7 +449,7 @@ final class OverviewScreen {
       previousDropped =
           placeholder
               || talksAboutFindings(bare)
-              || (judgeSettings && namesAbsentSetting(part, patch, known))
+              || namesAbsentSetting(part, settingsPatch, known)
               || (previousDropped && RELATIVE_TAIL.matcher(part).find());
       if (previousDropped) {
         dropped++;
@@ -831,6 +830,15 @@ final class OverviewScreen {
   private static boolean isCount(String word) {
     return NUMBER_WORDS.contains(word)
         || (!word.isEmpty() && word.chars().allMatch(Character::isDigit));
+  }
+
+  /**
+   * {@code patch}, or {@code null} when {@code clause} says the file lacks something ({@link
+   * #ABSENCE}): the setting such a clause names is absent from the patch on purpose, so none is
+   * judged.
+   */
+  private static String settingsPatch(String clause, String patch) {
+    return ABSENCE.stream().anyMatch(p -> p.matcher(clause).find()) ? null : patch;
   }
 
   /**
