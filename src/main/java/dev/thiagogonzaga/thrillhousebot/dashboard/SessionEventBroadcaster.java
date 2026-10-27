@@ -172,7 +172,7 @@ public final class SessionEventBroadcaster {
     if (state == null) {
       return;
     }
-    state.record(event.type(), json, now, MAX_BUFFERED_EVENTS_PER_SESSION);
+    state.add(event.type(), json, now, MAX_BUFFERED_EVENTS_PER_SESSION);
 
     if (isTerminalReviewEvent(event.type())) {
       sessionStateById.remove(event.sessionId());
@@ -274,7 +274,7 @@ public final class SessionEventBroadcaster {
       this.repositoryId = repositoryId;
     }
 
-    void record(String type, String json, Instant now, int maxSize) {
+    void add(String type, String json, Instant now, int maxSize) {
       synchronized (lock) {
         latestEventType = type;
         lastActivityAt = now;
