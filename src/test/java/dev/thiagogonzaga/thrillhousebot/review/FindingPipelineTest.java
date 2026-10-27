@@ -4653,7 +4653,14 @@ class FindingPipelineTest {
     var material = ArgumentCaptor.forClass(SummaryVerificationService.Material.class);
     verify(summaryVerification).verify(eq(42L), checked.capture(), material.capture());
     assertEquals("totals usage. writes a billing_runs row", checked.getValue().prPurpose());
-    assertEquals(List.of("### a.java\n", "### b.java\n"), material.getValue().diffParts());
+    // The PR's scope comes ahead of the batches, as the whole diff's header would (#1206).
+    assertEquals(
+        List.of(
+            "PR scope (whole pull request): 2 files changed, +5 -0\nDirectories touched: 1\n"
+                + "- (repository root): 2 files (+5 -0)\n",
+            "### a.java\n",
+            "### b.java\n"),
+        material.getValue().diffParts());
     assertEquals(result.findings(), material.getValue().findings());
     assertEquals("ctx", PromptTemplateEscaper.unfence(material.getValue().prContext()));
     assertEquals("stack", material.getValue().projectStack());
@@ -4687,6 +4694,47 @@ class FindingPipelineTest {
     var material = ArgumentCaptor.forClass(SummaryVerificationService.Material.class);
     verify(summaryVerification).verify(anyLong(), any(), material.capture());
     assertEquals(List.of("raw legacy diff"), material.getValue().diffParts());
+  }
+
+  /**
+   * #1206: a batch's text is file sections only, so the check is told the whole PR's totals and the
+   * rename it never read. Angular #301 lost a true "17 files, +484" and kotlin #294 a true renamed
+   * documentation file when the call counted the 16 reviewed files and saw no rename.
+   */
+  @Test
+  void aBudgetedReviewIsCheckedWithThePrScopeAndTheWithheldRename() {
+    var summaryVerification = mock(SummaryVerificationService.class);
+    when(summaryVerification.enabled()).thenReturn(true);
+    when(summaryVerification.verify(anyLong(), any(), any())).thenAnswer(inv -> inv.getArgument(1));
+    var session = persistedSession();
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summaryWithPurpose("p")));
+    var app = new FileDiff("src/App.java", "modified", 484, 0, 484, "@@ -1 +1 @@\n+x\n");
+    var ctx =
+        reviewContext(
+            List.of(new FileDiff("docs/JAVA.md", "renamed", 0, 0, 0, null, "README.md"), app),
+            List.of(app),
+            new ReviewContextLoader.PrTotals(17, 484, 0));
+
+    pipelineWith(summaryVerification)
+        .run(
+            session,
+            new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", ""),
+            ctx,
+            singleBatchPlan(batch("src/App.java"), List.of()),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    var material = ArgumentCaptor.forClass(SummaryVerificationService.Material.class);
+    verify(summaryVerification).verify(anyLong(), any(), material.capture());
+    var parts = material.getValue().diffParts();
+    assertEquals(2, parts.size());
+    var scope = parts.getFirst();
+    assertTrue(scope.startsWith("PR scope (whole pull request): 17 files changed, +484 -0"), scope);
+    assertTrue(scope.contains("README.md → docs/JAVA.md (pure rename — no content change)"), scope);
+    assertEquals("### src/App.java\n", parts.get(1));
   }
 
   /** #1078: off (the default), the step is never called and the summary is persisted as written. */

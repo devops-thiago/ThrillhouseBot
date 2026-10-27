@@ -51,6 +51,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 import org.jboss.logging.Logger;
 
 /**
@@ -765,6 +766,11 @@ public class FindingPipeline {
    * verifier reads, at the PR level. The diff is the text the review calls read, one part per
    * batch, or the whole diff when budgeting is off; the PR text is bounded as on the finding
    * verifier (#736); the findings are the ones this round posts.
+   *
+   * <p>A batch's text is file sections only, so a part ahead of the batches carries what the whole
+   * diff's header carries when budgeting is off: the PR's file and line totals and the files
+   * withheld from review. Without them the call counted the reviewed files alone and cut a true "17
+   * files" and a rename the review never read (#1206).
    */
   private SummaryVerificationService.Material summaryVerificationMaterial(
       ReviewResponse refined,
@@ -774,7 +780,10 @@ public class FindingPipeline {
     var budget = budgetPlanner.perCallInputBudget();
     var diff =
         plan.budgeted()
-            ? plan.batches().stream().map(DiffBudgetPlanner.DiffBatch::text).toList()
+            ? Stream.concat(
+                    Stream.of(changeScopeSummary(ctx) + withheldMaterialNotice(ctx, plan)),
+                    plan.batches().stream().map(DiffBudgetPlanner.DiffBatch::text))
+                .toList()
             : List.of(Objects.requireNonNullElse(ctx.diff(), ""));
     return new SummaryVerificationService.Material(
         PrContextBudget.bound(inputs.prContext(), budget, tokenCounter),

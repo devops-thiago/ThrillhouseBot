@@ -165,6 +165,25 @@ class DescriptionSectionScreenTest {
   }
 
   @Test
+  void anOmissionCuedByNoIsJudged() {
+    // scala #297 R2 (#1206): carried although the edited body names the Dockerfile.
+    var body =
+        """
+        Title: feat(scala): add cold-chain excursion tracker
+        Description:
+        Adds a small Scala service that tracks temperature excursions for refrigerated shipments.
+        - Includes a Dockerfile, CI workflow and `docs/CONFIG-SCALA.md`.
+        """;
+    var gap =
+        "The PR description provides no coverage of most of the change set: it describes only the"
+            + " excursion tracker feature while the scope is 16 files including a new Dockerfile,"
+            + " CI workflow, build config, config documentation and a full test suite.";
+
+    assertTrue(DescriptionGapScreen.falseOmission(gap, body));
+    assertEquals(List.of(), DescriptionGapScreen.screen(List.of(gap), body, ""));
+  }
+
+  @Test
   void anOmissionNamingAPathTheDescriptionLacksIsKept() {
     var gap = "The description never mentions the new `python/migrations/` directory.";
 
@@ -200,6 +219,7 @@ class DescriptionSectionScreenTest {
         "The description is missing the `python-ci` workflow.",
         "The PR body skips the `python-ci` workflow.",
         "The description says nothing about the `python-ci` workflow.",
+        "The description gives no account of the `python-ci` workflow.",
         "The description claims a build cache; beyond it the change adds a Dockerfile."
       })
   void otherWordingsOfAnOmissionAreJudged(String gap) {
