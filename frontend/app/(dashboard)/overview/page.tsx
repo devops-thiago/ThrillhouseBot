@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useMemo } from 'react';
 import { api, SessionSummary } from '@/lib/api';
 import { useWebSocket, SessionEvent } from '@/hooks/useWebSocket';
@@ -139,6 +140,9 @@ function LiveReviewCard({ review }: { review: LiveReviewState }) {
         </span>
         <span style={{ color: 'var(--accent)', fontSize: '0.85rem' }}>{statusLabel}</span>
       </div>
+      <Link href={`/activity?id=${review.sessionId}`} style={{ fontSize: '0.85rem' }}>
+        Steps, reasoning and cost so far
+      </Link>
       <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{review.prTitle}</span>
       {review.reason && (
         <span style={{ color: 'var(--red)', fontSize: '0.8rem' }}>{review.reason}</span>

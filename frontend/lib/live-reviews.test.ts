@@ -54,6 +54,15 @@ describe('buildLiveReviews', () => {
     expect(reviews[0].totalChars).toBe(16);
   });
 
+  it('shows no live review for a usage report that came after the review ended', () => {
+    const reviews = buildLiveReviews([
+      event('review.progress', 5, { inputTokens: 10, outputTokens: 2 }, '2026-07-07T12:00:06.000Z'),
+      event('review.completed', 4, {}, '2026-07-07T12:00:05.000Z'),
+    ]);
+
+    expect(reviews).toEqual([]);
+  });
+
   it('drops completed sessions from the live feed', () => {
     const reviews = buildLiveReviews([
       event('review.completed', 5, {}, '2026-07-07T12:00:05.000Z'),

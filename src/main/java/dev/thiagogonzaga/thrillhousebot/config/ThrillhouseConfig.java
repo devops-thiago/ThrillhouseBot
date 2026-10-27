@@ -998,6 +998,16 @@ public interface ThrillhouseConfig {
      */
     @WithName("github.account-owner")
     Optional<String> accountOwner();
+
+    /**
+     * Streams the review call's reasoning to the dashboard's live activity page (#66), apart from
+     * its output. Only a provider that returns its reasoning as {@code reasoning_content} on the
+     * OpenAI-compatible stream sends any. Off by default: the reasoning can quote the reviewed
+     * code, and it is shown to every dashboard user who may read the repository.
+     */
+    @WithName("reasoning-stream-enabled")
+    @WithDefault("false")
+    boolean reasoningStreamEnabled();
   }
 
   /**

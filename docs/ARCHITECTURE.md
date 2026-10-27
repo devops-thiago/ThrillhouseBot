@@ -574,9 +574,20 @@ that a pause a maintainer asked for is not silently dropped. The two startup mai
 The dashboard backend (`dashboard/`) serves the Next.js static export under `/dashboard/`, a
 GitHub OAuth login whose tokens stay on the server, REST endpoints under `/api/dashboard`
 (sessions, costs, tokens, feedback, learnings, summary) and a WebSocket at `/ws/dashboard`. The
-WebSocket carries `review.started`, `review.stream`, `review.batch`, `review.progress`,
-`review.retry`, `review.completed` and `review.failed` events, and replays an active session's
-events to a client that connects late. A browser cannot send a header the server can read per
+WebSocket carries `review.started`, `review.phase`, `review.stream`, `review.reasoning`,
+`review.batch`, `review.progress`, `review.retry`, `review.completed` and `review.failed` events,
+and replays an active session's events to a client that connects late; of the two text streams,
+`review.stream` and `review.reasoning`, only the latest event is kept, since each carries the
+text's tail. `review.phase` names the step a review is on: `context` and `review` from
+`ReviewOrchestrator`, `verify` once the single review call answers and `summarize` when the
+summary call starts, both from `AiReviewService`, then `publish`. A batched review checks each
+batch's findings as the batch finishes, so it reports `review.batch` progress and no `verify`
+step. `review.progress` is the review's spend so far: `OtelObservabilityListener` sends it from
+the session row once a call's usage is added there, so it counts every call the review made, the
+verifier's included. `review.reasoning` comes from the review call's thinking callback, only with
+`DASHBOARD_REASONING_STREAM_ENABLED` on, which also sets `returnThinking` on the streaming model
+so the provider's `reasoning_content` reaches that callback. Each is an ordinary `SessionEvent`,
+so a relay between replicas (#24) carries it unchanged. A browser cannot send a header the server can read per
 WebSocket connection, and the endpoint configuration is shared by every handshake, so the socket
 authenticates with a single-use ticket in its query string: the page fetches it from
 `POST /api/auth/socket-ticket` with its session cookie just before connecting, the ticket expires

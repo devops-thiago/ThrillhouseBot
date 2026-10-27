@@ -338,6 +338,7 @@ public class ReviewOrchestrator {
       // checks are the ones the gate reads, not a second fetch. Off, the reading keeps its place
       // beside the model call, so the gate reads CI as late as it did before.
       var ciFuture = ciFailureContext.enabled() ? startCiEvaluation(auth, ciReq) : null;
+      broadcastPhase(session, SessionEventBroadcaster.SessionEvent.Phase.CONTEXT);
       var ctx = contextLoader.load(auth, req, session, repository);
       var priorReviews = ctx.priorReviews();
       var previousFindings = ctx.previousFindingsList();
@@ -383,6 +384,7 @@ public class ReviewOrchestrator {
                   ctx,
                   ciFailures)
               .withLearnings(learned.selected());
+      broadcastPhase(session, SessionEventBroadcaster.SessionEvent.Phase.REVIEW);
       var reviewed = findingPipeline.run(session, promptInputs, ctx, plan, lineResolver, evidence);
 
       var earlyCi = ciFuture.join();
@@ -425,6 +427,7 @@ public class ReviewOrchestrator {
         return false;
       }
 
+      broadcastPhase(session, SessionEventBroadcaster.SessionEvent.Phase.PUBLISH);
       boolean summaryPosted = publishSummaryBestEffort(auth, req, result);
       // The optional delta enriches the review, never a second notification beside it.
       var followUpDelta =
@@ -553,6 +556,12 @@ public class ReviewOrchestrator {
       }
     }
     return resultSurfaced;
+  }
+
+  /** Tells the dashboard's live activity page which step the review is on (#66). */
+  private void broadcastPhase(
+      ReviewSession session, SessionEventBroadcaster.SessionEvent.Phase phase) {
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.phase(session, phase));
   }
 
   /** The exact bounded recall used by both the prompt and the deterministic decline check. */

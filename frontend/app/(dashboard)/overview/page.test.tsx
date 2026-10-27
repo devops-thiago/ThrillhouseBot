@@ -125,6 +125,10 @@ describe('OverviewPage', () => {
       screen.getByText('devops-thiago/ThrillhouseBot#99', { selector: 'span' }),
     ).toBeInTheDocument();
     expect(screen.getByText('Review in progress…')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Steps, reasoning and cost so far' })).toHaveAttribute(
+      'href',
+      expect.stringContaining('/activity?id=7'),
+    );
     expect(
       screen.queryByText(/No active reviews\. Open a PR to watch the model/),
     ).not.toBeInTheDocument();

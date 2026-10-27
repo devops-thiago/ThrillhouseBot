@@ -260,6 +260,13 @@ same diff.
   first. It runs for the commands' batching too. Off, the sort is the #935 manifest-first one,
   unchanged. Batches still run in parallel, so the order decides what the cap leaves out, not which
   call starts first.
+- **Live activity events are a view, never a source** (#66). `review.phase` steps come from the
+  orchestrator (`context`, `review`, `publish`) and `AiReviewService` (`verify` after the single
+  review call, `summarize` at the summary call); a batched review has no `verify` step.
+  `review.progress` is read off the session row after `recordModelUsage`, so it matches what the
+  session stores. The reasoning stream is opt-in (`DASHBOARD_REASONING_STREAM_ENABLED`) because it
+  can quote the reviewed code, and a `TokenStream` gets `onPartialThinking` only then: the
+  interface's default throws.
 - **AI services are stateless.** Every `@RegisterAiService` sets
   `NoChatMemoryProviderSupplier`. Review state travels in the previous-findings section, never in
   chat history.

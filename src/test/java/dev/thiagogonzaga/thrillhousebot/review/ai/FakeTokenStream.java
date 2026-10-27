@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.PartialThinking;
 import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.service.TokenStream;
 import dev.langchain4j.service.tool.ToolExecution;
@@ -28,7 +29,9 @@ public final class FakeTokenStream implements TokenStream {
 
   private final String text;
   private final int chunkSize;
+  private String thinking;
   private Consumer<String> partialHandler;
+  private Consumer<PartialThinking> thinkingHandler;
   private Consumer<ChatResponse> completeHandler;
   private Consumer<Throwable> errorHandler;
   private int errorHandlingRegistrations;
@@ -45,6 +48,18 @@ public final class FakeTokenStream implements TokenStream {
   @Override
   public TokenStream onPartialResponse(Consumer<String> handler) {
     this.partialHandler = handler;
+    return this;
+  }
+
+  /** Streams {@code thinking} to the thinking callback, in one piece, before the response. */
+  FakeTokenStream withThinking(String thinking) {
+    this.thinking = thinking;
+    return this;
+  }
+
+  @Override
+  public TokenStream onPartialThinking(Consumer<PartialThinking> handler) {
+    this.thinkingHandler = handler;
     return this;
   }
 
@@ -85,6 +100,9 @@ public final class FakeTokenStream implements TokenStream {
       throw new IllegalStateException(
           "One of [onError, ignoreErrors] must be invoked on TokenStream exactly 1 time, was: "
               + errorHandlingRegistrations);
+    }
+    if (thinkingHandler != null && thinking != null) {
+      thinkingHandler.accept(new PartialThinking(thinking));
     }
     if (partialHandler != null) {
       if (chunkSize <= 0) {

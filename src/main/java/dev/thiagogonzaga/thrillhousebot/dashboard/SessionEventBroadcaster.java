@@ -158,6 +158,12 @@ public final class SessionEventBroadcaster {
       return;
     }
 
+    // A usage report can land after its review ended; it must not bring the review back as live.
+    if (SessionEvent.TYPE_PROGRESS.equals(event.type())
+        && !sessionStateById.containsKey(event.sessionId())) {
+      return;
+    }
+
     Instant now = Instant.now(clock);
     var state =
         sessionStateById.computeIfAbsent(
@@ -166,14 +172,20 @@ public final class SessionEventBroadcaster {
     state.latestEventType = event.type();
     state.lastActivityAt = now;
 
+    // Each stream event carries the text's tail, so only the latest of each is kept for replay.
     if (SessionEvent.TYPE_STREAM.equals(event.type())) {
       state.latestStreamJson = json;
+      return;
+    }
+    if (SessionEvent.TYPE_REASONING.equals(event.type())) {
+      state.latestReasoningJson = json;
       return;
     }
 
     if (SessionEvent.TYPE_RETRY.equals(event.type())
         || SessionEvent.TYPE_STREAM_FAILED.equals(event.type())) {
       state.latestStreamJson = null;
+      state.latestReasoningJson = null;
     }
 
     state.appendBufferedEvent(json, MAX_BUFFERED_EVENTS_PER_SESSION);
@@ -204,6 +216,9 @@ public final class SessionEventBroadcaster {
 
       state.forEachBuffered(json -> sendText(wsSession, json));
 
+      if (state.latestReasoningJson != null) {
+        sendText(wsSession, state.latestReasoningJson);
+      }
       if (state.latestStreamJson != null) {
         sendText(wsSession, state.latestStreamJson);
       }
@@ -279,6 +294,7 @@ public final class SessionEventBroadcaster {
     String latestEventType;
     Instant lastActivityAt;
     String latestStreamJson;
+    String latestReasoningJson;
 
     SessionState(Instant createdAt, Long installationId, Long repositoryId) {
       this.lastActivityAt = createdAt;
@@ -311,7 +327,7 @@ public final class SessionEventBroadcaster {
   /** Events broadcast to WebSocket clients. */
   @RegisterForReflection
   public record SessionEvent(
-      String type, // review.started, review.stream, review.retry, review.completed, review.failed
+      String type, // review.started, review.phase, review.stream, review.reasoning, ...
       long sessionId,
       @JsonIgnore Long installationId,
       @JsonIgnore Long repositoryId,
@@ -321,19 +337,51 @@ public final class SessionEventBroadcaster {
       String commitSha,
       String timestamp,
       Map<String, Object> data) {
+    public static final String TYPE_PHASE = "review.phase";
     public static final String TYPE_STREAM = "review.stream";
+    public static final String TYPE_REASONING = "review.reasoning";
+    public static final String TYPE_PROGRESS = "review.progress";
     public static final String TYPE_RETRY = "review.retry";
     public static final String TYPE_STREAM_FAILED = "review.stream.failed";
     public static final String TYPE_COMPLETED = "review.completed";
     public static final String TYPE_FAILED = "review.failed";
 
+    /**
+     * The step a review is on, in the order a review takes them (#66). A multi-call review checks
+     * each batch's findings as the batch finishes, so it reports its batches under {@link #REVIEW}
+     * and has no separate {@link #VERIFY} step.
+     */
+    public enum Phase {
+      /** Reading the pull request: diff, files, earlier rounds, CI and linked issues. */
+      CONTEXT("context"),
+      /** The review calls. */
+      REVIEW("review"),
+      /** Checking the review call's findings. */
+      VERIFY("verify"),
+      /** The summary call and the checks on its text. */
+      SUMMARIZE("summarize"),
+      /** Posting the review, the summary and the check run. */
+      PUBLISH("publish");
+
+      private final String wireName;
+
+      Phase(String wireName) {
+        this.wireName = wireName;
+      }
+
+      /** The name the dashboard reads. */
+      public String wireName() {
+        return wireName;
+      }
+    }
+
     public SessionEvent {
       data = Map.copyOf(data);
     }
 
-    public static SessionEvent started(ReviewSession session) {
+    private static SessionEvent of(String type, ReviewSession session, Map<String, Object> data) {
       return new SessionEvent(
-          "review.started",
+          type,
           session.id,
           session.getInstallationId(),
           session.getRepositoryId(),
@@ -342,7 +390,17 @@ public final class SessionEventBroadcaster {
           session.getPrTitle(),
           session.getCommitSha(),
           session.getTimestamp().toString(),
-          Map.of(KEY_STATUS, STATUS_IN_PROGRESS));
+          data);
+    }
+
+    public static SessionEvent started(ReviewSession session) {
+      return of("review.started", session, Map.of(KEY_STATUS, STATUS_IN_PROGRESS));
+    }
+
+    /** The review has moved on to {@code phase}. */
+    public static SessionEvent phase(ReviewSession session, Phase phase) {
+      return of(
+          TYPE_PHASE, session, Map.of("phase", phase.wireName(), KEY_STATUS, STATUS_IN_PROGRESS));
     }
 
     public static SessionEvent stream(
@@ -352,16 +410,9 @@ public final class SessionEventBroadcaster {
         int totalChars,
         int chunkIndex,
         int attempt) {
-      return new SessionEvent(
+      return of(
           TYPE_STREAM,
-          session.id,
-          session.getInstallationId(),
-          session.getRepositoryId(),
-          session.getRepository(),
-          session.getPrNumber(),
-          session.getPrTitle(),
-          session.getCommitSha(),
-          session.getTimestamp().toString(),
+          session,
           Map.of(
               "chunk",
               chunk,
@@ -377,18 +428,40 @@ public final class SessionEventBroadcaster {
               "streaming"));
     }
 
+    /**
+     * The review call's reasoning, apart from its output (#66): the same chunk and tail shape as
+     * {@link #stream}.
+     */
+    public static SessionEvent reasoning(
+        ReviewSession session,
+        String chunk,
+        String tail,
+        int totalChars,
+        int chunkIndex,
+        int attempt) {
+      return of(
+          TYPE_REASONING,
+          session,
+          Map.of(
+              "chunk",
+              chunk,
+              "tail",
+              tail,
+              "totalChars",
+              totalChars,
+              "chunkIndex",
+              chunkIndex,
+              KEY_ATTEMPT,
+              attempt,
+              KEY_STATUS,
+              "reasoning"));
+    }
+
     public static SessionEvent retry(
         ReviewSession session, int attempt, int maxAttempts, String reason) {
-      return new SessionEvent(
+      return of(
           TYPE_RETRY,
-          session.id,
-          session.getInstallationId(),
-          session.getRepositoryId(),
-          session.getRepository(),
-          session.getPrNumber(),
-          session.getPrTitle(),
-          session.getCommitSha(),
-          session.getTimestamp().toString(),
+          session,
           Map.of(
               KEY_ATTEMPT,
               attempt,
@@ -402,16 +475,9 @@ public final class SessionEventBroadcaster {
 
     public static SessionEvent streamFailed(
         ReviewSession session, int attempt, int maxAttempts, String reason) {
-      return new SessionEvent(
+      return of(
           TYPE_STREAM_FAILED,
-          session.id,
-          session.getInstallationId(),
-          session.getRepositoryId(),
-          session.getRepository(),
-          session.getPrNumber(),
-          session.getPrTitle(),
-          session.getCommitSha(),
-          session.getTimestamp().toString(),
+          session,
           Map.of(
               KEY_ATTEMPT,
               attempt,
@@ -423,52 +489,41 @@ public final class SessionEventBroadcaster {
               "stream_failed"));
     }
 
-    public static SessionEvent progress(ReviewSession session, int findingsSoFar, long tokensUsed) {
-      return new SessionEvent(
-          "review.progress",
-          session.id,
-          session.getInstallationId(),
-          session.getRepositoryId(),
-          session.getRepository(),
-          session.getPrNumber(),
-          session.getPrTitle(),
-          session.getCommitSha(),
-          session.getTimestamp().toString(),
+    /**
+     * What the review has spent so far, read off its session row after a model call's usage was
+     * added to it (#66): every call the review made until now, the verifier's included.
+     */
+    public static SessionEvent progress(ReviewSession session) {
+      return of(
+          TYPE_PROGRESS,
+          session,
           Map.of(
-              "findingsSoFar",
-              findingsSoFar,
-              "tokensUsed",
-              tokensUsed,
+              "inputTokens",
+              session.getInputTokens(),
+              "outputTokens",
+              session.getOutputTokens(),
+              "totalTokens",
+              session.getInputTokens() + session.getOutputTokens(),
+              "cost",
+              session.getCost(),
+              "pricingMissing",
+              session.isPricingMissing(),
               KEY_STATUS,
               STATUS_IN_PROGRESS));
     }
 
     /** Progress on a large multi-call review: reviewing batch {@code index} of {@code count}. */
     public static SessionEvent batch(ReviewSession session, int index, int count) {
-      return new SessionEvent(
+      return of(
           "review.batch",
-          session.id,
-          session.getInstallationId(),
-          session.getRepositoryId(),
-          session.getRepository(),
-          session.getPrNumber(),
-          session.getPrTitle(),
-          session.getCommitSha(),
-          session.getTimestamp().toString(),
+          session,
           Map.of("batchIndex", index, "batchCount", count, KEY_STATUS, STATUS_IN_PROGRESS));
     }
 
     public static SessionEvent completed(ReviewSession session) {
-      return new SessionEvent(
+      return of(
           TYPE_COMPLETED,
-          session.id,
-          session.getInstallationId(),
-          session.getRepositoryId(),
-          session.getRepository(),
-          session.getPrNumber(),
-          session.getPrTitle(),
-          session.getCommitSha(),
-          session.getTimestamp().toString(),
+          session,
           Map.of(
               "critical",
               session.getCriticalFindings(),
@@ -493,16 +548,9 @@ public final class SessionEventBroadcaster {
     }
 
     public static SessionEvent failed(ReviewSession session) {
-      return new SessionEvent(
+      return of(
           TYPE_FAILED,
-          session.id,
-          session.getInstallationId(),
-          session.getRepositoryId(),
-          session.getRepository(),
-          session.getPrNumber(),
-          session.getPrTitle(),
-          session.getCommitSha(),
-          session.getTimestamp().toString(),
+          session,
           Map.of(
               "errorType",
               session.getErrorMessage() != null ? session.getErrorMessage() : "Unknown",
