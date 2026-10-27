@@ -54,6 +54,13 @@ public class ReviewResponseParser {
    */
   private static final String CLOSED_EARLIER_ROUND = "closed_earlier_round";
 
+  private static final String LINKED_ISSUE_CRITERIA = "linked_issue_criteria";
+
+  private static final String STATUS = "status";
+
+  /** Criterion verdicts read from one answer, at most: an issue lists a handful of criteria. */
+  static final int MAX_CRITERION_VERDICTS = 50;
+
   private static final String DESCRIPTION_GAPS = "description_gaps";
   private static final String ADDRESSED_GAPS = "addressed_gaps";
   static final String FILE_SUMMARIES = "file_summaries";
@@ -147,6 +154,11 @@ public class ReviewResponseParser {
     // #1066: the earlier-round closes a round records are the verdict's, set only after it; a
     // model answer that writes the field must not close earlier findings on later rounds.
     root.remove(CLOSED_EARLIER_ROUND);
+    // #1200: read apart and leniently, so a mis-shaped verdict never costs the findings a retry.
+    // Only the review lane's verdicts count: the summary call does not see the diff.
+    var verdictNode = root.remove(LINKED_ISSUE_CRITERIA);
+    var verdicts =
+        summaryLane ? List.<ReviewResponse.CriterionVerdict>of() : criterionVerdicts(verdictNode);
     if (summaryLane) {
       foldSummaryFields(root);
     }
@@ -171,11 +183,40 @@ public class ReviewResponseParser {
           root.size());
       root.set(FINDINGS, mapper.createArrayNode());
     }
+    ReviewResponse response;
     try {
-      return mapper.treeToValue(root, ReviewResponse.class);
+      response = mapper.treeToValue(root, ReviewResponse.class);
     } catch (JsonProcessingException e) {
-      return parseWithoutSummary(root, e);
+      response = parseWithoutSummary(root, e);
     }
+    return verdicts.isEmpty() ? response : response.withLinkedIssueCriteria(verdicts);
+  }
+
+  /**
+   * The criterion verdicts an answer's {@code linked_issue_criteria} array holds (#1200): each
+   * object with a text {@code criterion} and {@code status}, and an {@code evidence} line when it
+   * is text. Anything else in the array is skipped, and anything but an array reads as none.
+   */
+  static List<ReviewResponse.CriterionVerdict> criterionVerdicts(JsonNode node) {
+    if (node == null || !node.isArray()) {
+      return List.of();
+    }
+    var verdicts = new ArrayList<ReviewResponse.CriterionVerdict>();
+    for (var element : node) {
+      var criterion = textOf(element, "criterion");
+      var status = textOf(element, STATUS);
+      if (criterion != null && status != null && verdicts.size() < MAX_CRITERION_VERDICTS) {
+        verdicts.add(
+            new ReviewResponse.CriterionVerdict(criterion, status, textOf(element, "evidence")));
+      }
+    }
+    return verdicts;
+  }
+
+  /** {@code node}'s non-blank text field {@code name}, or {@code null}. */
+  private static String textOf(JsonNode node, String name) {
+    var value = node.get(name);
+    return value != null && value.isTextual() && !value.asText().isBlank() ? value.asText() : null;
   }
 
   /**
@@ -573,7 +614,7 @@ public class ReviewResponseParser {
     }
     var normalized = mapper.createArrayNode();
     if (statuses.isObject()) {
-      if (statuses.has("status")) {
+      if (statuses.has(STATUS)) {
         // A bare single status object with id/status fields at the top level
         normalized.add(statuses);
       } else {
@@ -591,7 +632,7 @@ public class ReviewResponseParser {
     if (value.isObject()) {
       item.setAll((ObjectNode) value);
     } else {
-      item.put("status", value.asText());
+      item.put(STATUS, value.asText());
     }
     if (!item.has("id")) {
       item.put("id", parseFindingId(key));

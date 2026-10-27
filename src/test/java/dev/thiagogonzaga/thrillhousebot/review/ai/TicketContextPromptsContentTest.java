@@ -84,4 +84,22 @@ class TicketContextPromptsContentTest {
         "#N is the number in that issue's own \"### Issue #N\" heading",
         "the number names the issue, as its heading shows it");
   }
+
+  @Test
+  void theReviewCallJudgesEachCriterionAndAnUnsureVerdictIsUnclear() {
+    // #1200: the one place a criterion nothing names is judged against the diff.
+    var review = TicketContextPrompts.REVIEW_REQUEST;
+    assertContains(review, "\"linked_issue_criteria\"", "the field the parser reads");
+    assertContains(review, "\"met\" | \"unmet\" | \"unclear\"", "the three statuses");
+    assertContains(
+        review,
+        "When you are unsure, the status is \"unclear\", never",
+        "a false unmet lists a met criterion as unmet");
+    assertContains(
+        review, "A verdict is not a finding", "missing scope still never becomes a line finding");
+    assertContains(
+        PrReviewPrompts.FINDINGS_RESPONSE_CONTRACT,
+        "\"linked_issue_criteria\" only when a",
+        "the contract allows the third field the linked-issue section asks for");
+  }
 }

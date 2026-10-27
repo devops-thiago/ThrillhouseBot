@@ -204,12 +204,15 @@ public class PrSummaryGenerator {
    * @param baseCode the code the PR description cites as already meeting a criterion; a criterion
    *     it shows met on the base branch is listed as met by existing code instead ({@link
    *     BaseCodeCitations}, #1148)
+   * @param criterionVerdicts the review calls' verdicts on the linked issue's criteria; one they
+   *     judge unmet gets its line ({@link LinkedIssueCriteria}, #1200)
    */
   record DescriptionSources(
       String claimText,
       Set<String> previouslyNamed,
       String linkedIssues,
-      BaseCodeCitations baseCode) {
+      BaseCodeCitations baseCode,
+      List<ReviewResponse.CriterionVerdict> criterionVerdicts) {
 
     static final DescriptionSources NONE = new DescriptionSources("", Set.of());
 
@@ -218,6 +221,16 @@ public class PrSummaryGenerator {
       previouslyNamed = Set.copyOf(previouslyNamed);
       linkedIssues = Objects.requireNonNullElse(linkedIssues, "");
       baseCode = Objects.requireNonNullElse(baseCode, BaseCodeCitations.NONE);
+      criterionVerdicts = List.copyOf(Objects.requireNonNullElse(criterionVerdicts, List.of()));
+    }
+
+    /** Sources with no criterion verdicts. */
+    DescriptionSources(
+        String claimText,
+        Set<String> previouslyNamed,
+        String linkedIssues,
+        BaseCodeCitations baseCode) {
+      this(claimText, previouslyNamed, linkedIssues, baseCode, List.of());
     }
 
     /** Sources with no description citations read. */
@@ -320,14 +333,20 @@ public class PrSummaryGenerator {
     appendPrPurpose(sb, aiSummary);
     // #1093: every criterion of the one linked issue the round states unmet gets its own line; a
     // line pointing at a finding takes the place of that finding's bullet.
-    var rendered = backedByFindings(surfaces.descriptionGaps(), result.findings());
+    // #1200: a criterion the review of the diff judged met leaves the list, carried or not.
+    var rendered =
+        LinkedIssueCriteria.withoutMet(
+            backedByFindings(surfaces.descriptionGaps(), result.findings()),
+            sources.linkedIssues(),
+            sources.criterionVerdicts());
     var criteria =
         LinkedIssueCriteria.unmet(
             sources.linkedIssues(),
             rendered,
             result.findings(),
             aiSummary == null ? null : aiSummary.prPurpose(),
-            summariesByPath(aiSummary));
+            summariesByPath(aiSummary),
+            sources.criterionVerdicts());
     var gaps = new ArrayList<>(rendered);
     gaps.addAll(criteria.lines());
     // #1148: a criterion the description shows met by code already on the base branch.

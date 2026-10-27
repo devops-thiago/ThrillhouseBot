@@ -404,8 +404,9 @@ public class ReviewOrchestrator {
               // #1148: the description alone, never the issue text, is read for citations.
               new VerdictBuilder.LinkedIssueContext(
                   linkedIssues,
-                  BaseCodeCitations.of(
-                      req.prDescription(), ctx.files(), evidence.citedLocations())));
+                  BaseCodeCitations.of(req.prDescription(), ctx.files(), evidence.citedLocations()),
+                  // #1200: the calls are done, so every batch's verdicts are in.
+                  evidence.criterionVerdicts().all()));
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);

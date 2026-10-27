@@ -183,8 +183,21 @@ public class VerdictBuilder {
    * @param section the unfenced linked-issue section, {@code ""} when none
    * @param baseCode the description's citations; a linked-issue criterion it shows met on the base
    *     branch is listed as met by existing code, not as unmet
+   * @param verdicts the review calls' verdicts on the issue's criteria (#1200); a criterion they
+   *     judge unmet gets its line even when nothing else the round wrote names it
    */
-  record LinkedIssueContext(String section, BaseCodeCitations baseCode) {}
+  record LinkedIssueContext(
+      String section, BaseCodeCitations baseCode, List<ReviewResponse.CriterionVerdict> verdicts) {
+
+    LinkedIssueContext {
+      verdicts = List.copyOf(Objects.requireNonNullElse(verdicts, List.of()));
+    }
+
+    /** The context of a review whose calls judged no criterion. */
+    LinkedIssueContext(String section, BaseCodeCitations baseCode) {
+      this(section, baseCode, List.of());
+    }
+  }
 
   /**
    * {@link #build(ReviewContextLoader.ReviewContext, ReviewResponse,
@@ -400,7 +413,8 @@ public class VerdictBuilder {
                         ctx.conversationComments(), botIdentity)
                     : Set.of(),
                 linked.section(),
-                linked.baseCode())),
+                linked.baseCode(),
+                linked.verdicts())),
         ciEvaluation,
         backstopStatuses);
   }

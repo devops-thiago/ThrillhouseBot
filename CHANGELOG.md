@@ -92,6 +92,12 @@ without it those counters stay hidden and nothing else changes.
 
 ### Fixed
 
+- On a pull request linked to one issue, Description vs. Implementation now names an acceptance
+  criterion the change does not meet even when no finding or summary sentence mentions it. The
+  review call, which reads the diff, judges each criterion as met, unmet or unclear, and a
+  criterion it judges unmet gets its "Linked issue #N:" line with what the review looked for. In a
+  multi-call review a criterion any batch judges met counts as met, and a criterion judged met
+  leaves the list on a later round, so it is not shown as unmet after a push implements it. (#1200)
 - Spans and metric points exported after a quiet spell are no longer sent to the collector twice.
   Quarkus used the 10-second export timeout as the connection's idle timeout and closed a connection
   right after writing a new export, which its retry then sent again
