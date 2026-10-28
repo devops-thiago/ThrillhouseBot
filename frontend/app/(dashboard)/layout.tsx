@@ -10,6 +10,7 @@ import "@/lib/charts";
 // Paths are relative to basePath (/dashboard) — do not include /dashboard here
 const NAV = [
   { href: "/overview", label: "Overview" },
+  { href: "/activity", label: "Live" },
   { href: "/costs", label: "Costs" },
   { href: "/tokens", label: "Tokens" },
   { href: "/sessions", label: "Sessions" },

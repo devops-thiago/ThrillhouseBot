@@ -43,6 +43,24 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
   }
 
   @Test
+  void recordingUsageReturnsTheSessionWithItsRunningTotals() throws Exception {
+    var session = persistSession();
+    updater.recordModelUsage(session.id, "deepseek-chat", 100, 20, 0.01, false, 100);
+
+    var updated = updater.recordModelUsage(session.id, "deepseek-chat", 50, 10, 0.02, true, 100);
+
+    assertEquals(150, updated.getInputTokens());
+    assertEquals(30, updated.getOutputTokens());
+    assertEquals(0.03, updated.getCost(), 0.001);
+    assertTrue(updated.isPricingMissing());
+  }
+
+  @Test
+  void recordingUsageForAMissingSessionReturnsNothing() {
+    assertNull(updater.recordModelUsage(-404L, "deepseek-chat", 1, 1, 0.0, false, 1));
+  }
+
+  @Test
   void shouldAccumulateModelUsageAcrossMultipleCalls() throws Exception {
     var session = persistSession();
 

@@ -294,6 +294,28 @@ class ReviewOrchestratorTest {
         .thenReturn(new GitHubReviewClient.PullRequestCommentResponse(1L, "ok", "main.py", 10));
   }
 
+  /**
+   * The events the review broadcast, less the phase changes the live activity page reads (#66):
+   * started, completed and failed are what these tests count.
+   */
+  private List<SessionEventBroadcaster.SessionEvent> lifecycleBroadcasts() {
+    var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
+    verify(broadcaster, atLeast(0)).broadcast(captor.capture());
+    return captor.getAllValues().stream()
+        .filter(e -> !SessionEventBroadcaster.SessionEvent.TYPE_PHASE.equals(e.type()))
+        .toList();
+  }
+
+  /** The steps the review told the live activity page it moved through, in order (#66). */
+  private List<Object> phasesBroadcast() {
+    var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
+    verify(broadcaster, atLeast(0)).broadcast(captor.capture());
+    return captor.getAllValues().stream()
+        .filter(e -> SessionEventBroadcaster.SessionEvent.TYPE_PHASE.equals(e.type()))
+        .map(e -> e.data().get("phase"))
+        .toList();
+  }
+
   private ReviewOrchestrator newOrchestrator() {
     return new ReviewOrchestrator(
         config,
@@ -1991,12 +2013,12 @@ class ReviewOrchestratorTest {
         verify(session)
             .setErrorMessage(argThat(msg -> msg != null && msg.contains("AI service unavailable")));
 
-        @SuppressWarnings("unchecked") // Generic <SessionEvent> capture unavoidable with Mockito
-        var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
-        verify(broadcaster, times(2)).broadcast(captor.capture());
-        var events = captor.getAllValues();
+        var events = lifecycleBroadcasts();
+        assertEquals(2, events.size());
         assertEquals("review.started", events.get(0).type());
         assertEquals("review.failed", events.get(1).type());
+        // #66: the review failed in its review step, so nothing was published.
+        assertEquals(List.of("context", "review"), phasesBroadcast());
 
         verify(commentClient)
             .createComment(
@@ -2120,7 +2142,7 @@ class ReviewOrchestratorTest {
         verify(session).setStatus(ReviewSession.STATUS_FAILED);
         verify(commentClient)
             .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
-        verify(broadcaster, times(2)).broadcast(any());
+        assertEquals(2, lifecycleBroadcasts().size());
       }
     }
 
@@ -2182,7 +2204,8 @@ class ReviewOrchestratorTest {
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
-        verify(broadcaster, times(2)).broadcast(any());
+        assertEquals(2, lifecycleBroadcasts().size());
+        assertEquals(List.of("context", "review", "publish"), phasesBroadcast());
         verify(commentClient, never())
             .createComment(
                 anyString(),
@@ -2370,7 +2393,7 @@ class ReviewOrchestratorTest {
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
-        verify(broadcaster, times(1)).broadcast(any());
+        assertEquals(1, lifecycleBroadcasts().size());
         // #73: the verdict is on the PR, so a failed session write still announces a completion.
         verify(notifier).reviewCompleted(any(), anyString(), any());
         verifyNoMoreInteractions(notifier);
@@ -2724,7 +2747,7 @@ class ReviewOrchestratorTest {
                 argThat(req -> req.body().contains("could not be completed")));
         verify(session, never()).setStatus(ReviewSession.STATUS_FAILED);
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
-        verify(broadcaster, times(2)).broadcast(any());
+        assertEquals(2, lifecycleBroadcasts().size());
       }
     }
 
@@ -4089,7 +4112,7 @@ class ReviewOrchestratorTest {
                   new PrePublishGuard.StandDown(
                       ReviewSkipReason.EXCLUDED_LABEL, "", "", "", "Skipped", "label-gated")));
 
-      verify(broadcaster, times(2)).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
+      assertEquals(2, lifecycleBroadcasts().size());
     }
 
     @Test
@@ -4175,7 +4198,7 @@ class ReviewOrchestratorTest {
                 anyString(), anyString(), anyString(), anyString(), eq(1L), updateCaptor.capture());
         assertEquals("skipped", updateCaptor.getValue().conclusion());
         verify(session).setStatus(ReviewSession.STATUS_FAILED);
-        verify(broadcaster, times(2)).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
+        assertEquals(2, lifecycleBroadcasts().size());
         // #73: the result was discarded, so no outcome is announced; the run for the new head
         // sends its own.
         verifyNoInteractions(notifier);
@@ -7892,7 +7915,7 @@ class ReviewOrchestratorTest {
                 eq(7),
                 argThat(req -> req.body().contains("could not be completed")));
         verify(session).setStatus(ReviewSession.STATUS_FAILED);
-        verify(broadcaster, times(2)).broadcast(any(SessionEventBroadcaster.SessionEvent.class));
+        assertEquals(2, lifecycleBroadcasts().size());
         verify(checkRunClient, never())
             .createCheckRun(anyString(), anyString(), anyString(), anyString(), any());
       }

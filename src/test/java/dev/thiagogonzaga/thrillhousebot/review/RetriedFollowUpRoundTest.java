@@ -144,6 +144,8 @@ class RetriedFollowUpRoundTest {
     var reasoning = mock(ThrillhouseConfig.AiPricingConfig.ReasoningConfig.class);
     when(config.review()).thenReturn(reviewConfig);
     when(config.ai()).thenReturn(aiConfig);
+    var dashboardConfig = mock(ThrillhouseConfig.DashboardConfig.class);
+    when(config.dashboard()).thenReturn(dashboardConfig);
     when(aiConfig.reasoning()).thenReturn(reasoning);
     when(aiConfig.routing())
         .thenReturn(mock(ThrillhouseConfig.AiPricingConfig.RoutingConfig.class));

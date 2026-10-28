@@ -84,7 +84,37 @@ export const mockSessionDetail: SessionDetail = {
 
 export function mockSessionEvents() {
   const now = new Date().toISOString();
+  const live = {
+    sessionId: 2,
+    repository: 'devops-thiago/ThrillhouseBot',
+    prNumber: 14,
+    prTitle: 'Wire up mock dashboard preview',
+    commitSha: 'def5678',
+    timestamp: now,
+  };
+  // Newest first, as the feed keeps them.
   return [
+    {
+      ...live,
+      type: 'review.stream' as const,
+      data: { tail: '{"findings":[{"risk":"MEDIUM","file":"src/app.ts"', totalChars: 46, attempt: 1 },
+    },
+    {
+      ...live,
+      type: 'review.reasoning' as const,
+      data: {
+        tail: 'The handler reads the token before the null check, so an expired session reaches the parser.',
+        totalChars: 96,
+        attempt: 1,
+      },
+    },
+    {
+      ...live,
+      type: 'review.progress' as const,
+      data: { inputTokens: 18240, outputTokens: 610, totalTokens: 18850, cost: 0.0041 },
+    },
+    { ...live, type: 'review.phase' as const, data: { phase: 'review' } },
+    { ...live, type: 'review.phase' as const, data: { phase: 'context' } },
     {
       type: 'review.started' as const,
       sessionId: 2,

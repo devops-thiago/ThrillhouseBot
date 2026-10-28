@@ -122,10 +122,18 @@ public class AiReviewService {
     this.repairService = repairService;
   }
 
-  /** Single-call review (normal-size PRs): streams tokens to the dashboard as they arrive. */
+  /**
+   * Single-call review (normal-size PRs): streams tokens to the dashboard as they arrive. Once the
+   * call answers, the review moves on to checking its findings, which the dashboard is told (#66).
+   */
   public ReviewResponse review(ReviewSession session, PromptInputs inputs) {
-    return runWithRetries(
-        session, () -> reviewStream(inputs), true, ModelLane.ACTIVE, routedModel(session));
+    var response =
+        runWithRetries(
+            session, () -> reviewStream(inputs), true, ModelLane.ACTIVE, routedModel(session));
+    broadcaster.broadcast(
+        SessionEventBroadcaster.SessionEvent.phase(
+            session, SessionEventBroadcaster.SessionEvent.Phase.VERIFY));
+    return response;
   }
 
   /**
@@ -156,6 +164,9 @@ public class AiReviewService {
    * omits the findings node or the summary object around its fields (#850).
    */
   public ReviewResponse summarize(ReviewSession session, SummaryInputs inputs) {
+    broadcaster.broadcast(
+        SessionEventBroadcaster.SessionEvent.phase(
+            session, SessionEventBroadcaster.SessionEvent.Phase.SUMMARIZE));
     return runWithRetries(
         session,
         () ->
@@ -828,9 +839,15 @@ public class AiReviewService {
     var deliberationGuard =
         ReasoningConfig.EFFORT_NONE.equals(reasoningEffort) ? new InlinedDeliberationGuard() : null;
 
+    var reasoning = new ReasoningFeed(session, attempt, broadcastTokens);
+
+    // The reasoning still pending goes out ahead of the output that follows it.
     Runnable flushStream =
         broadcastTokens
-            ? () -> flushPendingStream(session, buffer, chunkCount, attempt, lastFlushNanos)
+            ? () -> {
+              reasoning.flush();
+              flushPendingStream(session, buffer, chunkCount, attempt, lastFlushNanos);
+            }
             : () -> {};
 
     // The binding travels on this thread into the model's chat call, where the observability
@@ -845,6 +862,7 @@ public class AiReviewService {
       try (var _ = ReasoningRepeat.override(reasoningEffort);
           var _ = ModelOverride.override(model)) {
         stream = streamFactory.get();
+        reasoning.attach(stream, cancelled);
 
         stream
             .onPartialResponse(
@@ -1044,6 +1062,53 @@ public class AiReviewService {
             chunkCount.incrementAndGet(),
             attempt));
     lastFlushNanos.set(System.nanoTime());
+  }
+
+  /**
+   * The call's reasoning on its way to the dashboard's live activity page (#66), apart from its
+   * output. Only a call that streams its output there sends it, and only with {@code
+   * DASHBOARD_REASONING_STREAM_ENABLED} on; otherwise nothing is attached to the stream. It flushes
+   * on the output's cadence, and whatever is pending when the output flushes goes first.
+   */
+  private final class ReasoningFeed {
+
+    private final ReviewSession session;
+    private final int attempt;
+    private final boolean enabled;
+    private final StreamBuffer buffer = new StreamBuffer();
+    private final AtomicInteger chunkCount = new AtomicInteger();
+    private final AtomicLong lastFlushNanos = new AtomicLong(System.nanoTime());
+
+    ReasoningFeed(ReviewSession session, int attempt, boolean broadcastTokens) {
+      this.session = session;
+      this.attempt = attempt;
+      this.enabled = broadcastTokens && config.dashboard().reasoningStreamEnabled();
+    }
+
+    void attach(TokenStream stream, AtomicBoolean cancelled) {
+      if (enabled) {
+        stream.onPartialThinking(
+            thinking ->
+                handlePartialToken(
+                    thinking.text(), buffer, this::flush, cancelled, lastFlushNanos));
+      }
+    }
+
+    void flush() {
+      var pending = buffer.takePending();
+      if (pending == null) {
+        return;
+      }
+      broadcaster.broadcast(
+          SessionEventBroadcaster.SessionEvent.reasoning(
+              session,
+              pending.chunk(),
+              pending.tail(),
+              pending.totalChars(),
+              chunkCount.incrementAndGet(),
+              attempt));
+      lastFlushNanos.set(System.nanoTime());
+    }
   }
 
   /**

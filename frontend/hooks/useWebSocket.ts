@@ -7,7 +7,9 @@ export interface SessionEvent {
   type:
     | "keepalive"
     | "review.started"
+    | "review.phase"
     | "review.stream"
+    | "review.reasoning"
     | "review.stream.failed"
     | "review.batch"
     | "review.retry"
@@ -49,8 +51,15 @@ export function socketUrl(location: Pick<Location, "protocol" | "host">, ticket:
   return `${protocol}//${location.host}/ws/dashboard?ticket=${encodeURIComponent(ticket)}`;
 }
 
-export function useWebSocket() {
+/**
+ * The dashboard's event feed. `events` keeps the latest 100, newest first. `onEvent`, when given,
+ * sees every event as it arrives, oldest first, for a page that folds the whole stream instead of
+ * reading a window that the stream and reasoning chunks soon fill.
+ */
+export function useWebSocket(onEvent?: (event: SessionEvent) => void) {
   const [events, setEvents] = useState<SessionEvent[]>([]);
+  const onEventRef = useRef(onEvent);
+  onEventRef.current = onEvent;
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -96,6 +105,7 @@ export function useWebSocket() {
         if (event.type === "keepalive") {
           return;
         }
+        onEventRef.current?.(event);
         setEvents((prev) => [event, ...prev].slice(0, 100));
       } catch {
         /* ignore malformed */
@@ -119,7 +129,9 @@ export function useWebSocket() {
 
   useEffect(() => {
     if (MOCK_MODE) {
-      setEvents(mockSessionEvents());
+      const mocked = mockSessionEvents();
+      [...mocked].reverse().forEach((event) => onEventRef.current?.(event));
+      setEvents(mocked);
       setConnected(true);
       return;
     }

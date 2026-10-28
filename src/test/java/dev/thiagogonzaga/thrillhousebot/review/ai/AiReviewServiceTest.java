@@ -78,6 +78,8 @@ class AiReviewServiceTest {
   /** No routed or fallback model unless a test says so (#43). */
   @Mock private ThrillhouseConfig.AiPricingConfig.RoutingConfig routing;
 
+  @Mock private ThrillhouseConfig.DashboardConfig dashboardConfig;
+
   @Mock private SessionEventBroadcaster broadcaster;
 
   @Mock private ReviewTokenLedger tokenLedger;
@@ -106,6 +108,7 @@ class AiReviewServiceTest {
     lenient().when(reviewConfig.aiTimeoutSeconds()).thenReturn(5);
     // Reasoning on at max, the production shape behind #839; the concise lane resolves to low.
     lenient().when(config.ai()).thenReturn(aiConfig);
+    lenient().when(config.dashboard()).thenReturn(dashboardConfig);
     lenient().when(aiConfig.reasoning()).thenReturn(reasoning);
     lenient().when(aiConfig.routing()).thenReturn(routing);
     lenient().when(reasoning.enabled()).thenReturn(true);
@@ -171,6 +174,58 @@ class AiReviewServiceTest {
 
     verify(prReviewer, times(2)).reviewStream(followUp);
     verifyNoMoreInteractions(prReviewer);
+  }
+
+  @Test
+  void withTheReasoningStreamOnTheReviewCallsReasoningReachesTheDashboardAheadOfItsOutput() {
+    when(dashboardConfig.reasoningStreamEnabled()).thenReturn(true);
+    ReviewSession session = reviewSession();
+    when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
+        .thenReturn(new FakeTokenStream("{\"findings\":[]}").withThinking("Check the null path."));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    service.review(session, PROMPT_INPUTS);
+
+    var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
+    verify(broadcaster, atLeastOnce()).broadcast(captor.capture());
+    var types =
+        captor.getAllValues().stream().map(SessionEventBroadcaster.SessionEvent::type).toList();
+    assertEquals(List.of("review.reasoning", "review.stream", "review.phase"), types);
+    var thinking = captor.getAllValues().get(0);
+    assertEquals("Check the null path.", thinking.data().get("tail"));
+    assertEquals(1, thinking.data().get("chunkIndex"));
+    assertEquals("verify", captor.getAllValues().get(2).data().get("phase"));
+  }
+
+  @Test
+  void withTheReasoningStreamOffNoReasoningIsSent() {
+    ReviewSession session = reviewSession();
+    when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
+        .thenReturn(new FakeTokenStream("{\"findings\":[]}").withThinking("Check the null path."));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    service.review(session, PROMPT_INPUTS);
+
+    var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
+    verify(broadcaster, atLeastOnce()).broadcast(captor.capture());
+    assertTrue(captor.getAllValues().stream().noneMatch(e -> "review.reasoning".equals(e.type())));
+  }
+
+  @Test
+  void aBatchCallSendsNoReasoningEvenWithTheStreamOn() {
+    lenient().when(dashboardConfig.reasoningStreamEnabled()).thenReturn(true);
+    ReviewSession session = reviewSession();
+    when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
+        .thenReturn(new FakeTokenStream("{\"findings\":[]}").withThinking("Check the null path."));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    service.reviewBatch(session, PROMPT_INPUTS, 1, 2);
+
+    var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
+    verify(broadcaster, atLeastOnce()).broadcast(captor.capture());
+    assertEquals(
+        List.of("review.batch"),
+        captor.getAllValues().stream().map(SessionEventBroadcaster.SessionEvent::type).toList());
   }
 
   @Test
@@ -279,6 +334,9 @@ class AiReviewServiceTest {
     assertTrue(
         captor.getAllValues().stream().noneMatch(e -> "review.stream".equals(e.type())),
         "the summary call must not broadcast a per-token stream");
+    // #66: the live activity page shows the review is on its summary.
+    assertEquals("review.phase", captor.getAllValues().get(0).type());
+    assertEquals("summarize", captor.getAllValues().get(0).data().get("phase"));
   }
 
   @Test

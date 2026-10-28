@@ -103,6 +103,7 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 | `GITHUB_CLIENT_SECRET`<br>`thrillhousebot.dashboard.github.client-secret` | OAuth client secret for dashboard login, from the GitHub App's settings. | string | _(none)_ |
 | `GITHUB_OAUTH_URL`<br>`thrillhousebot.dashboard.github.oauth-url` | Base URL of GitHub's OAuth endpoints. | string | `https://github.com/login/oauth` |
 | `THRILLHOUSEBOT_DASHBOARD_GITHUB_REDIRECT_URI`<br>`thrillhousebot.dashboard.github.redirect-uri` | OAuth callback URL registered on the GitHub App; follows `DASHBOARD_URL`. | string | `${DASHBOARD_URL}/api/auth/callback` |
+| `DASHBOARD_REASONING_STREAM_ENABLED`<br>`thrillhousebot.dashboard.reasoning-stream-enabled` | Streams the review call's reasoning to the dashboard's live activity page (#66), apart from its output. Only a provider that returns its reasoning as `reasoning_content` on the OpenAI-compatible stream sends any. Off by default: the reasoning can quote the reviewed code, and it is shown to every dashboard user who may read the repository. | boolean | `false` |
 | `DASHBOARD_URL`<br>`thrillhousebot.dashboard.url` | Public dashboard URL, used for the OAuth callback and the session links posted to GitHub. | string | `http://localhost:8080` |
 
 ## `thrillhousebot.github`

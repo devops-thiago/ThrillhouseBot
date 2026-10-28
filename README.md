@@ -1318,6 +1318,21 @@ progress (batch X/Y) instead:
   <img src="docs/assets/live-streaming.png" alt="Dashboard Overview with summary cards, live model-output panel, and recent activity" width="800" />
 </p>
 
+The **Live** page follows one review at a time, from the moment it starts until
+it ends. It shows the step the review is on (reading the pull request,
+reviewing, checking the findings, summarizing, publishing), the tokens and cost
+spent so far across every model call, the model's output, and, when enabled, its
+reasoning. A review in batches shows its batch count instead of the output. The
+page keeps the last ten reviews that ended, and a link from the Overview's live
+panel opens a review on it.
+
+The reasoning panel is off by default. Set `DASHBOARD_REASONING_STREAM_ENABLED=true`
+to stream the review call's reasoning there. Only a provider that sends its
+reasoning as `reasoning_content` on the OpenAI-compatible stream has any to
+show; the flag reads what the provider already sends and changes nothing in the
+request. The reasoning can quote the reviewed code, and every dashboard user who
+can read the repository sees it.
+
 ## Repository instructions
 
 Add a `.github/thrillhousebot.md` file to a repository to guide its reviews:

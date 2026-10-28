@@ -11,6 +11,13 @@ without it those counters stay hidden and nothing else changes.
 
 ### Added
 
+- A **Live** dashboard page follows a review from start to end: the step it is on (reading the
+  pull request, reviewing, checking findings, summarizing, publishing), the tokens and cost spent
+  so far across all its model calls, its output and its batch progress. The new `review.phase`
+  WebSocket event carries the step, and `review.progress` now carries the running spend.
+  `DASHBOARD_REASONING_STREAM_ENABLED` (off by default) also streams the review call's reasoning
+  as `review.reasoning`, from providers that send `reasoning_content`. (#66)
+
 - `REVIEW_TRIAGE_ENABLED` (off by default) packs a large pull request's batches by review
   priority: build manifests, then files matching `AI_ROUTING_HIGH_RISK_PATHS`, then the rest, then
   files matching `AI_ROUTING_LOW_RISK_PATHS`, the larger change first within each. When

@@ -40,6 +40,12 @@ export function buildLiveReviews(events: SessionEvent[]): LiveReviewState[] {
       continue;
     }
 
+    // The running spend says nothing the card shows, and one that lands after the review ended
+    // must not bring it back as a live review.
+    if (event.type === 'review.progress') {
+      continue;
+    }
+
     const current = bySession.get(event.sessionId) ?? createLiveReviewFromEvent(event);
     if (!bySession.has(event.sessionId)) {
       bySession.set(event.sessionId, current);

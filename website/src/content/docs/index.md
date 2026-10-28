@@ -41,7 +41,9 @@ requests on your network; language support depends on the model.
 
 The built-in dashboard (Next.js, served by the bot itself) shows summary cards,
 a live activity feed that streams the model's output as a review runs, cost
-charts by model, token breakdowns, and a paginated session history:
+charts by model, token breakdowns, and a paginated session history. Its Live
+page follows one review step by step, with the tokens and cost spent so far and,
+when enabled, the model's reasoning:
 
 ![Dashboard Overview with summary cards, live model-output panel, and recent activity](../../assets/live-streaming.png)
 
