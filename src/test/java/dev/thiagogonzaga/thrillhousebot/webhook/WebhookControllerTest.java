@@ -977,6 +977,61 @@ class WebhookControllerTest {
   }
 
   @ParameterizedTest
+  @MethodSource("authorGatedActions")
+  void anExcludedAuthorIsSkippedBeforeAnyLabelIsRead(String action) {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    var controller =
+        newController(
+            new ReviewTriggerFilter(
+                false,
+                List.of(),
+                List.of("dependencies"),
+                List.of(),
+                List.of(),
+                List.of("octocat")));
+    var body =
+        buildPullRequestPayload(action, 1276, "owner/repo", "sha1276", "main")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+
+    verify(skipEmitter)
+        .recordSkip(
+            eq(ReviewSkipReason.EXCLUDED_AUTHOR),
+            anyLong(),
+            eq("owner"),
+            eq("repo"),
+            eq(1276),
+            anyString());
+    verify(labelGate, never()).currentLabels(anyLong(), anyString(), anyString(), anyInt());
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void aManualReviewStillRunsOnAPullRequestByAnExcludedAuthor() {
+    when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
+    when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
+    var controller =
+        newController(
+            new ReviewTriggerFilter(
+                false, List.of(), List.of(), List.of(), List.of(), List.of("octocat")));
+    var body =
+        buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/review")
+            .getBytes(StandardCharsets.UTF_8);
+
+    controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+
+    verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  static Stream<String> authorGatedActions() {
+    return Stream.of("opened", "synchronize", "reopened", "ready_for_review");
+  }
+
+  @ParameterizedTest
   @MethodSource("labelReadingActions")
   void reopenedAndReadyForReviewAlsoReadTheLabelsFromTheApi(String action) {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);

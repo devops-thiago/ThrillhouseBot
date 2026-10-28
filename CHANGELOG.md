@@ -34,6 +34,10 @@ without it those counters stay hidden and nothing else changes.
   `AI_FALLBACK_MODEL` takes over a review or summary call's remaining retries after a provider error
   or rate limit. Both are off by default and use the same provider; the paths and the size threshold
   are configurable.
+- `WEBHOOK_EXCLUDED_AUTHORS` skips automatic reviews of pull requests opened by the listed logins,
+  for example `dependabot[bot]`. Dependabot can open a pull request before it adds its labels, so
+  `WEBHOOK_EXCLUDED_LABELS=dependencies` could let a review run the model before the label arrived;
+  the author is in every `opened` event. A manual `/review` still runs (#1278).
 
 ### Changed
 

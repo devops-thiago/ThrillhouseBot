@@ -255,8 +255,9 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 | Variable | Description | Type | Default |
 |---|---|---|---|
 | `WEBHOOK_BASE_BRANCHES`<br>`thrillhousebot.webhook.triggers.base-branches` | Comma-separated globs; auto-review only PRs whose base branch matches one (`main,release/*`). `*` does not cross `/`; use `**` for that. Unset means every base branch. | list | _(none)_ |
+| `WEBHOOK_EXCLUDED_AUTHORS`<br>`thrillhousebot.webhook.triggers.excluded-authors` | Comma-separated logins; skip auto-review of PRs opened by any (case-insensitive exact match, `dependabot[bot]`). Unlike a label, the author is in every `opened` payload, so it holds when a bot labels its PR after opening it. | list | _(none)_ |
 | `WEBHOOK_EXCLUDED_LABELS`<br>`thrillhousebot.webhook.triggers.excluded-labels` | Comma-separated labels; skip auto-review of PRs carrying any (case-insensitive exact match). Wins over `WEBHOOK_REQUIRED_LABELS`. | list | _(none)_ |
-| `WEBHOOK_IGNORED_BASE_BRANCHES`<br>`thrillhousebot.webhook.triggers.ignored-base-branches` | Comma-separated globs; skip auto-review of PRs whose base branch matches one (`dependabot/**`). Wins over `WEBHOOK_BASE_BRANCHES`. | list | _(none)_ |
+| `WEBHOOK_IGNORED_BASE_BRANCHES`<br>`thrillhousebot.webhook.triggers.ignored-base-branches` | Comma-separated globs; skip auto-review of PRs whose base branch matches one (`gh-pages`). Wins over `WEBHOOK_BASE_BRANCHES`. | list | _(none)_ |
 | `WEBHOOK_REQUIRED_LABELS`<br>`thrillhousebot.webhook.triggers.required-labels` | Comma-separated labels; auto-review only PRs carrying at least one (case-insensitive exact match). Unset means no label is required. | list | _(none)_ |
 | `WEBHOOK_SKIP_DRAFTS`<br>`thrillhousebot.webhook.triggers.skip-drafts` | Do not auto-review drafts; the PR is reviewed once marked ready (`ready_for_review`). | boolean | `false` |
 <!-- docs:config-reference:end -->
