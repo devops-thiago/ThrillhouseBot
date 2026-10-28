@@ -4,6 +4,12 @@ name: GHCR prune
 # past their age limit, and the untagged per-architecture images and attestations that only
 # those belonged to. Releases, latest, snapshot and their signatures are never touched. Rules
 # and limits are in scripts/ghcr-prune/prune.mjs. A manual run is a dry run unless apply is set.
+#
+# Repository variables (Settings → Secrets and variables → Actions → Variables), all optional:
+#   GHCR_KEEP_TAGS          tags to always keep, comma separated (for example the dev server's image)
+#   GHCR_KEEP_SNAPSHOTS     snapshot versions kept per variant, newest first (default 10)
+#   GHCR_TEST_MAX_AGE_DAYS  age in days after which a test-* image is deleted (default 30)
+#   GHCR_MIN_AGE_HOURS      nothing younger than this is deleted (default 24)
 on:
   schedule:
     - cron: "17 4 * * 1"
@@ -68,4 +74,7 @@ jobs:
           APPLY: ${{ github.event_name == 'schedule' || inputs.apply }}
           KEEP_TAGS: ${{ vars.GHCR_KEEP_TAGS }},${{ inputs.keep_tags }}
           MAX_DELETES: ${{ inputs.max_deletes }}
+          KEEP_SNAPSHOTS: ${{ vars.GHCR_KEEP_SNAPSHOTS }}
+          TEST_MAX_AGE_DAYS: ${{ vars.GHCR_TEST_MAX_AGE_DAYS }}
+          MIN_AGE_HOURS: ${{ vars.GHCR_MIN_AGE_HOURS }}
         run: node scripts/ghcr-prune/prune.mjs

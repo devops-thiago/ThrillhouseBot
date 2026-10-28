@@ -48,6 +48,15 @@ test('a tag the rules do not know is kept', async () => {
   assert.equal((await plan([odd], noChildren, NOW, options())).keep.get(odd.name), 'unknown-tag');
 });
 
+test('a tag the rules do not know keeps the snapshot or test tags that share its version', async () => {
+  const snapshot = version(['v0.6.8-1111111-snapshot', 'nightly'], 60);
+  const expired = version(['test-sha-1234567', 'nightly'], 45);
+  const result = await plan([snapshot, expired], noChildren, NOW, options({ keepSnapshots: 0 }));
+  assert.deepEqual(result.remove, []);
+  assert.equal(result.keep.get(snapshot.name), 'unknown-tag');
+  assert.equal(result.keep.get(expired.name), 'unknown-tag');
+});
+
 test('children of a kept index stay and children of a deleted index go', async () => {
   const keptIndex = version(['v1.0.0']);
   const amd = version([]), arm = version([]), attestation = version([]);

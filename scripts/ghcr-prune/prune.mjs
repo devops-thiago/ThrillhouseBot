@@ -24,16 +24,17 @@ export function keepTagged(versions, now, options = DEFAULTS) {
   const keep = (version, reason) => { if (!reasons.has(version.name)) reasons.set(version.name, reason); };
   const explicit = new Set(options.keepTags);
   const snapshots = { default: [], distroless: [] };
+  // Deleting a version deletes every tag on it, so one tag the rules do not know keeps it.
+  const known = (tag) => RELEASE.test(tag) || SNAPSHOT.test(tag) || TEST.test(tag) || REFERRERS.test(tag) || explicit.has(tag);
   for (const version of versions) {
     const tags = tagsOf(version);
     if (tags.length === 0) continue;
     if (tags.some((tag) => RELEASE.test(tag))) keep(version, 'release');
     else if (tags.some((tag) => explicit.has(tag))) keep(version, 'keep-tag');
+    else if (!tags.every(known)) keep(version, 'unknown-tag');
     else if (now - Date.parse(version.created_at) < options.minAgeHours * 60 * 60 * 1000) keep(version, 'recent');
     else if (tags.some((tag) => SNAPSHOT.test(tag))) snapshots[variantOf(tags.find((tag) => SNAPSHOT.test(tag)))].push(version);
-    else if (tags.some((tag) => TEST.test(tag))) {
-      if (now - Date.parse(version.created_at) < options.testMaxAgeDays * DAY) keep(version, 'test');
-    } else if (!tags.every((tag) => REFERRERS.test(tag))) keep(version, 'unknown-tag');
+    else if (tags.some((tag) => TEST.test(tag)) && now - Date.parse(version.created_at) < options.testMaxAgeDays * DAY) keep(version, 'test');
   }
   for (const list of Object.values(snapshots)) {
     list.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
