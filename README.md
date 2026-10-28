@@ -1740,6 +1740,12 @@ Both images are built from the same native binary and published to GHCR:
   (`:v0.8.0-distroless`, and so on).
 - Snapshot tags: `:snapshot`, `:v<version>-<short-sha>-snapshot` and
   `:<full-sha>`, each with a `-distroless` variant.
+  A weekly job keeps the 10 newest snapshot builds of each variant and
+  deletes the older ones; pin a release tag, not a snapshot, for anything
+  that must keep pulling. `test-*` images are deleted after 30 days.
+  The counts and ages are repository variables (`GHCR_KEEP_SNAPSHOTS`,
+  `GHCR_TEST_MAX_AGE_DAYS`, `GHCR_MIN_AGE_HOURS`, plus `GHCR_KEEP_TAGS` for
+  tags to always keep), listed in `.github/workflows/ghcr-prune.yml`.
 
 Both are multi-arch (linux/amd64, linux/arm64), signed with cosign, and carry
 build-provenance attestations (see [Verifying a release](#verifying-a-release)).
