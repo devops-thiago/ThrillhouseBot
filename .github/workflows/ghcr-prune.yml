@@ -17,16 +17,16 @@ on:
         description: "Extra tags to keep, comma separated (added to the GHCR_KEEP_TAGS variable)"
         type: string
         default: ""
+      max_deletes:
+        description: "Most versions to delete in this run (oldest first)"
+        type: string
+        default: "300"
   pull_request:
     paths:
       - scripts/ghcr-prune/**
       - .github/workflows/ghcr-prune.yml
 
 permissions: {}
-
-concurrency:
-  group: ghcr-prune
-  cancel-in-progress: false
 
 jobs:
   test:
@@ -46,6 +46,9 @@ jobs:
     needs: [test]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    concurrency:
+      group: ghcr-prune
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -64,4 +67,5 @@ jobs:
           # The weekly run applies; a manual run applies only when asked.
           APPLY: ${{ github.event_name == 'schedule' || inputs.apply }}
           KEEP_TAGS: ${{ vars.GHCR_KEEP_TAGS }},${{ inputs.keep_tags }}
+          MAX_DELETES: ${{ inputs.max_deletes }}
         run: node scripts/ghcr-prune/prune.mjs
