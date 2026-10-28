@@ -980,7 +980,7 @@ class WebhookControllerTest {
   @MethodSource("authorGatedActions")
   void anExcludedAuthorIsSkippedBeforeAnyLabelIsRead(String action) {
     when(verifier.verify(anyString(), any(byte[].class), anyString())).thenReturn(true);
-    var controller =
+    var authorGated =
         newController(
             new ReviewTriggerFilter(
                 false,
@@ -993,7 +993,7 @@ class WebhookControllerTest {
         buildPullRequestPayload(action, 1276, "owner/repo", "sha1276", "main")
             .getBytes(StandardCharsets.UTF_8);
 
-    controller.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
+    authorGated.handleWebhook("sha256=valid", "pull_request", null, DELIVERY, body);
 
     verify(skipEmitter)
         .recordSkip(
@@ -1014,7 +1014,7 @@ class WebhookControllerTest {
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);
     when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
         .thenReturn(true);
-    var controller =
+    var authorGated =
         newController(
             new ReviewTriggerFilter(
                 false, List.of(), List.of(), List.of(), List.of(), List.of("octocat")));
@@ -1022,7 +1022,7 @@ class WebhookControllerTest {
         buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/review")
             .getBytes(StandardCharsets.UTF_8);
 
-    controller.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
+    authorGated.handleWebhook("sha256=valid", "issue_comment", null, DELIVERY, body);
 
     verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
