@@ -19,7 +19,7 @@ on:
           - native
         default: jvm
       extra_tag:
-        description: "Optional extra image tag (letters, digits, ._- only). Prefixed with test-."
+        description: "Optional extra tag (letters, digits, ._- only). Give the bare name: the workflow adds test- and, for native, -native, so v1-rc1 publishes test-v1-rc1-native."
         required: false
         type: string
         default: ""
