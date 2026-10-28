@@ -4,6 +4,10 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- A weekly workflow prunes old container images: snapshot builds from `main` beyond the 10 newest of each variant, `test-*` images older than 30 days, and the untagged images that only those used. Releases, `latest`, `snapshot` and their signatures and attestations are kept. A manual run prints the plan and deletes only when asked.
+
 ### Fixed
 
 - The version bump pull request opened after a release now passes the DCO check. Its commit was not signed off, and the check accepts an unsigned bot commit only when it has a verified signature (#1226).
