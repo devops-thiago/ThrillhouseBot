@@ -22,16 +22,16 @@
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.version>3.40.1</quarkus.platform.version>
         <quarkus-langchain4j.version>1.14.2</quarkus-langchain4j.version>
-        <opentelemetry.version>1.62.0</opentelemetry.version>
-        <opentelemetry.alpha.version>1.62.0-alpha</opentelemetry.alpha.version>
+        <opentelemetry.version>1.67.0</opentelemetry.version>
+        <opentelemetry.alpha.version>1.67.0-alpha</opentelemetry.alpha.version>
         <!-- Keep in lockstep with the prometheus-metrics version opentelemetry-exporter-prometheus ships -->
-        <prometheus-metrics.version>1.8.0</prometheus-metrics.version>
-        <jackson-bom.version>2.22.3</jackson-bom.version>
+        <prometheus-metrics.version>1.10.0</prometheus-metrics.version>
+        <jackson-bom.version>2.22.4</jackson-bom.version>
         <skipITs>true</skipITs>
         <!-- JUnit tag filters for surefire; the eval profile flips them to run PromptEvalTest -->
         <surefire.groups></surefire.groups>
         <surefire.excluded.groups>eval</surefire.excluded.groups>
-        <surefire-plugin.version>3.6.0</surefire-plugin.version>
+        <surefire-plugin.version>3.6.1</surefire-plugin.version>
         <!-- Default for @{argLine} in surefire; overwritten by the JaCoCo agent when active -->
         <argLine></argLine>
         <spotless.version>3.10.4</spotless.version>
@@ -55,7 +55,7 @@
         >**/review/ai/ReviewResponse.java</sonar.coverage.exclusions>
         <sonar.qualitygate.wait>true</sonar.qualitygate.wait>
         <sonar.scm.provider>git</sonar.scm.provider>
-        <jacoco.version>0.8.15</jacoco.version>
+        <jacoco.version>0.8.16</jacoco.version>
     </properties>
 
     <dependencyManagement>
