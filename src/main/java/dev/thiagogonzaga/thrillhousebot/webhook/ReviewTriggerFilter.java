@@ -40,6 +40,10 @@ import java.util.stream.Collectors;
  * (skip nothing, require nothing, allow every branch) review every PR, preserving the original
  * behavior. Manual {@code /review} comments bypass these filters entirely.
  *
+ * <p>The author gate exists for the same race as the label read below: a bot such as Dependabot can
+ * open a pull request before it labels it, and an {@code opened} delivery handled in between finds
+ * no label anywhere. The author is always in the payload.
+ *
  * <p>The label gates are also applied to labels read from the API, not only to the webhook payload
  * (#1021): a pull request can be labelled a second or two after it is opened, as Dependabot does,
  * so the {@code opened} payload is a snapshot without them. See {@link #labelSkipReason} and its
@@ -51,6 +55,7 @@ public class ReviewTriggerFilter {
   private final boolean skipDrafts;
   private final Set<String> requiredLabels;
   private final Set<String> excludedLabels;
+  private final Set<String> excludedAuthors;
   private final List<PathMatcher> baseBranchMatchers;
   private final List<PathMatcher> ignoredBaseBranchMatchers;
 
@@ -61,7 +66,8 @@ public class ReviewTriggerFilter {
         config.webhook().triggers().requiredLabels().orElseGet(List::of),
         config.webhook().triggers().excludedLabels().orElseGet(List::of),
         config.webhook().triggers().baseBranches().orElseGet(List::of),
-        config.webhook().triggers().ignoredBaseBranches().orElseGet(List::of));
+        config.webhook().triggers().ignoredBaseBranches().orElseGet(List::of),
+        config.webhook().triggers().excludedAuthors().orElseGet(List::of));
   }
 
   /** Visible for tests. */
@@ -71,9 +77,21 @@ public class ReviewTriggerFilter {
       List<String> excludedLabels,
       List<String> baseBranches,
       List<String> ignoredBaseBranches) {
+    this(skipDrafts, requiredLabels, excludedLabels, baseBranches, ignoredBaseBranches, List.of());
+  }
+
+  /** Visible for tests. */
+  ReviewTriggerFilter(
+      boolean skipDrafts,
+      List<String> requiredLabels,
+      List<String> excludedLabels,
+      List<String> baseBranches,
+      List<String> ignoredBaseBranches,
+      List<String> excludedAuthors) {
     this.skipDrafts = skipDrafts;
     this.requiredLabels = normalizeLabels(requiredLabels);
     this.excludedLabels = normalizeLabels(excludedLabels);
+    this.excludedAuthors = normalizeLabels(excludedAuthors);
     this.baseBranchMatchers = compileGlobs(baseBranches, "base-branches");
     this.ignoredBaseBranchMatchers = compileGlobs(ignoredBaseBranches, "ignored-base-branches");
   }
@@ -104,6 +122,14 @@ public class ReviewTriggerFilter {
     if (skipDrafts && pr.draft()) {
       return Optional.of(
           new Skip(ReviewSkipReason.DRAFT, "PR is a draft (webhook.triggers.skip-drafts=true)"));
+    }
+
+    var author = pr.user() != null ? pr.user().login() : null;
+    if (author != null && excludedAuthors.contains(author.trim().toLowerCase(Locale.ROOT))) {
+      return Optional.of(
+          new Skip(
+              ReviewSkipReason.EXCLUDED_AUTHOR,
+              "PR author '" + author + "' is in excluded-authors"));
     }
 
     var base = pr.base() != null ? pr.base().ref() : null;
@@ -166,7 +192,7 @@ public class ReviewTriggerFilter {
   /**
    * Compiles gitignore-style glob patterns. These follow {@link FileSystems#getPathMatcher}
    * semantics: {@code *} matches within a single path segment and does <em>not</em> cross {@code
-   * /}, so operators must use {@code **} to span slashes (e.g. {@code dependabot/**}, or {@code **}
+   * /}, so operators must use {@code **} to span slashes (e.g. {@code release/**}, or {@code **}
    * alone to match every branch). Unparseable patterns are logged and dropped rather than failing
    * the whole filter.
    */

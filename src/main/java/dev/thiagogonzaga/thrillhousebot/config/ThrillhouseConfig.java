@@ -198,6 +198,14 @@ public interface ThrillhouseConfig {
       Optional<List<String>> excludedLabels();
 
       /**
+       * Comma-separated logins; skip auto-review of PRs opened by any (case-insensitive exact
+       * match, {@code dependabot[bot]}). Unlike a label, the author is in every {@code opened}
+       * payload, so it holds when a bot labels its PR after opening it.
+       */
+      @WithName("excluded-authors")
+      Optional<List<String>> excludedAuthors();
+
+      /**
        * Comma-separated globs; auto-review only PRs whose base branch matches one ({@code
        * main,release/*}). {@code *} does not cross {@code /}; use {@code **} for that. Unset means
        * every base branch.
@@ -207,7 +215,7 @@ public interface ThrillhouseConfig {
 
       /**
        * Comma-separated globs; skip auto-review of PRs whose base branch matches one ({@code
-       * dependabot/**}). Wins over {@code WEBHOOK_BASE_BRANCHES}.
+       * gh-pages}). Wins over {@code WEBHOOK_BASE_BRANCHES}.
        */
       @WithName("ignored-base-branches")
       Optional<List<String>> ignoredBaseBranches();
