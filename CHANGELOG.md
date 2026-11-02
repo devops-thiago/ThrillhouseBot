@@ -179,6 +179,10 @@ without it those counters stay hidden and nothing else changes.
   sentence. (#1195)
 - The version bump pull request opened after a release now passes the DCO check. Its commit was not signed off, and the check accepts an unsigned bot commit only when it has a verified signature (#1226).
 
+### Changed
+
+- The webhook entry now rides the Quarkiverse GitHub App extension (`io.quarkiverse.githubapp:quarkus-github-app`): it owns the `POST /api/webhook` route, the `X-Hub-Signature-256` check and delivery parsing, and `webhook/WebhookEvents` keeps the existing routing (dedupe, pause, trigger filters, commands, CI rechecks). `WebhookController` and `WebhookVerifier` are gone. Malformed-request answers change to the extension's (`400` for missing/mismatched signature, `500` for a signed non-JSON body, `200` with an empty body on success).
+
 ## [0.8.0] - 2026-10-21
 
 This release adds suggestion verification, an optional summary check, response repair,

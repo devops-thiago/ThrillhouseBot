@@ -90,14 +90,18 @@ The container images run as an unprivileged user (UID 1001 on UBI9-micro,
 
 ### Fail-safe defaults
 
-`WebhookVerifier` rejects a request when the signature header is missing or
-malformed and when no secret is configured. With `GITHUB_ALLOWED_ACCOUNTS` set,
+`WebhookEvents` runs behind the Quarkiverse GitHub App extension's route, which rejects a
+request when the signature header is missing or when no secret is configured. With `GITHUB_ALLOWED_ACCOUNTS` set,
 an event from an installation on any other account is ignored before any work,
 so a public App installed by a stranger never spends the operator's budget. The dashboard refuses a login it
 has never been able to check with GitHub, keeps a known login's last answer for
 at most 30 minutes while GitHub is unreachable, and ends the session when GitHub
 rejects its token.
 Organization membership is granted only on GitHub's explicit answer. Optional context and outgoing
+||||||| parent of 602b19b (refactor(webhook): adopt Quarkiverse GitHub App extension for webhook entry)
+`WebhookEvents` runs behind the Quarkiverse GitHub App extension's route, which rejects a
+request when the signature header is missing or when no secret is configured. The dashboard refuses every login
+when the App owner cannot be resolved. Optional context and outgoing
 notifications are off until enabled, and a manual `/review` needs write access
 to the repository (`webhook/ManualReviewAuthorizer`).
 
@@ -127,7 +131,7 @@ manager and rotated with a restart, without rebuilding.
 
 | Weakness | Countermeasure | Where |
 |----------|----------------|-------|
-| Forged webhooks (CWE-345) and timing attacks on the signature (CWE-208) | HMAC-SHA256 over the raw body, compared with `MessageDigest.isEqual` | `webhook/WebhookVerifier` |
+| Forged webhooks (CWE-345) and timing attacks on the signature (CWE-208) | HMAC-SHA256 over the raw body, compared with `MessageDigest.isEqual` | the Quarkiverse GitHub App extension's route (`quarkus.github-app.webhook-secret`) |
 | Replayed deliveries | A recently seen `X-GitHub-Delivery` ID is dropped | `webhook/WebhookDeduplicator` |
 | Prompt injection from PR content | All model-visible external text is wrapped in fences built from a per-call random value and labelled as untrusted data; findings go through a second verification call | `review/PromptTemplateEscaper`, AGENTS.md "Untrusted data" |
 | Log injection (CWE-117) and secrets in logs (CWE-532) | Model and GitHub text is flattened with `LogSafe.oneLine`, enforced by `LogSafeInvariantTest`; the security scan never repeats a matched secret, and a notification URL is logged as scheme, host and port only | `LogSafe`, `review/SecurityScan`, `notification/` |
@@ -135,7 +139,7 @@ manager and rotated with a restart, without rebuilding.
 | Guessable session IDs (CWE-330) | 256-bit IDs from `SecureRandom`, 8-hour expiry | `dashboard/DashboardSessionStore` |
 | SQL injection (CWE-89) | Panache and JPQL queries with bound parameters only | `dashboard/`, `review/FindingFeedbackService` |
 | Improper certificate validation (CWE-295) | No custom `TrustManager`, `HostnameVerifier` or trust-all setting; the JDK and Vert.x defaults verify certificates and host names | `config/HttpClientProducer`, `application.properties` |
-| Unchecked input (CWE-20) | Webhook event types and dashboard parameters are matched against fixed lists, page sizes are clamped, configuration ranges are checked at startup | `webhook/WebhookController`, `dashboard/DashboardResource`, `config/StartupConfigValidator` |
+| Unchecked input (CWE-20) | Webhook event types and dashboard parameters are matched against fixed lists, page sizes are clamped, configuration ranges are checked at startup | `webhook/WebhookEvents`, `dashboard/DashboardResource`, `config/StartupConfigValidator` |
 | Vulnerable dependencies (CWE-1395) | Dependabot, Dependency Review on every pull request, Trivy on the source tree and images, weekly scheduled scans | `.github/dependabot.yml`, `.github/workflows/` |
 
 CI also runs CodeQL for Java and TypeScript, SpotBugs at maximum effort and the

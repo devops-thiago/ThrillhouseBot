@@ -282,7 +282,7 @@ public class ReviewOrchestrator {
   }
 
   /**
-   * Main entry point for reviewing a PR. Called from WebhookController for pull_request (opened,
+   * Main entry point for reviewing a PR. Called from WebhookEvents for pull_request (opened,
    * synchronize) and /review triggers.
    *
    * @return {@code true} when the review result was surfaced to GitHub (post-result steps may still

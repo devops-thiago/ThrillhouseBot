@@ -1764,7 +1764,7 @@ class ReviewOrchestratorTest {
       assertTrue(
           captureRepoInstructions(
                   new GitHubPullRequestClient.FileDiff(
-                      "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java",
+                      "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookEventsTest.java",
                       "modified",
                       1,
                       0,
