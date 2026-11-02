@@ -30,6 +30,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import java.util.Optional;
@@ -100,11 +101,21 @@ class HeadMovedGuardTest {
     // No reviewed sha to compare against: never treated as moved.
     var noSha =
         new ReviewOrchestrator.ReviewRequest(
-            "owner", "repo", 42, "", "T", "", "base", "main", 1L, false);
+            "owner", "repo", 42, "", "T", "", "base", "main", 1L, TestScopes.REPOSITORY_ID, false);
     assertFalse(HeadMovedGuard.headMoved(noSha, "other-sha"));
     var nullSha =
         new ReviewOrchestrator.ReviewRequest(
-            "owner", "repo", 42, null, "T", "", "base", "main", 1L, false);
+            "owner",
+            "repo",
+            42,
+            null,
+            "T",
+            "",
+            "base",
+            "main",
+            1L,
+            TestScopes.REPOSITORY_ID,
+            false);
     assertFalse(HeadMovedGuard.headMoved(nullSha, "other-sha"));
   }
 

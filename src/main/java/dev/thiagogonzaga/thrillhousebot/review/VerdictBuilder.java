@@ -183,8 +183,21 @@ public class VerdictBuilder {
    * @param section the unfenced linked-issue section, {@code ""} when none
    * @param baseCode the description's citations; a linked-issue criterion it shows met on the base
    *     branch is listed as met by existing code, not as unmet
+   * @param verdicts the review calls' verdicts on the issue's criteria (#1200); a criterion they
+   *     judge unmet gets its line even when nothing else the round wrote names it
    */
-  record LinkedIssueContext(String section, BaseCodeCitations baseCode) {}
+  record LinkedIssueContext(
+      String section, BaseCodeCitations baseCode, List<ReviewResponse.CriterionVerdict> verdicts) {
+
+    LinkedIssueContext {
+      verdicts = List.copyOf(Objects.requireNonNullElse(verdicts, List.of()));
+    }
+
+    /** The context of a review whose calls judged no criterion. */
+    LinkedIssueContext(String section, BaseCodeCitations baseCode) {
+      this(section, baseCode, List.of());
+    }
+  }
 
   /**
    * {@link #build(ReviewContextLoader.ReviewContext, ReviewResponse,
@@ -400,7 +413,8 @@ public class VerdictBuilder {
                         ctx.conversationComments(), botIdentity)
                     : Set.of(),
                 linked.section(),
-                linked.baseCode())),
+                linked.baseCode(),
+                linked.verdicts())),
         ciEvaluation,
         backstopStatuses);
   }
@@ -504,20 +518,38 @@ public class VerdictBuilder {
    * the open total and keeps the new count and its grades separate (#952): a follow-up that raised
    * one finding on a pull request with twenty open read "1 findings" on the check run, while the
    * summary comment and the verdict counted twenty-one. The still-open count is {@link
-   * ReviewResult#unresolvedPreviousCount()}, the one every other surface states.
+   * ReviewResult#unresolvedPreviousCount()}, the one every other surface states. The open total and
+   * the new findings come from the summary's own fold ({@link PrSummaryGenerator#currentState}), so
+   * a finding that replaces or re-raises an earlier one is counted once, as still open, on all
+   * three surfaces (#1199).
    */
   private static String newFindingsSummary(ReviewResult result) {
-    var grades =
-        String.format(
-            "%d critical, %d high, %d medium, %d low",
-            result.criticalCount(), result.highCount(), result.mediumCount(), result.lowCount());
     var stillOpen = result.unresolvedPreviousCount();
     if (stillOpen == 0) {
-      return result.totalFindings() + " findings: " + grades;
+      return result.totalFindings()
+          + " findings: "
+          + grades(
+              result.criticalCount(), result.highCount(), result.mediumCount(), result.lowCount());
     }
+    var fresh = PrSummaryGenerator.currentState(result).newFindings();
     return String.format(
         "%d open findings: %d new (%s), %d still open from earlier rounds",
-        result.totalFindings() + stillOpen, result.totalFindings(), grades, stillOpen);
+        fresh.size() + stillOpen,
+        fresh.size(),
+        grades(
+            countAt(fresh, RiskLevel.CRITICAL),
+            countAt(fresh, RiskLevel.HIGH),
+            countAt(fresh, RiskLevel.MEDIUM),
+            countAt(fresh, RiskLevel.LOW)),
+        stillOpen);
+  }
+
+  private static String grades(long critical, long high, long medium, long low) {
+    return String.format("%d critical, %d high, %d medium, %d low", critical, high, medium, low);
+  }
+
+  private static long countAt(List<Finding> findings, RiskLevel risk) {
+    return findings.stream().filter(f -> f.risk() == risk).count();
   }
 
   /**

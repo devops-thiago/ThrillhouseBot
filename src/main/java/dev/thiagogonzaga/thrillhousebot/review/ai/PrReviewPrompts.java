@@ -43,7 +43,8 @@ public final class PrReviewPrompts {
       """
             Response shape — this call returns findings and previous-finding statuses, nothing else:
             {"findings": [ ... ], "previous_findings_status": [ ... ]}
-            - Emit exactly these two top-level fields. "findings" holds one object per finding with
+            - Emit exactly these two top-level fields, plus "linked_issue_criteria" only when a
+              Linked Issue section below asks for it. "findings" holds one object per finding with
               the fields listed above, and is [] when you found no issues — never omit it.
             - Do NOT write a "summary" object, finding counts, an overall verdict, a statement of
               the PR's purpose, description gaps, per-file summaries, labels or a diagram. A

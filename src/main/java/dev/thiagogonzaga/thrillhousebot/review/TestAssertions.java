@@ -24,6 +24,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -108,6 +110,35 @@ final class TestAssertions {
   /** A quote in a finding's text: one backtick span on one line. */
   private static final Pattern QUOTE = Pattern.compile("`([^`\\n]++)`");
 
+  /**
+   * A single-quote span on one line: a finding quotes code that way too, as the scala
+   * ThrillhouseBot-test#297 finding wrote 'assert(…)' (#1194). A quote right after a letter or
+   * digit is a contraction's or a possessive's apostrophe and opens no span, so "Here's why
+   * 'assert(…)'" still reads the assertion. Read in its own pass, so no apostrophe swallows a
+   * backtick quote.
+   */
+  private static final Pattern SINGLE_QUOTE = Pattern.compile("(?<!\\w)'([^'\\n]++)'");
+
+  /** A function declared or called on a line: its name, then its argument list opening. */
+  private static final Pattern FUNCTION_NAME = Pattern.compile("([A-Za-z_]\\w*+)\\s*+\\(");
+
+  /**
+   * What a declaration puts before a function's name: its type and modifiers ({@code static void},
+   * {@code def}, {@code func}, {@code public async Task}), never an assignment or a call.
+   */
+  private static final Pattern DECLARATION_PREFIX = Pattern.compile("[\\w\\s*&<>:\\[\\],.]++");
+
+  /**
+   * Words that open a statement rather than a declaration's type, so the call after one ({@code
+   * else if (…)}, {@code return check(…)}, {@code with open(…) as fh:}) is not taken for a declared
+   * function, and a statement that only looks like a call ({@code retry: for (;;) {}) is not one.
+   */
+  private static final Set<String> STATEMENT_WORDS =
+      Set.of(
+          "else", "return", "case", "new", "throw", "await", "yield", "do", "not", "and", "or",
+          "if", "elif", "for", "foreach", "while", "until", "unless", "switch", "with", "catch",
+          "except", "assert", "raise", "lambda", "print");
+
   private static final Pattern WHITESPACE = Pattern.compile("\\s++");
 
   private record TestPatch(PatchLines lines, boolean commonJs) {}
@@ -164,6 +195,91 @@ final class TestAssertions {
       }
     }
     return List.copyOf(assertions);
+  }
+
+  /**
+   * The test functions that print {@code label}, for a harness whose check macro names each check
+   * with a string the job log then prints: C ThrillhouseBot-test#302 logged "FAIL
+   * rider_limit_rejects_third_code" from {@code CHECK("rider_limit_rejects_third_code", …)} inside
+   * {@code test_rider_limit}, and the finding named the function (#1194). Each changed line holding
+   * the label in double quotes is read up to the nearest line of its hunk indented less, a lone
+   * brace skipped; that line's first function name is kept when it holds "test".
+   */
+  synchronized List<String> functionsLabelling(String label) {
+    var key = lookupKey(label);
+    if (key.isEmpty()) {
+      return List.of();
+    }
+    var quoted = "\"" + label + "\"";
+    var functions = new LinkedHashSet<String>();
+    for (var at : index().getOrDefault(key, List.of())) {
+      var lines = patches.get(at[0]).lines().lines();
+      if (lines.get(at[1]).text().contains(quoted)) {
+        enclosingTestFunction(lines, at[1]).ifPresent(functions::add);
+      }
+    }
+    return List.copyOf(functions);
+  }
+
+  /**
+   * The test function the line at {@code start} is in, read as {@link #functionsLabelling} does.
+   * Blank lines, a lone brace and preprocessor lines are skipped. A less-indented line that
+   * declares no function ({@link #declaredFunction}), such as a block opened inside the function, a
+   * {@code case} label, a loop macro or a call, is climbed past, so a check inside a loop, a
+   * condition or a switch keeps its function; the walk ends at the first function declared, or at a
+   * line in the first column. A declaration whose type stands on the line above its name ({@code
+   * static void} over {@code test_rider_limit(void)}) is read with that line.
+   */
+  private static Optional<String> enclosingTestFunction(List<PatchLines.Line> lines, int start) {
+    var line = lines.get(start);
+    int indent = indentOf(line.text());
+    for (int i = start - 1; i >= 0 && i >= start - MAX_BODY_LINES; i--) {
+      var above = lines.get(i);
+      if (above.hunk() != line.hunk()) {
+        break;
+      }
+      var text = above.text();
+      var code = text.strip();
+      if (code.isEmpty() || code.equals("{") || code.startsWith("#") || indentOf(text) >= indent) {
+        continue;
+      }
+      var declared = declaredFunction(code, i > 0 ? lines.get(i - 1) : null, above.hunk());
+      if (declared.isPresent()) {
+        return declared.filter(name -> name.toLowerCase(Locale.ROOT).contains("test"));
+      }
+      if (indentOf(text) == 0) {
+        return Optional.empty();
+      }
+      indent = indentOf(text);
+    }
+    return Optional.empty();
+  }
+
+  /**
+   * The function {@code code} declares: its first name before an argument list, when a type or a
+   * keyword stands before that name ({@link #DECLARATION_PREFIX}, opened by none of the {@link
+   * #STATEMENT_WORDS}), the name is not one of them either, and the line is not a statement ending
+   * in {@code ;}. A name opening its line takes its type from the line {@code above} in the same
+   * hunk. {@code static void
+   * test_rider_limit(void)} declares one; {@code if (…) {}, {@code case (LIMIT):}, {@code
+   * for_each_cpu(i, mask) {}, {@code rc = latest_scan(d);} and {@code setup(&d);} do not.
+   */
+  private static Optional<String> declaredFunction(String code, PatchLines.Line above, int hunk) {
+    var name = FUNCTION_NAME.matcher(code);
+    if (code.endsWith(";") || !name.find()) {
+      return Optional.empty();
+    }
+    var prefix = code.substring(0, name.start()).strip();
+    if (prefix.isEmpty() && above != null && above.hunk() == hunk) {
+      prefix = above.text().strip();
+    }
+    var opening = prefix.split("[^\\w]", 2)[0];
+    return !prefix.isEmpty()
+            && DECLARATION_PREFIX.matcher(prefix).matches()
+            && !STATEMENT_WORDS.contains(opening)
+            && !STATEMENT_WORDS.contains(name.group(1))
+        ? Optional.of(name.group(1))
+        : Optional.empty();
   }
 
   /** How many patch lines the index has read. */
@@ -287,11 +403,13 @@ final class TestAssertions {
    */
   static List<String> quotesIn(String text) {
     var quotes = new ArrayList<String>();
-    var matcher = QUOTE.matcher(text);
-    while (matcher.find()) {
-      String quote = normalized(matcher.group(1));
-      if (quote.length() >= MIN_QUOTE_CHARS) {
-        quotes.add(quote);
+    for (var pattern : List.of(QUOTE, SINGLE_QUOTE)) {
+      var matcher = pattern.matcher(text);
+      while (matcher.find()) {
+        String quote = normalized(matcher.group(1));
+        if (quote.length() >= MIN_QUOTE_CHARS) {
+          quotes.add(quote);
+        }
       }
     }
     return List.copyOf(quotes);

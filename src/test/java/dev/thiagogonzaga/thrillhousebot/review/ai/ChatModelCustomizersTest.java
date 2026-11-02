@@ -20,6 +20,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
 
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
@@ -54,6 +55,8 @@ class ChatModelCustomizersTest {
     lenient().when(reasoning.enabled()).thenReturn(reasoningEnabled);
     lenient().when(reasoning.effort()).thenReturn(effort);
     lenient().when(reasoning.conciseEffort()).thenReturn(conciseEffort);
+    var dashboard = mock(ThrillhouseConfig.DashboardConfig.class);
+    lenient().when(config.dashboard()).thenReturn(dashboard);
     return config;
   }
 
@@ -127,6 +130,19 @@ class ChatModelCustomizersTest {
         .customize(builder);
 
     verifyNoInteractions(builder);
+  }
+
+  @Test
+  void withTheReasoningStreamOnTheStreamingModelReturnsItsThinking() {
+    var builder = mock(OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder.class);
+    var config = config(false, "low", Map.of());
+    when(config.dashboard().reasoningStreamEnabled()).thenReturn(true);
+
+    new ChatModelCustomizers.StreamingChatModelCustomizer(config, activeModel(config))
+        .customize(builder);
+
+    verify(builder).returnThinking(true);
+    verifyNoMoreInteractions(builder);
   }
 
   @Test

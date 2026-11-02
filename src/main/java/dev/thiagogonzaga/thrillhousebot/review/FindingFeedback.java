@@ -39,6 +39,7 @@ import java.time.Instant;
     name = "finding_feedback",
     indexes = {
       @Index(name = "idx_findingfeedback_repository", columnList = "repository"),
+      @Index(name = "idx_findingfeedback_scope", columnList = "installationId, repositoryId"),
       @Index(name = "idx_findingfeedback_comment", columnList = "githubCommentId"),
       @Index(name = "idx_findingfeedback_created", columnList = "createdAt")
     },
@@ -68,6 +69,15 @@ public class FindingFeedback extends PanacheEntity {
   /** Repository in {@code owner/repo} form. */
   @Column(nullable = false, length = 255)
   String repository;
+
+  /**
+   * Installation and repository id the feedback was given under (#1220); reads match both. {@code
+   * null} on a row from before #1220 that the startup backfill could not match; such a row is never
+   * read.
+   */
+  @Column Long installationId;
+
+  @Column Long repositoryId;
 
   /** Pull request number on {@link #repository}. */
   @Column(nullable = false)

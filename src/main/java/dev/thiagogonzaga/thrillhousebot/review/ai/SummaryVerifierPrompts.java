@@ -58,6 +58,9 @@ public final class SummaryVerifierPrompts {
               change handles every case. A finding about one case is never a reason to cut the
               statement of what the change does.
             - You would have to rely on remembered framework or library behaviour to call it false.
+            - It gives the size of the change (files, lines, directories) or says a file was
+              renamed or moved. The diff shows only the files that were reviewed; the PR scope
+              line and the list of files omitted from review, when present, count the whole change.
 
             When no diff section is included, judge the statements against the findings only.
 

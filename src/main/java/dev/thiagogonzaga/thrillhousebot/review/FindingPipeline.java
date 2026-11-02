@@ -33,6 +33,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.Throwables;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenSpendCeilingExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager;
+import io.opentelemetry.context.Context;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -50,6 +51,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 import org.jboss.logging.Logger;
 
 /**
@@ -213,6 +215,7 @@ public class FindingPipeline {
   private final ReviewDimensionRouter dimensionRouter;
   private final SecurityScan securityScan;
   private final SummaryVerificationService summaryVerification;
+  private final ModelRouter modelRouter;
 
   @Inject
   public FindingPipeline(
@@ -228,7 +231,8 @@ public class FindingPipeline {
       TruncatedResponseSalvager salvager,
       ReviewDimensionRouter dimensionRouter,
       SecurityScan securityScan,
-      SummaryVerificationService summaryVerification) {
+      SummaryVerificationService summaryVerification,
+      ModelRouter modelRouter) {
     this.aiReviewService = aiReviewService;
     this.findingScreen = findingScreen;
     this.deduplicator = deduplicator;
@@ -242,6 +246,7 @@ public class FindingPipeline {
     this.dimensionRouter = dimensionRouter;
     this.securityScan = securityScan;
     this.summaryVerification = summaryVerification;
+    this.modelRouter = modelRouter;
   }
 
   /**
@@ -265,6 +270,10 @@ public class FindingPipeline {
     // entry exists exactly while its provider callbacks may land and never outlives the review.
     tokenLedger.open(ledgerSessionId(session));
     try {
+      // Decided once for the whole review (#43), so every batch goes to the same model.
+      modelRouter
+          .route(ctx.reviewableFiles())
+          .ifPresent(model -> tokenLedger.routeTo(ledgerSessionId(session), model));
       var response = runWithLedger(session, promptInputs, ctx, plan, lineResolver, evidence);
       // A call that had to run with reasoning disabled (#839), or whose repeat was stopped because
       // the model wrote its deliberation into the response (#893), is noted on the ledger entry
@@ -310,6 +319,8 @@ public class FindingPipeline {
     ReviewResponse aiResponse;
     try {
       aiResponse = aiReviewService.review(session, singleInputs);
+      // #1200: taken here, before any step rebuilds the response without them.
+      evidence.criterionVerdicts().collect(aiResponse.linkedIssueCriteria());
     } catch (AiResponseTruncatedException e) {
       // #580: the call was made and billed, and its body is well-formed up to the cut. Losing the
       // whole review to it would discard exactly the paid work the multi-call lane already keeps.
@@ -484,7 +495,10 @@ public class FindingPipeline {
     }
     var outcomesByIndex = new BatchOutcome[batches.size()];
     var failedIndices = new ArrayList<Integer>();
-    try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+    // The batches run with this thread's OpenTelemetry context, so their model-call spans stay in
+    // the review's trace (#1263).
+    try (ExecutorService executor =
+        Context.taskWrapping(Executors.newVirtualThreadPerTaskExecutor())) {
       var futures =
           IntStream.range(0, batches.size())
               .mapToObj(i -> CompletableFuture.supplyAsync(() -> processBatch(i, run), executor))
@@ -754,6 +768,11 @@ public class FindingPipeline {
    * verifier reads, at the PR level. The diff is the text the review calls read, one part per
    * batch, or the whole diff when budgeting is off; the PR text is bounded as on the finding
    * verifier (#736); the findings are the ones this round posts.
+   *
+   * <p>A batch's text is file sections only, so a part ahead of the batches carries what the whole
+   * diff's header carries when budgeting is off: the PR's file and line totals and the files
+   * withheld from review. Without them the call counted the reviewed files alone and cut a true "17
+   * files" and a rename the review never read (#1206).
    */
   private SummaryVerificationService.Material summaryVerificationMaterial(
       ReviewResponse refined,
@@ -763,7 +782,10 @@ public class FindingPipeline {
     var budget = budgetPlanner.perCallInputBudget();
     var diff =
         plan.budgeted()
-            ? plan.batches().stream().map(DiffBudgetPlanner.DiffBatch::text).toList()
+            ? Stream.concat(
+                    Stream.of(changeScopeSummary(ctx) + withheldMaterialNotice(ctx, plan)),
+                    plan.batches().stream().map(DiffBudgetPlanner.DiffBatch::text))
+                .toList()
             : List.of(Objects.requireNonNullElse(ctx.diff(), ""));
     return new SummaryVerificationService.Material(
         PrContextBudget.bound(inputs.prContext(), budget, tokenCounter),
@@ -1075,6 +1097,8 @@ public class FindingPipeline {
     var batchInputs = run.prompts().forBatch(batch, "");
     var batchResponse =
         aiReviewService.reviewBatch(run.session(), batchInputs, index + 1, batches.size());
+    // #1200: each batch judges the criteria from its own files; LinkedIssueCriteria combines them.
+    run.evidence().criterionVerdicts().collect(batchResponse.linkedIssueCriteria());
     return refineBatchOutcome(index, batch, batchInputs, batchResponse, run);
   }
 

@@ -82,7 +82,7 @@ class LabelGateGuardTest {
     assertEquals("label-gated", standDown.kind());
     // The guard only decides; the stand-down's consequences are ReviewStandDown's.
     verifyNoInteractions(checkRunManager);
-    assertTrue(skipEmitter.countsByReason().isEmpty());
+    assertTrue(skipEmitter.countsByReason(java.util.List.of(1L)).isEmpty());
   }
 
   @Test

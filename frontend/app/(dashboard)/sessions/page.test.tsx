@@ -10,6 +10,16 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   api: vi.fn(),
 }));
 
+const installationFilter = vi.hoisted(() => ({
+  installations: [] as { id: number; account: string; repositories: number; installationWide: boolean }[],
+  installation: null as number | null,
+  setInstallation: vi.fn(),
+}));
+
+vi.mock('@/hooks/useInstallationFilter', () => ({
+  useInstallationFilter: () => installationFilter,
+}));
+
 function listPage(overrides: Partial<{ total: number; page: number }> = {}) {
   return {
     sessions: mockSessions,
@@ -201,7 +211,7 @@ describe('SessionsPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Page 2 of 3')).toBeInTheDocument();
     });
-    expect(sessions).toHaveBeenLastCalledWith(1);
+    expect(sessions).toHaveBeenLastCalledWith(1, undefined, null);
   });
 
   it('disables paging when a single page holds every session', async () => {
@@ -212,5 +222,35 @@ describe('SessionsPage', () => {
     });
     expect(screen.getByRole('button', { name: '← Previous' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Next →' })).toBeDisabled();
+  });
+});
+
+describe('SessionsPage installation filter', () => {
+  afterEach(() => {
+    installationFilter.installations = [];
+    installationFilter.installation = null;
+    cleanup();
+  });
+
+  it('asks for the selected installation and offers every readable one', async () => {
+    installationFilter.installations = [
+      { id: 1, account: 'acme', repositories: 3, installationWide: true },
+      { id: 2, account: 'globex', repositories: 1, installationWide: false },
+    ];
+    installationFilter.installation = 2;
+    const sessions = vi.fn().mockResolvedValue(listPage());
+    vi.mocked(api).mockReturnValue({ sessions } as unknown as ReturnType<typeof api>);
+
+    render(<SessionsPage />);
+
+    await waitFor(() => expect(sessions).toHaveBeenCalledWith(0, undefined, 2));
+    const picker = screen.getByLabelText('Installation');
+    expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'All installations',
+      'acme',
+      'globex',
+    ]);
+    await userEvent.selectOptions(picker, '');
+    expect(installationFilter.setInstallation).toHaveBeenCalledWith(null);
   });
 });

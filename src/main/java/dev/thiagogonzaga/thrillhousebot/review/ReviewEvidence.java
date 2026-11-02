@@ -32,29 +32,38 @@ import java.util.Objects;
  * @param citedLocations the round that reads the repository at the head commit
  * @param contextEvidence the round that reads this review's own context sections
  * @param selectedLearnings the active, bounded decline selection also rendered in the review prompt
+ * @param criterionVerdicts the review calls' verdicts on the linked issue's criteria (#1200), which
+ *     the verdict reads once the calls are done; the one accumulator of this review, shared by
+ *     every copy of it
  */
 public record ReviewEvidence(
     CitedLocationResolver.Round citedLocations,
     ContextEvidenceResolver.Round contextEvidence,
-    List<ReviewLearningService.LearningView> selectedLearnings) {
+    List<ReviewLearningService.LearningView> selectedLearnings,
+    LinkedIssueVerdicts criterionVerdicts) {
 
   public ReviewEvidence {
     selectedLearnings = List.copyOf(Objects.requireNonNullElse(selectedLearnings, List.of()));
+    criterionVerdicts = Objects.requireNonNullElseGet(criterionVerdicts, LinkedIssueVerdicts::new);
   }
 
   public ReviewEvidence(
       CitedLocationResolver.Round citedLocations, ContextEvidenceResolver.Round contextEvidence) {
-    this(citedLocations, contextEvidence, List.of());
+    this(citedLocations, contextEvidence, List.of(), null);
   }
 
   /** Only the active, relevant, capped selection the prompt read may affect a finding. */
   ReviewEvidence withLearnings(List<ReviewLearningService.LearningView> selected) {
-    return new ReviewEvidence(citedLocations, contextEvidence, selected);
+    return new ReviewEvidence(citedLocations, contextEvidence, selected, criterionVerdicts);
   }
 
   /** Attaches nothing at all, for a caller with no repository access and no loaded context. */
   public static final ReviewEvidence NONE =
-      new ReviewEvidence(CitedLocationResolver.disabled(), ContextEvidenceResolver.disabled());
+      new ReviewEvidence(
+          CitedLocationResolver.disabled(),
+          ContextEvidenceResolver.disabled(),
+          List.of(),
+          LinkedIssueVerdicts.DISCARD);
 
   /**
    * Opens both rounds over one review, on one budget.

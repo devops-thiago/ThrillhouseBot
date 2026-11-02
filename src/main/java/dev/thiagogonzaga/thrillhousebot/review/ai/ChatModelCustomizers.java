@@ -163,6 +163,11 @@ public final class ChatModelCustomizers {
     @Override
     public void customize(OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder builder) {
       STREAMING_TUNING.apply(config, activeModel, builder, false);
+      // #66: hands the review call's reasoning_content to the stream's thinking callback. It reads
+      // what the provider already sends and changes nothing in the request.
+      if (config.dashboard().reasoningStreamEnabled()) {
+        builder.returnThinking(true);
+      }
     }
   }
 

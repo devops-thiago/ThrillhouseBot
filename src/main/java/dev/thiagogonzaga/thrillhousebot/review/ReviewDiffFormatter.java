@@ -632,7 +632,8 @@ public class ReviewDiffFormatter {
     if (filename == null) {
       return false;
     }
-    var lower = filename.toLowerCase(Locale.ROOT);
+    // A leading slash lets a test directory at the repository root match like a nested one
+    var lower = "/" + filename.toLowerCase(Locale.ROOT);
     var name = filename.substring(filename.lastIndexOf('/') + 1);
     var dot = name.lastIndexOf('.');
     String baseName = dot > 0 ? name.substring(0, dot) : name;

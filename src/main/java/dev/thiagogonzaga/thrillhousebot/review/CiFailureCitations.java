@@ -24,6 +24,7 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -38,12 +39,14 @@ import java.util.regex.Pattern;
  * it off confidence "low".
  *
  * <p>The section is read back from its rendered text, as {@code CiFailureContextResolver} writes
- * it, because what counts is what the reviewer was shown. A finding cites a check when its own
- * words say something failed and name that check AS a check: quoted ({@code "test"}), or beside the
- * word that makes it one ({@code test check}, {@code test (conclusion: failure)}, {@code the
- * unit-tests job}). A bare co-occurrence is not a citation: a check named {@code test} would
- * otherwise be cited by any finding that says a test would fail in CI. Naming a check the section
- * does not record cites nothing, so a finding cannot buy the floor by saying "CI fails".
+ * it, because what counts is what the reviewer was shown. A finding cites a check when one sentence
+ * of it says something failed and names that check AS a check: quoted ({@code "test"}, but not as a
+ * key, {@code "test": …}), or beside the word that makes it one ({@code test check}, {@code test
+ * (conclusion: failure)}, {@code the unit-tests job}). The check and the failure in two sentences
+ * are often about two things (#1194). A bare co-occurrence is not a citation: a check named {@code
+ * test} would otherwise be cited by any finding that says a test would fail in CI. Naming a check
+ * the section does not record cites nothing, so a finding cannot buy the floor by saying "CI
+ * fails".
  *
  * <p>A finding also cites a check through a failing test its job log names (#1075): the section
  * lists the runner's line for each one ("✖ returns exactly `slots` applications (1.5ms)", "[ERROR]
@@ -61,7 +64,9 @@ import java.util.regex.Pattern;
  * (#952): rust ThrillhouseBot-test#279's finding quoted the failing test's {@code assert!} line and
  * never named the test, whose log printed only "got 4". The assertions are read from the test's
  * body in the pull request's changed files ({@link TestAssertions}), so a section parsed without
- * them ({@link #parse(String)}) cites by name only.
+ * them ({@link #parse(String)}) cites by name only. A failing test's name may also be a label its
+ * test function prints, as a C harness's {@code CHECK("name", …)} does; a finding naming that
+ * function names the test (#1194, {@link TestAssertions#functionsLabelling}).
  */
 final class CiFailureCitations implements FindingVerificationService.FailingChecks {
 
@@ -137,6 +142,18 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
 
   private static final Pattern NOT_A_WORD = Pattern.compile("[^a-z0-9]+");
 
+  /**
+   * The marks that end a finding's sentence or clause when whitespace follows ({@link #sentences}).
+   */
+  private static final String SENTENCE_MARKS = ".!?;";
+
+  /**
+   * The dotted abbreviations whose closing stop ends no sentence: "fails at COPY, i.e. the "test"
+   * check …". Only these: a stop after "etc." or "no." ends a sentence as often as not, and a cut
+   * that should not have been made can only lose a tie, never make a wrong one.
+   */
+  private static final Set<String> ABBREVIATIONS = Set.of("i.e", "e.g");
+
   /** The apostrophes a contraction is written with, dropped so "doesn't" reads as "doesnt". */
   private static final Pattern APOSTROPHE = Pattern.compile("['\u2019]");
 
@@ -145,6 +162,12 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
    * are anchored and possessive, so no line the pull request's code prints can make them backtrack.
    */
   private static final Pattern LOGGED_LEAD = Pattern.compile("^(?:\\[ERROR]\\s++|not ok \\d++ )");
+
+  /**
+   * The level sbt opens every line with, before ScalaTest's "- name *** FAILED ***" (#1194). Left
+   * on, the name was cut at its first " - " and read as "[info]".
+   */
+  private static final Pattern SBT_LEAD = Pattern.compile("^\\[(?:info|error)]\\s++");
 
   /** The mark Vitest opens a failed test's line with: "× capacity > marks a shift full 6ms". */
   private static final String VITEST_MARK = "\u00D7 ";
@@ -247,12 +270,19 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
    * finding's lower-cased text: its words are ordinary prose ("validates the input"), which a
    * finding about something else can say.
    */
-  private record FailingTest(String name, List<String> phrases, List<String> assertions) {
+  private record FailingTest(
+      String name, List<String> phrases, List<String> assertions, List<String> functions) {
 
+    /** Whether the finding names this test, or a test function that prints its name (#1194). */
     boolean namedIn(String raw, String text) {
-      if (name.indexOf(' ') >= 0) {
-        return phrases.stream().anyMatch(text::contains);
-      }
+      boolean byName =
+          name.indexOf(' ') >= 0
+              ? phrases.stream().anyMatch(text::contains)
+              : namesIdentifier(raw, name);
+      return byName || functions.stream().anyMatch(function -> namesIdentifier(raw, function));
+    }
+
+    private static boolean namesIdentifier(String raw, String name) {
       String identifier = name.toLowerCase(Locale.ROOT);
       for (int at = raw.indexOf(identifier); at >= 0; at = raw.indexOf(identifier, at + 1)) {
         int end = at + identifier.length();
@@ -390,7 +420,10 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
             new FailingTest(
                 name,
                 phrasesOf(name, line.strip().startsWith(VITEST_MARK)),
-                sources.assertionsOf(name)));
+                sources.assertionsOf(name),
+                sources.functionsLabelling(name).stream()
+                    .filter(CiFailureCitations::distinctive)
+                    .toList()));
       }
     }
     return List.copyOf(tests);
@@ -497,6 +530,10 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
 
   /** {@code line} without what the runner printed before the test's name. */
   private static String withoutLead(String line) {
+    var sbt = SBT_LEAD.matcher(line);
+    if (sbt.find()) {
+      return withoutLead(line.substring(sbt.end()));
+    }
     var logged = LOGGED_LEAD.matcher(line);
     if (logged.find()) {
       String rest = line.substring(logged.end());
@@ -724,7 +761,7 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     var quotes = TestAssertions.quotesIn(raw);
     var cited = new ArrayList<Citation>();
     for (Check check : checks) {
-      if (failureStated && namesAsACheck(check, raw, text)) {
+      if (failureStated && namedAsAFailingCheck(check, raw)) {
         cited.add(new Citation(check, null, false));
       }
       cited.addAll(testCitations(check, raw, text, quotes));
@@ -746,12 +783,100 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     return cited;
   }
 
-  /** Whether the finding names this check quoted, or beside a word that makes it a check. */
+  /**
+   * Whether one sentence of the finding both says something failed and names this check as a check
+   * (#1194). Across sentences the two are often about different things: node
+   * ThrillhouseBot-test#299's finding quoted the package.json script {@code "test"} in one sentence
+   * and said "docker build fails" in another, and was credited with the failing {@code test} check
+   * its job never reached the Dockerfile in.
+   */
+  private static boolean namedAsAFailingCheck(Check check, String raw) {
+    for (String sentence : sentences(raw)) {
+      String text = normalized(sentence);
+      if (states(text, FAILURE_WORDS) && namesAsACheck(check, sentence, text)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The finding's sentences and clauses: cut at a line break, and at a stop, a semicolon, a
+   * question or an exclamation mark that whitespace follows, except inside quoted code, whose code
+   * may hold "; ", or at the stop closing "i.e." or "e.g." (#1194). Quoted code is a backtick or
+   * single-quote span that closes on the same line, a single quote opening one only after no letter
+   * or digit, so neither a contraction's apostrophe nor a stray backtick quotes anything.
+   */
+  static List<String> sentences(String raw) {
+    var sentences = new ArrayList<String>();
+    int start = 0;
+    for (int i = 0; i < raw.length(); i++) {
+      char c = raw.charAt(i);
+      if (c == '\n') {
+        sentences.add(raw.substring(start, i));
+        start = i + 1;
+      } else if (opensAQuote(raw, i)) {
+        i = raw.indexOf(c, i + 1);
+      } else if (endsASentence(raw, i)) {
+        sentences.add(raw.substring(start, i));
+        start = i + 1;
+      }
+    }
+    sentences.add(raw.substring(start));
+    return sentences;
+  }
+
+  /**
+   * Whether a backtick or a single quote at {@code at} opens a span that closes before the line
+   * ends; a single quote right after a letter or digit is an apostrophe and opens none.
+   */
+  private static boolean opensAQuote(String raw, int at) {
+    char quote = raw.charAt(at);
+    if ((quote != '`' && quote != '\'')
+        || (quote == '\'' && at > 0 && Character.isLetterOrDigit(raw.charAt(at - 1)))) {
+      return false;
+    }
+    int close = raw.indexOf(quote, at + 1);
+    int lineEnd = raw.indexOf('\n', at + 1);
+    return close > 0 && (lineEnd < 0 || close < lineEnd);
+  }
+
+  private static boolean endsASentence(String raw, int at) {
+    return SENTENCE_MARKS.indexOf(raw.charAt(at)) >= 0
+        && at + 1 < raw.length()
+        && Character.isWhitespace(raw.charAt(at + 1))
+        && !(raw.charAt(at) == '.' && closesAnAbbreviation(raw, at));
+  }
+
+  /** Whether the stop at {@code dot} closes one of the {@link #ABBREVIATIONS}. */
+  private static boolean closesAnAbbreviation(String raw, int dot) {
+    int from = dot;
+    while (from > 0 && (Character.isLetter(raw.charAt(from - 1)) || raw.charAt(from - 1) == '.')) {
+      from--;
+    }
+    return ABBREVIATIONS.contains(raw.substring(from, dot).toLowerCase(Locale.ROOT));
+  }
+
+  /**
+   * Whether the finding names this check quoted, or beside a word that makes it a check. A quoted
+   * name followed by a colon is a key ({@code "test": "node --test"}), not the check.
+   */
   private static boolean namesAsACheck(Check check, String raw, String text) {
     String name = check.name().toLowerCase(Locale.ROOT);
-    return QUOTES.stream().anyMatch(pair -> raw.contains(pair.charAt(0) + name + pair.charAt(1)))
+    return QUOTES.stream()
+            .anyMatch(pair -> quotedNotAsAKey(raw, pair.charAt(0) + name + pair.charAt(1)))
         || besideACheckWord(check.words().strip(), text)
         || namesEveryWordOfACompoundName(check.words().strip(), text);
+  }
+
+  private static boolean quotedNotAsAKey(String raw, String quoted) {
+    for (int at = raw.indexOf(quoted); at >= 0; at = raw.indexOf(quoted, at + 1)) {
+      String after = raw.substring(at + quoted.length()).stripLeading();
+      if (!after.startsWith(":")) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static boolean besideACheckWord(String core, String text) {

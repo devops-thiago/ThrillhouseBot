@@ -29,6 +29,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerationParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerationResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGeneratorPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
@@ -138,7 +139,8 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
       RepoSettingsResolver repoSettingsResolver,
       DiffBudgetPlanner budgetPlanner,
       ActiveModelSettings activeModel,
-      ThrillhouseConfig config) {
+      ThrillhouseConfig config,
+      ReviewTokenLedger tokenLedger) {
     super(
         prClient,
         diffFormatter,
@@ -146,7 +148,8 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
         repoSettingsResolver,
         budgetPlanner,
         activeModel,
-        config);
+        config,
+        tokenLedger);
     this.authClient = authClient;
     this.prClient = prClient;
     this.reviewClient = reviewClient;
@@ -173,6 +176,13 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
   /** Generates and posts the documentation suggestions. Swallows every failure after logging it. */
   @ActivateRequestContext
   public void handle(DocTask task) {
+    try (var _ = openRun()) {
+      handleInRun(task);
+    }
+  }
+
+  /** {@link #handle}'s work, inside its ledger run. */
+  private void handleInRun(DocTask task) {
     try {
       var auth = authClient.getAuthHeader(task.installationId());
       var pr =

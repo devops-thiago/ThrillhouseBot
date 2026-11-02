@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
 import java.util.Map;
@@ -42,7 +43,17 @@ final class PrePublishGuardFixtures {
 
   static ReviewOrchestrator.ReviewRequest request(boolean manual) {
     return new ReviewOrchestrator.ReviewRequest(
-        "owner", "repo", 42, "abcdefgh", "T", "", "base", "main", 1L, manual);
+        "owner",
+        "repo",
+        42,
+        "abcdefgh",
+        "T",
+        "",
+        "base",
+        "main",
+        1L,
+        TestScopes.REPOSITORY_ID,
+        manual);
   }
 
   static PrePublishGuard.Review review(boolean manual, long checkRunId) {

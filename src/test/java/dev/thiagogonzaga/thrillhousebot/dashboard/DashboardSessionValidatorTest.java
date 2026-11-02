@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
@@ -38,7 +39,8 @@ class DashboardSessionValidatorTest {
   void setUp() {
     sessionStore = new DashboardSessionStore(now::get);
     accessChecker = mock(DashboardAccessChecker.class);
-    when(accessChecker.hasAccess(anyString())).thenReturn(true);
+    when(accessChecker.resolve(anyString(), anyString()))
+        .thenReturn(allowed(TestScopes.readable(false, "owner/repo")));
     validator = new DashboardSessionValidator(sessionStore, accessChecker);
   }
 
@@ -74,7 +76,8 @@ class DashboardSessionValidatorTest {
   @Test
   void shouldRejectWhenAccessCheckerDenies() {
     var sessionId = sessionStore.createSession("outsider", "gho_secret", "https://a.co", "Out");
-    when(accessChecker.hasAccess("outsider")).thenReturn(false);
+    when(accessChecker.resolve("outsider", "gho_secret"))
+        .thenReturn(DashboardAccessChecker.Resolution.DENIED);
 
     assertTrue(validator.resolveLogin(sessionId).isEmpty());
   }
@@ -88,34 +91,10 @@ class DashboardSessionValidatorTest {
   }
 
   @Test
-  void shouldDelegateAllowedRepositoryAccessForKnownSession() {
-    var sessionId = sessionStore.createSession("octocat", "gho_secret", "https://a.co", "Octocat");
-    when(accessChecker.hasRepositoryAccess("octocat", "owner/repo")).thenReturn(true);
-
-    assertTrue(validator.hasRepositoryAccess(sessionId, "owner/repo"));
-    verify(accessChecker).hasRepositoryAccess("octocat", "owner/repo");
-  }
-
-  @Test
-  void shouldDelegateDeniedRepositoryAccessForKnownSession() {
-    var sessionId = sessionStore.createSession("outsider", "gho_secret", "https://a.co", "Out");
-    when(accessChecker.hasRepositoryAccess("outsider", "owner/repo")).thenReturn(false);
-
-    assertFalse(validator.hasRepositoryAccess(sessionId, "owner/repo"));
-    verify(accessChecker).hasRepositoryAccess("outsider", "owner/repo");
-  }
-
-  @Test
-  void shouldRejectRepositoryAccessForUnknownSessionWithoutDelegating() {
-    assertFalse(validator.hasRepositoryAccess("unknown", "owner/repo"));
-    verify(accessChecker, never()).hasRepositoryAccess(anyString(), anyString());
-  }
-
-  @Test
   void shouldResolveTheRepositoryScopeOfAKnownSession() {
     var sessionId = sessionStore.createSession("octocat", "gho_secret", "https://a.co", "Octocat");
-    var scope = new RepositoryScope(false, java.util.Set.of("owner/repo"));
-    when(accessChecker.repositoryScope("octocat")).thenReturn(scope);
+    var scope = TestScopes.readable(false, "owner/repo");
+    when(accessChecker.resolve("octocat", "gho_secret")).thenReturn(allowed(scope));
 
     assertSame(scope, validator.repositoryScope(sessionId));
   }
@@ -123,7 +102,48 @@ class DashboardSessionValidatorTest {
   @Test
   void shouldGiveAnUnknownSessionAnEmptyScopeWithoutDelegating() {
     assertSame(RepositoryScope.NONE, validator.repositoryScope("unknown"));
-    verify(accessChecker, never()).repositoryScope(anyString());
+    verify(accessChecker, never()).resolve(anyString(), anyString());
+  }
+
+  @Test
+  void aTokenGitHubRejectsEndsTheSession() {
+    var sessionId = sessionStore.createSession("octocat", "gho_revoked", "https://a.co", "Octocat");
+    when(accessChecker.resolve("octocat", "gho_revoked"))
+        .thenReturn(
+            new DashboardAccessChecker.Resolution(
+                DashboardAccessChecker.AccessDecision.TOKEN_REJECTED, RepositoryScope.NONE));
+
+    assertFalse(validator.isValidSession(sessionId));
+    assertFalse(validator.isSessionOpen(sessionId));
+    assertSame(RepositoryScope.NONE, validator.repositoryScope(sessionId));
+  }
+
+  @Test
+  void anUnreachableGitHubDeniesButKeepsTheSession() {
+    var sessionId = sessionStore.createSession("octocat", "gho_secret", "https://a.co", "Octocat");
+    when(accessChecker.resolve("octocat", "gho_secret"))
+        .thenReturn(
+            new DashboardAccessChecker.Resolution(
+                DashboardAccessChecker.AccessDecision.UNAVAILABLE, RepositoryScope.NONE));
+
+    assertFalse(validator.isValidSession(sessionId));
+    assertTrue(validator.isSessionOpen(sessionId));
+    assertTrue(validator.refreshedScope(sessionId).isEmpty(), "keep what the socket had");
+  }
+
+  @Test
+  void aRefreshedScopeIsTheCurrentAnswerOrNothingOnceTheSessionIsGone() {
+    var sessionId = sessionStore.createSession("octocat", "gho_secret", "https://a.co", "Octocat");
+    var scope = TestScopes.readable(false, "owner/repo");
+    when(accessChecker.resolve("octocat", "gho_secret")).thenReturn(allowed(scope));
+
+    assertEquals(Optional.of(scope), validator.refreshedScope(sessionId));
+    assertEquals(Optional.of(RepositoryScope.NONE), validator.refreshedScope("unknown"));
+  }
+
+  private static DashboardAccessChecker.Resolution allowed(RepositoryScope scope) {
+    return new DashboardAccessChecker.Resolution(
+        DashboardAccessChecker.AccessDecision.ALLOWED, scope);
   }
 
   @Test

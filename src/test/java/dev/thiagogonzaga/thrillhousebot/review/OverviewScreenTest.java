@@ -187,6 +187,31 @@ class OverviewScreenTest {
   }
 
   @Test
+  void aClauseSayingTheFileLacksASettingKeepsIt() {
+    // java #293 (#1206): CONFIG-JAVA.md leaves BLOODBANK_PORT out, which is the point; in R2 no
+    // finding of that round named it.
+    var patch = "+| `BLOODBANK_SITES` | sites |\n+| `BLOODBANK_WARN_WINDOW` | window |";
+    var r1 =
+        "Configuration documentation; omits unit/type for BLOODBANK_WARN_WINDOW, comma-list"
+            + " semantics for BLOODBANK_SITES, and the BLOODBANK_PORT row entirely.";
+    var r2 =
+        "Documents BLOODBANK_SITES and BLOODBANK_WARN_WINDOW; prior findings flag omitted units,"
+            + " separators and the missing BLOODBANK_PORT row.";
+
+    assertEquals(r1, OverviewScreen.screenedText(r1, patch, ""));
+    assertEquals(r2, OverviewScreen.screenedText(r2, patch, ""));
+    assertEquals(
+        "Documents BLOODBANK_SITES; lacks a BLOODBANK_PORT row",
+        OverviewScreen.screenedText(
+            "Documents BLOODBANK_SITES; lacks a BLOODBANK_PORT row", patch, ""));
+    // Without a word saying something is left out, the invented setting is still cut.
+    assertEquals(
+        "Documents BLOODBANK_SITES.",
+        OverviewScreen.screenedText(
+            "Documents BLOODBANK_SITES; adds the BLOODBANK_PORT row.", patch, ""));
+  }
+
+  @Test
   void emptyClausesAreDroppedAndAnExactPathKeepsItsScreenedText() {
     assertEquals("one; two", OverviewScreen.screenedText("one;; two;", "+x", ""));
     var screened =

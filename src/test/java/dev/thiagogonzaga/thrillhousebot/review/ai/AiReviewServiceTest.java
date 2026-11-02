@@ -22,6 +22,7 @@ import static org.mockito.Mockito.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.exception.HttpException;
 import dev.langchain4j.exception.InternalServerException;
+import dev.langchain4j.exception.ModelNotFoundException;
 import dev.langchain4j.exception.RateLimitException;
 import dev.langchain4j.model.chat.response.StreamingHandle;
 import dev.langchain4j.model.output.TokenUsage;
@@ -32,6 +33,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -73,6 +75,11 @@ class AiReviewServiceTest {
 
   @Mock private ThrillhouseConfig.AiPricingConfig.ReasoningConfig reasoning;
 
+  /** No routed or fallback model unless a test says so (#43). */
+  @Mock private ThrillhouseConfig.AiPricingConfig.RoutingConfig routing;
+
+  @Mock private ThrillhouseConfig.DashboardConfig dashboardConfig;
+
   @Mock private SessionEventBroadcaster broadcaster;
 
   @Mock private ReviewTokenLedger tokenLedger;
@@ -101,7 +108,9 @@ class AiReviewServiceTest {
     lenient().when(reviewConfig.aiTimeoutSeconds()).thenReturn(5);
     // Reasoning on at max, the production shape behind #839; the concise lane resolves to low.
     lenient().when(config.ai()).thenReturn(aiConfig);
+    lenient().when(config.dashboard()).thenReturn(dashboardConfig);
     lenient().when(aiConfig.reasoning()).thenReturn(reasoning);
+    lenient().when(aiConfig.routing()).thenReturn(routing);
     lenient().when(reasoning.enabled()).thenReturn(true);
     lenient().when(reasoning.effort()).thenReturn("max");
     lenient().when(reasoning.conciseEffort()).thenReturn(Optional.empty());
@@ -165,6 +174,58 @@ class AiReviewServiceTest {
 
     verify(prReviewer, times(2)).reviewStream(followUp);
     verifyNoMoreInteractions(prReviewer);
+  }
+
+  @Test
+  void withTheReasoningStreamOnTheReviewCallsReasoningReachesTheDashboardAheadOfItsOutput() {
+    when(dashboardConfig.reasoningStreamEnabled()).thenReturn(true);
+    ReviewSession session = reviewSession();
+    when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
+        .thenReturn(new FakeTokenStream("{\"findings\":[]}").withThinking("Check the null path."));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    service.review(session, PROMPT_INPUTS);
+
+    var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
+    verify(broadcaster, atLeastOnce()).broadcast(captor.capture());
+    var types =
+        captor.getAllValues().stream().map(SessionEventBroadcaster.SessionEvent::type).toList();
+    assertEquals(List.of("review.reasoning", "review.stream", "review.phase"), types);
+    var thinking = captor.getAllValues().get(0);
+    assertEquals("Check the null path.", thinking.data().get("tail"));
+    assertEquals(1, thinking.data().get("chunkIndex"));
+    assertEquals("verify", captor.getAllValues().get(2).data().get("phase"));
+  }
+
+  @Test
+  void withTheReasoningStreamOffNoReasoningIsSent() {
+    ReviewSession session = reviewSession();
+    when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
+        .thenReturn(new FakeTokenStream("{\"findings\":[]}").withThinking("Check the null path."));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    service.review(session, PROMPT_INPUTS);
+
+    var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
+    verify(broadcaster, atLeastOnce()).broadcast(captor.capture());
+    assertTrue(captor.getAllValues().stream().noneMatch(e -> "review.reasoning".equals(e.type())));
+  }
+
+  @Test
+  void aBatchCallSendsNoReasoningEvenWithTheStreamOn() {
+    lenient().when(dashboardConfig.reasoningStreamEnabled()).thenReturn(true);
+    ReviewSession session = reviewSession();
+    when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
+        .thenReturn(new FakeTokenStream("{\"findings\":[]}").withThinking("Check the null path."));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    service.reviewBatch(session, PROMPT_INPUTS, 1, 2);
+
+    var captor = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
+    verify(broadcaster, atLeastOnce()).broadcast(captor.capture());
+    assertEquals(
+        List.of("review.batch"),
+        captor.getAllValues().stream().map(SessionEventBroadcaster.SessionEvent::type).toList());
   }
 
   @Test
@@ -273,6 +334,9 @@ class AiReviewServiceTest {
     assertTrue(
         captor.getAllValues().stream().noneMatch(e -> "review.stream".equals(e.type())),
         "the summary call must not broadcast a per-token stream");
+    // #66: the live activity page shows the review is on its summary.
+    assertEquals("review.phase", captor.getAllValues().get(0).type());
+    assertEquals("summarize", captor.getAllValues().get(0).data().get("phase"));
   }
 
   @Test
@@ -1138,12 +1202,12 @@ class AiReviewServiceTest {
   /**
    * #839 — a length stop with no content at all is the reasoning tail exhausting the output cap,
    * not an answer that was too long: the reasoning field carried everything the model produced.
-   * That call is repeated once with reasoning disabled, and the repeat's answer is the review's.
-   * The repeat is told apart on the thread that starts it: the model wrapper reads the session
-   * binding, so the binding is what the stub records at each call.
+   * That call is repeated once at low (#1173), and the repeat's answer is the review's. The repeat
+   * is told apart on the thread that starts it: the model wrapper reads the session binding, so the
+   * binding is what the stub records at each call.
    */
   @Test
-  void aNoContentLengthStopIsRetriedOnceWithReasoningDisabled() {
+  void aNoContentLengthStopIsRetriedOnceAtLowEffort() {
     var starts = new java.util.concurrent.atomic.AtomicInteger();
     var effortPerCall = new java.util.ArrayList<String>();
     ReviewSession session = reviewSession();
@@ -1160,12 +1224,12 @@ class AiReviewServiceTest {
 
     var response = service.review(session, PROMPT_INPUTS);
 
-    assertSame(parsed, response, "the answer of the repeat without reasoning is the review's");
+    assertSame(parsed, response, "the answer of the repeat at low is the review's");
     assertEquals(1, starts.get(), "the exhausted call is not repeated at the same effort");
     assertEquals(
-        java.util.Arrays.asList(null, "none"),
+        java.util.Arrays.asList(null, "low"),
         effortPerCall,
-        "the first call runs at the configured effort, the repeat with reasoning disabled");
+        "the first call runs at the configured effort, the repeat at low");
     assertNull(
         ReasoningRepeat.current(), "the override ends with the call; nothing later inherits it");
     verify(tokenLedger).recordReasoningStepDown(42L);
@@ -1215,8 +1279,12 @@ class AiReviewServiceTest {
     return prose.substring(0, chars);
   }
 
-  /** Stubs the review stream: a no-content cap first, then {@code repeat} for the step-down. */
+  /**
+   * Stubs the review stream: a no-content cap first, then {@code repeat} for the step-down, which
+   * goes out at none so the guard watches it (#893).
+   */
   private java.util.concurrent.atomic.AtomicInteger stubStepDownRepeat(TokenStream repeat) {
+    when(reasoning.repeatEffort()).thenReturn(Optional.of("none"));
     var starts = new java.util.concurrent.atomic.AtomicInteger();
     var calls = new java.util.concurrent.atomic.AtomicInteger();
     when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
@@ -1306,6 +1374,32 @@ class AiReviewServiceTest {
   }
 
   /**
+   * #1173 — a repeat at low keeps its reasoning in the provider's channel, so it is not watched:
+   * prose past the bound is parsed as any other answer.
+   */
+  @Test
+  void aRepeatAtLowIsNotWatchedForItsProse() {
+    ReviewSession session = reviewSession();
+    var content = deliberation(2 * InlinedDeliberationGuard.BOUND_CHARS);
+    var starts = new java.util.concurrent.atomic.AtomicInteger();
+    var calls = new java.util.concurrent.atomic.AtomicInteger();
+    when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
+        .thenAnswer(
+            invocation ->
+                calls.incrementAndGet() == 1
+                    ? TruncatedTokenStream.reasoningExhausted(starts)
+                    : new FakeTokenStream(content, 400));
+    var parsed = new ReviewResponse(List.of(), List.of(), null);
+    when(parser.parse(content)).thenReturn(parsed);
+
+    assertSame(parsed, service.review(session, PROMPT_INPUTS));
+
+    assertEquals(2, calls.get());
+    verify(tokenLedger).recordReasoningStepDown(anyLong());
+    verify(tokenLedger, never()).recordReasoningRepeatStopped(anyLong());
+  }
+
+  /**
    * #893 — only the step-down's repeat is watched: a call at the configured effort that opens with
    * prose past the bound is parsed (and rejected, if it must be) exactly as before.
    */
@@ -1330,6 +1424,7 @@ class AiReviewServiceTest {
    */
   @Test
   void aConciseRepeatThatDeliberatesInContentIsStoppedToo() {
+    when(reasoning.repeatEffort()).thenReturn(Optional.of("none"));
     var starts = new java.util.concurrent.atomic.AtomicInteger();
     var calls = new java.util.concurrent.atomic.AtomicInteger();
     ReviewSession session = reviewSession();
@@ -1444,11 +1539,11 @@ class AiReviewServiceTest {
 
   /**
    * #839 — the final summary call shares the loop, so a no-content cap on the concise lane steps
-   * down the same way; the lane's own effort (low, resolved from the active max — #567) is what is
-   * stepped down from.
+   * down the same way, from the lane's own effort (#567) to low (#1173).
    */
   @Test
-  void aNoContentSummaryCapIsRepeatedWithReasoningDisabledOnTheConciseLane() {
+  void aNoContentSummaryCapIsRepeatedAtLowOnTheConciseLane() {
+    when(reasoning.conciseEffort()).thenReturn(Optional.of("high"));
     var starts = new java.util.concurrent.atomic.AtomicInteger();
     var effortPerCall = new java.util.ArrayList<String>();
     ReviewSession session = reviewSession();
@@ -1469,7 +1564,7 @@ class AiReviewServiceTest {
 
     assertSame(parsed, response);
     assertEquals(1, starts.get());
-    assertEquals(java.util.Arrays.asList(null, "none"), effortPerCall);
+    assertEquals(java.util.Arrays.asList(null, "low"), effortPerCall);
     verify(tokenLedger).recordReasoningStepDown(42L);
   }
 
@@ -1833,6 +1928,146 @@ class AiReviewServiceTest {
     assertInstanceOf(AiReviewException.class, thrown.get());
     assertEquals("Retry delay interrupted", thrown.get().getMessage());
     assertTrue(stillInterrupted.get(), "the interrupt flag must survive the wrapped exception");
+  }
+
+  /** The model override each review stream was opened under (#43), in order. */
+  private List<String> recordReviewModels(TokenStream first, TokenStream... then) {
+    var models = new CopyOnWriteArrayList<String>();
+    var streams = new ArrayDeque<TokenStream>();
+    streams.add(first);
+    streams.addAll(List.of(then));
+    when(prReviewer.reviewStream(any(AiReviewService.PromptInputs.class)))
+        .thenAnswer(
+            inv -> {
+              models.add(String.valueOf(ModelOverride.current()));
+              return streams.size() > 1 ? streams.poll() : streams.peek();
+            });
+    return models;
+  }
+
+  @Test
+  void aRoutedReviewCallGoesToTheRoutedModelAndTheSummaryDoesNot() {
+    // #43: the route is the review's, decided once and read off the ledger by every review call.
+    when(tokenLedger.routedModel(42L)).thenReturn(Optional.of("cheap"));
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var models =
+        recordReviewModels(
+            new FakeTokenStream("{\"findings\":[]}"), new FakeTokenStream("{\"findings\":[]}"));
+    var summaryModels = new CopyOnWriteArrayList<String>();
+    when(prSummarizer.summarizeStream(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenAnswer(
+            inv -> {
+              summaryModels.add(String.valueOf(ModelOverride.current()));
+              return new FakeTokenStream("{\"summary\":{}}");
+            });
+    when(parser.parseSummary(anyString()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+
+    service.review(reviewSession(), PROMPT_INPUTS);
+    service.reviewBatch(reviewSession(), PROMPT_INPUTS, 1, 2);
+    service.summarize(
+        reviewSession(), new AiReviewService.SummaryInputs("ctx", "[]", "files", "", ""));
+
+    assertEquals(List.of("cheap", "cheap"), models);
+    assertEquals(List.of("null"), summaryModels, "the summary keeps the concise model");
+    assertNull(ModelOverride.current(), "no override outlives the call");
+  }
+
+  @Test
+  void aRateLimitMovesTheRemainingAttemptsToTheFallbackModelWithoutTheThrottleWait() {
+    when(routing.fallbackModel()).thenReturn(Optional.of("backup"));
+    when(reviewConfig.maxAiRetries()).thenReturn(3);
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var models =
+        recordReviewModels(
+            new ErrorTokenStream(new RateLimitException(new HttpException(429, "slow down"))),
+            new ErrorTokenStream(new HttpException(503, "Service Unavailable")),
+            new FakeTokenStream("{\"findings\":[]}"));
+    var slept = new CopyOnWriteArrayList<Duration>();
+    var spiedService = spy(service);
+    doAnswer(
+            invocation -> {
+              slept.add(invocation.getArgument(0));
+              return null;
+            })
+        .when(spiedService)
+        .sleep(any(Duration.class));
+
+    spiedService.review(reviewSession(), PROMPT_INPUTS);
+
+    assertEquals(List.of("null", "backup", "backup"), models, "once moved, the call stays");
+    assertEquals(
+        List.of(Duration.ofMillis(1), Duration.ofMillis(2)),
+        slept,
+        "the first fallback attempt goes to other capacity, so no 30 s throttle wait");
+  }
+
+  @Test
+  void aFailureThatIsNotTheProvidersKeepsTheFirstModel() {
+    when(routing.fallbackModel()).thenReturn(Optional.of("backup"));
+    when(reviewConfig.maxAiRetries()).thenReturn(2);
+    when(parser.parse(anyString())).thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    var models =
+        recordReviewModels(
+            new ErrorTokenStream(new RuntimeException("connection reset")),
+            new FakeTokenStream("{\"findings\":[]}"));
+
+    service.review(reviewSession(), PROMPT_INPUTS);
+
+    assertEquals(List.of("null", "null"), models);
+  }
+
+  @Test
+  void aProviderFailureWithNoFallbackOrNoAttemptLeftStaysPut() {
+    when(reviewConfig.maxAiRetries()).thenReturn(2);
+    var models =
+        recordReviewModels(new ErrorTokenStream(new HttpException(500, "Internal Server Error")));
+
+    assertThrows(AiReviewException.class, () -> service.review(reviewSession(), PROMPT_INPUTS));
+    assertEquals(List.of("null", "null"), models, "no fallback configured");
+
+    when(routing.fallbackModel()).thenReturn(Optional.of("backup"));
+    when(reviewConfig.maxAiRetries()).thenReturn(1);
+    assertThrows(AiReviewException.class, () -> service.review(reviewSession(), PROMPT_INPUTS));
+    assertEquals(List.of("null", "null", "null"), models, "the last attempt has nothing to move");
+  }
+
+  @Test
+  void aBlankFallbackModelIsNoFallback() {
+    when(routing.fallbackModel()).thenReturn(Optional.of("  "));
+    when(reviewConfig.maxAiRetries()).thenReturn(2);
+    var models = recordReviewModels(new ErrorTokenStream(new HttpException(503, "Unavailable")));
+
+    assertThrows(AiReviewException.class, () -> service.review(reviewSession(), PROMPT_INPUTS));
+
+    assertEquals(List.of("null", "null"), models);
+  }
+
+  @Test
+  void aRoutedCallFallsBackFromTheRoutedModel() {
+    when(tokenLedger.routedModel(42L)).thenReturn(Optional.of("cheap"));
+    when(routing.fallbackModel()).thenReturn(Optional.of("cheap"));
+    when(reviewConfig.maxAiRetries()).thenReturn(2);
+    var models =
+        recordReviewModels(new ErrorTokenStream(new ModelNotFoundException("no such model")));
+
+    assertThrows(AiReviewException.class, () -> service.review(reviewSession(), PROMPT_INPUTS));
+
+    assertEquals(
+        List.of("cheap", "cheap"), models, "a fallback that is the current model moves nothing");
+  }
+
+  @Test
+  void providerFailuresAreThrottlesServerErrorsAndUnknownModels() {
+    assertTrue(AiReviewService.isProviderFailure(new RateLimitException("slow down")));
+    assertTrue(
+        AiReviewService.isProviderFailure(
+            new AiReviewException("wrapped", 1, new InternalServerException("boom"))));
+    assertTrue(AiReviewService.isProviderFailure(new HttpException(502, "Bad Gateway")));
+    assertTrue(AiReviewService.isProviderFailure(new ModelNotFoundException("gone")));
+    assertFalse(AiReviewService.isProviderFailure(new HttpException(400, "Bad Request")));
+    assertFalse(AiReviewService.isProviderFailure(new RuntimeException("connection reset")));
   }
 
   /** Runs a two-attempt review whose first stream is {@code failing}; returns the waits between. */

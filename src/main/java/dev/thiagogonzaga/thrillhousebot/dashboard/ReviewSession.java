@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import io.quarkus.hibernate.orm.panache.PanacheEntity;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.persistence.Column;
@@ -30,7 +31,10 @@ import java.util.UUID;
     indexes = {
       @Index(name = "idx_reviewsession_timestamp", columnList = "timestamp"),
       @Index(name = "idx_reviewsession_status", columnList = "status"),
-      @Index(name = "idx_reviewsession_repository", columnList = "repository")
+      @Index(name = "idx_reviewsession_repository", columnList = "repository"),
+      @Index(
+          name = "idx_reviewsession_scope",
+          columnList = "installationId, repositoryId, prNumber")
     })
 @RegisterForReflection
 public class ReviewSession extends PanacheEntity {
@@ -44,6 +48,16 @@ public class ReviewSession extends PanacheEntity {
   String publicId;
 
   String repository; // "owner/repo"
+
+  /**
+   * GitHub App installation and numeric repository id the review ran under (#1220). Every read
+   * matches both, so a repository of the same name under another installation, or a re-created one,
+   * never sees these rows. {@code null} on a session from before #1220 that the startup backfill
+   * could not match; such a session is never served.
+   */
+  Long installationId;
+
+  Long repositoryId;
   int prNumber;
   String prTitle;
   String commitSha;
@@ -60,8 +74,8 @@ public class ReviewSession extends PanacheEntity {
    * the dashboard can flag under-reported spend. Cleared by {@link SessionCostBackfill} once
    * pricing is added and the cost is recomputed.
    *
-   * <p>{@code default false} is required so schema-update can add this NOT NULL column to a
-   * populated Postgres table (without it, existing rows are null and the ALTER fails).
+   * <p>{@code default false} let the NOT NULL column be added to a populated table; the V1
+   * migration keeps it (#22).
    */
   @Column(nullable = false, columnDefinition = "boolean not null default false")
   boolean pricingMissing;
@@ -89,6 +103,16 @@ public class ReviewSession extends PanacheEntity {
 
   public String getRepository() {
     return repository;
+  }
+
+  @JsonIgnore
+  public Long getInstallationId() {
+    return installationId;
+  }
+
+  @JsonIgnore
+  public Long getRepositoryId() {
+    return repositoryId;
   }
 
   public int getPrNumber() {
@@ -164,6 +188,11 @@ public class ReviewSession extends PanacheEntity {
     this.repository = repository;
   }
 
+  public void setScope(RepoScope scope) {
+    this.installationId = scope.installationId();
+    this.repositoryId = scope.repositoryId();
+  }
+
   public void setPrNumber(int prNumber) {
     this.prNumber = prNumber;
   }
@@ -233,9 +262,10 @@ public class ReviewSession extends PanacheEntity {
   }
 
   public static ReviewSession create(
-      String repository, int prNumber, String prTitle, String commitSha) {
+      RepoScope scope, String repository, int prNumber, String prTitle, String commitSha) {
     var session = new ReviewSession();
     session.setPublicId(UUID.randomUUID().toString());
+    session.setScope(scope);
     session.setRepository(repository);
     session.setPrNumber(prNumber);
     session.setPrTitle(prTitle);

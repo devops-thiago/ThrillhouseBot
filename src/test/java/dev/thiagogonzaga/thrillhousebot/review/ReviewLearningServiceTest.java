@@ -17,6 +17,8 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.LearningInput;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.RecordOutcome;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.RetractOutcome;
@@ -52,9 +54,14 @@ class ReviewLearningServiceTest {
     tx.commit();
   }
 
+  /** The scope of {@code repo} under {@code installationId}; the id ignores the name's case. */
+  private static RepoScope at(long installationId, String repo) {
+    return new RepoScope(installationId, TestScopes.repositoryId(repo));
+  }
+
   private static LearningInput decline(long installationId, String repo, String url, String text) {
     return new LearningInput(
-        installationId,
+        at(installationId, repo),
         repo,
         ReviewLearning.KIND_DECLINE,
         "renderThread misses deeper nested replies",
@@ -78,6 +85,7 @@ class ReviewLearningServiceTest {
     for (var column :
         java.util.List.of(
             "installationid",
+            "repositoryid",
             "repository",
             "kind",
             "findingtitle",
@@ -103,7 +111,7 @@ class ReviewLearningServiceTest {
     assertEquals(RecordOutcome.STORED, service.save(input, 10));
     assertEquals(RecordOutcome.DUPLICATE, service.save(input, 10));
 
-    var active = service.listActive(1L, "owner/repo", 10);
+    var active = service.listActive(at(1L, "owner/repo"), 10);
     assertEquals(1, active.size());
     var learning = active.get(0);
     assertEquals(ReviewLearning.KIND_DECLINE, learning.kind());
@@ -115,14 +123,14 @@ class ReviewLearningServiceTest {
     assertEquals("maintainer", learning.author());
     assertTrue(learning.active());
     assertNotNull(learning.createdAt());
-    assertEquals(1, service.countActive(1L, "OWNER/REPO"));
+    assertEquals(1, service.countActive(at(1L, "OWNER/REPO")));
   }
 
   @Test
   void aConventionHasNoFindingOrPath() {
     var input =
         new LearningInput(
-            1L,
+            at(1L, "o/r"),
             "o/r",
             ReviewLearning.KIND_CONVENTION,
             null,
@@ -135,7 +143,7 @@ class ReviewLearningServiceTest {
 
     assertEquals(RecordOutcome.STORED, service.save(input, 10));
 
-    var learning = service.listActive(1L, "o/r", 10).get(0);
+    var learning = service.listActive(at(1L, "o/r"), 10).get(0);
     assertNull(learning.findingTitle());
     assertNull(learning.findingRisk());
     assertNull(learning.path());
@@ -149,7 +157,7 @@ class ReviewLearningServiceTest {
         service.save(decline(1L, "o/r", "u1", "use " + FAKE.githubToken() + " here"), 10));
     var titled =
         new LearningInput(
-            1L,
+            at(1L, "o/r"),
             "o/r",
             ReviewLearning.KIND_DECLINE,
             "leaks " + FAKE.awsAccessKey(),
@@ -162,7 +170,7 @@ class ReviewLearningServiceTest {
     assertEquals(RecordOutcome.REFUSED_SECRET, service.save(titled, 10));
     var pathed =
         new LearningInput(
-            1L,
+            at(1L, "o/r"),
             "o/r",
             ReviewLearning.KIND_DECLINE,
             "t",
@@ -173,25 +181,47 @@ class ReviewLearningServiceTest {
             "u3",
             "m");
     assertEquals(RecordOutcome.REFUSED_SECRET, service.save(pathed, 10));
-    assertEquals(0, service.countActive(1L, "o/r"));
+    assertEquals(0, service.countActive(at(1L, "o/r")));
   }
 
   @Test
   void incompleteOrEmptyInputIsRefused() {
     assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(null, 10));
+    var unscoped =
+        new LearningInput(
+            null, "o/r", ReviewLearning.KIND_CONVENTION, null, null, null, FLAT, 1, "u", "m");
+    assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(unscoped, 10));
     assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(decline(1L, " ", "u", FLAT), 10));
     assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(decline(1L, "o/r", "u", "> x"), 10));
     assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(decline(1L, "o/r", " ", FLAT), 10));
     assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(decline(1L, "o/r", null, FLAT), 10));
-    var noKind = new LearningInput(1L, "o/r", null, null, null, null, FLAT, 1, "u", "m");
+    var noKind = new LearningInput(at(1L, "o/r"), "o/r", null, null, null, null, FLAT, 1, "u", "m");
     assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(noKind, 10));
     var noAuthor =
         new LearningInput(
-            1L, "o/r", ReviewLearning.KIND_CONVENTION, null, null, null, FLAT, 1, "u", " ");
+            at(1L, "o/r"),
+            "o/r",
+            ReviewLearning.KIND_CONVENTION,
+            null,
+            null,
+            null,
+            FLAT,
+            1,
+            "u",
+            " ");
     assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(noAuthor, 10));
     var nullAuthor =
         new LearningInput(
-            1L, "o/r", ReviewLearning.KIND_CONVENTION, null, null, null, FLAT, 1, "u", null);
+            at(1L, "o/r"),
+            "o/r",
+            ReviewLearning.KIND_CONVENTION,
+            null,
+            null,
+            null,
+            FLAT,
+            1,
+            "u",
+            null);
     assertEquals(RecordOutcome.REFUSED_EMPTY, service.save(nullAuthor, 10));
   }
 
@@ -205,8 +235,8 @@ class ReviewLearningServiceTest {
         service.save(decline(1L, "other/repo", "u3", FLAT), 2),
         "the cap is per repository");
 
-    var oldest = service.listActive(1L, "o/r", 10).get(1);
-    assertEquals(RetractOutcome.RETRACTED, service.retract(1L, "o/r", oldest.id(), "Admin"));
+    var oldest = service.listActive(at(1L, "o/r"), 10).get(1);
+    assertEquals(RetractOutcome.RETRACTED, service.retract(at(1L, "o/r"), oldest.id(), "Admin"));
     assertEquals(RecordOutcome.STORED, service.save(decline(1L, "o/r", "u3", FLAT), 2));
   }
 
@@ -214,30 +244,26 @@ class ReviewLearningServiceTest {
   void learningsNeverCrossRepositoriesOrInstallations() {
     service.save(decline(1L, "o/r", "u1", FLAT), 10);
 
-    assertEquals(1, service.listActive(1L, "o/r", 10).size());
-    assertTrue(service.listActive(2L, "o/r", 10).isEmpty(), "another installation");
-    assertTrue(service.listActive(1L, "o/other", 10).isEmpty(), "another repository");
-    assertTrue(service.listActive(1L, " ", 10).isEmpty());
-    assertTrue(service.listActive(1L, null, 10).isEmpty());
-    assertTrue(service.listActive(1L, "o/r", 0).isEmpty());
-    assertEquals(0, service.countActive(1L, null));
-    assertEquals(0, service.countActive(1L, " "));
+    assertEquals(1, service.listActive(at(1L, "o/r"), 10).size());
+    assertTrue(service.listActive(at(2L, "o/r"), 10).isEmpty(), "another installation");
+    assertTrue(service.listActive(at(1L, "o/other"), 10).isEmpty(), "another repository");
+    assertTrue(service.listActive(at(1L, "o/r"), 0).isEmpty());
   }
 
   @Test
   void retractIsScopedAndAudited() {
     service.save(decline(1L, "o/r", "u1", FLAT), 10);
-    var id = service.listActive(1L, "o/r", 10).get(0).id();
+    var id = service.listActive(at(1L, "o/r"), 10).get(0).id();
 
-    assertEquals(RetractOutcome.NOT_FOUND, service.retract(1L, "o/other", id, "x"));
-    assertEquals(RetractOutcome.NOT_FOUND, service.retract(2L, "o/r", id, "x"));
-    assertEquals(RetractOutcome.NOT_FOUND, service.retract(1L, "o/r", id + 1000, "x"));
-    assertEquals(RetractOutcome.NOT_FOUND, service.retract(1L, null, id, "x"));
-    assertEquals(RetractOutcome.RETRACTED, service.retract(1L, "O/R", id, " Admin "));
-    assertEquals(RetractOutcome.ALREADY_RETRACTED, service.retract(1L, "o/r", id, "admin"));
+    assertEquals(RetractOutcome.NOT_FOUND, service.retract(at(1L, "o/other"), id, "x"));
+    assertEquals(RetractOutcome.NOT_FOUND, service.retract(at(2L, "o/r"), id, "x"));
+    assertEquals(RetractOutcome.NOT_FOUND, service.retract(at(1L, "o/r"), id + 1000, "x"));
+    assertEquals(RetractOutcome.RETRACTED, service.retract(at(1L, "O/R"), id, " Admin "));
+    assertEquals(RetractOutcome.ALREADY_RETRACTED, service.retract(at(1L, "o/r"), id, "admin"));
 
-    assertTrue(service.listActive(1L, "o/r", 10).isEmpty(), "a retracted learning is not active");
-    var audit = service.listForAudit("o/r", 10);
+    assertTrue(
+        service.listActive(at(1L, "o/r"), 10).isEmpty(), "a retracted learning is not active");
+    var audit = service.listForAudit(at(1L, "o/r"), 10);
     assertEquals(1, audit.size());
     assertFalse(audit.get(0).active());
     assertEquals("admin", audit.get(0).retractedBy());
@@ -247,17 +273,35 @@ class ReviewLearningServiceTest {
   @Test
   void aRetractionWithoutALoginIsStillRecorded() {
     service.save(decline(1L, "o/r", "u1", FLAT), 10);
-    var id = service.listActive(1L, "o/r", 10).get(0).id();
+    var id = service.listActive(at(1L, "o/r"), 10).get(0).id();
 
-    assertEquals(RetractOutcome.RETRACTED, service.retract(1L, "o/r", id, null));
-    assertNull(service.listForAudit("o/r", 10).get(0).retractedBy());
+    assertEquals(RetractOutcome.RETRACTED, service.retract(at(1L, "o/r"), id, null));
+    assertNull(service.listForAudit(at(1L, "o/r"), 10).get(0).retractedBy());
   }
 
   @Test
-  void theAuditListNeedsARepository() {
-    assertTrue(service.listForAudit(null, 10).isEmpty());
-    assertTrue(service.listForAudit(" ", 10).isEmpty());
-    assertTrue(service.listForAudit("o/r", 0).isEmpty());
+  void theAuditListNeedsAPositiveLimit() {
+    assertTrue(service.listForAudit(at(1L, "o/r"), 0).isEmpty());
+  }
+
+  @Test
+  void anUnmatchedRowIsNeverReadNorCountedTowardTheCap() throws Exception {
+    var scope = at(1L, "o/r");
+    service.save(decline(1L, "o/r", "u1", FLAT), 10);
+    // A learning from before #1220 that the backfill could not match keeps a null repository id.
+    tx.begin();
+    em.createNativeQuery(
+            "insert into review_learning (id, active, author, createdat, dedupkey, installationid,"
+                + " kind, repository, sourceprnumber, sourceurl, text)"
+                + " values (nextval('review_learning_seq'), true, 'm', current_timestamp, 'legacy',"
+                + " 1, 'convention', 'o/r', 1, 'u', 'legacy')")
+        .executeUpdate();
+    tx.commit();
+
+    assertEquals(1, service.listActive(scope, 10).size());
+    assertEquals(1, service.countActive(scope));
+    assertEquals(1, service.listForAudit(scope, 10).size());
+    assertEquals(RecordOutcome.STORED, service.save(decline(1L, "o/r", "u2", FLAT), 2));
   }
 
   @Test

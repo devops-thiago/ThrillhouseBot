@@ -23,6 +23,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import io.quarkus.runtime.StartupEvent;
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.junit.QuarkusTest;
@@ -45,7 +46,7 @@ class InterruptedSessionReconcilerTest extends ReviewSessionTestSupport {
     when(sessionValidator.isValidSession(anyString())).thenReturn(true);
     when(sessionValidator.isValidSession(isNull())).thenReturn(false);
     when(sessionValidator.repositoryScope(anyString()))
-        .thenReturn(new RepositoryScope(true, java.util.Set.of("owner/repo")));
+        .thenReturn(TestScopes.readable(true, "owner/repo"));
   }
 
   @Test
@@ -131,7 +132,9 @@ class InterruptedSessionReconcilerTest extends ReviewSessionTestSupport {
 
   private long persistInProgress() throws Exception {
     tx.begin();
-    ReviewSession session = ReviewSession.create("owner/repo", 7, "Interrupted PR", "sha7");
+    ReviewSession session =
+        ReviewSession.create(
+            TestScopes.scope("owner/repo"), "owner/repo", 7, "Interrupted PR", "sha7");
     session.setModel("deepseek-chat");
     session.setInputTokens(1200);
     session.setOutputTokens(340);
@@ -144,7 +147,9 @@ class InterruptedSessionReconcilerTest extends ReviewSessionTestSupport {
 
   private long persistTerminal(String status, String errorMessage) throws Exception {
     tx.begin();
-    ReviewSession session = ReviewSession.create("owner/repo", 8, "Finished PR", "sha8");
+    ReviewSession session =
+        ReviewSession.create(
+            TestScopes.scope("owner/repo"), "owner/repo", 8, "Finished PR", "sha8");
     session.setStatus(status);
     session.setErrorMessage(errorMessage);
     session.persist();

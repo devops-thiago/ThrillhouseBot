@@ -30,6 +30,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Path("/api/dashboard")
 @Produces(MediaType.APPLICATION_JSON)
@@ -55,43 +56,58 @@ public class DashboardResource {
   private static final String KEY_TOTAL_TOKENS = "totalTokens";
   private static final String KEY_COUNT = "count";
   private static final String KEY_SINCE = "since";
+  private static final String KEY_TOTAL_EVENTS = "totalEvents";
+  private static final String KEY_REPOSITORIES = "repositories";
+
+  /** Named parameter of the period start in every time-bounded query. */
+  private static final String PARAM_SINCE = "since";
 
   /**
-   * Restricts a query to the caller's {@link RepositoryScope} (bound as {@code ?2}, lower-cased).
-   * Filtering in the query rather than after it keeps paging, totals and aggregates exact.
+   * Sessions since {@code :since} in the caller's scope; {@code scopeWhere} is {@link
+   * RepositoryScope#where} for alias {@code s}. Filtering in the query rather than after it keeps
+   * paging, totals and aggregates exact, and a row with no ids never matches (#1220).
    */
-  private static final String JPQL_IN_SCOPE = "lower(s." + FIELD_REPOSITORY + ") IN ?2";
+  private static String fromInScopeSince(String scopeWhere) {
+    return "FROM ReviewSession s WHERE s." + FIELD_TIMESTAMP + " > :since AND " + scopeWhere;
+  }
 
-  private static final String JPQL_FROM_IN_SCOPE_SINCE =
-      "FROM ReviewSession s WHERE s." + FIELD_TIMESTAMP + " > ?1 AND " + JPQL_IN_SCOPE;
+  private static String fromCompletedSince(String scopeWhere) {
+    return fromInScopeSince(scopeWhere)
+        + " AND s."
+        + FIELD_STATUS
+        + " = '"
+        + STATUS_COMPLETED
+        + "'";
+  }
 
-  private static final String JPQL_FROM_COMPLETED_SINCE =
-      JPQL_FROM_IN_SCOPE_SINCE + " AND s." + FIELD_STATUS + " = '" + STATUS_COMPLETED + "'";
+  private static String costsByModel(String scopeWhere) {
+    return "SELECT s.model as model, COUNT(s) as "
+        + KEY_COUNT
+        + ", SUM(s.cost) as "
+        + KEY_COST
+        + ", SUM(s.inputTokens) as inputTokens, SUM(s.outputTokens) as outputTokens "
+        + fromCompletedSince(scopeWhere)
+        + " GROUP BY s.model ORDER BY SUM(s.cost) DESC";
+  }
 
-  private static final String JPQL_COSTS_BY_MODEL =
-      "SELECT s.model as model, COUNT(s) as "
-          + KEY_COUNT
-          + ", SUM(s.cost) as "
-          + KEY_COST
-          + ", SUM(s.inputTokens) as inputTokens, SUM(s.outputTokens) as outputTokens "
-          + JPQL_FROM_COMPLETED_SINCE
-          + " GROUP BY s.model ORDER BY SUM(s.cost) DESC";
+  private static String tokensByModel(String scopeWhere) {
+    return "SELECT s.model as model, COUNT(s) as "
+        + KEY_COUNT
+        + ", SUM(s.inputTokens) as inputTokens, SUM(s.outputTokens) as outputTokens, "
+        + "SUM(s.inputTokens + s.outputTokens) as "
+        + KEY_TOTAL_TOKENS
+        + " "
+        + fromCompletedSince(scopeWhere)
+        + " GROUP BY s.model ORDER BY SUM(s.inputTokens + s.outputTokens) DESC";
+  }
 
-  private static final String JPQL_TOKENS_BY_MODEL =
-      "SELECT s.model as model, COUNT(s) as "
-          + KEY_COUNT
-          + ", SUM(s.inputTokens) as inputTokens, SUM(s.outputTokens) as outputTokens, "
-          + "SUM(s.inputTokens + s.outputTokens) as "
-          + KEY_TOTAL_TOKENS
-          + " "
-          + JPQL_FROM_COMPLETED_SINCE
-          + " GROUP BY s.model ORDER BY SUM(s.inputTokens + s.outputTokens) DESC";
-
-  private static final String JPQL_SUMMARY_TOTAL_COST =
-      "SELECT SUM(s.cost) as " + KEY_TOTAL_COST + " " + JPQL_FROM_COMPLETED_SINCE;
+  private static String summaryTotalCost(String scopeWhere) {
+    return "SELECT SUM(s.cost) as " + KEY_TOTAL_COST + " " + fromCompletedSince(scopeWhere);
+  }
 
   // Parameter / cookie name constants
   private static final String PARAM_PERIOD = "period";
+  private static final String PARAM_INSTALLATION = "installation";
   private static final String COOKIE_SESSION = "thrillhouse_session";
 
   // Error message constants
@@ -124,6 +140,38 @@ public class DashboardResource {
     return sessionValidator.isValidSession(sessionToken);
   }
 
+  /**
+   * The caller's scope, narrowed to one installation when {@code installation} is given (the
+   * dashboard's installation filter); an installation outside the scope narrows to nothing.
+   */
+  private RepositoryScope scope(String sessionToken, Long installation) {
+    return sessionValidator.repositoryScope(sessionToken).only(installation);
+  }
+
+  /** The installations the caller may read, for the dashboard's installation filter (#1221). */
+  @GET
+  @Path("/installations")
+  public Response listInstallations(@CookieParam(COOKIE_SESSION) String sessionToken) {
+    if (!isValidSession(sessionToken)) {
+      return unauthorizedResponse();
+    }
+    var installations =
+        sessionValidator.repositoryScope(sessionToken).sortedInstallations().stream()
+            .map(
+                i ->
+                    Map.<String, Object>of(
+                        "id",
+                        i.id(),
+                        "account",
+                        i.account(),
+                        KEY_REPOSITORIES,
+                        i.repositories().size(),
+                        "installationWide",
+                        i.installationWide()))
+            .toList();
+    return Response.ok(Map.of("installations", installations)).build();
+  }
+
   private Response unauthorizedResponse() {
     return Response.status(Response.Status.UNAUTHORIZED)
         .entity(Map.of(KEY_ERROR, MSG_NOT_AUTHENTICATED))
@@ -136,23 +184,19 @@ public class DashboardResource {
         .build();
   }
 
-  /** The scope's repositories as the {@code ?2} parameter of {@link #JPQL_IN_SCOPE}. */
-  private static List<String> scopeParameter(RepositoryScope scope) {
-    return List.copyOf(scope.repositories());
-  }
-
   @GET
   @Path("/sessions")
   public Response listSessions(
       @QueryParam("page") @DefaultValue("0") int page,
       @QueryParam("size") @DefaultValue("20") int size,
       @QueryParam("repository") String repository,
+      @QueryParam(PARAM_INSTALLATION) Long installation,
       @CookieParam(COOKIE_SESSION) String sessionToken) {
     if (!isValidSession(sessionToken)) {
       return unauthorizedResponse();
     }
 
-    var scope = sessionValidator.repositoryScope(sessionToken);
+    var scope = scope(sessionToken, installation);
     if (repository != null && !repository.isBlank() && !scope.allows(repository)) {
       return repositoryDeniedResponse();
     }
@@ -165,13 +209,18 @@ public class DashboardResource {
    */
   private Response sessionsPage(int page, int size, String repository, RepositoryScope scope) {
     Sort newestFirst = Sort.descending(FIELD_TIMESTAMP);
-    var readable =
-        repository != null && !repository.isBlank()
-            ? List.of(RepositoryScope.normalize(repository))
-            : scopeParameter(scope);
-    PanacheQuery<ReviewSession> query =
-        reviewSessionRepository.find(
-            "lower(" + FIELD_REPOSITORY + ") IN ?1", newestFirst, readable);
+    var params = new HashMap<String, Object>();
+    String where;
+    if (repository != null && !repository.isBlank()) {
+      // Checked against the scope by the caller, so the repository resolves.
+      var only = scope.scopeOf(repository).orElseThrow();
+      params.put("installationId", only.installationId());
+      params.put("repositoryId", only.repositoryId());
+      where = "installationId = :installationId AND repositoryId = :repositoryId";
+    } else {
+      where = scope.where(null, params);
+    }
+    PanacheQuery<ReviewSession> query = reviewSessionRepository.find(where, newestFirst, params);
     var sessions = query.page(page, size).list();
 
     var total = query.count();
@@ -194,7 +243,9 @@ public class DashboardResource {
     // A session from a repository the caller cannot read answers exactly like a missing one, so
     // ids do not reveal which other repositories have reviews.
     if (session == null
-        || !sessionValidator.repositoryScope(sessionToken).allows(session.getRepository())) {
+        || !sessionValidator
+            .repositoryScope(sessionToken)
+            .allows(session.getInstallationId(), session.getRepositoryId())) {
       return Response.status(Response.Status.NOT_FOUND)
           .entity(Map.of(KEY_ERROR, MSG_SESSION_NOT_FOUND))
           .build();
@@ -230,6 +281,7 @@ public class DashboardResource {
   @Path("/costs")
   public Response getCosts(
       @QueryParam(PARAM_PERIOD) @DefaultValue("month") String period,
+      @QueryParam(PARAM_INSTALLATION) Long installation,
       @CookieParam(COOKIE_SESSION) String sessionToken) {
     if (!isValidSession(sessionToken)) {
       return unauthorizedResponse();
@@ -243,14 +295,11 @@ public class DashboardResource {
           default -> Instant.now().minus(30, ChronoUnit.DAYS);
         });
 
+    var params = new HashMap<String, Object>();
+    params.put(PARAM_SINCE, since);
+    var where = scope(sessionToken, installation).where("s", params);
     List<Map<String, Object>> rows =
-        reviewSessionRepository
-            .find(
-                JPQL_COSTS_BY_MODEL,
-                since,
-                scopeParameter(sessionValidator.repositoryScope(sessionToken)))
-            .project(Map.class)
-            .list();
+        reviewSessionRepository.find(costsByModel(where), params).project(Map.class).list();
 
     var totalCost =
         rows.stream()
@@ -274,6 +323,7 @@ public class DashboardResource {
   @Path("/tokens")
   public Response getTokens(
       @QueryParam(PARAM_PERIOD) @DefaultValue("month") String period,
+      @QueryParam(PARAM_INSTALLATION) Long installation,
       @CookieParam(COOKIE_SESSION) String sessionToken) {
     if (!isValidSession(sessionToken)) {
       return unauthorizedResponse();
@@ -286,14 +336,11 @@ public class DashboardResource {
           default -> Instant.now().minus(30, ChronoUnit.DAYS);
         });
 
+    var params = new HashMap<String, Object>();
+    params.put(PARAM_SINCE, since);
+    var where = scope(sessionToken, installation).where("s", params);
     List<Map<String, Object>> rows =
-        reviewSessionRepository
-            .find(
-                JPQL_TOKENS_BY_MODEL,
-                since,
-                scopeParameter(sessionValidator.repositoryScope(sessionToken)))
-            .project(Map.class)
-            .list();
+        reviewSessionRepository.find(tokensByModel(where), params).project(Map.class).list();
 
     var totalTokens =
         rows.stream()
@@ -316,60 +363,73 @@ public class DashboardResource {
   /**
    * Aggregated maintainer finding feedback (👍/👎 / reply heuristics) for the learnings pipeline
    * precursor (#324). Optional {@code repository=owner/repo} filters to one repo; otherwise returns
-   * all repos ordered by event count.
+   * all repos ordered by event count. Optional {@code installation} narrows either to one
+   * installation.
    */
   @GET
   @Path("/feedback")
   public Response getFeedback(
       @QueryParam("repository") String repository,
+      @QueryParam(PARAM_INSTALLATION) Long installation,
       @CookieParam(COOKIE_SESSION) String sessionToken) {
     if (!isValidSession(sessionToken)) {
       return unauthorizedResponse();
     }
+    var scope = scope(sessionToken, installation);
     if (repository != null && !repository.isBlank()) {
-      var normalizedRepository = repository.strip();
-      if (!sessionValidator.hasRepositoryAccess(sessionToken, normalizedRepository)) {
+      var repoScope = scope.scopeOf(repository);
+      if (repoScope.isEmpty()) {
         return repositoryDeniedResponse();
       }
-      var summary = findingFeedbackService.summarize(normalizedRepository);
-      var recent = findingFeedbackService.listRecent(normalizedRepository, 50);
+      var summary =
+          findingFeedbackService.summarize(
+              repoScope.get(),
+              scope.nameOf(repoScope.get().installationId(), repoScope.get().repositoryId()));
+      var recent = findingFeedbackService.listRecent(repoScope.get(), 50);
       return Response.ok(
               Map.of(
-                  "repositories",
+                  KEY_REPOSITORIES,
                   List.of(
-                      Map.of(
-                          FIELD_REPOSITORY,
+                      feedbackRow(
                           summary.repository(),
-                          "usefulCount",
                           summary.usefulCount(),
-                          "notUsefulCount",
                           summary.notUsefulCount(),
-                          "totalEvents",
                           summary.totalEvents())),
                   "recent",
                   recent))
           .build();
     }
-    var scope = sessionValidator.repositoryScope(sessionToken);
-    var summaries =
-        findingFeedbackService.summarizeAll().stream()
-            .filter(s -> scope.allows(s.repository()))
-            .toList();
+    var readable = new HashMap<Long, Set<Long>>();
+    scope
+        .installations()
+        .forEach(
+            (id, readableInstallation) ->
+                readable.put(id, readableInstallation.repositories().keySet()));
+    // One query for every installation, already ordered by total events.
     var rows =
-        summaries.stream()
+        findingFeedbackService.countsByRepository(readable).entrySet().stream()
             .map(
-                s ->
-                    Map.<String, Object>of(
-                        FIELD_REPOSITORY,
-                        s.repository(),
-                        "usefulCount",
-                        s.usefulCount(),
-                        "notUsefulCount",
-                        s.notUsefulCount(),
-                        "totalEvents",
-                        s.totalEvents()))
+                e ->
+                    feedbackRow(
+                        scope.nameOf(e.getKey().installationId(), e.getKey().repositoryId()),
+                        e.getValue().usefulCount(),
+                        e.getValue().notUsefulCount(),
+                        e.getValue().totalEvents()))
             .toList();
-    return Response.ok(Map.of("repositories", rows)).build();
+    return Response.ok(Map.of(KEY_REPOSITORIES, rows)).build();
+  }
+
+  private static Map<String, Object> feedbackRow(
+      String repository, long usefulCount, long notUsefulCount, long totalEvents) {
+    return Map.of(
+        FIELD_REPOSITORY,
+        repository,
+        "usefulCount",
+        usefulCount,
+        "notUsefulCount",
+        notUsefulCount,
+        KEY_TOTAL_EVENTS,
+        totalEvents);
   }
 
   /**
@@ -383,6 +443,7 @@ public class DashboardResource {
   @Path("/learnings")
   public Response getLearnings(
       @QueryParam("repository") String repository,
+      @QueryParam(PARAM_INSTALLATION) Long installation,
       @CookieParam(COOKIE_SESSION) String sessionToken) {
     if (!isValidSession(sessionToken)) {
       return unauthorizedResponse();
@@ -393,7 +454,8 @@ public class DashboardResource {
           .build();
     }
     var normalizedRepository = repository.strip();
-    if (!sessionValidator.hasRepositoryAccess(sessionToken, normalizedRepository)) {
+    var repoScope = scope(sessionToken, installation).scopeOf(normalizedRepository);
+    if (repoScope.isEmpty()) {
       return repositoryDeniedResponse();
     }
     return Response.ok(
@@ -402,28 +464,32 @@ public class DashboardResource {
                 normalizedRepository,
                 "learnings",
                 reviewLearningService.listForAudit(
-                    normalizedRepository, ReviewLearningService.MAX_AUDIT_ROWS)))
+                    repoScope.get(), ReviewLearningService.MAX_AUDIT_ROWS)))
         .build();
   }
 
   @GET
   @Path("/summary")
-  public Response getSummary(@CookieParam(COOKIE_SESSION) String sessionToken) {
+  public Response getSummary(
+      @QueryParam(PARAM_INSTALLATION) Long installation,
+      @CookieParam(COOKIE_SESSION) String sessionToken) {
     if (!isValidSession(sessionToken)) {
       return unauthorizedResponse();
     }
 
     var since = Instant.now().minus(30, ChronoUnit.DAYS);
-    var scope = sessionValidator.repositoryScope(sessionToken);
-    var readable = scopeParameter(scope);
+    var scope = scope(sessionToken, installation);
+    var params = new HashMap<String, Object>();
+    params.put(PARAM_SINCE, since);
+    var where = scope.where("s", params);
 
-    var totalReviews = countInScopeSince(null, since, readable);
-    var completedReviews = countInScopeSince(STATUS_COMPLETED, since, readable);
-    var failedReviews = countInScopeSince(STATUS_FAILED, since, readable);
+    var totalReviews = countInScopeSince(null, since, scope);
+    var completedReviews = countInScopeSince(STATUS_COMPLETED, since, scope);
+    var failedReviews = countInScopeSince(STATUS_FAILED, since, scope);
 
     var costRow =
         reviewSessionRepository
-            .find(JPQL_SUMMARY_TOTAL_COST, since, readable)
+            .find(summaryTotalCost(where), params)
             .project(Map.class)
             .singleResult();
     var totalCost = extractTotalCost(costRow, KEY_TOTAL_COST);
@@ -432,11 +498,10 @@ public class DashboardResource {
         reviewSessionRepository
             .find(
                 "SELECT s.model as model, COUNT(s) as cnt "
-                    + JPQL_FROM_IN_SCOPE_SINCE
+                    + fromInScopeSince(where)
                     + " GROUP BY s.model"
                     + " ORDER BY COUNT(s) DESC",
-                since,
-                readable)
+                params)
             .project(Map.class)
             .firstResult();
     String topModel = extractTopModel(modelRow);
@@ -454,23 +519,25 @@ public class DashboardResource {
                 "topModel",
                 topModel,
                 "skippedReviewsByReason",
-                // Skip counters are installation-wide and carry no repository, so only the account
-                // owner (who can read every installed repository) sees them.
-                scope.accountOwner() ? reviewSkipEmitter.countsByReason() : Map.of(),
+                // Skip counters carry no repository, so a login sees them only for installations
+                // whose installation-wide views it may see: the account itself, or an
+                // organization member (#1221).
+                reviewSkipEmitter.countsByReason(scope.installationWideIds()),
                 KEY_SINCE,
                 since.toString()))
         .build();
   }
 
   /** Sessions since {@code since} in the caller's scope, optionally of one status only. */
-  private long countInScopeSince(String status, Instant since, List<String> readable) {
-    var where = FIELD_TIMESTAMP + " > ?1 AND lower(" + FIELD_REPOSITORY + ") IN ?2";
-    if (status == null) {
-      return nullSafeCount(reviewSessionRepository.count(where, since, readable));
+  private long countInScopeSince(String status, Instant since, RepositoryScope scope) {
+    var params = new HashMap<String, Object>();
+    params.put(PARAM_SINCE, since);
+    var where = FIELD_TIMESTAMP + " > :since AND " + scope.where(null, params);
+    if (status != null) {
+      where += " AND " + FIELD_STATUS + " = :" + FIELD_STATUS;
+      params.put(FIELD_STATUS, status);
     }
-    return nullSafeCount(
-        reviewSessionRepository.count(
-            where + " AND " + FIELD_STATUS + " = ?3", since, readable, status));
+    return nullSafeCount(reviewSessionRepository.count(where, params));
   }
 
   static String extractTopModel(Map<?, ?> modelRow) {

@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
+import jakarta.ws.rs.CookieParam;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
@@ -26,7 +27,9 @@ import java.util.regex.Pattern;
  * Resolves the short session links posted on GitHub (check runs, comments) to the dashboard
  * sessions page. Links use the session's random public id — never the sequential database id — so
  * they cannot be enumerated; the dashboard is a static export, so dynamic paths need a server-side
- * redirect. Unknown or malformed ids fall back to the sessions list.
+ * redirect. The redirect reveals the session's database id, so it is given only to a dashboard
+ * login that may read the session's repository (#1220). Anyone else, like an unknown or malformed
+ * id, falls back to the sessions list, so the response does not tell whether the session exists.
  */
 @Path("/session")
 public class SessionLinkResource {
@@ -37,21 +40,29 @@ public class SessionLinkResource {
   private static final URI SESSIONS_PAGE = URI.create("/dashboard/sessions/");
 
   private final ReviewSessionRepository reviewSessionRepository;
+  private final DashboardSessionValidator sessionValidator;
 
-  public SessionLinkResource(ReviewSessionRepository reviewSessionRepository) {
+  public SessionLinkResource(
+      ReviewSessionRepository reviewSessionRepository, DashboardSessionValidator sessionValidator) {
     this.reviewSessionRepository = reviewSessionRepository;
+    this.sessionValidator = sessionValidator;
   }
 
   @GET
   @Path("/{publicId}")
-  public Response redirectToSession(@PathParam("publicId") String publicId) {
+  public Response redirectToSession(
+      @PathParam("publicId") String publicId,
+      @CookieParam("thrillhouse_session") String sessionToken) {
     // A matched path segment is never null.
-    if (!PUBLIC_ID_PATTERN.matcher(publicId).matches()) {
+    if (!PUBLIC_ID_PATTERN.matcher(publicId).matches()
+        || !sessionValidator.isValidSession(sessionToken)) {
       return Response.seeOther(SESSIONS_PAGE).build();
     }
+    var scope = sessionValidator.repositoryScope(sessionToken);
     return reviewSessionRepository
         .find("publicId", publicId)
         .firstResultOptional()
+        .filter(session -> scope.allows(session.getInstallationId(), session.getRepositoryId()))
         .map(session -> Response.seeOther(URI.create("/dashboard/sessions/?id=" + session.id)))
         .orElseGet(() -> Response.seeOther(SESSIONS_PAGE))
         .build();

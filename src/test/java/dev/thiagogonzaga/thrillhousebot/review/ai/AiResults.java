@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import dev.langchain4j.model.output.FinishReason;
+import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.service.Result;
 
 /**
@@ -47,5 +48,16 @@ public final class AiResults {
    */
   public static Result<String> aiNoContent() {
     return Result.<String>builder().finishReason(FinishReason.STOP).build();
+  }
+
+  /**
+   * A call stopped at its response-length cap with no content, its reasoning having spent the whole
+   * allowance (#839), billed {@code inputTokens} in and {@code outputTokens} out.
+   */
+  public static Result<String> aiReasonedAway(int inputTokens, int outputTokens) {
+    return Result.<String>builder()
+        .finishReason(FinishReason.LENGTH)
+        .tokenUsage(new TokenUsage(inputTokens, outputTokens))
+        .build();
   }
 }

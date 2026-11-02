@@ -37,6 +37,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ImprovementParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrImproveAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrImproveAssistantPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrSuggestionPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
 import java.util.Map;
@@ -121,7 +122,8 @@ class PrImprovementServiceTest {
         repoSettingsResolver,
         new DiffBudgetPlanner(formatter, new TokenCounter(), config, activeModel),
         activeModel,
-        config);
+        config,
+        mock(ReviewTokenLedger.class));
   }
 
   private PrImprovementService.ImproveTask task() {

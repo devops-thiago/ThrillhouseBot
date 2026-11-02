@@ -272,6 +272,44 @@ class ReviewTriggerFilterTest {
     return cfg;
   }
 
+  @Test
+  void anExcludedAuthorIsSkippedWhateverItsLabels() {
+    var filter =
+        new ReviewTriggerFilter(
+            false, List.of(), List.of(), List.of(), List.of(), List.of(" Dependabot[bot] "));
+    Supplier<List<String>> unread =
+        () -> {
+          throw new AssertionError("an author skip must not read the labels");
+        };
+
+    var skip = filter.skipReason(by("dependabot[bot]", "ai-review"), unread);
+
+    assertEquals(ReviewSkipReason.EXCLUDED_AUTHOR, skip.orElseThrow().reason());
+    assertTrue(skip.orElseThrow().detail().contains("dependabot[bot]"));
+    assertTrue(filter.skipReason(by("octocat")).isEmpty());
+  }
+
+  @Test
+  void noAuthorIsSkippedWhenNoneIsExcludedOrThePayloadHasNoAuthor() {
+    var unset = filter(false, List.of(), List.of(), List.of(), List.of());
+    var excluding =
+        new ReviewTriggerFilter(
+            false, List.of(), List.of(), List.of(), List.of(), List.of("dependabot[bot]"));
+
+    assertTrue(unset.skipReason(by("dependabot[bot]")).isEmpty());
+    assertTrue(excluding.skipReason(pr("main", false)).isEmpty(), "no user in the payload");
+    assertTrue(excluding.skipReason(by(null)).isEmpty(), "no login in the payload");
+  }
+
+  private static WebhookPayload.PullRequest by(String login, String... labels) {
+    var labelList = new java.util.ArrayList<WebhookPayload.Label>();
+    for (String name : labels) {
+      labelList.add(new WebhookPayload.Label(name));
+    }
+    return new WebhookPayload.PullRequest(
+        1, "Test PR", null, base("main"), new WebhookPayload.User(login, 1), "", false, labelList);
+  }
+
   private static ReviewTriggerFilter filter(
       boolean skipDrafts,
       List<String> required,

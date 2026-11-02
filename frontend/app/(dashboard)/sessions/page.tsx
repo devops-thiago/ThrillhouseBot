@@ -2,8 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { api, ApiError, SessionDetail, SessionListItem } from '@/lib/api';
+import { useInstallationFilter } from '@/hooks/useInstallationFilter';
+import { InstallationFilter } from '@/components/InstallationFilter';
 
 export default function SessionsPage() {
+  const { installations, installation, setInstallation } = useInstallationFilter();
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
@@ -38,7 +41,7 @@ export default function SessionsPage() {
     setLoading(true);
     setError(null);
     api()
-      .sessions(page)
+      .sessions(page, undefined, installation)
       .then((data) => {
         if (cancelled) return;
         setSessions(data.sessions);
@@ -53,7 +56,7 @@ export default function SessionsPage() {
     return () => {
       cancelled = true;
     };
-  }, [page, reloadKey]);
+  }, [page, reloadKey, installation]);
 
   useEffect(() => {
     if (selectedId == null) {
@@ -88,7 +91,17 @@ export default function SessionsPage() {
 
   return (
     <div>
-      <h1 style={{ marginBottom: '1.5rem' }}>Session History</h1>
+      <div style={styles.heading}>
+        <h1>Session History</h1>
+        <InstallationFilter
+          installations={installations}
+          value={installation}
+          onChange={(next) => {
+            setPage(0);
+            setInstallation(next);
+          }}
+        />
+      </div>
 
       {loading && <p>Loading...</p>}
 
@@ -399,6 +412,14 @@ function formatJson(raw: string) {
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  heading: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '0.75rem',
+    marginBottom: '1.5rem',
+  },
   chartCard: {
     background: 'var(--bg-secondary)',
     border: '1px solid var(--border)',

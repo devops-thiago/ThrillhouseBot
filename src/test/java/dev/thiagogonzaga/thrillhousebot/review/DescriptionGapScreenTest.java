@@ -60,6 +60,48 @@ class DescriptionGapScreenTest {
   }
 
   @Test
+  void aBracketedEndingMatchesTheWordWithAnyEnding() {
+    // java #293 R2 (#1206): the body reads "following pagination to the end".
+    var body =
+        """
+        Title: feat(java): add blood bank expiry tracker
+        Description:
+        - Imports each site's inventory feed, following pagination to the end.
+        """;
+    var gap =
+        "The description says \"follow[s] pagination to the end\", but loadSlots reads the first"
+            + " page and stops.";
+
+    assertEquals(List.of(gap), DescriptionGapScreen.screen(List.of(gap), body, ""));
+    assertTrue(
+        DescriptionGapScreen.appearsIn(
+            "importer follow[ing] pagination … to [the] end",
+            DescriptionGapScreen.normalize("the importer following pagination to the end")));
+    assertTrue(
+        DescriptionGapScreen.appearsIn(
+            "follow[s]", DescriptionGapScreen.normalize("it follows pagination")));
+    assertTrue(
+        DescriptionGapScreen.appearsIn(
+            "follow[s]ing up", DescriptionGapScreen.normalize("following up")));
+  }
+
+  @Test
+  void aBracketedEndingStillNeedsTheWordsAroundIt() {
+    var body = "Description:\nImports each site's feed, following pagination to the end.";
+    var misquote = "The description says \"follow[s] every link to the end\", but it stops early.";
+
+    assertEquals(List.of(), DescriptionGapScreen.screen(List.of(misquote), body, ""));
+    // The stem must open a word: "follow[s]" is not "unfollowed".
+    assertFalse(
+        DescriptionGapScreen.appearsIn(
+            "follow[s] pagination", DescriptionGapScreen.normalize("unfollowed pagination")));
+    // A short word's bracket reads as its letters: "a[n] import" is "an import", not "any".
+    assertFalse(
+        DescriptionGapScreen.appearsIn(
+            "a[n] import of feeds", DescriptionGapScreen.normalize("any import of feeds")));
+  }
+
+  @Test
   void aQuoteGivingWhatTheChangeDoesIsNotTakenForTheDescriptionsClaim() {
     // The second quote follows the first's end, with no cue between them: it is the code's side.
     var gap =

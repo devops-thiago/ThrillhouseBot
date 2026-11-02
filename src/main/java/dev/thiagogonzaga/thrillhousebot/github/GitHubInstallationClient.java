@@ -28,12 +28,6 @@ import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 public interface GitHubInstallationClient {
 
   @GET
-  @Path("/app")
-  @Produces(MediaType.APPLICATION_JSON)
-  AppInfo getApp(
-      @HeaderParam("Authorization") String authorization, @HeaderParam("Accept") String accept);
-
-  @GET
   @Path("/app/installations")
   @Produces(MediaType.APPLICATION_JSON)
   List<Installation> listInstallations(
@@ -52,15 +46,6 @@ public interface GitHubInstallationClient {
       @QueryParam("page") @DefaultValue("1") int page);
 
   @GET
-  @Path("/repos/{owner}/{repo}/collaborators/{username}")
-  Response checkCollaborator(
-      @HeaderParam("Authorization") String authorization,
-      @HeaderParam("Accept") String accept,
-      @PathParam("owner") String owner,
-      @PathParam("repo") String repo,
-      @PathParam("username") String username);
-
-  @GET
   @Path("/repos/{owner}/{repo}/collaborators/{username}/permission")
   @Produces(MediaType.APPLICATION_JSON)
   CollaboratorPermission collaboratorPermission(
@@ -70,15 +55,40 @@ public interface GitHubInstallationClient {
       @PathParam("repo") String repo,
       @PathParam("username") String username);
 
-  record Installation(long id, Account account) {
+  /**
+   * The repository by name. A renamed repository answers its old name with a 301 whose {@code
+   * Location} ends in {@code /repositories/{id}}; redirects are not followed, so the caller reads
+   * the id from it (#1220).
+   */
+  @GET
+  @Path("/repos/{owner}/{repo}")
+  Response getRepository(
+      @HeaderParam("Authorization") String authorization,
+      @HeaderParam("Accept") String accept,
+      @PathParam("owner") String owner,
+      @PathParam("repo") String repo);
+
+  /**
+   * Whether {@code username} is a member of {@code org}: 204 when they are. Needs the App's
+   * Organization → Members: read permission; without it GitHub answers 403 (#1221).
+   */
+  @GET
+  @Path("/orgs/{org}/members/{username}")
+  Response checkOrgMember(
+      @HeaderParam("Authorization") String authorization,
+      @HeaderParam("Accept") String accept,
+      @PathParam("org") String org,
+      @PathParam("username") String username);
+
+  /**
+   * An installation of the App; {@code suspendedAt} is set while its owner has it suspended, and
+   * such an installation is not served (#1222).
+   */
+  record Installation(long id, Account account, @JsonProperty("suspended_at") String suspendedAt) {
     public record Account(String login, String type) {}
   }
 
   record CollaboratorPermission(String permission, @JsonProperty("role_name") String roleName) {}
-
-  record AppInfo(Owner owner) {
-    public record Owner(String login, String type) {}
-  }
 
   record InstallationRepositoriesResponse(
       @JsonProperty("total_count") int totalCount, List<Repository> repositories) {
@@ -87,7 +97,7 @@ public interface GitHubInstallationClient {
       this.repositories = repositories == null ? List.of() : List.copyOf(repositories);
     }
 
-    public record Repository(String name, Owner owner) {
+    public record Repository(long id, String name, Owner owner) {
       public record Owner(String login) {}
     }
   }

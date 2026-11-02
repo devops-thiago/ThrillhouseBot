@@ -1,5 +1,6 @@
 import type {
   CostData,
+  InstallationOption,
   SessionDetail,
   SessionListItem,
   SessionSummary,
@@ -83,7 +84,37 @@ export const mockSessionDetail: SessionDetail = {
 
 export function mockSessionEvents() {
   const now = new Date().toISOString();
+  const live = {
+    sessionId: 2,
+    repository: 'devops-thiago/ThrillhouseBot',
+    prNumber: 14,
+    prTitle: 'Wire up mock dashboard preview',
+    commitSha: 'def5678',
+    timestamp: now,
+  };
+  // Newest first, as the feed keeps them.
   return [
+    {
+      ...live,
+      type: 'review.stream' as const,
+      data: { tail: '{"findings":[{"risk":"MEDIUM","file":"src/app.ts"', totalChars: 46, attempt: 1 },
+    },
+    {
+      ...live,
+      type: 'review.reasoning' as const,
+      data: {
+        tail: 'The handler reads the token before the null check, so an expired session reaches the parser.',
+        totalChars: 96,
+        attempt: 1,
+      },
+    },
+    {
+      ...live,
+      type: 'review.progress' as const,
+      data: { inputTokens: 18240, outputTokens: 610, totalTokens: 18850, cost: 0.0041 },
+    },
+    { ...live, type: 'review.phase' as const, data: { phase: 'review' } },
+    { ...live, type: 'review.phase' as const, data: { phase: 'context' } },
     {
       type: 'review.started' as const,
       sessionId: 2,
@@ -113,14 +144,19 @@ function delay<T>(value: T, ms = 0): Promise<T> {
     : new Promise((resolve) => setTimeout(() => resolve(value), ms));
 }
 
+export const mockInstallations: InstallationOption[] = [
+  { id: 1, account: 'devops-thiago', repositories: 2, installationWide: true },
+];
+
 export function createMockApi(ms = 0) {
   return {
-    summary: () => delay(mockSummary, ms),
+    installations: () => delay(mockInstallations, ms),
+    summary: (_installation?: number | null) => delay(mockSummary, ms),
     costs: (period = 'month') =>
       delay({ ...mockCostData, period }, ms),
     tokens: (period = 'month') =>
       delay({ ...mockTokenData, period }, ms),
-    sessions: (page = 0, repo?: string) => {
+    sessions: (page = 0, repo?: string, _installation?: number | null) => {
       const sessions = repo
         ? mockSessions.filter((s) => s.repository === repo)
         : mockSessions;

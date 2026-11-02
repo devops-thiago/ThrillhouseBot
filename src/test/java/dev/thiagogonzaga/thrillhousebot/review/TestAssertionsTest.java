@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import java.util.List;
@@ -435,5 +436,273 @@ class TestAssertionsTest {
         List.of("assert_eq!(zone(7.1, &t), 2);"),
         TestAssertions.quotesIn(
             "`x + 1` and `assert_eq!(zone(7.1,   &t), 2);` and `split\nacross lines here`"));
+  }
+
+  /** A finding quotes code in single quotes too, as scala ThrillhouseBot-test#297's did (#1194). */
+  @Test
+  void singleQuotedSpansAreQuotesToo() {
+    assertEquals(
+        List.of("assert(excursiondetector.rollingaverage(rs, 3) == 6.0)"),
+        TestAssertions.quotesIn(
+            "the test asserts 'assert(ExcursionDetector.rollingAverage(rs, 3) == 6.0)', the"
+                + " average of the last three; it's 'short'"));
+  }
+
+  /**
+   * A contraction's apostrophe opens no single-quote span, so a quoted assertion after it reads.
+   */
+  @Test
+  void aContractionDoesNotOpenASingleQuoteSpan() {
+    assertEquals(
+        List.of("assert(zone(x, 7) == 6.0)"),
+        TestAssertions.quotesIn(
+            "Here's a longer explanation of why 'assert(zone(x, 7) == 6.0)' fails at COPY"));
+  }
+
+  /** A contraction's apostrophe opens no span that swallows a backtick quote after it. */
+  @Test
+  void aContractionDoesNotHideABacktickQuote() {
+    assertTrue(
+        TestAssertions.quotesIn(
+                "it's wrong: `assert_eq!(zone(7.1, &t), 2);` isn't what the test expects")
+            .contains("assert_eq!(zone(7.1, &t), 2);"));
+  }
+
+  /** A check inside a loop or a condition keeps the test function it is in. */
+  @Test
+  void aNestedCheckLabelLeadsToItsTestFunction() {
+    var tests =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "c/tests/test_sweep.c",
+                    """
+                    @@ -0,0 +1,9 @@
+                    +static void test_sweep_expires_codes(void)
+                    +{
+                    +    for (int i = 0; i < 3; i++) {
+                    +        if (codes[i].active) {
+                    +            CHECK("sweep_expires_every_code", codes[i].expired);
+                    +        }
+                    +    } while (0);
+                    +    CHECK("sweep_keeps_the_dock_free", dock_free);
+                    +}
+                    """)));
+
+    assertEquals(
+        List.of("test_sweep_expires_codes"), tests.functionsLabelling("sweep_expires_every_code"));
+  }
+
+  /**
+   * A less-indented line with an argument list that declares nothing is climbed past: a
+   * parenthesized case label, a loop macro, an else-if after a brace or on its own, and a call,
+   * even one whose name holds "test" (#1194).
+   */
+  @Test
+  void onlyADeclaredFunctionEndsTheLabelWalk() {
+    var tests =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "c/tests/test_fleet.c",
+                    """
+                    @@ -0,0 +1,16 @@
+                    +static void test_fleet_pages(void) {
+                    +    switch (rc) {
+                    +    case (DISP_LIMIT):
+                    +        for_each_dock(d, fleet) {
+                    +        } else if (d->gone) {
+                    +            if (d->busy) {
+                    +            }
+                    +            else if (d->free) {
+                    +                rc = latest_scan(d);
+                    +                {
+                    +                    update_latest_tests(d);
+                    +                        CHECK("fleet_pages_every_dock", rc == 0);
+                    +                }
+                    +            }
+                    +        }
+                    +    }
+                    """)));
+
+    assertEquals(List.of("test_fleet_pages"), tests.functionsLabelling("fleet_pages_every_dock"));
+  }
+
+  /**
+   * A {@code with} block and a labeled loop open blocks inside the function, not declarations, so a
+   * check under either keeps its test function.
+   */
+  @Test
+  void aWithBlockOrALabeledLoopIsClimbedPast() {
+    var tests =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "tests/test_sweep.py",
+                    """
+                    @@ -0,0 +1,3 @@
+                    +    def test_sweep(self):
+                    +        with open(self.path) as fh:
+                    +            check("sweep_reads_every_line", fh.read())
+                    """),
+                file(
+                    "src/test/java/SweepTest.java",
+                    """
+                    @@ -0,0 +1,3 @@
+                    +  void testRetriesTheSweep() {
+                    +    retry: for (;;) {
+                    +      check("sweep_retries_until_done", done);
+                    """)));
+
+    assertEquals(List.of("test_sweep"), tests.functionsLabelling("sweep_reads_every_line"));
+    assertEquals(
+        List.of("testRetriesTheSweep"), tests.functionsLabelling("sweep_retries_until_done"));
+  }
+
+  /**
+   * A declaration whose type stands on the line above its name is read with that line; a name that
+   * opens its hunk or its file has no line above to take a type from.
+   */
+  @Test
+  void aDeclarationSplitAcrossTwoLinesLeadsToItsFunction() {
+    var tests =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "c/tests/test_split.c",
+                    """
+                    @@ -0,0 +1,5 @@
+                    +static void
+                    +test_rider_split(void)
+                    +{
+                    +    CHECK("split_declaration_label", ok);
+                    +}
+                    @@ -40,0 +41,2 @@
+                    +run_all_tests(void)
+                    +    CHECK("label_under_a_hunk_opening_name", ok);
+                    """),
+                file(
+                    "c/tests/test_first.c",
+                    """
+                    @@ -0,0 +1,2 @@
+                    +run_first_tests(void)
+                    +    CHECK("label_under_a_file_opening_name", ok);
+                    """)));
+
+    assertEquals(List.of("test_rider_split"), tests.functionsLabelling("split_declaration_label"));
+    assertEquals(List.of(), tests.functionsLabelling("label_under_a_hunk_opening_name"));
+    assertEquals(List.of(), tests.functionsLabelling("label_under_a_file_opening_name"));
+  }
+
+  /** A check under a switch's case label or a preprocessor guard keeps its function too. */
+  @Test
+  void aCheckUnderACaseLabelOrAGuardLeadsToItsTestFunction() {
+    var tests =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "c/tests/test_expiry.c",
+                    """
+                    @@ -0,0 +1,11 @@
+                    +static void test_expire_codes(void) {
+                    +    switch (rc) {
+                    +    case DISP_LIMIT:
+                    +        CHECK("expiry_rejects_a_fourth_code", ok);
+                    +        break;
+                    +    }
+                    +#ifdef WITH_SWEEP
+                    +    CHECK("expiry_sweeps_with_the_option", swept);
+                    +#endif
+                    +}
+                    """)));
+
+    assertEquals(
+        List.of("test_expire_codes"), tests.functionsLabelling("expiry_rejects_a_fourth_code"));
+    assertEquals(
+        List.of("test_expire_codes"), tests.functionsLabelling("expiry_sweeps_with_the_option"));
+  }
+
+  /** Lines 59-71 of c ThrillhouseBot-test#302's {@code c/tests/test_dispenser.c}. */
+  private static final String C_302_TEST =
+      """
+      @@ -0,0 +59,13 @@
+      +static void test_rider_limit(void)
+      +{
+      +    static config_t cfg;
+      +    static dispenser_t d;
+      +    int rc;
+      +
+      +    config_load(&cfg);
+      +    setup(&d, &cfg);
+      +    dispenser_issue(&d, "rider1", "+15550101", "harbor", 100, stub_notify, NULL);
+      +    dispenser_issue(&d, "rider1", "+15550101", "harbor", 101, stub_notify, NULL);
+      +    rc = dispenser_issue(&d, "rider1", "+15550101", "harbor", 102, stub_notify, NULL);
+      +    CHECK("rider_limit_rejects_third_code", rc == DISP_LIMIT);
+      +}
+      """;
+
+  /**
+   * A C harness prints the label its {@code CHECK} macro was given, and a finding names the test
+   * function the check is in (#1194): the label leads to that function, the Allman brace skipped.
+   */
+  @Test
+  void aCheckLabelLeadsToTheTestFunctionThatPrintsIt() {
+    var tests = TestAssertions.of(List.of(file("c/tests/test_dispenser.c", C_302_TEST)));
+
+    assertEquals(
+        List.of("test_rider_limit"), tests.functionsLabelling("rider_limit_rejects_third_code"));
+    assertEquals(List.of(), tests.functionsLabelling("rider_limit_unknown_label"));
+    assertEquals(
+        List.of(), tests.functionsLabelling("stub_notify"), "named, not quoted as a label");
+    assertEquals(List.of(), TestAssertions.NONE.functionsLabelling("--"), "no identifier");
+  }
+
+  /**
+   * The label leads nowhere when the line above it indented less declares no test function, when
+   * its hunk starts before one, or when the line holding it is not quoted as the label.
+   */
+  @Test
+  void aCheckLabelOutsideATestFunctionLeadsNowhere() {
+    var tests =
+        TestAssertions.of(
+            List.of(
+                file(
+                    "c/tests/helpers.c",
+                    """
+                    @@ -0,0 +1,3 @@
+                    +static void setup(void)
+                    +{
+                    +    CHECK("setup_loads_the_config", loaded);
+                    @@ -20,0 +20,1 @@
+                    +    CHECK("orphan_label_at_hunk_start", ok);
+                    """),
+                file(
+                    "c/tests/flat.c",
+                    """
+                    @@ -0,0 +1,3 @@
+                    +CHECK("top_level_label", ok);
+                    +int counter;
+                    +    CHECK("indented_under_a_declaration", ok);
+                    """)));
+
+    assertEquals(List.of(), tests.functionsLabelling("setup_loads_the_config"));
+    assertEquals(List.of(), tests.functionsLabelling("orphan_label_at_hunk_start"));
+    assertEquals(List.of(), tests.functionsLabelling("top_level_label"));
+    assertEquals(List.of(), tests.functionsLabelling("indented_under_a_declaration"));
+  }
+
+  /** The walk up from a label stops after {@link TestAssertions#MAX_BODY_LINES} lines. */
+  @Test
+  void aCheckLabelTooFarBelowItsFunctionLeadsNowhere() {
+    var patch = new StringBuilder("@@ -0,0 +1,202 @@\n+void test_long_body(void) {\n");
+    for (int i = 0; i < TestAssertions.MAX_BODY_LINES; i++) {
+      patch.append("+    step(").append(i).append(");\n");
+    }
+    patch.append("+    CHECK(\"long_body_final_check\", ok);\n");
+
+    assertEquals(
+        List.of(),
+        TestAssertions.of(List.of(file("c/tests/long.c", patch.toString())))
+            .functionsLabelling("long_body_final_check"));
   }
 }

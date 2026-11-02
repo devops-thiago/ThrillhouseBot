@@ -78,8 +78,8 @@ class ReviewStandDownTest {
     assertSame(SUPERSEDED, standDown.beforeFirstWrite(run).orElseThrow());
 
     verify(second, never()).check(any());
-    assertEquals(1L, skipEmitter.countsByReason().get("HEAD_MOVED"));
-    assertFalse(skipEmitter.countsByReason().containsKey("EXCLUDED_LABEL"));
+    assertEquals(1L, skipEmitter.countsByReason(java.util.List.of(1L)).get("HEAD_MOVED"));
+    assertFalse(skipEmitter.countsByReason(java.util.List.of(1L)).containsKey("EXCLUDED_LABEL"));
     var update = ArgumentCaptor.forClass(CheckRunManager.CheckRunUpdate.class);
     verify(checkRunManager).updateCheckRun(update.capture());
     assertEquals(
@@ -107,7 +107,7 @@ class ReviewStandDownTest {
     var order = inOrder(first, second);
     order.verify(first).check(run);
     order.verify(second).check(run);
-    assertEquals(1L, skipEmitter.countsByReason().get("EXCLUDED_LABEL"));
+    assertEquals(1L, skipEmitter.countsByReason(java.util.List.of(1L)).get("EXCLUDED_LABEL"));
   }
 
   @Test
@@ -119,7 +119,7 @@ class ReviewStandDownTest {
     assertTrue(standDown.beforeFirstWrite(run).isEmpty());
 
     verifyNoInteractions(checkRunManager);
-    assertTrue(skipEmitter.countsByReason().isEmpty());
+    assertTrue(skipEmitter.countsByReason(java.util.List.of(1L)).isEmpty());
   }
 
   @Test
@@ -132,7 +132,7 @@ class ReviewStandDownTest {
     doThrow(new RuntimeException("check run API down")).when(checkRunManager).updateCheckRun(any());
     assertDoesNotThrow(() -> standDown.beforeFirstWrite(review(false, 1L)));
 
-    assertEquals(2L, skipEmitter.countsByReason().get("HEAD_MOVED"));
+    assertEquals(2L, skipEmitter.countsByReason(java.util.List.of(1L)).get("HEAD_MOVED"));
   }
 
   @Test

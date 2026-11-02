@@ -71,7 +71,7 @@ class NativeImageIT {
   void bindsASignedPing() throws GeneralSecurityException {
     var body =
         "{\"zen\":\"Keep it logically awesome.\",\"hook_id\":1,"
-            + "\"repository\":{\"full_name\":\"octo/repo\",\"name\":\"repo\","
+            + "\"repository\":{\"id\":7,\"full_name\":\"octo/repo\",\"name\":\"repo\","
             + "\"owner\":{\"login\":\"octo\"}},"
             + "\"installation\":{\"id\":42},\"sender\":{\"login\":\"octo\"}}";
     delivery("ping", body).then().statusCode(200).body("status", equalTo("ok"));

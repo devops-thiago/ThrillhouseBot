@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import io.quarkus.runtime.StartupEvent;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -106,7 +107,8 @@ class SessionCostBackfillTest extends ReviewSessionTestSupport {
   private long persistUsage(
       String model, int input, int output, double cost, boolean pricingMissing) throws Exception {
     tx.begin();
-    ReviewSession session = ReviewSession.create("owner/repo", 1, "PR", "sha");
+    ReviewSession session =
+        ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 1, "PR", "sha");
     session.setModel(model);
     session.setInputTokens(input);
     session.setOutputTokens(output);

@@ -537,11 +537,11 @@ public class ReviewContextLoader {
     // isFirstVisibleReview keys off the summary comment directly, not reviews alone: a first
     // round held back only by pending CI posts the summary comment but no review.
     List<String> priorAiResponseJsons =
-        sessionPersistence.findAllPriorAiResponseJsons(repository, req.prNumber(), session.id);
+        sessionPersistence.findAllPriorAiResponseJsons(req.scope(), req.prNumber(), session.id);
     // Read right beside the responses, from the same history in the same order, so each response's
     // head is known; the supersede guard needs the head of the round this review reports on (#932).
     List<String> priorCommitShas =
-        sessionPersistence.findAllPriorCommitShas(repository, req.prNumber(), session.id);
+        sessionPersistence.findAllPriorCommitShas(req.scope(), req.prNumber(), session.id);
     var isFirstVisibleReview =
         priorReviews.stream()
                 .noneMatch(r -> r.user() != null && botIdentity.matches(r.user().login()))
@@ -740,6 +740,7 @@ public class ReviewContextLoader {
         pr.base() != null ? pr.base().sha() : "",
         req.defaultBranch(),
         req.installationId(),
+        req.repositoryId(),
         req.isManualTrigger(),
         pr.base() != null ? pr.base().ref() : "",
         req.forceSummary());

@@ -135,6 +135,8 @@ public class ReviewOrchestrator {
    * @param baseSha base branch SHA (for comparison)
    * @param defaultBranch repo default branch name
    * @param installationId GitHub App installation ID
+   * @param repositoryId GitHub's numeric repository id from the webhook payload; with {@code
+   *     installationId} it scopes every stored row of the review (#1220)
    * @param isManualTrigger {@code true} when triggered by a /review command
    * @param baseRef PR base/target branch name, used to resolve required CI checks without an extra
    *     PR fetch; may be empty until {@link ReviewContextLoader#resolveMissingPrDetails} fills it
@@ -153,9 +155,15 @@ public class ReviewOrchestrator {
       String baseSha,
       String defaultBranch,
       long installationId,
+      long repositoryId,
       boolean isManualTrigger,
       String baseRef,
       boolean forceSummary) {
+
+    /** The installation and repository every row this review stores is scoped to. */
+    public RepoScope scope() {
+      return new RepoScope(installationId, repositoryId);
+    }
 
     /**
      * Back-compat convenience for callers that carry the base ref but never force the summary — the
@@ -172,6 +180,7 @@ public class ReviewOrchestrator {
         String baseSha,
         String defaultBranch,
         long installationId,
+        long repositoryId,
         boolean isManualTrigger,
         String baseRef) {
       this(
@@ -184,6 +193,7 @@ public class ReviewOrchestrator {
           baseSha,
           defaultBranch,
           installationId,
+          repositoryId,
           isManualTrigger,
           baseRef,
           false);
@@ -205,6 +215,7 @@ public class ReviewOrchestrator {
         String baseSha,
         String defaultBranch,
         long installationId,
+        long repositoryId,
         boolean isManualTrigger) {
       this(
           owner,
@@ -216,6 +227,7 @@ public class ReviewOrchestrator {
           baseSha,
           defaultBranch,
           installationId,
+          repositoryId,
           isManualTrigger,
           "");
     }
@@ -287,7 +299,11 @@ public class ReviewOrchestrator {
 
     ReviewSession session =
         ReviewSession.create(
-            repository, request.prNumber(), request.prTitle(), request.commitSha());
+            request.scope(),
+            repository,
+            request.prNumber(),
+            request.prTitle(),
+            request.commitSha());
     sessionPersistence.create(session);
     broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(session));
 
@@ -322,6 +338,7 @@ public class ReviewOrchestrator {
       // checks are the ones the gate reads, not a second fetch. Off, the reading keeps its place
       // beside the model call, so the gate reads CI as late as it did before.
       var ciFuture = ciFailureContext.enabled() ? startCiEvaluation(auth, ciReq) : null;
+      broadcastPhase(session, SessionEventBroadcaster.SessionEvent.Phase.CONTEXT);
       var ctx = contextLoader.load(auth, req, session, repository);
       var priorReviews = ctx.priorReviews();
       var previousFindings = ctx.previousFindingsList();
@@ -367,6 +384,7 @@ public class ReviewOrchestrator {
                   ctx,
                   ciFailures)
               .withLearnings(learned.selected());
+      broadcastPhase(session, SessionEventBroadcaster.SessionEvent.Phase.REVIEW);
       var reviewed = findingPipeline.run(session, promptInputs, ctx, plan, lineResolver, evidence);
 
       var earlyCi = ciFuture.join();
@@ -388,8 +406,9 @@ public class ReviewOrchestrator {
               // #1148: the description alone, never the issue text, is read for citations.
               new VerdictBuilder.LinkedIssueContext(
                   linkedIssues,
-                  BaseCodeCitations.of(
-                      req.prDescription(), ctx.files(), evidence.citedLocations())));
+                  BaseCodeCitations.of(req.prDescription(), ctx.files(), evidence.citedLocations()),
+                  // #1200: the calls are done, so every batch's verdicts are in.
+                  evidence.criterionVerdicts().all()));
 
       String conclusion = VerdictBuilder.conclusionForResult(result);
       String checkTitle = VerdictBuilder.checkTitleForResult(result);
@@ -408,6 +427,7 @@ public class ReviewOrchestrator {
         return false;
       }
 
+      broadcastPhase(session, SessionEventBroadcaster.SessionEvent.Phase.PUBLISH);
       boolean summaryPosted = publishSummaryBestEffort(auth, req, result);
       // The optional delta enriches the review, never a second notification beside it.
       var followUpDelta =
@@ -460,7 +480,12 @@ public class ReviewOrchestrator {
           "capture finding feedback",
           () ->
               findingFeedbackCapture.captureOnPriorFindings(
-                  auth, doneReq.owner(), doneReq.repo(), doneReq.prNumber(), inlineComments));
+                  auth,
+                  doneReq.scope(),
+                  doneReq.owner(),
+                  doneReq.repo(),
+                  doneReq.prNumber(),
+                  inlineComments));
       if (learnings.enabled()) {
         runPostResultStep(
             doneReq,
@@ -469,7 +494,7 @@ public class ReviewOrchestrator {
                 learnings.captureSurvivingDeclines(
                     new ReviewLearnings.DeclineCapture(
                         auth,
-                        doneReq.installationId(),
+                        doneReq.scope(),
                         doneReq.owner(),
                         doneReq.repo(),
                         doneReq.prNumber(),
@@ -533,12 +558,18 @@ public class ReviewOrchestrator {
     return resultSurfaced;
   }
 
+  /** Tells the dashboard's live activity page which step the review is on (#66). */
+  private void broadcastPhase(
+      ReviewSession session, SessionEventBroadcaster.SessionEvent.Phase phase) {
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.phase(session, phase));
+  }
+
   /** The exact bounded recall used by both the prompt and the deterministic decline check. */
   private ReviewLearnings.Recall recallLearnings(
       ReviewRequest req, ReviewContextLoader.ReviewContext ctx) {
     return learnings.enabled()
         ? learnings.recall(
-            req.installationId(),
+            req.scope(),
             req.owner(),
             req.repo(),
             ctx.reviewableFiles().stream().map(GitHubPullRequestClient.FileDiff::filename).toList())

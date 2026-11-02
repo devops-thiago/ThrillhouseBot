@@ -539,6 +539,27 @@ public final class DiffLineResolver {
   }
 
   /**
+   * The non-blank right-side lines of {@code file} from {@code range}'s start to its end as the
+   * diff holds them, indentation included (#1197): the lines a suggestion posted on that range
+   * replaces. Empty when the file has no right side.
+   */
+  public List<String> rightSideLines(String file, LineRange range) {
+    String key = file == null ? null : resolveTextKeyForFileOrVariant(file);
+    if (key == null) {
+      return List.of();
+    }
+    Map<Integer, String> lineText = rightSideLineTextByFile.get(key);
+    var lines = new ArrayList<String>();
+    for (int line = range.startLine(); line <= range.endLine(); line++) {
+      String text = lineText.get(line);
+      if (text != null && !text.isBlank()) {
+        lines.add(text);
+      }
+    }
+    return lines;
+  }
+
+  /**
    * Resolves {@code file} to the diff key holding its right-side text — the exact key when its text
    * is non-empty, else the unique {@link FilePaths#same} variant. Returns {@code null} on absence
    * or genuine ambiguity (two suffix-colliding keys), mirroring {@link

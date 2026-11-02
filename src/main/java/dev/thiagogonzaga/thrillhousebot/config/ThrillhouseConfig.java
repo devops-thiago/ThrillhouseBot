@@ -110,6 +110,16 @@ public interface ThrillhouseConfig {
     List<String> botLogins();
 
     /**
+     * Comma-separated logins of the accounts whose installations the bot serves. An event from an
+     * installation on any other account is ignored before any work, and the dashboard lists no
+     * other installation. Set it when the GitHub App is public, which dashboard sign-in for anyone
+     * but the App's owner requires, since anyone can install a public App. Unset serves every
+     * installation.
+     */
+    @WithName("allowed-accounts")
+    Optional<List<String>> allowedAccounts();
+
+    /**
      * Minimum spacing between two content-creating GitHub calls (comments, review comments,
      * replies, reviews), shared by the whole process. GitHub's guidance is at most one per second;
      * it answers faster writes with {@code 403}, {@code 429} or a {@code 422} "was submitted too
@@ -188,6 +198,14 @@ public interface ThrillhouseConfig {
       Optional<List<String>> excludedLabels();
 
       /**
+       * Comma-separated logins; skip auto-review of PRs opened by any (case-insensitive exact
+       * match, {@code dependabot[bot]}). Unlike a label, the author is in every {@code opened}
+       * payload, so it holds when a bot labels its PR after opening it.
+       */
+      @WithName("excluded-authors")
+      Optional<List<String>> excludedAuthors();
+
+      /**
        * Comma-separated globs; auto-review only PRs whose base branch matches one ({@code
        * main,release/*}). {@code *} does not cross {@code /}; use {@code **} for that. Unset means
        * every base branch.
@@ -197,7 +215,7 @@ public interface ThrillhouseConfig {
 
       /**
        * Comma-separated globs; skip auto-review of PRs whose base branch matches one ({@code
-       * dependabot/**}). Wins over {@code WEBHOOK_BASE_BRANCHES}.
+       * gh-pages}). Wins over {@code WEBHOOK_BASE_BRANCHES}.
        */
       @WithName("ignored-base-branches")
       Optional<List<String>> ignoredBaseBranches();
@@ -297,7 +315,8 @@ public interface ThrillhouseConfig {
      * Most tokens one review may use across all its calls, as the provider reports them, retries
      * and the summary call included. Once reached, no further call is made: the remaining batches
      * are named as not reviewed, the summary degrades to counts only, and the findings already paid
-     * for are kept. Reviews only. {@code 0} disables it.
+     * for are kept. An on-request command or a maintainer reply that reached it only skips the
+     * repeat of a call that spent its whole cap reasoning. {@code 0} disables it.
      *
      * <p>Complements {@link #maxAiCalls()}, which bounds how many calls are planned but not what
      * they cost: one call against a large-context model can span two orders of magnitude of spend.
@@ -358,6 +377,16 @@ public interface ThrillhouseConfig {
     @WithDefault("false")
     @WithName("dimension-routing-enabled")
     boolean dimensionRoutingEnabled();
+
+    /**
+     * Pack a large pull request's files into batches by review priority (#666): build manifests,
+     * then files matching {@code AI_ROUTING_HIGH_RISK_PATHS}, then the rest, then files matching
+     * {@code AI_ROUTING_LOW_RISK_PATHS}, the larger change first within each. When the call cap
+     * leaves files out, the low-risk ones go first. Off, the order is build manifests then size.
+     */
+    @WithDefault("false")
+    @WithName("triage-enabled")
+    boolean triageEnabled();
 
     /**
      * Check a maintainer's decline against the reviewed code before recording the finding
@@ -933,6 +962,14 @@ public interface ThrillhouseConfig {
     @WithName("max-labels")
     @WithDefault("3")
     int maxLabels();
+
+    /**
+     * Comma-separated label names the bot never suggests, applies or creates, matched ignoring
+     * case: labels a team keeps for its own workflow, such as {@code review}. They are left out of
+     * the list the model sees and dropped from its suggestions.
+     */
+    @WithName("blocked")
+    Optional<List<String>> blocked();
   }
 
   interface DashboardConfig {
@@ -963,12 +1000,22 @@ public interface ThrillhouseConfig {
     String oauthUrl();
 
     /**
-     * Login of the account that owns the GitHub App. The dashboard shows that account every
-     * installed repository and limits everyone else to the repositories they collaborate on. Unset
-     * resolves it from the App ({@code GET /app}).
+     * Optional. When set, the dashboard serves only the installation on this account. Unset serves
+     * every installation the signed-in user can access. Either way a user sees only the
+     * repositories GitHub lets them read.
      */
     @WithName("github.account-owner")
     Optional<String> accountOwner();
+
+    /**
+     * Streams the review call's reasoning to the dashboard's live activity page (#66), apart from
+     * its output. Only a provider that returns its reasoning as {@code reasoning_content} on the
+     * OpenAI-compatible stream sends any. Off by default: the reasoning can quote the reviewed
+     * code, and it is shown to every dashboard user who may read the repository.
+     */
+    @WithName("reasoning-stream-enabled")
+    @WithDefault("false")
+    boolean reasoningStreamEnabled();
   }
 
   /**
@@ -1092,6 +1139,67 @@ public interface ThrillhouseConfig {
 
     ReasoningConfig reasoning();
 
+    RoutingConfig routing();
+
+    /**
+     * Risk-based model routing and provider fallback for the review calls (#43). Off by default:
+     * with neither model set, every call goes to {@code AI_MODEL} exactly as before.
+     *
+     * <p>Both models are sent on the same provider ({@code AI_BASE_URL}, {@code AI_API_KEY}) by
+     * overriding the request's {@code model} per call, and both run under the active model's budget
+     * and generation settings. The validator refuses one whose per-model {@code max-input-tokens}
+     * is below the review's effective budget, since the plan is sized for the active model, and
+     * warns about one with neither a per-model nor a pricing entry, which is likely a typo.
+     */
+    interface RoutingConfig {
+
+      /**
+       * Cheaper model for low-risk pull requests: those that touch no {@code
+       * AI_ROUTING_HIGH_RISK_PATHS} file and either have every reviewable file matching {@code
+       * AI_ROUTING_LOW_RISK_PATHS} or change at most {@code AI_ROUTING_LOW_RISK_MAX_CHANGED_LINES}
+       * lines. Only the review calls are routed; the summary call, the verifier and the commands
+       * keep their own models. Unset turns routing off.
+       */
+      @WithName("low-risk-model")
+      Optional<String> lowRiskModel();
+
+      /**
+       * Most changed lines (additions plus deletions over the reviewable files) a pull request may
+       * have to count as low risk by size. {@code 0} routes by paths alone; a negative value is
+       * rejected at boot.
+       */
+      @WithDefault("100")
+      @WithName("low-risk-max-changed-lines")
+      int lowRiskMaxChangedLines();
+
+      /**
+       * Comma-separated gitignore-style globs of low-risk files (docs, text, lockfiles). A pull
+       * request whose every reviewable file matches is routed to {@code AI_ROUTING_LOW_RISK_MODEL}
+       * whatever its size, unless one of them also matches {@code AI_ROUTING_HIGH_RISK_PATHS}. Same
+       * pattern syntax as {@code THRILLHOUSEBOT_REVIEW_IGNORED_FILES}.
+       */
+      @WithDefault("**/*.md,**/*.mdx,**/*.rst,**/*.txt,**/*.adoc,docs/,**/*.lock,**/go.sum")
+      @WithName("low-risk-paths")
+      List<String> lowRiskPaths();
+
+      /**
+       * Comma-separated gitignore-style globs of high-risk files, under the new or the old name of
+       * a renamed file. A pull request touching one is never routed to the low-risk model, however
+       * small it is and even when the file also matches {@code AI_ROUTING_LOW_RISK_PATHS}.
+       */
+      @WithDefault(".github/workflows/,**/*.sql,**/migrations/,**/auth/,**/security/,**/Dockerfile")
+      @WithName("high-risk-paths")
+      List<String> highRiskPaths();
+
+      /**
+       * Secondary model for the streamed review and summary calls. When an attempt fails with a
+       * provider error (HTTP 5xx, an unknown model) or a rate limit, the call's remaining retries
+       * go to this model instead. Unset keeps every retry on the first model.
+       */
+      @WithName("fallback-model")
+      Optional<String> fallbackModel();
+    }
+
     /**
      * Prices used for cost tracking, keyed by model name (the {@code AI_MODEL} value) like the
      * per-model settings. {@code application.properties} ships prices for the models it knows. When
@@ -1131,9 +1239,9 @@ public interface ThrillhouseConfig {
      */
     interface ReasoningConfig {
       /**
-       * The tier that asks the model not to reason at all. Named because it is also the value one
-       * call steps down to on its own when the reasoning tail spends the whole output allowance
-       * (#839), so the step-down and the configured value can never disagree on the spelling.
+       * The tier that asks the model not to reason at all. Named because the repeat of a call whose
+       * reasoning spent the whole output allowance (#839) is watched for deliberation written into
+       * its response only when it goes out at this tier (#893).
        */
       String EFFORT_NONE = "none";
 
@@ -1153,6 +1261,12 @@ public interface ThrillhouseConfig {
        * Send a reasoning-effort hint ({@code reasoning_effort}). When {@code false}, no reasoning
        * parameter is sent and the provider default applies, except on the one repeat of a call that
        * spent its whole output cap reasoning, which sends the lane's effort.
+       *
+       * <p>Set it {@code true} for a model that reasons by default. With it off, {@code
+       * glm-5.3-flash} spent the whole 8192-token concise cap on 9 of 12 summary and summary-check
+       * calls before the repeat answered, 94,533 output tokens in all; with it on, the concise lane
+       * sent {@code low} and no call was cut, 6,982 tokens in all (#1174). It stays off by default
+       * because a model with no reasoning parameter may reject the call.
        */
       @WithDefault("false")
       boolean enabled();
@@ -1190,6 +1304,23 @@ public interface ThrillhouseConfig {
        */
       @WithName("concise-effort")
       Optional<String> conciseEffort();
+
+      /**
+       * Effort for the one repeat of a call that stopped at its response cap with no content, its
+       * reasoning having spent the whole allowance (#839). Same values. Unset means {@code low}
+       * while reasoning is enabled, with no repeat on a lane that already sends {@code low} or
+       * {@code none}; while it is off, the lane's effort as it would go out enabled. A value equal
+       * to what the first call sent makes no repeat.
+       *
+       * <p>Unset does not mean {@code none}: {@code glm-5.3-flash} ignores {@code none}, and 5 of 6
+       * repeats at {@code none} spent the cap again, while at {@code low} all 6 answered in under a
+       * thousand output tokens (#1173). Nor does it mean one tier below the lane: on the provider
+       * #839 was measured on, adjacent tiers barely moved the reasoning length, so {@code xhigh}
+       * after a cut {@code max} call would spend the cap a second time. Set {@code none} for a
+       * provider that honors it.
+       */
+      @WithName("repeat-effort")
+      Optional<String> repeatEffort();
 
       /** An {@link #effort()} value normalized to the lowercase wire value providers expect. */
       static String normalize(String effort) {

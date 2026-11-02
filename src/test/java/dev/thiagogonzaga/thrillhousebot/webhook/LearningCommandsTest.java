@@ -16,12 +16,13 @@
 package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearning;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.LearningView;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewLearningService.RecordOutcome;
@@ -34,13 +35,25 @@ import org.junit.jupiter.api.Test;
 
 class LearningCommandsTest {
 
+  private static final RepoScope SCOPE = new RepoScope(1L, TestScopes.REPOSITORY_ID);
+
   private final ReviewLearnings learnings = mock(ReviewLearnings.class);
   private final LearningCommands commands =
       new LearningCommands(learnings, BotIdentity.of("thrillhousebot"));
 
   private static CommentCommandService.CommandContext ctx(CommentCommand command, String body) {
     return new CommentCommandService.CommandContext(
-        command, "o", "r", 7, "main", 1L, "Maintainer", "OWNER", 555L, body);
+        command,
+        "o",
+        "r",
+        7,
+        "main",
+        1L,
+        TestScopes.REPOSITORY_ID,
+        "Maintainer",
+        "OWNER",
+        555L,
+        body);
   }
 
   private static LearningView view(long id, String kind, String title, String path, String text) {
@@ -68,7 +81,7 @@ class LearningCommandsTest {
 
   @Test
   void anEmptyRepositorySaysSo() {
-    when(learnings.list(1L, "o", "r")).thenReturn(List.of());
+    when(learnings.list(SCOPE)).thenReturn(List.of());
 
     assertEquals(
         "🧠 ThrillhouseBot has no active learnings for this repository.",
@@ -78,7 +91,7 @@ class LearningCommandsTest {
   @Test
   void theListShowsIdKindSubjectTextAndSourceWithEchoedProseNeutralized() {
     when(learnings.maxPerRepo()).thenReturn(100);
-    when(learnings.list(1L, "o", "r"))
+    when(learnings.list(SCOPE))
         .thenReturn(
             List.of(
                 view(
@@ -118,7 +131,7 @@ class LearningCommandsTest {
     for (long i = 1; i <= LearningCommands.MAX_LISTED + 2; i++) {
       many.add(view(i, ReviewLearning.KIND_CONVENTION, null, null, "rule " + i));
     }
-    when(learnings.list(1L, "o", "r")).thenReturn(many);
+    when(learnings.list(SCOPE)).thenReturn(many);
 
     var reply = commands.reply(ctx(CommentCommand.LEARNINGS, "/learnings"));
 
@@ -133,7 +146,7 @@ class LearningCommandsTest {
 
   @Test
   void forgetAcceptsTheIdSpellingsTheListUses() {
-    when(learnings.forget(1L, "o", "r", 12L, "Maintainer")).thenReturn(RetractOutcome.RETRACTED);
+    when(learnings.forget(SCOPE, 12L, "Maintainer")).thenReturn(RetractOutcome.RETRACTED);
 
     for (var body :
         List.of(
@@ -151,9 +164,8 @@ class LearningCommandsTest {
 
   @Test
   void forgetReportsTheOtherOutcomesAndTheUsage() {
-    when(learnings.forget(1L, "o", "r", 3L, "Maintainer"))
-        .thenReturn(RetractOutcome.ALREADY_RETRACTED);
-    when(learnings.forget(1L, "o", "r", 4L, "Maintainer")).thenReturn(RetractOutcome.NOT_FOUND);
+    when(learnings.forget(SCOPE, 3L, "Maintainer")).thenReturn(RetractOutcome.ALREADY_RETRACTED);
+    when(learnings.forget(SCOPE, 4L, "Maintainer")).thenReturn(RetractOutcome.NOT_FOUND);
 
     assertEquals(
         "Learning 3 was already retracted.",
@@ -167,14 +179,14 @@ class LearningCommandsTest {
         LearningCommands.FORGET_USAGE,
         commands.reply(ctx(CommentCommand.FORGET, "/forget `12` in code")));
     assertEquals(LearningCommands.FORGET_USAGE, commands.reply(ctx(CommentCommand.FORGET, null)));
-    verify(learnings, never()).forget(anyLong(), anyString(), anyString(), eq(12L), anyString());
+    verify(learnings, never()).forget(any(), eq(12L), anyString());
   }
 
   @Test
   void rememberStoresTheTextAfterTheCommandWord() {
-    when(learnings.rememberConvention(1L, "o", "r", 7, 555L, "Maintainer", "Prefer `records`."))
+    when(learnings.rememberConvention(SCOPE, "o", "r", 7, 555L, "Maintainer", "Prefer `records`."))
         .thenReturn(RecordOutcome.STORED);
-    when(learnings.rememberConvention(1L, "o", "r", 7, 555L, "Maintainer", "Use UTC."))
+    when(learnings.rememberConvention(SCOPE, "o", "r", 7, 555L, "Maintainer", "Use UTC."))
         .thenReturn(RecordOutcome.DUPLICATE);
 
     assertTrue(
@@ -188,7 +200,7 @@ class LearningCommandsTest {
 
   @Test
   void aQuotedOrDocumentedRememberNeverSuppliesTheText() {
-    when(learnings.rememberConvention(1L, "o", "r", 7, 555L, "Maintainer", "Use `UTC` times."))
+    when(learnings.rememberConvention(SCOPE, "o", "r", 7, 555L, "Maintainer", "Use `UTC` times."))
         .thenReturn(RecordOutcome.STORED);
 
     var reply =
@@ -211,7 +223,7 @@ class LearningCommandsTest {
 
   @Test
   void anotherUsersRememberNeverSuppliesTheText() {
-    when(learnings.rememberConvention(1L, "o", "r", 7, 555L, "Maintainer", "Use UTC."))
+    when(learnings.rememberConvention(SCOPE, "o", "r", 7, 555L, "Maintainer", "Use UTC."))
         .thenReturn(RecordOutcome.STORED);
 
     var reply =
@@ -226,11 +238,11 @@ class LearningCommandsTest {
   @Test
   void rememberExplainsEveryRefusal() {
     when(learnings.maxPerRepo()).thenReturn(100);
-    when(learnings.rememberConvention(1L, "o", "r", 7, 555L, "Maintainer", "secret"))
+    when(learnings.rememberConvention(SCOPE, "o", "r", 7, 555L, "Maintainer", "secret"))
         .thenReturn(RecordOutcome.REFUSED_SECRET);
-    when(learnings.rememberConvention(1L, "o", "r", 7, 555L, "Maintainer", "full"))
+    when(learnings.rememberConvention(SCOPE, "o", "r", 7, 555L, "Maintainer", "full"))
         .thenReturn(RecordOutcome.REFUSED_CAP);
-    when(learnings.rememberConvention(1L, "o", "r", 7, 555L, "Maintainer", "> quoted"))
+    when(learnings.rememberConvention(SCOPE, "o", "r", 7, 555L, "Maintainer", "> quoted"))
         .thenReturn(RecordOutcome.REFUSED_EMPTY);
 
     assertTrue(

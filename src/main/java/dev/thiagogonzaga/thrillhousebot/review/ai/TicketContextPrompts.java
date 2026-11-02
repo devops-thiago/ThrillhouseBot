@@ -54,6 +54,21 @@ public final class TicketContextPrompts {
             - A criterion the diff does not address at all is NOT a finding. Scope is judged in the
               PR summary, not in line comments: do not report missing work, do not restate the
               issue, and do not raise a finding only because the issue asks for something.
+            - Judge each criterion listed under "Acceptance criteria (from the issue):" instead, in
+              a top-level "linked_issue_criteria" array beside "findings", one object per criterion:
+              {"criterion": "<the criterion, copied as the list writes it>",
+               "status": "met" | "unmet" | "unclear", "evidence": "<one short line>"}
+              - "met": a changed line implements it. The evidence names the file and what the line
+                does.
+              - "unmet": the diff changes the code the criterion governs (the endpoint, handler,
+                validation or job it names) and no changed line implements it. The evidence names
+                what you looked for and where ("the POST /readings handler in ingest.rs accepts a
+                batch of any size; nothing answers 413").
+              - "unclear": anything else, including when the code that would implement it is not
+                in the diff you were shown. When you are unsure, the status is "unclear", never
+                "unmet".
+              - A verdict is not a finding: a criterion you judge unmet still gets no finding.
+              - With no criteria listed, write "linked_issue_criteria": [].
             - The issue may be stale, partial or wrong. The diff decides what the change does."""
           .stripIndent();
 

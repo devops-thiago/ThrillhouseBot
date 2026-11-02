@@ -1059,6 +1059,7 @@ public class FindingVerificationService {
             "Finding verification for review session " + ledgerSessionId,
             call,
             () -> ReasoningRepeat.effortFor(config, true),
+            () -> ReasoningRepeat.enableHint(config),
             () -> tokenLedger.ceilingReached(ledgerSessionId),
             answer -> recordVerifierUsage(ledgerSessionId, answer),
             () -> tokenLedger.recordReasoningStepDown(ledgerSessionId));

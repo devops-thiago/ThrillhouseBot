@@ -29,6 +29,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.AiPricingConfig;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.AiPricingConfig.ModelPricing;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionUpdater;
+import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
@@ -64,6 +65,7 @@ class OtelObservabilityListenerTest {
   private AiPricingConfig aiConfig;
   private Vertx vertx;
   private ReviewTokenLedger tokenLedger;
+  private SessionEventBroadcaster broadcaster;
 
   @BeforeEach
   void setUp() {
@@ -106,6 +108,7 @@ class OtelObservabilityListenerTest {
     tokenLedger = new ReviewTokenLedger(config);
 
     sessionUpdater = mock(ReviewSessionUpdater.class);
+    broadcaster = mock(SessionEventBroadcaster.class);
     vertx = mock(Vertx.class);
     when(vertx.<Void>executeBlocking(any(Callable.class)))
         .thenAnswer(
@@ -117,7 +120,9 @@ class OtelObservabilityListenerTest {
               when(future.onFailure(any())).thenReturn(future);
               return future;
             });
-    listener = new OtelObservabilityListener(otel, config, sessionUpdater, vertx, tokenLedger);
+    listener =
+        new OtelObservabilityListener(
+            otel, config, sessionUpdater, vertx, tokenLedger, broadcaster);
   }
 
   @AfterEach
@@ -211,7 +216,8 @@ class OtelObservabilityListenerTest {
             });
 
     var failingListener =
-        new OtelObservabilityListener(localOtel, config, failingUpdater, failingVertx, tokenLedger);
+        new OtelObservabilityListener(
+            localOtel, config, failingUpdater, failingVertx, tokenLedger, broadcaster);
     var attrs = requestAttributes(failingListener, 16L, 1);
 
     assertDoesNotThrow(() -> failingListener.onResponse(responseContext(attrs)));
@@ -245,7 +251,8 @@ class OtelObservabilityListenerTest {
   void onResponseShouldPreferExplicitlyConfiguredProviderName() {
     when(aiConfig.providerName()).thenReturn(Optional.of("  my-gateway  "));
     var overridden =
-        new OtelObservabilityListener(otel, config, sessionUpdater, vertx, tokenLedger);
+        new OtelObservabilityListener(
+            otel, config, sessionUpdater, vertx, tokenLedger, broadcaster);
 
     overridden.onResponse(responseContext(requestAttributes(overridden, 1L, 1)));
 
@@ -256,7 +263,8 @@ class OtelObservabilityListenerTest {
   void onResponseShouldDeriveProviderWhenConfiguredNameIsBlank() {
     when(aiConfig.providerName()).thenReturn(Optional.of("   "));
     var blankOverride =
-        new OtelObservabilityListener(otel, config, sessionUpdater, vertx, tokenLedger);
+        new OtelObservabilityListener(
+            otel, config, sessionUpdater, vertx, tokenLedger, broadcaster);
 
     blankOverride.onResponse(responseContext(requestAttributes(blankOverride, 1L, 1)));
 
@@ -268,6 +276,37 @@ class OtelObservabilityListenerTest {
     var attrCaptor = ArgumentCaptor.forClass(Attributes.class);
     verify(durationHistogram).record(anyDouble(), attrCaptor.capture());
     return attrCaptor.getValue().get(AttributeKey.stringKey("gen_ai.provider.name"));
+  }
+
+  @Test
+  void onResponseBroadcastsTheReviewsSpendSoFarOnceTheCallIsRecorded() {
+    var updated = new dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession();
+    updated.id = 42L;
+    updated.setInputTokens(900);
+    updated.setOutputTokens(100);
+    updated.setCost(0.02);
+    updated.setTimestamp(java.time.Instant.parse("2026-10-27T10:00:00Z"));
+    when(sessionUpdater.recordModelUsage(
+            anyLong(), any(), anyInt(), anyInt(), anyDouble(), anyBoolean(), anyLong()))
+        .thenReturn(updated);
+
+    listener.onResponse(responseContext(requestAttributes(42L, 1)));
+
+    var event = ArgumentCaptor.forClass(SessionEventBroadcaster.SessionEvent.class);
+    verify(broadcaster).broadcast(event.capture());
+    assertEquals("review.progress", event.getValue().type());
+    assertEquals(1000, event.getValue().data().get("totalTokens"));
+    assertEquals(0.02, event.getValue().data().get("cost"));
+  }
+
+  @Test
+  void onResponseBroadcastsNothingWhenTheSessionRowIsGone() {
+    listener.onResponse(responseContext(requestAttributes(42L, 1)));
+
+    verify(sessionUpdater)
+        .recordModelUsage(
+            anyLong(), any(), anyInt(), anyInt(), anyDouble(), anyBoolean(), anyLong());
+    verifyNoInteractions(broadcaster);
   }
 
   @Test
@@ -482,7 +521,8 @@ class OtelObservabilityListenerTest {
     // call must still reach the ledger, the session row and the duration/cost metrics; only the
     // token samples it has no value for are left out.
     var ledger = mock(ReviewTokenLedger.class);
-    var local = new OtelObservabilityListener(otel, config, sessionUpdater, vertx, ledger);
+    var local =
+        new OtelObservabilityListener(otel, config, sessionUpdater, vertx, ledger, broadcaster);
     ModelPricing modelPricing = mock(ModelPricing.class);
     when(modelPricing.inputPer1k()).thenReturn(0.14);
     when(modelPricing.outputPer1k()).thenReturn(0.28);

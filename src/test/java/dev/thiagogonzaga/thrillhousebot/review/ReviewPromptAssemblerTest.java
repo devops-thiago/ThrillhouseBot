@@ -27,6 +27,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubLabelClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TicketContextPrompts;
@@ -261,7 +262,19 @@ class ReviewPromptAssemblerTest {
               null);
       var req =
           new ReviewOrchestrator.ReviewRequest(
-              "o", "r", 1, "headsha", title, body, "basesha", "main", 1L, false, "main", false);
+              "o",
+              "r",
+              1,
+              "headsha",
+              title,
+              body,
+              "basesha",
+              "main",
+              1L,
+              TestScopes.REPOSITORY_ID,
+              false,
+              "main",
+              false);
       return assembler.assemble(ctx, req).prContext();
     }
   }
@@ -327,7 +340,19 @@ class ReviewPromptAssemblerTest {
               null);
       var req =
           new ReviewOrchestrator.ReviewRequest(
-              "o", "r", 1, "headsha", "t", "", "basesha", "main", 1L, false, "main", false);
+              "o",
+              "r",
+              1,
+              "headsha",
+              "t",
+              "",
+              "basesha",
+              "main",
+              1L,
+              TestScopes.REPOSITORY_ID,
+              false,
+              "main",
+              false);
       return assembler.assemble(ctx, req);
     }
   }
@@ -461,7 +486,19 @@ class ReviewPromptAssemblerTest {
               null);
       var req =
           new ReviewOrchestrator.ReviewRequest(
-              "o", "r", 1, "headsha", "title", "body", "basesha", "main", 1L, false, "main", false);
+              "o",
+              "r",
+              1,
+              "headsha",
+              "title",
+              "body",
+              "basesha",
+              "main",
+              1L,
+              TestScopes.REPOSITORY_ID,
+              false,
+              "main",
+              false);
       return assembler.assemble(ctx, req);
     }
   }
@@ -561,7 +598,19 @@ class ReviewPromptAssemblerTest {
               null);
       var req =
           new ReviewOrchestrator.ReviewRequest(
-              "o", "r", 1, "headsha", "title", "body", "basesha", "main", 1L, false, "main", false);
+              "o",
+              "r",
+              1,
+              "headsha",
+              "title",
+              "body",
+              "basesha",
+              "main",
+              1L,
+              TestScopes.REPOSITORY_ID,
+              false,
+              "main",
+              false);
       return assembler.assemble(ctx, req);
     }
   }
@@ -658,7 +707,19 @@ class ReviewPromptAssemblerTest {
               null);
       var req =
           new ReviewOrchestrator.ReviewRequest(
-              "o", "r", 1, "headsha", "title", "body", "basesha", "main", 1L, false, "main", false);
+              "o",
+              "r",
+              1,
+              "headsha",
+              "title",
+              "body",
+              "basesha",
+              "main",
+              1L,
+              TestScopes.REPOSITORY_ID,
+              false,
+              "main",
+              false);
       return assembler.assemble(ctx, req);
     }
   }
@@ -789,7 +850,19 @@ class ReviewPromptAssemblerTest {
               null);
       var req =
           new ReviewOrchestrator.ReviewRequest(
-              "o", "r", 1, "headsha", "title", "body", "basesha", "main", 1L, false, "main", false);
+              "o",
+              "r",
+              1,
+              "headsha",
+              "title",
+              "body",
+              "basesha",
+              "main",
+              1L,
+              TestScopes.REPOSITORY_ID,
+              false,
+              "main",
+              false);
       return assembler.assemble(
           ctx, req, new ReviewPromptAssembler.TrailingContext(ciFailures, linkedIssues, learnings));
     }
@@ -985,7 +1058,19 @@ class ReviewPromptAssemblerTest {
               null);
       var req =
           new ReviewOrchestrator.ReviewRequest(
-              "o", "r", 1, "headsha", "title", prBody, "basesha", "main", 1L, false, "main", false);
+              "o",
+              "r",
+              1,
+              "headsha",
+              "title",
+              prBody,
+              "basesha",
+              "main",
+              1L,
+              TestScopes.REPOSITORY_ID,
+              false,
+              "main",
+              false);
       return assembler.assemble(
           ctx, req, new ReviewPromptAssembler.TrailingContext("", linkedIssues, ""));
     }

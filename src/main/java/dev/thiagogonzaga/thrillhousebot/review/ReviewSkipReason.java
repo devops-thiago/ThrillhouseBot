@@ -35,6 +35,8 @@ public enum ReviewSkipReason {
   EXCLUDED_LABEL,
   /** The PR has none of the {@code webhook.triggers.required-labels}. */
   MISSING_REQUIRED_LABEL,
+  /** The PR was opened by a login in {@code webhook.triggers.excluded-authors}. */
+  EXCLUDED_AUTHOR,
   /** An automatic review completed within {@code review.auto-review-min-interval}. */
   RATE_LIMITED,
   /** The review executor rejected the task (saturated or shutting down). */

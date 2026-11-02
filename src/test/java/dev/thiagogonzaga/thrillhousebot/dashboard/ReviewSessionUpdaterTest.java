@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
@@ -39,6 +40,24 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
     assertEquals(0.42, loaded.getCost(), 0.001);
     assertFalse(loaded.isPricingMissing());
     assertEquals(1500, loaded.getDurationMs());
+  }
+
+  @Test
+  void recordingUsageReturnsTheSessionWithItsRunningTotals() throws Exception {
+    var session = persistSession();
+    updater.recordModelUsage(session.id, "deepseek-chat", 100, 20, 0.01, false, 100);
+
+    var updated = updater.recordModelUsage(session.id, "deepseek-chat", 50, 10, 0.02, true, 100);
+
+    assertEquals(150, updated.getInputTokens());
+    assertEquals(30, updated.getOutputTokens());
+    assertEquals(0.03, updated.getCost(), 0.001);
+    assertTrue(updated.isPricingMissing());
+  }
+
+  @Test
+  void recordingUsageForAMissingSessionReturnsNothing() {
+    assertNull(updater.recordModelUsage(-404L, "deepseek-chat", 1, 1, 0.0, false, 1));
   }
 
   @Test
@@ -136,7 +155,8 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
 
   private ReviewSession persistSession() throws Exception {
     tx.begin();
-    ReviewSession session = ReviewSession.create("owner/repo", 3, "PR", "abc");
+    ReviewSession session =
+        ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 3, "PR", "abc");
     session.persist();
     session.flush();
     tx.commit();

@@ -1126,4 +1126,22 @@ class DiffLineResolverTest {
     assertTrue(one.addsEveryLineNear("src/A.java", quote, 3, List.of("requireNumeric(id);"), 2));
     assertFalse(two.addsEveryLineNear("src/A.java", quote, 3, List.of("requireNumeric(id);"), 2));
   }
+
+  /**
+   * #1197: the replaced lines keep their indentation; blank lines and lines in no hunk are left
+   * out.
+   */
+  @Test
+  void rightSideLinesAreTheNonBlankLinesOfTheRangeAsWritten() {
+    var resolver =
+        new DiffLineResolver(
+            Map.of("src/A.java", "@@ -1,0 +1,3 @@\n+  a();\n+\n+\tb();\n@@ -9,0 +9,1 @@\n+  c();"));
+
+    assertEquals(
+        List.of("  a();", "\tb();", "  c();"),
+        resolver.rightSideLines("src/A.java", new DiffLineResolver.LineRange(1, 9)));
+    assertEquals(
+        List.of(), resolver.rightSideLines("src/B.java", new DiffLineResolver.LineRange(1, 3)));
+    assertEquals(List.of(), resolver.rightSideLines(null, new DiffLineResolver.LineRange(1, 3)));
+  }
 }

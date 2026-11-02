@@ -53,7 +53,8 @@ import java.util.stream.Collectors;
  *   <li><b>A setting named in a file summary is in that file's change.</b> An {@code UPPER_SNAKE}
  *       name that neither the file's patch nor the findings and PR text contain is one the summary
  *       invented; the clause naming it is cut (the whole summary when it is the first). A file with
- *       no patch to read is not judged.
+ *       no patch to read is not judged, nor is a clause saying the file lacks something ("omits the
+ *       BLOODBANK_PORT row"), since a setting the patch does not hold is its point (#1206).
  *   <li><b>A ticket key in the purpose paragraph is one the PR text or linked issues name.</b> An
  *       invented key such as "THRILLHOUSEBOT-122" takes its sentence out of the paragraph.
  * </ul>
@@ -147,6 +148,15 @@ final class OverviewScreen {
   /** A setting or environment variable name: two or more upper-case words joined by underscores. */
   private static final Pattern SETTING_NAME =
       Pattern.compile("(?<![\\w$])[A-Z][A-Z0-9]*+(?:_[A-Z0-9]++)++(?![\\w$])");
+
+  /**
+   * A clause saying the file leaves something out: "omits", "is missing", "lacks", "undocumented".
+   * The setting it names is the one the patch does not hold. One pattern per shape.
+   */
+  private static final List<Pattern> ABSENCE =
+      List.of(
+          Pattern.compile("(?i)\\b(?:missing|omit(?:s|ted|ting)?|omission|absent|undocumented)\\b"),
+          Pattern.compile("(?i)\\b(?:lacks?|lacking|leaves?\\s++out|left\\s++out)\\b"));
 
   /**
    * A tracker key such as {@code PROJ-123}, in any case ("abcd-12", "Proj-7" are the same keys
@@ -408,7 +418,8 @@ final class OverviewScreen {
    * the dashboard"); as it is when none of its parts does; and {@code ""} when the first does,
    * since the first part carries the clause's verb and the rest would be a fragment, so the whole
    * clause goes ("hosts the two findings, renders the dashboard"). Each kept part keeps the
-   * separator it had.
+   * separator it had. A clause saying the file lacks something ({@link #ABSENCE}) is not judged on
+   * its settings.
    */
   private static String withoutUntrueParts(String clause, String patch, String known) {
     var parts = new ArrayList<String>();
@@ -424,6 +435,7 @@ final class OverviewScreen {
       from = cuts.end();
     }
     parts.add(clause.substring(from).strip());
+    var settingsPatch = settingsPatch(clause, patch);
     var kept = new StringBuilder();
     var dropped = 0;
     var previousDropped = false;
@@ -437,7 +449,7 @@ final class OverviewScreen {
       previousDropped =
           placeholder
               || talksAboutFindings(bare)
-              || namesAbsentSetting(part, patch, known)
+              || namesAbsentSetting(part, settingsPatch, known)
               || (previousDropped && RELATIVE_TAIL.matcher(part).find());
       if (previousDropped) {
         dropped++;
@@ -818,6 +830,15 @@ final class OverviewScreen {
   private static boolean isCount(String word) {
     return NUMBER_WORDS.contains(word)
         || (!word.isEmpty() && word.chars().allMatch(Character::isDigit));
+  }
+
+  /**
+   * {@code patch}, or {@code null} when {@code clause} says the file lacks something ({@link
+   * #ABSENCE}): the setting such a clause names is absent from the patch on purpose, so none is
+   * judged.
+   */
+  private static String settingsPatch(String clause, String patch) {
+    return ABSENCE.stream().anyMatch(p -> p.matcher(clause).find()) ? null : patch;
   }
 
   /**

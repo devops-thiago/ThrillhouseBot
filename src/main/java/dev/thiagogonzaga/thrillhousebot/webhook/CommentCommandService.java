@@ -20,6 +20,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ChangelogEntryGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.DocGenerationService;
@@ -163,10 +164,16 @@ public class CommentCommandService {
       int prNumber,
       String defaultBranch,
       long installationId,
+      long repositoryId,
       String login,
       String authorAssociation,
       long commentId,
       String body) {
+
+    /** The installation and repository the command's PR belongs to. */
+    public RepoScope scope() {
+      return new RepoScope(installationId, repositoryId);
+    }
 
     /** A context for a command that reads no argument and cites no comment. */
     public CommandContext(
@@ -176,6 +183,7 @@ public class CommentCommandService {
         int prNumber,
         String defaultBranch,
         long installationId,
+        long repositoryId,
         String login,
         String authorAssociation) {
       this(
@@ -185,6 +193,7 @@ public class CommentCommandService {
           prNumber,
           defaultBranch,
           installationId,
+          repositoryId,
           login,
           authorAssociation,
           0L,
@@ -244,7 +253,7 @@ public class CommentCommandService {
       log.info("Ignoring unauthorized /summary from @{} on PR #{}", ctx.login(), num(ctx));
       return;
     }
-    if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
+    if (prPauseService.isPaused(ctx.scope(), ctx.owner(), ctx.repo(), ctx.prNumber())) {
       postComment(auth, ctx, PAUSED_NOTICE);
       return;
     }
@@ -274,6 +283,7 @@ public class CommentCommandService {
             "",
             ctx.defaultBranch(),
             ctx.installationId(),
+            ctx.repositoryId(),
             true,
             "",
             true));
@@ -284,7 +294,7 @@ public class CommentCommandService {
       log.info("Ignoring unauthorized /describe from @{} on PR #{}", ctx.login(), num(ctx));
       return;
     }
-    if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
+    if (prPauseService.isPaused(ctx.scope(), ctx.owner(), ctx.repo(), ctx.prNumber())) {
       postComment(auth, ctx, PAUSED_NOTICE);
       return;
     }
@@ -310,7 +320,7 @@ public class CommentCommandService {
       log.info("Ignoring unauthorized /changelog from @{} on PR #{}", ctx.login(), num(ctx));
       return;
     }
-    if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
+    if (prPauseService.isPaused(ctx.scope(), ctx.owner(), ctx.repo(), ctx.prNumber())) {
       postComment(auth, ctx, PAUSED_NOTICE);
       return;
     }
@@ -340,7 +350,7 @@ public class CommentCommandService {
       declineAsDisabled(ctx, auth, "/add-docs", "add-docs-enabled");
       return;
     }
-    if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
+    if (prPauseService.isPaused(ctx.scope(), ctx.owner(), ctx.repo(), ctx.prNumber())) {
       postComment(auth, ctx, PAUSED_NOTICE);
       return;
     }
@@ -364,7 +374,7 @@ public class CommentCommandService {
       declineAsDisabled(ctx, auth, "/improve", "improve-enabled");
       return;
     }
-    if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
+    if (prPauseService.isPaused(ctx.scope(), ctx.owner(), ctx.repo(), ctx.prNumber())) {
       postComment(auth, ctx, PAUSED_NOTICE);
       return;
     }
@@ -389,7 +399,7 @@ public class CommentCommandService {
       declineAsDisabled(ctx, auth, "/generate-tests", "generate-tests-enabled");
       return;
     }
-    if (prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber())) {
+    if (prPauseService.isPaused(ctx.scope(), ctx.owner(), ctx.repo(), ctx.prNumber())) {
       postComment(auth, ctx, PAUSED_NOTICE);
       return;
     }
@@ -406,6 +416,7 @@ public class CommentCommandService {
             ctx.prNumber(),
             ctx.defaultBranch(),
             ctx.installationId(),
+            ctx.repositoryId(),
             auth);
     postComment(auth, ctx, suggestion != null ? suggestion : noOutputNotice("/generate-tests"));
   }
@@ -473,10 +484,11 @@ public class CommentCommandService {
    */
   private boolean pauseIfPossible(CommandContext ctx) {
     try {
-      prPauseService.pause(ctx.owner(), ctx.repo(), ctx.prNumber());
+      prPauseService.pause(ctx.scope(), ctx.owner(), ctx.repo(), ctx.prNumber());
       return true;
     } catch (RuntimeException e) {
-      boolean paused = prPauseService.isPaused(ctx.owner(), ctx.repo(), ctx.prNumber());
+      boolean paused =
+          prPauseService.isPaused(ctx.scope(), ctx.owner(), ctx.repo(), ctx.prNumber());
       if (paused) {
         log.debug("Concurrent /pause already paused {}/{} #{}", ctx.owner(), ctx.repo(), num(ctx));
       } else {
@@ -491,7 +503,7 @@ public class CommentCommandService {
       log.info("Ignoring unauthorized /resume from @{} on PR #{}", ctx.login(), num(ctx));
       return;
     }
-    var wasPaused = prPauseService.resume(ctx.owner(), ctx.repo(), ctx.prNumber());
+    var wasPaused = prPauseService.resume(ctx.scope(), ctx.owner(), ctx.repo(), ctx.prNumber());
     postComment(
         auth,
         ctx,

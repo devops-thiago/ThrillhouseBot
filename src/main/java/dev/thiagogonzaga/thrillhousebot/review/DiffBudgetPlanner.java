@@ -821,11 +821,10 @@ public class DiffBudgetPlanner {
     // finding on a file the model cannot name has no path to anchor an inline comment to anyway.
     // Build manifests go first (#935): they are small, so impact-descending packing put them last,
     // where the bin cap omits first, yet they decide what the build produces — the proof of a
-    // Dockerfile copying a jar the pom never builds sits in the pom.
+    // Dockerfile copying a jar the pom never builds sits in the pom. With triage on (#666), the
+    // high-risk paths follow them and the low-risk paths go last.
     ordered.sort(
-        Comparator.comparing(
-                (GitHubPullRequestClient.FileDiff f) ->
-                    !ReviewDiffFormatter.isBuildManifest(f.filename()))
+        priority()
             .thenComparing(
                 Comparator.comparingInt(
                         (GitHubPullRequestClient.FileDiff f) -> f.additions() + f.deletions())
@@ -859,6 +858,18 @@ public class DiffBudgetPlanner {
       }
     }
     return rendered;
+  }
+
+  /**
+   * The first sort key of the packing order: {@link FileTriage}'s tiers with {@code
+   * REVIEW_TRIAGE_ENABLED} on, else build manifests ahead of every other file.
+   */
+  private Comparator<GitHubPullRequestClient.FileDiff> priority() {
+    if (config.review().triageEnabled()) {
+      return FileTriage.of(config).byTier();
+    }
+    return Comparator.comparing(
+        (GitHubPullRequestClient.FileDiff f) -> !ReviewDiffFormatter.isBuildManifest(f.filename()));
   }
 
   /**

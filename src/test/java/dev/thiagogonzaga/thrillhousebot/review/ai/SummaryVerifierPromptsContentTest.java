@@ -58,6 +58,13 @@ class SummaryVerifierPromptsContentTest {
   }
 
   @Test
+  void theChangesSizeAndRenamesAreJudgedOnTheWholeChange() {
+    // #1206: the call counted the reviewed files and cut a true "17 files" and a withheld rename.
+    assertTrue(SummaryVerifierPrompts.SYSTEM.contains("renamed or moved."));
+    assertTrue(SummaryVerifierPrompts.SYSTEM.contains("when present, count the whole change."));
+  }
+
+  @Test
   void aFindingAboutOneCaseDoesNotContradictWhatTheChangeDoes() {
     // rc6 sessions 7353 and 7356 cut S1 in the only rounds with an edge-case finding open, and the
     // #1142 eval case cut a true sentence about "removes" on a finding about "cuts".

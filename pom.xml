@@ -20,13 +20,16 @@
         <project.build.outputTimestamp>2026-10-22T10:24:23Z</project.build.outputTimestamp>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
-        <quarkus.platform.version>3.40.1</quarkus.platform.version>
+        <quarkus.platform.version>3.40.1.1</quarkus.platform.version>
         <quarkus-langchain4j.version>1.14.2</quarkus-langchain4j.version>
-        <opentelemetry.version>1.67.0</opentelemetry.version>
-        <opentelemetry.alpha.version>1.67.0-alpha</opentelemetry.alpha.version>
+        <!-- Quarkus 3.40 is incompatible with OTel 1.67; keep both BOMs at 1.62 until #1289
+             can be upgraded together with the platform. The known advisory remains tracked there. -->
+        <opentelemetry.version>1.62.0</opentelemetry.version>
+        <opentelemetry.alpha.version>1.62.0-alpha</opentelemetry.alpha.version>
         <!-- Keep in lockstep with the prometheus-metrics version opentelemetry-exporter-prometheus ships -->
         <prometheus-metrics.version>1.10.0</prometheus-metrics.version>
         <jackson-bom.version>2.22.4</jackson-bom.version>
+        <guava-bom.version>33.7.2-jre</guava-bom.version>
         <skipITs>true</skipITs>
         <!-- JUnit tag filters for surefire; the eval profile flips them to run PromptEvalTest -->
         <surefire.groups></surefire.groups>
@@ -95,6 +98,20 @@
                 <groupId>com.fasterxml.jackson</groupId>
                 <artifactId>jackson-bom</artifactId>
                 <version>${jackson-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!--
+                CVE override for guava GHSA-xxph-c9ww-hj94 / CVE-2026-102554
+                (unbounded allocation when deserializing CompactHashMap and
+                related collections), fixed in 33.7.2 while quarkus-bom 3.40.1.1
+                manages 33.6.0. Declared before the quarkus-bom import so this
+                BOM wins. Remove once the platform ships a fixed guava.
+            -->
+            <dependency>
+                <groupId>com.google.guava</groupId>
+                <artifactId>guava-bom</artifactId>
+                <version>${guava-bom.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -201,6 +218,15 @@
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-jdbc-postgresql</artifactId>
         </dependency>
+        <!-- Flyway owns the schema (#22); Hibernate only validates it. -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-flyway</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-flyway-postgresql</artifactId>
+        </dependency>
 
         <!-- JWT for GitHub App auth -->
         <dependency>
@@ -253,6 +279,12 @@
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-junit-mockito</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- In-memory span exporter for the trace-propagation tests (#1263); version from the OTel BOM -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

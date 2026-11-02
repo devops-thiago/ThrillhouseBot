@@ -60,6 +60,7 @@ public class PullRequestLabelGate {
    */
   public record StandDown(
       String auth,
+      long installationId,
       String owner,
       String repo,
       int prNumber,
@@ -104,6 +105,7 @@ public class PullRequestLabelGate {
   public void standDown(ReviewTriggerFilter.Skip skip, StandDown where) {
     skipEmitter.recordSkip(
         skip.reason(),
+        where.installationId(),
         where.owner(),
         where.repo(),
         where.prNumber(),

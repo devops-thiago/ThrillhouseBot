@@ -48,7 +48,9 @@ class PrometheusMetricsEndpointTest {
         .statusCode(200)
         .header("Content-Type", containsString("text/plain"))
         .body(containsString("thrillhouse_reviews_total"))
-        .body(containsString("outcome=\"completed\""));
+        .body(containsString("outcome=\"completed\""))
+        // Quarkus's own metrics are on by default (#1262).
+        .body(containsString("jvm_"));
   }
 
   public static class OtelSdkEnabledProfile implements QuarkusTestProfile {

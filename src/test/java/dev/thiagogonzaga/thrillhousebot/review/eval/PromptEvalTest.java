@@ -24,6 +24,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ChangeSymbols;
 import dev.thiagogonzaga.thrillhousebot.review.Confidence;
 import dev.thiagogonzaga.thrillhousebot.review.EvalTrailingGuidance;
@@ -230,7 +231,11 @@ class PromptEvalTest {
     // Shaped as the orchestrator creates one: the retry and repeat events read its fields.
     var session =
         ReviewSession.create(
-            "eval/" + evalCase.name(), spec.sourcePr(), orEmpty(spec.prTitle()), "eval");
+            TestScopes.scope("eval/" + evalCase.name()),
+            "eval/" + evalCase.name(),
+            spec.sourcePr(),
+            orEmpty(spec.prTitle()),
+            "eval");
     session.id = EVAL_SESSION_ID;
     callRecorder.reset();
     ReviewResponse.Summary summary;

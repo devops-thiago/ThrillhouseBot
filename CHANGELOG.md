@@ -4,12 +4,179 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+The dashboard now serves every installation of the GitHub App, and shows each user the
+repositories GitHub lets them read. Approve the new App permission **Organization → Members:
+read** on each installation so organization members see the installation-wide skip counters;
+without it those counters stay hidden and nothing else changes.
+
 ### Added
 
-- A weekly workflow prunes old container images: snapshot builds from `main` beyond the 10 newest of each variant, `test-*` images older than 30 days, and the untagged images that only those used. Releases, `latest`, `snapshot` and their signatures and attestations are kept. A manual run prints the plan and deletes only when asked.
+- A **Live** dashboard page follows a review from start to end: the step it is on (reading the
+  pull request, reviewing, checking findings, summarizing, publishing), the tokens and cost spent
+  so far across all its model calls, its output and its batch progress. The new `review.phase`
+  WebSocket event carries the step, and `review.progress` now carries the running spend.
+  `DASHBOARD_REASONING_STREAM_ENABLED` (off by default) also streams the review call's reasoning
+  as `review.reasoning`, from providers that send `reasoning_content`. (#66)
+
+- `REVIEW_TRIAGE_ENABLED` (off by default) packs a large pull request's batches by review
+  priority: build manifests, then files matching `AI_ROUTING_HIGH_RISK_PATHS`, then the rest, then
+  files matching `AI_ROUTING_LOW_RISK_PATHS`, the larger change first within each. When
+  `REVIEW_MAX_AI_CALLS` leaves files out, the low-risk ones go first instead of the smallest. The
+  globs are the ones model routing reads; no model call is made. (#666)
+
+- `REVIEW_LABELS_BLOCKED` (`thrillhousebot.review.labels.blocked`) lists labels the bot never
+  suggests, applies or creates, matched ignoring case, such as a team's own `review` label. They
+  are left out of the labels shown to the model and dropped from its suggestions. (#1238)
+
+- **Risk-based model routing and fallback** (#43). `AI_ROUTING_LOW_RISK_MODEL` sends the review
+  calls of a low-risk pull request (no high-risk path, which wins over an overlapping low-risk glob,
+  and either only docs, text or lockfiles or a small change) to a cheaper model, and
+  `AI_FALLBACK_MODEL` takes over a review or summary call's remaining retries after a provider error
+  or rate limit. Both are off by default and use the same provider; the paths and the size threshold
+  are configurable.
+- `WEBHOOK_EXCLUDED_AUTHORS` skips automatic reviews of pull requests opened by the listed logins,
+  for example `dependabot[bot]`. Dependabot can open a pull request before it adds its labels, so
+  `WEBHOOK_EXCLUDED_LABELS=dependencies` could let a review run the model before the label arrived;
+  the author is in every `opened` event. A manual `/review` still runs (#1278).
+
+### Changed
+
+- The Docker test image workflow builds the native variant for arm64 as well as amd64, each on a
+  runner of its own architecture, and publishes one multi-arch tag. The JVM variant stays amd64.
+- The bot follows installation and repository events. Uninstalling or suspending the App, or
+  removing a repository from an installation, stops the dashboard serving it at once instead of
+  after its cache expired; unsuspending or adding it back serves it again. A renamed or
+  transferred repository's stored rows show its new name. The App now subscribes to the
+  **Repository** event; an existing App must tick it under Permissions & events. Purging an
+  installation's rows by installation id is documented in `docs/OPERATIONS.md`. (#1222)
+
+- Flyway now owns the database schema. Migrations in `src/main/resources/db/migration` run at
+  startup, and Hibernate only validates the entities against them instead of updating the schema
+  itself. A database created before this release has the tables but no history; on its first
+  start it is recorded as version 1, the v0.8.0 schema, and only later migrations run. Upgrade
+  from v0.8.x. The dev and test databases are in-memory H2 in PostgreSQL mode, built from the
+  same migrations. (#22)
+- Stored reviews, pauses, finding feedback and learnings are scoped by GitHub App installation
+  and the repository's numeric id instead of the `owner/repo` name. A repository of the same name
+  under another installation, or one deleted and re-created, no longer sees another's history,
+  and a renamed repository keeps its own. On the first start after the upgrade the bot fills the
+  ids in for existing rows; rows of a repository it cannot match stay hidden, except a pause,
+  which is still honored. The repository configuration caches are keyed by installation too.
+  (#1220)
+- With `AI_REASONING_ENABLED=true`, the one repeat of a call that spent its whole response cap
+  reasoning now goes out at `reasoning_effort=low` instead of `none`, and a lane already at `low`
+  or `none` is not repeated. `glm-5.3-flash` ignores `none`, so that repeat spent the cap a
+  second time and was billed in full. The new `AI_REASONING_REPEAT_EFFORT`
+  (`thrillhousebot.ai.reasoning.repeat-effort`) sets the repeat's effort; set it to `none` to keep
+  the previous behavior on a provider that honors it. (#1173)
+- With `AI_REASONING_ENABLED=false`, the warning logged for a call that spent its whole response
+  cap reasoning now says to set `AI_REASONING_ENABLED=true` for a model that reasons by default,
+  and the docs recommend it. On `glm-5.3-flash` that took the concise calls from 9 of 12 cut at
+  the cap to none, and their output from 94,533 to 6,982 tokens. (#1174)
+- The on-request commands (`/describe`, `/changelog`, `/improve`, `/add-docs`,
+  `/generate-tests`) and the replies to maintainer comments now repeat a call that spent its whole
+  response cap reasoning, once at a lower effort, as review calls do. Each command or reply counts
+  its own calls against `REVIEW_MAX_TOKENS_PER_REVIEW`, and the repeat is skipped once it reaches
+  it. Before, the user got no answer. (#1175)
+### Security
+
+- Guava is raised to 33.7.2 (GHSA-xxph-c9ww-hj94, unbounded allocation when deserializing
+  `CompactHashMap` and related collections). The Quarkus platform does not ship the fix yet.
+  (#1288)
+
+- `GITHUB_ALLOWED_ACCOUNTS` (`thrillhousebot.github.allowed-accounts`) limits the bot to the
+  installations on the listed accounts. Events from any other installation are ignored before
+  any work and logged, and the dashboard does not list those installations. Dashboard sign-in for
+  anyone but the App's owner needs a public App, which anyone can install, so set it when the App
+  is public. Unset serves every installation, as before. (#1235)
+
+- Dashboard access is decided by GitHub with the user's own sign-in: the App's installations
+  they can access and the repositories they can read there, across every installation. An
+  outside contributor or a non-member sees nothing, an organization member whose base
+  permission is none does not see a private repository, and a token GitHub rejects ends the
+  session. The installation-wide skip counters go to the account itself or to organization
+  members, per installation. `thrillhousebot.dashboard.github.account-owner` is now optional and
+  limits the dashboard to one account; the "not configured" error is gone. The live feed
+  follows a change in access within five minutes. Acting through the bot (`/review`, decline
+  learnings, finding feedback) needs write, maintain or admin. (#1221)
+
+- The dashboard WebSocket no longer takes its session from the endpoint configuration that every
+  handshake shares. After any user had connected, a socket opened without a session cookie was
+  authenticated as that user and received their live review events, and two handshakes at the
+  same time could swap identities. The page now fetches a single-use ticket from
+  `POST /api/auth/socket-ticket` and opens the socket with it in the query string; the ticket
+  expires after 30 seconds and works once. The session cookie is no longer accepted as a query
+  parameter. (#1223)
+- A session link posted on GitHub (`/session/<id>`) now redirects to the session's page only for
+  a dashboard login that may read it; anyone else is sent to the sessions list, so the link no
+  longer reveals the session's numeric id. (#1220)
 
 ### Fixed
 
+- Four true summary statements are no longer cut. A description gap that quotes the description
+  with a bracketed ending, such as "follow[s]" for "following", is no longer taken for a misquote.
+  An omission bullet saying the description "provides no coverage of" files the description names
+  is dropped like one that says it "does not mention" them. The summary verification, which reads
+  the diff in batches, now also gets the pull request's file and line totals and the files withheld
+  from review, so it no longer cuts a true file count or a pure rename. A file summary saying a
+  document omits a setting, such as "the missing BLOODBANK_PORT row", keeps it. (#1206)
+- On a pull request linked to one issue, Description vs. Implementation now names an acceptance
+  criterion the change does not meet even when no finding or summary sentence mentions it. The
+  review call, which reads the diff, judges each criterion as met, unmet or unclear, and a
+  criterion it judges unmet gets its "Linked issue #N:" line with what the review looked for. In a
+  multi-call review a criterion any batch judges met counts as met, and a criterion judged met
+  leaves the list on a later round, so it is not shown as unmet after a push implements it. (#1200)
+- Spans and metric points exported after a quiet spell are no longer sent to the collector twice.
+  Quarkus used the 10-second export timeout as the connection's idle timeout and closed a connection
+  right after writing a new export, which its retry then sent again
+  ([quarkusio/quarkus#57107](https://github.com/quarkusio/quarkus/issues/57107)). The timeout now
+  defaults to 65 seconds for traces, metrics and logs, above the collector's 60-second keep-alive,
+  and `OTEL_EXPORTER_TIMEOUT` sets it. (#1268)
+- Metrics are exported over OTLP, as the README describes. Before, only traces were, and the
+  metrics reached only the Prometheus endpoint. `OTEL_EXPORTER_ENDPOINT` now sets the endpoint for
+  every signal, so metrics go where traces already went; a Quarkus per-signal variable such as
+  `QUARKUS_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` still overrides it. Quarkus's JVM and HTTP server
+  metrics are exported too, and with `PROMETHEUS_METRICS_ENABLED=true` they also appear on
+  `/metrics` (`jvm.*`, `http.server.request.duration`); `OTEL_JVM_METRICS_ENABLED=false` and
+  `OTEL_HTTP_SERVER_METRICS_ENABLED=false` turn them off. Log records can be exported
+  with `OTEL_LOGS_ENABLED=true`, off by default. A deployment that set only
+  `QUARKUS_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` now also sends metrics to `OTEL_EXPORTER_ENDPOINT`
+  (default `http://localhost:4317`): set that variable to the collector too. (#1262)
+- A review's spans share one trace. Each review runs in a `review` span that links to the webhook
+  delivery that started it, or to every delivery a coalesced review serves, including a `/review`
+  the running review answers, and its model calls,
+  multi-call batches included, are spans in that trace. Before, every model call of a review
+  started a trace of its own. Commands, maintainer replies and notifications stay in their
+  delivery's trace. (#1263)
+- On a follow-up round, the check run's open total and new count now match the summary and the
+  "changes since the last review" section. A finding that replaces an open "Things to double-check"
+  item from an earlier round was counted twice on the check run, once as new and once as still
+  open. (#1199)
+- A "Things to double-check" item about a test file is no longer marked "Same issue as" an inline
+  finding on the production code it tests. A test fake that accepts what the real type rejects, and
+  a defect in that real type, are now listed as two separate defects even when both titles name the
+  type. (#1198)
+- A multi-line suggestion that loses the indentation of the lines it replaces gets it back before
+  it is posted, so "Commit suggestion" no longer commits misformatted code. This covers a first
+  line written at column 0 while the following lines keep their indent, and spaces written where
+  the file indents with tabs. A suggestion is rewritten only when its quote of the replaced code
+  shows the same loss, so a deliberate change of indentation, such as a Python dedent, is kept.
+  (#1197)
+- When the PR description is edited between two reviews of the same commit, Description vs.
+  Implementation is judged again against the new text. Bullets written against the old description,
+  such as "it describes only the tracker feature", are no longer carried over. Linked-issue gaps
+  still carry until the code meets them, and a round whose summary call fails keeps every gap.
+  (#1196)
+- The summary's sentence on a failing CI check no longer credits a finding that names the check
+  and a failure in different sentences, or quotes the check's name as a key such as the
+  package.json script `"test":`. It now credits a finding that names the C test function whose
+  `CHECK` label the log prints, or quotes a test's assertion in single quotes, and it reads the
+  failing test's name from sbt's `[info] - name *** FAILED ***` line. (#1194)
+- Findings and the summary no longer carry the review's internal wording. "The withheld list" and
+  "a withheld path" read as the files not shown, "see description_gaps" points at Description vs.
+  Implementation, a clause such as "the summary should carry the description gap" is dropped, and
+  an opening "Name the exact layer to verify:" is removed so the check it introduced starts the
+  sentence. (#1195)
 - The version bump pull request opened after a release now passes the DCO check. Its commit was not signed off, and the check accepts an unsigned bot commit only when it has a verified signature (#1226).
 
 ## [0.8.0] - 2026-10-21

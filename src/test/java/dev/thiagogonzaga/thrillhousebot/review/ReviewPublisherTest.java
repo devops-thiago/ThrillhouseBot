@@ -33,6 +33,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.ws.rs.WebApplicationException;
 import java.time.Duration;
@@ -370,7 +371,7 @@ class ReviewPublisherTest {
     followUpSummaryEnabled(false);
     var req =
         new ReviewOrchestrator.ReviewRequest(
-            "o", "r", 1, "sha", "t", "", "base", "main", 9L, false);
+            "o", "r", 1, "sha", "t", "", "base", "main", 9L, TestScopes.REPOSITORY_ID, false);
     // A thread exists on the PR, just not for this finding — so the reply surface is skipped for
     // being unmatched, not for the PR having no inline comments at all.
     var otherThread =

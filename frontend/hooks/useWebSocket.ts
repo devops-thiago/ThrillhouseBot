@@ -7,7 +7,9 @@ export interface SessionEvent {
   type:
     | "keepalive"
     | "review.started"
+    | "review.phase"
     | "review.stream"
+    | "review.reasoning"
     | "review.stream.failed"
     | "review.batch"
     | "review.retry"
@@ -23,17 +25,41 @@ export interface SessionEvent {
   data: Record<string, any>;
 }
 
-async function isAuthenticated(): Promise<boolean> {
+/**
+ * Fetches the single-use ticket the socket presents in its query string. A WebSocket cannot carry
+ * the session in a header the server can read per connection, so each connect asks for a fresh
+ * ticket; null when the session is gone or not allowed, which stops reconnecting.
+ */
+export async function fetchSocketTicket(): Promise<string | null> {
   try {
-    const res = await fetch("/api/auth/me", { credentials: "include" });
-    return res.ok;
+    const res = await fetch("/api/auth/socket-ticket", {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!res.ok) {
+      return null;
+    }
+    const body: { ticket?: unknown } = await res.json();
+    return typeof body.ticket === "string" && body.ticket !== "" ? body.ticket : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-export function useWebSocket() {
+export function socketUrl(location: Pick<Location, "protocol" | "host">, ticket: string): string {
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${location.host}/ws/dashboard?ticket=${encodeURIComponent(ticket)}`;
+}
+
+/**
+ * The dashboard's event feed. `events` keeps the latest 100, newest first. `onEvent`, when given,
+ * sees every event as it arrives, oldest first, for a page that folds the whole stream instead of
+ * reading a window that the stream and reasoning chunks soon fill.
+ */
+export function useWebSocket(onEvent?: (event: SessionEvent) => void) {
   const [events, setEvents] = useState<SessionEvent[]>([]);
+  const onEventRef = useRef(onEvent);
+  onEventRef.current = onEvent;
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -42,11 +68,6 @@ export function useWebSocket() {
 
   const connect = useCallback(async () => {
     if (!mountedRef.current) {
-      return;
-    }
-
-    if (!(await isAuthenticated())) {
-      setConnected(false);
       return;
     }
 
@@ -61,8 +82,13 @@ export function useWebSocket() {
 
     existing?.close();
 
-    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${location.host}/ws/dashboard`);
+    const ticket = await fetchSocketTicket();
+    if (!ticket || !mountedRef.current) {
+      setConnected(false);
+      return;
+    }
+
+    const ws = new WebSocket(socketUrl(location, ticket));
 
     ws.onopen = () => {
       if (!mountedRef.current) {
@@ -79,6 +105,7 @@ export function useWebSocket() {
         if (event.type === "keepalive") {
           return;
         }
+        onEventRef.current?.(event);
         setEvents((prev) => [event, ...prev].slice(0, 100));
       } catch {
         /* ignore malformed */
@@ -102,7 +129,9 @@ export function useWebSocket() {
 
   useEffect(() => {
     if (MOCK_MODE) {
-      setEvents(mockSessionEvents());
+      const mocked = mockSessionEvents();
+      [...mocked].reverse().forEach((event) => onEventRef.current?.(event));
+      setEvents(mocked);
       setConnected(true);
       return;
     }

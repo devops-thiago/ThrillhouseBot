@@ -25,6 +25,7 @@ import com.nimbusds.jwt.SignedJWT;
 import dev.thiagogonzaga.thrillhousebot.config.RsaPrivateKeyParser;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import java.security.interfaces.RSAPrivateKey;
 import java.time.Duration;
@@ -233,6 +234,16 @@ public class GitHubAuthClient {
   /** Returns an Authorization header value for GitHub API calls. */
   public String getAuthHeader(long installationId) {
     return BEARER + installationToken(installationId);
+  }
+
+  /**
+   * Drops a gone installation's cached token (#1222), so nothing keeps calling GitHub with it after
+   * the installation was uninstalled or suspended.
+   */
+  void onInstallationChange(@Observes InstallationChange change) {
+    if (change.kind() == InstallationChange.Kind.GONE) {
+      tokenCache.remove(change.installationId());
+    }
   }
 
   /**

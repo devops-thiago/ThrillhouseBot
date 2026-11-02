@@ -1,9 +1,12 @@
 'use client';
 
+import Link from 'next/link';
 import { useMemo } from 'react';
 import { api, SessionSummary } from '@/lib/api';
 import { useWebSocket, SessionEvent } from '@/hooks/useWebSocket';
 import { useDashboardFetch } from '@/hooks/useDashboardFetch';
+import { useInstallationFilter } from '@/hooks/useInstallationFilter';
+import { InstallationFilter } from '@/components/InstallationFilter';
 import {
   buildLiveReviews,
   liveReviewProgressMessage,
@@ -13,6 +16,7 @@ import {
 
 export default function OverviewPage() {
   const { events, connected } = useWebSocket();
+  const { installations, installation, setInstallation } = useInstallationFilter();
 
   const lifecycleCount = useMemo(
     () =>
@@ -31,8 +35,8 @@ export default function OverviewPage() {
     error: summaryError,
     retry: retrySummary,
   } = useDashboardFetch<SessionSummary>(
-    () => api().summary(),
-    [lifecycleCount],
+    () => api().summary(installation),
+    [lifecycleCount, installation],
     { keepStaleWhileLoading: true },
   );
 
@@ -49,7 +53,14 @@ export default function OverviewPage() {
 
   return (
     <div>
-      <h1 style={{ marginBottom: '1.5rem' }}>Dashboard Overview</h1>
+      <div style={styles.heading}>
+        <h1>Dashboard Overview</h1>
+        <InstallationFilter
+          installations={installations}
+          value={installation}
+          onChange={setInstallation}
+        />
+      </div>
 
       {summaryError && !summary ? (
         <div style={styles.errorBox}>
@@ -129,6 +140,9 @@ function LiveReviewCard({ review }: { review: LiveReviewState }) {
         </span>
         <span style={{ color: 'var(--accent)', fontSize: '0.85rem' }}>{statusLabel}</span>
       </div>
+      <Link href={`/activity?id=${review.sessionId}`} style={{ fontSize: '0.85rem' }}>
+        Steps, reasoning and cost so far
+      </Link>
       <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{review.prTitle}</span>
       {review.reason && (
         <span style={{ color: 'var(--red)', fontSize: '0.8rem' }}>{review.reason}</span>
@@ -186,6 +200,14 @@ function EventCard({ event }: { event: SessionEvent }) {
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  heading: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '0.75rem',
+    marginBottom: '1.5rem',
+  },
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',

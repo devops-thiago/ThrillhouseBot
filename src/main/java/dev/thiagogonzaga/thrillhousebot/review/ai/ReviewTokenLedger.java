@@ -19,8 +19,10 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
@@ -55,11 +57,20 @@ import java.util.concurrent.atomic.LongAdder;
  * onto its plan before clearing the entry. A repeat that was stopped because the model wrote its
  * deliberation into the response (#893) is noted too, and counted apart, so the summary can tell a
  * review produced with reasoning off from one whose repeat delivered nothing.
+ *
+ * <p>An on-request command or a maintainer reply is not a review, but its blocking calls get the
+ * same one repeat (#1175), metered and skipped at the same ceiling. Each such run takes its own
+ * entry through {@link #openRun} and records its calls' {@code Result}-reported usage directly;
+ * those calls are never bound to a session, so the listener does not count them a second time.
+ *
+ * <p>The entry also holds the model the review's calls were routed to (#43), for the same reason:
+ * the route is decided once per review and read by every batch, each on its own thread.
  */
 @ApplicationScoped
 public class ReviewTokenLedger {
 
   private final ConcurrentHashMap<Long, Entry> entries = new ConcurrentHashMap<>();
+  private final AtomicLong lastRunKey = new AtomicLong();
   private final long maxTokensPerReview;
 
   /** One review's row: tokens spent so far, and how many calls stepped down and how they ended. */
@@ -67,6 +78,7 @@ public class ReviewTokenLedger {
     private final LongAdder spent = new LongAdder();
     private final AtomicInteger reasoningStepDowns = new AtomicInteger();
     private final AtomicInteger stoppedRepeats = new AtomicInteger();
+    private volatile String routedModel;
   }
 
   @Inject
@@ -77,6 +89,17 @@ public class ReviewTokenLedger {
   /** Opens the ledger entry for a review so its calls' usage is accumulated. Idempotent. */
   public void open(long sessionId) {
     entries.computeIfAbsent(sessionId, id -> new Entry());
+  }
+
+  /**
+   * Opens an entry for a run that is not a review, an on-request command or a maintainer reply, and
+   * returns its key. Keys count down from {@code -1}, so they never meet a session's persisted id
+   * or the {@link #keyFor} sentinel. The caller clears it when the run is done.
+   */
+  public long openRun() {
+    var key = lastRunKey.decrementAndGet();
+    open(key);
+    return key;
   }
 
   /**
@@ -128,6 +151,23 @@ public class ReviewTokenLedger {
     }
     var stopped = entry.stoppedRepeats.get();
     return new ReasoningStepDown(entry.reasoningStepDowns.get() > stopped, stopped > 0);
+  }
+
+  /**
+   * Routes the review's calls to {@code model} instead of {@code AI_MODEL} (#43). Dropped for a
+   * session with no open entry, like {@link #recordUsage}.
+   */
+  public void routeTo(long sessionId, String model) {
+    var entry = entries.get(sessionId);
+    if (entry != null) {
+      entry.routedModel = model;
+    }
+  }
+
+  /** The model the review's calls were routed to; empty when they go to {@code AI_MODEL}. */
+  public Optional<String> routedModel(long sessionId) {
+    var entry = entries.get(sessionId);
+    return entry == null ? Optional.empty() : Optional.ofNullable(entry.routedModel);
   }
 
   /** Total tokens (input + output) recorded for this review so far; 0 when nothing is open. */

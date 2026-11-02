@@ -35,14 +35,16 @@ import java.util.stream.Stream;
  *       passage is not there. The model once misquoted "{@code docs/RUST-V10.md}" as "{@code
  *       docs/RUST-VEV10.md}" and then reported its own misquote as a gap, two rounds running. Both
  *       sides are compared case-, whitespace- and punctuation-blind, an editorial bracket such as
- *       "[t]he" reads as the letters it holds, and a bracketed or "…" omission splits the quote
- *       into parts that must appear in order. Only a quote of at least {@value #MIN_QUOTE_WORDS}
- *       words that a claim cue attributes is judged, the cue before the quote or, as in "'…' is
- *       what the description promises", right after it (#1064): a quoted path or value the bullet
- *       gives as what the change does is not the description's claim, and a single quoted word is
- *       usually an identifier the model inflected. A single token that runs words together, camel
- *       case such as "retryForever" or a run such as "retriesforever" that starts or ends with a
- *       word of the PR text, is judged too, against the PR text with its separators removed.
+ *       "[t]he" reads as the letters it holds, a bracketed ending such as "follow[s]" matches the
+ *       word before it with any ending ("following", #1206), and a bracketed or "…" omission splits
+ *       the quote into parts that must appear in order. Only a quote of at least {@value
+ *       #MIN_QUOTE_WORDS} words that a claim cue attributes is judged, the cue before the quote or,
+ *       as in "'…' is what the description promises", right after it (#1064): a quoted path or
+ *       value the bullet gives as what the change does is not the description's claim, and a single
+ *       quoted word is usually an identifier the model inflected. A single token that runs words
+ *       together, camel case such as "retryForever" or a run such as "retriesforever" that starts
+ *       or ends with a word of the PR text, is judged too, against the PR text with its separators
+ *       removed.
  *   <li><b>A bullet must cite the description or a linked issue.</b> A gap is a mismatch between
  *       what the author or the linked issue says and what the change does; one that names neither —
  *       a configuration document's example disagreeing with the code, say — is a finding about the
@@ -203,6 +205,15 @@ final class DescriptionGapScreen {
   /** An editorial bracket holding one or two letters, as in "[t]he". */
   private static final Pattern EDITORIAL_LETTERS = Pattern.compile("\\[(\\p{L}{1,2})]");
 
+  /**
+   * An editorial bracket ending a word of three letters or more, as in "follow[s]": the quote
+   * inflects the word, so the word matches with any ending.
+   */
+  private static final Pattern INFLECTION = Pattern.compile("(?<=\\p{L}{3})\\[\\p{L}{1,3}]");
+
+  /** Where {@link #INFLECTION} took a bracket out, until the quote's parts are matched. */
+  private static final String STEM_END = "\uE000";
+
   /** An omission inside a quote: a bracketed insertion, or an ellipsis. */
   private static final Pattern OMISSION = Pattern.compile("\\[[^]]*+]|\\.{3}|…");
 
@@ -252,14 +263,14 @@ final class DescriptionGapScreen {
 
   /**
    * The description said to leave something out, in one clause: "the description never mentions",
-   * "the description's summary covers X but not". A comma ends the clause, so "what the description
-   * says, and it does not" is not an omission.
+   * "the description provides no coverage of", "the description's summary covers X but not". A
+   * comma ends the clause, so "what the description says, and it does not" is not an omission.
    */
   private static final List<Pattern> DESCRIPTION_OMITS =
       List.of(
           Pattern.compile(
               "(?i)\\b(?:description|pr\\s++body)\\b[^.;,\n]{0,80}?"
-                  + "\\b(?:not|never|omit\\w*|lacks?|nothing|without|doesn['’]t)\\b"),
+                  + "\\b(?:not|no|never|omit\\w*|lacks?|nothing|without|doesn['’]t)\\b"),
           Pattern.compile(
               "(?i)\\b(?:description|pr\\s++body)\\b[^.;,\n]{0,80}?"
                   + "\\b(?:fails?\\s++to|leaves?\\s++out|is\\s++missing|misses|skips)\\b"));
@@ -1207,23 +1218,49 @@ final class DescriptionGapScreen {
   /**
    * Whether every part of {@code quote} between omissions appears in {@code normalizedSource}, in
    * order, on word boundaries. Each part starts after the previous one does, so a tail that
-   * re-quotes the head's last words ("the cache is bounded … bounded by TTL") still appears.
+   * re-quotes the head's last words ("the cache is bounded … bounded by TTL") still appears. A word
+   * ending in an {@linkplain #INFLECTION inflection bracket} matches with any ending.
    */
   static boolean appearsIn(String quote, String normalizedSource) {
     var haystack = " " + normalizedSource + " ";
     var from = 0;
-    for (var part : OMISSION.split(joinEditorialLetters(quote))) {
-      var needle = normalize(part);
-      if (needle.isEmpty()) {
+    var marked = INFLECTION.matcher(quote).replaceAll(STEM_END);
+    for (var part : OMISSION.split(joinEditorialLetters(marked))) {
+      var needle = needle(part);
+      if (needle == null) {
         continue;
       }
-      var at = haystack.indexOf(" " + needle + " ", from);
-      if (at < 0) {
+      var at = needle.matcher(haystack);
+      if (!at.find(from)) {
         return false;
       }
-      from = at + 1;
+      from = at.start() + 1;
     }
     return true;
+  }
+
+  /**
+   * What {@code part} of a quote matches in the normalised source, on word boundaries: its words,
+   * each one {@link #STEM_END} follows taking any ending; {@code null} when it holds no word.
+   */
+  private static Pattern needle(String part) {
+    var segments = part.split(STEM_END, -1);
+    var body = new StringBuilder();
+    for (var i = 0; i < segments.length; i++) {
+      var words = normalize(segments[i]);
+      if (!words.isEmpty()) {
+        // A segment after a stem opens a new word unless it carries on the stem's letters.
+        if (!body.isEmpty() && !Character.isLetterOrDigit(segments[i].charAt(0))) {
+          body.append(' ');
+        }
+        body.append(Pattern.quote(words));
+      }
+      // A stem is three letters or more, so the words before each mark are never empty.
+      if (i < segments.length - 1) {
+        body.append("\\p{L}*");
+      }
+    }
+    return body.isEmpty() ? null : Pattern.compile("(?<= )" + body + "(?= )");
   }
 
   private static String joinEditorialLetters(String quote) {

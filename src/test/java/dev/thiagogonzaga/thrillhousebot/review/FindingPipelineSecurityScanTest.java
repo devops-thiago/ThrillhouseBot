@@ -32,6 +32,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerifier;
@@ -120,11 +121,13 @@ class FindingPipelineSecurityScanTest {
             new TruncatedResponseSalvager(new ObjectMapper()),
             ReviewDimensionRouter.disabled(),
             new SecurityScan(true, true, 3.5, List.of()),
-            SummaryVerificationService.disabled());
+            SummaryVerificationService.disabled(),
+            mock(ModelRouter.class));
   }
 
   private static ReviewSession session() {
-    var session = ReviewSession.create("owner/repo", 60, "PR", "sha");
+    var session =
+        ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 60, "PR", "sha");
     session.id = 60L;
     return session;
   }

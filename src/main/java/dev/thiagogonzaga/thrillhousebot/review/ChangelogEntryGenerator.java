@@ -23,6 +23,7 @@ import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ChangelogAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ChangelogAssistantPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrSuggestionPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
@@ -100,7 +101,8 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
       DiffBudgetPlanner budgetPlanner,
       ActiveModelSettings activeModel,
       ThrillhouseConfig config,
-      ChangelogAssistant changelogAssistant) {
+      ChangelogAssistant changelogAssistant,
+      ReviewTokenLedger tokenLedger) {
     super(
         prClient,
         diffFormatter,
@@ -108,7 +110,8 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
         repoSettingsResolver,
         budgetPlanner,
         activeModel,
-        config);
+        config,
+        tokenLedger);
     this.changelogAssistant = changelogAssistant;
   }
 
@@ -122,6 +125,19 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
    */
   @ActivateRequestContext
   public String generate(
+      String owner,
+      String repo,
+      int prNumber,
+      String defaultBranch,
+      long installationId,
+      String auth) {
+    try (var _ = openRun()) {
+      return generateInRun(owner, repo, prNumber, defaultBranch, installationId, auth);
+    }
+  }
+
+  /** {@link #generate}'s work, inside its ledger run. */
+  private String generateInRun(
       String owner,
       String repo,
       int prNumber,

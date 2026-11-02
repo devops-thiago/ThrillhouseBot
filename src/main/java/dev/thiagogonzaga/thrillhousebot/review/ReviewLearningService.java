@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -28,10 +29,11 @@ import java.util.UUID;
 /**
  * Persists and reads {@link ReviewLearning} rows (#38). Short transactions only — never spans a
  * GitHub or model call. Every write, and every read that feeds a review or a comment command, is
- * scoped to one installation and one repository, so a learning taught on one repository can never
- * reach a review of another, nor a review of the same repository name under a different
- * installation. The one exception is {@link #listForAudit}, the dashboard's read-only history,
- * which is scoped to the repository alone behind the dashboard's repository-access check.
+ * scoped to one installation and one repository id, so a learning taught on one repository can
+ * never reach a review of another, nor a review of the same repository name under a different
+ * installation or after the repository was deleted and re-created (#1220). A renamed repository
+ * keeps its learnings. The dashboard's read-only audit history is scoped the same way. A row from
+ * before #1220 that the startup backfill could not match has no repository id and is never read.
  *
  * <p>The per-repository cap is checked before each insert rather than enforced by a lock, so two
  * captures racing at the cap can each add one row. It bounds growth, not an exact count; the prompt
@@ -40,7 +42,7 @@ import java.util.UUID;
 @ApplicationScoped
 public class ReviewLearningService {
 
-  private static final String SCOPE = "installationId = ?1 and repository = ?2";
+  private static final String SCOPE = "installationId = ?1 and repositoryId = ?2";
 
   /** Most rows one audit read returns; retracted learnings are kept, so history is unbounded. */
   public static final int MAX_AUDIT_ROWS = 200;
@@ -54,7 +56,7 @@ public class ReviewLearningService {
 
   /** A learning to store. {@code text} is the raw maintainer prose; it is normalized here. */
   public record LearningInput(
-      long installationId,
+      RepoScope scope,
       String repository,
       String kind,
       String findingTitle,
@@ -113,6 +115,7 @@ public class ReviewLearningService {
   @Transactional
   public RecordOutcome save(LearningInput input, int maxPerRepo) {
     if (input == null
+        || input.scope() == null
         || isBlank(input.repository())
         || isBlank(input.kind())
         || isBlank(input.author())
@@ -133,16 +136,17 @@ public class ReviewLearningService {
         input.findingTitle() == null
             ? null
             : LearningText.oneLine(input.findingTitle(), ReviewLearning.MAX_TITLE_CHARS);
-    var key = dedupKey(input.kind(), input.installationId(), repo, input.sourceUrl(), title);
+    var key =
+        dedupKey(input.kind(), input.scope().installationId(), repo, input.sourceUrl(), title);
     if (repository.count("dedupKey", key) > 0) {
       return RecordOutcome.DUPLICATE;
     }
-    if (repository.count(SCOPE + " and active = true", input.installationId(), repo)
-        >= maxPerRepo) {
+    if (countActive(input.scope()) >= maxPerRepo) {
       return RecordOutcome.REFUSED_CAP;
     }
     var row = new ReviewLearning();
-    row.installationId = input.installationId();
+    row.installationId = input.scope().installationId();
+    row.repositoryId = input.scope().repositoryId();
     row.repository = repo;
     row.kind = input.kind();
     row.findingTitle = title;
@@ -162,15 +166,15 @@ public class ReviewLearningService {
 
   /** Active learnings of one repository under one installation, newest first. */
   @Transactional
-  public List<LearningView> listActive(long installationId, String repositoryKey, int limit) {
-    if (isBlank(repositoryKey) || limit <= 0) {
+  public List<LearningView> listActive(RepoScope scope, int limit) {
+    if (limit <= 0) {
       return List.of();
     }
     return repository
         .find(
             SCOPE + " and active = true order by createdAt desc, id desc",
-            installationId,
-            normalizeRepository(repositoryKey))
+            scope.installationId(),
+            scope.repositoryId())
         .page(0, limit)
         .list()
         .stream()
@@ -180,28 +184,26 @@ public class ReviewLearningService {
 
   /** Active learnings held by one repository under one installation. */
   @Transactional
-  public long countActive(long installationId, String repositoryKey) {
-    if (isBlank(repositoryKey)) {
-      return 0;
-    }
+  public long countActive(RepoScope scope) {
     return repository.count(
-        SCOPE + " and active = true", installationId, normalizeRepository(repositoryKey));
+        SCOPE + " and active = true", scope.installationId(), scope.repositoryId());
   }
 
   /**
    * The newest {@code limit} learnings of a repository (at most {@value #MAX_AUDIT_ROWS}),
-   * retracted ones included, newest first — the dashboard's audit view. Not installation-scoped:
-   * the dashboard has already checked the viewer can read the repository, and an operator auditing
-   * it wants the whole history.
+   * retracted ones included, newest first — the dashboard's audit view, behind its
+   * repository-access check.
    */
   @Transactional
-  public List<LearningView> listForAudit(String repositoryKey, int limit) {
-    if (isBlank(repositoryKey) || limit <= 0) {
+  public List<LearningView> listForAudit(RepoScope scope, int limit) {
+    if (limit <= 0) {
       return List.of();
     }
     return repository
         .find(
-            "repository = ?1 order by createdAt desc, id desc", normalizeRepository(repositoryKey))
+            SCOPE + " order by createdAt desc, id desc",
+            scope.installationId(),
+            scope.repositoryId())
         .page(0, Math.min(limit, MAX_AUDIT_ROWS))
         .list()
         .stream()
@@ -215,14 +217,10 @@ public class ReviewLearningService {
    * another's learnings. The row is kept, marked inactive, with who retracted it and when.
    */
   @Transactional
-  public RetractOutcome retract(
-      long installationId, String repositoryKey, long id, String retractedBy) {
-    if (isBlank(repositoryKey)) {
-      return RetractOutcome.NOT_FOUND;
-    }
+  public RetractOutcome retract(RepoScope scope, long id, String retractedBy) {
     var row =
         repository
-            .find(SCOPE + " and id = ?3", installationId, normalizeRepository(repositoryKey), id)
+            .find(SCOPE + " and id = ?3", scope.installationId(), scope.repositoryId(), id)
             .firstResult();
     if (row == null) {
       return RetractOutcome.NOT_FOUND;

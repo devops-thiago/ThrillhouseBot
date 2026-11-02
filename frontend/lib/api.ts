@@ -46,6 +46,14 @@ export interface SessionListItem {
   timestamp: string;
 }
 
+/** One installation of the App the signed-in user can read, for the installation filter. */
+export interface InstallationOption {
+  id: number;
+  account: string;
+  repositories: number;
+  installationWide: boolean;
+}
+
 export interface SessionDetail extends SessionListItem {
   commitSha: string;
   errorMessage?: string | null;
@@ -74,14 +82,24 @@ async function fetchJson<T>(url: string): Promise<T> {
   return res.json();
 }
 
+/** The `installation` query parameter, or nothing when every installation is shown. */
+export function installationParam(installation?: number | null, separator = '&'): string {
+  return installation == null ? '' : `${separator}installation=${installation}`;
+}
+
 function realApi() {
   return {
-    summary: () => fetchJson<SessionSummary>('/api/dashboard/summary'),
+    installations: () =>
+      fetchJson<{ installations: InstallationOption[] }>('/api/dashboard/installations').then(
+        (data) => data.installations,
+      ),
+    summary: (installation?: number | null) =>
+      fetchJson<SessionSummary>(`/api/dashboard/summary${installationParam(installation, '?')}`),
     costs: (period = 'month') => fetchJson<CostData>(`/api/dashboard/costs?period=${period}`),
     tokens: (period = 'month') => fetchJson<TokenData>(`/api/dashboard/tokens?period=${period}`),
-    sessions: (page = 0, repo?: string) =>
+    sessions: (page = 0, repo?: string, installation?: number | null) =>
       fetchJson<{ sessions: SessionListItem[]; total: number; page: number; size: number }>(
-        `/api/dashboard/sessions?page=${page}&size=20${repo ? `&repository=${encodeURIComponent(repo)}` : ''}`,
+        `/api/dashboard/sessions?page=${page}&size=20${repo ? `&repository=${encodeURIComponent(repo)}` : ''}${installationParam(installation)}`,
       ),
     session: (id: number) => fetchJson<SessionDetail>(`/api/dashboard/sessions/${id}`),
   };

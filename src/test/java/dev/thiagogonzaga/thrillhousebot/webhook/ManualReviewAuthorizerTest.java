@@ -62,6 +62,20 @@ class ManualReviewAuthorizerTest {
   }
 
   @Test
+  void aMaintainerMayRequestAReviewAndATriagerMayNot() {
+    when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
+    when(installationClient.collaboratorPermission(
+            anyString(), anyString(), anyString(), anyString(), eq("keeper")))
+        .thenReturn(new CollaboratorPermission("write", "maintain"));
+    when(installationClient.collaboratorPermission(
+            anyString(), anyString(), anyString(), anyString(), eq("sorter")))
+        .thenReturn(new CollaboratorPermission("read", "triage"));
+
+    assertTrue(authorizer.isAuthorized("o", "r", 1L, "keeper", "MEMBER"));
+    assertFalse(authorizer.isAuthorized("o", "r", 1L, "sorter", "MEMBER"));
+  }
+
+  @Test
   void shouldRejectBlankOrNullLogin() {
     assertFalse(authorizer.isAuthorized("o", "r", 1L, null, "OWNER"));
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "   ", "OWNER"));

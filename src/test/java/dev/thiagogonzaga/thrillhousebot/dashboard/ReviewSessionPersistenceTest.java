@@ -17,6 +17,8 @@ package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import java.util.Optional;
@@ -29,7 +31,8 @@ class ReviewSessionPersistenceTest extends ReviewSessionTestSupport {
 
   @Test
   void shouldCreateSessionInTransaction() throws Exception {
-    ReviewSession session = ReviewSession.create("owner/repo", 7, "Title", "sha1");
+    ReviewSession session =
+        ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 7, "Title", "sha1");
     session.setStatus(ReviewSession.STATUS_IN_PROGRESS);
 
     tx.begin();
@@ -83,7 +86,8 @@ class ReviewSessionPersistenceTest extends ReviewSessionTestSupport {
     persistSessionWith("owner/repo", 4, ReviewSession.STATUS_COMPLETED, "{\"v\":4}");
     var current = persistSessionWith("owner/repo", 3, ReviewSession.STATUS_IN_PROGRESS, null);
 
-    var json = persistence.findPreviousAiResponseJson("owner/repo", 3, current.id);
+    var json =
+        persistence.findPreviousAiResponseJson(TestScopes.scope("owner/repo"), 3, current.id);
 
     assertEquals(Optional.of("{\"v\":2}"), json);
   }
@@ -92,7 +96,10 @@ class ReviewSessionPersistenceTest extends ReviewSessionTestSupport {
   void shouldNotReturnAiResponseOfCurrentSession() throws Exception {
     var current = persistSessionWith("owner/repo", 3, ReviewSession.STATUS_COMPLETED, "{\"v\":1}");
 
-    assertTrue(persistence.findPreviousAiResponseJson("owner/repo", 3, current.id).isEmpty());
+    assertTrue(
+        persistence
+            .findPreviousAiResponseJson(TestScopes.scope("owner/repo"), 3, current.id)
+            .isEmpty());
   }
 
   @Test
@@ -100,7 +107,10 @@ class ReviewSessionPersistenceTest extends ReviewSessionTestSupport {
     persistSessionWith("owner/repo", 3, ReviewSession.STATUS_COMPLETED, null);
     var current = persistSessionWith("owner/repo", 3, ReviewSession.STATUS_IN_PROGRESS, null);
 
-    assertTrue(persistence.findPreviousAiResponseJson("owner/repo", 3, current.id).isEmpty());
+    assertTrue(
+        persistence
+            .findPreviousAiResponseJson(TestScopes.scope("owner/repo"), 3, current.id)
+            .isEmpty());
   }
 
   @Test
@@ -112,7 +122,8 @@ class ReviewSessionPersistenceTest extends ReviewSessionTestSupport {
     persistSessionWith("owner/repo", 4, ReviewSession.STATUS_COMPLETED, "{\"v\":4}");
     var current = persistSessionWith("owner/repo", 3, ReviewSession.STATUS_IN_PROGRESS, null);
 
-    var jsons = persistence.findAllPriorAiResponseJsons("owner/repo", 3, current.id);
+    var jsons =
+        persistence.findAllPriorAiResponseJsons(TestScopes.scope("owner/repo"), 3, current.id);
 
     assertEquals(java.util.List.of("{\"v\":2}", "{\"v\":1}"), jsons);
   }
@@ -129,22 +140,63 @@ class ReviewSessionPersistenceTest extends ReviewSessionTestSupport {
 
     assertEquals(
         java.util.List.of("{\"v\":4}", "{\"v\":1}"),
-        persistence.findAllPriorAiResponseJsons("owner/repo", 3, current.id));
+        persistence.findAllPriorAiResponseJsons(TestScopes.scope("owner/repo"), 3, current.id));
     assertEquals(
         java.util.List.of("sha-two", "sha-one"),
-        persistence.findAllPriorCommitShas("owner/repo", 3, current.id));
+        persistence.findAllPriorCommitShas(TestScopes.scope("owner/repo"), 3, current.id));
   }
 
   @Test
   void shouldReturnEmptyListWhenNoPriorSessions() throws Exception {
     var current = persistSessionWith("owner/repo", 3, ReviewSession.STATUS_COMPLETED, "{\"v\":1}");
 
-    assertTrue(persistence.findAllPriorAiResponseJsons("owner/repo", 3, current.id).isEmpty());
+    assertTrue(
+        persistence
+            .findAllPriorAiResponseJsons(TestScopes.scope("owner/repo"), 3, current.id)
+            .isEmpty());
+  }
+
+  @Test
+  void priorRoundsFollowTheRepositoryIdNotItsName() throws Exception {
+    var scope = TestScopes.scope("owner/repo");
+    persistSessionIn(scope, "owner/old-name", ReviewSession.STATUS_COMPLETED, "{\"v\":1}");
+    persistSessionIn(
+        new RepoScope(2L, scope.repositoryId()),
+        "owner/repo",
+        ReviewSession.STATUS_COMPLETED,
+        "{\"other installation\":1}");
+    persistSessionIn(null, "owner/repo", ReviewSession.STATUS_COMPLETED, "{\"unmatched\":1}");
+    var current = persistSessionIn(scope, "owner/repo", ReviewSession.STATUS_IN_PROGRESS, null);
+
+    assertEquals(
+        java.util.List.of("{\"v\":1}"),
+        persistence.findAllPriorAiResponseJsons(scope, 3, current.id),
+        "a rename keeps the history; another installation and an unmatched row never join it");
+  }
+
+  /** A session of PR 3 stored under {@code scope}, or with no scope at all when it is null. */
+  private ReviewSession persistSessionIn(
+      RepoScope scope, String repository, String status, String aiResponseJson) throws Exception {
+    tx.begin();
+    var session = ReviewSession.create(TestScopes.scope(repository), repository, 3, "PR", "abc");
+    if (scope == null) {
+      session.installationId = null;
+      session.repositoryId = null;
+    } else {
+      session.setScope(scope);
+    }
+    session.setStatus(status);
+    session.setAiResponseJson(aiResponseJson);
+    session.persist();
+    session.flush();
+    tx.commit();
+    return session;
   }
 
   private ReviewSession persistSession() throws Exception {
     tx.begin();
-    ReviewSession session = ReviewSession.create("owner/repo", 3, "PR", "abc");
+    ReviewSession session =
+        ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 3, "PR", "abc");
     session.persist();
     session.flush();
     tx.commit();
@@ -160,7 +212,8 @@ class ReviewSessionPersistenceTest extends ReviewSessionTestSupport {
       String repository, int prNumber, String status, String aiResponseJson, String commitSha)
       throws Exception {
     tx.begin();
-    ReviewSession session = ReviewSession.create(repository, prNumber, "PR", commitSha);
+    ReviewSession session =
+        ReviewSession.create(TestScopes.scope(repository), repository, prNumber, "PR", commitSha);
     session.setStatus(status);
     session.setAiResponseJson(aiResponseJson);
     session.persist();

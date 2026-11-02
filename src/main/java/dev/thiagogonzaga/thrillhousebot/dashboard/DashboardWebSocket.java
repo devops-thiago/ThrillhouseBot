@@ -23,15 +23,19 @@ import jakarta.websocket.OnClose;
 import jakarta.websocket.OnOpen;
 import jakarta.websocket.Session;
 import jakarta.websocket.server.ServerEndpoint;
+import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@ServerEndpoint(value = "/ws/dashboard", configurator = DashboardWebSocketConfigurator.class)
+@ServerEndpoint("/ws/dashboard")
 @RegisterForReflection
 @ApplicationScoped
 public class DashboardWebSocket {
 
   private static final Logger log = LoggerFactory.getLogger(DashboardWebSocket.class);
+
+  /** Query parameter carrying the ticket from {@code POST /api/auth/socket-ticket}. */
+  static final String TICKET_PARAMETER = "ticket";
 
   private final SessionEventBroadcaster broadcaster;
 
@@ -48,7 +52,7 @@ public class DashboardWebSocket {
   public void onOpen(Session session) {
     var sessionToken = extractSessionToken(session);
     if (sessionToken == null || !sessionValidator.isValidSession(sessionToken)) {
-      log.warn("WebSocket connection rejected: missing/invalid session cookie");
+      log.warn("WebSocket connection rejected: missing, reused or expired ticket");
       try {
         session.close(
             new CloseReason(CloseReason.CloseCodes.VIOLATED_POLICY, "Authentication required"));
@@ -60,48 +64,62 @@ public class DashboardWebSocket {
 
     // Live events are scoped like the REST endpoints: only repositories this login can read, and
     // nothing once the dashboard session is logged out or expires.
-    var scope = sessionValidator.repositoryScope(sessionToken);
-    broadcaster.addSession(
-        session,
-        repository -> scope.allows(repository) && sessionValidator.isSessionOpen(sessionToken));
+    broadcaster.addSession(session, new ScopedReader(sessionToken, sessionValidator));
     log.info(
         "Dashboard WebSocket connected: {} (total: {})",
         session.getId(),
         broadcaster.getConnectedCount());
   }
 
+  /**
+   * The session this socket was opened for, from the single-use ticket in its query string (#1223).
+   * The query string belongs to this connection alone; the endpoint configuration and its user
+   * properties are shared by every handshake, so nothing identifying is ever read from them.
+   */
   private String extractSessionToken(Session session) {
-    var cookieObj =
-        session.getUserProperties().get(DashboardWebSocketConfigurator.COOKIE_USER_PROPERTY);
-    if (cookieObj instanceof String cookieHeader) {
-      return extractCookieValue(cookieHeader, "thrillhouse_session");
-    }
-
-    var cookieHeaders = session.getRequestParameterMap().get("Cookie");
-    if (cookieHeaders != null) {
-      for (String cookieHeader : cookieHeaders) {
-        String value = extractCookieValue(cookieHeader, "thrillhouse_session");
-        if (value != null && !value.isBlank()) {
-          return value;
-        }
-      }
-    }
-
-    return null;
-  }
-
-  static String extractCookieValue(String cookieHeader, String name) {
-    if (cookieHeader == null || cookieHeader.isBlank()) {
+    var tickets = session.getRequestParameterMap().get(TICKET_PARAMETER);
+    if (tickets == null || tickets.size() != 1) {
       return null;
     }
-    var prefix = name + "=";
-    for (String part : cookieHeader.split(";")) {
-      var trimmed = part.trim();
-      if (trimmed.startsWith(prefix)) {
-        return trimmed.substring(prefix.length());
-      }
+    return sessionValidator.redeemSocketTicket(tickets.getFirst()).orElse(null);
+  }
+
+  /**
+   * One connection's view of what its login may read. The scope is read from memory on every event;
+   * {@link #refresh} re-resolves it on the keepalive worker (#1221), which asks GitHub only once
+   * the cached scope has expired, so lost access stops live events within that lifetime.
+   */
+  static final class ScopedReader implements SessionEventBroadcaster.RepositoryReader {
+    private final String sessionToken;
+    private final DashboardSessionValidator sessionValidator;
+    private final AtomicReference<RepositoryScope> scope;
+
+    ScopedReader(String sessionToken, DashboardSessionValidator sessionValidator) {
+      this.sessionToken = sessionToken;
+      this.sessionValidator = sessionValidator;
+      this.scope = new AtomicReference<>(sessionValidator.repositoryScope(sessionToken));
     }
-    return null;
+
+    @Override
+    public boolean canRead(Long installationId, Long repositoryId) {
+      return scope.get().allows(installationId, repositoryId)
+          && sessionValidator.isSessionOpen(sessionToken);
+    }
+
+    /**
+     * Keeps the last known scope while GitHub cannot be asked, so a transient outage never closes a
+     * connection whose session survives it.
+     */
+    @Override
+    public boolean refresh() {
+      if (!sessionValidator.isSessionOpen(sessionToken)) {
+        scope.set(RepositoryScope.NONE);
+        return false;
+      }
+      var current = sessionValidator.refreshedScope(sessionToken).orElseGet(scope::get);
+      scope.set(current);
+      return !current.isEmpty();
+    }
   }
 
   @OnClose

@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quarkus.runtime.annotations.RegisterForReflection;
@@ -46,13 +47,22 @@ public final class SessionEventBroadcaster {
   private Clock clock = Clock.systemUTC();
 
   /**
-   * Decides, per connection, whether a review event of one repository may be sent to it. Fixed when
+   * Decides, per connection, whether a review event of one repository may be sent to it, by the
+   * installation and repository id the review was stored under (#1220), never by name. Fixed when
    * the connection opens from the dashboard login's {@link RepositoryScope}, so a broadcast never
    * waits on a GitHub call.
    */
   @FunctionalInterface
   public interface RepositoryReader {
-    boolean canRead(String repository);
+    boolean canRead(Long installationId, Long repositoryId);
+
+    /**
+     * Re-resolves what the connection may read, off the broadcast path (#1221), and answers whether
+     * it may still read anything. A reader fixed at open never changes.
+     */
+    default boolean refresh() {
+      return true;
+    }
   }
 
   /** Each open dashboard connection with the repositories it may receive events for. */
@@ -74,6 +84,31 @@ public final class SessionEventBroadcaster {
     log.debug("WebSocket client connected (total: {})", sessions.size());
   }
 
+  /**
+   * Re-resolves every open connection's access and closes the ones that lost it, so a login whose
+   * access was removed stops receiving events once its cached scope expires. Runs on a worker
+   * thread, never the broadcast path, since a reader may ask GitHub.
+   */
+  public void refreshReaders() {
+    sessions.forEach(
+        (session, reader) -> {
+          if (!reader.refresh()) {
+            sessions.remove(session);
+            closeQuietly(session);
+          }
+        });
+  }
+
+  private static void closeQuietly(jakarta.websocket.Session session) {
+    try {
+      session.close(
+          new jakarta.websocket.CloseReason(
+              jakarta.websocket.CloseReason.CloseCodes.VIOLATED_POLICY, "Access ended"));
+    } catch (java.io.IOException | RuntimeException e) {
+      log.debug("Failed to close a WebSocket whose access ended", e);
+    }
+  }
+
   public void removeSession(jakarta.websocket.Session session) {
     sessions.remove(session);
     log.debug("WebSocket client disconnected (total: {})", sessions.size());
@@ -91,7 +126,7 @@ public final class SessionEventBroadcaster {
       return;
     }
 
-    sendTextTo(reader -> reader.canRead(event.repository()), json);
+    sendTextTo(reader -> reader.canRead(event.installationId(), event.repositoryId()), json);
   }
 
   /** Application-level heartbeat for connected dashboard clients. */
@@ -106,7 +141,9 @@ public final class SessionEventBroadcaster {
   /** Evicts replay buffers for sessions with no recent activity and no terminal event. */
   public void evictStaleSessionBuffers() {
     var cutoff = Instant.now(clock).minus(MAX_SESSION_BUFFER_AGE);
-    sessionStateById.entrySet().removeIf(entry -> entry.getValue().lastActivityAt.isBefore(cutoff));
+    sessionStateById
+        .entrySet()
+        .removeIf(entry -> entry.getValue().lastActivityAt().isBefore(cutoff));
   }
 
   private String serialize(SessionEvent event) {
@@ -124,23 +161,18 @@ public final class SessionEventBroadcaster {
     }
 
     Instant now = Instant.now(clock);
+    // A usage report is sent from the thread that saved it (#66), so it can land after its review
+    // ended; it updates a review still buffered and never brings back one that ended.
     var state =
-        sessionStateById.computeIfAbsent(
-            event.sessionId(), id -> new SessionState(now, event.repository()));
-    state.latestEventType = event.type();
-    state.lastActivityAt = now;
-
-    if (SessionEvent.TYPE_STREAM.equals(event.type())) {
-      state.latestStreamJson = json;
+        SessionEvent.TYPE_PROGRESS.equals(event.type())
+            ? sessionStateById.get(event.sessionId())
+            : sessionStateById.computeIfAbsent(
+                event.sessionId(),
+                id -> new SessionState(now, event.installationId(), event.repositoryId()));
+    if (state == null) {
       return;
     }
-
-    if (SessionEvent.TYPE_RETRY.equals(event.type())
-        || SessionEvent.TYPE_STREAM_FAILED.equals(event.type())) {
-      state.latestStreamJson = null;
-    }
-
-    state.appendBufferedEvent(json, MAX_BUFFERED_EVENTS_PER_SESSION);
+    state.add(event.type(), json, now, MAX_BUFFERED_EVENTS_PER_SESSION);
 
     if (isTerminalReviewEvent(event.type())) {
       sessionStateById.remove(event.sessionId());
@@ -157,19 +189,9 @@ public final class SessionEventBroadcaster {
       return;
     }
 
-    for (var entry : sessionStateById.entrySet()) {
-      var state = entry.getValue();
-      var latestType = state.latestEventType;
-      if (latestType == null
-          || isTerminalReviewEvent(latestType)
-          || !reader.canRead(state.repository)) {
-        continue;
-      }
-
-      state.forEachBuffered(json -> sendText(wsSession, json));
-
-      if (state.latestStreamJson != null) {
-        sendText(wsSession, state.latestStreamJson);
+    for (var state : sessionStateById.values()) {
+      if (reader.canRead(state.installationId, state.repositoryId)) {
+        state.replayIfActive(json -> sendText(wsSession, json));
       }
     }
   }
@@ -215,16 +237,14 @@ public final class SessionEventBroadcaster {
   /** Seeds replay buffer state for tests without exposing the backing map. */
   void seedReplayState(
       long sessionId,
-      String repository,
+      Long installationId,
+      Long repositoryId,
       String latestEventType,
       Instant lastActivityAt,
       List<String> bufferedEventJson,
       String latestStreamJson) {
-    var state = new SessionState(lastActivityAt, repository);
-    state.latestEventType = latestEventType;
-    state.lastActivityAt = lastActivityAt;
-    state.latestStreamJson = latestStreamJson;
-    state.loadBufferedEvents(bufferedEventJson);
+    var state = new SessionState(lastActivityAt, installationId, repositoryId);
+    state.seed(latestEventType, bufferedEventJson, latestStreamJson);
     sessionStateById.put(sessionId, state);
   }
 
@@ -233,22 +253,44 @@ public final class SessionEventBroadcaster {
     return sessionStateById.size();
   }
 
-  /** Per-session replay state tracked while a review is in progress. */
+  /**
+   * Per-session replay state tracked while a review is in progress. The review's thread, its
+   * batches' threads and the thread that saves a call's usage all record into it, and a connecting
+   * client replays it, so every field is read and written under {@link #lock}.
+   */
   private static final class SessionState {
-    private final Object bufferLock = new Object();
+    private final Object lock = new Object();
     private final Deque<String> buffer = new ArrayDeque<>();
-    final String repository;
-    String latestEventType;
-    Instant lastActivityAt;
-    String latestStreamJson;
+    final Long installationId;
+    final Long repositoryId;
+    private String latestEventType;
+    private Instant lastActivityAt;
+    private String latestStreamJson;
+    private String latestReasoningJson;
 
-    SessionState(Instant createdAt, String repository) {
+    SessionState(Instant createdAt, Long installationId, Long repositoryId) {
       this.lastActivityAt = createdAt;
-      this.repository = repository;
+      this.installationId = installationId;
+      this.repositoryId = repositoryId;
     }
 
-    void appendBufferedEvent(String json, int maxSize) {
-      synchronized (bufferLock) {
+    void add(String type, String json, Instant now, int maxSize) {
+      synchronized (lock) {
+        latestEventType = type;
+        lastActivityAt = now;
+        // Each stream event carries the text's tail, so only the latest of each is kept.
+        if (SessionEvent.TYPE_STREAM.equals(type)) {
+          latestStreamJson = json;
+          return;
+        }
+        if (SessionEvent.TYPE_REASONING.equals(type)) {
+          latestReasoningJson = json;
+          return;
+        }
+        if (SessionEvent.TYPE_RETRY.equals(type) || SessionEvent.TYPE_STREAM_FAILED.equals(type)) {
+          latestStreamJson = null;
+          latestReasoningJson = null;
+        }
         buffer.addLast(json);
         while (buffer.size() > maxSize) {
           buffer.removeFirst();
@@ -256,14 +298,32 @@ public final class SessionEventBroadcaster {
       }
     }
 
-    void forEachBuffered(Consumer<String> consumer) {
-      synchronized (bufferLock) {
-        buffer.forEach(consumer);
+    /** Replays the buffered events, then the latest reasoning and output, unless it has ended. */
+    void replayIfActive(Consumer<String> send) {
+      synchronized (lock) {
+        if (latestEventType == null || isTerminalReviewEvent(latestEventType)) {
+          return;
+        }
+        buffer.forEach(send);
+        if (latestReasoningJson != null) {
+          send.accept(latestReasoningJson);
+        }
+        if (latestStreamJson != null) {
+          send.accept(latestStreamJson);
+        }
       }
     }
 
-    void loadBufferedEvents(List<String> events) {
-      synchronized (bufferLock) {
+    Instant lastActivityAt() {
+      synchronized (lock) {
+        return lastActivityAt;
+      }
+    }
+
+    void seed(String latestEventType, List<String> events, String latestStreamJson) {
+      synchronized (lock) {
+        this.latestEventType = latestEventType;
+        this.latestStreamJson = latestStreamJson;
         buffer.addAll(events);
       }
     }
@@ -272,34 +332,80 @@ public final class SessionEventBroadcaster {
   /** Events broadcast to WebSocket clients. */
   @RegisterForReflection
   public record SessionEvent(
-      String type, // review.started, review.stream, review.retry, review.completed, review.failed
+      String type, // review.started, review.phase, review.stream, review.reasoning, ...
       long sessionId,
+      @JsonIgnore Long installationId,
+      @JsonIgnore Long repositoryId,
       String repository,
       int prNumber,
       String prTitle,
       String commitSha,
       String timestamp,
       Map<String, Object> data) {
+    public static final String TYPE_PHASE = "review.phase";
     public static final String TYPE_STREAM = "review.stream";
+    public static final String TYPE_REASONING = "review.reasoning";
+    public static final String TYPE_PROGRESS = "review.progress";
     public static final String TYPE_RETRY = "review.retry";
     public static final String TYPE_STREAM_FAILED = "review.stream.failed";
     public static final String TYPE_COMPLETED = "review.completed";
     public static final String TYPE_FAILED = "review.failed";
 
+    /**
+     * The step a review is on, in the order a review takes them (#66). A multi-call review checks
+     * each batch's findings as the batch finishes, so it reports its batches under {@link #REVIEW}
+     * and has no separate {@link #VERIFY} step.
+     */
+    public enum Phase {
+      /** Reading the pull request: diff, files, earlier rounds, CI and linked issues. */
+      CONTEXT("context"),
+      /** The review calls. */
+      REVIEW("review"),
+      /** Checking the review call's findings. */
+      VERIFY("verify"),
+      /** The summary call and the checks on its text. */
+      SUMMARIZE("summarize"),
+      /** Posting the review, the summary and the check run. */
+      PUBLISH("publish");
+
+      private final String wireName;
+
+      Phase(String wireName) {
+        this.wireName = wireName;
+      }
+
+      /** The name the dashboard reads. */
+      public String wireName() {
+        return wireName;
+      }
+    }
+
     public SessionEvent {
       data = Map.copyOf(data);
     }
 
-    public static SessionEvent started(ReviewSession session) {
+    private static SessionEvent of(String type, ReviewSession session, Map<String, Object> data) {
       return new SessionEvent(
-          "review.started",
+          type,
           session.id,
+          session.getInstallationId(),
+          session.getRepositoryId(),
           session.getRepository(),
           session.getPrNumber(),
           session.getPrTitle(),
           session.getCommitSha(),
           session.getTimestamp().toString(),
-          Map.of(KEY_STATUS, STATUS_IN_PROGRESS));
+          data);
+    }
+
+    public static SessionEvent started(ReviewSession session) {
+      return of("review.started", session, Map.of(KEY_STATUS, STATUS_IN_PROGRESS));
+    }
+
+    /** The review has moved on to {@code phase}. */
+    public static SessionEvent phase(ReviewSession session, Phase phase) {
+      return of(
+          TYPE_PHASE, session, Map.of("phase", phase.wireName(), KEY_STATUS, STATUS_IN_PROGRESS));
     }
 
     public static SessionEvent stream(
@@ -309,14 +415,9 @@ public final class SessionEventBroadcaster {
         int totalChars,
         int chunkIndex,
         int attempt) {
-      return new SessionEvent(
+      return of(
           TYPE_STREAM,
-          session.id,
-          session.getRepository(),
-          session.getPrNumber(),
-          session.getPrTitle(),
-          session.getCommitSha(),
-          session.getTimestamp().toString(),
+          session,
           Map.of(
               "chunk",
               chunk,
@@ -332,16 +433,40 @@ public final class SessionEventBroadcaster {
               "streaming"));
     }
 
+    /**
+     * The review call's reasoning, apart from its output (#66): the same chunk and tail shape as
+     * {@link #stream}.
+     */
+    public static SessionEvent reasoning(
+        ReviewSession session,
+        String chunk,
+        String tail,
+        int totalChars,
+        int chunkIndex,
+        int attempt) {
+      return of(
+          TYPE_REASONING,
+          session,
+          Map.of(
+              "chunk",
+              chunk,
+              "tail",
+              tail,
+              "totalChars",
+              totalChars,
+              "chunkIndex",
+              chunkIndex,
+              KEY_ATTEMPT,
+              attempt,
+              KEY_STATUS,
+              "reasoning"));
+    }
+
     public static SessionEvent retry(
         ReviewSession session, int attempt, int maxAttempts, String reason) {
-      return new SessionEvent(
+      return of(
           TYPE_RETRY,
-          session.id,
-          session.getRepository(),
-          session.getPrNumber(),
-          session.getPrTitle(),
-          session.getCommitSha(),
-          session.getTimestamp().toString(),
+          session,
           Map.of(
               KEY_ATTEMPT,
               attempt,
@@ -355,14 +480,9 @@ public final class SessionEventBroadcaster {
 
     public static SessionEvent streamFailed(
         ReviewSession session, int attempt, int maxAttempts, String reason) {
-      return new SessionEvent(
+      return of(
           TYPE_STREAM_FAILED,
-          session.id,
-          session.getRepository(),
-          session.getPrNumber(),
-          session.getPrTitle(),
-          session.getCommitSha(),
-          session.getTimestamp().toString(),
+          session,
           Map.of(
               KEY_ATTEMPT,
               attempt,
@@ -374,46 +494,41 @@ public final class SessionEventBroadcaster {
               "stream_failed"));
     }
 
-    public static SessionEvent progress(ReviewSession session, int findingsSoFar, long tokensUsed) {
-      return new SessionEvent(
-          "review.progress",
-          session.id,
-          session.getRepository(),
-          session.getPrNumber(),
-          session.getPrTitle(),
-          session.getCommitSha(),
-          session.getTimestamp().toString(),
+    /**
+     * What the review has spent so far, read off its session row after a model call's usage was
+     * added to it (#66): every call the review made until now, the verifier's included.
+     */
+    public static SessionEvent progress(ReviewSession session) {
+      return of(
+          TYPE_PROGRESS,
+          session,
           Map.of(
-              "findingsSoFar",
-              findingsSoFar,
-              "tokensUsed",
-              tokensUsed,
+              "inputTokens",
+              session.getInputTokens(),
+              "outputTokens",
+              session.getOutputTokens(),
+              "totalTokens",
+              session.getInputTokens() + session.getOutputTokens(),
+              "cost",
+              session.getCost(),
+              "pricingMissing",
+              session.isPricingMissing(),
               KEY_STATUS,
               STATUS_IN_PROGRESS));
     }
 
     /** Progress on a large multi-call review: reviewing batch {@code index} of {@code count}. */
     public static SessionEvent batch(ReviewSession session, int index, int count) {
-      return new SessionEvent(
+      return of(
           "review.batch",
-          session.id,
-          session.getRepository(),
-          session.getPrNumber(),
-          session.getPrTitle(),
-          session.getCommitSha(),
-          session.getTimestamp().toString(),
+          session,
           Map.of("batchIndex", index, "batchCount", count, KEY_STATUS, STATUS_IN_PROGRESS));
     }
 
     public static SessionEvent completed(ReviewSession session) {
-      return new SessionEvent(
+      return of(
           TYPE_COMPLETED,
-          session.id,
-          session.getRepository(),
-          session.getPrNumber(),
-          session.getPrTitle(),
-          session.getCommitSha(),
-          session.getTimestamp().toString(),
+          session,
           Map.of(
               "critical",
               session.getCriticalFindings(),
@@ -438,14 +553,9 @@ public final class SessionEventBroadcaster {
     }
 
     public static SessionEvent failed(ReviewSession session) {
-      return new SessionEvent(
+      return of(
           TYPE_FAILED,
-          session.id,
-          session.getRepository(),
-          session.getPrNumber(),
-          session.getPrTitle(),
-          session.getCommitSha(),
-          session.getTimestamp().toString(),
+          session,
           Map.of(
               "errorType",
               session.getErrorMessage() != null ? session.getErrorMessage() : "Unknown",

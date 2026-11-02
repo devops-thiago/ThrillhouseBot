@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
@@ -24,8 +25,10 @@ import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningRepeat;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReplyAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ResponseCaps;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.webhook.ManualReviewAuthorizer;
 import dev.thiagogonzaga.thrillhousebot.webhook.TriggerDetector;
 import io.quarkus.logging.Log;
@@ -66,6 +69,8 @@ public class MaintainerReplyService {
   private final BotIdentity botIdentity;
   private final ResponseCaps responseCaps;
   private final ReviewThreadService reviewThreadService;
+  private final ThrillhouseConfig config;
+  private final ReviewTokenLedger tokenLedger;
 
   @Inject
   public MaintainerReplyService(
@@ -80,7 +85,9 @@ public class MaintainerReplyService {
       RepoSettingsResolver repoSettingsResolver,
       BotIdentity botIdentity,
       ResponseCaps responseCaps,
-      ReviewThreadService reviewThreadService) {
+      ReviewThreadService reviewThreadService,
+      ThrillhouseConfig config,
+      ReviewTokenLedger tokenLedger) {
     this.authClient = authClient;
     this.authorizer = authorizer;
     this.triggerDetector = triggerDetector;
@@ -93,6 +100,8 @@ public class MaintainerReplyService {
     this.botIdentity = botIdentity;
     this.responseCaps = responseCaps;
     this.reviewThreadService = reviewThreadService;
+    this.config = config;
+    this.tokenLedger = tokenLedger;
   }
 
   /**
@@ -475,7 +484,11 @@ public class MaintainerReplyService {
         clear ? "clear" : "decline", task.owner(), task.repo(), task.prNumber(), named, mayAct);
   }
 
-  /** Calls the assistant with already-raw inputs, escaping each for templating. Null on failure. */
+  /**
+   * Calls the assistant with already-raw inputs, escaping each for templating. Null on failure. A
+   * call that spent its whole cap reasoning is repeated once at a lower effort, metered as its own
+   * ledger run (#1175).
+   */
   private String generateReply(
       String question,
       String prContext,
@@ -483,16 +496,24 @@ public class MaintainerReplyService {
       String codeContext,
       String thread,
       Set<String> realPaths) {
+    var runKey = tokenLedger.openRun();
     try {
       String reply =
           AiResponses.textOrThrowOnTruncation(
-              replyAssistant.reply(
-                  PromptTemplateEscaper.escape(question),
-                  PromptTemplateEscaper.escape(prContext),
-                  PromptTemplateEscaper.escape(finding),
-                  // codeContext is the diff/hunk under discussion: fence it byte-exact.
-                  PromptTemplateEscaper.fence(codeContext),
-                  PromptTemplateEscaper.escape(thread)),
+              ReasoningRepeat.outsideReview(
+                  "Maintainer reply",
+                  () ->
+                      replyAssistant.reply(
+                          PromptTemplateEscaper.escape(question),
+                          PromptTemplateEscaper.escape(prContext),
+                          PromptTemplateEscaper.escape(finding),
+                          // codeContext is the diff/hunk under discussion: fence it byte-exact.
+                          PromptTemplateEscaper.fence(codeContext),
+                          PromptTemplateEscaper.escape(thread)),
+                  config,
+                  true,
+                  tokenLedger,
+                  runKey),
               "Maintainer reply",
               // ReplyAssistant is bound to the concise named model, so the cap that can cut this
               // call is REVIEW_CONCISE_MAX_OUTPUT_TOKENS, not the active model's.
@@ -514,6 +535,8 @@ public class MaintainerReplyService {
     } catch (RuntimeException e) {
       Log.warn("Reply assistant call failed — posting nothing", e);
       return null;
+    } finally {
+      tokenLedger.clear(runKey);
     }
   }
 

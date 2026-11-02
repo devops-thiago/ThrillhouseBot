@@ -19,6 +19,7 @@ import io.quarkus.hibernate.orm.panache.PanacheEntity;
 import io.quarkus.runtime.annotations.RegisterForReflection;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.Index;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
@@ -30,10 +31,11 @@ import jakarta.persistence.UniqueConstraint;
  */
 @Entity
 @Table(
+    indexes = @Index(name = "idx_pausedpr_repository", columnList = "repository, prNumber"),
     uniqueConstraints =
         @UniqueConstraint(
-            name = "uq_pausedpr_repository_pr",
-            columnNames = {"repository", "prNumber"}))
+            name = "uq_pausedpr_scope_pr",
+            columnNames = {"installationId", "repositoryId", "prNumber"}))
 @RegisterForReflection
 public class PausedPr extends PanacheEntity {
 
@@ -41,7 +43,17 @@ public class PausedPr extends PanacheEntity {
   @Column(nullable = false)
   public String repository;
 
-  /** Pull request number, unique together with {@link #repository}. */
+  /**
+   * Installation and repository id the pause belongs to (#1220). {@code null} on a pause from
+   * before #1220 that the startup backfill could not match; {@link PrPauseService} still honors
+   * such a row by its exact repository name, so a pause a maintainer asked for is never silently
+   * lifted.
+   */
+  @Column public Long installationId;
+
+  @Column public Long repositoryId;
+
+  /** Pull request number, unique together with the installation and repository id. */
   @Column(nullable = false)
   public int prNumber;
 }

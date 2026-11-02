@@ -33,6 +33,7 @@ import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ChangelogAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ChangelogAssistantPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrSuggestionPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -153,7 +154,8 @@ class ChangelogEntryGeneratorTest {
         new DiffBudgetPlanner(formatter, new TokenCounter(), config, activeModel),
         activeModel,
         config,
-        changelogAssistant);
+        changelogAssistant,
+        mock(ReviewTokenLedger.class));
   }
 
   private static FileDiff foo() {

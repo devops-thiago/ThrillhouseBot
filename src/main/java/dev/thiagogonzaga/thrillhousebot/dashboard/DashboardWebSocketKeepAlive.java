@@ -16,12 +16,16 @@
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
 import io.vertx.core.Vertx;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,7 +41,13 @@ public class DashboardWebSocketKeepAlive {
 
   private final ThrillhouseConfig config;
 
-  private long timerId = -1;
+  private volatile long timerId = -1;
+
+  private final ExecutorService refreshExecutor =
+      Executors.newThreadPerTaskExecutor(
+          Thread.ofVirtual().name("dashboard-scope-refresh-", 0).factory());
+
+  private final AtomicBoolean refreshing = new AtomicBoolean();
 
   @Inject
   public DashboardWebSocketKeepAlive(
@@ -63,12 +73,48 @@ public class DashboardWebSocketKeepAlive {
             id -> {
               broadcaster.sendKeepAlive();
               broadcaster.evictStaleSessionBuffers();
+              refreshReaders();
             });
   }
 
   void onStop(@Observes ShutdownEvent event) {
     if (timerId >= 0) {
       vertx.cancelTimer(timerId);
+    }
+    refreshExecutor.shutdownNow();
+  }
+
+  /**
+   * An installation change can end what an open connection may read (#1222); re-resolve now rather
+   * than at the next tick. Only submits work, so the webhook never waits on GitHub.
+   */
+  void onInstallationChange(@Observes InstallationChange change) {
+    refreshReaders();
+  }
+
+  /**
+   * Re-resolves the open connections' access on a virtual thread: the timer runs on the event loop,
+   * which must never wait on GitHub. A refresh still running when the next tick comes is not
+   * started twice.
+   */
+  void refreshReaders() {
+    if (!refreshing.compareAndSet(false, true)) {
+      return;
+    }
+    try {
+      refreshExecutor.execute(
+          () -> {
+            try {
+              broadcaster.refreshReaders();
+            } catch (RuntimeException e) {
+              log.warn("Refreshing dashboard WebSocket access failed", e);
+            } finally {
+              refreshing.set(false);
+            }
+          });
+    } catch (RuntimeException e) {
+      refreshing.set(false);
+      log.warn("Could not schedule the dashboard WebSocket access refresh", e);
     }
   }
 }

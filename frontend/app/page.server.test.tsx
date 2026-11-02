@@ -20,7 +20,7 @@ function authState(overrides: Partial<ReturnType<typeof useAuth>>) {
     user: null,
     loading: false,
     accessDenied: false,
-    notConfigured: false,
+    unavailable: false,
     login: vi.fn(),
     logout: vi.fn(),
     isAuthenticated: false,

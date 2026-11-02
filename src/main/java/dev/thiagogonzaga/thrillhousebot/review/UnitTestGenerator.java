@@ -21,8 +21,10 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.UnitTestAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.UnitTestAssistantPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.UnitTestGenerationParser;
@@ -142,7 +144,8 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
       UnitTestGenerationParser parser,
       SuggestionFormatter suggestionFormatter,
       ReviewSessionPersistence sessionPersistence,
-      FollowUpAnalyzer followUpAnalyzer) {
+      FollowUpAnalyzer followUpAnalyzer,
+      ReviewTokenLedger tokenLedger) {
     super(
         prClient,
         diffFormatter,
@@ -150,7 +153,8 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
         repoSettingsResolver,
         budgetPlanner,
         activeModel,
-        config);
+        config,
+        tokenLedger);
     this.projectStackResolver = projectStackResolver;
     this.testAssistant = testAssistant;
     this.parser = parser;
@@ -165,6 +169,8 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
    * the comment says so rather than staying silent — the maintainer asked for tests explicitly. The
    * caller is responsible for posting it.
    *
+   * @param repositoryId GitHub's numeric repository id; with {@code installationId} it selects the
+   *     prior review rounds (#1220)
    * @param auth the {@code Authorization} header for the installation (already minted by the
    *     caller)
    */
@@ -175,6 +181,22 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
       int prNumber,
       String defaultBranch,
       long installationId,
+      long repositoryId,
+      String auth) {
+    try (var _ = openRun()) {
+      return generateInRun(
+          owner, repo, prNumber, defaultBranch, installationId, repositoryId, auth);
+    }
+  }
+
+  /** {@link #generate}'s work, inside its ledger run. */
+  private String generateInRun(
+      String owner,
+      String repo,
+      int prNumber,
+      String defaultBranch,
+      long installationId,
+      long repositoryId,
       String auth) {
     var inputs = loadInputs(owner, repo, prNumber, defaultBranch, installationId, auth, COMMAND);
     if (inputs == null) {
@@ -194,7 +216,8 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
     var extras =
         new ExtraSections(
             PromptTemplateEscaper.escape(stack),
-            PromptTemplateEscaper.escape(priorFindings(owner, repo, prNumber)));
+            PromptTemplateEscaper.escape(
+                priorFindings(owner, repo, new RepoScope(installationId, repositoryId), prNumber)));
     // The project stack and the prior findings ride on every batch call, so both have to be part
     // of the overhead the planner subtracts before sizing batches — see the six-argument
     // planBatches.
@@ -250,11 +273,10 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
    * here, and over the <em>whole</em> load: this is enrichment, so nothing in fetching or
    * deserializing prior rounds may cost a command that worked without them before.
    */
-  private String priorFindings(String owner, String repo, int prNumber) {
+  private String priorFindings(String owner, String repo, RepoScope scope, int prNumber) {
     try {
       var priorJsons =
-          sessionPersistence.findAllPriorAiResponseJsons(
-              owner + "/" + repo, prNumber, NO_SESSION_IN_PROGRESS);
+          sessionPersistence.findAllPriorAiResponseJsons(scope, prNumber, NO_SESSION_IN_PROGRESS);
       var priorResponses = followUpAnalyzer.parsePreviousResponses(priorJsons);
       return renderFindings(
           FollowUpAnalyzer.effectivePreviousFindings(priorResponses),

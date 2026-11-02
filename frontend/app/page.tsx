@@ -8,8 +8,8 @@ import SiteFooter from "@/components/SiteFooter";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, loading, accessDenied, notConfigured, login, logout } = useAuth();
-  const signedIn = !loading && !notConfigured && !accessDenied && !!user;
+  const { user, loading, accessDenied, unavailable, login, logout } = useAuth();
+  const signedIn = !loading && !unavailable && !accessDenied && !!user;
 
   // Redirect after render: the static export prerenders this page on the server,
   // where `window` does not exist (mock mode starts signed in).
@@ -26,18 +26,15 @@ export default function LoginPage() {
         <p>Loading...</p>
       </div>
     );
-  if (notConfigured) {
+  if (unavailable) {
     return (
       <div style={styles.page}>
         <GithubCorner />
         <div style={styles.center}>
           <div style={styles.card}>
-            <h1 style={styles.title}>Dashboard not configured</h1>
+            <h1 style={styles.title}>Access check unavailable</h1>
             <p style={styles.subtitle}>
-              Dashboard access control is not configured: the GitHub App owner
-              could not be resolved. An administrator must set{" "}
-              <code>thrillhousebot.dashboard.github.account-owner</code> before
-              anyone can sign in.
+              GitHub could not be reached to check your access. Try again in a moment.
             </p>
             <button type="button" onClick={logout} style={styles.logoutBtn}>
               Log out

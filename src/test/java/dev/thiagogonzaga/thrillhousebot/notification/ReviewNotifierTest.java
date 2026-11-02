@@ -27,6 +27,7 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator.ReviewRequest;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewResult;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewState;
@@ -52,7 +53,18 @@ class ReviewNotifierTest {
   private static final Clock CLOCK =
       Clock.fixed(Instant.parse("2026-09-29T12:00:00Z"), ZoneOffset.UTC);
   private static final ReviewRequest REQUEST =
-      new ReviewRequest("octo", "repo", 42, "0123456789", "Title", "", "base", "main", 1L, false);
+      new ReviewRequest(
+          "octo",
+          "repo",
+          42,
+          "0123456789",
+          "Title",
+          "",
+          "base",
+          "main",
+          1L,
+          TestScopes.REPOSITORY_ID,
+          false);
   private static final ReviewResult CLEAN =
       new ReviewResult(
           List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);

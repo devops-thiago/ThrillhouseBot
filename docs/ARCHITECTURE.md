@@ -215,9 +215,11 @@ A failed call attempt is retried with backoff, up to `thrillhousebot.review.max-
 attempts (default 5). A response cut at its length cap is not retried, because the same call would
 be cut the same way: the findings completed before the cut are kept and the affected files are
 disclosed. A length stop with no content (reasoning used the whole cap) is repeated once at a
-lower effort: `none` when reasoning is enabled, the lane's effort (`low` unless set) when it is off
-in config and the provider default reasoned the cap away. The blocking review-path calls (the
-finding verifier, the summary check, response repair) repeat the same way.
+lower effort: `low` when reasoning is enabled (no repeat on a lane already at `low` or `none`),
+the lane's effort (`low` unless set) when it is off in config and the provider default reasoned the
+cap away, or `AI_REASONING_REPEAT_EFFORT` when set. The blocking review-path calls (the
+finding verifier, the summary check, response repair) repeat the same way, and so do the
+on-request commands and maintainer replies, whose calls are metered per command or reply.
 Each call is bounded by `AI_TIMEOUT` (default 300 s).
 
 `AI_MAX_CONCURRENT_CALLS` caps model calls in flight across the process (default `0`, no cap); a
@@ -417,9 +419,11 @@ Because the edit replaces the whole body, each round renders the PR as it stands
 Key Findings and "Things to double-check" cover the round's new findings plus every earlier finding
 still open, tagged as open since an earlier review. Description gaps the previous summary listed
 are passed to the summary call (`DescriptionGapCarryover`). On a changed head, the call can mark
-a gap addressed. On an unchanged head, that answer cannot clear a gap unless the PR description
-changed since the summary that listed it; then only description gaps can leave, never linked-issue
-gaps. A quoted omission also leaves when the edited description now contains the quoted passage.
+a gap addressed. On an unchanged head, that answer cannot clear a gap. When the PR description
+changed since the summary that listed the gaps, only the linked-issue gaps are carried and put to
+the call. The description gaps are judged again against the new text, as on a first review, and
+stay only if the call reports them again. A round with no summary answer keeps them all, except a
+quoted omission the edited description now contains.
 The current round's matching finding replaces its gap entry, and gaps tied to an issue that is no
 longer linked are removed. When the summary call returns no overview on an unchanged head, the
 previous round's overview is reused (`PriorOverviewCarryover`).
@@ -550,29 +554,70 @@ does not lose it. On startup `InterruptedSessionReconciler` marks every session 
 | `FindingFeedback` | `finding_feedback` | 👍/👎 reactions and reply signals on findings. See [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/). |
 | `ReviewLearning` | `review_learning` | Review learnings, scoped to installation and repository. A retracted row stays, with `active` cleared. |
 
-Production uses PostgreSQL (`DATABASE_URL`); dev mode uses in-memory H2. There are no migration
-scripts: Hibernate updates the schema in production and drops and recreates it in dev.
+Production uses PostgreSQL (`DATABASE_URL`); dev mode and the tests use in-memory H2 in PostgreSQL
+mode. Flyway runs the scripts in `src/main/resources/db/migration` at boot, and Hibernate only
+validates the entities against the result. A database created before migrations were adopted is
+baselined at V1, the v0.8.0 schema.
+
+Every row carries the GitHub App installation id and GitHub's numeric repository id it was stored
+under (#1220), both from the signed webhook payload, and every read matches both (`RepoScope`).
+A repository of the same name under another installation, or one deleted and re-created, never
+sees another's rows; a renamed repository keeps its own. Rows stored before v0.9.0 are filled at
+startup by `ScopeBackfill`, which matches each `owner/repo` to the App's installations and their
+repositories, following GitHub's redirect for a renamed one. A row it cannot match keeps a null
+scope and is never read, except a pause, which is still honored and lifted by its exact name so
+that a pause a maintainer asked for is not silently dropped. The two startup maintenance passes,
+`InterruptedSessionReconciler` and `SessionCostBackfill`, read every session by design.
 
 ## Dashboard and notifications
 
 The dashboard backend (`dashboard/`) serves the Next.js static export under `/dashboard/`, a
 GitHub OAuth login whose tokens stay on the server, REST endpoints under `/api/dashboard`
 (sessions, costs, tokens, feedback, learnings, summary) and a WebSocket at `/ws/dashboard`. The
-WebSocket carries `review.started`, `review.stream`, `review.batch`, `review.progress`,
-`review.retry`, `review.completed` and `review.failed` events, and replays an active session's
-events to a client that connects late. Check runs link to `/session/<id>`, which redirects to the
-session page.
+WebSocket carries `review.started`, `review.phase`, `review.stream`, `review.reasoning`,
+`review.batch`, `review.progress`, `review.retry`, `review.completed` and `review.failed` events,
+and replays an active session's events to a client that connects late; of the two text streams,
+`review.stream` and `review.reasoning`, only the latest event is kept, since each carries the
+text's tail. `review.phase` names the step a review is on: `context` and `review` from
+`ReviewOrchestrator`, `verify` once the single review call answers and `summarize` when the
+summary call starts, both from `AiReviewService`, then `publish`. A batched review checks each
+batch's findings as the batch finishes, so it reports `review.batch` progress and no `verify`
+step. `review.progress` is the review's spend so far: `OtelObservabilityListener` sends it from
+the session row once a call's usage is added there, so it counts every call the review made, the
+verifier's included. `review.reasoning` comes from the review call's thinking callback, only with
+`DASHBOARD_REASONING_STREAM_ENABLED` on, which also sets `returnThinking` on the streaming model
+so the provider's `reasoning_content` reaches that callback. Each is an ordinary `SessionEvent`,
+so a relay between replicas (#24) carries it unchanged. A browser cannot send a header the server can read per
+WebSocket connection, and the endpoint configuration is shared by every handshake, so the socket
+authenticates with a single-use ticket in its query string: the page fetches it from
+`POST /api/auth/socket-ticket` with its session cookie just before connecting, the ticket expires
+after 30 seconds, and `onOpen` redeems it once. Check runs link to `/session/<id>`, which redirects
+a login that may read the session to the session page, and anyone else to the sessions list.
 
-Every endpoint and the WebSocket are scoped per repository. `DashboardAccessChecker` resolves a
-login's `RepositoryScope` once per request from the cached installation snapshot: the account
-owner gets every installed repository, anyone else only the installed repositories they
-collaborate on (one collaborator check per repository, cached for five minutes and only while
-the snapshot it came from is current). Session lists, paging totals, costs, tokens, the summary
-and feedback are filtered by that set in the query; `?repository=` naming a repository outside it
-answers 403; a session id from one answers 404, the same as a missing id. The installation-wide
-skip counters in the summary go to the owner only. A WebSocket connection takes the scope it had
-when it opened and receives only events, and late-join replays, of those repositories, until the
-login session ends.
+Every endpoint and the WebSocket are scoped per repository (#1221). `DashboardAccessChecker`
+asks GitHub with the login's own GitHub App user token: `GET /user/installations` for the App's
+installations the user can access, and `GET /user/installations/{id}/repositories` for the
+repositories they can read in each. The answer, a `RepositoryScope` of installation ids to
+repository ids and names, is cached per token for five minutes. While GitHub cannot be asked,
+the login keeps the last answer GitHub gave for up to 30 minutes, or is denied when there is
+none, and GitHub is asked again at most once a minute; a token GitHub rejects ends the
+dashboard session. With
+`account-owner` set, only that account's installation is kept. Session lists, paging totals,
+costs, tokens, the summary, feedback and learnings are filtered in the query by one
+`(installationId, repositoryId in …)` term per installation, so a row with no ids is never
+served and an empty scope matches nothing; `?installation=` narrows to one installation,
+`?repository=` naming a repository outside the scope answers 403, and a session id from one
+answers 404, the same as a missing id. Skip counters are kept per installation and summed only
+over installations whose installation-wide views the login may see: its own personal account, or
+an organization it is a member of (`GET /orgs/{org}/members/{user}` with the installation token,
+which needs Organization → Members: read and is granted only on 204). A WebSocket connection
+reads its scope from memory on every event; the keepalive tick re-resolves it on a virtual
+thread, never the event loop or a review thread, and closes the connection once nothing is
+readable or the session has ended.
+
+Acting is separate from viewing: `github/RepositoryPermissions` grants it to write, maintain and
+admin (the legacy `permission` field or `role_name`), and `/review`, decline learnings and
+finding feedback all use it. The dashboard has no endpoint that changes state.
 
 With `NOTIFICATIONS_WEBHOOK_URL` set, `ReviewNotifier` posts each final outcome (completed or
 failed) once, as JSON, Slack or Discord, off the review thread. Requests can be signed with

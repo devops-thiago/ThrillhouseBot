@@ -24,6 +24,7 @@ import dev.langchain4j.model.chat.listener.ChatModelResponseContext;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.AiPricingConfig.ModelPricing;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionUpdater;
+import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.metrics.DoubleCounter;
@@ -54,6 +55,7 @@ public class OtelObservabilityListener implements ChatModelListener {
   private final ReviewSessionUpdater sessionUpdater;
   private final Vertx vertx;
   private final ReviewTokenLedger tokenLedger;
+  private final SessionEventBroadcaster broadcaster;
   private final String providerName;
   private final LongHistogram tokenHistogram;
   private final DoubleHistogram durationHistogram;
@@ -67,11 +69,13 @@ public class OtelObservabilityListener implements ChatModelListener {
       ThrillhouseConfig config,
       ReviewSessionUpdater sessionUpdater,
       Vertx vertx,
-      ReviewTokenLedger tokenLedger) {
+      ReviewTokenLedger tokenLedger,
+      SessionEventBroadcaster broadcaster) {
     this.config = config;
     this.sessionUpdater = sessionUpdater;
     this.vertx = vertx;
     this.tokenLedger = tokenLedger;
+    this.broadcaster = broadcaster;
     this.providerName = resolveProviderName(config);
     var meter = otel.getMeter("thrillhousebot");
 
@@ -190,15 +194,21 @@ public class OtelObservabilityListener implements ChatModelListener {
       var recordedPricingMissing = pricingMissing;
       runOnWorker(
           sessionId,
-          () ->
-              sessionUpdater.recordModelUsage(
-                  sessionId,
-                  model,
-                  persistedInput,
-                  persistedOutput,
-                  recordedCost,
-                  recordedPricingMissing,
-                  durationMs),
+          () -> {
+            var updated =
+                sessionUpdater.recordModelUsage(
+                    sessionId,
+                    model,
+                    persistedInput,
+                    persistedOutput,
+                    recordedCost,
+                    recordedPricingMissing,
+                    durationMs);
+            // #66: the review's running spend, read off the row once this call's usage is in it.
+            if (updated != null) {
+              broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.progress(updated));
+            }
+          },
           "persist session usage");
       if (log.isInfoEnabled()) {
         var costLabel =

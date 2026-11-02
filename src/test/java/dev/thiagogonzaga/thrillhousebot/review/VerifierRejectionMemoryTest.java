@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
 import java.util.List;
@@ -30,7 +31,7 @@ class VerifierRejectionMemoryTest {
   private final VerifierRejectionMemory memory = new VerifierRejectionMemory();
 
   private static ReviewSession session(String headSha) {
-    return ReviewSession.create("owner/repo", 70, "PR", headSha);
+    return ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 70, "PR", headSha);
   }
 
   private static ReviewResponse.Finding finding(String file, int line, String title) {
@@ -179,15 +180,22 @@ class VerifierRejectionMemoryTest {
   @Test
   void rememberNothingWithoutARepositoryOrAHead() {
     var claim = finding("src/A.cs", 3, "Concatenated SQL");
-    memory.remember(ReviewSession.create("", 70, "PR", "2659f683"), List.of(claim), List.of());
-    memory.remember(ReviewSession.create("owner/repo", 70, "PR", null), List.of(claim), List.of());
+    memory.remember(
+        ReviewSession.create(TestScopes.scope(""), "", 70, "PR", "2659f683"),
+        List.of(claim),
+        List.of());
+    memory.remember(
+        ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 70, "PR", null),
+        List.of(claim),
+        List.of());
 
     assertEquals(0, memory.size());
     assertEquals(
         List.of("Concatenated SQL"),
         titlesOf(
             memory.withoutRejectionsOnThisHead(
-                ReviewSession.create("owner/repo", 70, "PR", " "), response(claim))),
+                ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 70, "PR", " "),
+                response(claim))),
         "a session with no head recalls nothing either");
   }
 
@@ -225,7 +233,9 @@ class VerifierRejectionMemoryTest {
     var claim = finding("src/A.cs", 3, "Concatenated SQL");
     for (var pr = 1; pr <= VerifierRejectionMemory.MAX_PULL_REQUESTS + 1; pr++) {
       memory.remember(
-          ReviewSession.create("owner/repo", pr, "PR", "2659f683"), List.of(claim), List.of());
+          ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", pr, "PR", "2659f683"),
+          List.of(claim),
+          List.of());
     }
 
     assertEquals(VerifierRejectionMemory.MAX_PULL_REQUESTS, memory.size());
@@ -233,7 +243,9 @@ class VerifierRejectionMemoryTest {
         List.of("Concatenated SQL"),
         titlesOf(
             memory.withoutRejectionsOnThisHead(
-                ReviewSession.create("owner/repo", 1, "PR", "2659f683"), response(claim))),
+                ReviewSession.create(
+                    TestScopes.scope("owner/repo"), "owner/repo", 1, "PR", "2659f683"),
+                response(claim))),
         "the first pull request written was evicted");
   }
 }

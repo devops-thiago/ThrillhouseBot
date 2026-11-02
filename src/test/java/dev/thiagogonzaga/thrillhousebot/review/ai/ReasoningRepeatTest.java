@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.request.ChatRequest;
@@ -38,6 +39,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class ReasoningRepeatTest {
 
@@ -57,6 +60,14 @@ class ReasoningRepeatTest {
 
   private static ThrillhouseConfig config(
       boolean enabled, String effort, Optional<String> conciseEffort) {
+    return config(enabled, effort, conciseEffort, Optional.empty());
+  }
+
+  private static ThrillhouseConfig config(
+      boolean enabled,
+      String effort,
+      Optional<String> conciseEffort,
+      Optional<String> repeatEffort) {
     var config = mock(ThrillhouseConfig.class);
     var ai = mock(ThrillhouseConfig.AiPricingConfig.class);
     var reasoning = mock(ThrillhouseConfig.AiPricingConfig.ReasoningConfig.class);
@@ -65,23 +76,55 @@ class ReasoningRepeatTest {
     lenient().when(reasoning.enabled()).thenReturn(enabled);
     lenient().when(reasoning.effort()).thenReturn(effort);
     lenient().when(reasoning.conciseEffort()).thenReturn(conciseEffort);
+    lenient().when(reasoning.repeatEffort()).thenReturn(repeatEffort);
     return config;
   }
 
+  /**
+   * #1173: glm-5.3-flash ignores none, so with reasoning enabled the repeat goes out at low, and a
+   * lane already at low or none has no lower effort to repeat at. Pinned for every lane effort.
+   */
+  @ParameterizedTest
+  @CsvSource({
+    "none, ''",
+    "low, ''",
+    "medium, low",
+    "high, low",
+    "xhigh, low",
+    "max, low",
+    "MAX, low"
+  })
+  void withReasoningEnabledTheRepeatGoesOutAtLowBelowTheLanesEffort(String lane, String repeat) {
+    var expected = repeat.isEmpty() ? Optional.<String>empty() : Optional.of(repeat);
+    assertEquals(
+        expected,
+        ReasoningRepeat.effortFor(config(true, lane, Optional.empty()), false),
+        "active lane at " + lane);
+    assertEquals(
+        expected,
+        ReasoningRepeat.effortFor(config(true, "max", Optional.of(lane)), true),
+        "concise lane at " + lane);
+  }
+
   @Test
-  void withReasoningEnabledTheRepeatGoesOutAtNoneUnlessTheLaneIsAlreadyThere() {
+  void aConfiguredRepeatEffortIsSentUnlessTheFirstCallAlreadySentIt() {
     assertEquals(
         Optional.of("none"),
-        ReasoningRepeat.effortFor(config(true, "max", Optional.empty()), true));
+        ReasoningRepeat.effortFor(config(true, "max", Optional.empty(), Optional.of("None")), true),
+        "an operator can ask for none on a provider that honors it");
+    assertEquals(
+        Optional.of("medium"),
+        ReasoningRepeat.effortFor(
+            config(true, "max", Optional.empty(), Optional.of("medium")), false));
     assertEquals(
         Optional.of("none"),
-        ReasoningRepeat.effortFor(config(true, "Medium", Optional.empty()), false));
+        ReasoningRepeat.effortFor(
+            config(false, "max", Optional.empty(), Optional.of("none")), true),
+        "with reasoning off nothing was sent, so any configured effort is a different call");
     assertEquals(
         Optional.empty(),
-        ReasoningRepeat.effortFor(config(true, "max", Optional.of("None")), true),
-        "a concise lane already at none would repeat the identical call");
-    assertEquals(
-        Optional.empty(), ReasoningRepeat.effortFor(config(true, "none", Optional.empty()), false));
+        ReasoningRepeat.effortFor(config(true, "max", Optional.empty(), Optional.of("low")), true),
+        "the concise lane already sent low, so the repeat would be the identical call");
   }
 
   /**
@@ -107,6 +150,14 @@ class ReasoningRepeatTest {
     assertEquals(
         "the provider default",
         ReasoningRepeat.firstEffort(config(false, "low", Optional.empty()), true));
+  }
+
+  @Test
+  void theLogsSuggestEnablingReasoningOnlyWhileItIsOff() {
+    assertEquals("", ReasoningRepeat.enableHint(config(true, "low", Optional.empty())));
+    assertTrue(
+        ReasoningRepeat.enableHint(config(false, "low", Optional.empty()))
+            .contains("set AI_REASONING_ENABLED=true"));
   }
 
   @Test
@@ -179,6 +230,7 @@ class ReasoningRepeatTest {
               return effortPerCall.size() == 1 ? REASONED_AWAY : ANSWERED;
             },
             () -> Optional.of("low"),
+            () -> "",
             () -> false,
             metered::add,
             repeats::incrementAndGet);
@@ -205,6 +257,7 @@ class ReasoningRepeatTest {
                   .build();
             },
             () -> Optional.of("none"),
+            () -> "",
             () -> false,
             r -> {},
             () -> {});
@@ -223,6 +276,55 @@ class ReasoningRepeatTest {
     assertSame(cut, once(cut, () -> Optional.of("low"), false));
     assertSame(REASONED_AWAY, once(REASONED_AWAY, Optional::empty, false));
     assertSame(REASONED_AWAY, once(REASONED_AWAY, () -> Optional.of("low"), true));
+  }
+
+  @Test
+  void outsideAReviewBothCallsAreMeteredToTheRunAndTheCeilingStopsTheRepeat() {
+    var config = config(false, "low", Optional.empty());
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    lenient().when(config.review()).thenReturn(review);
+    var ledger = new ReviewTokenLedger(config);
+    var run = ledger.openRun();
+    var calls = new AtomicInteger();
+
+    var result =
+        ReasoningRepeat.outsideReview(
+            "/describe assistant",
+            () -> calls.incrementAndGet() == 1 ? REASONED_AWAY : ANSWERED,
+            config,
+            false,
+            ledger,
+            run);
+
+    assertSame(ANSWERED, result);
+    assertEquals(2, calls.get());
+    assertEquals(
+        REASONED_AWAY.tokenUsage().totalTokenCount() + ANSWERED.tokenUsage().totalTokenCount(),
+        ledger.tokensSpent(run),
+        "the cut call was billed too");
+
+    when(review.maxTokensPerReview()).thenReturn(1L);
+    var capped = new ReviewTokenLedger(config);
+    var cappedRun = capped.openRun();
+    assertSame(
+        REASONED_AWAY,
+        ReasoningRepeat.outsideReview(
+            "Maintainer reply", () -> REASONED_AWAY, config, true, capped, cappedRun));
+  }
+
+  @Test
+  void outsideAReviewACallWithNoResultOrUsageRecordsNothing() {
+    var config = config(false, "low", Optional.empty());
+    var review = mock(ThrillhouseConfig.ReviewConfig.class);
+    lenient().when(config.review()).thenReturn(review);
+    var ledger = new ReviewTokenLedger(config);
+    var run = ledger.openRun();
+
+    assertNull(ReasoningRepeat.outsideReview("x", () -> null, config, false, ledger, run));
+    var noUsage = Result.<String>builder().content("a").finishReason(FinishReason.STOP).build();
+    assertSame(
+        noUsage, ReasoningRepeat.outsideReview("x", () -> noUsage, config, false, ledger, run));
+    assertEquals(0, ledger.tokensSpent(run));
   }
 
   private static Optional<String> countRead(AtomicInteger reads, String effort) {
@@ -245,6 +347,7 @@ class ReasoningRepeatTest {
               return first;
             },
             effort,
+            () -> "",
             () -> ceilingReached,
             r -> {},
             repeats::incrementAndGet);

@@ -115,7 +115,9 @@ public class ProjectStackResolver {
    * are cached per repo — manifests change far less often than PRs arrive.
    */
   public String resolve(String owner, String repo, String defaultBranch, long installationId) {
-    var cacheKey = owner + "/" + repo;
+    // Keyed by installation too (#1220): a repository of the same name under another installation
+    // has its own configuration.
+    var cacheKey = installationId + ":" + owner + "/" + repo;
     var cached = cache.get(cacheKey);
     if (cached != null) {
       if (clock.getAsLong() < cached.expiresAt()) {

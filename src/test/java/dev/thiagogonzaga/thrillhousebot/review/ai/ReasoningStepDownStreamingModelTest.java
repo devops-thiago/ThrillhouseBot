@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 import dev.langchain4j.data.message.UserMessage;
@@ -123,6 +124,32 @@ class ReasoningStepDownStreamingModelTest {
     assertEquals("none", effective.reasoningEffort());
     assertEquals(4096, effective.maxOutputTokens());
     assertEquals(0.5, effective.temperature(), "the call's own temperature overrides the default");
+  }
+
+  @Test
+  void aCallUnderAModelOverrideGoesToThatModelWithItsEffortKept() {
+    // #43: a routed or fallback call changes only the model name; a step-down effort set on the
+    // same call survives the second rewrite.
+    try (var _ = ReasoningRepeat.override("none");
+        var _ = ModelOverride.override("cheap-model")) {
+      model.chat(REQUEST, handler());
+    }
+    try (var _ = ModelOverride.override("outer");
+        var _ = ModelOverride.override(null)) {
+      assertEquals("outer", ModelOverride.current(), "a null override keeps the enclosing one");
+      try (var _ = ModelOverride.override("inner")) {
+        assertEquals("inner", ModelOverride.current());
+      }
+      assertEquals("outer", ModelOverride.current(), "closing restores the enclosing override");
+    }
+    model.chat(REQUEST, handler());
+
+    var sent = assertInstanceOf(OpenAiChatRequestParameters.class, seen.get(0).parameters());
+    assertEquals("cheap-model", sent.modelName());
+    assertEquals("none", sent.reasoningEffort());
+    assertEquals(0.5, sent.temperature());
+    assertNull(ModelOverride.current(), "the override ends with its scope");
+    assertSame(REQUEST, seen.get(1), "a call after the scope goes out untouched");
   }
 
   @Test

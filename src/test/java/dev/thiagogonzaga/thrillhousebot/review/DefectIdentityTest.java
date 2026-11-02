@@ -526,6 +526,59 @@ class DefectIdentityTest {
         item);
   }
 
+  /**
+   * #1198, ThrillhouseBot-test#296: both titles name {@code WebhookSink} and share "alerts", but
+   * the item is about the test's fake accepting what the real sink rejects, and the thread about
+   * the real sink never delivering. A finding on a test file and one on the code it tests are two
+   * defects.
+   */
+  @Test
+  void aTestDoubleFindingIsNotTheDefectOfTheTypeItStandsIn() {
+    var item =
+        at(
+            "medium",
+            "low",
+            "rust/tests/ingester_tests.rs",
+            34,
+            "FakeSink accepts empty-zone alerts the real WebhookSink rejects",
+            "The fake's send (tests lines 32-34) returns Ok(Receipt { payload: String::new() })"
+                + " for any alert, including empty zones — the test"
+                + " alert_with_empty_zone_is_delivered then asserts one delivery. The real"
+                + " collaborator contradicts this: rust/src/sink.rs lines 28-30 return"
+                + " Err(SinkError::EmptyZone) when alert.zone.trim().is_empty(), per the trait"
+                + " contract on lines 17-18 ('an alert with an empty zone is rejected with"
+                + " `SinkError::EmptyZone`'). In production the empty-zone reading counts into"
+                + " report.failed and the alert is dropped, the opposite of what the test asserts"
+                + " and what its name claims; the suite is green while the delivery path for this"
+                + " case is untested. Make the fake mirror the rejection and assert suppression, or"
+                + " change the sink's contract.");
+    var inline =
+        at(
+            "high",
+            "high",
+            "rust/src/sink.rs",
+            27,
+            "WebhookSink never delivers alerts; sent counter counts undelivered alerts",
+            "The module doc on sink.rs line 1 says 'Delivery of alerts to the on-call webhook.'"
+                + " and the trait doc on line 17 says 'Delivers one alert.', but WebhookSink::send"
+                + " (lines 27-36) only builds a payload string and returns it as a Receipt:"
+                + " Ok(Receipt { payload }) on line 35. No network call exists anywhere in the PR,"
+                + " and rust/Cargo.toml declares zero dependencies, so no HTTP client is even"
+                + " available. The Receipt return value is discarded by the caller —"
+                + " rust/src/ingester.rs lines 77-80 count Ok(_) into report.sent — so"
+                + " ingested hot readings are counted as sent alerts that reach no one.");
+
+    assertApart(inline, item);
+    // A crate at the repository root keeps its tests in a top-level tests directory.
+    assertApart(
+        at("high", "high", "src/sink.rs", 27, inline.title(), inline.description()),
+        at("medium", "low", "tests/ingester_tests.rs", 34, item.title(), item.description()));
+    // Two findings on test files that name one subject still pair as before.
+    assertPaired(
+        at("high", "high", "rust/tests/sink_tests.rs", 12, inline.title(), inline.description()),
+        item);
+  }
+
   /** Two titles in one file that open alike but name different places, far apart, stay apart. */
   @Test
   void titlesThatOpenAlikeInOneFileAreNotOneDefectAtAnyDistance() {

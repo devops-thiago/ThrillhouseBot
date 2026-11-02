@@ -16,6 +16,8 @@
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
 import dev.langchain4j.exception.HttpException;
+import dev.langchain4j.exception.InternalServerException;
+import dev.langchain4j.exception.ModelNotFoundException;
 import dev.langchain4j.exception.RateLimitException;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingHandle;
@@ -58,6 +60,8 @@ public class AiReviewService {
   private static final Duration MAX_BACKOFF = Duration.ofSeconds(30);
 
   private static final int TOO_MANY_REQUESTS = 429;
+
+  private static final int FIRST_SERVER_ERROR = 500;
 
   /**
    * How many attempts of one logical call may end at the streaming deadline (#862): the first and
@@ -118,9 +122,18 @@ public class AiReviewService {
     this.repairService = repairService;
   }
 
-  /** Single-call review (normal-size PRs): streams tokens to the dashboard as they arrive. */
+  /**
+   * Single-call review (normal-size PRs): streams tokens to the dashboard as they arrive. Once the
+   * call answers, the review moves on to checking its findings, which the dashboard is told (#66).
+   */
   public ReviewResponse review(ReviewSession session, PromptInputs inputs) {
-    return runWithRetries(session, () -> reviewStream(inputs), true, ModelLane.ACTIVE);
+    var response =
+        runWithRetries(
+            session, () -> reviewStream(inputs), true, ModelLane.ACTIVE, routedModel(session));
+    broadcaster.broadcast(
+        SessionEventBroadcaster.SessionEvent.phase(
+            session, SessionEventBroadcaster.SessionEvent.Phase.VERIFY));
+    return response;
   }
 
   /**
@@ -134,7 +147,8 @@ public class AiReviewService {
       ReviewSession session, PromptInputs inputs, int batchIndex, int batchCount) {
     broadcaster.broadcast(
         SessionEventBroadcaster.SessionEvent.batch(session, batchIndex, batchCount));
-    return runWithRetries(session, () -> reviewStream(inputs), false, ModelLane.ACTIVE);
+    return runWithRetries(
+        session, () -> reviewStream(inputs), false, ModelLane.ACTIVE, routedModel(session));
   }
 
   /**
@@ -150,6 +164,9 @@ public class AiReviewService {
    * omits the findings node or the summary object around its fields (#850).
    */
   public ReviewResponse summarize(ReviewSession session, SummaryInputs inputs) {
+    broadcaster.broadcast(
+        SessionEventBroadcaster.SessionEvent.phase(
+            session, SessionEventBroadcaster.SessionEvent.Phase.SUMMARIZE));
     return runWithRetries(
         session,
         () ->
@@ -160,7 +177,8 @@ public class AiReviewService {
                 inputs.previousFindings(),
                 inputs.repoInstructions()),
         false,
-        ModelLane.CONCISE);
+        ModelLane.CONCISE,
+        null);
   }
 
   private TokenStream reviewStream(PromptInputs inputs) {
@@ -170,9 +188,9 @@ public class AiReviewService {
   /**
    * Runs one logical AI call: the transient-failure retry loop at the configured effort, and — once
    * — the same loop again at a lower effort when the first pass ends in a length stop that produced
-   * no content at all (#839). The lower effort is {@code none} when reasoning is enabled, and the
-   * lane's own effort ({@code low} unless configured) when it is off in config and the provider
-   * default reasoned the cap away (#1169); {@link ReasoningRepeat#effortFor} decides.
+   * no content at all (#839). The lower effort is {@code low} when reasoning is enabled (#1173),
+   * and the lane's own effort ({@code low} unless configured) when it is off in config and the
+   * provider default reasoned the cap away (#1169); {@link ReasoningRepeat#effortFor} decides.
    *
    * <p>A length stop comes in two shapes that the retry loop must tell apart. With content, the
    * answer itself outgrew the cap: the identical call would be cut identically, so it is not
@@ -180,26 +198,30 @@ public class AiReviewService {
    * the answer — the reasoning tail spent the whole output allowance, which is a variable-length
    * thing that the identical call may or may not repeat, and that a call without reasoning cannot.
    * Production saw three reviews in a row fail that way at {@code max}, each billed for the full
-   * cap and delivering nothing. The repeat goes straight to {@code none} rather than one tier down:
-   * on the provider where this was measured the tiers barely move the reasoning length, so a tier
-   * down burns the cap a second time. The step-down is per call — the configured effort is not
-   * touched, the next call sends it again — and it is noted on the review's ledger entry so the
-   * posted summary discloses that the review ran with less reasoning. A repeat that also stops at
-   * the cap propagates as before, so the cap is hit at most twice per logical call; a transient
-   * failure on either pass keeps the ordinary {@code max-ai-retries} budget, because a provider
-   * error on the repeat is the same kind of failure it is on any other call and is retried on the
-   * same terms.
+   * cap and delivering nothing. The repeat goes straight down to {@code low} rather than one tier
+   * down: on the provider where this was measured the tiers barely move the reasoning length, so a
+   * tier down burns the cap a second time. Not to {@code none}, which {@code glm-5.3-flash} ignores
+   * (#1173), unless {@code AI_REASONING_REPEAT_EFFORT} asks for it. The step-down is per call — the
+   * configured effort is not touched, the next call sends it again — and it is noted on the
+   * review's ledger entry so the posted summary discloses that the review ran with less reasoning.
+   * A repeat that also stops at the cap propagates as before, so the cap is hit at most twice per
+   * logical call; a transient failure on either pass keeps the ordinary {@code max-ai-retries}
+   * budget, because a provider error on the repeat is the same kind of failure it is on any other
+   * call and is retried on the same terms.
    *
    * <p>The premise holds only where the provider keeps reasoning in its own channel. A model that
    * writes its deliberation into the response once reasoning is disabled makes the repeat the same
-   * call at the same price (#893), so the repeat is watched by an {@link InlinedDeliberationGuard}:
-   * content that runs its bound with no answer begun stops the repeat there, and the call fails
-   * with the first call's truncation, whose report states what the repeat showed. That is noted on
-   * the ledger apart from a repeat that ran, so the posted summary says which one happened.
+   * call at the same price (#893), so a repeat at {@code none} is watched by an {@link
+   * InlinedDeliberationGuard}: content that runs its bound with no answer begun stops the repeat
+   * there, and the call fails with the first call's truncation, whose report states what the repeat
+   * showed. That is noted on the ledger apart from a repeat that ran, so the posted summary says
+   * which one happened.
    *
-   * <p>The repeat's calls are bound as reasoning-disabled on the thread that starts them (see
-   * {@link #streamOnce}); {@link ReasoningStepDownStreamingModel} reads that binding and sends
-   * {@code reasoning_effort=none} on those calls alone.
+   * <p>A repeat at any other tier keeps its reasoning in the provider's channel and is not watched.
+   *
+   * <p>The repeat's effort is set as the {@link ReasoningRepeat#override} on the thread that starts
+   * its calls (see {@link #streamOnce}); {@link ReasoningStepDownStreamingModel} reads it and sends
+   * that {@code reasoning_effort} on those calls alone.
    *
    * <p>The timed-out attempts are counted here rather than inside the loop, so the bound of {@link
    * #MAX_TIMED_OUT_ATTEMPTS} is on the logical call and both passes share it (#862). A call that
@@ -210,10 +232,13 @@ public class AiReviewService {
       ReviewSession session,
       Supplier<TokenStream> streamFactory,
       boolean broadcastTokens,
-      ModelLane lane) {
+      ModelLane lane,
+      String firstModel) {
     var timeouts = new TimeoutBudget();
+    var model = new CallModel(firstModel, fallbackModel());
     try {
-      return attemptWithRetries(session, streamFactory, broadcastTokens, lane, null, timeouts);
+      return attemptWithRetries(
+          session, streamFactory, broadcastTokens, lane, null, timeouts, model);
     } catch (AiResponseTruncatedException e) {
       var effort = repeatEffort(e, lane);
       if (effort.isEmpty()) {
@@ -222,18 +247,33 @@ public class AiReviewService {
       Log.warnf(
           "AI review for session %d stopped at its response-length cap with no content at"
               + " reasoning_effort=%s (%s): the reasoning tail spent the whole output allowance,"
-              + " so the call is repeated once at reasoning_effort=%s",
+              + " so the call is repeated once at reasoning_effort=%s%s",
           session.id,
           ReasoningRepeat.firstEffort(config, lane == ModelLane.CONCISE),
           describeUsage(e),
-          effort.get());
+          effort.get(),
+          ReasoningRepeat.enableHint(config));
       tokenLedger.recordReasoningStepDown(ReviewTokenLedger.keyFor(session));
       broadcaster.broadcast(
           SessionEventBroadcaster.SessionEvent.retry(
               session, 1, config.review().maxAiRetries(), REASONING_STEP_DOWN_REASON));
       return repeatAtLowerEffort(
-          session, streamFactory, broadcastTokens, lane, timeouts, e, effort.get());
+          session, streamFactory, broadcastTokens, lane, timeouts, model, e, effort.get());
     }
+  }
+
+  /**
+   * The model the review was routed to (#43), or {@code null} for {@code AI_MODEL}. Read only by
+   * {@link #review} and {@link #reviewBatch}, which pass it to {@link #runWithRetries} as the first
+   * model; every other call passes {@code null}, so routing follows the call, not the lane or the
+   * ledger entry's lifetime.
+   */
+  private String routedModel(ReviewSession session) {
+    return tokenLedger.routedModel(ReviewTokenLedger.keyFor(session)).orElse(null);
+  }
+
+  private String fallbackModel() {
+    return config.ai().routing().fallbackModel().filter(m -> !m.isBlank()).orElse(null);
   }
 
   /**
@@ -248,10 +288,12 @@ public class AiReviewService {
       boolean broadcastTokens,
       ModelLane lane,
       TimeoutBudget timeouts,
+      CallModel model,
       AiResponseTruncatedException firstStop,
       String effort) {
     try {
-      return attemptWithRetries(session, streamFactory, broadcastTokens, lane, effort, timeouts);
+      return attemptWithRetries(
+          session, streamFactory, broadcastTokens, lane, effort, timeouts, model);
     } catch (InlinedDeliberationGuard.Stopped stopped) {
       tokenLedger.recordReasoningRepeatStopped(ReviewTokenLedger.keyFor(session));
       var report = firstStop.report().withInlinedDeliberation(stopped.chars());
@@ -274,9 +316,10 @@ public class AiReviewService {
   /**
    * The effort a no-content length stop's one repeat goes out at, when there is a repeat to make.
    * Empty for a stop with content (the answer was too long — the salvage path's case, never
-   * retried) and when the lane already runs at {@code none} with reasoning enabled (the repeat
-   * would be the identical call); otherwise {@link ReasoningRepeat#effortFor}. The lane matters
-   * because the concise lane resolves its own effort (#567).
+   * retried) and when {@link ReasoningRepeat#effortFor} is empty because there is no lower effort
+   * to repeat at, as for a lane already at {@code low} or {@code none} with reasoning enabled;
+   * otherwise the effort it returns, which is the {@code none} tier only when configured. The lane
+   * matters because the concise lane resolves its own effort (#567).
    */
   private Optional<String> repeatEffort(AiResponseTruncatedException e, ModelLane lane) {
     if (!"".equals(e.partialBody())) {
@@ -299,9 +342,11 @@ public class AiReviewService {
       boolean broadcastTokens,
       ModelLane lane,
       String reasoningEffort,
-      TimeoutBudget timeouts) {
+      TimeoutBudget timeouts,
+      CallModel model) {
     var maxAttempts = config.review().maxAiRetries();
     RuntimeException lastFailure = null;
+    var fellBack = false;
 
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
       // Spend-ceiling gate, before EVERY attempt: a retry is a fresh billed call, and the previous
@@ -314,12 +359,24 @@ public class AiReviewService {
         broadcaster.broadcast(
             SessionEventBroadcaster.SessionEvent.retry(
                 session, attempt, maxAttempts, retryFailureReason(lastFailure)));
-        sleep(retryDelay(session, attempt, maxAttempts, lastFailure));
+        // The first attempt on the fallback model goes to other capacity, so a throttle on the
+        // previous model is no reason to wait out the throttle ceiling before it.
+        sleep(
+            fellBack
+                ? backoffDelay(attempt)
+                : retryDelay(session, attempt, maxAttempts, lastFailure));
       }
 
       try {
         var answer =
-            streamOnce(session, streamFactory, attempt, broadcastTokens, lane, reasoningEffort);
+            streamOnce(
+                session,
+                streamFactory,
+                attempt,
+                broadcastTokens,
+                lane,
+                reasoningEffort,
+                model.current());
         return lane == ModelLane.CONCISE
             ? withReadFileSummaries(session, answer)
             : answer.response();
@@ -354,11 +411,62 @@ public class AiReviewService {
             SessionEventBroadcaster.SessionEvent.streamFailed(
                 session, attempt, maxAttempts, sanitize(e)));
         failIfTimeoutBudgetSpent(session, attempt, maxAttempts, e, timeouts);
+        fellBack = attempt < maxAttempts && fellBackOn(session, attempt, maxAttempts, model, e);
       }
     }
 
     throw new AiReviewException(
         "AI review failed after " + maxAttempts + " attempts", maxAttempts, lastFailure);
+  }
+
+  /**
+   * Moves the call's remaining attempts to the fallback model when {@code failure} is a provider
+   * error or a rate limit and the call is not already there (#43). Returns whether it moved.
+   */
+  private static boolean fellBackOn(
+      ReviewSession session,
+      int attempt,
+      int maxAttempts,
+      CallModel model,
+      RuntimeException failure) {
+    if (!isProviderFailure(failure) || !model.fallBack()) {
+      return false;
+    }
+    Log.warnf(
+        "AI review attempt %d/%d for session %d failed with a provider error or rate limit; the"
+            + " remaining attempts go to the fallback model %s (AI_FALLBACK_MODEL)",
+        attempt, maxAttempts, session.id, model.current());
+    return true;
+  }
+
+  /**
+   * The model one logical call's attempts go to (#43): {@code null} for the lane's configured
+   * model, or the routed model, until a provider failure moves it to the fallback model, where it
+   * stays for the rest of the call, the lower-effort repeat included. Not thread safe, like {@link
+   * TimeoutBudget}: one call's attempts run one after another on a single thread.
+   */
+  private static final class CallModel {
+
+    private String current;
+    private final String fallback;
+
+    CallModel(String first, String fallback) {
+      this.current = first;
+      this.fallback = fallback;
+    }
+
+    String current() {
+      return current;
+    }
+
+    /** Moves to the fallback model; false when there is none or the call is already on it. */
+    boolean fallBack() {
+      if (fallback == null || fallback.equals(current)) {
+        return false;
+      }
+      current = fallback;
+      return true;
+    }
   }
 
   /**
@@ -705,9 +813,11 @@ public class AiReviewService {
       int attempt,
       boolean broadcastTokens,
       ModelLane lane,
-      String reasoningEffort) {
+      String reasoningEffort,
+      String model) {
     try (var _ = callGate.acquire("AI review call for session " + session.id)) {
-      return streamInSlot(session, streamFactory, attempt, broadcastTokens, lane, reasoningEffort);
+      return streamInSlot(
+          session, streamFactory, attempt, broadcastTokens, lane, reasoningEffort, model);
     }
   }
 
@@ -717,7 +827,8 @@ public class AiReviewService {
       int attempt,
       boolean broadcastTokens,
       ModelLane lane,
-      String reasoningEffort) {
+      String reasoningEffort,
+      String model) {
     var result = new CompletableFuture<Answer>();
     var buffer = new StreamBuffer();
     var chunkCount = new AtomicInteger();
@@ -728,21 +839,30 @@ public class AiReviewService {
     var deliberationGuard =
         ReasoningConfig.EFFORT_NONE.equals(reasoningEffort) ? new InlinedDeliberationGuard() : null;
 
+    var reasoning = new ReasoningFeed(session, attempt, broadcastTokens);
+
+    // The reasoning still pending goes out ahead of the output that follows it.
     Runnable flushStream =
         broadcastTokens
-            ? () -> flushPendingStream(session, buffer, chunkCount, attempt, lastFlushNanos)
+            ? () -> {
+              reasoning.flush();
+              flushPendingStream(session, buffer, chunkCount, attempt, lastFlushNanos);
+            }
             : () -> {};
 
     // The binding travels on this thread into the model's chat call, where the observability
     // listener reads the session off it; the step-down model reads the reasoning override (#839)
-    // the same way. Both run before the stream returns, on this same thread.
+    // and the model override (#43) the same way. All run before the stream returns, on this same
+    // thread.
     ReviewSessionContext.bind(session.id, attempt);
     var callId = ReviewSessionContext.currentCallId();
     var deadline = streamTimeout();
     TokenStream stream = null;
     try {
-      try (var _ = ReasoningRepeat.override(reasoningEffort)) {
+      try (var _ = ReasoningRepeat.override(reasoningEffort);
+          var _ = ModelOverride.override(model)) {
         stream = streamFactory.get();
+        reasoning.attach(stream, cancelled);
 
         stream
             .onPartialResponse(
@@ -945,6 +1065,53 @@ public class AiReviewService {
   }
 
   /**
+   * The call's reasoning on its way to the dashboard's live activity page (#66), apart from its
+   * output. Only a call that streams its output there sends it, and only with {@code
+   * DASHBOARD_REASONING_STREAM_ENABLED} on; otherwise nothing is attached to the stream. It flushes
+   * on the output's cadence, and whatever is pending when the output flushes goes first.
+   */
+  private final class ReasoningFeed {
+
+    private final ReviewSession session;
+    private final int attempt;
+    private final boolean enabled;
+    private final StreamBuffer buffer = new StreamBuffer();
+    private final AtomicInteger chunkCount = new AtomicInteger();
+    private final AtomicLong lastFlushNanos = new AtomicLong(System.nanoTime());
+
+    ReasoningFeed(ReviewSession session, int attempt, boolean broadcastTokens) {
+      this.session = session;
+      this.attempt = attempt;
+      this.enabled = broadcastTokens && config.dashboard().reasoningStreamEnabled();
+    }
+
+    void attach(TokenStream stream, AtomicBoolean cancelled) {
+      if (enabled) {
+        stream.onPartialThinking(
+            thinking ->
+                handlePartialToken(
+                    thinking.text(), buffer, this::flush, cancelled, lastFlushNanos));
+      }
+    }
+
+    void flush() {
+      var pending = buffer.takePending();
+      if (pending == null) {
+        return;
+      }
+      broadcaster.broadcast(
+          SessionEventBroadcaster.SessionEvent.reasoning(
+              session,
+              pending.chunk(),
+              pending.tail(),
+              pending.totalChars(),
+              chunkCount.incrementAndGet(),
+              attempt));
+      lastFlushNanos.set(System.nanoTime());
+    }
+  }
+
+  /**
    * Cancels the provider connection of an abandoned stream so it stops generating billed tokens,
    * instead of running until the provider-side timeout with only client-side muting.
    */
@@ -1008,6 +1175,21 @@ public class AiReviewService {
    */
   static boolean isThrottle(Throwable failure) {
     return Throwables.findCause(failure, AiReviewService::namesAThrottle).isPresent();
+  }
+
+  /**
+   * Whether a failure is one the fallback model can help with (#43): a {@linkplain #isThrottle
+   * throttle}, a server error (HTTP 5xx), or the provider not knowing the model. Visible for tests.
+   */
+  static boolean isProviderFailure(Throwable failure) {
+    return isThrottle(failure)
+        || Throwables.findCause(failure, AiReviewService::namesAServerFailure).isPresent();
+  }
+
+  private static boolean namesAServerFailure(Throwable cause) {
+    return cause instanceof InternalServerException
+        || cause instanceof ModelNotFoundException
+        || (cause instanceof HttpException http && http.statusCode() >= FIRST_SERVER_ERROR);
   }
 
   private static boolean namesAThrottle(Throwable cause) {

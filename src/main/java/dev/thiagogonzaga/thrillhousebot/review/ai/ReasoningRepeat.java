@@ -39,7 +39,7 @@ import java.util.function.Supplier;
  * is kept apart from {@link ReviewSessionContext}: binding a session on a blocking call would make
  * the observability listener record its usage on top of the caller's own recording.
  */
-final class ReasoningRepeat {
+public final class ReasoningRepeat {
 
   private static final ThreadLocal<String> EFFORT = new ThreadLocal<>();
 
@@ -49,30 +49,57 @@ final class ReasoningRepeat {
    * The {@code reasoning_effort} the repeat sends on the given lane, or empty when there is no
    * repeat to make.
    *
-   * <p>With reasoning enabled, the repeat goes out at {@code none}, unless the lane already sends
-   * {@code none} and the repeat would be the identical call. With reasoning off in config nothing
-   * was sent, so the provider's default effort applied, and a model that reasons by default can
-   * spend the cap that way on most calls, as {@code glm-5.3-flash} did on the concise lane in
-   * #1169. The repeat then sends the effort the lane would send with reasoning enabled ({@code low}
-   * unless configured), not {@code none}: that model spent the cap again at {@code none}, while at
-   * {@code low} the same calls answered in under a thousand output tokens.
+   * <p>{@code AI_REASONING_REPEAT_EFFORT} when set. Otherwise, with reasoning enabled, the repeat
+   * goes out at {@code low}, the lowest tier known to be valid wherever reasoning is enabled at all
+   * ({@link ReasoningConfig#DEFAULT_CONCISE_EFFORT}), and a lane that already sends {@code low} or
+   * {@code none} gets no repeat. Not {@code none}: {@code glm-5.3-flash} ignores it and spent the
+   * cap again on 5 of 6 such repeats, while at {@code low} all 6 answered (#1173). Not one tier
+   * down either: where #839 was measured, adjacent tiers barely moved the reasoning length.
+   *
+   * <p>With reasoning off in config nothing was sent, so the provider's default effort applied, and
+   * a model that reasons by default can spend the cap that way on most calls, as {@code
+   * glm-5.3-flash} did on the concise lane in #1169. The repeat then sends the effort the lane
+   * would send with reasoning enabled ({@code low} unless configured).
+   *
+   * <p>A repeat at the effort the first call already sent would be the identical call, so none is
+   * made.
    */
   static Optional<String> effortFor(ThrillhouseConfig config, boolean concise) {
     var reasoning = config.ai().reasoning();
-    if (!reasoning.enabled()) {
+    var first = ChatModelCustomizers.reasoningEffort(config, concise);
+    var configured = reasoning.repeatEffort().map(ReasoningConfig::normalize);
+    if (configured.isPresent()) {
+      return configured.filter(effort -> !first.equals(Optional.of(effort)));
+    }
+    if (first.isEmpty()) {
       return Optional.of(
           concise
               ? ReasoningConfig.resolveConciseEffort(reasoning)
               : ReasoningConfig.normalize(reasoning.effort()));
     }
-    return ChatModelCustomizers.reasoningEffort(config, concise)
-        .filter(effort -> !ReasoningConfig.EFFORT_NONE.equals(effort))
-        .map(effort -> ReasoningConfig.EFFORT_NONE);
+    var floor = ReasoningConfig.ALLOWED_EFFORTS.indexOf(ReasoningConfig.DEFAULT_CONCISE_EFFORT);
+    return ReasoningConfig.ALLOWED_EFFORTS.indexOf(first.get()) > floor
+        ? Optional.of(ReasoningConfig.DEFAULT_CONCISE_EFFORT)
+        : Optional.empty();
   }
 
   /** The effort the lane's first call went out at, as the step-down logs name it. */
   static String firstEffort(ThrillhouseConfig config, boolean concise) {
     return ChatModelCustomizers.reasoningEffort(config, concise).orElse("the provider default");
+  }
+
+  /**
+   * What the step-down logs add when reasoning is off in config: the first call went out at the
+   * provider's default effort, and a model that reasons by default can spend its cap that way on
+   * most calls, so the fix is to send the lane's effort from the first call (#1174). Empty while
+   * reasoning is enabled.
+   */
+  static String enableHint(ThrillhouseConfig config) {
+    return config.ai().reasoning().enabled()
+        ? ""
+        : "; AI_REASONING_ENABLED=false left the first call at the provider's default effort, so"
+            + " set AI_REASONING_ENABLED=true for a model that reasons by default and the lane's"
+            + " effort goes out from the first call";
   }
 
   /**
@@ -126,12 +153,14 @@ final class ReasoningRepeat {
    * review's spend ceiling stops it. The effort is read only once a repeat is due. The repeat is
    * metered too, and {@code onRepeat} runs before it so the review can disclose it. The caller
    * reads the returned result as it read the first one: a repeat that is cut again is reported like
-   * any other cut answer.
+   * any other cut answer. {@code hint} ends the repeat's log line, as {@link #enableHint} does, and
+   * is read only then.
    */
   static Result<String> blocking(
       String what,
       Supplier<Result<String>> call,
       Supplier<Optional<String>> effortFor,
+      Supplier<String> hint,
       BooleanSupplier ceilingReached,
       Consumer<Result<String>> meter,
       Runnable onRepeat) {
@@ -147,14 +176,42 @@ final class ReasoningRepeat {
     var usage = result.tokenUsage();
     Log.warnf(
         "%s stopped at its response-length cap with no content (%s output tokens): the reasoning"
-            + " spent the whole allowance, so the call is repeated once at reasoning_effort=%s",
-        what, usage == null ? "unknown" : usage.outputTokenCount(), effort.get());
+            + " spent the whole allowance, so the call is repeated once at reasoning_effort=%s%s",
+        what, usage == null ? "unknown" : usage.outputTokenCount(), effort.get(), hint.get());
     onRepeat.run();
     try (var _ = override(effort.get())) {
       result = call.get();
     }
     meter.accept(result);
     return result;
+  }
+
+  /**
+   * {@link #blocking} for a call made outside a review: an on-request command or a maintainer reply
+   * (#1175). Both calls' usage goes to {@code ledgerKey}, the run's entry from {@link
+   * ReviewTokenLedger#openRun}, and the repeat is skipped once that run reached the spend ceiling.
+   * Nothing reports a step-down for these calls, so none is noted.
+   */
+  public static Result<String> outsideReview(
+      String what,
+      Supplier<Result<String>> call,
+      ThrillhouseConfig config,
+      boolean concise,
+      ReviewTokenLedger ledger,
+      long ledgerKey) {
+    return blocking(
+        what,
+        call,
+        () -> effortFor(config, concise),
+        () -> enableHint(config),
+        () -> ledger.ceilingReached(ledgerKey),
+        result -> {
+          var usage = result == null ? null : result.tokenUsage();
+          if (usage != null) {
+            ledger.recordUsage(ledgerKey, usage.inputTokenCount(), usage.outputTokenCount());
+          }
+        },
+        () -> {});
   }
 
   /** Restores the thread's previous override when closed. */

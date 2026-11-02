@@ -3,8 +3,7 @@
 
 This guide covers stored data, health probes, shutdown, backups and upgrades.
 Commands use the repository's `docker-compose.yml`, with the services
-`thrillhousebot` and `db`. Hibernate updates the schema at startup; there are no
-migration scripts. Back up the database before an upgrade and restore that
+`thrillhousebot` and `db`. Flyway migrates the schema at startup. Back up the database before an upgrade and restore that
 backup if you need to return to an older version.
 
 ## What is stored, and what is not
@@ -32,6 +31,32 @@ Everything else lives in the process and is lost on a restart:
 The bot's state on GitHub (its reviews, summary comments, check runs and
 finding threads) stays on GitHub. A follow-up review reads it back from there,
 so a restart does not lose track of the findings on open pull requests.
+
+## Installations and repositories
+
+The bot follows GitHub's installation events (#1222). Uninstalling or
+suspending the App on an account stops the dashboard from serving that
+installation at once, and unsuspending brings it back. Removing a repository
+from an installation hides it, and adding it again serves its history again,
+since rows are kept by repository id. The bot remembers a removal for ten
+minutes, long enough for GitHub's own answer to catch up, so a lost unsuspend
+or added delivery hides nothing for longer than that. Renaming or transferring a repository
+updates the name its stored rows show; a transferred repository belongs to
+another installation and starts fresh there. Renames need the App's
+**Repository** event; an App registered before it was in the manifest must
+tick it under **Permissions & events → Subscribe to events**.
+
+The bot never deletes stored rows. To purge an installation's data, for example
+after it was uninstalled for good, delete its rows by installation id (the
+`installation.id` of its webhook deliveries, or `installationid` in the tables),
+after taking a backup:
+
+```sql
+DELETE FROM reviewsession    WHERE installationid = 123456;
+DELETE FROM pausedpr         WHERE installationid = 123456;
+DELETE FROM finding_feedback WHERE installationid = 123456;
+DELETE FROM review_learning  WHERE installationid = 123456;
+```
 
 ## Scaling
 
@@ -63,7 +88,7 @@ The bot serves the SmallRye Health endpoints on its HTTP port (8080, or
 | `/q/health` | All of the above together | Manual checks |
 
 The bot does not start without its database. When PostgreSQL cannot be reached
-at boot, Hibernate cannot update the schema and the process exits with
+at boot, Flyway cannot migrate the schema and the process exits with
 `Failed to start application`. With `restart: unless-stopped` Compose starts it
 again, and the bot service waits for the `db` health check on the first start.
 
@@ -225,12 +250,26 @@ Use your `DB_USER` in place of `thrillhouse` after `-U` if you changed it.
 
 ## Upgrades and database changes
 
-There are no migration scripts. On startup the production profile lets
-Hibernate update the schema in place (`schema-management.strategy=update`): it
-creates missing tables and columns and never drops or renames them. On a new,
-empty database the first start logs warnings such as
-`constraint "uq_pausedpr_repository_pr" of relation "pausedpr" does not exist,
-skipping`; they are expected.
+Schema changes ship as Flyway migrations, which run on startup in order and
+are recorded in the `flyway_schema_history` table. Hibernate then checks that
+the schema matches what the release expects, and the start fails with a
+`Schema-validation` error if it does not.
+
+A database created before v0.9.0 has the tables but no history table. On its
+first start Flyway records it as version 1, the v0.8.0 schema
+(`Baselining schema "public" to version 1`), and applies only the later
+migrations. Upgrade such a database from v0.8.x; an older one should first be
+started once on v0.8.x so that its schema reaches the v0.8.0 shape.
+
+From v0.9.0 every stored row carries the GitHub App installation id and the
+repository's numeric id. On the first start after the upgrade the bot fills them
+in for existing rows, matching each `owner/repo` to the installations it can
+see, and logs `Scope backfill: matched N repository name(s) and filled M
+row(s)`. Rows of a repository it cannot match (deleted, transferred to another
+account, or no longer installed) stay hidden from the dashboard and from later
+reviews; the bot tries them again on every start. A pause it cannot match is
+still honored, and `/resume` lifts it. If GitHub cannot be reached, nothing is
+written and the next start tries again.
 
 To upgrade:
 

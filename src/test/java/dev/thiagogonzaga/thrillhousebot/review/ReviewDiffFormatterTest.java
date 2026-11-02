@@ -1213,6 +1213,9 @@ class ReviewDiffFormatterTest {
     assertTrue(ReviewDiffFormatter.isTestFile("__tests__/foo.js"));
     assertTrue(ReviewDiffFormatter.isTestFile("ModuleTests.java"));
     assertTrue(ReviewDiffFormatter.isTestFile("src/tests/helper.rb"));
+    assertTrue(ReviewDiffFormatter.isTestFile("tests/ingester_tests.rs"));
+    assertTrue(ReviewDiffFormatter.isTestFile("test/helper.rb"));
+    assertFalse(ReviewDiffFormatter.isTestFile("attest/helper.rb"));
     assertTrue(ReviewDiffFormatter.isTestFile("web/foo.test.js"));
     assertTrue(ReviewDiffFormatter.isTestFile("test_data"));
     assertTrue(ReviewDiffFormatter.isTestFile("data_test.csv"));

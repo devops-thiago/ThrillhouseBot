@@ -22,6 +22,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import jakarta.websocket.RemoteEndpoint;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,7 +34,20 @@ class SessionEventBroadcasterTest {
   private static final java.time.Instant FIXED_NOW =
       java.time.Instant.parse("2025-06-01T12:00:00Z");
 
-  private static final SessionEventBroadcaster.RepositoryReader READ_ALL = repository -> true;
+  private static final SessionEventBroadcaster.RepositoryReader READ_ALL =
+      (installationId, repositoryId) -> true;
+
+  /** The installation and repository ids every review session here is stored under. */
+  private static final RepoScope TEST_REPO = new RepoScope(1L, 7L);
+
+  private static final RepoScope OTHER_REPO = new RepoScope(1L, 8L);
+
+  /** A connection that may read exactly {@code scope}. */
+  private static SessionEventBroadcaster.RepositoryReader reads(RepoScope scope) {
+    return (installationId, repositoryId) ->
+        Long.valueOf(scope.installationId()).equals(installationId)
+            && Long.valueOf(scope.repositoryId()).equals(repositoryId);
+  }
 
   private SessionEventBroadcaster broadcaster;
   private ObjectMapper mapper;
@@ -110,6 +124,108 @@ class SessionEventBroadcasterTest {
   }
 
   @Test
+  void aLateClientGetsThePhasesSpendAndOnlyTheLatestReasoningAndOutput() {
+    var reviewSession = createReviewSession();
+    reviewSession.id = 98L;
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(reviewSession));
+    broadcaster.broadcast(
+        SessionEventBroadcaster.SessionEvent.phase(
+            reviewSession, SessionEventBroadcaster.SessionEvent.Phase.REVIEW));
+    broadcaster.broadcast(
+        SessionEventBroadcaster.SessionEvent.reasoning(reviewSession, "a", "a", 1, 1, 1));
+    broadcaster.broadcast(
+        SessionEventBroadcaster.SessionEvent.reasoning(reviewSession, "b", "ab", 2, 2, 1));
+    broadcaster.broadcast(
+        SessionEventBroadcaster.SessionEvent.stream(reviewSession, "{", "{", 1, 1, 1));
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.progress(reviewSession));
+
+    var wsSession = mock(jakarta.websocket.Session.class);
+    var asyncRemote = mock(RemoteEndpoint.Async.class);
+    when(wsSession.isOpen()).thenReturn(true);
+    when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
+
+    broadcaster.addSession(wsSession, READ_ALL);
+
+    var payload = ArgumentCaptor.forClass(String.class);
+    verify(asyncRemote, times(5)).sendText(payload.capture(), any());
+    var sent = payload.getAllValues();
+    assertTrue(sent.get(0).contains("\"type\":\"review.started\""));
+    assertTrue(sent.get(1).contains("\"type\":\"review.phase\""));
+    assertTrue(sent.get(2).contains("\"type\":\"review.progress\""));
+    assertTrue(sent.get(3).contains("\"type\":\"review.reasoning\""));
+    assertTrue(sent.get(3).contains("\"tail\":\"ab\""));
+    assertTrue(sent.get(4).contains("\"type\":\"review.stream\""));
+  }
+
+  @Test
+  void aRetryDropsTheReasoningOfTheAttemptItEnds() {
+    var reviewSession = createReviewSession();
+    reviewSession.id = 97L;
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(reviewSession));
+    broadcaster.broadcast(
+        SessionEventBroadcaster.SessionEvent.reasoning(reviewSession, "a", "a", 1, 1, 1));
+    broadcaster.broadcast(
+        SessionEventBroadcaster.SessionEvent.retry(reviewSession, 2, 5, "timeout"));
+
+    var wsSession = mock(jakarta.websocket.Session.class);
+    var asyncRemote = mock(RemoteEndpoint.Async.class);
+    when(wsSession.isOpen()).thenReturn(true);
+    when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
+
+    broadcaster.addSession(wsSession, READ_ALL);
+
+    var payload = ArgumentCaptor.forClass(String.class);
+    verify(asyncRemote, times(2)).sendText(payload.capture(), any());
+    assertTrue(payload.getAllValues().stream().noneMatch(p -> p.contains("review.reasoning")));
+  }
+
+  @Test
+  void eventsRecordedFromSeveralThreadsAtOnceAreAllReplayed() throws Exception {
+    var reviewSession = createReviewSession();
+    reviewSession.id = 95L;
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(reviewSession));
+    // The review thread, its batches and the usage-saving worker all broadcast for one review.
+    try (var pool = java.util.concurrent.Executors.newFixedThreadPool(4)) {
+      var tasks = new java.util.ArrayList<java.util.concurrent.Callable<Void>>();
+      for (var t = 0; t < 4; t++) {
+        tasks.add(
+            () -> {
+              for (var i = 0; i < 50; i++) {
+                broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.progress(reviewSession));
+                broadcaster.broadcast(
+                    SessionEventBroadcaster.SessionEvent.stream(reviewSession, "x", "x", i, i, 1));
+              }
+              return null;
+            });
+      }
+      for (var done : pool.invokeAll(tasks)) {
+        done.get();
+      }
+    }
+
+    var wsSession = mock(jakarta.websocket.Session.class);
+    var asyncRemote = mock(RemoteEndpoint.Async.class);
+    when(wsSession.isOpen()).thenReturn(true);
+    when(wsSession.getAsyncRemote()).thenReturn(asyncRemote);
+
+    broadcaster.addSession(wsSession, READ_ALL);
+
+    // started, the 200 usage reports, then the latest output.
+    verify(asyncRemote, times(202)).sendText(anyString(), any());
+  }
+
+  @Test
+  void aUsageReportAfterTheReviewEndedDoesNotBringItBack() {
+    var reviewSession = createReviewSession();
+    reviewSession.id = 96L;
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(reviewSession));
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.completed(reviewSession));
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.progress(reviewSession));
+
+    assertEquals(0, broadcaster.replayStateCount());
+  }
+
+  @Test
   void shouldNotReplayToClosedWebSocketSession() {
     var reviewSession = createReviewSession();
     reviewSession.id = 77L;
@@ -146,7 +262,9 @@ class SessionEventBroadcasterTest {
     reviewSession.id = 55L;
 
     for (var i = 0; i < 505; i++) {
-      broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.progress(reviewSession, i, i));
+      broadcaster.broadcast(
+          SessionEventBroadcaster.SessionEvent.phase(
+              reviewSession, SessionEventBroadcaster.SessionEvent.Phase.REVIEW));
     }
 
     var wsSession = mock(jakarta.websocket.Session.class);
@@ -236,7 +354,16 @@ class SessionEventBroadcasterTest {
   void shouldNotBufferNonReviewEvents() {
     var event =
         new SessionEventBroadcaster.SessionEvent(
-            "keepalive", 1L, "owner/repo", 1, "title", "sha", "2025-06-01T12:00:00Z", Map.of());
+            "keepalive",
+            1L,
+            null,
+            null,
+            "owner/repo",
+            1,
+            "title",
+            "sha",
+            "2025-06-01T12:00:00Z",
+            Map.of());
 
     assertDoesNotThrow(() -> broadcaster.broadcast(event));
 
@@ -272,7 +399,8 @@ class SessionEventBroadcasterTest {
     var staleAt = FIXED_NOW.minus(SessionEventBroadcaster.MAX_SESSION_BUFFER_AGE).minusSeconds(1);
     broadcaster.seedReplayState(
         91L,
-        "test/repo",
+        1L,
+        7L,
         "review.started",
         staleAt,
         java.util.List.of("{\"type\":\"review.started\"}"),
@@ -289,8 +417,7 @@ class SessionEventBroadcasterTest {
     reviewSession.id = 92L;
     broadcaster.setClock(java.time.Clock.fixed(FIXED_NOW, java.time.ZoneOffset.UTC));
     var staleAt = FIXED_NOW.minus(SessionEventBroadcaster.MAX_SESSION_BUFFER_AGE).minusSeconds(1);
-    broadcaster.seedReplayState(
-        92L, "test/repo", "review.started", staleAt, java.util.List.of(), null);
+    broadcaster.seedReplayState(92L, 1L, 7L, "review.started", staleAt, java.util.List.of(), null);
 
     broadcaster.broadcast(
         SessionEventBroadcaster.SessionEvent.stream(reviewSession, "tok", "tail", 4, 1, 1));
@@ -473,13 +600,51 @@ class SessionEventBroadcasterTest {
     var session = createReviewSession();
     session.id = 10L;
 
-    var event = SessionEventBroadcaster.SessionEvent.progress(session, 5, 1500);
+    session.setInputTokens(1200);
+    session.setOutputTokens(300);
+    session.setCost(0.0125);
+    session.setPricingMissing(true);
+
+    var event = SessionEventBroadcaster.SessionEvent.progress(session);
 
     assertEquals("review.progress", event.type());
     assertEquals(10L, event.sessionId());
-    assertEquals(5, event.data().get("findingsSoFar"));
-    assertEquals(1500L, event.data().get("tokensUsed"));
+    assertEquals(1200, event.data().get("inputTokens"));
+    assertEquals(300, event.data().get("outputTokens"));
+    assertEquals(1500, event.data().get("totalTokens"));
+    assertEquals(0.0125, event.data().get("cost"));
+    assertEquals(true, event.data().get("pricingMissing"));
     assertEquals("in_progress", event.data().get("status"));
+  }
+
+  @Test
+  void shouldCreateSessionEventPhase() {
+    var session = createReviewSession();
+    session.id = 10L;
+
+    var event =
+        SessionEventBroadcaster.SessionEvent.phase(
+            session, SessionEventBroadcaster.SessionEvent.Phase.SUMMARIZE);
+
+    assertEquals("review.phase", event.type());
+    assertEquals("summarize", event.data().get("phase"));
+    assertEquals("in_progress", event.data().get("status"));
+  }
+
+  @Test
+  void shouldCreateSessionEventReasoning() {
+    var session = createReviewSession();
+    session.id = 5L;
+
+    var event = SessionEventBroadcaster.SessionEvent.reasoning(session, "hmm", "so hmm", 6, 2, 1);
+
+    assertEquals("review.reasoning", event.type());
+    assertEquals("hmm", event.data().get("chunk"));
+    assertEquals("so hmm", event.data().get("tail"));
+    assertEquals(6, event.data().get("totalChars"));
+    assertEquals(2, event.data().get("chunkIndex"));
+    assertEquals(1, event.data().get("attempt"));
+    assertEquals("reasoning", event.data().get("status"));
   }
 
   @Test
@@ -639,8 +804,8 @@ class SessionEventBroadcasterTest {
     var allowed = openSession(allowedRemote);
     var deniedRemote = mock(RemoteEndpoint.Async.class);
     var denied = openSession(deniedRemote);
-    broadcaster.addSession(allowed, "TEST/Repo"::equalsIgnoreCase);
-    broadcaster.addSession(denied, "other/repo"::equals);
+    broadcaster.addSession(allowed, reads(TEST_REPO));
+    broadcaster.addSession(denied, reads(OTHER_REPO));
 
     broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(reviewSession));
     broadcaster.sendKeepAlive();
@@ -648,6 +813,8 @@ class SessionEventBroadcasterTest {
     var payload = ArgumentCaptor.forClass(String.class);
     verify(allowedRemote, times(2)).sendText(payload.capture(), any());
     assertTrue(payload.getAllValues().get(0).contains("\"repository\":\"test/repo\""));
+    assertFalse(payload.getAllValues().get(0).contains("installationId"));
+    assertFalse(payload.getAllValues().get(0).contains("repositoryId"));
     verify(deniedRemote).sendText(eq("{\"type\":\"keepalive\"}"), any());
     verifyNoMoreInteractions(deniedRemote);
     assertEquals(2, broadcaster.getConnectedCount());
@@ -656,20 +823,45 @@ class SessionEventBroadcasterTest {
   @Test
   void shouldReplayOnlyActiveReviewsOfReadableRepositories() {
     broadcaster.seedReplayState(
-        70L, "test/repo", "review.started", FIXED_NOW, java.util.List.of("{\"a\":1}"), null);
+        70L, 1L, 7L, "review.started", FIXED_NOW, java.util.List.of("{\"a\":1}"), null);
     broadcaster.seedReplayState(
-        71L, "other/repo", "review.started", FIXED_NOW, java.util.List.of("{\"b\":2}"), null);
+        71L, 1L, 8L, "review.started", FIXED_NOW, java.util.List.of("{\"b\":2}"), null);
     var remote = mock(RemoteEndpoint.Async.class);
 
-    broadcaster.addSession(openSession(remote), "test/repo"::equals);
+    broadcaster.addSession(openSession(remote), reads(TEST_REPO));
 
     verify(remote).sendText(eq("{\"a\":1}"), any());
     verifyNoMoreInteractions(remote);
   }
 
   @Test
+  void aReaderFixedAtOpenSurvivesARefresh() {
+    var remote = mock(RemoteEndpoint.Async.class);
+    broadcaster.addSession(openSession(remote), READ_ALL);
+
+    broadcaster.refreshReaders();
+
+    assertEquals(1, broadcaster.getConnectedCount());
+  }
+
+  @Test
+  void theSameRepositoryNameUnderAnotherInstallationGetsNoEventsOrReplays() {
+    var otherInstallation = new RepoScope(2L, TEST_REPO.repositoryId());
+    var liveRemote = mock(RemoteEndpoint.Async.class);
+    broadcaster.addSession(openSession(liveRemote), reads(otherInstallation));
+    var reviewSession = createReviewSession();
+    reviewSession.id = 73L;
+
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.started(reviewSession));
+    var lateRemote = mock(RemoteEndpoint.Async.class);
+    broadcaster.addSession(openSession(lateRemote), reads(otherInstallation));
+
+    verifyNoInteractions(liveRemote, lateRemote);
+  }
+
+  @Test
   void shouldNotReplayAStateThatNeverRecordedAnEvent() {
-    broadcaster.seedReplayState(72L, "test/repo", null, FIXED_NOW, java.util.List.of("{}"), null);
+    broadcaster.seedReplayState(72L, 1L, 7L, null, FIXED_NOW, java.util.List.of("{}"), null);
     var remote = mock(RemoteEndpoint.Async.class);
 
     broadcaster.addSession(openSession(remote), READ_ALL);
@@ -686,12 +878,13 @@ class SessionEventBroadcasterTest {
 
   private void injectBufferedEvent(long sessionId, String latestType, String json) {
     broadcaster.seedReplayState(
-        sessionId, "test/repo", latestType, FIXED_NOW, java.util.List.of(json), null);
+        sessionId, 1L, 7L, latestType, FIXED_NOW, java.util.List.of(json), null);
   }
 
   private ReviewSession createReviewSession() {
     var session = new ReviewSession();
     session.id = 1L;
+    session.setScope(TEST_REPO);
     session.setRepository("test/repo");
     session.setPrNumber(1);
     session.setPrTitle("Test");

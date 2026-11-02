@@ -26,6 +26,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
+import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -43,7 +44,8 @@ class FindingStageTest {
   private static final AiReviewService.PromptInputs INPUTS =
       new AiReviewService.PromptInputs("fenced diff", "pr ctx", "", "stack", "tests", "prior", "");
 
-  private final ReviewSession session = ReviewSession.create("owner/repo", 7, "PR", "sha");
+  private final ReviewSession session =
+      ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 7, "PR", "sha");
   private final ReviewEvidence evidence = mock(ReviewEvidence.class);
   private final ReviewResponse raw = response(finding("raw"));
   private final DiffBudgetPlanner.BudgetPlan plan =
