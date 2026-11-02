@@ -34,11 +34,14 @@ are included as CLI alternatives that can run with your own model.
 
 ThrillhouseBot runs as a self-hosted GitHub App. You configure an
 OpenAI-compatible model endpoint; a local Ollama endpoint keeps model requests
-on your network. The dashboard stores review history, token use and costs.
+on your network. The dashboard shows the repositories each signed-in user can
+read across App installations, with review history, token use and costs. Its Live page follows
+the current review step and spend. Optional file triage prioritizes large diffs;
+optional routing and fallback select models on the configured provider.
 Large diffs are split into batches within a token budget, and files that do not
 fit are listed as unreviewed.
 
-In 0.8.0, the finding verifier can also revise suggested fixes and remove
+The finding verifier can revise suggested fixes and remove
 contradicted description sentences. An optional summary-verification call
 checks summary statements against the diff and findings. These model checks
 can miss defects or retain unsupported claims; inspect suggestions before

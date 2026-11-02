@@ -4,10 +4,21 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
-The dashboard now serves every installation of the GitHub App, and shows each user the
-repositories GitHub lets them read. Approve the new App permission **Organization → Members:
-read** on each installation so organization members see the installation-wide skip counters;
-without it those counters stay hidden and nothing else changes.
+## [0.9.0] - 2026-11-02
+
+This release adds a live review view, multi-installation dashboard access, optional model routing
+and fallback, and file-priority batching. Before upgrading:
+
+- Back up the database. Flyway now migrates it at startup; upgrade from v0.8.x. Older databases
+  must first be started on v0.8.x. Restoring the backup is required to roll back a schema change.
+- Subscribe an existing GitHub App to the **Repository** event under Permissions & events.
+  Approve **Organization → Members: read** so organization members can see installation-wide
+  skip counters; without it those counters stay hidden.
+- Metrics now follow `OTEL_EXPORTER_ENDPOINT` as traces do. If only a per-signal traces endpoint
+  was configured, also set the generic endpoint for metrics. Log export remains opt-in.
+
+See [the operations guide](docs/OPERATIONS.md#upgrades-and-database-changes) for backup, migration
+and rollback details. New review features below are off by default unless stated otherwise.
 
 ### Added
 
@@ -44,8 +55,8 @@ without it those counters stay hidden and nothing else changes.
 - The Docker test image workflow builds the native variant for arm64 as well as amd64, each on a
   runner of its own architecture, and publishes one multi-arch tag. The JVM variant stays amd64.
 - The bot follows installation and repository events. Uninstalling or suspending the App, or
-  removing a repository from an installation, stops the dashboard serving it at once instead of
-  after its cache expired; unsuspending or adding it back serves it again. A renamed or
+  removing a repository from an installation, invalidates cached dashboard permissions and
+  requests a live-connection refresh; unsuspending or adding it back restores access. A renamed or
   transferred repository's stored rows show its new name. The App now subscribes to the
   **Repository** event; an existing App must tick it under Permissions & events. Purging an
   installation's rows by installation id is documented in `docs/OPERATIONS.md`. (#1222)
@@ -56,12 +67,12 @@ without it those counters stay hidden and nothing else changes.
   start it is recorded as version 1, the v0.8.0 schema, and only later migrations run. Upgrade
   from v0.8.x. The dev and test databases are in-memory H2 in PostgreSQL mode, built from the
   same migrations. (#22)
-- Stored reviews, pauses, finding feedback and learnings are scoped by GitHub App installation
-  and the repository's numeric id instead of the `owner/repo` name. A repository of the same name
-  under another installation, or one deleted and re-created, no longer sees another's history,
-  and a renamed repository keeps its own. On the first start after the upgrade the bot fills the
-  ids in for existing rows; rows of a repository it cannot match stay hidden, except a pause,
-  which is still honored. The repository configuration caches are keyed by installation too.
+- New reviews, pauses, finding feedback and learnings record the GitHub App installation and
+  numeric repository ids instead of using only the `owner/repo` name. Reads match both ids, so
+  already-scoped history stays with its repository after a rename. On the first start after the
+  upgrade, existing name-only rows are matched to the App's current repositories. Unmatched rows
+  stay hidden, except a pause, which is still honored. Repository configuration caches are keyed
+  by installation too.
   (#1220)
 - With `AI_REASONING_ENABLED=true`, the one repeat of a call that spent its whole response cap
   reasoning now goes out at `reasoning_effort=low` instead of `none`, and a lane already at `low`
@@ -80,7 +91,7 @@ without it those counters stay hidden and nothing else changes.
   it. Before, the user got no answer. (#1175)
 ### Security
 
-- Guava is raised to 33.7.2 (GHSA-xxph-c9ww-hj94, unbounded allocation when deserializing
+- Guava is raised to 33.7.2-jre (GHSA-xxph-c9ww-hj94, unbounded allocation when deserializing
   `CompactHashMap` and related collections). The Quarkus platform does not ship the fix yet.
   (#1288)
 
@@ -96,8 +107,8 @@ without it those counters stay hidden and nothing else changes.
   permission is none does not see a private repository, and a token GitHub rejects ends the
   session. The installation-wide skip counters go to the account itself or to organization
   members, per installation. `thrillhousebot.dashboard.github.account-owner` is now optional and
-  limits the dashboard to one account; the "not configured" error is gone. The live feed
-  follows a change in access within five minutes. Acting through the bot (`/review`, decline
+  limits the dashboard to one account; the "not configured" error is gone. Live connections
+  use the same repository permissions, refreshed in the background. Acting through the bot (`/review`, decline
   learnings, finding feedback) needs write, maintain or admin. (#1221)
 
 - The dashboard WebSocket no longer takes its session from the endpoint configuration that every
@@ -177,7 +188,15 @@ without it those counters stay hidden and nothing else changes.
   Implementation, a clause such as "the summary should carry the description gap" is dropped, and
   an opening "Name the exact layer to verify:" is removed so the check it introduced starts the
   sentence. (#1195)
-- The version bump pull request opened after a release now passes the DCO check. Its commit was not signed off, and the check accepts an unsigned bot commit only when it has a verified signature (#1226).
+- The post-release version bump commit now carries a `Signed-off-by` trailer matching the bot's
+  author identity, so it passes DCO directly. It is signed off, rather than cryptographically
+  signed. (#1226)
+
+### Known limitations
+
+- OpenTelemetry API 1.62.0 remains affected by GHSA-ccrj-gw8r-854m. A compatible dependency
+  upgrade is tracked in [#1289](https://github.com/devops-thiago/ThrillhouseBot/issues/1289); the
+  Guava update above does not resolve it.
 
 ## [0.8.0] - 2026-10-21
 
