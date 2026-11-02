@@ -46,7 +46,7 @@ guide, configuration reference, architecture, comparison, and the hosted
 - Follow-up reviews track whether earlier findings were fixed, declined or are still open, and re-check a maintainer's decline against the code
 - One summary comment per pull request, edited in place every round, with a risk breakdown, a changed-files walkthrough and every finding still open
 - Comment commands (`/review`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`, `/help`, and with learnings on `/learnings`, `/remember`, `/forget`) and conversational replies to `@thrillhousebot`
-- Auto-review triggers: skip drafts, gate on labels, filter by base branch, and optionally space out reviews of one PR (`AUTO_REVIEW_MIN_INTERVAL`)
+- Auto-review triggers: skip drafts, gate on labels or authors, filter by base branch, and optionally space out reviews of one PR (`AUTO_REVIEW_MIN_INTERVAL`)
 - Maintainer 👍/👎 reactions and "not useful" replies are recorded as [finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/)
 - Optional review context, each off by default: the issues a PR links and their acceptance criteria, failing CI checks and test names, patch coverage from your own coverage report, and review learnings (maintainer declines and `/remember` conventions from earlier reviews of the same repository)
 - Optional deterministic scan of added lines for leaked credentials and risky Terraform, Kubernetes, CloudFormation and Dockerfile settings, with no model call and every matched secret redacted
@@ -1612,8 +1612,9 @@ and counts skips per reason in the dashboard summary
 2. **Draft** (`reason=DRAFT`): with `WEBHOOK_SKIP_DRAFTS=true`, drafts wait until
    marked ready.
 3. **Paused** (`reason=PAUSED`): someone commented `/pause`; comment `/resume`.
-4. **Label gates** (`reason=MISSING_REQUIRED_LABEL` / `EXCLUDED_LABEL`): check
-   `WEBHOOK_REQUIRED_LABELS` and `WEBHOOK_EXCLUDED_LABELS`.
+4. **Label and author gates** (`reason=MISSING_REQUIRED_LABEL` /
+   `EXCLUDED_LABEL` / `EXCLUDED_AUTHOR`): check `WEBHOOK_REQUIRED_LABELS`,
+   `WEBHOOK_EXCLUDED_LABELS` and `WEBHOOK_EXCLUDED_AUTHORS`.
 5. **Base-branch filters** (`reason=BASE_BRANCH_NOT_ALLOWED` /
    `IGNORED_BASE_BRANCH`): check `WEBHOOK_BASE_BRANCHES` and
    `WEBHOOK_IGNORED_BASE_BRANCHES`.
