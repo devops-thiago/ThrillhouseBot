@@ -76,6 +76,10 @@ without it those counters stay hidden and nothing else changes.
   it. Before, the user got no answer. (#1175)
 ### Security
 
+- Guava is raised to 33.7.2 (GHSA-xxph-c9ww-hj94, unbounded allocation when deserializing
+  `CompactHashMap` and related collections). The Quarkus platform does not ship the fix yet.
+  (#1288)
+
 - `GITHUB_ALLOWED_ACCOUNTS` (`thrillhousebot.github.allowed-accounts`) limits the bot to the
   installations on the listed accounts. Events from any other installation are ignored before
   any work and logged, and the dashboard does not list those installations. Dashboard sign-in for

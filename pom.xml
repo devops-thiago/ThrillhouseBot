@@ -27,6 +27,7 @@
         <!-- Keep in lockstep with the prometheus-metrics version opentelemetry-exporter-prometheus ships -->
         <prometheus-metrics.version>1.10.0</prometheus-metrics.version>
         <jackson-bom.version>2.22.4</jackson-bom.version>
+        <guava-bom.version>33.7.2-jre</guava-bom.version>
         <skipITs>true</skipITs>
         <!-- JUnit tag filters for surefire; the eval profile flips them to run PromptEvalTest -->
         <surefire.groups></surefire.groups>
@@ -95,6 +96,20 @@
                 <groupId>com.fasterxml.jackson</groupId>
                 <artifactId>jackson-bom</artifactId>
                 <version>${jackson-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!--
+                CVE override for guava GHSA-xxph-c9ww-hj94 / CVE-2026-102554
+                (unbounded allocation when deserializing CompactHashMap and
+                related collections), fixed in 33.7.2 while quarkus-bom 3.40.1.1
+                manages 33.6.0. Declared before the quarkus-bom import so this
+                BOM wins. Remove once the platform ships a fixed guava.
+            -->
+            <dependency>
+                <groupId>com.google.guava</groupId>
+                <artifactId>guava-bom</artifactId>
+                <version>${guava-bom.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
