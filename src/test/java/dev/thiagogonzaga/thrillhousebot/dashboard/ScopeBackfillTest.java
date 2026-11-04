@@ -37,6 +37,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
 import jakarta.ws.rs.core.Response;
+import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -51,6 +52,9 @@ import org.junit.jupiter.api.Test;
 class ScopeBackfillTest extends ReviewSessionTestSupport {
 
   private static final RepoScope ACME_APP = new RepoScope(10L, 100L);
+
+  /** When the mocked repositories were created: before every row these tests store. */
+  private static final Instant CREATED = Instant.parse("2020-01-01T00:00:00Z");
 
   @Inject ScopeBackfillStore store;
   @Inject EntityManager em;
@@ -105,6 +109,41 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
         1,
         ReviewLearning.count("repositoryId is null"),
         "a learning of another installation is not moved into this one");
+  }
+
+  @Test
+  void rowsOlderThanTheMatchedRepositoryBelongToADeletedOneAndStayHidden() throws Exception {
+    // acme/app was deleted and created again under the same name after these rows were stored.
+    var older = legacySession("acme/app");
+    legacyPause("acme/app", 7);
+    legacyFeedback("acme/app");
+    legacyLearning(10L, "acme/app");
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer acme"), anyString(), eq(100), eq(1)))
+        .thenReturn(repositories(new Repo(100L, "acme", "app", Instant.now().plusSeconds(60))));
+
+    assertEquals(new ScopeBackfill.Result(1, 0, 1), backfill.backfill());
+    ReviewSession hidden = ReviewSession.findById(older.id);
+    assertNull(hidden.getInstallationId());
+    assertNull(hidden.getRepositoryId());
+    assertEquals(1, FindingFeedback.count("installationId is null"));
+    assertEquals(1, ReviewLearning.count("repositoryId is null"));
+    // A pause stores no time and only holds reviews back, so it still follows the name.
+    assertEquals(1, PausedPr.count("installationId = 10 and repositoryId = 100"));
+  }
+
+  @Test
+  void aRepositoryWithoutACreationDateFillsNoReviewRows() throws Exception {
+    var session = legacySession("acme/app");
+    legacyFeedback("acme/app");
+    when(installationClient.listInstallationRepositories(
+            eq("Bearer acme"), anyString(), eq(100), eq(1)))
+        .thenReturn(repositories(new Repo(100L, "acme", "app", null)));
+
+    assertEquals(new ScopeBackfill.Result(1, 0, 0), backfill.backfill());
+    ReviewSession hidden = ReviewSession.findById(session.id);
+    assertNull(hidden.getInstallationId());
+    assertEquals(1, FindingFeedback.count("installationId is null"));
   }
 
   @Test
@@ -215,7 +254,7 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
                     new InstallationRepositoriesResponse.Repository(2L, "app", null),
                     new InstallationRepositoriesResponse.Repository(
                         3L, "app", new InstallationRepositoriesResponse.Repository.Owner(null)),
-                    new InstallationRepositoriesResponse.Repository(100L, "app", acme),
+                    new InstallationRepositoriesResponse.Repository(100L, "app", acme, CREATED),
                     // Listed without an id: skipped, so it neither replaces the entry above nor
                     // aborts the run with a scope that cannot exist.
                     new InstallationRepositoriesResponse.Repository(0L, "app", acme))));
@@ -302,7 +341,11 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
 
   private static final String ACCEPT = "application/vnd.github+json";
 
-  private record Repo(long id, String owner, String name) {}
+  private record Repo(long id, String owner, String name, Instant createdAt) {
+    Repo(long id, String owner, String name) {
+      this(id, owner, name, CREATED);
+    }
+  }
 
   private static GitHubInstallationClient.Installation installation(long id, String account) {
     return new GitHubInstallationClient.Installation(
@@ -318,7 +361,8 @@ class ScopeBackfillTest extends ReviewSessionTestSupport {
                     new InstallationRepositoriesResponse.Repository(
                         r.id(),
                         r.name(),
-                        new InstallationRepositoriesResponse.Repository.Owner(r.owner())))
+                        new InstallationRepositoriesResponse.Repository.Owner(r.owner()),
+                        r.createdAt()))
             .toList());
   }
 

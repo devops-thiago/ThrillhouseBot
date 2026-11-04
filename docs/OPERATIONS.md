@@ -267,7 +267,9 @@ in for existing rows, matching each `owner/repo` to the installations it can
 see, and logs `Scope backfill: matched N repository name(s) and filled M
 row(s)`. Rows of a repository it cannot match (deleted, transferred to another
 account, or no longer installed) stay hidden from the dashboard and from later
-reviews; the bot tries them again on every start. A pause it cannot match is
+reviews; the bot tries them again on every start. So do rows stored before the
+matched repository was created: they belong to an earlier repository of the same
+name that was deleted. A pause it cannot match is
 still honored, and `/resume` lifts it. If GitHub cannot be reached, nothing is
 written and the next start tries again.
 
