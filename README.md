@@ -1193,7 +1193,7 @@ again. Commands such as `/describe` or `/improve` send nothing.
   "schema_version": 1,
   "event": "review.completed",
   "timestamp": "2026-09-29T12:00:00Z",
-  "bot": { "name": "thrillhousebot", "version": "0.8.0" },
+  "bot": { "name": "thrillhousebot", "version": "0.9.0" },
   "repository": "octo/repo",
   "pull_request": { "number": 42, "head_sha": "0123abc…", "url": "https://github.com/octo/repo/pull/42" },
   "session_url": "https://bot.example/session/…",
@@ -1291,8 +1291,9 @@ installation.
 
 Everything the dashboard shows is scoped this way: the session list and its
 totals, session details, costs, tokens, the overview, feedback, learnings and
-the live feed, which follows a change in your access within five minutes. A
-`?repository=` you cannot access returns 403, and a session id from such a
+the live feed. Repository permissions are cached for five minutes, and live
+connections refresh them in the background. A `?repository=` you cannot access
+returns 403, and a session id from such a
 repository returns 404. The overview's skip counts span a whole installation, so
 they are shown for a personal account to that account, and for an organization
 to its members. Checking membership needs the app's Organization → Members: read
@@ -1663,8 +1664,8 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
   history and cost totals are stored in PostgreSQL. Multiple replicas are not
   supported.
 - **Dashboard access.** GitHub OAuth only, for users who can read a repository
-  where the app is installed; no admin UI or guest mode. A change in someone's
-  access reaches the dashboard within five minutes. GitHub lets only the owner of
+  where the app is installed; no admin UI or guest mode. Access is checked
+  against GitHub's repository permissions and cached for five minutes. GitHub lets only the owner of
   a private app sign in with it, so anyone else needs the app to be public; set
   `GITHUB_ALLOWED_ACCOUNTS` then, because anyone can install a public app.
 - **Production database.** Container and native builds use PostgreSQL. H2 is for
@@ -1701,14 +1702,14 @@ Sigstore) and carry build-provenance attestations. To check a release:
 cosign verify \
   --certificate-identity-regexp='https://github.com/devops-thiago/ThrillhouseBot.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/devops-thiago/thrillhousebot:v0.8.0
+  ghcr.io/devops-thiago/thrillhousebot:v0.9.0
 
 # Provenance (image)
-gh attestation verify oci://ghcr.io/devops-thiago/thrillhousebot:v0.8.0 \
+gh attestation verify oci://ghcr.io/devops-thiago/thrillhousebot:v0.9.0 \
   --repo devops-thiago/ThrillhouseBot
 
 # Provenance (a downloaded binary)
-gh attestation verify thrillhousebot-v0.8.0-linux-amd64.tar.gz \
+gh attestation verify thrillhousebot-v0.9.0-linux-amd64.tar.gz \
   --repo devops-thiago/ThrillhouseBot
 ```
 
@@ -1731,9 +1732,10 @@ docker compose pull && docker compose up -d
 
 Each release's notes start with what changes for an existing installation:
 new or renamed settings, changed defaults and database changes. Database
-changes are Flyway migrations that run on startup; a database created before
-v0.9.0 is recognised as the v0.8.0 schema on its first start. New
-settings default to the previous behaviour unless the notes say otherwise. If
+changes are Flyway migrations that run on startup. Back up the database first
+and upgrade from v0.8.x; older databases must first be started once on v0.8.x.
+The first v0.9.0 start records that schema as version 1 and applies later
+migrations. New settings default to the previous behaviour unless the notes say otherwise. If
 you pin a version with `IMAGE_TAG` in `.env`, set it to the new tag before
 pulling.
 
@@ -1838,7 +1840,7 @@ Both images are built from the same native binary and published to GHCR:
 
 - `ghcr.io/devops-thiago/thrillhousebot:latest`: UBI9-micro (default).
 - `ghcr.io/devops-thiago/thrillhousebot:latest-distroless`: distroless base
-  (`:v0.8.0-distroless`, and so on).
+  (`:v0.9.0-distroless`, and so on).
 - Snapshot tags: `:snapshot`, `:v<version>-<short-sha>-snapshot` and
   `:<full-sha>`, each with a `-distroless` variant.
   A weekly job keeps the 10 newest snapshot builds of each variant and

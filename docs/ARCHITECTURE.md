@@ -559,14 +559,13 @@ mode. Flyway runs the scripts in `src/main/resources/db/migration` at boot, and 
 validates the entities against the result. A database created before migrations were adopted is
 baselined at V1, the v0.8.0 schema.
 
-Every row carries the GitHub App installation id and GitHub's numeric repository id it was stored
-under (#1220), both from the signed webhook payload, and every read matches both (`RepoScope`).
-A repository of the same name under another installation, or one deleted and re-created, never
-sees another's rows; a renamed repository keeps its own. Rows stored before v0.9.0 are filled at
-startup by `ScopeBackfill`, which matches each `owner/repo` to the App's installations and their
-repositories, following GitHub's redirect for a renamed one. It fills only rows stored after the
-matched repository was created, since older ones belong to a deleted repository of the same name.
-A row it cannot match keeps a null
+New rows carry the GitHub App installation id and GitHub's numeric repository id from the signed
+webhook payload (#1220), and reads match both (`RepoScope`). Already-scoped rows stay with those
+ids after a rename; a different installation or repository id does not match them. Rows stored
+before v0.9.0 lack those ids. At startup, `ScopeBackfill` matches each `owner/repo` to the App's
+installations and their repositories, following GitHub's redirect for a renamed one. It fills only
+rows stored after the matched repository was created, since older ones belong to a deleted
+repository of the same name. A row it cannot match keeps a null
 scope and is never read, except a pause, which is still honored and lifted by its exact name so
 that a pause a maintainer asked for is not silently dropped. The two startup maintenance passes,
 `InterruptedSessionReconciler` and `SessionCostBackfill`, read every session by design.

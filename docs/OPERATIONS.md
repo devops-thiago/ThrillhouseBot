@@ -35,10 +35,10 @@ so a restart does not lose track of the findings on open pull requests.
 ## Installations and repositories
 
 The bot follows GitHub's installation events (#1222). Uninstalling or
-suspending the App on an account stops the dashboard from serving that
-installation at once, and unsuspending brings it back. Removing a repository
-from an installation hides it, and adding it again serves its history again,
-since rows are kept by repository id. The bot remembers a removal for ten
+suspending the App invalidates cached dashboard permissions and requests a
+refresh of live connections. Unsuspending restores access. Removing a repository
+from an installation removes it from subsequent access checks; adding it again
+serves its history, since rows are kept by repository id. The bot remembers a removal for ten
 minutes, long enough for GitHub's own answer to catch up, so a lost unsuspend
 or added delivery hides nothing for longer than that. Renaming or transferring a repository
 updates the name its stored rows show; a transferred repository belongs to
@@ -150,7 +150,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: thrillhousebot
-          image: ghcr.io/devops-thiago/thrillhousebot:v0.8.0
+          image: ghcr.io/devops-thiago/thrillhousebot:v0.9.0
           ports:
             - containerPort: 8080
           securityContext:
