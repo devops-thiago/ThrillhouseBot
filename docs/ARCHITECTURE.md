@@ -564,7 +564,9 @@ under (#1220), both from the signed webhook payload, and every read matches both
 A repository of the same name under another installation, or one deleted and re-created, never
 sees another's rows; a renamed repository keeps its own. Rows stored before v0.9.0 are filled at
 startup by `ScopeBackfill`, which matches each `owner/repo` to the App's installations and their
-repositories, following GitHub's redirect for a renamed one. A row it cannot match keeps a null
+repositories, following GitHub's redirect for a renamed one. It fills only rows stored after the
+matched repository was created, since older ones belong to a deleted repository of the same name.
+A row it cannot match keeps a null
 scope and is never read, except a pause, which is still honored and lifted by its exact name so
 that a pause a maintainer asked for is not silently dropped. The two startup maintenance passes,
 `InterruptedSessionReconciler` and `SessionCostBackfill`, read every session by design.
