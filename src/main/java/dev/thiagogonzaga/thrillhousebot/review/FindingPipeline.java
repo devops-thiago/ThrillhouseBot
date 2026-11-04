@@ -22,7 +22,6 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ReviewExecutorProducer;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
-import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
@@ -30,7 +29,6 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.SummaryVerificationService;
-import dev.thiagogonzaga.thrillhousebot.review.ai.Throwables;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenSpendCeilingExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager;
@@ -917,7 +915,7 @@ public class FindingPipeline {
       ReviewContextLoader.ReviewContext ctx,
       AiReviewException failure,
       DescriptionGapCarryover.Carry carry) {
-    if (isInterruption(failure)) {
+    if (AiFailures.isInterruption(failure)) {
       throw failure;
     }
     plan.recordSummaryDegradation(SummaryDegradation.SUMMARY_FAILED);
@@ -927,16 +925,6 @@ public class FindingPipeline {
         ledgerSessionId(session), failure.attempts(), refined.findings().size());
     return persistWithSummary(
         session, refined, PriorOverviewCarryover.fillDegraded(ctx, refined.findings()), carry);
-  }
-
-  /**
-   * Whether an AI failure is the calling thread being interrupted rather than the call failing. The
-   * AI service restores the interrupt flag before wrapping the {@link InterruptedException}, but a
-   * later attempt can consume the flag, so the cause chain is read as well.
-   */
-  private static boolean isInterruption(AiReviewException failure) {
-    return Thread.currentThread().isInterrupted()
-        || Throwables.findCause(failure, InterruptedException.class).isPresent();
   }
 
   /**
@@ -1056,7 +1044,7 @@ public class FindingPipeline {
           // cap (#495), so the failure goes straight to the disclose step — which now salvages
           // the complete leading findings out of the buffered partial body first (#500).
           outcomesByIndex[i] = salvageTruncatedBatch(i, run, truncation.get());
-        } else if (AiContextWindowExceededException.findIn(e).isPresent()) {
+        } else if (AiFailures.isContextWindowRejection(e)) {
           // Deterministic like a truncation: the provider rejected the batch's request for
           // exceeding the model's context window, and the sequential retry below would re-send
           // the identical prompt against the identical window (#622). Straight to disclosure.
@@ -1066,7 +1054,7 @@ public class FindingPipeline {
                   + " files as not reviewed",
               i + 1, batches.size());
           plan.recordUncoveredFiles(filenamesOf(batches.get(i).files()));
-        } else if (isSpendCeilingBlocked(e)) {
+        } else if (AiFailures.isSpendCeilingBlocked(e)) {
           // Deterministic like a truncation: the ledger is monotonic within a review, so a retry
           // would be refused identically. Degrade like the budgeter — disclose, with the ceiling
           // as the reason — instead of paying nothing and losing the batches that succeeded.
@@ -1165,15 +1153,6 @@ public class FindingPipeline {
 
   private static List<String> filenamesOf(List<GitHubPullRequestClient.FileDiff> files) {
     return files.stream().map(GitHubPullRequestClient.FileDiff::filename).toList();
-  }
-
-  /**
-   * Whether a batch failure was the spend ceiling refusing the call before it was made. The refusal
-   * arrives wrapped in the parallel pass's {@link CompletionException}, so this shares the bounded
-   * cause walk in {@link Throwables#findCause} with {@link AiResponseTruncatedException#findIn}.
-   */
-  private static boolean isSpendCeilingBlocked(Throwable failure) {
-    return Throwables.findCause(failure, TokenSpendCeilingExceededException.class).isPresent();
   }
 
   /**
