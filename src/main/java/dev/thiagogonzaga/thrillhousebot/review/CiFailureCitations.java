@@ -813,7 +813,7 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
     int i = 0;
     while (i < raw.length()) {
       if (opensAQuote(raw, i)) {
-        // The span closes on this line, so the next character to read is the one after it.
+        // opensAQuote found the closing quote before the line ends, so this jump stays on the line.
         i = raw.indexOf(raw.charAt(i), i + 1) + 1;
         continue;
       }
