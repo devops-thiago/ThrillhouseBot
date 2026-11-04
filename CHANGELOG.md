@@ -128,8 +128,9 @@ and rollback details. New review features below are off by default unless stated
   authenticated as that user and received their live review events, and two handshakes at the
   same time could swap identities. The page now fetches a single-use ticket from
   `POST /api/auth/socket-ticket` and opens the socket with it in the query string; the ticket
-  expires after 30 seconds and works once. The session cookie is no longer accepted as a query
-  parameter. (#1223)
+  expires after 30 seconds and works once. When the server cannot check access with GitHub (503)
+  or the request gets no answer, the page keeps retrying with backoff; a denied or expired session
+  stops it. The session cookie is no longer accepted as a query parameter. (#1223)
 - A session link posted on GitHub (`/session/<id>`) now redirects to the session's page only for
   a dashboard login that may read it; anyone else is sent to the sessions list, so the link no
   longer reveals the session's numeric id. (#1220)
