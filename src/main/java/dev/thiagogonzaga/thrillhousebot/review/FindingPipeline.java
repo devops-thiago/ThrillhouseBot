@@ -51,7 +51,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
-import org.jboss.logging.Logger;
 
 /**
  * The post-AI finding chain: validate quotes, dedupe, verify against the diff, calibrate the graded
@@ -65,12 +64,18 @@ import org.jboss.logging.Logger;
 public class FindingPipeline {
 
   /**
-   * Logger pinned to this class so the empty-batch warning emitted from {@link BatchPrompts} keeps
-   * the category operators already filter on: the build-time {@code Log} facade binds its category
-   * to the class holding the call, which for a nested type would silently relabel the WARN to
-   * {@code FindingPipeline$BatchPrompts}.
+   * The empty-batch warning of {@link BatchPrompts}. It lives here so it keeps the category
+   * operators already filter on: the build-time {@code Log} facade binds its category to the class
+   * holding the call, which for the nested type would silently relabel the WARN to {@code
+   * FindingPipeline$BatchPrompts}.
    */
-  private static final Logger LOG = Logger.getLogger(FindingPipeline.class);
+  static void warnBatchWithoutDiff(int files) {
+    Log.warnf(
+        "Review batch covering %d file(s) carries no diff text, so the heuristic failure-mode"
+            + " review dimension has no material to evaluate and is omitted from that call —"
+            + " this is a planning defect, not a pull request that introduces no heuristic code",
+        files);
+  }
 
   /** Directory rows listed in the scope header before the remainder is rolled up by count. */
   private static final int MAX_SCOPE_DIRECTORIES = 10;
@@ -157,8 +162,8 @@ public class FindingPipeline {
      * notice} this class already adds after planning, and it is what the token safety margin (10%
      * of the input cap by default, ~4800 tokens against this section's ~700) is held back for.
      *
-     * <p>Warns through {@link #LOG}, pinned to the enclosing class, so the operator-facing category
-     * is unchanged by this method living in {@link BatchPrompts}.
+     * <p>Warns through {@link #warnBatchWithoutDiff}, in the enclosing class, so the
+     * operator-facing category is unchanged by this method living in {@link BatchPrompts}.
      */
     private static String heuristicFailureModesFor(DiffBudgetPlanner.DiffBatch batch) {
       var scanned = heuristicScanSource(batch.text());
@@ -167,11 +172,7 @@ public class FindingPipeline {
         // detector fed nothing reports "no heuristic code" in the same voice as a detector that
         // read
         // the diff and found none.
-        LOG.warnf(
-            "Review batch covering %d file(s) carries no diff text, so the heuristic failure-mode"
-                + " review dimension has no material to evaluate and is omitted from that call —"
-                + " this is a planning defect, not a pull request that introduces no heuristic code",
-            batch.files().size());
+        warnBatchWithoutDiff(batch.files().size());
         return "";
       }
       return ReviewPromptAssembler.heuristicFailureModesSection(scanned);

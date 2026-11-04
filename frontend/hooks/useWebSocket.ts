@@ -26,24 +26,36 @@ export interface SessionEvent {
 }
 
 /**
+ * A socket ticket, or why there is none. `retry` is true when the failure is temporary: a 503,
+ * which the server sends when it could not check access with GitHub, or a request that never got
+ * an answer. Anything else (the session is gone, access is denied, the answer is malformed) stops
+ * reconnecting.
+ */
+export type SocketTicket = { ticket: string } | { ticket: null; retry: boolean };
+
+/**
  * Fetches the single-use ticket the socket presents in its query string. A WebSocket cannot carry
  * the session in a header the server can read per connection, so each connect asks for a fresh
- * ticket; null when the session is gone or not allowed, which stops reconnecting.
+ * ticket.
  */
-export async function fetchSocketTicket(): Promise<string | null> {
+export async function fetchSocketTicket(): Promise<SocketTicket> {
+  let res: Response;
   try {
-    const res = await fetch("/api/auth/socket-ticket", {
+    res = await fetch("/api/auth/socket-ticket", {
       method: "POST",
       credentials: "include",
     });
-    if (!res.ok) {
-      return null;
-    }
-    const body: { ticket?: unknown } = await res.json();
-    return typeof body.ticket === "string" && body.ticket !== "" ? body.ticket : null;
   } catch {
-    return null;
+    return { ticket: null, retry: true };
   }
+  if (!res.ok) {
+    return { ticket: null, retry: res.status === 503 };
+  }
+  // An answer that is not JSON is malformed, not a failed request: it stops, like any other.
+  const body: { ticket?: unknown } | null = await res.json().catch(() => null);
+  return typeof body?.ticket === "string" && body.ticket !== ""
+    ? { ticket: body.ticket }
+    : { ticket: null, retry: false };
 }
 
 export function socketUrl(location: Pick<Location, "protocol" | "host">, ticket: string): string {
@@ -70,6 +82,12 @@ export function useWebSocket(onEvent?: (event: SessionEvent) => void) {
     if (!mountedRef.current) {
       return;
     }
+    // Tries again after the current delay, doubling it up to 30 seconds.
+    const scheduleReconnect = () => {
+      const delay = reconnectDelay.current;
+      reconnectTimeout.current = setTimeout(connect, delay);
+      reconnectDelay.current = Math.min(delay * 2, 30000);
+    };
 
     const existing = wsRef.current;
     if (
@@ -82,13 +100,19 @@ export function useWebSocket(onEvent?: (event: SessionEvent) => void) {
 
     existing?.close();
 
-    const ticket = await fetchSocketTicket();
-    if (!ticket || !mountedRef.current) {
+    const answer = await fetchSocketTicket();
+    if (!mountedRef.current) {
+      return;
+    }
+    if (answer.ticket === null) {
       setConnected(false);
+      if (answer.retry) {
+        scheduleReconnect();
+      }
       return;
     }
 
-    const ws = new WebSocket(socketUrl(location, ticket));
+    const ws = new WebSocket(socketUrl(location, answer.ticket));
 
     ws.onopen = () => {
       if (!mountedRef.current) {
@@ -118,9 +142,7 @@ export function useWebSocket(onEvent?: (event: SessionEvent) => void) {
       }
       setConnected(false);
       wsRef.current = null;
-      const delay = reconnectDelay.current;
-      reconnectTimeout.current = setTimeout(connect, delay);
-      reconnectDelay.current = Math.min(delay * 2, 30000);
+      scheduleReconnect();
     };
 
     ws.onerror = () => ws.close();
