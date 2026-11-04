@@ -3632,9 +3632,9 @@ class FindingPipelineTest {
 
   /**
    * #486 P4 — the packing loop could break at zero listed lines, emitting a bare rollup note in
-   * place of the PR-scope header {@code changedFilesOverview} renders first precisely so clamping
-   * can only take the tail. The note also counted lines while reading "changed files", so the
-   * header rows inflated it above the real file count.
+   * place of the PR-scope header {@code overviewHeader} renders first precisely so clamping can
+   * only take the tail. The note also counted lines while reading "changed files", so the header
+   * rows inflated it above the real file count.
    */
   @Test
   void anOverviewTooSmallForItsScopeHeaderIsWithheldNotReducedToABareRollup() {

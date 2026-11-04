@@ -652,7 +652,7 @@ public class FindingPipeline {
     }
     // Added before the clamps below, so the overview and findings are sized around it.
     var inputs = withCarriedGaps(promptInputs, carry);
-    var overview = clampOverview(changedFilesOverview(ctx, plan), inputs);
+    var overview = clampOverview(overviewHeader(ctx), overviewRows(ctx, plan), inputs);
     var summaryInputs =
         new AiReviewService.SummaryInputs(
             inputs.prContext(),
@@ -1249,17 +1249,17 @@ public class FindingPipeline {
    * row is grounded with a wide margin. Pinned by {@code
    * FindingPipelineTest#aPr532SizedOverviewKeepsFarMoreRowsThanTheWalkthroughRenders}.
    *
-   * <p>Only the per-file rows are clampable. The {@linkplain ChangedFilesOverview#header() header
-   * block} — the pure-rename rollup and the PR-scope totals — is rendered first precisely so
-   * clamping can only take the tail, so a budget too small to hold it withholds the overview
-   * outright rather than emitting a rollup note in the header's place (#486 P4). That also keeps
-   * the note's count honest: everything it can drop is a file.
+   * <p>Only the per-file rows are clampable. The {@linkplain #overviewHeader header block} — the
+   * pure-rename rollup and the PR-scope totals — is rendered first precisely so clamping can only
+   * take the tail, so a budget too small to hold it withholds the overview outright rather than
+   * emitting a rollup note in the header's place (#486 P4). That also keeps the note's count
+   * honest: everything it can drop is a file.
    */
   private String clampOverview(
-      ChangedFilesOverview overview, AiReviewService.PromptInputs promptInputs) {
+      String header, String fileRows, AiReviewService.PromptInputs promptInputs) {
     var budget = budgetPlanner.perCallInputBudget();
     if (budget == Integer.MAX_VALUE) {
-      return overview.text();
+      return header + fileRows;
     }
     var inherited =
         PrReviewPrompts.SUMMARY_SYSTEM
@@ -1268,14 +1268,15 @@ public class FindingPipeline {
             + promptInputs.previousFindings()
             + promptInputs.summaryInstructions();
     var overviewBudget = (budget - tokenCounter.estimateTokens(inherited)) / 2;
-    var rows = overview.fileRows();
+    // The per-file rows as lines, empty when there are none — never a single blank row.
+    var rows = fileRows.isEmpty() ? new String[0] : fileRows.split("\n");
     // Rollup-note tokens are reserved up front so post-truncation append cannot exceed the share.
     var noteReserve = tokenCounter.estimateTokens(overviewRollupNote(rows.length));
-    var headerTokens = tokenCounter.estimateTokens(overview.header());
+    var headerTokens = tokenCounter.estimateTokens(header);
     if (overviewBudget - noteReserve < headerTokens) {
       return "(changed-files overview withheld — summary input budget exhausted)\n";
     }
-    var sb = new StringBuilder(overview.header());
+    var sb = new StringBuilder(header);
     var used = headerTokens;
     var listed = 0;
     while (listed < rows.length) {
@@ -1288,7 +1289,7 @@ public class FindingPipeline {
       listed++;
     }
     if (listed == rows.length) {
-      return overview.text();
+      return header + fileRows;
     }
     sb.append(overviewRollupNote(rows.length - listed));
     return sb.toString();
@@ -1533,29 +1534,10 @@ public class FindingPipeline {
   }
 
   /**
-   * The summary call's changed-files overview, split at the seam {@link #clampOverview} clamps on:
-   * the {@code header} block that must survive any clamp (pure-rename rollup, PR-scope totals) and
-   * the newline-separated per-file {@code rows} that may be rolled up by count from the tail.
+   * The head of the summary call's changed-files overview, the block {@link #clampOverview} keeps
+   * through any clamp: the pure-rename rollup, then the PR-scope totals.
    */
-  private record ChangedFilesOverview(String header, String rows) {
-
-    String text() {
-      return header + rows;
-    }
-
-    /** The per-file rows as lines, empty when there are none — never a single blank row. */
-    String[] fileRows() {
-      return rows.isEmpty() ? new String[0] : rows.split("\n");
-    }
-  }
-
-  /**
-   * Every changed file by name + change counts, so the summary covers files with no findings too.
-   * Hunk-clipped files are marked partially analyzed — presenting them with bare change counts
-   * would tell the summary they were fully covered when most of the patch was never sent.
-   */
-  private static ChangedFilesOverview changedFilesOverview(
-      ReviewContextLoader.ReviewContext ctx, DiffBudgetPlanner.BudgetPlan plan) {
+  private static String overviewHeader(ReviewContextLoader.ReviewContext ctx) {
     var header = new StringBuilder();
     // Pure-rename rollup first so clampOverview (keeps a prefix) never drops the disclosure on
     // large multi-call reviews (#386).
@@ -1564,7 +1546,18 @@ public class FindingPipeline {
       header.append(ReviewDiffFormatter.formatPureRenameRollup(pureRenames));
     }
     // Scope totals next, ahead of the per-file rows, for the same reason: clamping drops the tail.
-    header.append(changeScopeSummary(ctx));
+    return header.append(changeScopeSummary(ctx)).toString();
+  }
+
+  /**
+   * The overview's per-file rows, one line each, which {@link #clampOverview} may roll up by count
+   * from the tail. Every changed file by name + change counts, so the summary covers files with no
+   * findings too. Hunk-clipped files are marked partially analyzed — presenting them with bare
+   * change counts would tell the summary they were fully covered when most of the patch was never
+   * sent.
+   */
+  private static String overviewRows(
+      ReviewContextLoader.ReviewContext ctx, DiffBudgetPlanner.BudgetPlan plan) {
     var sb = new StringBuilder();
     var omitted = Set.copyOf(plan.omittedFiles());
     var patchless = Set.copyOf(plan.patchlessFiles());
@@ -1616,7 +1609,7 @@ public class FindingPipeline {
                   : " (not reviewed — the review call for it did not complete; treated as"
                       + " uncovered)\n");
     }
-    return new ChangedFilesOverview(header.toString(), sb.toString());
+    return sb.toString();
   }
 
   /** The per-file coverage caveat for the summary overview, or empty for full coverage. */
