@@ -35,12 +35,13 @@ so a restart does not lose track of the findings on open pull requests.
 ## Installations and repositories
 
 The bot follows GitHub's installation events (#1222). Uninstalling or
-suspending the App invalidates cached dashboard permissions and requests a
-refresh of live connections. Unsuspending restores access. Removing a repository
-from an installation removes it from subsequent access checks; adding it again
-serves its history, since rows are kept by repository id. The bot remembers a removal for ten
+suspending the App stops the dashboard serving that installation at once, open
+live connections included; unsuspending brings it back. Removing a repository
+from an installation hides it at once; adding it again serves its history,
+since rows are kept by repository id. The bot remembers a removal for ten
 minutes, long enough for GitHub's own answer to catch up, so a lost unsuspend
-or added delivery hides nothing for longer than that. Renaming or transferring a repository
+or added delivery hides nothing for longer than that. Renaming or transferring
+a repository
 updates the name its stored rows show; a transferred repository belongs to
 another installation and starts fresh there. Renames need the App's
 **Repository** event; an App registered before it was in the manifest must

@@ -11,9 +11,13 @@ and fallback, and file-priority batching. Before upgrading:
 
 - Back up the database. Flyway now migrates it at startup; upgrade from v0.8.x. Older databases
   must first be started on v0.8.x. Restoring the backup is required to roll back a schema change.
-- Subscribe an existing GitHub App to the **Repository** event under Permissions & events.
-  Approve **Organization → Members: read** so organization members can see installation-wide
-  skip counters; without it those counters stay hidden.
+- Subscribe an existing GitHub App to the **Repository** event under Permissions & events, and add
+  **Organization → Members: read** there too, then accept the new permission on each
+  installation. Organization members need it to see the installation-wide skip counters; without
+  it those counters stay hidden.
+- `thrillhousebot.dashboard.github.account-owner` no longer shows its account every installed
+  repository. The owner, like everyone else, now sees what GitHub lets them read; when set, the
+  property only limits the dashboard to that account's installations.
 - Metrics now follow `OTEL_EXPORTER_ENDPOINT` as traces do. If only a per-signal traces endpoint
   was configured, also set the generic endpoint for metrics. Log export remains opt-in.
 
@@ -32,7 +36,7 @@ and rollback details. New review features below are off by default unless stated
 - `REVIEW_TRIAGE_ENABLED` (off by default) packs a large pull request's batches by review
   priority: build manifests, then files matching `AI_ROUTING_HIGH_RISK_PATHS`, then the rest, then
   files matching `AI_ROUTING_LOW_RISK_PATHS`, the larger change first within each. When
-  `REVIEW_MAX_AI_CALLS` leaves files out, the low-risk ones go first instead of the smallest. The
+  `REVIEW_MAX_AI_CALLS` leaves files out, the low-risk ones are left out first instead of the smallest. The
   globs are the ones model routing reads; no model call is made. (#666)
 
 - `REVIEW_LABELS_BLOCKED` (`thrillhousebot.review.labels.blocked`) lists labels the bot never
@@ -49,7 +53,6 @@ and rollback details. New review features below are off by default unless stated
   for example `dependabot[bot]`. Dependabot can open a pull request before it adds its labels, so
   `WEBHOOK_EXCLUDED_LABELS=dependencies` could let a review run the model before the label arrived;
   the author is in every `opened` event. A manual `/review` still runs (#1278).
-
 - A weekly workflow prunes old container images: snapshot builds from `main` beyond the 10 newest
   of each variant, `test-*` images older than 30 days, and the untagged images that only those
   used. Releases, `latest`, `snapshot` and their signatures and attestations are kept. A manual
@@ -59,6 +62,7 @@ and rollback details. New review features below are off by default unless stated
 
 - The Docker test image workflow builds the native variant for arm64 as well as amd64, each on a
   runner of its own architecture, and publishes one multi-arch tag. The JVM variant stays amd64.
+  (#1252)
 - The bot follows installation and repository events. Uninstalling or suspending the App, or
   removing a repository from an installation, invalidates cached dashboard permissions and
   requests a live-connection refresh; unsuspending or adding it back restores access. A renamed or
@@ -82,7 +86,7 @@ and rollback details. New review features below are off by default unless stated
   reasoning now goes out at `reasoning_effort=low` instead of `none`, and a lane already at `low`
   or `none` is not repeated. `glm-5.3-flash` ignores `none`, so that repeat spent the cap a
   second time and was billed in full. The new `AI_REASONING_REPEAT_EFFORT`
-  (`thrillhousebot.ai.reasoning.repeat-effort`) sets the repeat's effort; set it to `none` to keep
+  (`thrillhousebot.ai.reasoning.repeat-effort`) sets the repeat's effort with reasoning on or off; set it to `none` to keep
   the previous behavior on a provider that honors it. (#1173)
 - With `AI_REASONING_ENABLED=false`, the warning logged for a call that spent its whole response
   cap reasoning now says to set `AI_REASONING_ENABLED=true` for a model that reasons by default,
@@ -93,6 +97,9 @@ and rollback details. New review features below are off by default unless stated
   response cap reasoning, once at a lower effort, as review calls do. Each command or reply counts
   its own calls against `REVIEW_MAX_TOKENS_PER_REVIEW`, and the repeat is skipped once it reaches
   it. Before, the user got no answer. (#1175)
+- The dashboard's `next` dependency is raised to 16.4.3 (#1230, #1286). The dashboard is a static
+  export, so the Next.js server advisories these releases fix do not apply to it.
+
 ### Security
 
 - Guava is raised to 33.7.2-jre (GHSA-xxph-c9ww-hj94, unbounded allocation when deserializing
@@ -110,8 +117,9 @@ and rollback details. New review features below are off by default unless stated
   outside contributor or a non-member sees nothing, an organization member whose base
   permission is none does not see a private repository, and a token GitHub rejects ends the
   session. The installation-wide skip counters go to the account itself or to organization
-  members, per installation. `thrillhousebot.dashboard.github.account-owner` is now optional and
-  limits the dashboard to one account; the "not configured" error is gone. Live connections
+  members, per installation. `thrillhousebot.dashboard.github.account-owner` no longer grants its
+  account every installed repository; when set, it limits the dashboard to that account's
+  installations, and the "not configured" error is gone. Live connections
   use the same repository permissions, refreshed in the background. Acting through the bot (`/review`, decline
   learnings, finding feedback) needs write, maintain or admin. (#1221)
 

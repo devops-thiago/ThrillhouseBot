@@ -560,8 +560,9 @@ validates the entities against the result. A database created before migrations 
 baselined at V1, the v0.8.0 schema.
 
 New rows carry the GitHub App installation id and GitHub's numeric repository id from the signed
-webhook payload (#1220), and reads match both (`RepoScope`). Already-scoped rows stay with those
-ids after a rename; a different installation or repository id does not match them. Rows stored
+webhook payload (#1220), and reads match both (`RepoScope`). A renamed repository keeps its rows;
+a same-named repository under another installation, or one deleted and re-created, never matches
+them. Rows stored
 before v0.9.0 lack those ids. At startup, `ScopeBackfill` matches each `owner/repo` to the App's
 installations and their repositories, following GitHub's redirect for a renamed one. It fills only
 rows stored after the matched repository was created, since older ones belong to a deleted
