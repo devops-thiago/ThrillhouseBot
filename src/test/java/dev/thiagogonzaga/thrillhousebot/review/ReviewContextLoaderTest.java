@@ -374,7 +374,7 @@ class ReviewContextLoaderTest {
               TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
-      var ctx = loader.load("auth", request(), session, "owner/repo");
+      var ctx = loader.load("auth", request(), session);
 
       assertEquals("", ctx.diff());
       assertEquals("", ctx.baseComparison());
@@ -399,7 +399,7 @@ class ReviewContextLoaderTest {
               TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
-      var ctx = loader.load("auth", request(), session, "owner/repo");
+      var ctx = loader.load("auth", request(), session);
 
       assertTrue(ctx.diff().contains("## Overview"));
       assertTrue(ctx.diff().contains("### a.java"));
@@ -429,7 +429,7 @@ class ReviewContextLoaderTest {
               TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
-      var ctx = loader.load("auth", request(), session, "owner/repo");
+      var ctx = loader.load("auth", request(), session);
 
       assertEquals(1, ctx.reviewableFiles().size());
       assertEquals("src/App.java", ctx.reviewableFiles().get(0).filename());
@@ -464,7 +464,7 @@ class ReviewContextLoaderTest {
               TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
-      var ctx = loader.load("auth", request(), session, "owner/repo");
+      var ctx = loader.load("auth", request(), session);
 
       assertEquals(List.of("paymnets/**"), ctx.unmatchedIgnoreGlobs());
     }
@@ -483,7 +483,7 @@ class ReviewContextLoaderTest {
               TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
-      var ctx = loader.load("auth", request(), session, "owner/repo");
+      var ctx = loader.load("auth", request(), session);
 
       assertEquals(List.of(), ctx.unmatchedIgnoreGlobs());
     }
@@ -513,7 +513,7 @@ class ReviewContextLoaderTest {
               TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
-      var ctx = loader.load("auth", request(), session, "owner/repo");
+      var ctx = loader.load("auth", request(), session);
 
       assertFalse(
           ctx.reviewableFiles().contains(ignoredDoc),
@@ -551,7 +551,7 @@ class ReviewContextLoaderTest {
               TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
-      var ctx = loader.load("auth", request(), session, "owner/repo");
+      var ctx = loader.load("auth", request(), session);
 
       assertEquals(2, ctx.reviewableFiles().size());
       assertTrue(ctx.diff().contains("+gen"), ctx.diff());
@@ -571,7 +571,7 @@ class ReviewContextLoaderTest {
               TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
-      var ctx = assertDoesNotThrow(() -> loader.load("auth", request(), session, "owner/repo"));
+      var ctx = assertDoesNotThrow(() -> loader.load("auth", request(), session));
 
       assertEquals(1, ctx.reviewableFiles().size());
       assertEquals("src/App.java", ctx.reviewableFiles().get(0).filename());
@@ -608,7 +608,7 @@ class ReviewContextLoaderTest {
               TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
-      var ctx = loader.load("auth", request(), session, "owner/repo");
+      var ctx = loader.load("auth", request(), session);
 
       assertEquals(1, ctx.pathInstructions().scopes().size());
       var scope = ctx.pathInstructions().scopes().get(0);
@@ -634,7 +634,7 @@ class ReviewContextLoaderTest {
               TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
-      var ctx = loader.load("auth", request(), session, "owner/repo");
+      var ctx = loader.load("auth", request(), session);
 
       assertTrue(ctx.pathInstructions().isEmpty());
     }
@@ -669,7 +669,7 @@ class ReviewContextLoaderTest {
       when(patchCoverageResolver.resolve(eq("auth"), any(), eq(settings), anyList()))
           .thenReturn(new PatchCoverageResolver.Resolution("### uncovered", ""));
 
-      var ctx = loader.load("auth", request(), session, "owner/repo");
+      var ctx = loader.load("auth", request(), session);
 
       assertEquals("### uncovered", ctx.patchCoverage());
       assertEquals("", ctx.coverageArtifactRefusal(), "a report that was read discloses nothing");
@@ -701,7 +701,7 @@ class ReviewContextLoaderTest {
           .thenReturn(
               new PatchCoverageResolver.Resolution("", "it holds more than 512 `.xml` entries"));
 
-      var ctx = loader.load("auth", request(), session, "owner/repo");
+      var ctx = loader.load("auth", request(), session);
 
       assertEquals("", ctx.patchCoverage(), "a refused artifact adds nothing to the prompt");
       assertEquals("it holds more than 512 `.xml` entries", ctx.coverageArtifactRefusal());
@@ -787,7 +787,7 @@ class ReviewContextLoaderTest {
       var error =
           assertThrows(
               ReviewContextLoader.StaleReviewException.class,
-              () -> loader.load("auth", request(), session(), "owner/repo"));
+              () -> loader.load("auth", request(), session()));
 
       assertTrue(error.getMessage().contains("expected expected-sha, current new-sha"));
     }
@@ -811,7 +811,7 @@ class ReviewContextLoaderTest {
         var error =
             assertThrows(
                 ReviewContextLoader.StaleReviewException.class,
-                () -> loader.load("auth", request(), session(), "owner/repo"));
+                () -> loader.load("auth", request(), session()));
         assertTrue(error.getMessage().contains("current null"));
       }
     }
@@ -831,7 +831,7 @@ class ReviewContextLoaderTest {
       var error =
           assertThrows(
               ReviewContextLoader.StaleReviewException.class,
-              () -> loader.load("auth", request(null), session(), "owner/repo"));
+              () -> loader.load("auth", request(null), session()));
 
       assertTrue(error.getMessage().contains("expected null, current current-sha"));
     }
@@ -847,8 +847,7 @@ class ReviewContextLoaderTest {
       var reviewSession = session();
       var error =
           assertThrows(
-              IllegalStateException.class,
-              () -> loader.load("auth", reviewRequest, reviewSession, "owner/repo"));
+              IllegalStateException.class, () -> loader.load("auth", reviewRequest, reviewSession));
 
       assertTrue(error.getMessage().contains("refusing to review potentially mixed revisions"));
     }
@@ -934,7 +933,7 @@ class ReviewContextLoaderTest {
           ReviewSession.create(
               TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
-      return realAnalyzerLoader().load("auth", request(), session, "owner/repo");
+      return realAnalyzerLoader().load("auth", request(), session);
     }
 
     @Test
@@ -1556,7 +1555,7 @@ class ReviewContextLoaderTest {
       session.id = 1L;
       DiffLineResolver.CONSTRUCTION_COUNT.set(0);
 
-      var ctx = loader.load("auth", request(), session, "owner/repo");
+      var ctx = loader.load("auth", request(), session);
       assertEquals(0, DiffLineResolver.CONSTRUCTION_COUNT.get());
 
       var first = ctx.lineResolver();
@@ -1579,7 +1578,7 @@ class ReviewContextLoaderTest {
       session.id = 1L;
       DiffLineResolver.CONSTRUCTION_COUNT.set(0);
 
-      loader.load("auth", request(), session, "owner/repo");
+      loader.load("auth", request(), session);
 
       assertEquals(0, DiffLineResolver.CONSTRUCTION_COUNT.get());
     }
@@ -1626,7 +1625,7 @@ class ReviewContextLoaderTest {
               TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
 
-      var ctx = loader.load("auth", request(), session, "owner/repo");
+      var ctx = loader.load("auth", request(), session);
 
       assertEquals(parsed, ctx.priorAiResponses());
       assertEquals(1, ctx.previousFindingsList().size());
@@ -1774,7 +1773,7 @@ class ReviewContextLoaderTest {
           ReviewSession.create(
               TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
       session.id = 1L;
-      return realAnalyzerLoader().load("auth", request(), session, "owner/repo");
+      return realAnalyzerLoader().load("auth", request(), session);
     }
 
     @Test

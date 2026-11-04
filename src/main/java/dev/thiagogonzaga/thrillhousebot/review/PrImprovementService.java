@@ -108,14 +108,15 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
       ThrillhouseConfig config,
       ReviewTokenLedger tokenLedger) {
     super(
-        prClient,
-        diffFormatter,
-        instructionsResolver,
-        repoSettingsResolver,
-        budgetPlanner,
-        activeModel,
-        config,
-        tokenLedger);
+        new Shared(
+            prClient,
+            diffFormatter,
+            instructionsResolver,
+            repoSettingsResolver,
+            budgetPlanner,
+            activeModel,
+            config,
+            tokenLedger));
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
     this.suggestionFormatter = suggestionFormatter;

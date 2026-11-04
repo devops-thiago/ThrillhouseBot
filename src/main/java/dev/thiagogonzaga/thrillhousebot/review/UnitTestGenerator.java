@@ -147,14 +147,15 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
       FollowUpAnalyzer followUpAnalyzer,
       ReviewTokenLedger tokenLedger) {
     super(
-        prClient,
-        diffFormatter,
-        instructionsResolver,
-        repoSettingsResolver,
-        budgetPlanner,
-        activeModel,
-        config,
-        tokenLedger);
+        new Shared(
+            prClient,
+            diffFormatter,
+            instructionsResolver,
+            repoSettingsResolver,
+            budgetPlanner,
+            activeModel,
+            config,
+            tokenLedger));
     this.projectStackResolver = projectStackResolver;
     this.testAssistant = testAssistant;
     this.parser = parser;

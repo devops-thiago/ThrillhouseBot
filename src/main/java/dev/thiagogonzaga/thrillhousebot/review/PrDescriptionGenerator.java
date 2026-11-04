@@ -93,14 +93,15 @@ public class PrDescriptionGenerator extends AbstractPrSuggestionGenerator {
       PrDescribeAssistant describeAssistant,
       ReviewTokenLedger tokenLedger) {
     super(
-        prClient,
-        diffFormatter,
-        instructionsResolver,
-        repoSettingsResolver,
-        budgetPlanner,
-        activeModel,
-        config,
-        tokenLedger);
+        new Shared(
+            prClient,
+            diffFormatter,
+            instructionsResolver,
+            repoSettingsResolver,
+            budgetPlanner,
+            activeModel,
+            config,
+            tokenLedger));
     this.describeAssistant = describeAssistant;
   }
 

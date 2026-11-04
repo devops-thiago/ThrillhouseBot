@@ -233,11 +233,10 @@ final class TestAssertions {
   private static Optional<String> enclosingTestFunction(List<PatchLines.Line> lines, int start) {
     var line = lines.get(start);
     int indent = indentOf(line.text());
-    for (int i = start - 1; i >= 0 && i >= start - MAX_BODY_LINES; i--) {
+    for (int i = start - 1;
+        i >= 0 && i >= start - MAX_BODY_LINES && lines.get(i).hunk() == line.hunk();
+        i--) {
       var above = lines.get(i);
-      if (above.hunk() != line.hunk()) {
-        break;
-      }
       var text = above.text();
       var code = text.strip();
       if (code.isEmpty() || code.equals("{") || code.startsWith("#") || indentOf(text) >= indent) {

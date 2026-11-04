@@ -519,9 +519,19 @@ public final class PromptLabelScrubber {
    */
   private static final Pattern SUMMARY_ROUTING =
       Pattern.compile(
-          "\\b[Tt]he summary (?:should|must|will|needs to|ought to) (?:carry|list|include|record"
-              + "|hold|note|flag|mention|report|cover) (?:the |this |that |a |an )?description[ _-]"
-              + "gaps?(?=[ \\t]*(?:[.!?\\n]|\\z))");
+          "\\b[Tt]he summary ((?:needs|ought) to|\\w++) (\\w++) (?:(\\w++) )?description[ _-]"
+              + "gaps?(?=[ \\t]*+(?:[.!?\\n]|\\z))");
+
+  /** The words {@link #SUMMARY_ROUTING} accepts in its three slots; checked in code, not regex. */
+  private static final Set<String> ROUTING_MODALS =
+      Set.of("should", "must", "will", "needs to", "ought to");
+
+  private static final Set<String> ROUTING_VERBS =
+      Set.of(
+          "carry", "list", "include", "record", "hold", "note", "flag", "mention", "report",
+          "cover");
+
+  private static final Set<String> ROUTING_ARTICLES = Set.of("the", "this", "that", "a", "an");
 
   /**
    * "Name the exact layer to verify: check whether …" (#1195): the injection rule's instruction,
@@ -846,9 +856,11 @@ public final class PromptLabelScrubber {
         .replaceAll(
             m ->
                 Matcher.quoteReplacement(
-                    opensSentence(named, m.start(), 0)
-                        ? (m.group(1) == null ? "" : m.group(1).toUpperCase(Locale.ROOT))
-                        : m.group()));
+                    opensSentence(named, m.start(), 0) ? upperOrEmpty(m.group(1)) : m.group()));
+  }
+
+  private static String upperOrEmpty(String text) {
+    return text == null ? "" : text.toUpperCase(Locale.ROOT);
   }
 
   /**
@@ -861,7 +873,9 @@ public final class PromptLabelScrubber {
     var words = OBJECT_WORD.matcher(text.substring(from));
     String head = null;
     boolean first = true;
-    while (words.find()) {
+    // The object ends at a stop or a closing parenthesis after a word, or at a preposition.
+    boolean open = true;
+    while (open && words.find()) {
       var word = words.group().toLowerCase(Locale.ROOT);
       if (first && (PLURAL_COUNTS.contains(word) || (word.matches("\\d+") && !"1".equals(word)))) {
         return true;
@@ -871,10 +885,9 @@ public final class PromptLabelScrubber {
       }
       first = false;
       head = word;
-      if (words.end() < text.length() - from
-          && ".,;:)\n".indexOf(text.charAt(from + words.end())) >= 0) {
-        break;
-      }
+      open =
+          words.end() >= text.length() - from
+              || ".,;:)\n".indexOf(text.charAt(from + words.end())) < 0;
     }
     // A dotted head is a file name ("main.rs"), never a plural noun.
     return head != null
@@ -955,13 +968,21 @@ public final class PromptLabelScrubber {
     return token.chars().anyMatch(Character::isUpperCase);
   }
 
+  private static boolean isRoutingNote(Matcher m) {
+    return ROUTING_MODALS.contains(m.group(1))
+        && ROUTING_VERBS.contains(m.group(2))
+        && (m.group(3) == null || ROUTING_ARTICLES.contains(m.group(3)));
+  }
+
   /** Drops each {@link #SUMMARY_ROUTING} clause where {@link #removeClause} lets it go. */
   private static String removeRoutingNotes(String text) {
     var m = SUMMARY_ROUTING.matcher(text);
     var out = new StringBuilder(text.length());
     int at = 0;
     while (m.find()) {
-      at = removeClause(text, m.start(), m.end(), at, out, true);
+      if (isRoutingNote(m)) {
+        at = removeClause(text, m.start(), m.end(), at, out, true);
+      }
     }
     return out.append(text, at, text.length()).toString();
   }

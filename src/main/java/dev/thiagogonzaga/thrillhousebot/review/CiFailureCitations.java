@@ -810,17 +810,18 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
   static List<String> sentences(String raw) {
     var sentences = new ArrayList<String>();
     int start = 0;
-    for (int i = 0; i < raw.length(); i++) {
-      char c = raw.charAt(i);
-      if (c == '\n') {
-        sentences.add(raw.substring(start, i));
-        start = i + 1;
-      } else if (opensAQuote(raw, i)) {
-        i = raw.indexOf(c, i + 1);
-      } else if (endsASentence(raw, i)) {
+    int i = 0;
+    while (i < raw.length()) {
+      if (opensAQuote(raw, i)) {
+        // opensAQuote found the closing quote before the line ends, so this jump stays on the line.
+        i = raw.indexOf(raw.charAt(i), i + 1) + 1;
+        continue;
+      }
+      if (raw.charAt(i) == '\n' || endsASentence(raw, i)) {
         sentences.add(raw.substring(start, i));
         start = i + 1;
       }
+      i++;
     }
     sentences.add(raw.substring(start));
     return sentences;

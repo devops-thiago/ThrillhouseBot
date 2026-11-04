@@ -2020,39 +2020,42 @@ class AiReviewServiceTest {
 
   @Test
   void aProviderFailureWithNoFallbackOrNoAttemptLeftStaysPut() {
+    var session = reviewSession();
     when(reviewConfig.maxAiRetries()).thenReturn(2);
     var models =
         recordReviewModels(new ErrorTokenStream(new HttpException(500, "Internal Server Error")));
 
-    assertThrows(AiReviewException.class, () -> service.review(reviewSession(), PROMPT_INPUTS));
+    assertThrows(AiReviewException.class, () -> service.review(session, PROMPT_INPUTS));
     assertEquals(List.of("null", "null"), models, "no fallback configured");
 
     when(routing.fallbackModel()).thenReturn(Optional.of("backup"));
     when(reviewConfig.maxAiRetries()).thenReturn(1);
-    assertThrows(AiReviewException.class, () -> service.review(reviewSession(), PROMPT_INPUTS));
+    assertThrows(AiReviewException.class, () -> service.review(session, PROMPT_INPUTS));
     assertEquals(List.of("null", "null", "null"), models, "the last attempt has nothing to move");
   }
 
   @Test
   void aBlankFallbackModelIsNoFallback() {
+    var session = reviewSession();
     when(routing.fallbackModel()).thenReturn(Optional.of("  "));
     when(reviewConfig.maxAiRetries()).thenReturn(2);
     var models = recordReviewModels(new ErrorTokenStream(new HttpException(503, "Unavailable")));
 
-    assertThrows(AiReviewException.class, () -> service.review(reviewSession(), PROMPT_INPUTS));
+    assertThrows(AiReviewException.class, () -> service.review(session, PROMPT_INPUTS));
 
     assertEquals(List.of("null", "null"), models);
   }
 
   @Test
   void aRoutedCallFallsBackFromTheRoutedModel() {
+    var session = reviewSession();
     when(tokenLedger.routedModel(42L)).thenReturn(Optional.of("cheap"));
     when(routing.fallbackModel()).thenReturn(Optional.of("cheap"));
     when(reviewConfig.maxAiRetries()).thenReturn(2);
     var models =
         recordReviewModels(new ErrorTokenStream(new ModelNotFoundException("no such model")));
 
-    assertThrows(AiReviewException.class, () -> service.review(reviewSession(), PROMPT_INPUTS));
+    assertThrows(AiReviewException.class, () -> service.review(session, PROMPT_INPUTS));
 
     assertEquals(
         List.of("cheap", "cheap"), models, "a fallback that is the current model moves nothing");

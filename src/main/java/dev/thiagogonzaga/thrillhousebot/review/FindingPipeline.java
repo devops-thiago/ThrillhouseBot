@@ -19,6 +19,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.config.ReviewExecutorProducer;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException;
@@ -33,7 +34,6 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.Throwables;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenSpendCeilingExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TruncatedResponseSalvager;
-import io.opentelemetry.context.Context;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -48,7 +48,6 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -497,8 +496,7 @@ public class FindingPipeline {
     var failedIndices = new ArrayList<Integer>();
     // The batches run with this thread's OpenTelemetry context, so their model-call spans stay in
     // the review's trace (#1263).
-    try (ExecutorService executor =
-        Context.taskWrapping(Executors.newVirtualThreadPerTaskExecutor())) {
+    try (ExecutorService executor = ReviewExecutorProducer.tracedVirtualThreads()) {
       var futures =
           IntStream.range(0, batches.size())
               .mapToObj(i -> CompletableFuture.supplyAsync(() -> processBatch(i, run), executor))

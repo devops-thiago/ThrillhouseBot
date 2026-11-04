@@ -184,9 +184,9 @@ public class FindingFeedbackCaptureService {
               .limit(MAX_FINDINGS_PER_CAPTURE)
               .toList();
       var permissionCache = new HashMap<String, Boolean>();
+      var pr = new PullRequest(auth, scope, owner, repo, prNumber);
       for (var comment : candidates) {
-        captureReactions(
-            auth, scope, owner, repo, prNumber, comment.id(), comment.body(), permissionCache);
+        captureReactions(pr, comment.id(), comment.body(), permissionCache);
       }
     } catch (RuntimeException e) {
       log.warn(
@@ -242,7 +242,10 @@ public class FindingFeedbackCaptureService {
       return;
     }
     captureReactions(
-        auth, scope, owner, repo, prNumber, rootCommentId, root.body(), permissionCache);
+        new PullRequest(auth, scope, owner, repo, prNumber),
+        rootCommentId,
+        root.body(),
+        permissionCache);
     captureReplyHeuristic(
         new ReplyFeedback(scope, owner, repo, prNumber, rootCommentId, findingIndex.getAsInt()),
         replyAuthorLogin,
@@ -272,30 +275,31 @@ public class FindingFeedbackCaptureService {
       int prNumber,
       long commentId,
       String commentBody) {
-    captureReactions(auth, scope, owner, repo, prNumber, commentId, commentBody, new HashMap<>());
+    captureReactions(
+        new PullRequest(auth, scope, owner, repo, prNumber),
+        commentId,
+        commentBody,
+        new HashMap<>());
   }
 
+  /** The pull request whose finding comments are polled, with the token to poll them. */
+  private record PullRequest(
+      String auth, RepoScope scope, String owner, String repo, int prNumber) {}
+
   private void captureReactions(
-      String auth,
-      RepoScope scope,
-      String owner,
-      String repo,
-      int prNumber,
-      long commentId,
-      String commentBody,
-      Map<String, Boolean> permissionCache) {
+      PullRequest pr, long commentId, String commentBody, Map<String, Boolean> permissionCache) {
     OptionalInt findingIndex = SuggestionFormatter.parseFindingMarker(commentBody);
     if (findingIndex.isEmpty()) {
       return;
     }
     var ctx =
         new ReactionPollContext(
-            auth,
-            scope,
-            owner,
-            repo,
-            owner + "/" + repo,
-            prNumber,
+            pr.auth(),
+            pr.scope(),
+            pr.owner(),
+            pr.repo(),
+            pr.owner() + "/" + pr.repo(),
+            pr.prNumber(),
             commentId,
             findingIndex.getAsInt(),
             permissionCache);
