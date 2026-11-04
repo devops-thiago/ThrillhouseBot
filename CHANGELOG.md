@@ -39,6 +39,11 @@ without it those counters stay hidden and nothing else changes.
   `WEBHOOK_EXCLUDED_LABELS=dependencies` could let a review run the model before the label arrived;
   the author is in every `opened` event. A manual `/review` still runs (#1278).
 
+- A weekly workflow prunes old container images: snapshot builds from `main` beyond the 10 newest
+  of each variant, `test-*` images older than 30 days, and the untagged images that only those
+  used. Releases, `latest`, `snapshot` and their signatures and attestations are kept. A manual
+  run prints the plan and deletes only when asked. (#1275)
+
 ### Changed
 
 - The Docker test image workflow builds the native variant for arm64 as well as amd64, each on a
