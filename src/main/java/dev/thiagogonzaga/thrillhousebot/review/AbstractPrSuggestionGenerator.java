@@ -108,7 +108,8 @@ public abstract class AbstractPrSuggestionGenerator {
    */
   protected AbstractPrSuggestionGenerator() {}
 
-  protected AbstractPrSuggestionGenerator(
+  /** The collaborators every command generator shares, handed over by its CDI constructor. */
+  record Shared(
       GitHubPullRequestClient prClient,
       ReviewDiffFormatter diffFormatter,
       InstructionsResolver instructionsResolver,
@@ -116,15 +117,17 @@ public abstract class AbstractPrSuggestionGenerator {
       DiffBudgetPlanner budgetPlanner,
       ActiveModelSettings activeModel,
       ThrillhouseConfig config,
-      ReviewTokenLedger tokenLedger) {
-    this.prClient = prClient;
-    this.diffFormatter = diffFormatter;
-    this.instructionsResolver = instructionsResolver;
-    this.repoSettingsResolver = repoSettingsResolver;
-    this.budgetPlanner = budgetPlanner;
-    this.activeModel = activeModel;
-    this.config = config;
-    this.tokenLedger = tokenLedger;
+      ReviewTokenLedger tokenLedger) {}
+
+  protected AbstractPrSuggestionGenerator(Shared shared) {
+    this.prClient = shared.prClient();
+    this.diffFormatter = shared.diffFormatter();
+    this.instructionsResolver = shared.instructionsResolver();
+    this.repoSettingsResolver = shared.repoSettingsResolver();
+    this.budgetPlanner = shared.budgetPlanner();
+    this.activeModel = shared.activeModel();
+    this.config = shared.config();
+    this.tokenLedger = shared.tokenLedger();
   }
 
   /**

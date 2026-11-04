@@ -487,8 +487,7 @@ public class ReviewContextLoader {
    * ({@code diff} and {@code baseComparison} are empty; line-path {@code omittedFiles} is 0);
    * {@link DiffBudgetPlanner} is authoritative for what the model sees.
    */
-  ReviewContext load(
-      String auth, ReviewOrchestrator.ReviewRequest req, ReviewSession session, String repository) {
+  ReviewContext load(String auth, ReviewOrchestrator.ReviewRequest req, ReviewSession session) {
     var files = fetchPrFiles(auth, req.owner(), req.repo(), req.prNumber());
     var prTotals = fetchPrTotalsForReview(auth, req);
     // One read of the repository's own settings for the whole review: the ignore globs below and

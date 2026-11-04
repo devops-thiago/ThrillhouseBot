@@ -42,6 +42,14 @@ public class ReviewExecutorProducer {
   @ApplicationScoped
   @ReviewExecutor
   ExecutorService reviewExecutor() {
+    return tracedVirtualThreads();
+  }
+
+  /**
+   * A virtual-thread-per-task executor whose tasks run with the OpenTelemetry context current when
+   * they were submitted, so their spans stay in the submitter's trace (#1263).
+   */
+  public static ExecutorService tracedVirtualThreads() {
     return Context.taskWrapping(Executors.newVirtualThreadPerTaskExecutor());
   }
 

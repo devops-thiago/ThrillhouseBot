@@ -234,11 +234,15 @@ public class AiReviewService {
       boolean broadcastTokens,
       ModelLane lane,
       String firstModel) {
-    var timeouts = new TimeoutBudget();
-    var model = new CallModel(firstModel, fallbackModel());
+    var call =
+        new Call(
+            streamFactory,
+            broadcastTokens,
+            lane,
+            new TimeoutBudget(),
+            new CallModel(firstModel, fallbackModel()));
     try {
-      return attemptWithRetries(
-          session, streamFactory, broadcastTokens, lane, null, timeouts, model);
+      return attemptWithRetries(session, call, null);
     } catch (AiResponseTruncatedException e) {
       var effort = repeatEffort(e, lane);
       if (effort.isEmpty()) {
@@ -257,8 +261,7 @@ public class AiReviewService {
       broadcaster.broadcast(
           SessionEventBroadcaster.SessionEvent.retry(
               session, 1, config.review().maxAiRetries(), REASONING_STEP_DOWN_REASON));
-      return repeatAtLowerEffort(
-          session, streamFactory, broadcastTokens, lane, timeouts, model, e, effort.get());
+      return repeatAtLowerEffort(session, call, e, effort.get());
     }
   }
 
@@ -283,17 +286,9 @@ public class AiReviewService {
    * repeat's outcome changes: an answer is the call's, and any other failure propagates as before.
    */
   private ReviewResponse repeatAtLowerEffort(
-      ReviewSession session,
-      Supplier<TokenStream> streamFactory,
-      boolean broadcastTokens,
-      ModelLane lane,
-      TimeoutBudget timeouts,
-      CallModel model,
-      AiResponseTruncatedException firstStop,
-      String effort) {
+      ReviewSession session, Call call, AiResponseTruncatedException firstStop, String effort) {
     try {
-      return attemptWithRetries(
-          session, streamFactory, broadcastTokens, lane, effort, timeouts, model);
+      return attemptWithRetries(session, call, effort);
     } catch (InlinedDeliberationGuard.Stopped stopped) {
       tokenLedger.recordReasoningRepeatStopped(ReviewTokenLedger.keyFor(session));
       var report = firstStop.report().withInlinedDeliberation(stopped.chars());
@@ -336,14 +331,22 @@ public class AiReviewService {
     return e.report().figures(TruncationReport.PLAIN);
   }
 
-  private ReviewResponse attemptWithRetries(
-      ReviewSession session,
+  /**
+   * What stays the same across one logical call's attempts and its lower-effort repeat: the
+   * prompt's stream, whether tokens are broadcast, the lane, the shared timeout budget and the
+   * model the attempts go to.
+   */
+  private record Call(
       Supplier<TokenStream> streamFactory,
       boolean broadcastTokens,
       ModelLane lane,
-      String reasoningEffort,
       TimeoutBudget timeouts,
-      CallModel model) {
+      CallModel model) {}
+
+  private ReviewResponse attemptWithRetries(
+      ReviewSession session, Call call, String reasoningEffort) {
+    var lane = call.lane();
+    var model = call.model();
     var maxAttempts = config.review().maxAiRetries();
     RuntimeException lastFailure = null;
     var fellBack = false;
@@ -356,24 +359,16 @@ public class AiReviewService {
       // refusal propagates instead of being mistaken for one more transient failure to retry.
       tokenLedger.ensureCallAllowed(ReviewTokenLedger.keyFor(session));
       if (attempt > 1) {
-        broadcaster.broadcast(
-            SessionEventBroadcaster.SessionEvent.retry(
-                session, attempt, maxAttempts, retryFailureReason(lastFailure)));
-        // The first attempt on the fallback model goes to other capacity, so a throttle on the
-        // previous model is no reason to wait out the throttle ceiling before it.
-        sleep(
-            fellBack
-                ? backoffDelay(attempt)
-                : retryDelay(session, attempt, maxAttempts, lastFailure));
+        waitBeforeRetry(session, attempt, maxAttempts, lastFailure, fellBack);
       }
 
       try {
         var answer =
             streamOnce(
                 session,
-                streamFactory,
+                call.streamFactory(),
                 attempt,
-                broadcastTokens,
+                call.broadcastTokens(),
                 lane,
                 reasoningEffort,
                 model.current());
@@ -410,13 +405,31 @@ public class AiReviewService {
         broadcaster.broadcast(
             SessionEventBroadcaster.SessionEvent.streamFailed(
                 session, attempt, maxAttempts, sanitize(e)));
-        failIfTimeoutBudgetSpent(session, attempt, maxAttempts, e, timeouts);
+        failIfTimeoutBudgetSpent(session, attempt, maxAttempts, e, call.timeouts());
         fellBack = attempt < maxAttempts && fellBackOn(session, attempt, maxAttempts, model, e);
       }
     }
 
     throw new AiReviewException(
         "AI review failed after " + maxAttempts + " attempts", maxAttempts, lastFailure);
+  }
+
+  /**
+   * Announces attempt {@code attempt} and waits before it. The first attempt on the fallback model
+   * goes to other capacity, so a throttle on the previous model is no reason to wait out the
+   * throttle ceiling before it.
+   */
+  private void waitBeforeRetry(
+      ReviewSession session,
+      int attempt,
+      int maxAttempts,
+      RuntimeException lastFailure,
+      boolean fellBack) {
+    broadcaster.broadcast(
+        SessionEventBroadcaster.SessionEvent.retry(
+            session, attempt, maxAttempts, retryFailureReason(lastFailure)));
+    sleep(
+        fellBack ? backoffDelay(attempt) : retryDelay(session, attempt, maxAttempts, lastFailure));
   }
 
   /**

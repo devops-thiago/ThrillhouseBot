@@ -339,7 +339,7 @@ public class ReviewOrchestrator {
       // beside the model call, so the gate reads CI as late as it did before.
       var ciFuture = ciFailureContext.enabled() ? startCiEvaluation(auth, ciReq) : null;
       broadcastPhase(session, SessionEventBroadcaster.SessionEvent.Phase.CONTEXT);
-      var ctx = contextLoader.load(auth, req, session, repository);
+      var ctx = contextLoader.load(auth, req, session);
       var priorReviews = ctx.priorReviews();
       var previousFindings = ctx.previousFindingsList();
       var inlineComments = ctx.inlineComments();

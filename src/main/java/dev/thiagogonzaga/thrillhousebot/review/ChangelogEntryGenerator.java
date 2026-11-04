@@ -104,14 +104,15 @@ public class ChangelogEntryGenerator extends AbstractPrSuggestionGenerator {
       ChangelogAssistant changelogAssistant,
       ReviewTokenLedger tokenLedger) {
     super(
-        prClient,
-        diffFormatter,
-        instructionsResolver,
-        repoSettingsResolver,
-        budgetPlanner,
-        activeModel,
-        config,
-        tokenLedger);
+        new Shared(
+            prClient,
+            diffFormatter,
+            instructionsResolver,
+            repoSettingsResolver,
+            budgetPlanner,
+            activeModel,
+            config,
+            tokenLedger));
     this.changelogAssistant = changelogAssistant;
   }
 

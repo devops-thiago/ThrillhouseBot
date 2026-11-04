@@ -1536,7 +1536,10 @@ class PromptLabelScrubberTest {
         "see description_gaps in parseGaps",
         "see description_gaps in pr_purpose too",
         "the summary should carry the total cost",
-        "If the summary should carry the description gap, add it."
+        "If the summary should carry the description gap, add it.",
+        "It fails. The summary may carry the description gap.",
+        "It fails. The summary should drop the description gap.",
+        "It fails. The summary should carry every description gap."
       })
   void ordinaryWithheldVerifyAndKeyProseStays(String text) {
     assertEquals(text, PromptLabelScrubber.scrub(text));
@@ -1582,6 +1585,10 @@ class PromptLabelScrubberTest {
         "This trace inverts the claim.",
         PromptLabelScrubber.scrub(
             "This trace inverts the claim. The summary should carry this description gap."));
+    assertEquals(
+        "This trace inverts the claim.",
+        PromptLabelScrubber.scrub(
+            "This trace inverts the claim. The summary needs to note description gaps."));
   }
 
   // ThrillhouseBot-test#292 discussion_r4336427157.
