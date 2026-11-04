@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -111,6 +112,44 @@ class DashboardWebSocketKeepAliveTest {
             java.util.List.of()));
 
     verify(broadcaster, timeout(5_000)).refreshReaders();
+    keepAlive.onStop(mock(ShutdownEvent.class));
+  }
+
+  @Test
+  void anInstallationChangeDuringARunningRefreshMakesItPassAgain() throws Exception {
+    SessionEventBroadcaster broadcaster = mock(SessionEventBroadcaster.class);
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    var calls = new AtomicInteger();
+    doAnswer(
+            invocation -> {
+              if (calls.incrementAndGet() == 1) {
+                started.countDown();
+                release.await(5, TimeUnit.SECONDS);
+              }
+              return null;
+            })
+        .when(broadcaster)
+        .refreshReaders();
+    ThrillhouseConfig config = mock(ThrillhouseConfig.class);
+    when(config.websocketKeepAliveMs()).thenReturn(0L);
+    var keepAlive = new DashboardWebSocketKeepAlive(mock(Vertx.class), broadcaster, config);
+    // With the keepalive off, no later tick would ever catch up a dropped change.
+    keepAlive.onStart(mock(StartupEvent.class));
+
+    keepAlive.refreshReaders();
+    assertTrue(started.await(5, TimeUnit.SECONDS));
+    keepAlive.onInstallationChange(
+        new dev.thiagogonzaga.thrillhousebot.github.InstallationChange(
+            dev.thiagogonzaga.thrillhousebot.github.InstallationChange.Kind.GONE,
+            20L,
+            java.util.List.of()));
+    release.countDown();
+
+    verify(broadcaster, timeout(5_000).times(2)).refreshReaders();
+    // The change is consumed by that second pass, so no third one follows.
+    Thread.sleep(100);
+    assertEquals(2, calls.get());
     keepAlive.onStop(mock(ShutdownEvent.class));
   }
 
