@@ -4,7 +4,7 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
-## [0.9.0] - 2026-11-02
+## [0.9.0] - 2026-11-04
 
 This release adds a live review view, multi-installation dashboard access, optional model routing
 and fallback, and file-priority batching. Before upgrading:
@@ -50,6 +50,11 @@ and rollback details. New review features below are off by default unless stated
   `WEBHOOK_EXCLUDED_LABELS=dependencies` could let a review run the model before the label arrived;
   the author is in every `opened` event. A manual `/review` still runs (#1278).
 
+- A weekly workflow prunes old container images: snapshot builds from `main` beyond the 10 newest
+  of each variant, `test-*` images older than 30 days, and the untagged images that only those
+  used. Releases, `latest`, `snapshot` and their signatures and attestations are kept. A manual
+  run prints the plan and deletes only when asked. (#1275)
+
 ### Changed
 
 - The Docker test image workflow builds the native variant for arm64 as well as amd64, each on a
@@ -70,10 +75,9 @@ and rollback details. New review features below are off by default unless stated
 - New reviews, pauses, finding feedback and learnings record the GitHub App installation and
   numeric repository ids instead of using only the `owner/repo` name. Reads match both ids, so
   already-scoped history stays with its repository after a rename. On the first start after the
-  upgrade, existing name-only rows are matched to the App's current repositories. Unmatched rows
-  stay hidden, except a pause, which is still honored. Repository configuration caches are keyed
-  by installation too.
-  (#1220)
+  upgrade, existing name-only rows are matched to the App's current repositories. Unmatched rows,
+  and rows stored before the matched repository was created, stay hidden, except a pause, which
+  is still honored. Repository configuration caches are keyed by installation too. (#1220)
 - With `AI_REASONING_ENABLED=true`, the one repeat of a call that spent its whole response cap
   reasoning now goes out at `reasoning_effort=low` instead of `none`, and a lane already at `low`
   or `none` is not repeated. `glm-5.3-flash` ignores `none`, so that repeat spent the cap a

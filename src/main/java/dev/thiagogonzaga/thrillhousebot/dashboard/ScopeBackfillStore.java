@@ -22,6 +22,7 @@ import dev.thiagogonzaga.thrillhousebot.webhook.PausedPrRepository;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
+import java.time.Instant;
 import java.util.Locale;
 import java.util.Set;
 import java.util.TreeSet;
@@ -71,37 +72,20 @@ public class ScopeBackfillStore {
   }
 
   /**
-   * Gives every unscoped row of {@code repository} (any casing) the matched scope, and returns how
-   * many rows changed. A learning already names its installation, so it is filled only when that
-   * matches. A legacy pause whose pull request is already paused under the scope is removed rather
-   * than duplicated.
+   * Gives every unscoped row of {@code repository} (any casing) stored at or after {@code
+   * createdAt} the matched scope, and returns how many rows changed. Older rows belong to an
+   * earlier repository of the same name and stay unscoped; with no {@code createdAt} no review,
+   * feedback or learning row is filled. A learning already names its installation, so it is filled
+   * only when that matches. A legacy pause whose pull request is already paused under the scope is
+   * removed rather than duplicated; pauses carry no time and only hold reviews back, so they are
+   * matched by name alone.
    */
   @Transactional
-  public int apply(String repository, RepoScope scope) {
+  public int apply(String repository, RepoScope scope, Instant createdAt) {
     var name = repository.strip().toLowerCase(Locale.ROOT);
     var installationId = scope.installationId();
     var repositoryId = scope.repositoryId();
-    var changed =
-        sessions.update(
-            "installationId = ?1, repositoryId = ?2"
-                + " where installationId is null and lower(repository) = ?3",
-            installationId,
-            repositoryId,
-            name);
-    changed +=
-        feedback.update(
-            "installationId = ?1, repositoryId = ?2"
-                + " where installationId is null and lower(repository) = ?3",
-            installationId,
-            repositoryId,
-            name);
-    changed +=
-        learnings.update(
-            "repositoryId = ?2 where repositoryId is null and installationId = ?1"
-                + " and lower(repository) = ?3",
-            installationId,
-            repositoryId,
-            name);
+    var changed = createdAt == null ? 0 : fillSince(name, scope, createdAt);
     for (var pause : pauses.list("installationId is null and lower(repository) = ?1", name)) {
       var alreadyPaused =
           pauses.count(
@@ -119,6 +103,36 @@ public class ScopeBackfillStore {
       }
       changed++;
     }
+    return changed;
+  }
+
+  private int fillSince(String name, RepoScope scope, Instant since) {
+    var installationId = scope.installationId();
+    var repositoryId = scope.repositoryId();
+    var changed =
+        sessions.update(
+            "installationId = ?1, repositoryId = ?2"
+                + " where installationId is null and lower(repository) = ?3 and timestamp >= ?4",
+            installationId,
+            repositoryId,
+            name,
+            since);
+    changed +=
+        feedback.update(
+            "installationId = ?1, repositoryId = ?2"
+                + " where installationId is null and lower(repository) = ?3 and createdAt >= ?4",
+            installationId,
+            repositoryId,
+            name,
+            since);
+    changed +=
+        learnings.update(
+            "repositoryId = ?2 where repositoryId is null and installationId = ?1"
+                + " and lower(repository) = ?3 and createdAt >= ?4",
+            installationId,
+            repositoryId,
+            name,
+            since);
     return changed;
   }
 }

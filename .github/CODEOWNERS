@@ -3,3 +3,5 @@
 /.github/CODEOWNERS @devops-thiago
 # The required DCO check delegates to this validator and its regression tests.
 /scripts/dco/ @devops-thiago
+# Deletes container image versions; a wrong rule removes published images.
+/scripts/ghcr-prune/ @devops-thiago

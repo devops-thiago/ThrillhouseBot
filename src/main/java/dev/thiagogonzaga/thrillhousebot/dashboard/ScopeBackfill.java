@@ -23,6 +23,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -46,6 +47,11 @@ import org.slf4j.LoggerFactory;
  * answers the old name with a redirect to the repository's id, which is matched when the
  * installation of that owner still has it. Everything else stays unmatched, and its rows keep a
  * null scope: a repository deleted, transferred to another account, or no longer installed.
+ *
+ * <p>A name alone cannot tell a repository from an older one deleted under the same name, so a
+ * match fills only the rows stored after the matched repository was created. Older rows belong to
+ * the deleted repository and stay hidden, as does every row of a repository whose creation date
+ * GitHub does not give.
  *
  * <p>Fails closed. When the installations cannot be listed nothing is written, and an installation
  * whose repositories cannot be listed matches nothing; the next start tries again, since unfilled
@@ -104,7 +110,7 @@ public class ScopeBackfill {
     var jwt = "Bearer " + authClient.generateAppJwt();
     var installations =
         allPages(page -> installationClient.listInstallations(jwt, ACCEPT, PER_PAGE, page));
-    var byName = new HashMap<String, RepoScope>();
+    var byName = new HashMap<String, Match>();
     var byOwner = new HashMap<String, Installed>();
     for (var installation : installations) {
       installed(installation).ifPresent(i -> index(i, byName, byOwner));
@@ -112,22 +118,35 @@ public class ScopeBackfill {
     int matched = 0;
     int rows = 0;
     for (var name : names) {
-      var scope = Optional.ofNullable(byName.get(name)).or(() -> renamed(name, byOwner));
-      if (scope.isPresent()) {
+      var match = Optional.ofNullable(byName.get(name)).or(() -> renamed(name, byOwner));
+      if (match.isPresent()) {
         matched++;
-        rows += store.apply(name, scope.get());
+        rows += store.apply(name, match.get().scope(), match.get().createdAt());
       }
     }
     return new Result(matched, names.size() - matched, rows);
   }
 
   /** One installation's token and repositories, as {@code owner/repo} (lower-cased) to id. */
-  private record Installed(long installationId, String auth, Map<String, Long> repositories) {}
+  private record Installed(
+      long installationId,
+      String auth,
+      Map<String, Long> repositories,
+      Map<Long, Instant> createdAt) {
+
+    Match match(long repositoryId) {
+      return new Match(new RepoScope(installationId, repositoryId), createdAt.get(repositoryId));
+    }
+  }
+
+  /** A matched repository and when it was created ({@code null} when GitHub did not say). */
+  private record Match(RepoScope scope, Instant createdAt) {}
 
   private Optional<Installed> installed(GitHubInstallationClient.Installation installation) {
     try {
       var auth = authClient.getAuthHeader(installation.id());
       var repositories = new HashMap<String, Long>();
+      var createdAt = new HashMap<Long, Instant>();
       for (var repo :
           allPages(
               page ->
@@ -139,9 +158,12 @@ public class ScopeBackfill {
             && repo.owner().login() != null
             && repo.name() != null) {
           repositories.put(lower(repo.owner().login() + "/" + repo.name()), repo.id());
+          if (repo.createdAt() != null) {
+            createdAt.put(repo.id(), repo.createdAt());
+          }
         }
       }
-      return Optional.of(new Installed(installation.id(), auth, repositories));
+      return Optional.of(new Installed(installation.id(), auth, repositories, createdAt));
     } catch (RuntimeException e) {
       log.warn(
           "Scope backfill could not list the repositories of installation {}; its rows stay"
@@ -153,12 +175,12 @@ public class ScopeBackfill {
   }
 
   private static void index(
-      Installed installed, Map<String, RepoScope> byName, Map<String, Installed> byOwner) {
+      Installed installed, Map<String, Match> byName, Map<String, Installed> byOwner) {
     installed
         .repositories()
         .forEach(
             (name, id) -> {
-              byName.put(name, new RepoScope(installed.installationId(), id));
+              byName.put(name, installed.match(id));
               byOwner.put(name.substring(0, name.indexOf('/')), installed);
             });
   }
@@ -167,7 +189,7 @@ public class ScopeBackfill {
    * The scope of a repository renamed since its rows were stored: the old name redirects to the
    * repository's id, which must still be one the owner's installation can access.
    */
-  private Optional<RepoScope> renamed(String name, Map<String, Installed> byOwner) {
+  private Optional<Match> renamed(String name, Map<String, Installed> byOwner) {
     var slash = name.indexOf('/');
     var installed = byOwner.get(name.substring(0, Math.max(slash, 0)));
     if (installed == null) {
@@ -180,7 +202,7 @@ public class ScopeBackfill {
               installed.auth(), ACCEPT, name.substring(0, slash), name.substring(slash + 1));
       return movedTo(response)
           .filter(id -> installed.repositories().containsValue(id))
-          .map(id -> new RepoScope(installed.installationId(), id));
+          .map(installed::match);
     } catch (RuntimeException e) {
       log.warn(
           "Scope backfill could not look up {}; its rows stay hidden until the next start: {}",

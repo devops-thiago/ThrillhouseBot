@@ -19,6 +19,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import java.time.Instant;
 import java.util.List;
 import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
@@ -97,7 +98,16 @@ public interface GitHubInstallationClient {
       this.repositories = repositories == null ? List.of() : List.copyOf(repositories);
     }
 
-    public record Repository(long id, String name, Owner owner) {
+    /**
+     * {@code createdAt} tells a repository from an older one deleted under the same name: the scope
+     * backfill fills only rows stored after it.
+     */
+    public record Repository(
+        long id, String name, Owner owner, @JsonProperty("created_at") Instant createdAt) {
+      public Repository(long id, String name, Owner owner) {
+        this(id, name, owner, null);
+      }
+
       public record Owner(String login) {}
     }
   }

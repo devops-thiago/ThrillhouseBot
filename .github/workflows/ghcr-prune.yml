@@ -1,0 +1,80 @@
+name: GHCR prune
+
+# Deletes old container image versions: snapshots from main beyond the newest few, test images
+# past their age limit, and the untagged per-architecture images and attestations that only
+# those belonged to. Releases, latest, snapshot and their signatures are never touched. Rules
+# and limits are in scripts/ghcr-prune/prune.mjs. A manual run is a dry run unless apply is set.
+#
+# Repository variables (Settings → Secrets and variables → Actions → Variables), all optional:
+#   GHCR_KEEP_TAGS          tags to always keep, comma separated (for example the dev server's image)
+#   GHCR_KEEP_SNAPSHOTS     snapshot versions kept per variant, newest first (default 10)
+#   GHCR_TEST_MAX_AGE_DAYS  age in days after which a test-* image is deleted (default 30)
+#   GHCR_MIN_AGE_HOURS      nothing younger than this is deleted (default 24)
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Delete the planned versions (unchecked: only print the plan)"
+        type: boolean
+        default: false
+      keep_tags:
+        description: "Extra tags to keep, comma separated (added to the GHCR_KEEP_TAGS variable)"
+        type: string
+        default: ""
+      max_deletes:
+        description: "Most versions to delete in this run (oldest first)"
+        type: string
+        default: "300"
+  pull_request:
+    paths:
+      - scripts/ghcr-prune/**
+      - .github/workflows/ghcr-prune.yml
+
+permissions: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - run: node --test scripts/ghcr-prune/prune.test.mjs
+
+  prune:
+    needs: [test]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ghcr-prune
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Prune image versions
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OWNER: devops-thiago
+          PACKAGE: thrillhousebot
+          # The weekly run applies; a manual run applies only when asked.
+          APPLY: ${{ github.event_name == 'schedule' || inputs.apply }}
+          KEEP_TAGS: ${{ vars.GHCR_KEEP_TAGS }},${{ inputs.keep_tags }}
+          MAX_DELETES: ${{ inputs.max_deletes }}
+          KEEP_SNAPSHOTS: ${{ vars.GHCR_KEEP_SNAPSHOTS }}
+          TEST_MAX_AGE_DAYS: ${{ vars.GHCR_TEST_MAX_AGE_DAYS }}
+          MIN_AGE_HOURS: ${{ vars.GHCR_MIN_AGE_HOURS }}
+        run: node scripts/ghcr-prune/prune.mjs
