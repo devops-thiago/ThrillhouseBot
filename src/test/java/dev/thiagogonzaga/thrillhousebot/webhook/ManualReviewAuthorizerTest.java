@@ -183,11 +183,15 @@ class ManualReviewAuthorizerTest {
     // GitHub is degraded: the permission call would eventually answer "admin", but not within the
     // ACK-path budget. The check must abandon it and deny rather than block the webhook worker.
     when(reviewConfig.manualTriggerAuthTimeout()).thenReturn(Duration.ofMillis(100));
-    when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
+    // On a loaded machine the timeout can pass before the background check reaches GitHub at all,
+    // so these stubs stay lenient: the test is about the denial, not about the calls being made.
+    lenient().when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
     // The latch keeps the call in flight (past the timeout) without a wall-clock sleep.
     var release = new CountDownLatch(1);
-    when(installationClient.collaboratorPermission(
-            anyString(), anyString(), anyString(), anyString(), anyString()))
+    lenient()
+        .when(
+            installationClient.collaboratorPermission(
+                anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenAnswer(
             inv -> {
               release.await();
