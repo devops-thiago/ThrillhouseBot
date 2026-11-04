@@ -36,7 +36,7 @@ ThrillhouseBot runs as a self-hosted GitHub App. You configure an
 OpenAI-compatible model endpoint; a local Ollama endpoint keeps model requests
 on your network. The dashboard shows the repositories each signed-in user can
 read across App installations, with review history, token use and costs. Its Live page follows
-the current review step and spend. Optional file triage prioritizes large diffs;
+the current review step and spend. Optional triage orders a large pull request's files by risk, so low-risk files are the first left out;
 optional routing and fallback select models on the configured provider.
 Large diffs are split into batches within a token budget, and files that do not
 fit are listed as unreviewed.

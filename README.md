@@ -1292,9 +1292,9 @@ installation.
 Everything the dashboard shows is scoped this way: the session list and its
 totals, session details, costs, tokens, the overview, feedback, learnings and
 the live feed. Repository permissions are cached for five minutes, and live
-connections refresh them in the background. A `?repository=` you cannot access
-returns 403, and a session id from such a
-repository returns 404. The overview's skip counts span a whole installation, so
+connections refresh them in the background; uninstalling or suspending the App,
+or removing a repository from it, applies at once. A `?repository=` you cannot
+access returns 403, and a session id from such a repository returns 404. The overview's skip counts span a whole installation, so
 they are shown for a personal account to that account, and for an organization
 to its members. Checking membership needs the app's Organization → Members: read
 permission; without it the counts stay hidden. Viewing never grants acting:
@@ -1665,8 +1665,9 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
   supported.
 - **Dashboard access.** GitHub OAuth only, for users who can read a repository
   where the app is installed; no admin UI or guest mode. Access is checked
-  against GitHub's repository permissions and cached for five minutes. GitHub lets only the owner of
-  a private app sign in with it, so anyone else needs the app to be public; set
+  against GitHub's repository permissions and cached for five minutes; an
+  uninstall, a suspension or a removed repository applies at once. GitHub lets
+  only the owner of a private app sign in with it, so anyone else needs the app to be public; set
   `GITHUB_ALLOWED_ACCOUNTS` then, because anyone can install a public app.
 - **Production database.** Container and native builds use PostgreSQL. H2 is for
   `quarkus:dev` and the tests only, and its driver is not packaged in the image.
@@ -1732,10 +1733,11 @@ docker compose pull && docker compose up -d
 
 Each release's notes start with what changes for an existing installation:
 new or renamed settings, changed defaults and database changes. Database
-changes are Flyway migrations that run on startup. Back up the database first
-and upgrade from v0.8.x; older databases must first be started once on v0.8.x.
-The first v0.9.0 start records that schema as version 1 and applies later
-migrations. New settings default to the previous behaviour unless the notes say otherwise. If
+changes are Flyway migrations that run on startup; back up the database first.
+Flyway arrived in v0.9.0: a database created before it is recorded as version 1
+(the v0.8.0 schema) on its first v0.9.0 start, so upgrade to v0.9.0 from v0.8.x
+(see [docs/OPERATIONS.md](docs/OPERATIONS.md#upgrades-and-database-changes)).
+New settings default to the previous behaviour unless the notes say otherwise. If
 you pin a version with `IMAGE_TAG` in `.env`, set it to the new tag before
 pulling.
 
