@@ -39,21 +39,23 @@ export type SocketTicket = { ticket: string } | { ticket: null; retry: boolean }
  * ticket.
  */
 export async function fetchSocketTicket(): Promise<SocketTicket> {
+  let res: Response;
   try {
-    const res = await fetch("/api/auth/socket-ticket", {
+    res = await fetch("/api/auth/socket-ticket", {
       method: "POST",
       credentials: "include",
     });
-    if (!res.ok) {
-      return { ticket: null, retry: res.status === 503 };
-    }
-    const body: { ticket?: unknown } = await res.json();
-    return typeof body.ticket === "string" && body.ticket !== ""
-      ? { ticket: body.ticket }
-      : { ticket: null, retry: false };
   } catch {
     return { ticket: null, retry: true };
   }
+  if (!res.ok) {
+    return { ticket: null, retry: res.status === 503 };
+  }
+  // An answer that is not JSON is malformed, not a failed request: it stops, like any other.
+  const body: { ticket?: unknown } | null = await res.json().catch(() => null);
+  return typeof body?.ticket === "string" && body.ticket !== ""
+    ? { ticket: body.ticket }
+    : { ticket: null, retry: false };
 }
 
 export function socketUrl(location: Pick<Location, "protocol" | "host">, ticket: string): string {

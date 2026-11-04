@@ -69,7 +69,7 @@ public class FindingPipeline {
    * holding the call, which for the nested type would silently relabel the WARN to {@code
    * FindingPipeline$BatchPrompts}.
    */
-  private static void warnBatchWithoutDiff(int files) {
+  static void warnBatchWithoutDiff(int files) {
     Log.warnf(
         "Review batch covering %d file(s) carries no diff text, so the heuristic failure-mode"
             + " review dimension has no material to evaluate and is omitted from that call —"

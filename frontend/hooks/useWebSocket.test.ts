@@ -44,6 +44,19 @@ describe('fetchSocketTicket', () => {
     expect(await fetchSocketTicket()).toEqual({ ticket: null, retry: false });
   });
 
+  it('stops reconnecting on an answer that is not JSON', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        json: () => Promise.reject(new SyntaxError('Unexpected token <')),
+      }),
+    );
+
+    expect(await fetchSocketTicket()).toEqual({ ticket: null, retry: false });
+  });
+
   it('retries when the request gets no answer', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
 
