@@ -25,7 +25,7 @@ import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -47,7 +47,11 @@ public class DashboardWebSocketKeepAlive {
       Executors.newThreadPerTaskExecutor(
           Thread.ofVirtual().name("dashboard-scope-refresh-", 0).factory());
 
-  private final AtomicBoolean refreshing = new AtomicBoolean();
+  /**
+   * 0 while no refresh runs. A running refresh holds it above 0, and every installation change that
+   * arrives meanwhile raises it, which tells the refresh to make another pass.
+   */
+  private final AtomicInteger requests = new AtomicInteger();
 
   @Inject
   public DashboardWebSocketKeepAlive(
@@ -86,10 +90,14 @@ public class DashboardWebSocketKeepAlive {
 
   /**
    * An installation change can end what an open connection may read (#1222); re-resolve now rather
-   * than at the next tick. Only submits work, so the webhook never waits on GitHub.
+   * than at the next tick. Only submits work, so the webhook never waits on GitHub. When a refresh
+   * is already running, it may have passed some connections before the change, so it makes another
+   * pass instead of dropping this one: with the keepalive off there is no later tick to catch up.
    */
   void onInstallationChange(@Observes InstallationChange change) {
-    refreshReaders();
+    if (requests.getAndIncrement() == 0) {
+      schedule();
+    }
   }
 
   /**
@@ -98,23 +106,30 @@ public class DashboardWebSocketKeepAlive {
    * started twice.
    */
   void refreshReaders() {
-    if (!refreshing.compareAndSet(false, true)) {
-      return;
+    if (requests.compareAndSet(0, 1)) {
+      schedule();
     }
+  }
+
+  private void schedule() {
     try {
-      refreshExecutor.execute(
-          () -> {
-            try {
-              broadcaster.refreshReaders();
-            } catch (RuntimeException e) {
-              log.warn("Refreshing dashboard WebSocket access failed", e);
-            } finally {
-              refreshing.set(false);
-            }
-          });
+      refreshExecutor.execute(this::refresh);
     } catch (RuntimeException e) {
-      refreshing.set(false);
+      requests.set(0);
       log.warn("Could not schedule the dashboard WebSocket access refresh", e);
     }
+  }
+
+  /** Passes until no installation change arrived during the last one, then goes idle. */
+  private void refresh() {
+    int seen;
+    do {
+      seen = requests.get();
+      try {
+        broadcaster.refreshReaders();
+      } catch (RuntimeException e) {
+        log.warn("Refreshing dashboard WebSocket access failed", e);
+      }
+    } while (!requests.compareAndSet(seen, 0));
   }
 }
