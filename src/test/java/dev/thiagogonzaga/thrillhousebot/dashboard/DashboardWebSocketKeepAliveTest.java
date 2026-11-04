@@ -15,11 +15,11 @@
  */
 package dev.thiagogonzaga.thrillhousebot.dashboard;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -148,8 +148,7 @@ class DashboardWebSocketKeepAliveTest {
 
     verify(broadcaster, timeout(5_000).times(2)).refreshReaders();
     // The change is consumed by that second pass, so no third one follows.
-    Thread.sleep(100);
-    assertEquals(2, calls.get());
+    verify(broadcaster, after(200).times(2)).refreshReaders();
     keepAlive.onStop(mock(ShutdownEvent.class));
   }
 
