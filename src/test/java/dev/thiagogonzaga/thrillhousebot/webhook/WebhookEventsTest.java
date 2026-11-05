@@ -196,15 +196,19 @@ class WebhookEventsTest {
     var handler =
         new Handler() {
           @Override
-          public void publish(LogRecord record) {
-            captured.add(record.getMessage());
+          public void publish(LogRecord entry) {
+            captured.add(entry.getMessage());
           }
 
           @Override
-          public void flush() {}
+          public void flush() {
+            // Records are captured immediately; nothing is buffered.
+          }
 
           @Override
-          public void close() {}
+          public void close() {
+            // This in-memory handler owns no external resources.
+          }
         };
     var ping = mock(GitHubEvent.class);
     logger.addHandler(handler);
@@ -830,26 +834,21 @@ class WebhookEventsTest {
     verifyNoInteractions(skipEmitter);
   }
 
-  @Test
-  void shouldNotEmitDuplicateSkipEventForNonPullRequestRedelivery() {
+  @ParameterizedTest(name = "{0}: {1}")
+  @MethodSource("redeliveriesWithoutReviewIdentity")
+  void shouldNotEmitDuplicateSkipEventWithoutReviewIdentity(String eventType, String payload) {
     when(deduplicator.isDuplicate("redelivered-id")).thenReturn(true);
 
-    var body = "{\"action\":\"created\"}".getBytes(StandardCharsets.UTF_8);
-
-    deliver("issue_comment", event("issue_comment", "redelivered-id", body));
+    deliver(eventType, event(eventType, "redelivered-id", payload));
 
     verifyNoInteractions(skipEmitter);
   }
 
-  @Test
-  void shouldNotEmitDuplicateSkipEventWhenRedeliveryHasNoAction() {
-    when(deduplicator.isDuplicate("redelivered-id")).thenReturn(true);
-
-    var body = "{}".getBytes(StandardCharsets.UTF_8);
-
-    deliver("pull_request", event("pull_request", "redelivered-id", body));
-
-    verifyNoInteractions(skipEmitter);
+  private static Stream<Arguments> redeliveriesWithoutReviewIdentity() {
+    return Stream.of(
+        arguments("issue_comment", "{\"action\":\"created\"}"),
+        arguments("pull_request", "{}"),
+        arguments("pull_request", "{\"action\":\"opened\",\"pull_request\":{\"number\":7}}"));
   }
 
   @Test
@@ -874,18 +873,6 @@ class WebhookEventsTest {
         ("{\"action\":\"opened\",\"pull_request\":{\"number\":7},"
                 + "\"repository\":{\"id\":7,\"full_name\":\"owner/repo\",\"name\":\"repo\"}}")
             .getBytes(StandardCharsets.UTF_8);
-
-    deliver("pull_request", event("pull_request", "redelivered-id", body));
-
-    verifyNoInteractions(skipEmitter);
-  }
-
-  @Test
-  void shouldNotEmitDuplicateSkipEventWhenRedeliveryLacksRepository() {
-    when(deduplicator.isDuplicate("redelivered-id")).thenReturn(true);
-
-    var body =
-        "{\"action\":\"opened\",\"pull_request\":{\"number\":7}}".getBytes(StandardCharsets.UTF_8);
 
     deliver("pull_request", event("pull_request", "redelivered-id", body));
 
