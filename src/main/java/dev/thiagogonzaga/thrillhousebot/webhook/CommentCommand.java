@@ -18,7 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.webhook;
 /**
  * A command parsed from a PR comment. {@link #NONE} means the comment carried no recognized
  * command. Detected by {@link TriggerDetector#detectCommand(String)} and routed by {@link
- * WebhookController}.
+ * WebhookEvents}.
  */
 public enum CommentCommand {
   /** No recognized command in the comment. */

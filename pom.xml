@@ -24,6 +24,10 @@
         <quarkus-langchain4j.version>1.14.2</quarkus-langchain4j.version>
         <!-- Quarkus 3.40 is incompatible with OTel 1.67; keep both BOMs at 1.62 until #1289
              can be upgraded together with the platform. The known advisory remains tracked there. -->
+        <!-- Quarkiverse GitHub App: handles the webhook entry (HMAC signature, delivery
+             parsing, event dispatch). Built against Quarkus 3.36.x, forward compatible with
+             this platform. Bump only together with the quarkus-github-api it pulls. -->
+        <quarkus-github-app.version>2.16.0</quarkus-github-app.version>
         <opentelemetry.version>1.62.0</opentelemetry.version>
         <opentelemetry.alpha.version>1.62.0-alpha</opentelemetry.alpha.version>
         <!-- Keep in lockstep with the prometheus-metrics version opentelemetry-exporter-prometheus ships -->
@@ -228,10 +232,23 @@
             <artifactId>quarkus-flyway-postgresql</artifactId>
         </dependency>
 
-        <!-- JWT for GitHub App auth -->
+        <!-- GitHub App auth -->
         <dependency>
             <groupId>com.nimbusds</groupId>
             <artifactId>nimbus-jose-jwt</artifactId>
+        </dependency>
+        <!--
+            GitHub event handling (Quarkiverse GitHub App): owns the webhook entry — HMAC
+            signature check over the raw body, delivery parsing and event dispatch to the
+            observers in webhook/WebhookEvents — and provides typed hub4j payloads and
+            installation-scoped GitHub clients for the phases that migrate the REST clients.
+            The route is mounted on the same POST /api/webhook path via quarkus.github-app.*
+            in application.properties.
+        -->
+        <dependency>
+            <groupId>io.quarkiverse.githubapp</groupId>
+            <artifactId>quarkus-github-app</artifactId>
+            <version>${quarkus-github-app.version}</version>
         </dependency>
 
         <!-- Health checks -->

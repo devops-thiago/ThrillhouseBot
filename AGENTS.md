@@ -63,7 +63,7 @@ same diff.
 
 | Package | Owns |
 |---|---|
-| `webhook/` | `WebhookController` (`POST /api/webhook`), HMAC check (`WebhookVerifier`), triggers and filters (`TriggerDetector`, `ReviewTriggerFilter`), dedupe, pause state, the comment commands (`CommentCommandService`) |
+| `webhook/` | The webhook entry (`WebhookEvents`, driven by the Quarkiverse GitHub App extension's route on `POST /api/webhook`; it owns the HMAC check), triggers and filters (`TriggerDetector`, `ReviewTriggerFilter`), dedupe, pause state, the comment commands (`CommentCommandService`) |
 | `review/` | Everything between "a review was requested" and "the result is on GitHub": orchestration, context loading, prompt assembly, budgeting, the post-model finding chain, verdict, publishing, CI gating, follow-ups, the on-request commands |
 | `review/ai/` | The LangChain4j layer: AI service interfaces and their prompt constants (`*Prompts`), streaming and retries (`AiReviewService`), parsing and salvage, the verifier, the token ledger, the call gate |
 | `github/` | REST and GraphQL clients, app auth, write pacing and retry (`GitHubWritePacer`, `GitHubWriteRetry`), instructions and repo-settings resolution |
@@ -399,12 +399,25 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   the summary at once and nothing is posted against a diff that changed. This is `HeadMovedGuard`,
   run by `ReviewStandDown` before `LabelGateGuard`; the orchestrator only closes out the session.
 - **The label gates read the labels the pull request carries now, not only the payload's** (#1021).
-  Dependabot labels a pull request a second or two after opening it, so `WebhookController` reads
+  Dependabot labels a pull request a second or two after opening it, so `WebhookEvents` reads
   them from the API on `opened`, `reopened` and `ready_for_review` (payload fallback on a failed
   read), `LabelGateGuard` re-reads them before an automatic run's first write, after the head
   guard (fail open, like the head guard), and `CiHoldRevisit` before posting a held approval (fail
   closed: the hold stays). All three go through `PullRequestLabelGate`, which reads nothing when
   no label gate is configured, and skip a manual `/review` (`HeldVerdict.manualTrigger`).
+- **The webhook entry is the Quarkiverse GitHub App extension's route**, set to the same `POST
+  /api/webhook` path via `quarkus.github-app.*` (aliased to the `GITHUB_APP_ID` /
+  `GITHUB_PRIVATE_KEY` / `GITHUB_WEBHOOK_SECRET` variables, checked equal by
+  `WebhookEntryConfigTest`). The extension verifies the `X-Hub-Signature-256` over the raw body
+  (only in prod — dev and test skip it), parses the delivery and hands `WebhookEvents` a raw
+  `GitHubEvent`; the observers re-bind its `getParsedPayload()` with the project's Jackson into
+  `WebhookPayload` and route exactly as the former hand-rolled controller did. Every listener
+  method declares event/action qualifiers and takes only the raw event, so a delivery builds no
+  hub4j payload and no installation client on the ack path; `WebhookEventsObserversTest` pins the
+  wiring (a lost qualifier silently drops deliveries), and the dedupe, the dispatch-rejected
+  rollback and the duplicate-skip recording lived with the routing. HTTP corner cases come from
+  the extension's `Routes`: missing mandatory headers `400`, signature mismatch `400`, signed
+  non-JSON body `500`, accepted delivery `200` with an empty body (`NativeImageIT` pins these).
 
 ## Prompts
 

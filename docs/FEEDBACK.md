@@ -95,7 +95,7 @@ cannot access gets `403`.
   (`summarize(repository)`, `summarizeAll()`).
 - `FindingFeedbackCaptureService`: reaction polling and the reply heuristic.
 - `GitHubReactionClient.listReviewCommentReactions`: the Reactions API call.
-- `WebhookController`: schedules capture when someone replies on a review
+- `WebhookEvents`: schedules capture when someone replies on a review
   thread.
 - `ReviewOrchestrator`: runs capture on earlier findings during a follow-up
   review.

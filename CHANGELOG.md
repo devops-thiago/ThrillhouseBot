@@ -211,6 +211,10 @@ and rollback details. New review features below are off by default unless stated
   upgrade is tracked in [#1289](https://github.com/devops-thiago/ThrillhouseBot/issues/1289); the
   Guava update above does not resolve it.
 
+### Changed
+
+- The webhook entry now rides the Quarkiverse GitHub App extension (`io.quarkiverse.githubapp:quarkus-github-app`): it owns the `POST /api/webhook` route, the `X-Hub-Signature-256` check and delivery parsing, and `webhook/WebhookEvents` keeps the existing routing (dedupe, pause, trigger filters, commands, CI rechecks). `WebhookController` and `WebhookVerifier` are gone. Malformed-request answers change to the extension's (`400` for missing/mismatched signature, `500` for a signed non-JSON body, `200` with an empty body on success).
+
 ## [0.8.0] - 2026-10-21
 
 This release adds suggestion verification, an optional summary check, response repair,

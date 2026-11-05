@@ -21,7 +21,7 @@ flowchart LR
     end
 
     subgraph BOT[ThrillhouseBot]
-        WH[webhook/<br/>WebhookController]
+        WH[webhook/<br/>WebhookEvents]
         DSP[review/<br/>ReviewDispatcher]
         RO[review/<br/>ReviewOrchestrator]
         FP[review/<br/>FindingPipeline]
@@ -53,7 +53,7 @@ thread resolution over GraphQL, the instructions file and the repository setting
 
 ```mermaid
 flowchart TD
-    GH[GitHub event] -->|HMAC check, delivery dedupe| WH[WebhookController]
+    GH[GitHub event] -->|HMAC check, delivery parse<br/>Quarkiverse GitHub App| WH[WebhookEvents]
     WH -->|pull_request: pause, trigger filters,<br/>auto-review window| DSP
     WH -->|/review: 👀, pause, write access| DSP
     WH -->|other commands: 👀| CMD[CommentCommandService]
@@ -72,11 +72,12 @@ flowchart TD
     PUB --> POST[Feedback, learnings, labels,<br/>session saved, notification]
 ```
 
-`WebhookController` verifies the signature, drops a redelivered delivery id, routes the event and
-answers 200 before any review work starts. Only cheap gates run on the request thread: the pause
-lookup, the trigger filters, the 👀 reaction on a command (bounded by `ACK_REACTION_TIMEOUT`,
-default `3s`) and the write-access check for `/review` (bounded by `MANUAL_TRIGGER_AUTH_TIMEOUT`,
-default `5s`).
+The Quarkiverse GitHub App extension verifies the signature and parses the delivery inside its
+route; `WebhookEvents` then drops a redelivered delivery id, routes the event and returns before
+any review work starts. Only cheap gates run on the request thread: the pause lookup, the trigger
+filters, the 👀 reaction on a command (bounded by `ACK_REACTION_TIMEOUT`, default `3s`) and the
+write-access check for `/review` (bounded by `MANUAL_TRIGGER_AUTH_TIMEOUT`, default `5s`). No
+installation client is built on the ack path: the observers receive the raw event only.
 
 | Event | What it starts |
 |---|---|
@@ -658,7 +659,7 @@ diff, filtered by the ignore globs.
 
 | Package | Responsibility | Notable classes |
 |---|---|---|
-| `webhook/` | Receives events, verifies the signature, drops redeliveries, applies trigger filters, pause state and the auto-review window, acks commands with 👀, routes commands and replies, starts CI-hold rechecks | `WebhookController`, `WebhookVerifier`, `WebhookDeduplicator`, `TriggerDetector`, `ReviewTriggerFilter`, `ManualReviewAuthorizer`, `AckReactionService`, `CommentCommandService`, `LearningCommands`, `PrPauseService` |
+| `webhook/` | The webhook entry: the Quarkiverse GitHub App extension verifies the signature and parses deliveries, then applies trigger filters, pause state and the auto-review window, drops redeliveries, acks commands with 👀, routes commands and replies, starts CI-hold rechecks | `WebhookEvents`, `WebhookDeduplicator`, `TriggerDetector`, `ReviewTriggerFilter`, `ManualReviewAuthorizer`, `AckReactionService`, `CommentCommandService`, `LearningCommands`, `PrPauseService` |
 | `review/` | Everything from "a review was requested" to "the result is on GitHub": dispatch, context, prompt assembly, budgeting, the finding chain, the security scan, follow-up reconciliation, verdict, publishing, CI gating, learnings, replies and the on-request commands | `ReviewDispatcher`, `ReviewOrchestrator`, `ReviewContextLoader`, `ReviewPromptAssembler`, `DiffBudgetPlanner`, `FindingPipeline`, `FindingScreen`, `SecurityScan`, `FollowUpAnalyzer`, `VerdictBuilder`, `ReviewPublisher`, `PrSummaryGenerator`, `CiStatusEvaluator`, `CiHoldRevisit`, `TicketContextResolver`, `ReviewLearnings`, `MaintainerReplyService` |
 | `review/ai/` | The LangChain4j layer: AI service interfaces and prompts, streaming and retries, response parsing and salvage, the verifier, the token ledger and the call gate | `AiReviewService`, `PrReviewer`, `PrSummarizer`, `FindingVerifier`, `FindingVerificationService`, `ReviewResponseParser`, `ReplyAssistant`, `ModelCallGate`, `ReviewTokenLedger` |
 | `github/` | GitHub REST and GraphQL clients, app auth, write pacing and retry, the instructions file and repository settings | `GitHubAuthClient`, `GitHubReviewClient`, `GitHubCheckRunClient`, `GitHubWritePacer`, `GitHubWriteRetry`, `InstructionsResolver`, `RepoSettingsResolver`, `ReviewThreadService` |

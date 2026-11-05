@@ -73,7 +73,7 @@ class ReviewPromptAssemblerTest {
     assertEquals(
         PrReviewPrompts.MOCK_FIDELITY_REQUEST,
         ReviewPromptAssembler.mockFidelitySection(
-            "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java"));
+            "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookEventsTest.java"));
   }
 
   @Test

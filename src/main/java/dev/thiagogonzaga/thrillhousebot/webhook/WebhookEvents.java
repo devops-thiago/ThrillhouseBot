@@ -31,23 +31,36 @@ import dev.thiagogonzaga.thrillhousebot.review.ReviewDispatcher;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewOrchestrator;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewSkipEmitter;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewSkipReason;
-import jakarta.enterprise.event.Event;
+import io.quarkiverse.githubapp.GitHubEvent;
+import io.quarkiverse.githubapp.event.CheckSuite;
+import io.quarkiverse.githubapp.event.IssueComment;
+import io.quarkiverse.githubapp.event.Ping;
+import io.quarkiverse.githubapp.event.PullRequest;
+import io.quarkiverse.githubapp.event.PullRequestReviewComment;
+import io.quarkiverse.githubapp.event.RawEvent;
+import io.quarkiverse.githubapp.event.Repository;
+import io.quarkiverse.githubapp.event.Status;
+import jakarta.enterprise.inject.spi.BeanManager;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.*;
-import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
 import java.io.IOException;
 import java.util.List;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@Path("/api/webhook")
-@Produces(MediaType.APPLICATION_JSON)
-@Consumes(MediaType.APPLICATION_JSON)
-public class WebhookController {
+/**
+ * The webhook entry: the Quarkiverse GitHub App extension verifies the {@code X-Hub-Signature-256}
+ * over the raw body, parses the delivery and routes it to the observers below on the same {@code
+ * POST /api/webhook} path. Business routing is unchanged: dedupe, pause state, trigger filters,
+ * per-PR dispatch serialization and the comment commands keep their exact callers and semantics.
+ *
+ * <p>Each observer method receives the raw {@link GitHubEvent}: no payload is bound and no
+ * installation client is created on the ACK path, so a delivery costs no GitHub call before the
+ * routing decides otherwise.
+ */
+public class WebhookEvents {
 
-  private static final Logger log = LoggerFactory.getLogger(WebhookController.class);
+  private static final Logger log = LoggerFactory.getLogger(WebhookEvents.class);
 
   private static final String ACTION_READY_FOR_REVIEW = "ready_for_review";
   private static final String ACTION_SYNCHRONIZE = "synchronize";
@@ -56,8 +69,9 @@ public class WebhookController {
   private static final Set<String> AUTO_REVIEW_ACTIONS =
       Set.of("opened", "reopened", ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW);
 
+  private static final String EVENT_PULL_REQUEST = "pull_request";
+
   private final ThrillhouseConfig config;
-  private final WebhookVerifier verifier;
   private final TriggerDetector triggerDetector;
   private final ReviewTriggerFilter triggerFilter;
   private final PullRequestLabelGate labelGate;
@@ -74,14 +88,13 @@ public class WebhookController {
   private final CiHoldRegistry ciHoldRegistry;
   private final AllowedAccounts allowedAccounts;
 
-  private final Event<InstallationChange> installationChanges;
+  private final BeanManager beanManager;
 
   private final ObjectMapper mapper;
 
   @Inject
-  public WebhookController(
+  public WebhookEvents(
       ThrillhouseConfig config,
-      WebhookVerifier verifier,
       TriggerDetector triggerDetector,
       ReviewTriggerFilter triggerFilter,
       PullRequestLabelGate labelGate,
@@ -97,10 +110,9 @@ public class WebhookController {
       FindingFeedbackCaptureService findingFeedbackCapture,
       CiHoldRegistry ciHoldRegistry,
       AllowedAccounts allowedAccounts,
-      Event<InstallationChange> installationChanges,
+      BeanManager beanManager,
       ObjectMapper mapper) {
     this.config = config;
-    this.verifier = verifier;
     this.triggerDetector = triggerDetector;
     this.triggerFilter = triggerFilter;
     this.labelGate = labelGate;
@@ -116,35 +128,64 @@ public class WebhookController {
     this.findingFeedbackCapture = findingFeedbackCapture;
     this.ciHoldRegistry = ciHoldRegistry;
     this.allowedAccounts = allowedAccounts;
-    this.installationChanges = installationChanges;
+    this.beanManager = beanManager;
     this.mapper = mapper;
   }
 
-  @POST
-  public Response handleWebhook(
-      @HeaderParam("X-Hub-Signature-256") String signature,
-      @HeaderParam("X-GitHub-Event") String eventType,
-      @HeaderParam("X-GitHub-Hook-Installation-Target-Type") String targetType,
-      @HeaderParam("X-GitHub-Delivery") String deliveryId,
-      byte[] body) {
-    if (!verifier.verify(signature, body, config.github().webhookSecret())) {
-      return Response.status(Response.Status.UNAUTHORIZED)
-          .entity("{\"error\":\"Invalid signature\"}")
-          .build();
-    }
+  void onPullRequest(
+      @PullRequest.Opened @PullRequest.Reopened @PullRequest.Synchronize @PullRequest.ReadyForReview
+          GitHubEvent event) {
+    routeEvent("pull_request", event);
+  }
 
-    WebhookPayload payload;
-    try {
-      payload = mapper.readValue(body, WebhookPayload.class);
-    } catch (IOException e) {
-      log.error("Failed to parse webhook payload", e);
-      return Response.status(Response.Status.BAD_REQUEST)
-          .entity("{\"error\":\"Invalid payload\"}")
-          .build();
+  void onIssueComment(@IssueComment.Created GitHubEvent event) {
+    routeEvent("issue_comment", event);
+  }
+
+  void onReviewComment(@PullRequestReviewComment.Created GitHubEvent event) {
+    routeEvent("pull_request_review_comment", event);
+  }
+
+  void onCheckSuiteCompleted(@CheckSuite.Completed GitHubEvent event) {
+    routeEvent("check_suite", event);
+  }
+
+  void onStatus(@Status GitHubEvent event) {
+    routeEvent("status", event);
+  }
+
+  void onPing(@Ping GitHubEvent event) {
+    log.info("Webhook ping received");
+  }
+
+  void onInstallationEvent(@RawEvent(event = "installation") GitHubEvent event) {
+    routeEvent("installation", event);
+  }
+
+  void onInstallationRepositoriesEvent(
+      @RawEvent(event = "installation_repositories") GitHubEvent event) {
+    routeEvent("installation_repositories", event);
+  }
+
+  void onRepositoryEvent(@Repository GitHubEvent event) {
+    routeEvent("repository", event);
+  }
+
+  /**
+   * Routes one delivery the same way the controller always did: parse, dedupe against the delivery
+   * id, then business handling. Visible for tests.
+   */
+  void routeEvent(String eventType, GitHubEvent event) {
+    WebhookPayload payload = parsePayload(event);
+    if (payload == null) {
+      return;
     }
 
     log.info(
-        "Received {} event (action: {}, delivery: {})", eventType, payload.action(), deliveryId);
+        "Received {} event (action: {}, delivery: {})",
+        eventType,
+        payload.action(),
+        event.getDeliveryId());
 
     // A public App can be installed by anyone; serve only the configured accounts (#1235).
     var account = accountOf(payload);
@@ -153,21 +194,65 @@ public class WebhookController {
           "Ignoring {} event from {}: not an allowed account (delivery: {})",
           eventType,
           account,
-          deliveryId);
-      return Response.ok("{\"status\":\"ignored\"}").build();
+          event.getDeliveryId());
+      return;
     }
 
     // GitHub redeliveries (manual or automatic retry) reuse the same delivery id.
-    if (deduplicator.isDuplicate(deliveryId)) {
-      log.info("Ignoring redelivered {} event (delivery: {})", eventType, deliveryId);
-      recordDuplicateAutoReviewSkip(eventType, payload, deliveryId);
-      return Response.ok("{\"status\":\"ignored\"}").build();
+    if (deduplicator.isDuplicate(event.getDeliveryId())) {
+      log.info("Ignoring redelivered {} event (delivery: {})", eventType, event.getDeliveryId());
+      recordDuplicateAutoReviewSkip(eventType, payload, event.getDeliveryId());
+      return;
     }
 
-    routeEvent(eventType, payload, deliveryId);
+    try {
+      boolean handled = handle(eventType, payload);
+      if (!handled) {
+        deduplicator.forget(event.getDeliveryId());
+      }
+    } catch (RuntimeException e) {
+      deduplicator.forget(event.getDeliveryId());
+      log.error("Error processing webhook event", e);
+    }
+  }
 
-    // GitHub expects a 200 within 10 seconds.
-    return Response.ok("{\"status\":\"ok\"}").build();
+  private boolean handle(String eventType, WebhookPayload payload) {
+    return switch (eventType) {
+      case "pull_request" -> handlePullRequest(payload);
+      case "issue_comment" -> handleIssueComment(payload);
+      case "pull_request_review_comment" -> handleReviewComment(payload);
+      case "check_suite" -> handleCheckSuite(payload);
+      case "status" -> handleStatus(payload);
+      case "installation" -> {
+        handleInstallation(payload);
+        yield true;
+      }
+      case "installation_repositories" -> {
+        handleInstallationRepositories(payload);
+        yield true;
+      }
+      case "repository" -> {
+        handleRepository(payload);
+        yield true;
+      }
+      case "ping" -> {
+        log.info("Webhook ping received");
+        yield true;
+      }
+      default -> {
+        log.debug("Unhandled event type: {}", eventType);
+        yield true;
+      }
+    };
+  }
+
+  private WebhookPayload parsePayload(GitHubEvent event) {
+    try {
+      return mapper.readValue(event.getParsedPayload().encode(), WebhookPayload.class);
+    } catch (IOException e) {
+      log.error("Failed to parse webhook payload", e);
+      return null;
+    }
   }
 
   /**
@@ -176,7 +261,7 @@ public class WebhookController {
    */
   private void recordDuplicateAutoReviewSkip(
       String eventType, WebhookPayload payload, String deliveryId) {
-    if (!"pull_request".equals(eventType)
+    if (!EVENT_PULL_REQUEST.equals(eventType)
         || payload.action() == null
         || !AUTO_REVIEW_ACTIONS.contains(payload.action())) {
       return;
@@ -195,45 +280,6 @@ public class WebhookController {
         "redelivered webhook (delivery: " + deliveryId + ")");
   }
 
-  private void routeEvent(String eventType, WebhookPayload payload, String deliveryId) {
-    try {
-      boolean handled =
-          switch (eventType) {
-            case "pull_request" -> handlePullRequest(payload);
-            case "issue_comment" -> handleIssueComment(payload);
-            case "pull_request_review_comment" -> handleReviewComment(payload);
-            case "check_suite" -> handleCheckSuite(payload);
-            case "status" -> handleStatus(payload);
-            case "installation" -> {
-              handleInstallation(payload);
-              yield true;
-            }
-            case "installation_repositories" -> {
-              handleInstallationRepositories(payload);
-              yield true;
-            }
-            case "repository" -> {
-              handleRepository(payload);
-              yield true;
-            }
-            case "ping" -> {
-              log.info("Webhook ping received");
-              yield true;
-            }
-            default -> {
-              log.debug("Unhandled event type: {}", eventType);
-              yield true;
-            }
-          };
-      if (!handled) {
-        deduplicator.forget(deliveryId);
-      }
-    } catch (RuntimeException e) {
-      deduplicator.forget(deliveryId);
-      log.error("Error processing webhook event", e);
-    }
-  }
-
   /**
    * @return {@code false} only when a review was attempted but the dispatcher rejected it (so the
    *     dedup slot should be rolled back); {@code true} when the event was handled or legitimately
@@ -244,7 +290,6 @@ public class WebhookController {
     if (action == null) return true;
 
     return switch (action) {
-      // ready_for_review fires when a draft is marked ready and is not followed by a synchronize.
       case "opened", "reopened", ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW -> {
         var pr = payload.pullRequest();
         var repo = payload.repository();
@@ -331,14 +376,6 @@ public class WebhookController {
     };
   }
 
-  /**
-   * The labels the trigger filter's label gates read (#1021). A {@code synchronize} payload is
-   * current, but the {@code opened}, {@code reopened} and {@code ready_for_review} payloads can
-   * predate labels added right after them — Dependabot opens a pull request, then labels it — so
-   * for those the labels are read from the API. The filter asks only when a label gate is
-   * configured. A failed read falls back to the payload's labels: the review then runs as it did
-   * before the read existed, and the pre-publish gate in the orchestrator reads them again.
-   */
   private List<String> gatedLabels(WebhookPayload payload) {
     var pr = payload.pullRequest();
     var payloadLabels = pr.labels().stream().map(WebhookPayload.Label::name).toList();
@@ -360,18 +397,12 @@ public class WebhookController {
     return current.get();
   }
 
-  /**
-   * @return {@code false} only when a review was attempted but the dispatcher rejected it (so the
-   *     dedup slot should be rolled back); {@code true} when the event was handled or legitimately
-   *     ignored.
-   */
   private boolean handleIssueComment(WebhookPayload payload) {
     if (!"created".equals(payload.action())) {
       log.debug("Ignoring issue_comment action: {}", payload.action());
       return true;
     }
 
-    // issue_comment fires for both issues and PRs; the pull_request link marks a PR.
     if (payload.issue() == null || payload.issue().pullRequest() == null) {
       log.debug("Ignoring comment on issue (not PR)");
       return true;
@@ -394,11 +425,6 @@ public class WebhookController {
     return maybeDispatchConversationalMention(payload);
   }
 
-  /**
-   * Builds the command context and routes a recognized comment command. {@code /review} keeps its
-   * synchronous authorize-then-dispatch path so the dispatch outcome can roll back the webhook
-   * dedup slot; every other command runs asynchronously off the ack thread.
-   */
   private boolean handleCommentCommand(WebhookPayload payload, CommentCommand command) {
     var repo = payload.repository();
     if (unscoped(payload)) {
@@ -411,7 +437,6 @@ public class WebhookController {
         repo.name(),
         payload.comment().id(),
         AckReactionService.CommentKind.ISSUE);
-    // On issue_comment the issue number equals the PR number.
     var ctx =
         new CommentCommandService.CommandContext(
             command,
@@ -433,7 +458,6 @@ public class WebhookController {
     return true;
   }
 
-  /** Dispatches a conversational reply for a bare {@code @thrillhousebot} mention on a PR. */
   private boolean maybeDispatchConversationalMention(WebhookPayload payload) {
     if (!config.review().conversationalRepliesEnabled()
         || !triggerDetector.containsBotMention(payload.comment().body())) {
@@ -474,14 +498,6 @@ public class WebhookController {
             null));
   }
 
-  /**
-   * Handles {@code pull_request_review_comment} events — a maintainer mentioning the bot on a diff
-   * line or inside an inline review thread. Only an explicit {@code @}-mention gets a contextual
-   * answer; a bare reply (even on the bot's own finding thread) is ignored.
-   *
-   * @return {@code false} only when a reply was attempted but the dispatcher rejected it (so the
-   *     dedup slot should be rolled back); {@code true} when the event was handled or ignored.
-   */
   private boolean handleReviewComment(WebhookPayload payload) {
     if (!"created".equals(payload.action())) {
       log.debug("Ignoring pull_request_review_comment action: {}", payload.action());
@@ -505,12 +521,9 @@ public class WebhookController {
       return true;
     }
 
-    // GitHub thread roots carry no in_reply_to_id; a reply targets its thread's root.
     boolean isReply = comment.inReplyToId() != null;
     Long rootCommentId = isReply ? comment.inReplyToId() : comment.id();
 
-    // Finding feedback (#324): poll 👍/👎 on the finding root when a human replies. Independent of
-    // conversational replies — reactions are not delivered as a webhook event for GitHub Apps.
     if (isReply) {
       findingFeedbackCapture.scheduleCaptureOnReviewReply(
           scope(payload),
@@ -561,18 +574,6 @@ public class WebhookController {
             comment.diffHunk()));
   }
 
-  /**
-   * Handles {@code check_suite} events (#825): a completed suite on a head whose review is held on
-   * the CI gate gets that gate re-evaluated. {@code check_suite} rather than {@code workflow_run}
-   * because it fires for every app that reports check runs — GitHub Actions and any other CI — and
-   * reads from the same source the gate does; and the head is matched through {@link
-   * CiHoldRegistry} rather than the payload's {@code pull_requests}, which is empty for a fork. The
-   * bot's own suite completing is what every held review ends with, and never changes the gate, so
-   * it is skipped.
-   *
-   * @return {@code false} only when a re-evaluation was attempted but the dispatcher rejected it
-   *     (so the dedup slot should be rolled back); {@code true} otherwise
-   */
   private boolean handleCheckSuite(WebhookPayload payload) {
     if (!"completed".equals(payload.action())) {
       log.debug("Ignoring check_suite action: {}", payload.action());
@@ -590,11 +591,6 @@ public class WebhookController {
     return recheckHeldVerdicts(payload, suite.headSha(), "check suite");
   }
 
-  /**
-   * Handles {@code status} events (#825): a required check reported through the legacy Commit
-   * Status API completes no check suite, so a hold whose last outstanding check is one of those is
-   * lifted from here. A {@code pending} status changes nothing and is ignored.
-   */
   private boolean handleStatus(WebhookPayload payload) {
     if (payload.state() == null || "pending".equalsIgnoreCase(payload.state())) {
       log.debug("Ignoring status with state: {}", payload.state());
@@ -608,10 +604,6 @@ public class WebhookController {
     return appId != null && appId.strip().equals(Long.toString(app.id()));
   }
 
-  /**
-   * Dispatches a CI re-evaluation for every pull request tracked or held at {@code headSha}. Most
-   * completions match nothing — the head is not under a held review — and end here at no cost.
-   */
   private boolean recheckHeldVerdicts(WebhookPayload payload, String headSha, String source) {
     var repo = payload.repository();
     if (headSha == null || headSha.isBlank() || unscoped(payload) || repo.owner() == null) {
@@ -646,13 +638,6 @@ public class WebhookController {
     return queued;
   }
 
-  /**
-   * Handles a manual {@code /review}: honors a pause, restricts the paid review to write-access
-   * holders, then dispatches it.
-   *
-   * @return the dispatch outcome (so a rejected dispatch rolls back the dedup slot), or {@code
-   *     true} when the command was handled without dispatching (paused or unauthorized).
-   */
   private boolean handleReviewCommand(CommentCommandService.CommandContext ctx) {
     if (prPauseService.isPaused(ctx.scope(), ctx.owner(), ctx.repo(), ctx.prNumber())) {
       log.info(
@@ -684,11 +669,6 @@ public class WebhookController {
             true));
   }
 
-  /**
-   * An installation was uninstalled, suspended, unsuspended or accepted new permissions (#1222).
-   * Nothing of a gone installation is served from then on; observers only update memory and the
-   * stored rows, so this never calls GitHub before the acknowledgement.
-   */
   private void handleInstallation(WebhookPayload payload) {
     var installation = payload.installation();
     if (installation == null || installation.id() <= 0 || payload.action() == null) {
@@ -707,11 +687,10 @@ public class WebhookController {
         payload.action(),
         installation.id());
     if (kind != null) {
-      installationChanges.fire(new InstallationChange(kind, installation.id(), List.of()));
+      beanManager.getEvent().fire(new InstallationChange(kind, installation.id(), List.of()));
     }
   }
 
-  /** Repositories were added to or removed from an installation (#1222). */
   private void handleInstallationRepositories(WebhookPayload payload) {
     var installation = payload.installation();
     if (installation == null || installation.id() <= 0) {
@@ -737,14 +716,10 @@ public class WebhookController {
             .toList();
     if (!changed.isEmpty()) {
       log.info("Installation {}: {} {} repository(ies)", installationId, kind, changed.size());
-      installationChanges.fire(new InstallationChange(kind, installationId, changed));
+      beanManager.getEvent().fire(new InstallationChange(kind, installationId, changed));
     }
   }
 
-  /**
-   * A repository was renamed or transferred (#1222): its stored rows take the new name by
-   * repository id, so their history follows it.
-   */
   private void handleRepository(WebhookPayload payload) {
     var repo = payload.repository();
     if (!"renamed".equals(payload.action()) && !"transferred".equals(payload.action())) {
@@ -756,18 +731,15 @@ public class WebhookController {
       return;
     }
     log.info("Repository {} {} to {}", repo.id(), payload.action(), repo.fullName());
-    installationChanges.fire(
-        new InstallationChange(
-            InstallationChange.Kind.REPOSITORY_RENAMED,
-            payload.installation().id(),
-            List.of(new InstallationChange.Repository(repo.id(), repo.fullName()))));
+    beanManager
+        .getEvent()
+        .fire(
+            new InstallationChange(
+                InstallationChange.Kind.REPOSITORY_RENAMED,
+                payload.installation().id(),
+                List.of(new InstallationChange.Repository(repo.id(), repo.fullName()))));
   }
 
-  /**
-   * The account an event's installation belongs to: the repository owner's login, or the
-   * installation's account when that login is unavailable (no repository, or its owner or login is
-   * missing); null when the payload names neither.
-   */
   private static String accountOf(WebhookPayload payload) {
     var repo = payload.repository();
     if (repo != null && repo.owner() != null && repo.owner().login() != null) {
@@ -779,17 +751,12 @@ public class WebhookController {
         : null;
   }
 
-  /** The payload's installation id, or the skip counters' key for an unknown installation. */
   private static long installationOf(WebhookPayload payload) {
     return payload.installation() == null
         ? ReviewSkipEmitter.UNKNOWN_INSTALLATION
         : payload.installation().id();
   }
 
-  /**
-   * Whether the payload lacks the repository or installation that scope everything the bot stores
-   * (#1220); such an event is ignored rather than handled unscoped.
-   */
   private static boolean unscoped(WebhookPayload payload) {
     return payload.repository() == null
         || payload.repository().id() <= 0
@@ -797,10 +764,6 @@ public class WebhookController {
         || payload.installation().id() <= 0;
   }
 
-  /**
-   * The installation and repository a payload belongs to. Called only after the payload's
-   * repository and installation were checked to be present.
-   */
   private static RepoScope scope(WebhookPayload payload) {
     return new RepoScope(payload.installation().id(), payload.repository().id());
   }

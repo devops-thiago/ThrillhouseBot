@@ -58,7 +58,7 @@ class EvalTrailingGuidanceTest {
         EvalTrailingGuidance.relatedTests(
             List.of(
                 "src/main/java/dev/thiagogonzaga/thrillhousebot/review/ReviewDispatcher.java",
-                "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java"));
+                "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookEventsTest.java"));
     var guidance =
         EvalTrailingGuidance.forCase(
             corpusDiff("pr102-mock-contradicts-dispatch-must-find"),
@@ -68,7 +68,7 @@ class EvalTrailingGuidanceTest {
             "");
 
     assertEquals(
-        "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookControllerTest.java", tests);
+        "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookEventsTest.java", tests);
     var mock = guidance.indexOf(PrReviewPrompts.MOCK_FIDELITY_REQUEST);
     var bugFix = guidance.indexOf(PrReviewPrompts.BUG_FIX_EFFICACY_REQUEST);
     assertTrue(mock >= 0 && bugFix > mock, guidance);
