@@ -572,6 +572,8 @@ public interface ThrillhouseConfig {
 
     LabelsConfig labels();
 
+    DescribeConfig describe();
+
     DiagramConfig diagram();
 
     @WithName("patch-coverage")
@@ -970,6 +972,25 @@ public interface ThrillhouseConfig {
      */
     @WithName("blocked")
     Optional<List<String>> blocked();
+  }
+
+  /**
+   * Opt-in apply mode for the {@code /describe} command, mirroring {@link LabelsConfig#apply()}:
+   * suggestion-only is the released behaviour, and letting the bot mutate the PR is the operator's
+   * explicit call.
+   */
+  interface DescribeConfig {
+    /**
+     * Make `/describe` replace the PR's title and body with the generated suggestion instead of
+     * only posting it as a comment. The previous title and description are kept in the confirmation
+     * comment, and the commenter still needs write access. See <a
+     * href="https://github.com/devops-thiago/ThrillhouseBot#commands">Commands</a>.
+     *
+     * <p>When {@code false}, the suggestion is only posted as a comment to copy in and the PR is
+     * never edited.
+     */
+    @WithDefault("false")
+    boolean apply();
   }
 
   interface DashboardConfig {
