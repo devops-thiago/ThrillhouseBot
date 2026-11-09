@@ -111,8 +111,9 @@ class WebhookEventsObserversTest {
           method.getParameterTypes()[0],
           method.getName() + ": observers bind no payload; the ack path builds no client");
       assertEquals(void.class, method.getReturnType(), method.getName());
-      assertTrue(
-          (method.getModifiers() & (Modifier.PUBLIC | Modifier.PROTECTED | Modifier.PRIVATE)) == 0,
+      assertEquals(
+          0,
+          method.getModifiers() & (Modifier.PUBLIC | Modifier.PROTECTED | Modifier.PRIVATE),
           method.getName() + ": observers stay package-private like the product convention");
       names.add(method.getName());
     }
@@ -176,7 +177,7 @@ class WebhookEventsObserversTest {
     try {
       var method = annotation.annotationType().getMethod("value");
       return String.valueOf(method.invoke(annotation));
-    } catch (ReflectiveOperationException e) {
+    } catch (ReflectiveOperationException _) {
       return null;
     }
   }

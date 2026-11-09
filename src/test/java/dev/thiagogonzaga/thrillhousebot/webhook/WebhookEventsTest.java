@@ -218,8 +218,10 @@ class WebhookEventsTest {
       logger.removeHandler(handler);
     }
 
-    assertTrue(captured.contains("Webhook ping received"));
-    verifyNoInteractions(ping, deduplicator, reviewDispatcher, replyDispatcher, installationEvents);
+    assertTrue(captured.stream().anyMatch(m -> m.startsWith("Webhook ping received")));
+    verify(ping).getDeliveryId();
+    verifyNoMoreInteractions(ping);
+    verifyNoInteractions(deduplicator, reviewDispatcher, replyDispatcher, installationEvents);
   }
 
   private InstallationChange firedChange() {
@@ -376,7 +378,7 @@ class WebhookEventsTest {
     allowedAccounts = new AllowedAccounts(List.of("owner"));
     events = newEvents(triggerFilter);
 
-    events.routeEvent("ping", event("ping", DELIVERY, "{}".getBytes(StandardCharsets.UTF_8)));
+    events.routeEvent("push", event("push", DELIVERY, "{}".getBytes(StandardCharsets.UTF_8)));
 
     verify(deduplicator).isDuplicate(DELIVERY);
   }
@@ -1975,16 +1977,6 @@ class WebhookEventsTest {
 
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
     verify(prPauseService, never()).isPaused(any(), any(), any(), anyInt());
-  }
-
-  @Test
-  void shouldHandlePingEvent() {
-
-    var body = "{}".getBytes(StandardCharsets.UTF_8);
-
-    events.routeEvent("ping", event("ping", DELIVERY, body));
-
-    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
   }
 
   @Test

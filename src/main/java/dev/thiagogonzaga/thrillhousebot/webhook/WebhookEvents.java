@@ -135,7 +135,7 @@ public class WebhookEvents {
   void onPullRequest(
       @PullRequest.Opened @PullRequest.Reopened @PullRequest.Synchronize @PullRequest.ReadyForReview
           GitHubEvent event) {
-    routeEvent("pull_request", event);
+    routeEvent(EVENT_PULL_REQUEST, event);
   }
 
   void onIssueComment(@IssueComment.Created GitHubEvent event) {
@@ -155,7 +155,7 @@ public class WebhookEvents {
   }
 
   void onPing(@Ping GitHubEvent event) {
-    log.info("Webhook ping received");
+    log.info("Webhook ping received (delivery: {})", event.getDeliveryId());
   }
 
   void onInstallationEvent(@RawEvent(event = "installation") GitHubEvent event) {
@@ -172,8 +172,8 @@ public class WebhookEvents {
   }
 
   /**
-   * Routes one delivery the same way the controller always did: parse, dedupe against the delivery
-   * id, then business handling. Visible for tests.
+   * Routes one delivery from its observer: parse, dedupe against the delivery id, then business
+   * handling. A ping never gets here: {@link #onPing} acknowledges it. Visible for tests.
    */
   void routeEvent(String eventType, GitHubEvent event) {
     WebhookPayload payload = parsePayload(event);
@@ -218,7 +218,7 @@ public class WebhookEvents {
 
   private boolean handle(String eventType, WebhookPayload payload) {
     return switch (eventType) {
-      case "pull_request" -> handlePullRequest(payload);
+      case EVENT_PULL_REQUEST -> handlePullRequest(payload);
       case "issue_comment" -> handleIssueComment(payload);
       case "pull_request_review_comment" -> handleReviewComment(payload);
       case "check_suite" -> handleCheckSuite(payload);
@@ -233,10 +233,6 @@ public class WebhookEvents {
       }
       case "repository" -> {
         handleRepository(payload);
-        yield true;
-      }
-      case "ping" -> {
-        log.info("Webhook ping received");
         yield true;
       }
       default -> {
