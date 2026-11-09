@@ -33,12 +33,6 @@ delivery still gets `200`.
   was tagged, and v0.9.0 still uses `WebhookController` and `WebhookVerifier`. The change is
   described under **Changed** above.
 
-### Known limitations
-
-- OpenTelemetry API 1.62.0 remains affected by GHSA-ccrj-gw8r-854m. The fixed 1.67.0 requires a
-  Quarkus release that ships it; the upgrade is tracked in
-  [#1289](https://github.com/devops-thiago/ThrillhouseBot/issues/1289).
-
 ## [0.9.0] - 2026-11-04
 
 This release adds a live review view, multi-installation dashboard access, optional model routing
