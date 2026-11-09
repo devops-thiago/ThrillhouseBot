@@ -329,7 +329,7 @@ public class PatchCoverageResolver {
     result.sort(
         (left, right) -> {
           var bySize = Integer.compare(right.lines().size(), left.lines().size());
-          return bySize != 0 ? bySize : left.path().compareTo(right.path());
+          return bySize == 0 ? left.path().compareTo(right.path()) : bySize;
         });
     return List.copyOf(result);
   }
