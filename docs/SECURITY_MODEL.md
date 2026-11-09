@@ -9,7 +9,7 @@ security limits. To report a vulnerability, see
 
 - Only GitHub can trigger a review. Every webhook request must carry a valid
   `X-Hub-Signature-256` HMAC for the configured webhook secret, or it is
-  rejected with 401 before the body is parsed.
+  rejected with 400 before the body is parsed.
 - The bot reads pull requests; it never checks out, builds or runs their code.
   Diffs, titles, descriptions, comments, linked issues and CI logs are passed to
   the model as text.

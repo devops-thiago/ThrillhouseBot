@@ -4,6 +4,35 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-09
+
+The webhook endpoint now runs on the Quarkiverse GitHub App extension. There are no new settings,
+no schema changes and no new GitHub App permissions. A monitor or proxy that checks the webhook's
+status codes should expect `400` instead of `401` for a missing or mismatched signature; a valid
+delivery still gets `200`.
+
+### Changed
+
+- The Quarkiverse GitHub App extension (`io.quarkiverse.githubapp:quarkus-github-app` 2.16.0)
+  now serves `POST /api/webhook`: it checks `X-Hub-Signature-256` against `GITHUB_WEBHOOK_SECRET`
+  and parses the delivery, then `WebhookEvents` routes it as before (deduplication, pauses,
+  trigger filters, commands, CI rechecks). The replies follow the extension: `400` for a missing
+  or mismatched signature (previously `401`), `500` for a signed body that is not JSON (previously
+  `400`), and `200` with an empty body for an accepted delivery. Startup still fails without a
+  webhook secret. (#1291, #1303, #1308)
+
+### Dependencies
+
+- Bumped the actions group (#1307), the frontend npm dependencies (#1305) and the website docs
+  dependencies (#1306)
+
+### Errata
+
+- The `[0.9.0]` section's **Changed** entry about the webhook entry and the Quarkiverse GitHub
+  App extension describes this release, not v0.9.0. It was added to the changelog after v0.9.0
+  was tagged, and v0.9.0 still uses `WebhookController` and `WebhookVerifier`. The change is
+  described under **Changed** above.
+
 ## [0.9.0] - 2026-11-04
 
 This release adds a live review view, multi-installation dashboard access, optional model routing

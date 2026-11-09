@@ -1193,7 +1193,7 @@ again. Commands such as `/describe` or `/improve` send nothing.
   "schema_version": 1,
   "event": "review.completed",
   "timestamp": "2026-09-29T12:00:00Z",
-  "bot": { "name": "thrillhousebot", "version": "0.9.0" },
+  "bot": { "name": "thrillhousebot", "version": "0.9.1" },
   "repository": "octo/repo",
   "pull_request": { "number": 42, "head_sha": "0123abc…", "url": "https://github.com/octo/repo/pull/42" },
   "session_url": "https://bot.example/session/…",
@@ -1703,14 +1703,14 @@ Sigstore) and carry build-provenance attestations. To check a release:
 cosign verify \
   --certificate-identity-regexp='https://github.com/devops-thiago/ThrillhouseBot.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/devops-thiago/thrillhousebot:v0.9.0
+  ghcr.io/devops-thiago/thrillhousebot:v0.9.1
 
 # Provenance (image)
-gh attestation verify oci://ghcr.io/devops-thiago/thrillhousebot:v0.9.0 \
+gh attestation verify oci://ghcr.io/devops-thiago/thrillhousebot:v0.9.1 \
   --repo devops-thiago/ThrillhouseBot
 
 # Provenance (a downloaded binary)
-gh attestation verify thrillhousebot-v0.9.0-linux-amd64.tar.gz \
+gh attestation verify thrillhousebot-v0.9.1-linux-amd64.tar.gz \
   --repo devops-thiago/ThrillhouseBot
 ```
 
@@ -1842,7 +1842,7 @@ Both images are built from the same native binary and published to GHCR:
 
 - `ghcr.io/devops-thiago/thrillhousebot:latest`: UBI9-micro (default).
 - `ghcr.io/devops-thiago/thrillhousebot:latest-distroless`: distroless base
-  (`:v0.9.0-distroless`, and so on).
+  (`:v0.9.1-distroless`, and so on).
 - Snapshot tags: `:snapshot`, `:v<version>-<short-sha>-snapshot` and
   `:<full-sha>`, each with a `-distroless` variant.
   A weekly job keeps the 10 newest snapshot builds of each variant and
