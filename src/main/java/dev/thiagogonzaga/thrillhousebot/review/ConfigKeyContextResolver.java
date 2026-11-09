@@ -372,7 +372,7 @@ public class ConfigKeyContextResolver {
 
   private static int byPathDepthThenName(String left, String right) {
     var byDepth = Integer.compare(depth(left), depth(right));
-    return byDepth != 0 ? byDepth : left.compareTo(right);
+    return byDepth == 0 ? left.compareTo(right) : byDepth;
   }
 
   private static int depth(String path) {

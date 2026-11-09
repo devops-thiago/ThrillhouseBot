@@ -80,6 +80,24 @@ class NativeImageIT {
   }
 
   @Test
+  void rejectsADeliveryWhoseSignatureDoesNotMatchTheBody() throws GeneralSecurityException {
+    // Every mandatory header is present, so the refusal comes from the signature check itself:
+    // the body was changed after it was signed.
+    var signedBody = "{\"zen\":\"signed\"}".getBytes(StandardCharsets.UTF_8);
+    given()
+        .contentType("application/json")
+        .header("X-GitHub-Event", "ping")
+        .header("X-GitHub-Delivery", UUID.randomUUID().toString())
+        .header("X-Hub-Signature-256", "sha256=" + hmac(signedBody))
+        .body("{\"zen\":\"tampered\"}")
+        .when()
+        .post(WEBHOOK)
+        .then()
+        .statusCode(400)
+        .body(equalTo("Invalid signature."));
+  }
+
+  @Test
   void refusesASignedBodyThatIsNotJson() throws GeneralSecurityException {
     // The signature check runs first and passes here: the refusal comes from the delivery, not
     // from the request.
