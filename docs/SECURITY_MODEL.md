@@ -91,17 +91,14 @@ The container images run as an unprivileged user (UID 1001 on UBI9-micro,
 ### Fail-safe defaults
 
 `WebhookEvents` runs behind the Quarkiverse GitHub App extension's route, which rejects a
-request when the signature header is missing or when no secret is configured. With `GITHUB_ALLOWED_ACCOUNTS` set,
+request whose signature header is missing or does not match the body, and the application does
+not start without a webhook secret. With `GITHUB_ALLOWED_ACCOUNTS` set,
 an event from an installation on any other account is ignored before any work,
 so a public App installed by a stranger never spends the operator's budget. The dashboard refuses a login it
 has never been able to check with GitHub, keeps a known login's last answer for
 at most 30 minutes while GitHub is unreachable, and ends the session when GitHub
 rejects its token.
 Organization membership is granted only on GitHub's explicit answer. Optional context and outgoing
-||||||| parent of 602b19b (refactor(webhook): adopt Quarkiverse GitHub App extension for webhook entry)
-`WebhookEvents` runs behind the Quarkiverse GitHub App extension's route, which rejects a
-request when the signature header is missing or when no secret is configured. The dashboard refuses every login
-when the App owner cannot be resolved. Optional context and outgoing
 notifications are off until enabled, and a manual `/review` needs write access
 to the repository (`webhook/ManualReviewAuthorizer`).
 
