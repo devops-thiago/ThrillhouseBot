@@ -20,21 +20,20 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import jakarta.ws.rs.NotFoundException;
-import jakarta.ws.rs.WebApplicationException;
-import jakarta.ws.rs.core.Response;
-import java.util.Base64;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.kohsuke.github.GHFileNotFoundException;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 class InstructionsResolverTest {
 
-  @Mock private GitHubAuthClient authClient;
+  @Mock private io.quarkiverse.githubapp.GitHubClientProvider clientProvider;
 
-  @Mock private GitHubPullRequestClient prClient;
+  @Mock private org.kohsuke.github.GitHub gitHub;
+
+  @Mock private org.kohsuke.github.GHRepository repository;
 
   @Mock private ThrillhouseConfig config;
 
@@ -51,42 +50,32 @@ class InstructionsResolverTest {
   private static final String AUTH_HEADER = "Bearer test-jwt";
 
   @BeforeEach
-  void setUp() {
+  void setUp() throws Exception {
     MockitoAnnotations.openMocks(this);
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.instructionsFile()).thenReturn(".github/thrillhousebot.md");
-    when(authClient.getAuthHeader(INSTALLATION_ID)).thenReturn(AUTH_HEADER);
-    resolver = new InstructionsResolver(config, authClient, prClient, currentTimeMs::get);
+    when(clientProvider.getInstallationClient(INSTALLATION_ID)).thenReturn(gitHub);
+    when(gitHub.getRepository(anyString())).thenReturn(repository);
+    resolver = new InstructionsResolver(config, clientProvider, currentTimeMs::get);
   }
 
-  private GitHubPullRequestClient.FileContent makeFileContent(String content) {
-    var encoded =
-        Base64.getEncoder()
-            .encodeToString(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-    return new GitHubPullRequestClient.FileContent(
-        "file.md", "path/to/file.md", encoded, "base64", content.length());
+  private org.kohsuke.github.GHContent makeFileContent(String content) throws Exception {
+    var mock = org.mockito.Mockito.mock(org.kohsuke.github.GHContent.class);
+    org.mockito.Mockito.doReturn(content).when(mock).getContent();
+    org.mockito.Mockito.doReturn(true).when(mock).isFile();
+    return mock;
   }
 
   @Test
-  void shouldResolveFirstFileInFallbackChain() {
+  void shouldResolveFirstFileInFallbackChain() throws Exception {
     // thrillhousebot.md (first in chain) returns 404, copilot-instructions.md (second) succeeds
-    when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
-        .thenThrow(new NotFoundException(Response.status(404).build()));
+    doThrow(new GHFileNotFoundException("not found"))
+        .when(repository)
+        .getFileContent(".github/thrillhousebot.md", DEFAULT_BRANCH);
 
-    when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/copilot-instructions.md",
-            DEFAULT_BRANCH))
-        .thenReturn(makeFileContent("# Copilot Instructions"));
+    doReturn(makeFileContent("# Copilot Instructions"))
+        .when(repository)
+        .getFileContent(".github/copilot-instructions.md", DEFAULT_BRANCH);
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -96,15 +85,38 @@ class InstructionsResolverTest {
   }
 
   @Test
-  void shouldResolveThrillhousebotMd() {
-    when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
-        .thenReturn(makeFileContent("Custom bot instructions"));
+  void shouldSkipNullFileContent() throws Exception {
+    doReturn(null).when(repository).getFileContent(".github/thrillhousebot.md", DEFAULT_BRANCH);
+    doReturn(makeFileContent("# Copilot Instructions"))
+        .when(repository)
+        .getFileContent(".github/copilot-instructions.md", DEFAULT_BRANCH);
+
+    var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+
+    assertTrue(result.isPresent());
+    assertEquals("# Copilot Instructions", result.content());
+  }
+
+  @Test
+  void shouldSkipNonFileContent() throws Exception {
+    var nonFile = org.mockito.Mockito.mock(org.kohsuke.github.GHContent.class);
+    org.mockito.Mockito.doReturn(false).when(nonFile).isFile();
+    doReturn(nonFile).when(repository).getFileContent(".github/thrillhousebot.md", DEFAULT_BRANCH);
+    doReturn(makeFileContent("# Copilot Instructions"))
+        .when(repository)
+        .getFileContent(".github/copilot-instructions.md", DEFAULT_BRANCH);
+
+    var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+
+    assertTrue(result.isPresent());
+    assertEquals("# Copilot Instructions", result.content());
+  }
+
+  @Test
+  void shouldResolveThrillhousebotMd() throws Exception {
+    doReturn(makeFileContent("Custom bot instructions"))
+        .when(repository)
+        .getFileContent(".github/thrillhousebot.md", DEFAULT_BRANCH);
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -114,29 +126,19 @@ class InstructionsResolverTest {
   }
 
   @Test
-  void shouldTryClaudeMdAsFallback() {
+  void shouldTryClaudeMdAsFallback() throws Exception {
     // First two in chain fail (404), CLAUDE.md succeeds
-    when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
-        .thenThrow(new NotFoundException(Response.status(404).build()));
+    doThrow(new GHFileNotFoundException("not found"))
+        .when(repository)
+        .getFileContent(".github/thrillhousebot.md", DEFAULT_BRANCH);
 
-    when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/copilot-instructions.md",
-            DEFAULT_BRANCH))
-        .thenThrow(new NotFoundException(Response.status(404).build()));
+    doThrow(new GHFileNotFoundException("not found"))
+        .when(repository)
+        .getFileContent(".github/copilot-instructions.md", DEFAULT_BRANCH);
 
-    when(prClient.getFileContent(
-            AUTH_HEADER, "application/vnd.github+json", OWNER, REPO, "CLAUDE.md", DEFAULT_BRANCH))
-        .thenReturn(makeFileContent("# CLAUDE.md content"));
+    doReturn(makeFileContent("# CLAUDE.md content"))
+        .when(repository)
+        .getFileContent("CLAUDE.md", DEFAULT_BRANCH);
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -146,11 +148,10 @@ class InstructionsResolverTest {
   }
 
   @Test
-  void shouldReturnEmptyWhenNoFilesFound() {
+  void shouldReturnEmptyWhenNoFilesFound() throws Exception {
     // All files throw 404
-    when(prClient.getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenThrow(new NotFoundException(Response.status(404).build()));
+    when(repository.getFileContent(anyString(), anyString()))
+        .thenThrow(new GHFileNotFoundException("not found"));
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -161,15 +162,10 @@ class InstructionsResolverTest {
   }
 
   @Test
-  void shouldCacheResultAndNotHitApiOnSecondCall() {
-    when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
-        .thenReturn(makeFileContent("Cached content"));
+  void shouldCacheResultAndNotHitApiOnSecondCall() throws Exception {
+    doReturn(makeFileContent("Cached content"))
+        .when(repository)
+        .getFileContent(".github/thrillhousebot.md", DEFAULT_BRANCH);
 
     // First call — hits API
     var first = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -180,55 +176,36 @@ class InstructionsResolverTest {
     assertEquals("Cached content", second.content());
 
     // API should only be called once per file path (only the first one since it succeeded)
-    verify(prClient, times(1))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+    verify(repository, times(1)).getFileContent(anyString(), anyString());
   }
 
   @Test
-  void shouldRemoveExpiredCacheEntryBeforeRefetch() {
-    when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
-        .thenReturn(makeFileContent("Cached content"));
+  void shouldRemoveExpiredCacheEntryBeforeRefetch() throws Exception {
+    doReturn(makeFileContent("Cached content"))
+        .when(repository)
+        .getFileContent(".github/thrillhousebot.md", DEFAULT_BRANCH);
 
     resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
     assertEquals(1, resolver.cache.size());
 
     currentTimeMs.addAndGet(InstructionsResolver.CACHE_TTL_MS + 1);
 
-    when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
-        .thenReturn(makeFileContent("Refreshed content"));
+    doReturn(makeFileContent("Refreshed content"))
+        .when(repository)
+        .getFileContent(".github/thrillhousebot.md", DEFAULT_BRANCH);
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
     assertEquals("Refreshed content", result.content());
     assertEquals(1, resolver.cache.size());
-    verify(prClient, times(2))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+    verify(repository, times(2)).getFileContent(anyString(), anyString());
   }
 
   @Test
-  void shouldRefetchAfterCacheExpiry() {
-    when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
-        .thenReturn(makeFileContent("Fresh content"));
+  void shouldRefetchAfterCacheExpiry() throws Exception {
+    doReturn(makeFileContent("Fresh content"))
+        .when(repository)
+        .getFileContent(".github/thrillhousebot.md", DEFAULT_BRANCH);
 
     // First call — populate cache
     resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -237,77 +214,45 @@ class InstructionsResolverTest {
     currentTimeMs.addAndGet(InstructionsResolver.CACHE_TTL_MS + 1);
 
     // Second call — should refetch since the cached entry is expired
-    when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
-        .thenReturn(makeFileContent("Refreshed content"));
+    doReturn(makeFileContent("Refreshed content"))
+        .when(repository)
+        .getFileContent(".github/thrillhousebot.md", DEFAULT_BRANCH);
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
     assertEquals("Refreshed content", result.content());
 
     // API should have been called twice total
-    verify(prClient, times(2))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+    verify(repository, times(2)).getFileContent(anyString(), anyString());
   }
 
   @Test
-  void shouldCacheNegativeResultForSeparateRepos() {
-    // No files found for repo A
-    when(prClient.getFileContent(
-            eq(AUTH_HEADER),
-            eq("application/vnd.github+json"),
-            eq("owner-a"),
-            eq("repo-a"),
-            anyString(),
-            eq(DEFAULT_BRANCH)))
-        .thenThrow(new NotFoundException(Response.status(404).build()));
-
-    // thrillhousebot.md found for repo B
-    when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            "owner-b",
-            "repo-b",
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
-        .thenReturn(makeFileContent("Repo B instructions"));
+  void shouldCacheNegativeResultForSeparateRepos() throws Exception {
+    var repositoryA = mock(org.kohsuke.github.GHRepository.class);
+    var repositoryB = mock(org.kohsuke.github.GHRepository.class);
+    doReturn(repositoryA).when(gitHub).getRepository("owner-a/repo-a");
+    doReturn(repositoryB).when(gitHub).getRepository("owner-a/repo-b");
+    doThrow(new GHFileNotFoundException("not found"))
+        .when(repositoryA)
+        .getFileContent(anyString(), anyString());
+    doReturn(makeFileContent("Repo B instructions"))
+        .when(repositoryB)
+        .getFileContent(".github/thrillhousebot.md", DEFAULT_BRANCH);
 
     var resultA = resolver.resolve("owner-a", "repo-a", DEFAULT_BRANCH, INSTALLATION_ID);
     assertFalse(resultA.isPresent());
 
-    var resultB = resolver.resolve("owner-b", "repo-b", DEFAULT_BRANCH, INSTALLATION_ID);
+    var resultB = resolver.resolve("owner-a", "repo-b", DEFAULT_BRANCH, INSTALLATION_ID);
     assertTrue(resultB.isPresent());
     assertEquals("Repo B instructions", resultB.content());
   }
 
   @Test
-  void shouldDecodeMimeWrappedBase64() {
-    // GitHub's contents API wraps base64 in newlines for any file beyond one base64 line
+  void shouldReturnHub4jDecodedContentAsIs() throws Exception {
     var content = "# Instructions\n".repeat(20);
-    var wrapped =
-        Base64.getMimeEncoder(60, "\n".getBytes(java.nio.charset.StandardCharsets.UTF_8))
-            .encodeToString(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-    assertTrue(wrapped.contains("\n"));
-    when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
-        .thenReturn(
-            new GitHubPullRequestClient.FileContent(
-                "thrillhousebot.md",
-                ".github/thrillhousebot.md",
-                wrapped,
-                "base64",
-                content.length()));
+    doReturn(makeFileContent(content))
+        .when(repository)
+        .getFileContent(".github/thrillhousebot.md", DEFAULT_BRANCH);
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -315,46 +260,44 @@ class InstructionsResolverTest {
   }
 
   @Test
-  void shouldHandleWebApplicationException() {
-    when(prClient.getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenThrow(new WebApplicationException(Response.status(500).build()));
+  void aServerErrorIsAFailedReadAndIsNotCached() throws Exception {
+    doThrow(
+            new org.kohsuke.github.HttpException(
+                "server error", 503, "Service Unavailable", "https://api.github.com"))
+        .when(repository)
+        .getFileContent(anyString(), anyString());
 
-    var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+    assertEquals(
+        InstructionsResolver.ResolvedInstructions.EMPTY,
+        resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
+    assertEquals(
+        InstructionsResolver.ResolvedInstructions.EMPTY,
+        resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
 
-    assertFalse(result.isPresent());
+    assertEquals(0, resolver.cache.size(), "a 503 said nothing about the repository");
+    verify(repository, times(2 * resolver.fallbackChain().size()))
+        .getFileContent(anyString(), anyString());
   }
 
   @Test
-  void shouldRefetchAfterNegativeCacheExpiry() {
-    when(prClient.getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenThrow(new NotFoundException(Response.status(404).build()));
+  void shouldRefetchAfterNegativeCacheExpiry() throws Exception {
+    when(repository.getFileContent(anyString(), anyString()))
+        .thenThrow(new GHFileNotFoundException("not found"));
 
     // First call — every fallback path 404s, negative result is cached
     assertFalse(resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID).isPresent());
-    verify(prClient, times(5))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+    verify(repository, times(5)).getFileContent(anyString(), anyString());
 
     // Still inside the 60s negative-cache window — no new API calls
     currentTimeMs.addAndGet(59_999);
     assertFalse(resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID).isPresent());
-    verify(prClient, times(5))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+    verify(repository, times(5)).getFileContent(anyString(), anyString());
 
     // Past the negative-cache TTL — the resolver retries and finds a newly added file
     currentTimeMs.addAndGet(2);
     doReturn(makeFileContent("Added later"))
-        .when(prClient)
-        .getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH);
+        .when(repository)
+        .getFileContent(".github/thrillhousebot.md", DEFAULT_BRANCH);
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -362,68 +305,53 @@ class InstructionsResolverTest {
   }
 
   @Test
-  void shouldExposeFallbackChainWithConfiguredFileFirst() {
+  void shouldExposeFallbackChainWithConfiguredFileFirst() throws Exception {
     assertEquals(".github/thrillhousebot.md", resolver.fallbackChain().get(0));
   }
 
   @Test
-  void shouldUseDefaultFallbackChainWhenInstructionsFileIsNull() {
+  void shouldUseDefaultFallbackChainWhenInstructionsFileIsNull() throws Exception {
     when(reviewConfig.instructionsFile()).thenReturn(null);
-    resolver = new InstructionsResolver(config, authClient, prClient, currentTimeMs::get);
+    resolver = new InstructionsResolver(config, clientProvider, currentTimeMs::get);
 
     assertEquals(".github/thrillhousebot.md", resolver.fallbackChain().get(0));
     assertEquals(5, resolver.fallbackChain().size());
   }
 
   @Test
-  void shouldOmitBlankConfiguredInstructionsFileFromFallbackChain() {
+  void shouldOmitBlankConfiguredInstructionsFileFromFallbackChain() throws Exception {
     when(reviewConfig.instructionsFile()).thenReturn("   ");
-    resolver = new InstructionsResolver(config, authClient, prClient, currentTimeMs::get);
+    resolver = new InstructionsResolver(config, clientProvider, currentTimeMs::get);
 
     assertEquals(".github/thrillhousebot.md", resolver.fallbackChain().get(0));
     assertEquals(5, resolver.fallbackChain().size());
   }
 
   @Test
-  void shouldResolveConfiguredInstructionsFileFirst() {
+  void shouldResolveConfiguredInstructionsFileFirst() throws Exception {
     when(reviewConfig.instructionsFile()).thenReturn("docs/CUSTOM.md");
-    resolver = new InstructionsResolver(config, authClient, prClient, currentTimeMs::get);
+    resolver = new InstructionsResolver(config, clientProvider, currentTimeMs::get);
 
-    when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            "docs/CUSTOM.md",
-            DEFAULT_BRANCH))
-        .thenReturn(makeFileContent("# Custom instructions"));
+    doReturn(makeFileContent("# Custom instructions"))
+        .when(repository)
+        .getFileContent("docs/CUSTOM.md", DEFAULT_BRANCH);
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
     assertEquals("# Custom instructions", result.content());
     assertEquals("docs/CUSTOM.md", result.source());
-    verify(prClient, never())
-        .getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH);
+    verify(repository, times(1)).getFileContent("docs/CUSTOM.md", DEFAULT_BRANCH);
+    verify(repository, never())
+        .getFileContent(argThat(path -> !"docs/CUSTOM.md".equals(path)), anyString());
   }
 
   @Test
-  void productionConstructorShouldResolveWithSystemClock() {
-    var productionResolver = new InstructionsResolver(config, authClient, prClient);
+  void productionConstructorShouldResolveWithSystemClock() throws Exception {
+    var productionResolver = new InstructionsResolver(config, clientProvider);
 
-    when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
-        .thenReturn(makeFileContent("Prod instructions"));
+    doReturn(makeFileContent("Prod instructions"))
+        .when(repository)
+        .getFileContent(".github/thrillhousebot.md", DEFAULT_BRANCH);
 
     var result = productionResolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -431,16 +359,14 @@ class InstructionsResolverTest {
 
     // The freshly cached entry is served on the next call (System clock is within TTL)
     productionResolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
-    verify(prClient, times(1))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+    verify(repository, times(1)).getFileContent(anyString(), anyString());
   }
 
   @Test
-  void sweepShouldEvictExpiredEntriesAboveThreshold() {
-    when(prClient.getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenReturn(makeFileContent("instructions"));
+  void sweepShouldEvictExpiredEntriesAboveThreshold() throws Exception {
+    doReturn(makeFileContent("instructions"))
+        .when(repository)
+        .getFileContent(anyString(), anyString());
     for (var i = 0; i < InstructionsResolver.CACHE_SWEEP_THRESHOLD; i++) {
       resolver.resolve(OWNER, "repo-" + i, DEFAULT_BRANCH, INSTALLATION_ID);
     }
@@ -454,10 +380,10 @@ class InstructionsResolverTest {
   }
 
   @Test
-  void sweepShouldNotRunBelowThreshold() {
-    when(prClient.getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenReturn(makeFileContent("instructions"));
+  void sweepShouldNotRunBelowThreshold() throws Exception {
+    doReturn(makeFileContent("instructions"))
+        .when(repository)
+        .getFileContent(anyString(), anyString());
     resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
     currentTimeMs.addAndGet(InstructionsResolver.CACHE_TTL_MS + 1);
 
@@ -465,5 +391,40 @@ class InstructionsResolverTest {
 
     // Below the threshold the expired entry is left for evict-on-read to replace
     assertEquals(1, resolver.cache.size());
+  }
+
+  @Test
+  void repositoryResolutionFailureReturnsEmpty() throws Exception {
+    org.mockito.Mockito.doThrow(new java.io.IOException("boom"))
+        .when(gitHub)
+        .getRepository(org.mockito.ArgumentMatchers.anyString());
+
+    var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+
+    assertFalse(result.isPresent());
+  }
+
+  @Test
+  void installationClientFailureReturnsEmptyWithoutThrowing() throws Exception {
+    doThrow(new IllegalStateException("installation client unavailable"))
+        .when(clientProvider)
+        .getInstallationClient(INSTALLATION_ID);
+
+    var result =
+        assertDoesNotThrow(() -> resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
+
+    assertEquals(InstructionsResolver.ResolvedInstructions.EMPTY, result);
+  }
+
+  @Test
+  void nullContentIsSkipped() throws Exception {
+    var file = org.mockito.Mockito.mock(org.kohsuke.github.GHContent.class);
+    org.mockito.Mockito.doReturn(null).when(file).getContent();
+    org.mockito.Mockito.doReturn(true).when(file).isFile();
+    org.mockito.Mockito.doReturn(file).when(repository).getFileContent(anyString(), anyString());
+
+    var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+
+    assertFalse(result.isPresent());
   }
 }
