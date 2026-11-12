@@ -33,7 +33,7 @@ final class LineMentions {
                 + Pattern.quote(name)
                 + "):"
                 + from
-                + "(?![\\d]|-\\d|–\\d)");
+                + "(?![\\d]|[-–—]\\d)");
     Matcher matcher = mention.matcher(text);
     var out = new StringBuilder(text.length());
     while (matcher.find()) {

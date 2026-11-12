@@ -476,8 +476,8 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
       doc = atLine(doc, declaration.getAsInt());
     }
     var resolved = lineResolver.resolveRightSideLine(doc.file(), doc.line());
-    // A multi-line declaration is anchored by its verbatim range below, so it only needs the file
-    // to be in the diff.
+    // A multi-line declaration is anchored by its verbatim range below. It still needs its cited
+    // line in the diff or within a few lines of a hunk; one cited further away is skipped.
     if (resolved.isEmpty()) {
       Log.debugf(
           "Skipping /add-docs suggestion for %s:%d — declaration line is not in the diff",
