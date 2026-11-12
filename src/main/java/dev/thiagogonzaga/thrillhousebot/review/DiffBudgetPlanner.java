@@ -980,20 +980,20 @@ public class DiffBudgetPlanner {
   }
 
   /**
-   * Hunk-clips a single oversized file section down to {@code budgetTokens}. Converts the token
-   * budget to a line budget by ratio and re-clips from the original a few times until it fits — a
-   * bounded loop, since {@link ReviewDiffFormatter#truncateSection} is monotonic in line count.
-   * Returns {@code null} when even a one-line clip stays over budget (pathologically small
-   * budgets): the caller must omit the file by name rather than present a stub as coverage.
-   */
-  /**
-   * The tokens a section costs in the review prompt, which carries it with the line-number column
+   * The tokens a section costs in the review prompt, which carries it with each line's number
    * (#1320). The batch keeps the plain section; only its size is measured on the numbered text.
    */
   private int promptTokens(String section) {
     return tokenCounter.estimateTokens(DiffLineNumbers.annotate(section));
   }
 
+  /**
+   * Hunk-clips a single oversized file section down to {@code budgetTokens}. Converts the token
+   * budget to a line budget by ratio and re-clips from the original a few times until it fits — a
+   * bounded loop, since {@link ReviewDiffFormatter#truncateSection} is monotonic in line count.
+   * Returns {@code null} when even a one-line clip stays over budget (pathologically small
+   * budgets): the caller must omit the file by name rather than present a stub as coverage.
+   */
   private String clipToBudget(String section, int budgetTokens) {
     var target = Math.max(1, (int) (budgetTokens * 0.9));
     var lines = ReviewDiffFormatter.lineCount(section);

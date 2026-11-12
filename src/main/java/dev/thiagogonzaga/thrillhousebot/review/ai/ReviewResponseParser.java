@@ -195,9 +195,9 @@ public class ReviewResponseParser {
   }
 
   /**
-   * Removes the line-number column from each finding's quotes when the model copied it from the
+   * Removes the line numbers from each finding's quotes when the model copied them from the
    * numbered diff (#1320), so {@code suggestion_old} still matches the code and a committable
-   * {@code suggestion_new} never carries it.
+   * {@code suggestion_new} never carries them.
    */
   static void stripLeakedLineNumbers(ObjectNode root) {
     var findings = root.get(FINDINGS);
