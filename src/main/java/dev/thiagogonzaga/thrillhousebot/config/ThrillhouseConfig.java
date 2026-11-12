@@ -228,8 +228,11 @@ public interface ThrillhouseConfig {
     @WithName("max-review-comments")
     int maxReviewComments();
 
-    /** Attempts per failed AI call. At most two may end in a timeout. */
-    @WithDefault("5")
+    /**
+     * Attempts per failed AI call. At most two may end in a timeout. A rejected API key is never
+     * retried.
+     */
+    @WithDefault("3")
     @WithName("max-ai-retries")
     int maxAiRetries();
 

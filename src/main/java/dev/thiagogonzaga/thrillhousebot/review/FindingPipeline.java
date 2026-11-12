@@ -988,7 +988,8 @@ public class FindingPipeline {
   /**
    * One batch's sequential retry: a fresh billed attempt whose failure classifications mirror the
    * parallel pass — a mid-retry ceiling refusal or a truncation goes to disclosure (the truncation
-   * salvaging first), anything else soft-fails the batch as not reviewed.
+   * salvaging first), a rejected API key fails the review (#1329), anything else soft-fails the
+   * batch as not reviewed.
    */
   private void retryBatch(int index, BatchRun run, BatchOutcome[] outcomesByIndex) {
     var batches = run.batches();
@@ -1005,6 +1006,7 @@ public class FindingPipeline {
           index + 1, batches.size(), e.getMessage());
       plan.recordSpendCeilingSkippedFiles(filenamesOf(batches.get(index).files()));
     } catch (RuntimeException e) {
+      AiFailures.throwIfApiKeyRejected(e);
       var truncation = AiResponseTruncatedException.findIn(e);
       if (truncation.isPresent()) {
         // The parallel attempt failed transiently and the retry hit the length cap: same
@@ -1030,10 +1032,11 @@ public class FindingPipeline {
   /**
    * Joins the parallel batch futures, classifying each failure: a truncation is disclosed at once
    * (its retry would cut identically), a ceiling refusal is disclosed with the ceiling as the
-   * reason, and anything else queues for the sequential retry pass. A genuine ceiling refusal
-   * always follows billed spend — the ledger opens fresh per review and only refuses once spent
-   * reaches a positive ceiling — so an all-refused review still falls through to the disclosure and
-   * counts-only summary paths; there is no reachable zero-call state to special-case.
+   * reason, a rejected API key fails the review at once (#1329), and anything else queues for the
+   * sequential retry pass. A genuine ceiling refusal always follows billed spend — the ledger opens
+   * fresh per review and only refuses once spent reaches a positive ceiling — so an all-refused
+   * review still falls through to the disclosure and counts-only summary paths; there is no
+   * reachable zero-call state to special-case.
    */
   private void joinBatchOutcomes(
       List<CompletableFuture<BatchOutcome>> futures,
@@ -1047,6 +1050,7 @@ public class FindingPipeline {
       try {
         outcomesByIndex[i] = futures.get(i).join();
       } catch (CompletionException e) {
+        AiFailures.throwIfApiKeyRejected(e);
         var truncation = AiResponseTruncatedException.findIn(e);
         if (truncation.isPresent()) {
           // The batch's own retry below would re-send the identical prompt against the identical

@@ -141,6 +141,14 @@ same diff.
   answer's `findings` and merged with the other documents, so a later empty object cannot discard
   it (#960, `ReviewResponseParserFindingArrayTest`). Any other array, and a lone `[]`, is still
   refused.
+- **A rejected API key is never retried** (#1329). `AiApiKeyRejectedException.classify` reads an
+  HTTP 401 or 403 or LangChain4j's `AuthenticationException` anywhere in the cause chain.
+  `AiReviewService.attemptWithRetries` throws it on the first attempt, before the repair step,
+  the fallback move and any backoff wait; `ResponseRepairService` throws it instead of reading it
+  as a failed repair; `FindingPipeline` fails the review on a batch's rejection instead of
+  queueing its sequential retry; and `ReviewOrchestrator.failureReason` stores its fixed message
+  (never the provider body, which can echo the key). The blocking verifier and summary check make
+  one call and fail open as before. `max-ai-retries` defaults to 3.
 - **Length stops.** A length stop with content is not retried: the identical call would be cut
   identically (#495). The response is salvaged or disclosed. A length stop with no content (the
   reasoning spent the cap) is repeated once at the effort `ReasoningRepeat.effortFor` names (#839):
@@ -527,9 +535,13 @@ live `fence(...)` (#604).
   the repair step over a failed answer and expect each keyword title back as one finding
   (`repaired`) or each keyword path back as one file summary (`file-summaries-read`).
   `EvalCorpusTest` validates the schema and routing coverage in every build. The live
-  `PromptEvalTest` is tagged `eval`, runs only with `-Peval`, and skips itself without
-  `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY`:
-  `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY=… ./mvnw test -Peval -Dtest=PromptEvalTest`. Run it before
+  `PromptEvalTest` is tagged `eval`, runs only with `-Peval`, skips itself without
+  `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY`, and fails without
+  `QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY` (the verifier, summary check and repair use the
+  `concise` client, whose key is the test profile's dummy otherwise):
+  `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY=… QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY=… ./mvnw test -Peval -Dtest=PromptEvalTest`.
+  The suite fails at the first call the provider refuses for its key, including one that failed
+  open, as `EvalCallRecorder.onError` records it (#1329). Run it before
   shipping a change to `PrReviewPrompts` or `FindingVerifierPrompts`, with
   `REVIEW_DIMENSION_ROUTING_ENABLED=true` too when routing is involved, and with
   `-Deval.only=summary-verification` before shipping a change to `SummaryVerifierPrompts`, and

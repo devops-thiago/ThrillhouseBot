@@ -15,6 +15,25 @@ All notable changes to ThrillhouseBot.
   for its totals or told to state sizes; the stored totals are counted from the findings, and the
   dashboard's session total is taken from the severity counts the posted risk table shows, so the
   two agree. Older stored sessions still load and render. (#1323)
+### Changed
+
+- **`THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` defaults to 3, down from 5** (#1329): with the 2 s
+  exponential backoff, five attempts spent about 30 s of waiting before a call that kept failing
+  gave up. Throttles, timeouts and provider errors keep their handling within the smaller budget.
+  Set the variable to keep the old value.
+
+### Fixed
+
+- **A rejected API key fails the call on its first attempt** (#1329): an HTTP 401 or 403, or
+  LangChain4j's `AuthenticationException`, was retried like any transient failure, so a wrong or
+  revoked key cost every review all its attempts and the backoff waits, and the failure read as a
+  generic retry exhaustion. The review, batch and summary calls and the repair step now stop at
+  once, with no wait and no move to `AI_FALLBACK_MODEL`, and the log line and the session's
+  failure reason say the provider rejected the API key and name `AI_API_KEY`. A multi-call review
+  fails instead of retrying each batch. `PromptEvalTest` stops the whole suite at the first
+  rejected call, including a verifier, summary check or repair call that fails open, and fails at
+  once when `QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY` is not set beside
+  `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY`, since those calls use the concise client's key
 
 ## [0.9.1] - 2026-11-09
 

@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review.eval;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -32,6 +33,7 @@ import dev.thiagogonzaga.thrillhousebot.review.PromptSections;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
 import dev.thiagogonzaga.thrillhousebot.review.RiskLevel;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiApiKeyRejectedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
@@ -53,12 +55,14 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -72,8 +76,12 @@ import org.junit.jupiter.api.Test;
  * FindingVerifierPrompts}:
  *
  * <pre>{@code
- * QUARKUS_LANGCHAIN4J_OPENAI_API_KEY=... ./mvnw test -Peval -Dtest=PromptEvalTest
+ * QUARKUS_LANGCHAIN4J_OPENAI_API_KEY=... QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY=... \
+ *     ./mvnw test -Peval -Dtest=PromptEvalTest
  * }</pre>
+ *
+ * <p>The verifier, summary check and repair calls use the {@code concise} client, so its key is
+ * required too. The suite fails at the first call the provider refuses for its key (#1329).
  *
  * <p>Both prompts follow {@code REVIEW_DIMENSION_ROUTING_ENABLED} exactly as production does
  * (#665): off, every case runs against the monolithic prompts; on, each generator case gets the
@@ -82,7 +90,7 @@ import org.junit.jupiter.api.Test;
  *
  * <pre>{@code
  * REVIEW_DIMENSION_ROUTING_ENABLED=true QUARKUS_LANGCHAIN4J_OPENAI_API_KEY=... \
- *     ./mvnw test -Peval -Dtest=PromptEvalTest
+ *     QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY=... ./mvnw test -Peval -Dtest=PromptEvalTest
  * }</pre>
  *
  * <p>{@code -Deval.only=<name>,<name>} runs only the cases whose name contains one of the given
@@ -96,7 +104,8 @@ import org.junit.jupiter.api.Test;
  *
  * <p>Caveat: {@link FindingVerificationService#verify} fails open by design, so a provider outage
  * during a verifier sample surfaces as a spurious "confirmed" — check the logged warning before
- * trusting a failure.
+ * trusting a failure. A rejected key is the exception: the call listener sees it and the suite
+ * fails at once.
  */
 @QuarkusTest
 @Tag("eval")
@@ -107,6 +116,24 @@ class PromptEvalTest {
   private static final long SAMPLE_TIMEOUT_MINUTES = 10;
   private static final int PARSE_ATTEMPTS = 3;
   private static final String ONLY = System.getProperty("eval.only", "");
+
+  /** The key the review and summary calls use. */
+  static final String KEY_VARIABLE = "QUARKUS_LANGCHAIN4J_OPENAI_API_KEY";
+
+  /**
+   * The key the verifier, summary check and repair calls use: the {@code concise} client's. Under
+   * the test profile it is {@code AI_API_KEY}'s dummy value unless set, and every such call is
+   * rejected.
+   */
+  static final String CONCISE_KEY_VARIABLE = "QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY";
+
+  /** Why the suite stopped on a rejected key (#1329). */
+  static final String REJECTED_KEY =
+      "The AI provider rejected the API key; the eval stops at the first rejected call. Check "
+          + KEY_VARIABLE
+          + " and "
+          + CONCISE_KEY_VARIABLE
+          + ".";
 
   /** A generator sample with no parseable review: it matches no expectation, so it fails. */
   private static final String UNPARSED = "unparsed";
@@ -128,8 +155,8 @@ class PromptEvalTest {
   @Test
   void promptsReproduceLabeledDogfoodOutcomes() throws Exception {
     assumeTrue(
-        System.getenv("QUARKUS_LANGCHAIN4J_OPENAI_API_KEY") != null,
-        "eval needs a real provider key in QUARKUS_LANGCHAIN4J_OPENAI_API_KEY");
+        System.getenv(KEY_VARIABLE) != null, "eval needs a real provider key in " + KEY_VARIABLE);
+    missingConciseKey(System.getenv(CONCISE_KEY_VARIABLE)).ifPresent(Assertions::fail);
 
     var report = new StringBuilder();
     var failed = 0;
@@ -140,7 +167,7 @@ class PromptEvalTest {
       var passes = 0;
       var outcomes = new StringBuilder();
       for (var sample = 0; sample < SAMPLES; sample++) {
-        String outcome = outcomeOf(evalCase);
+        String outcome = sampleOutcome(evalCase);
         outcomes.append(sample == 0 ? "" : ", ").append(outcome);
         if (sampleMatchesExpectation(evalCase, outcome)) {
           passes++;
@@ -181,6 +208,48 @@ class PromptEvalTest {
         || Arrays.stream(ONLY.split(","))
             .map(String::strip)
             .anyMatch(part -> !part.isEmpty() && evalCase.name().contains(part));
+  }
+
+  /**
+   * One sample's outcome; the suite fails at once when the provider rejected the key on any call of
+   * it, including a verifier, summary check or repair call that failed open (#1329).
+   */
+  private String sampleOutcome(EvalCase evalCase) throws Exception {
+    String outcome;
+    try {
+      outcome = outcomeOf(evalCase);
+    } catch (AiApiKeyRejectedException e) {
+      return fail(REJECTED_KEY, e);
+    }
+    failOnRejectedKey(callRecorder.keyRejected(), null);
+    return outcome;
+  }
+
+  /**
+   * Fails the suite with {@link #REJECTED_KEY} when a call was refused for its key: {@code
+   * recorded} by the listener, or {@code failure} is the refusal. Returns otherwise.
+   */
+  static void failOnRejectedKey(boolean recorded, Throwable failure) {
+    if (recorded || (failure != null && AiApiKeyRejectedException.isRejectedKey(failure))) {
+      fail(REJECTED_KEY, failure);
+    }
+  }
+
+  /**
+   * Why the suite cannot run when {@code conciseKey}, the value of {@link #CONCISE_KEY_VARIABLE},
+   * is unset or blank: the verifier, summary check and repair calls would be rejected and fail
+   * open, so their cases would grade the fallback instead of the prompt.
+   */
+  static Optional<String> missingConciseKey(String conciseKey) {
+    if (conciseKey != null && !conciseKey.isBlank()) {
+      return Optional.empty();
+    }
+    return Optional.of(
+        "eval needs "
+            + CONCISE_KEY_VARIABLE
+            + " as well as "
+            + KEY_VARIABLE
+            + ": the verifier, summary check and repair calls use the concise client's key");
   }
 
   private String outcomeOf(EvalCase evalCase) throws Exception {
@@ -244,6 +313,7 @@ class PromptEvalTest {
     } catch (AiResponseTruncatedException _) {
       return "cut";
     } catch (RuntimeException e) {
+      failOnRejectedKey(false, e);
       // Only the type is logged: the message can carry provider or model text.
       Log.infof("Summary sample failed (%s)", e.getClass().getSimpleName());
       return CALL_FAILED;
@@ -601,7 +671,8 @@ class PromptEvalTest {
           .start();
       try {
         return reviewResponseParser.parse(raw.get(SAMPLE_TIMEOUT_MINUTES, TimeUnit.MINUTES));
-      } catch (ExecutionException _) {
+      } catch (ExecutionException e) {
+        failOnRejectedKey(callRecorder.keyRejected(), e);
         Log.infof("Eval sample attempt %d failed; retrying", attempt);
       } catch (RuntimeException _) {
         Log.infof("Eval sample attempt %d was not review JSON; retrying", attempt);

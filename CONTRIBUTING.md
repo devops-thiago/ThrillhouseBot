@@ -270,11 +270,14 @@ a real model, so it only runs on request:
 
 ```bash
 QUARKUS_LANGCHAIN4J_OPENAI_API_KEY=<key> \
+QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY=<key> \
 AI_BASE_URL=<provider endpoint> AI_MODEL=<model> \
 ./mvnw test -Peval -Dtest=PromptEvalTest
 ```
 
-Set `AI_BASE_URL` and `AI_MODEL` to a model the provider serves today. Without
+The verifier, summary check and repair calls use the `concise` client, so both
+keys are needed; the suite stops at the first call the provider refuses for its
+key. Set `AI_BASE_URL` and `AI_MODEL` to a model the provider serves today. Without
 them the suite uses the application defaults, and a retired model name makes
 every case fail. Set `REVIEW_DIMENSION_ROUTING_ENABLED=true` as well to test the
 routed prompts; run that before turning routing on anywhere.
