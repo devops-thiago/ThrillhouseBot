@@ -23,10 +23,10 @@ public final class DiffLineNumbers {
   private static final String FENCE_OPEN = "```diff";
   private static final String FENCE = "```";
 
-  /** A copied number: digits, one space, then the added or context marker. */
   /** How far a copied run's first number may be from the line the finding cites. */
   private static final int RUN_SLACK = 3;
 
+  /** A copied number: digits, one space, then the added or context marker. */
   private static final Pattern LEAKED_NUMBER = Pattern.compile("^(\\d{1,9}) [+ ]");
 
   private DiffLineNumbers() {}

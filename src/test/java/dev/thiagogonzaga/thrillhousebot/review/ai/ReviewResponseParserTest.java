@@ -1574,7 +1574,7 @@ class ReviewResponseParserTest {
     var raw =
         """
         {"findings":[{"risk":"low","file":"A.java","line":11,"title":"t","description":"d",
-          "suggestion_old":"11 +    int c;\n12 +    int d;",
+          "suggestion_old":"11 +    int c;\\n12 +    int d;",
           "suggestion_new":"11 +    long c;"},
           {"risk":"low","file":"B.java","line":2,"title":"u","description":"e",
           "suggestion_old":"200 OK","suggestion_new":7},
