@@ -57,7 +57,7 @@ final class CountStatements {
    */
   private static final Pattern TOKEN =
       Pattern.compile(
-          "(?<![#+.\\w])[+−]?\\d++(?!\\.?\\w)|\\p{L}++", Pattern.UNICODE_CHARACTER_CLASS);
+          "(?<![#+.\\w-])[+−-]?\\d++(?!\\.?\\w)|\\p{L}++", Pattern.UNICODE_CHARACTER_CLASS);
 
   /** Punctuation that ends a phrase, so a count does not reach across it: "a new one, findings". */
   private static final Pattern PHRASE_BREAK = Pattern.compile("[,;:()–—]|\\s-\\s");
@@ -123,8 +123,11 @@ final class CountStatements {
 
   private static final String ACROSS = "across";
 
-  /** A word that may sit between a number and its unit: "two new files", "40 changed lines". */
-  private static final Set<String> UNIT_MODIFIERS = union(EDITED, Set.of("new", "source", "test"));
+  /**
+   * How many words may sit between a number and its unit: "two new files", "4 config files", "3 new
+   * migration files".
+   */
+  private static final int UNIT_REACH = 2;
 
   /** Words that hedge a number and may sit between it and the verb framing it: "about 600". */
   private static final Set<String> APPROXIMATIONS =
@@ -242,7 +245,7 @@ final class CountStatements {
    */
   private static boolean signedFigure(String word) {
     var sign = word.charAt(0);
-    return sign == '+' || sign == '−';
+    return sign == '+' || sign == '−' || sign == '-';
   }
 
   /** Whether {@code word} is a number in digits or in words. */
@@ -276,23 +279,32 @@ final class CountStatements {
 
   /**
    * Whether the number at {@code at} is a size of the change: a unit ({@link #SIZE_UNITS}) follows
-   * it, after at most one {@link #UNIT_MODIFIERS} word, and the number is joined to it by a hyphen
-   * ("555-line") or framed as a size ({@link #framedAsSize}).
+   * it within {@link #UNIT_REACH} words in the same phrase, and the number is in digits and joined
+   * to it by a hyphen ("555-line", where "one-line" is an ordinary adjective) or framed as a size
+   * ({@link #framedAsSize}).
    */
   private static boolean statesSize(String sentence, List<Token> tokens, int at) {
-    var unit = at + 1;
-    if (unit < tokens.size() && UNIT_MODIFIERS.contains(tokens.get(unit).word())) {
-      unit++;
-    }
-    if (unit >= tokens.size()
-        || !SIZE_UNITS.contains(tokens.get(unit).word())
-        || !joined(sentence, tokens.get(at), tokens.get(unit))) {
+    var unit = unitAfter(sentence, tokens, at);
+    if (unit < 0) {
       return false;
     }
+    var number = tokens.get(at).word();
     var hyphenated =
         unit == at + 1
+            && Character.isDigit(number.charAt(number.length() - 1))
             && sentence.substring(tokens.get(at).end(), tokens.get(unit).start()).equals("-");
     return hyphenated || framedAsSize(sentence, tokens, at, unit);
+  }
+
+  /** The index of the first unit within {@link #UNIT_REACH} words after {@code at}, or -1. */
+  private static int unitAfter(String sentence, List<Token> tokens, int at) {
+    var last = Math.min(tokens.size() - 1, at + 1 + UNIT_REACH);
+    for (var j = at + 1; j <= last && joined(sentence, tokens.get(at), tokens.get(j)); j++) {
+      if (SIZE_UNITS.contains(tokens.get(j).word())) {
+        return j;
+      }
+    }
+    return -1;
   }
 
   /**

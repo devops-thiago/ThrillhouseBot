@@ -79,7 +79,12 @@ class CountStatementsTest {
         "Splits twenty-three files across the modules.",
         "It touches twenty-three files.",
         "It touches 6 files today.",
-        "The parser shrinks by \u221220."
+        "The parser shrinks by \u221220.",
+        "The parser shrinks by -20.",
+        "It is +40/-20 overall.",
+        "Adds 4 config files.",
+        "Touches 2 schema directories.",
+        "Adds 3 new migration files."
       })
   void aCountOrSizeIsStated(String sentence) {
     assertTrue(CountStatements.statesCount(sentence), sentence);
@@ -106,7 +111,12 @@ class CountStatementsTest {
         "Replaces the old pass with a new one, findings included.",
         "Moves the v2 files across to the new module.",
         "Ships schema 6, files across the tree keep it.",
-        "6 files are new."
+        "6 files are new.",
+        "Adds a one-line guard to the parser.",
+        "Keeps a single-file layout.",
+        "Sets the offset to x-5.",
+        "Accepts Java 17-21.",
+        "Adds 2 checks for missing files."
       })
   void noCountOrSizeIsStated(String sentence) {
     assertFalse(CountStatements.statesCount(sentence), sentence);
