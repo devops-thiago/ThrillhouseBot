@@ -23,6 +23,8 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Removes the sentences of the overview's prose that state a count of findings or a size of the
@@ -54,7 +56,7 @@ final class CountStatements {
    */
   private static final Pattern TOKEN =
       Pattern.compile(
-          "(?<![#+._\\p{L}\\p{N}])[+−]?\\d++(?:,\\d++)*+(?!\\p{L}|\\.\\d)|\\p{L}++",
+          "(?<![#+.\\w])[+−]?\\d++(?:,\\d++)*+(?!\\.?\\w)|\\p{L}++",
           Pattern.UNICODE_CHARACTER_CLASS);
 
   /** Punctuation that ends a phrase, so a count does not reach across it: "a new one, findings". */
@@ -115,9 +117,14 @@ final class CountStatements {
           "module",
           "modules");
 
+  /** The past participles of editing: "40 changed lines", "555 lines added", "files touched". */
+  private static final Set<String> EDITED =
+      Set.of("changed", "modified", "added", "removed", "deleted", "touched");
+
+  private static final String ACROSS = "across";
+
   /** A word that may sit between a number and its unit: "two new files", "40 changed lines". */
-  private static final Set<String> UNIT_MODIFIERS =
-      Set.of("new", "changed", "modified", "source", "test", "added", "removed", "deleted");
+  private static final Set<String> UNIT_MODIFIERS = union(EDITED, Set.of("new", "source", "test"));
 
   /** Words that hedge a number and may sit between it and the verb framing it: "about 600". */
   private static final Set<String> APPROXIMATIONS =
@@ -125,32 +132,32 @@ final class CountStatements {
 
   /** Words before a number that frame it as the size of the change: "touches 6 files". */
   private static final Set<String> SIZE_CUES_BEFORE =
-      Set.of(
-          "across",
-          "spanning",
-          "spans",
-          "span",
-          "touches",
-          "touching",
-          "touched",
-          "changes",
-          "changing",
-          "changed",
-          "modifies",
-          "modified",
-          "adds",
-          "adding",
-          "added",
-          "removes",
-          "removing",
-          "removed",
-          "deletes",
-          "deleting",
-          "deleted");
+      union(
+          EDITED,
+          Set.of(
+              ACROSS,
+              "spanning",
+              "spans",
+              "span",
+              "touches",
+              "touching",
+              "changes",
+              "changing",
+              "modifies",
+              "adds",
+              "adding",
+              "removes",
+              "removing",
+              "deletes",
+              "deleting"));
 
   /** Words after a unit that frame the number as the size of the change: "555 lines across". */
-  private static final Set<String> SIZE_CUES_AFTER =
-      Set.of("changed", "added", "removed", "deleted", "touched", "modified", "across");
+  private static final Set<String> SIZE_CUES_AFTER = union(EDITED, Set.of(ACROSS));
+
+  /** The words of both sets, as one unmodifiable set. */
+  private static Set<String> union(Set<String> first, Set<String> second) {
+    return Stream.concat(first.stream(), second.stream()).collect(Collectors.toUnmodifiableSet());
+  }
 
   /** One word of a sentence and where it sits. */
   private record Token(String word, int start, int end) {}
