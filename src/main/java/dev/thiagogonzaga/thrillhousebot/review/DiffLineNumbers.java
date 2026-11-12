@@ -43,11 +43,12 @@ public final class DiffLineNumbers {
     int next = -1;
     for (int i = 0; i < lines.length; i++) {
       var line = lines[i];
-      var marker = line.strip();
+      // Fences are matched whole: inside a block every patch line starts with its marker, so a
+      // context line " ```" from a Markdown file is code, not the end of the block.
       if (!inBlock) {
-        inBlock = marker.equals(FENCE_OPEN);
+        inBlock = line.equals(FENCE_OPEN);
         next = -1;
-      } else if (marker.equals(FENCE)) {
+      } else if (line.equals(FENCE)) {
         inBlock = false;
       } else {
         Matcher header = DiffLineResolver.HUNK_HEADER.matcher(line);

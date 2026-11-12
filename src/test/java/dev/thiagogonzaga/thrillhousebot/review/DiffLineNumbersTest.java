@@ -87,6 +87,15 @@ class DiffLineNumbersTest {
     }
 
     @Test
+    void aFenceInsideAMarkdownPatchDoesNotCloseTheBlock() {
+      var diff = "```diff\n@@ -1,3 +1,4 @@\n ```java\n+int a;\n ```\n+after\n```";
+
+      assertEquals(
+          "```diff\n@@ -1,3 +1,4 @@\n1  ```java\n2 +int a;\n3  ```\n4 +after\n```",
+          DiffLineNumbers.annotate(diff));
+    }
+
+    @Test
     void nullPassesThrough() {
       assertNull(DiffLineNumbers.annotate(null));
     }
