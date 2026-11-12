@@ -45,9 +45,9 @@ class PromptEvalKeyTest {
     var streamed = new ExecutionException(new HttpException(401, "Unauthorized"));
     assertThrows(
         AssertionFailedError.class, () -> PromptEvalTest.failOnRejectedKey(false, streamed));
+    var authentication = new AuthenticationException("bad key");
     assertThrows(
-        AssertionFailedError.class,
-        () -> PromptEvalTest.failOnRejectedKey(false, new AuthenticationException("bad key")));
+        AssertionFailedError.class, () -> PromptEvalTest.failOnRejectedKey(false, authentication));
   }
 
   @Test

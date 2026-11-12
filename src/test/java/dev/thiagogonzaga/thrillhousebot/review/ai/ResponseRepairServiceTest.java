@@ -229,10 +229,11 @@ class ResponseRepairServiceTest {
   void aRepairRejectedForItsKeyIsThrownAfterOneCall() {
     when(reviewRepairer.repair(anyString(), anyString(), anyString()))
         .thenThrow(new HttpException(401, "Unauthorized"));
+    var parseFailure = refusal();
     var thrown =
         assertThrows(
             AiApiKeyRejectedException.class,
-            () -> service.repair(SESSION, ModelLane.ACTIVE, BROKEN_REVIEW, refusal()));
+            () -> service.repair(SESSION, ModelLane.ACTIVE, BROKEN_REVIEW, parseFailure));
     assertEquals(
         "The AI provider rejected the API key (HTTP 401); check AI_API_KEY", thrown.getMessage());
     verify(reviewRepairer, times(1)).repair(anyString(), anyString(), anyString());
