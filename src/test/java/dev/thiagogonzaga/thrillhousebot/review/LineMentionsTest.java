@@ -22,6 +22,8 @@ class LineMentionsTest {
   void leavesOtherFilesOtherLinesAndRangesAlone() {
     var text =
         "Bar.java:42, other/Foo.java:42, Foo.java:420, Foo.java:42-50, Foo.java:42–50, Foo.java:42—50, xFoo.java:42";
+    var lists = "Foo.java:42..44, Foo.java:42,44, Foo.java:42, 44 and Foo.java:42 to 44";
+    assertEquals(lists, LineMentions.moved(lists, FILE, 42, 45));
     assertEquals(text, LineMentions.moved(text, FILE, 42, 45));
     assertEquals(
         "at Foo.java:45—the crash", LineMentions.moved("at Foo.java:42—the crash", FILE, 42, 45));

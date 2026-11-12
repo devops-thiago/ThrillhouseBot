@@ -10,8 +10,9 @@ import java.util.regex.Pattern;
  * thread then says "at {@code Foo.java:42}" while sitting on line 45.
  *
  * <p>Only mentions of the finding's own file at exactly the old line are rewritten: the full path
- * or any path ending in its file name, followed by {@code :line} and no further digit or range.
- * Mentions of other files and of ranges are left alone.
+ * or any path ending in its file name, followed by {@code :line} and no further digit, range or
+ * list ({@code 42-50}, {@code 42..50}, {@code 42,44}, {@code 42 to 50}). Mentions of other files
+ * and of ranges are left alone.
  */
 final class LineMentions {
 
@@ -33,7 +34,7 @@ final class LineMentions {
                 + Pattern.quote(name)
                 + "):"
                 + from
-                + "(?![\\d]|[-–—]\\d)");
+                + "(?!\\d|[-–—]\\d|\\.\\.\\d|,\\s?\\d|\\s+to\\s+\\d)");
     Matcher matcher = mention.matcher(text);
     var out = new StringBuilder(text.length());
     while (matcher.find()) {
