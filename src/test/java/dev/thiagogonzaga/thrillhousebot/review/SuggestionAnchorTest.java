@@ -454,9 +454,11 @@ class SuggestionAnchorTest {
                 EXPIRY_TRACKER,
                 "@@ -10,4 +10,2 @@\n keep();\n-verify(a).call();\n-verify(a).close();\n next();"));
     var cited = finding(EXPIRY_TRACKER, 13, "verify(a).call();", "verify(a).call(1);");
+    var citedAbove = finding(EXPIRY_TRACKER, 9, "verify(a).call();", null);
 
     var placed = SuggestionAnchor.place(cited, resolver);
 
+    assertEquals(11, SuggestionAnchor.place(citedAbove, resolver).line());
     assertEquals(11, placed.line());
     assertNull(placed.suggestionNew());
     assertEquals("verify(a).call();", placed.suggestionOld());

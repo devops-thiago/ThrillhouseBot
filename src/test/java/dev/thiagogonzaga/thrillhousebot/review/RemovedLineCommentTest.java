@@ -126,6 +126,15 @@ class RemovedLineCommentTest {
   }
 
   @Test
+  void aBlankQuoteStaysOnTheRightSide() {
+    post(finding("  ", null));
+
+    assertEquals(
+        List.of(new Attempt(WITHOUT_SUGGESTION, 12, "RIGHT", null, null, false)),
+        reviewClient.landed);
+  }
+
+  @Test
   void aRefusedBaseSideCommentIsFiledOnTheFile() {
     reviewClient.refuse =
         attempt ->

@@ -317,6 +317,15 @@ class DiffLineResolverBothSidesTest {
     }
 
     @Test
+    void aRunCutOffByTheEndOfTheFileIsNotPresent() {
+      var endsInABlank = Map.of(FILE, List.of("a();", ""));
+      var endsAtTheLine = Map.of(FILE, List.of("context();", "new();", "a();"));
+
+      assertFalse(resolver(PATCH, endsInABlank).isFindingPresent(FILE, "a();\nb();"));
+      assertFalse(resolver(PATCH, endsAtTheLine).isFindingPresent(FILE, "a();\nb();"));
+    }
+
+    @Test
     void moreThanTwoBlankLinesBreakARun() {
       var head = Map.of(FILE, List.of("a();", "", "", "", "b();", "context();", "new();"));
 
