@@ -24,6 +24,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.notification.ReviewNotifier;
 import dev.thiagogonzaga.thrillhousebot.observability.ReviewOutcomeMetrics;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiApiKeyRejectedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
@@ -866,17 +867,23 @@ public class ReviewOrchestrator {
       reviewPublisher.postFailureNotice(auth, req.owner(), req.repo(), req.prNumber());
     }
 
-    String errorMessage =
-        e.getMessage() != null
-            ? e.getMessage().substring(0, Math.min(e.getMessage().length(), 200))
-            : "Unknown error";
     try {
-      applyReviewFailure(session, errorMessage);
+      applyReviewFailure(session, failureReason(e));
     } catch (RuntimeException persistenceError) {
       Log.warnf(persistenceError, "Failed to persist failed review session %d", session.id);
     }
     broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.failed(session));
     notifier.reviewFailed(req, sessionUrl(session), e);
+  }
+
+  /**
+   * The session's failure reason: the failure's message, cut at 200 characters. A rejected API key
+   * is named however deep the review wrapped it (#1329).
+   */
+  static String failureReason(RuntimeException e) {
+    var rejection = AiApiKeyRejectedException.findIn(e);
+    var reason = rejection.isPresent() ? rejection.get().getMessage() : e.getMessage();
+    return reason != null ? reason.substring(0, Math.min(reason.length(), 200)) : "Unknown error";
   }
 
   /** Applies review completion fields to the in-memory session and persisted entity together. */
