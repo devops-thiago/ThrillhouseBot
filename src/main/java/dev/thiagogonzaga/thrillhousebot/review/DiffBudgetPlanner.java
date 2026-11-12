@@ -884,7 +884,7 @@ public class DiffBudgetPlanner {
       String section,
       int diffBudgetTokens,
       Rendered rendered) {
-    var tokens = tokenCounter.estimateTokens(section);
+    var tokens = promptTokens(section);
     if (tokens > diffBudgetTokens) {
       var clipped = clipToBudget(section, diffBudgetTokens);
       if (clipped == null) {
@@ -893,7 +893,7 @@ public class DiffBudgetPlanner {
       }
       recordName(rendered.clipped(), file.filename());
       section = clipped;
-      tokens = tokenCounter.estimateTokens(clipped);
+      tokens = promptTokens(clipped);
     }
     rendered.sized().add(new Sized(file, section, tokens));
   }
@@ -986,16 +986,24 @@ public class DiffBudgetPlanner {
    * Returns {@code null} when even a one-line clip stays over budget (pathologically small
    * budgets): the caller must omit the file by name rather than present a stub as coverage.
    */
+  /**
+   * The tokens a section costs in the review prompt, which carries it with the line-number column
+   * (#1320). The batch keeps the plain section; only its size is measured on the numbered text.
+   */
+  private int promptTokens(String section) {
+    return tokenCounter.estimateTokens(DiffLineNumbers.annotate(section));
+  }
+
   private String clipToBudget(String section, int budgetTokens) {
     var target = Math.max(1, (int) (budgetTokens * 0.9));
     var lines = ReviewDiffFormatter.lineCount(section);
     var clipped = section;
-    var clippedTokens = tokenCounter.estimateTokens(clipped);
+    var clippedTokens = promptTokens(clipped);
     for (var i = 0; i < 8 && clippedTokens > budgetTokens; i++) {
       var ratio = Math.min(0.95, (double) target / Math.max(1, clippedTokens));
       lines = Math.max(1, (int) (lines * ratio));
       clipped = ReviewDiffFormatter.truncateSection(section, lines);
-      clippedTokens = tokenCounter.estimateTokens(clipped);
+      clippedTokens = promptTokens(clipped);
     }
     if (clippedTokens > budgetTokens) {
       Log.warnf(

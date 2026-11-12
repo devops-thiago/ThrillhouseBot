@@ -1568,4 +1568,34 @@ class ReviewResponseParserTest {
     assertTrue(parsed.linkedIssueCriteria().isEmpty());
     assertEquals("p", parsed.summary().prPurpose());
   }
+
+  @Test
+  void stripsALineNumberColumnCopiedIntoTheQuotes() {
+    var raw =
+        """
+        {"findings":[{"risk":"low","file":"A.java","line":11,"title":"t","description":"d",
+          "suggestion_old":"11 +    int c;\n12 +    int d;",
+          "suggestion_new":"11 +    long c;"},
+          {"risk":"low","file":"B.java","line":2,"title":"u","description":"e",
+          "suggestion_old":"200 OK","suggestion_new":7}]}
+        """;
+
+    var findings = parser.parse(raw).findings();
+
+    assertEquals("    int c;\n    int d;", findings.get(0).suggestionOld());
+    assertEquals("    long c;", findings.get(0).suggestionNew());
+    assertEquals("200 OK", findings.get(1).suggestionOld());
+  }
+
+  @Test
+  void aFindingsNodeThatIsNotAnArrayOfObjectsIsLeftAsItIs() throws Exception {
+    var mapper = new ObjectMapper();
+    for (var json : List.of("{}", "{\"findings\":\"none\"}", "{\"findings\":[\"x\", 3]}")) {
+      var root = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(json);
+
+      ReviewResponseParser.stripLeakedLineNumbers(root);
+
+      assertEquals(mapper.readTree(json), root);
+    }
+  }
 }

@@ -27,6 +27,7 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.AiPricingConfig.ReasoningConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
+import dev.thiagogonzaga.thrillhousebot.review.DiffLineNumbers;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses.ModelLane;
 import io.quarkiverse.langchain4j.runtime.aiservice.QuarkusAiServiceTokenStream;
 import io.quarkus.logging.Log;
@@ -729,6 +730,15 @@ public class AiReviewService {
           summaryInstructions,
           reviewSystemPrompt,
           "");
+    }
+
+    /**
+     * The diff slot as the review call's template renders it: the same text with a new-side line
+     * number on every added and context line (#1320), so the model reads {@code line} instead of
+     * counting it. {@link #diff} stays the plain patch for the stages that parse it.
+     */
+    public String numberedDiff() {
+      return DiffLineNumbers.annotate(diff);
     }
 
     /** These inputs with the summary call's guidance replaced; every other slot is kept. */

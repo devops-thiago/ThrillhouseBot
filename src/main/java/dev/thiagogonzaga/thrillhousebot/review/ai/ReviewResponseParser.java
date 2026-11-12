@@ -26,6 +26,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.thiagogonzaga.thrillhousebot.LogSafe;
+import dev.thiagogonzaga.thrillhousebot.review.DiffLineNumbers;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -169,6 +170,7 @@ public class ReviewResponseParser {
     normalizeStringList(root, ADDRESSED_GAPS);
     normalizeFileSummaries(root);
     normalizeSummaryCounts(root);
+    stripLeakedLineNumbers(root);
     if (!root.hasNonNull(FINDINGS)) {
       if (!summaryLane) {
         // Absent is not the same as empty. A review that found nothing says "findings": [] — both
@@ -190,6 +192,34 @@ public class ReviewResponseParser {
       response = parseWithoutSummary(root, e);
     }
     return verdicts.isEmpty() ? response : response.withLinkedIssueCriteria(verdicts);
+  }
+
+  /**
+   * Removes the line-number column from each finding's quotes when the model copied it from the
+   * numbered diff (#1320), so {@code suggestion_old} still matches the code and a committable
+   * {@code suggestion_new} never carries it.
+   */
+  static void stripLeakedLineNumbers(ObjectNode root) {
+    var findings = root.get(FINDINGS);
+    if (findings == null || !findings.isArray()) {
+      return;
+    }
+    for (var finding : findings) {
+      if (finding instanceof ObjectNode node) {
+        stripLeakedLineNumbers(node, "suggestion_old");
+        stripLeakedLineNumbers(node, "suggestion_new");
+      }
+    }
+  }
+
+  private static void stripLeakedLineNumbers(ObjectNode finding, String field) {
+    var value = finding.get(field);
+    if (value != null && value.isTextual()) {
+      var stripped = DiffLineNumbers.stripLeaked(value.asText());
+      if (!stripped.equals(value.asText())) {
+        finding.put(field, stripped);
+      }
+    }
   }
 
   /**
