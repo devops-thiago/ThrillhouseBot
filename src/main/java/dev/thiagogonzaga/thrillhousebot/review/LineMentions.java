@@ -9,10 +9,10 @@ import java.util.regex.Pattern;
  * line the diff can take a comment on, its description can still name the line the model cited: the
  * thread then says "at {@code Foo.java:42}" while sitting on line 45.
  *
- * <p>Only mentions of the finding's own file at exactly the old line are rewritten: the full path
- * or any path ending in its file name, followed by {@code :line} and no further digit, range or
- * list ({@code 42-50}, {@code 42..50}, {@code 42,44}, {@code 42 to 50}). Mentions of other files
- * and of ranges are left alone.
+ * <p>Only mentions of the finding's own file at exactly the old line are rewritten: the bare file
+ * name, the full path or a tail of it, or an absolute path ending in it, followed by {@code :line}
+ * and no further digit, range or list ({@code 42-50}, {@code 42..50}, {@code 42,44}, {@code 42 to
+ * 50}). Mentions of other files and of ranges are left alone.
  */
 final class LineMentions {
 
@@ -30,7 +30,7 @@ final class LineMentions {
     }
     var mention =
         Pattern.compile(
-            "(?<![\\w./-])((?:[\\w.-]+/)*"
+            "(?<![\\w./-])(/?(?:[\\w.-]+/)*"
                 + Pattern.quote(name)
                 + "):"
                 + from
@@ -40,7 +40,10 @@ final class LineMentions {
     while (matcher.find()) {
       String path = matcher.group(1);
       String replacement =
-          path.equals(name) || file.endsWith("/" + path) || file.equals(path)
+          path.equals(name)
+                  || file.endsWith("/" + path)
+                  || file.equals(path)
+                  || path.endsWith("/" + file)
               ? path + ":" + to
               : matcher.group();
       matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));

@@ -19,6 +19,14 @@ class LineMentionsTest {
   }
 
   @Test
+  void movesAnAbsolutePathEndingInTheFile() {
+    assertEquals(
+        "at /home/u/repo/src/main/Foo.java:45, not /other/Foo.java:42",
+        LineMentions.moved(
+            "at /home/u/repo/src/main/Foo.java:42, not /other/Foo.java:42", FILE, 42, 45));
+  }
+
+  @Test
   void leavesOtherFilesOtherLinesAndRangesAlone() {
     var text =
         "Bar.java:42, other/Foo.java:42, Foo.java:420, Foo.java:42-50, Foo.java:42–50, Foo.java:42—50, xFoo.java:42";
