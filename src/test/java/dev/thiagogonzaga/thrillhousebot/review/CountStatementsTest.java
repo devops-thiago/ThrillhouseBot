@@ -85,7 +85,10 @@ class CountStatementsTest {
         "Adds 4 config files.",
         "Touches 2 schema directories.",
         "Adds 3 new migration files.",
-        "It leaves 3 findings"
+        "It leaves 3 findings",
+        "Seventeen open high-severity findings remain in the parser.",
+        "It adds two new high-density files.",
+        "It holds 40 changed lines."
       })
   void aCountOrSizeIsStated(String sentence) {
     assertTrue(CountStatements.statesCount(sentence), sentence);

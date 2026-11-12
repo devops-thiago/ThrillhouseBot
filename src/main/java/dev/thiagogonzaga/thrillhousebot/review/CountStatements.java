@@ -288,7 +288,7 @@ final class CountStatements {
    * #FINDINGS_HEADS}), or a "finding" that ends its phrase ({@link #SINGULAR_ENDERS}) does.
    */
   private static boolean countsFindings(String sentence, List<Token> tokens, int at) {
-    var last = Math.min(tokens.size() - 1, at + COUNT_REACH);
+    var last = lastWithin(sentence, tokens, at, COUNT_REACH);
     for (var j = at + 1; j <= last && joined(sentence, tokens.get(at), tokens.get(j)); j++) {
       var word = tokens.get(j).word();
       if (word.equals(FINDINGS)) {
@@ -299,6 +299,37 @@ final class CountStatements {
       }
     }
     return false;
+  }
+
+  /**
+   * The index of the last token at most {@code reach} words after {@code at}, counting a hyphenated
+   * compound ("high-severity", "555-line") as one word.
+   */
+  private static int lastWithin(String sentence, List<Token> tokens, int at, int reach) {
+    var words = 0;
+    var last = at;
+    while (last + 1 < tokens.size()) {
+      if (!hyphenJoined(sentence, tokens.get(last), tokens.get(last + 1)) && ++words > reach) {
+        break;
+      }
+      last++;
+    }
+    return last;
+  }
+
+  /** Whether an {@link #EDITED} word sits between the number and its unit: "40 changed lines". */
+  private static boolean editedBetween(List<Token> tokens, int at, int unit) {
+    for (var k = at + 1; k < unit; k++) {
+      if (EDITED.contains(tokens.get(k).word())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether only a hyphen stands between {@code from} and {@code to}. */
+  private static boolean hyphenJoined(String sentence, Token from, Token to) {
+    return sentence.substring(from.end(), to.start()).equals("-");
   }
 
   /** Whether no {@link #PHRASE_BREAK} stands between {@code from} and {@code to}. */
@@ -321,13 +352,13 @@ final class CountStatements {
     var hyphenated =
         unit == at + 1
             && Character.isDigit(number.charAt(number.length() - 1))
-            && sentence.substring(tokens.get(at).end(), tokens.get(unit).start()).equals("-");
+            && hyphenJoined(sentence, tokens.get(at), tokens.get(unit));
     return hyphenated || framedAsSize(sentence, tokens, at, unit);
   }
 
   /** The index of the first unit within {@link #UNIT_REACH} words after {@code at}, or -1. */
   private static int unitAfter(String sentence, List<Token> tokens, int at) {
-    var last = Math.min(tokens.size() - 1, at + 1 + UNIT_REACH);
+    var last = lastWithin(sentence, tokens, at, 1 + UNIT_REACH);
     for (var j = at + 1; j <= last && joined(sentence, tokens.get(at), tokens.get(j)); j++) {
       if (SIZE_UNITS.contains(tokens.get(j).word())) {
         return j;
@@ -339,11 +370,12 @@ final class CountStatements {
   /**
    * Whether the number at {@code at}, counted in the unit at {@code unit}, is framed as the
    * change's size: a {@link #SIZE_CUES_BEFORE} word comes before it (past hedges such as "about"
-   * and the other words of a spelled number), an opening parenthesis does, or a {@link
-   * #SIZE_CUES_AFTER} word follows the unit.
+   * and the other words of a spelled number), an opening parenthesis does, an {@link #EDITED} word
+   * sits between the number and the unit, or a {@link #SIZE_CUES_AFTER} word follows the unit.
    */
   private static boolean framedAsSize(String sentence, List<Token> tokens, int at, int unit) {
-    if (unit + 1 < tokens.size() && SIZE_CUES_AFTER.contains(tokens.get(unit + 1).word())) {
+    if (editedBetween(tokens, at, unit)
+        || unit + 1 < tokens.size() && SIZE_CUES_AFTER.contains(tokens.get(unit + 1).word())) {
       return true;
     }
     var first = at;
