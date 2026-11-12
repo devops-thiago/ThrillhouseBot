@@ -16,6 +16,14 @@ All notable changes to ThrillhouseBot.
   that the line holds the quoted declaration, so accepting it could rewrite another line. It is
   now placed on the line that holds the quoted declaration, indentation included, and skipped
   when there is no such line. (#1320)
+### Changed
+
+- The review call's diff now shows each added and context line's line number in the new file
+  (`842 +code`), so the model reads a finding's `line` instead of counting it from the hunk
+  header. Only the prompt carries the numbers; the stages that check quotes and place threads
+  still read the plain patch, and a number the model copies into `suggestion_old` or
+  `suggestion_new` is removed before either is used. The numbers add about 10% to the diff's
+  tokens on the test corpus, and the token budget counts them. (#1320)
 
 ## [0.9.1] - 2026-11-09
 
