@@ -88,7 +88,10 @@ class CountStatementsTest {
         "It leaves 3 findings",
         "Seventeen open high-severity findings remain in the parser.",
         "It adds two new high-density files.",
-        "It holds 40 changed lines."
+        "It holds 40 changed lines.",
+        "One finding remaining.",
+        "It leaves one finding unaddressed.",
+        "Adds thirty two new migration files."
       })
   void aCountOrSizeIsStated(String sentence) {
     assertTrue(CountStatements.statesCount(sentence), sentence);
@@ -122,7 +125,9 @@ class CountStatementsTest {
         "Accepts Java 17-21.",
         "Adds 2 checks for missing files.",
         "Merges the two findings columns into one query.",
-        "Splits 3 findings tables by severity."
+        "Splits 3 findings tables by severity.",
+        "Introduces the two findings screens used by the pipeline.",
+        "Merges the three findings passes into one."
       })
   void noCountOrSizeIsStated(String sentence) {
     assertFalse(CountStatements.statesCount(sentence), sentence);

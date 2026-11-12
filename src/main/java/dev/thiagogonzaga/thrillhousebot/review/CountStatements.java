@@ -80,6 +80,11 @@ final class CountStatements {
           "was",
           "remains",
           "remained",
+          "remaining",
+          "unresolved",
+          "unaddressed",
+          "outstanding",
+          "pending",
           "stays",
           "stayed",
           "left",
@@ -130,7 +135,19 @@ final class CountStatements {
           "view",
           "views",
           "tab",
-          "tabs");
+          "tabs",
+          "screen",
+          "screens",
+          "pass",
+          "passes",
+          "list",
+          "lists",
+          "check",
+          "checks",
+          "filter",
+          "filters",
+          "note",
+          "notes");
 
   /** The units a size is counted in. */
   private static final Set<String> SIZE_UNITS =
