@@ -77,14 +77,18 @@ public final class DiffLineNumbers {
    * The quote without the line numbers and diff markers the model copied from the annotated diff.
    * Applied only when every non-blank line starts with a number, a space and a marker, and the
    * numbers run consecutively, which is what a copied run of the diff looks like and plain code
-   * practically never does. Anything else is returned unchanged.
+   * practically never does. A single numbered line is stripped only when its number is {@code
+   * citedLine}, the line the finding names: on its own, {@code 1 + 2} is as likely to be code.
+   * Anything else is returned unchanged.
    */
-  public static String stripLeaked(String quote) {
+  public static String stripLeaked(String quote, int citedLine) {
     if (quote == null || quote.isEmpty() || !Character.isDigit(quote.charAt(0))) {
       return quote;
     }
     var lines = quote.split("\n", -1);
     int expected = -1;
+    int numbered = 0;
+    int first = -1;
     for (var line : lines) {
       if (line.isBlank()) {
         continue;
@@ -97,7 +101,13 @@ public final class DiffLineNumbers {
       if (expected >= 0 && value != expected) {
         return quote;
       }
+      if (numbered++ == 0) {
+        first = value;
+      }
       expected = value + 1;
+    }
+    if (numbered == 1 && first != citedLine) {
+      return quote;
     }
     var out = new StringBuilder(quote.length());
     for (int i = 0; i < lines.length; i++) {

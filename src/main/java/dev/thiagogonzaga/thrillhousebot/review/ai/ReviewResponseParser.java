@@ -215,7 +215,7 @@ public class ReviewResponseParser {
   private static void stripLeakedLineNumbers(ObjectNode finding, String field) {
     var value = finding.get(field);
     if (value != null && value.isTextual()) {
-      var stripped = DiffLineNumbers.stripLeaked(value.asText());
+      var stripped = DiffLineNumbers.stripLeaked(value.asText(), finding.path("line").asInt(-1));
       if (!stripped.equals(value.asText())) {
         finding.put(field, stripped);
       }

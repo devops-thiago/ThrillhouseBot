@@ -1577,7 +1577,9 @@ class ReviewResponseParserTest {
           "suggestion_old":"11 +    int c;\n12 +    int d;",
           "suggestion_new":"11 +    long c;"},
           {"risk":"low","file":"B.java","line":2,"title":"u","description":"e",
-          "suggestion_old":"200 OK","suggestion_new":7}]}
+          "suggestion_old":"200 OK","suggestion_new":7},
+          {"risk":"low","file":"C.java","line":4,"title":"v","description":"f",
+          "suggestion_old":"4  x = 1;","suggestion_new":"1 + 2"}]}
         """;
 
     var findings = parser.parse(raw).findings();
@@ -1585,6 +1587,8 @@ class ReviewResponseParserTest {
     assertEquals("    int c;\n    int d;", findings.get(0).suggestionOld());
     assertEquals("    long c;", findings.get(0).suggestionNew());
     assertEquals("200 OK", findings.get(1).suggestionOld());
+    assertEquals("x = 1;", findings.get(2).suggestionOld());
+    assertEquals("1 + 2", findings.get(2).suggestionNew());
   }
 
   @Test

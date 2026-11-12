@@ -115,9 +115,19 @@ class DiffLineNumbersTest {
     @Test
     void removesCopiedNumbersAndMarkers() {
       assertEquals(
-          "    int c;\n    int d;", DiffLineNumbers.stripLeaked("11 +    int c;\n12 +    int d;"));
-      assertEquals("int a;", DiffLineNumbers.stripLeaked("10  int a;"));
-      assertEquals("a\n\nb", DiffLineNumbers.stripLeaked("1  a\n\n2  b"));
+          "    int c;\n    int d;",
+          DiffLineNumbers.stripLeaked("11 +    int c;\n12 +    int d;", -1));
+      assertEquals("a\n\nb", DiffLineNumbers.stripLeaked("1  a\n\n2  b", 40));
+      assertEquals("int a;", DiffLineNumbers.stripLeaked("10  int a;", 10));
+    }
+
+    @Test
+    void aSingleNumberedLineIsStrippedOnlyWhenItsNumberIsTheCitedLine() {
+      // On its own "1 + 2" is as likely to be the code as a copied "1 +" and " 2".
+      for (int cited : new int[] {-1, 2, 11}) {
+        assertSame("1 + 2", DiffLineNumbers.stripLeaked("1 + 2", cited));
+      }
+      assertEquals(" 2", DiffLineNumbers.stripLeaked("1 + 2", 1));
     }
 
     @Test
@@ -131,9 +141,9 @@ class DiffLineNumbersTest {
             "1234567890 +x", // longer than any line number
             ""
           }) {
-        assertSame(quote, DiffLineNumbers.stripLeaked(quote), quote);
+        assertSame(quote, DiffLineNumbers.stripLeaked(quote, 1), quote);
       }
-      assertNull(DiffLineNumbers.stripLeaked(null));
+      assertNull(DiffLineNumbers.stripLeaked(null, 1));
     }
   }
 }
