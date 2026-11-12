@@ -44,6 +44,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiApiKeyRejectedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
@@ -807,6 +808,58 @@ class FindingPipelineTest {
     assertEquals("B", result.findings().get(0).title());
     assertEquals(List.of("a.java"), plan.runtimeUncoveredFiles());
     assertTrue(captor.getValue().changedFiles().contains("a.java (not reviewed"));
+  }
+
+  @Test
+  void multiCallFailsTheReviewOnABatchWhoseKeyWasRejected() {
+    // #1329: the sequential retry would send the same key, and disclosing the files would post a
+    // review that read nothing. The review fails with the rejection instead.
+    var session =
+        ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 1, "Big PR", "sha");
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var rejection =
+        AiApiKeyRejectedException.classify(
+                new dev.langchain4j.exception.HttpException(401, "Unauthorized"))
+            .orElseThrow();
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt())).thenThrow(rejection);
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    var ctx = reviewContext();
+    var plan = multiBatchPlan();
+    var resolver = new DiffLineResolver(Map.of());
+
+    assertSame(
+        rejection,
+        assertThrows(
+            AiApiKeyRejectedException.class,
+            () -> pipeline.run(session, template, ctx, plan, resolver, ReviewEvidence.NONE)));
+
+    verify(aiReviewService, times(1)).reviewBatch(eq(session), any(), eq(1), anyInt());
+    verify(aiReviewService, never()).summarize(any(), any());
+  }
+
+  @Test
+  void aBatchRetryRejectedForItsKeyFailsTheReview() {
+    var session =
+        ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 1, "Big PR", "sha");
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenThrow(new AiReviewException("connection reset", 3, null))
+        .thenThrow(new dev.langchain4j.exception.AuthenticationException("revoked"));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    var ctx = reviewContext();
+    var plan = multiBatchPlan();
+    var resolver = new DiffLineResolver(Map.of());
+
+    var thrown =
+        assertThrows(
+            AiApiKeyRejectedException.class,
+            () -> pipeline.run(session, template, ctx, plan, resolver, ReviewEvidence.NONE));
+
+    assertEquals("The AI provider rejected the API key; check AI_API_KEY", thrown.getMessage());
+    verify(aiReviewService, times(2)).reviewBatch(eq(session), any(), eq(1), anyInt());
+    verify(aiReviewService, never()).summarize(any(), any());
   }
 
   @Test
