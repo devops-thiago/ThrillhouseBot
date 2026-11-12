@@ -1010,9 +1010,11 @@ public final class PrReviewPrompts {
             Rules:
             - "findings" MUST be an empty array []. Do not invent, restate, or re-rank findings;
               they are final.
-            - Base summary.total_findings and the per-severity counts on the findings provided
-              below — unless a "(+N more findings not shown …)" note follows the array; use that
-              note's stated true totals then, since the list was truncated to fit your input.
+            - Write no counts or sizes in any prose field: no number of findings ("two
+              findings", "one medium finding remains"), no file, line or directory totals
+              ("6 files", "+555 lines"). You see only part of what the summary reports, and the
+              summary prints every count and size from the diff and the findings itself; a
+              number you write is cut with its sentence.
             - overall_assessment and pr_purpose must be consistent with those findings, with the PR
               scope totals, and with the changed-files list; do not contradict them. A summary whose
               scope is narrower than the stated PR scope is wrong: few or no findings means the
@@ -1038,14 +1040,13 @@ public final class PrReviewPrompts {
               description_gaps.
 
             The "summary" object must include:
-            - total_findings, critical, high, medium, low: counts of the findings provided below
             - overall_assessment: one-sentence verdict on the change
             - pr_purpose: 1-3 sentences on what the WHOLE change set does. You do not see the diff,
               so ground it in the PR scope totals and the changed-file list below, which are
               computed from the diff and are authoritative, and in the findings; use the PR title
               and description (the author's stated intent) only where that evidence bears them
               out. Cover the change set as a whole: when it spans many files or several
-              directories, say so and name the main areas it touches. Never present one
+              directories, say so in words and name the main areas it touches. Never present one
               extracted class, one file, or the one component that happens to carry findings as if
               it were the whole pull request. Describe behavior, not a file listing. Name an issue
               or ticket only as the PR title, description or a linked issue writes it; never make

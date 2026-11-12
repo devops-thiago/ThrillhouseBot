@@ -127,7 +127,10 @@ same diff.
 - **The review call returns findings and `previous_findings_status` only**
   (`PrReviewPrompts.FINDINGS_RESPONSE_CONTRACT`). Every lane ends with the summary call
   (`AiReviewService.summarize` → `PrSummarizer`, on the `concise` model), which writes every
-  summary field from the verified findings. The call is skipped only at the call cap or the spend
+  summary prose field from the verified findings. It is not asked for the counts:
+  `persistWithSummary` recounts `total_findings` and the severity counts from the findings
+  (`FindingVerificationService.recount`, #1323), and the dashboard's session total reads the
+  stored severity columns, which the risk table renders. The call is skipped only at the call cap or the spend
   ceiling, and a failed, cut or skipped call leaves a counts-only summary that says so
   (`SummaryDegradation`). Do not add summary fields back to the review contract.
 - **Response extraction anchors on the answer's tail.** `ReviewResponseParser.extractJson(raw,
@@ -573,7 +576,12 @@ live `fence(...)` (#604).
   backtick and tilde blocks close only at a run of their own marker at least as long as the opener
   and at its quote depth; list prefixes are recognized, and mixed, shorter or quoted markers inside
   a block and unclosed blocks stay byte-exact (#1099, #1111). Inline-span probing stops at the next
-  marker or newline instead of rereading the line's tail for every span. `OverviewScreen` keeps
+  marker or newline instead of rereading the line's tail for every span. `CountStatements` cuts a
+  purpose or assessment sentence stating a finding count or a change size, from `OverviewScreen`,
+  the salvaged summary and the carried purpose (`PriorOverviewCarryover.previousOverview`, so the
+  carried-overview banner still matches); a size needs a hyphenated unit, a signed figure or a
+  framing word ("across", "touches", an opening parenthesis), so "caps the table at 50 files" stays,
+  and the computed CI sentence is never cut (#1323). `OverviewScreen` keeps
   count conjunctions with their clause while screening compound or approximate review counts,
   preserves real file roles using the same numbers, and treats "cf." as an abbreviation before a
   ticket key (#1105, #1106). `DescriptionGapScreen` matches a quoted compound identifier to

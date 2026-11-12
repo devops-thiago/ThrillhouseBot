@@ -25,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
+import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
@@ -886,8 +887,12 @@ public class FindingPipeline {
               + " (max-output-tokens / REVIEW_CONCISE_MAX_OUTPUT_TOKENS); the summary object"
               + " closed before the cut and was salvaged — keeping the %d paid findings",
           ledgerSessionId(session), refined.findings().size());
+      // #1323: the salvaged prose skipped the overview screen, so its counts and sizes go here.
       return persistWithSummary(
-          session, refined, PriorOverviewCarryover.fill(salvagedSummary, ctx), carry);
+          session,
+          refined,
+          PriorOverviewCarryover.fill(CountStatements.screen(salvagedSummary), ctx),
+          carry);
     }
     Log.warnf(
         "Summary response for session %d was cut at the model's response-length cap"
@@ -933,6 +938,8 @@ public class FindingPipeline {
    * removed from what the model wrote (#918): the stored round then matches what is posted, and the
    * next round's previous findings are read back clean. It is also where the description gaps
    * carried from the previous round join the summary (#923), on every lane and degradation alike.
+   * The summary's counts are taken from the findings here too (#1323): the summary call is not
+   * asked for them, and the stored session reads them.
    */
   private ReviewResponse persistWithSummary(
       ReviewSession session,
@@ -942,7 +949,9 @@ public class FindingPipeline {
     var merged =
         PromptLabelScrubber.scrub(
             new ReviewResponse(
-                refined.findings(), refined.previousFindingsStatus(), carry.apply(summary)));
+                refined.findings(),
+                refined.previousFindingsStatus(),
+                FindingVerificationService.recount(carry.apply(summary), refined.findings())));
     persistAiResponse(session, merged);
     return merged;
   }

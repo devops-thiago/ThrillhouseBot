@@ -664,6 +664,31 @@ class PrReviewPromptsContentTest {
         "the summary must not present one extracted class as the whole PR (#335)");
   }
 
+  /**
+   * #1323: the summary call sees only this round's findings, so a count it writes can only disagree
+   * with the totals the summary computes ("One medium finding remains" over 17 open).
+   */
+  @Test
+  void summaryPromptAsksForNoCountsAndForbidsThemInProse() {
+    String sys = PrReviewPrompts.SUMMARY_SYSTEM;
+    assertContains(
+        sys,
+        "Write no counts or sizes in any prose field",
+        "the summary prose must state no finding count or change size (#1323)");
+    assertContains(
+        sys,
+        "\"one medium finding remains\"",
+        "the prompt must name the #1315 sentence as the kind of count it forbids");
+    for (String field : new String[] {"total_findings", "per-severity counts"}) {
+      assertFalse(
+          sys.contains(field),
+          "the summary call must no longer be asked for " + field + " (#1323)");
+    }
+    assertFalse(
+        ResponseRepairPrompts.SUMMARY_CONTRACT.contains("total_findings"),
+        "the repair contract must not ask for the counts either (#1323)");
+  }
+
   @Test
   void summaryPromptRejectsASummaryNarrowerThanThePrScope() {
     String sys = PrReviewPrompts.SUMMARY_SYSTEM;
