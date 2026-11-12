@@ -63,6 +63,13 @@ class DiffLineNumbersTest {
     }
 
     @Test
+    void aLineThatOnlyLooksLikeAHunkHeaderStartsNoCount() {
+      var diff = "```diff\n@@ not a header @@\n+x\n```";
+
+      assertEquals(diff, DiffLineNumbers.annotate(diff));
+    }
+
+    @Test
     void anUnclosedBlockIsAnnotatedToTheEnd() {
       assertEquals(
           "```diff\n@@ -1 +1 @@\n1 +a", DiffLineNumbers.annotate("```diff\n@@ -1 +1 @@\n+a"));
