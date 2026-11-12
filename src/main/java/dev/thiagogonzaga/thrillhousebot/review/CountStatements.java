@@ -40,9 +40,10 @@ import java.util.stream.Stream;
  * <p>A sentence states a count when a number, in digits or in words, comes at most three words
  * before "findings", or before a "finding" that ends its phrase ("One medium finding remains", "17
  * findings were raised"; "one finding stage" names a part of the code). It states a size when it
- * holds a signed figure ("+555"), a compound such as "555-line", or a number followed by lines,
- * files, directories, folders or modules in a sentence that frames it as the change's size: after a
- * verb such as "touches", "adds" or "across", inside an opening parenthesis, or before "changed",
+ * holds a signed figure framed as a size ("+555 lines", "+40/-20", "shrinks by -20"; "sets the
+ * offset to -5" is a value), a compound such as "555-line", or a number followed by lines, files,
+ * directories, folders or modules in a sentence that frames it as the change's size: after a verb
+ * such as "touches", "adds" or "across", inside an opening parenthesis, or before "changed",
  * "added" or "across". "Caps the table at 50 files" and "Java 17" are not sizes.
  */
 final class CountStatements {
@@ -264,7 +265,7 @@ final class CountStatements {
     var tokens = tokens(sentence);
     for (var i = 0; i < tokens.size(); i++) {
       var word = tokens.get(i).word();
-      if (signedFigure(word)) {
+      if (signedFigure(word) && signedSize(sentence, tokens, i)) {
         return true;
       }
       if (isNumber(word)
@@ -292,6 +293,31 @@ final class CountStatements {
   private static boolean signedFigure(String word) {
     var sign = word.charAt(0);
     return sign == '+' || sign == '−' || sign == '-';
+  }
+
+  /**
+   * Whether the signed figure at {@code at} is a size of the change rather than a value the code
+   * uses ("sets the offset to -5"): a unit follows it ("+555 lines"), it is paired with another
+   * signed figure ("+40/-20"), or "by" or a {@link #SIZE_CUES_BEFORE} word comes before it
+   * ("shrinks by -20").
+   */
+  private static boolean signedSize(String sentence, List<Token> tokens, int at) {
+    if (unitAfter(sentence, tokens, at) >= 0
+        || pairedSigned(sentence, tokens, at, at + 1)
+        || pairedSigned(sentence, tokens, at - 1, at)) {
+      return true;
+    }
+    var before = at > 0 ? tokens.get(at - 1).word() : "";
+    return before.equals("by") || SIZE_CUES_BEFORE.contains(before);
+  }
+
+  /** Whether the tokens at {@code left} and {@code right} are signed figures split by a slash. */
+  private static boolean pairedSigned(String sentence, List<Token> tokens, int left, int right) {
+    return left >= 0
+        && right < tokens.size()
+        && signedFigure(tokens.get(left).word())
+        && signedFigure(tokens.get(right).word())
+        && sentence.substring(tokens.get(left).end(), tokens.get(right).start()).equals("/");
   }
 
   /** Whether {@code word} is a number in digits or in words. */
