@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -1819,5 +1820,32 @@ class PrReviewPromptsContentTest {
         sys,
         "Do not describe how material reached you (\"supplied from\", \"as provided with this\nreview\"",
         "provenance notes about the prompt's input are prompt vocabulary too (#975)");
+  }
+
+  @Test
+  void reviewPromptRendersTheNumberedDiffAndAsksForTheShownLineNumber() {
+    assertContains(
+        PrReviewPrompts.USER, "{{inputs.numberedDiff}}", "the review call reads the numbered diff");
+    assertFalse(
+        PrReviewPrompts.USER.contains("{{inputs.diff}}"),
+        "the plain diff slot is for the deterministic stages, not the prompt");
+    assertContains(
+        PrReviewPrompts.CORE_FINDING_FIELDS_AND_SEVERITY,
+        "never count lines from a hunk header",
+        "the line is read from the column");
+    assertContains(
+        PrReviewPrompts.CORE_FINDING_FIELDS_AND_SEVERITY,
+        "the leading line number",
+        "quotes leave the column out");
+  }
+
+  @Test
+  void promptInputsNumberTheDiffOnlyForThePrompt() {
+    var inputs =
+        new AiReviewService.PromptInputs(
+            "```diff\n@@ -1 +3 @@\n+x\n```", "", "", "", "", "", "", "", null);
+
+    assertEquals("```diff\n@@ -1 +3 @@\n3 +x\n```", inputs.numberedDiff());
+    assertEquals("```diff\n@@ -1 +3 @@\n+x\n```", inputs.diff());
   }
 }
