@@ -66,8 +66,14 @@ class DiffParsersAgreementTest {
             "@@ -7,3 +7,3 @@\n x = 1;\n---counter;\n+++counter;\n y = 2;\n"),
         Arguments.of(
             "a file without a final newline",
-            "@@ -1,2 +1,2 @@\n keep();\n-last();\n\\ No newline at end of file\n+last2();\n"
-                + "\\ No newline at end of file"),
+            """
+            @@ -1,2 +1,2 @@
+             keep();
+            -last();
+            \\ No newline at end of file
+            +last2();
+            \\ No newline at end of file\
+            """),
         Arguments.of("a new file", "@@ -0,0 +1,3 @@\n+one();\n+two();\n+three();"),
         Arguments.of(
             "a removal-only hunk last", "@@ -1,1 +1,1 @@\n-a\n+b\n@@ -9,2 +9,1 @@\n z\n-y\n"),

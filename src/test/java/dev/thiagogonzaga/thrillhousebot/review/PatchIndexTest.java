@@ -57,8 +57,18 @@ class PatchIndexTest {
   void aRawGitDiffsFileHeadersEndTheHunkAndAreNotLines() {
     var patch =
         PatchIndex.parse(
-            "@@ -1,1 +1,1 @@\n-a\n+b\ndiff --git a/B b/B\nindex 1..2\n--- a/B\n+++ b/B\n"
-                + "@@ -4,1 +4,1 @@\n-c\n+d\n");
+            """
+            @@ -1,1 +1,1 @@
+            -a
+            +b
+            diff --git a/B b/B
+            index 1..2
+            --- a/B
+            +++ b/B
+            @@ -4,1 +4,1 @@
+            -c
+            +d
+            """);
 
     assertEquals(List.of("a", "b", "c", "d"), patch.lines().stream().map(Line::text).toList());
     assertEquals(1, patch.lastHunk());

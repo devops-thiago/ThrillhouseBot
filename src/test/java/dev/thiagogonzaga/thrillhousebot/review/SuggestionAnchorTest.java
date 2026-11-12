@@ -441,7 +441,6 @@ class SuggestionAnchorTest {
         lastRow);
   }
 
-  /** A resolver over one file the pull request adds with {@code lines}, numbered from 1. */
   /**
    * #1321: a quote of lines the pull request removes moves the finding to where they stood in the
    * new file and loses its suggestion, which GitHub could not apply to removed lines.
@@ -473,6 +472,7 @@ class SuggestionAnchorTest {
     assertSame(cited, SuggestionAnchor.place(cited, resolver));
   }
 
+  /** A resolver over one file the pull request adds with {@code lines}, numbered from 1. */
   private static DiffLineResolver resolver(String file, String... lines) {
     var patch = new StringBuilder("@@ -0,0 +1," + lines.length + " @@");
     for (var line : lines) {
