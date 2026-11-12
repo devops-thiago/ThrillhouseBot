@@ -86,27 +86,7 @@ public final class DiffLineNumbers {
       return quote;
     }
     var lines = quote.split("\n", -1);
-    int expected = -1;
-    int numbered = 0;
-    int first = -1;
-    for (var line : lines) {
-      if (line.isBlank()) {
-        continue;
-      }
-      var number = LEAKED_NUMBER.matcher(line);
-      if (!number.lookingAt()) {
-        return quote;
-      }
-      int value = Integer.parseInt(number.group(1));
-      if (expected >= 0 && value != expected) {
-        return quote;
-      }
-      if (numbered++ == 0) {
-        first = value;
-      }
-      expected = value + 1;
-    }
-    if (numbered == 1 && first != citedLine) {
+    if (!isCopiedRun(lines, citedLine)) {
       return quote;
     }
     var out = new StringBuilder(quote.length());
@@ -118,5 +98,33 @@ public final class DiffLineNumbers {
       }
     }
     return out.toString();
+  }
+
+  /**
+   * Whether every non-blank line carries a copied number and the numbers run on consecutively, with
+   * a lone numbered line accepted only at {@code citedLine}.
+   */
+  private static boolean isCopiedRun(String[] lines, int citedLine) {
+    int expected = -1;
+    int numbered = 0;
+    int first = -1;
+    for (var line : lines) {
+      if (line.isBlank()) {
+        continue;
+      }
+      var number = LEAKED_NUMBER.matcher(line);
+      if (!number.lookingAt()) {
+        return false;
+      }
+      int value = Integer.parseInt(number.group(1));
+      if (expected >= 0 && value != expected) {
+        return false;
+      }
+      if (numbered++ == 0) {
+        first = value;
+      }
+      expected = value + 1;
+    }
+    return numbered > 1 || first == citedLine;
   }
 }
