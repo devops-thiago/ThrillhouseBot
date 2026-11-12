@@ -125,9 +125,19 @@ class DiffLineNumbersTest {
     void removesCopiedNumbersAndMarkers() {
       assertEquals(
           "    int c;\n    int d;",
-          DiffLineNumbers.stripLeaked("11 +    int c;\n12 +    int d;", -1));
-      assertEquals("a\n\nb", DiffLineNumbers.stripLeaked("1  a\n\n2  b", 40));
+          DiffLineNumbers.stripLeaked("11 +    int c;\n12 +    int d;", 11));
+      assertEquals("a\n\nb", DiffLineNumbers.stripLeaked("1  a\n\n2  b", 1));
       assertEquals("int a;", DiffLineNumbers.stripLeaked("10  int a;", 10));
+      assertEquals(
+          "\n  int a;\nint b;", DiffLineNumbers.stripLeaked("\n10    int a;\n11 +int b;", 12));
+    }
+
+    @Test
+    void aRunIsStrippedOnlyNearTheCitedLine() {
+      var list = "1  item one\n2  item two";
+      assertSame(list, DiffLineNumbers.stripLeaked(list, 40));
+      assertSame(list, DiffLineNumbers.stripLeaked(list, -1));
+      assertEquals("item one\nitem two", DiffLineNumbers.stripLeaked(list, 4));
     }
 
     @Test

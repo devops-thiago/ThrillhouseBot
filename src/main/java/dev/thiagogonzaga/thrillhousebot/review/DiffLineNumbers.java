@@ -26,6 +26,9 @@ public final class DiffLineNumbers {
   private static final String FENCE_OPEN = "```diff";
   private static final String FENCE = "```";
 
+  /** How far a copied run's first number may be from the line the finding cites. */
+  private static final int RUN_SLACK = 3;
+
   /** A copied number: digits, one space, then the added or context marker. */
   private static final Pattern LEAKED_NUMBER = Pattern.compile("^(\\d{1,9}) [+ ]");
 
@@ -90,12 +93,14 @@ public final class DiffLineNumbers {
    * The quote without the line numbers and diff markers the model copied from the annotated diff.
    * Applied only when every non-blank line starts with a number, a space and a marker, and the
    * numbers run consecutively, which is what a copied run of the diff looks like and plain code
-   * practically never does. A single numbered line is stripped only when its number is {@code
-   * citedLine}, the line the finding names: on its own, {@code 1 + 2} is as likely to be code.
-   * Anything else is returned unchanged.
+   * practically never does. Blank lines before or inside the run are kept as they are. The run must
+   * also start where the finding points: a single numbered line only at {@code citedLine}, since on
+   * its own {@code 1 + 2} is as likely to be code, and a longer run within {@link #RUN_SLACK} lines
+   * of it, so a quote of a numbered list elsewhere in a data file is left alone. Anything else is
+   * returned unchanged.
    */
   public static String stripLeaked(String quote, int citedLine) {
-    if (quote == null || quote.isEmpty() || !Character.isDigit(quote.charAt(0))) {
+    if (quote == null || quote.isBlank() || !Character.isDigit(quote.stripLeading().charAt(0))) {
       return quote;
     }
     var lines = quote.split("\n", -1);
@@ -138,6 +143,7 @@ public final class DiffLineNumbers {
       }
       expected = value + 1;
     }
-    return numbered > 1 || first == citedLine;
+    var slack = numbered > 1 ? RUN_SLACK : 0;
+    return citedLine > 0 && Math.abs(first - citedLine) <= slack;
   }
 }
