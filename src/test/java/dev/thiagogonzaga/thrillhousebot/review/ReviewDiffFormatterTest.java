@@ -385,7 +385,7 @@ class ReviewDiffFormatterTest {
     @Test
     void shouldKeepFileHeaderParseableAsSectionHeaderWhenBudgetIsOneLine() {
       // The truncation notice folds into the header's own parenthetical so consumers that scope by
-      // file (FindingQuoteValidator.indexDiff) still read the path out of "### <path> (…)".
+      // file (DiffIndex.ofFormattedDiff) still read the path out of "### <path> (…)".
       var section = "### src/App.java (modified, +9 -2)\n```diff\n@@ -1,2 +1,9 @@\n+x\n```\n\n";
 
       var truncated = ReviewDiffFormatter.truncateSection(section, 1).stripTrailing();

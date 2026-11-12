@@ -41,6 +41,17 @@ All notable changes to ThrillhouseBot.
   that the line holds the quoted declaration, so accepting it could rewrite another line. It is
   now placed on the line that holds the quoted declaration, indentation included, and skipped
   when there is no such line. (#1320)
+- **A finding is no longer superseded because its quote starts just outside the patch** (#1321,
+  #1318): presence was checked against the patch's added and context lines only, so a quote that
+  began one line before its hunk read as gone, and the next round superseded the finding even
+  though its file had not changed. A quote that is not in the patch is now looked for in the
+  whole file at the head commit, read the way cited locations are (at most 16 files per review).
+  The patch is parsed once with both sides, and the quote check, the thread placement, the
+  security scan, the patch-coverage reader and the prompt's line numbers all read it, so they
+  agree on every line number. A quote never matches across two hunks. A finding that quotes lines
+  the pull request removes is now posted on those lines, on the diff's base side, without a
+  suggestion block, when its line points at them; before, it was posted on a nearby line of the
+  new file.
 
 ## [0.9.1] - 2026-11-09
 

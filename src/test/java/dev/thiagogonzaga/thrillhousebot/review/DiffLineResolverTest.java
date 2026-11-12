@@ -67,7 +67,7 @@ class DiffLineResolverTest {
 
   @Test
   void shouldParseRightSideLinesFromPatch() {
-    var lines = DiffLineResolver.parseRightSideLines(PATCH);
+    var lines = rightSideLineNumbers(PATCH);
 
     assertEquals(3, lines.size());
     assertTrue(lines.contains(10));
@@ -89,8 +89,8 @@ class DiffLineResolverTest {
     var resolver = new DiffLineResolver(Map.of("main.py", ""));
 
     assertTrue(resolver.resolveRightSideLine("main.py", 10).isEmpty());
-    assertTrue(DiffLineResolver.parseRightSideLines(null).isEmpty());
-    assertTrue(DiffLineResolver.parseRightSideLines("   ").isEmpty());
+    assertTrue(rightSideLineNumbers(null).isEmpty());
+    assertTrue(rightSideLineNumbers("   ").isEmpty());
   }
 
   @Test
@@ -145,56 +145,6 @@ class DiffLineResolverTest {
   }
 
   @Test
-  void isLineInDiffShouldAcceptExactLineAndLinesWithinTolerance() {
-    var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
-
-    assertTrue(resolver.isLineInDiff("main.py", 11, 3)); // exact right-side line
-    assertTrue(resolver.isLineInDiff("main.py", 13, 3)); // one past line 12, within tolerance
-    assertTrue(resolver.isLineInDiff("main.py", 8, 3)); // two before line 10, within tolerance
-  }
-
-  @Test
-  void isLineInDiffShouldRejectLineFarFromDiff() {
-    var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
-
-    // Neither snaps a far line onto the nearest hunk line (#1320), so the approve backstop never
-    // treats a merely-touched file as a still-present finding.
-    assertTrue(resolver.resolveRightSideLine("main.py", 99).isEmpty());
-    assertFalse(resolver.isLineInDiff("main.py", 99, 3)); // only a floor exists, far below
-    assertFalse(resolver.isLineInDiff("main.py", 2, 3)); // only a ceiling exists, far above
-  }
-
-  @Test
-  void isLineInDiffShouldRejectWhenFileHasNoRightSideLines() {
-    var deletionOnly =
-        """
-        @@ -10,2 +10,0 @@
-        -removed_one
-        -removed_two
-        """;
-    var resolver = new DiffLineResolver(Map.of("main.py", deletionOnly));
-
-    assertFalse(resolver.isLineInDiff("main.py", 10, 3));
-  }
-
-  @Test
-  void isLineInDiffShouldRejectMissingFileAndInvalidInputs() {
-    var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
-
-    assertFalse(resolver.isLineInDiff("other.py", 11, 3));
-    assertFalse(resolver.isLineInDiff(null, 11, 3));
-    assertFalse(resolver.isLineInDiff("main.py", 0, 3));
-  }
-
-  @Test
-  void isLineInDiffShouldMatchAcrossPathVariants() {
-    var resolver = new DiffLineResolver(Map.of("src/dir/Main.java", PATCH));
-
-    // The model may report a shorter path than GitHub's diff filename; FilePaths.same bridges them.
-    assertTrue(resolver.isLineInDiff("dir/Main.java", 11, 3));
-  }
-
-  @Test
   void shouldIgnoreDeletionOnlyLines() {
     var patch =
         """
@@ -202,7 +152,7 @@ class DiffLineResolverTest {
         -removed_one
         -removed_two
         """;
-    var lines = DiffLineResolver.parseRightSideLines(patch);
+    var lines = rightSideLineNumbers(patch);
 
     assertTrue(lines.isEmpty());
   }
@@ -216,7 +166,7 @@ class DiffLineResolverTest {
         -old
         +new
         """;
-    var lines = DiffLineResolver.parseRightSideLines(patch);
+    var lines = rightSideLineNumbers(patch);
 
     assertEquals(2, lines.size());
     assertTrue(lines.contains(1));
@@ -236,7 +186,7 @@ class DiffLineResolverTest {
     var resolver = new DiffLineResolver(Map.of("A.java", patch));
 
     // The raw line-number proxy drops it (32 is far from the old line 10); content matching holds.
-    assertFalse(resolver.isLineInDiff("A.java", 10, 3));
+    assertFalse(resolver.resolveRightSideLine("A.java", 10).isPresent());
     assertTrue(resolver.isFindingPresent("A.java", "dangerous_call()"));
   }
 
@@ -260,7 +210,7 @@ class DiffLineResolverTest {
 
     // The raw line-number proxy is fooled: stale line 42 is within ±3 of the surviving context
     // line now at right-line 41 (ctx_45), so it reads "present" though the bug was deleted.
-    assertTrue(resolver.isLineInDiff("A.java", 42, 3));
+    assertTrue(resolver.resolveRightSideLine("A.java", 42).isPresent());
     // Content matching is not: the anchor exists only as a deletion, never on the right side.
     assertFalse(resolver.isFindingPresent("A.java", "buggy_42()"));
   }
@@ -408,7 +358,7 @@ class DiffLineResolverTest {
         +
         +third();
         """;
-    var lines = DiffLineResolver.parseRightSideLines(patch);
+    var lines = rightSideLineNumbers(patch);
     var resolver = new DiffLineResolver(Map.of("A.java", patch));
 
     // A blank added line still advances the right-side counter (it is a commentable line) ...
@@ -417,23 +367,6 @@ class DiffLineResolverTest {
     // match contiguously. Were the blank kept, it would sit between them and break the run.
     assertTrue(resolver.isFindingPresent("A.java", "first();\nthird();"));
     assertFalse(resolver.isFindingPresent("A.java", "second();"));
-  }
-
-  @Test
-  void isLineInDiffFallsBackToVariantWhenExactEntryIsEmpty() {
-    // a deletion-only file stores its exact-path key with an empty right side, while a
-    // longer path variant holds the real right-side lines. The empty exact entry must not
-    // short-circuit the variant fallback and drop a still-open finding.
-    var deletionOnly =
-        """
-        @@ -10,2 +10,0 @@
-        -removed_one
-        -removed_two
-        """;
-    var resolver =
-        new DiffLineResolver(Map.of("dir/Main.java", deletionOnly, "src/dir/Main.java", PATCH));
-
-    assertTrue(resolver.isLineInDiff("dir/Main.java", 11, 3));
   }
 
   @Test
@@ -523,29 +456,6 @@ class DiffLineResolverTest {
   }
 
   @Test
-  void isLineInDiffChecksEveryMatchingVariantNotJustTheFirstCandidate() {
-    // suffix-colliding files both FilePaths.same-match the shortened path, but only one
-    // carries the target line. The scan checks every matching variant, so a decoy variant whose
-    // lines are elsewhere cannot shadow the one that holds the line — the old first-match lookup
-    // could have tested the decoy and dropped the match.
-    var atLine20 =
-        """
-        @@ -1,1 +20,1 @@
-        +twenty
-        """;
-    var farAway =
-        """
-        @@ -1,1 +99,1 @@
-        +far
-        """;
-    var resolver =
-        new DiffLineResolver(Map.of("a/util/Helper.java", atLine20, "b/util/Helper.java", farAway));
-
-    assertTrue(resolver.isLineInDiff("util/Helper.java", 20, 3));
-    assertFalse(resolver.isLineInDiff("util/Helper.java", 50, 3));
-  }
-
-  @Test
   void isFindingPresentSkipsEmptyVariantSoDeletionOnlyFileDoesNotHold() {
     // A path variant whose only patch is deletion-only carries no right-side text. It is skipped
     // (not matched as an empty entry), so a finding whose shortened path resolves solely to that
@@ -570,33 +480,7 @@ class DiffLineResolverTest {
     var resolver = new DiffLineResolver(Map.of("src/B.java", PATCH));
 
     assertFalse(resolver.isFindingPresent("B.java", "new_line()"));
-    assertFalse(resolver.isLineInDiff("B.java", 11, 3));
-  }
-
-  @Test
-  void isLineInDiffTreatsNonEmptyExactMatchAsAuthoritativeOverVariant() {
-    // The line-membership counterpart to the isFindingPresent authoritative-exact test: when the
-    // file's own diff entry is non-empty, the decision is made from it alone — a same-suffix
-    // variant
-    // carrying the requested line must not be consulted.
-    var exactAtLine20 =
-        """
-        @@ -1,1 +20,1 @@
-        +twenty
-        """;
-    var variantAtLine50 =
-        """
-        @@ -1,1 +50,1 @@
-        +fifty
-        """;
-    var resolver =
-        new DiffLineResolver(
-            Map.of("dir/F.java", exactAtLine20, "src/dir/F.java", variantAtLine50));
-
-    // 50 is far from the exact entry's only line (20); the variant's line 50 is never consulted.
-    assertFalse(resolver.isLineInDiff("dir/F.java", 50, 3));
-    // Sanity: the exact entry's own line still resolves.
-    assertTrue(resolver.isLineInDiff("dir/F.java", 20, 3));
+    assertFalse(resolver.resolveRightSideLine("B.java", 11).isPresent());
   }
 
   @Test
@@ -1151,5 +1035,12 @@ class DiffLineResolverTest {
     assertEquals(
         List.of(), resolver.rightSideLines("src/B.java", new DiffLineResolver.LineRange(1, 3)));
     assertEquals(List.of(), resolver.rightSideLines(null, new DiffLineResolver.LineRange(1, 3)));
+  }
+
+  /** The right-side line numbers of a patch, as the shared parser numbers them. */
+  private static java.util.TreeSet<Integer> rightSideLineNumbers(String patch) {
+    var numbers = new java.util.TreeSet<Integer>();
+    PatchIndex.parse(patch).rightSide().forEach(line -> numbers.add(line.rightLine()));
+    return numbers;
   }
 }

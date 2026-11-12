@@ -514,29 +514,7 @@ public class CitedLocationResolver {
     }
 
     private Optional<List<String>> fetch(String path) {
-      try {
-        var file = prClient.getFileContent(auth, ACCEPT, owner, repo, path, ref);
-        if (file == null || file.content() == null || file.size() > MAX_FILE_BYTES) {
-          return Optional.empty();
-        }
-        // GitHub wraps base64 content in newlines — only the MIME decoder tolerates them.
-        var text =
-            new String(Base64.getMimeDecoder().decode(file.content()), StandardCharsets.UTF_8);
-        if (text.isEmpty()) {
-          return Optional.empty();
-        }
-        // A file ending in a newline has no extra last line; keeping the split's trailing empty
-        // element would overstate the line count the "line N does not exist" note reports.
-        var lines = new ArrayList<>(List.of(text.split("\n", -1)));
-        if (lines.size() > 1 && lines.get(lines.size() - 1).isEmpty()) {
-          lines.remove(lines.size() - 1);
-        }
-        return Optional.of(List.copyOf(lines));
-      } catch (RuntimeException e) {
-        Log.debugf(
-            e, "Could not read %s from %s/%s to resolve a cited location", path, owner, repo);
-        return Optional.empty();
-      }
+      return readLines(prClient, auth, owner, repo, path, ref);
     }
 
     /** Charges the review's evidence budget, dropping a note that no longer fits. */
@@ -548,6 +526,41 @@ public class CitedLocationResolver {
             LogSafe.oneLine(finding.file()), finding.line());
       }
       return attached;
+    }
+  }
+
+  /**
+   * The lines of {@code path} at {@code ref}, read through the contents API; empty when the file
+   * cannot be read, is larger than {@link #MAX_FILE_BYTES} or is empty. Shared with the presence
+   * check's head-file reads ({@link HeadFileLines}, #1321), so both read a file the same way.
+   */
+  static Optional<List<String>> readLines(
+      GitHubPullRequestClient prClient,
+      String auth,
+      String owner,
+      String repo,
+      String path,
+      String ref) {
+    try {
+      var file = prClient.getFileContent(auth, ACCEPT, owner, repo, path, ref);
+      if (file == null || file.content() == null || file.size() > MAX_FILE_BYTES) {
+        return Optional.empty();
+      }
+      // GitHub wraps base64 content in newlines — only the MIME decoder tolerates them.
+      var text = new String(Base64.getMimeDecoder().decode(file.content()), StandardCharsets.UTF_8);
+      if (text.isEmpty()) {
+        return Optional.empty();
+      }
+      // A file ending in a newline has no extra last line; keeping the split's trailing empty
+      // element would overstate the line count the "line N does not exist" note reports.
+      var lines = new ArrayList<>(List.of(text.split("\n", -1)));
+      if (lines.size() > 1 && lines.get(lines.size() - 1).isEmpty()) {
+        lines.remove(lines.size() - 1);
+      }
+      return Optional.of(List.copyOf(lines));
+    } catch (RuntimeException e) {
+      Log.debugf(e, "Could not read %s from %s/%s at %s", path, owner, repo, ref);
+      return Optional.empty();
     }
   }
 

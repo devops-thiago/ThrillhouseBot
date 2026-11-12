@@ -849,8 +849,8 @@ public class ReviewDiffFormatter {
    *
    * <p>The truncation notice folds into the header's own parenthetical instead of trailing it, so
    * the line still reads as {@code ### <path> (…)} for consumers that scope by file (see {@code
-   * FindingQuoteValidator.indexDiff}, which cuts the path at the last {@code " ("}). A first line
-   * that is not a section header is left as the bare notice.
+   * DiffIndex.ofFormattedDiff}, which cuts the path at the last {@code " ("}). A first line that is
+   * not a section header is left as the bare notice.
    */
   private static String clippedHeader(String firstLine) {
     if (!firstLine.startsWith("### ")) {

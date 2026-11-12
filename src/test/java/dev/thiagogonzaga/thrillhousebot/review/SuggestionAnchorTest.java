@@ -442,6 +442,35 @@ class SuggestionAnchorTest {
   }
 
   /** A resolver over one file the pull request adds with {@code lines}, numbered from 1. */
+  /**
+   * #1321: a quote of lines the pull request removes moves the finding to where they stood in the
+   * new file and loses its suggestion, which GitHub could not apply to removed lines.
+   */
+  @Test
+  void aQuoteOfRemovedLinesMovesTheFindingToWhereTheyStoodAndDropsItsSuggestion() {
+    var resolver =
+        new DiffLineResolver(
+            Map.of(
+                EXPIRY_TRACKER,
+                "@@ -10,4 +10,2 @@\n keep();\n-verify(a).call();\n-verify(a).close();\n next();"));
+    var cited = finding(EXPIRY_TRACKER, 13, "verify(a).call();", "verify(a).call(1);");
+
+    var placed = SuggestionAnchor.place(cited, resolver);
+
+    assertEquals(11, placed.line());
+    assertNull(placed.suggestionNew());
+    assertEquals("verify(a).call();", placed.suggestionOld());
+  }
+
+  @Test
+  void aFindingAlreadyWhereTheRemovedLinesStoodKeepsItsLine() {
+    var resolver =
+        new DiffLineResolver(Map.of(EXPIRY_TRACKER, "@@ -10,2 +10,1 @@\n keep();\n-gone();"));
+    var cited = finding(EXPIRY_TRACKER, 11, "gone();", null);
+
+    assertSame(cited, SuggestionAnchor.place(cited, resolver));
+  }
+
   private static DiffLineResolver resolver(String file, String... lines) {
     var patch = new StringBuilder("@@ -0,0 +1," + lines.length + " @@");
     for (var line : lines) {

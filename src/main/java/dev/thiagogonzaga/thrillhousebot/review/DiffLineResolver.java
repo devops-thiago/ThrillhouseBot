@@ -24,7 +24,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.NavigableSet;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -32,16 +31,13 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
-import java.util.regex.Pattern;
+import java.util.function.ToIntFunction;
 
 /**
  * Maps AI-reported file line numbers to lines that exist in the PR diff — required for GitHub
  * inline review comments (422 when the line is outside the diff).
  */
 public final class DiffLineResolver {
-
-  // Shared with FindingQuoteValidator, which tracks the same right-side line numbers.
-  static final Pattern HUNK_HEADER = Pattern.compile("@@ -\\d+(?:,\\d+)? \\+(\\d+)(?:,\\d+)? @@");
 
   /**
    * Package-visible construction counter so tests can assert one build per review (and none when a
@@ -55,13 +51,33 @@ public final class DiffLineResolver {
    */
   static final int NEAR_CITED_LINE = 3;
 
-  private final Map<String, TreeSet<Integer>> rightSideLinesByFile;
-  private final Map<String, List<String>> rightSideTextByFile;
-  private final Map<String, List<Integer>> rightSideTextLineNumbersByFile;
-  private final Map<String, Map<Integer, String>> rightSideLineTextByFile;
-  private final Map<String, TreeSet<Integer>> rightSideHunkStartsByFile;
-  private final Map<String, Map<Integer, String>> addedTextByFile;
+  /** Which side of the diff a finding's anchor quotes. */
+  public enum Side {
+    /** The head file: added and context lines. */
+    RIGHT,
+    /** The base file: the lines the pull request removes, with the context around them. */
+    LEFT
+  }
+
+  /**
+   * Reads a changed file's lines at the review's head commit, so presence can look past the few
+   * context lines a patch carries (#1321). Empty when the file cannot be read.
+   */
+  @FunctionalInterface
+  public interface HeadFiles {
+
+    /** Reads nothing: presence is judged from the patches alone. */
+    HeadFiles NONE = path -> Optional.empty();
+
+    Optional<List<String>> lines(String path);
+  }
+
+  /** The review's one parse of every patch (#1321). */
+  private final DiffIndex index;
+
+  private final Map<String, FileSide> byFile;
   private final Set<String> changedFiles;
+  private final HeadFiles headFiles;
 
   public DiffLineResolver(Map<String, String> patchesByFile) {
     this(patchesByFile, List.of());
@@ -74,42 +90,65 @@ public final class DiffLineResolver {
    * only.
    */
   public DiffLineResolver(Map<String, String> patchesByFile, Collection<String> changedFiles) {
+    this(patchesByFile, changedFiles, HeadFiles.NONE);
+  }
+
+  /**
+   * A resolver that also reads a changed file at the head commit through {@code headFiles} when a
+   * finding's anchor is not in that file's patch, so an anchor running past the patch's context is
+   * not read as gone (#1318, #1321).
+   */
+  public DiffLineResolver(
+      Map<String, String> patchesByFile, Collection<String> changedFiles, HeadFiles headFiles) {
     CONSTRUCTION_COUNT.incrementAndGet();
     this.changedFiles = new HashSet<>(changedFiles);
     this.changedFiles.addAll(patchesByFile.keySet());
-    this.rightSideLinesByFile = new HashMap<>();
-    this.rightSideTextByFile = new HashMap<>();
-    this.rightSideTextLineNumbersByFile = new HashMap<>();
-    this.rightSideLineTextByFile = new HashMap<>();
-    this.rightSideHunkStartsByFile = new HashMap<>();
-    this.addedTextByFile = new HashMap<>();
-    patchesByFile.forEach(
-        (file, patch) -> {
-          RightSide rightSide = parseRightSide(patch);
-          rightSideLinesByFile.put(file, rightSide.lines());
-          rightSideTextByFile.put(file, rightSide.text());
-          rightSideTextLineNumbersByFile.put(file, rightSide.textLineNumbers());
-          rightSideLineTextByFile.put(file, rightSide.lineText());
-          rightSideHunkStartsByFile.put(file, rightSide.hunkStarts());
-          addedTextByFile.put(file, rightSide.added());
-        });
+    this.headFiles = headFiles;
+    this.index = DiffIndex.ofPatches(patchesByFile);
+    this.byFile = new HashMap<>();
+    index.files().forEach((file, patch) -> byFile.put(file, FileSide.of(patch)));
+  }
+
+  /** Every patch of the review, parsed once with both sides. */
+  DiffIndex index() {
+    return index;
   }
 
   /**
    * Whether the prior finding's flagged code is still present on the right side (additions and
-   * surviving context) of the current diff — the predicate the approve backstop relies on to tell a
-   * still-open finding from one whose code has been changed away.
+   * surviving context) of the current diff, or in the head file outside the patch: the predicate
+   * the approve backstop relies on to tell a still-open finding from one whose code has been
+   * changed away. The same as {@link #isFindingPresent(String, String, Side)} on the {@link
+   * Side#RIGHT right side}.
+   */
+  public boolean isFindingPresent(String file, String anchor) {
+    return isFindingPresent(file, anchor, Side.RIGHT);
+  }
+
+  /**
+   * Whether the prior finding's flagged code is still present.
    *
    * <p>When the finding carries an {@code anchor} (its persisted {@code suggestion_old}, the
    * verbatim code it flagged), presence is judged by <em>content</em>: the anchor's non-blank lines
-   * must appear, in order and adjacent, as a contiguous run of right-side lines. This is immune to
-   * the two failure modes of a raw line-number test: a force-push/rebase that drifts the still-open
-   * code by more than {@code tolerance} lines no longer reads as "gone" (under-block), and code
-   * that was deleted or replaced no longer reads as "present" just because a surviving context line
-   * sits near the stale line number (over-block) — the replaced text exists only on the diff's left
-   * side. Requiring a contiguous run, rather than mere set-membership of each line, also stops a
-   * multi-line block whose lines happen to survive scattered in unrelated places from reading as
-   * still-present.
+   * must appear, in order and adjacent, as a contiguous run of lines of <em>one hunk</em> (#1321).
+   * This is immune to the two failure modes of a raw line-number test: a force-push/rebase that
+   * drifts the still-open code no longer reads as "gone" (under-block), and code that was deleted
+   * or replaced no longer reads as "present" just because a surviving context line sits near the
+   * stale line number (over-block). Requiring a contiguous run, rather than mere set-membership of
+   * each line, also stops a multi-line block whose lines happen to survive scattered in unrelated
+   * places, or at the end of one hunk and the start of the next, from reading as still-present.
+   *
+   * <p>On the {@link Side#RIGHT right side} (code the head holds), a run of added or context lines
+   * is present. A patch shows only three lines of context around a change, so an anchor that runs
+   * past them (#1318: a quote starting one line before its hunk) is then looked for in the whole
+   * head file, read through {@link HeadFiles} for a file the pull request changes, with up to
+   * {@link CitedLocationResolver#MAX_BLANK_GAP} blank lines between two quoted lines. An unreadable
+   * head file adds nothing, so presence is then what the patch shows.
+   *
+   * <p>On the {@link Side#LEFT left side} (a finding about code the pull request removes), the
+   * finding stands while its lines are still removed: a run of base-side lines of one hunk holding
+   * at least one removed line, or, once the patch no longer shows the removal, a head file that
+   * does not hold the anchor. A head file holding it again means the removal was undone.
    *
    * <p>One residual the content test cannot resolve: a single generic anchor line (e.g. {@code
    * return null;}) that was changed away at the finding's location but recurs verbatim elsewhere in
@@ -127,16 +166,92 @@ public final class DiffLineResolver {
    * toward holding (returning true) for the backstop, avoiding the drift-fragile under-blocking
    * behavior of a raw line check.
    */
-  public boolean isFindingPresent(String file, String anchor) {
+  public boolean isFindingPresent(String file, String anchor, Side side) {
     if (file == null) {
       return false;
     }
     List<Predicate<String>> anchorLines = normalizedAnchorLines(anchor);
     if (anchorLines.isEmpty()) {
-      return presentInFileOrVariant(rightSideLinesByFile, file, lines -> true);
+      return presentInFileOrVariant(file, FileSide::hasLines, patch -> true);
     }
+    return side == Side.LEFT
+        ? isRemovalPresent(file, anchorLines)
+        : isRightSidePresent(file, anchorLines);
+  }
+
+  private boolean isRightSidePresent(String file, List<Predicate<String>> anchorLines) {
+    if (presentInFileOrVariant(
+        file, FileSide::hasRightText, patch -> !patch.rightRuns(anchorLines).isEmpty())) {
+      return true;
+    }
+    boolean inHeadFile =
+        headFileLines(file).filter(lines -> holdsRun(lines, anchorLines)).isPresent();
+    if (inHeadFile) {
+      Log.infof(
+          "A finding's anchor on %s is outside the patch's context but in the head file; it is"
+              + " still present",
+          LogSafe.oneLine(file));
+    }
+    return inHeadFile;
+  }
+
+  private boolean isRemovalPresent(String file, List<Predicate<String>> anchorLines) {
     return presentInFileOrVariant(
-        rightSideTextByFile, file, text -> containsContiguous(text, anchorLines));
+            file, FileSide::hasLeftText, patch -> !patch.removedRuns(anchorLines).isEmpty())
+        || headFileLines(file).filter(lines -> !holdsRun(lines, anchorLines)).isPresent();
+  }
+
+  /**
+   * {@code file}'s lines at the head commit, read only for a file the pull request changes and
+   * whose patch leaves it in place; empty for a removed file, a path no patch resolves, or a file
+   * that cannot be read.
+   */
+  private Optional<List<String>> headFileLines(String file) {
+    String key = byFile.containsKey(file) ? file : uniqueVariant(file, patch -> true);
+    if (key == null || !byFile.get(key).hasLines()) {
+      return Optional.empty();
+    }
+    return headFiles.lines(key);
+  }
+
+  /**
+   * Whether {@code fileLines} hold the anchor as a run in order, stepping over at most {@link
+   * CitedLocationResolver#MAX_BLANK_GAP} blank lines between two of its lines (its own blank lines
+   * were dropped), the matching {@link CitedLocationResolver} reads a whole file with.
+   */
+  private static boolean holdsRun(List<String> fileLines, List<Predicate<String>> anchorLines) {
+    for (int start = 0; start < fileLines.size(); start++) {
+      if (runStartsAt(fileLines, start, anchorLines)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean runStartsAt(
+      List<String> fileLines, int start, List<Predicate<String>> anchorLines) {
+    int at = start;
+    for (int i = 0; i < anchorLines.size(); i++) {
+      if (i > 0) {
+        at = nextLineAfterBlanks(fileLines, at + 1);
+      }
+      if (at >= fileLines.size() || !anchorLines.get(i).test(fileLines.get(at).strip())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static int nextLineAfterBlanks(List<String> fileLines, int from) {
+    int at = from;
+    int skipped = 0;
+    while (at < fileLines.size()
+        && fileLines.get(at).isBlank()
+        && skipped < CitedLocationResolver.MAX_BLANK_GAP) {
+      at++;
+      skipped++;
+    }
+    return at;
   }
 
   /**
@@ -153,7 +268,7 @@ public final class DiffLineResolver {
     if (at.isEmpty() || lines.isEmpty()) {
       return false;
     }
-    var added = addedTextByFile.get(resolveTextKeyForFileOrVariant(file));
+    var added = byFile.get(resolveKey(file, FileSide::hasRightText)).added();
     var from = at.get().startLine() - margin;
     var to = at.get().endLine() + margin;
     return lines.stream()
@@ -165,31 +280,16 @@ public final class DiffLineResolver {
   }
 
   /**
-   * Retrieves the right-side text of a specific line number, or {@code null} if not in the diff.
+   * Retrieves the right-side text of a specific line number, or {@code null} if not in the diff. A
+   * model path variant resolves to the one diff file it names; on a suffix collision (two diff
+   * files both matching) the answer is {@code null} rather than a guess.
    */
   public String getLineText(String file, int line) {
     if (file == null || line <= 0) {
       return null;
     }
-    Map<Integer, String> exact = rightSideLineTextByFile.get(file);
-    if (exact != null && !exact.isEmpty()) {
-      return exact.get(line);
-    }
-    // Variant fallback: resolve to the unique FilePaths.same variant; on a suffix collision
-    // (two diff keys both matching) return null rather than guess.
-    Map<Integer, String> resolved = null;
-    for (var entry : rightSideLineTextByFile.entrySet()) {
-      var value = entry.getValue();
-      if (!entry.getKey().equals(file)
-          && !value.isEmpty()
-          && FilePaths.same(file, entry.getKey())) {
-        if (resolved != null) {
-          return null;
-        }
-        resolved = value;
-      }
-    }
-    return resolved != null ? resolved.get(line) : null;
+    String key = resolveKey(file, FileSide::hasLines);
+    return key == null ? null : byFile.get(key).lineText().get(line);
   }
 
   /**
@@ -287,48 +387,6 @@ public final class DiffLineResolver {
         finding.suggestionNew());
   }
 
-  /** Whether {@code needle} appears as a contiguous, in-order run within {@code haystack}. */
-  private static boolean containsContiguous(List<String> haystack, List<Predicate<String>> needle) {
-    for (int i = 0; i + needle.size() <= haystack.size(); i++) {
-      if (matchesAt(haystack, i, needle)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private static boolean matchesAt(
-      List<String> haystack, int offset, List<Predicate<String>> needle) {
-    for (int j = 0; j < needle.size(); j++) {
-      if (!needle.get(j).test(haystack.get(offset + j))) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  /**
-   * Whether {@code line} — or a line within {@code tolerance} of it — is an actual right-side line
-   * of the file's diff. Unlike {@link #resolveRightSideLine}, this never snaps to an arbitrarily
-   * distant line. The file is matched with {@link FilePaths#same}, so a model path variant still
-   * resolves to the diff's filename.
-   */
-  public boolean isLineInDiff(String file, int line, int tolerance) {
-    if (file == null || line <= 0) {
-      return false;
-    }
-    return presentInFileOrVariant(
-        rightSideLinesByFile, file, lines -> lineWithinTolerance(lines, line, tolerance));
-  }
-
-  /** Whether {@code line} — or a member within {@code tolerance} of it — is in {@code lines}. */
-  private static boolean lineWithinTolerance(NavigableSet<Integer> lines, int line, int tolerance) {
-    Integer floor = lines.floor(line);
-    Integer ceiling = lines.ceiling(line);
-    return (floor != null && line - floor <= tolerance)
-        || (ceiling != null && ceiling - line <= tolerance);
-  }
-
   /**
    * Whether {@code predicate} holds for {@code file}'s own diff entry or, failing that, for any
    * other diff file whose path is a {@link FilePaths#same} variant of it.
@@ -337,8 +395,9 @@ public final class DiffLineResolver {
    * that name, so the result is decided from it alone and no variant is consulted — a same-suffix
    * file that merely shares the path must never resurrect a finding whose code changed away in its
    * own file. The variant fallback runs only when the exact entry is absent <em>or empty</em>: a
-   * deletion-only patch stores an empty right side under its exact key, so the fallback must still
-   * consult the variants that may hold the real data.
+   * deletion-only patch has an empty right side under its exact key, so the fallback must still
+   * consult the variants that may hold the real data. {@code nonEmpty} says what empty means for
+   * the question asked.
    *
    * <p>The fallback inspects <em>every</em> matching variant rather than the first the backing
    * {@link HashMap} happens to iterate, so an ambiguous shortened path — two changed files sharing
@@ -347,16 +406,16 @@ public final class DiffLineResolver {
    * backstop, which prefers a finding kept open (and clearable by a reply on its thread) over
    * silently approving over a still-open finding.
    */
-  private static <V extends Collection<?>> boolean presentInFileOrVariant(
-      Map<String, V> byFile, String file, Predicate<V> predicate) {
-    V exact = byFile.get(file);
-    if (exact != null && !exact.isEmpty()) {
+  private boolean presentInFileOrVariant(
+      String file, Predicate<FileSide> nonEmpty, Predicate<FileSide> predicate) {
+    FileSide exact = byFile.get(file);
+    if (exact != null && nonEmpty.test(exact)) {
       return predicate.test(exact);
     }
     for (var entry : byFile.entrySet()) {
-      V value = entry.getValue();
+      FileSide value = entry.getValue();
       if (!entry.getKey().equals(file)
-          && !value.isEmpty()
+          && nonEmpty.test(value)
           && FilePaths.same(file, entry.getKey())
           && predicate.test(value)) {
         return true;
@@ -366,39 +425,39 @@ public final class DiffLineResolver {
   }
 
   /**
-   * Resolves {@code file} to its non-empty exact right-side line set or, failing that, to the
-   * unique non-empty {@link FilePaths#same} variant set.
-   *
-   * <p>A non-empty exact entry is authoritative and is returned immediately. The variant fallback
-   * runs when the exact entry is absent or empty. If multiple different variant keys match, an
-   * empty set is returned to avoid placing a comment on the wrong file on genuine ambiguity — the
-   * caller treats empty exactly as "no resolvable line", the safe direction. The result is never
-   * {@code null}.
+   * Resolves {@code file} to the diff key of its entry: the exact key when that entry is non-empty
+   * by {@code nonEmpty}, else the unique non-empty {@link FilePaths#same} variant. Returns {@code
+   * null} on absence or genuine ambiguity (two suffix-colliding keys), so a comment, a range or a
+   * line text is never bound to the wrong file; the caller treats {@code null} as "no resolvable
+   * line", the safe direction.
    */
-  private TreeSet<Integer> resolveRightSideLinesForFileOrVariant(String file) {
-    TreeSet<Integer> exact = rightSideLinesByFile.get(file);
-    if (exact != null && !exact.isEmpty()) {
-      return exact;
+  private String resolveKey(String file, Predicate<FileSide> nonEmpty) {
+    FileSide exact = byFile.get(file);
+    if (exact != null && nonEmpty.test(exact)) {
+      return file;
     }
-    TreeSet<Integer> resolved = null;
-    for (var entry : rightSideLinesByFile.entrySet()) {
-      TreeSet<Integer> value = entry.getValue();
+    return uniqueVariant(file, nonEmpty);
+  }
+
+  /** The one other diff key that is a {@link FilePaths#same} variant of {@code file}, or null. */
+  private String uniqueVariant(String file, Predicate<FileSide> nonEmpty) {
+    String resolved = null;
+    for (var entry : byFile.entrySet()) {
       if (!entry.getKey().equals(file)
-          && !value.isEmpty()
+          && nonEmpty.test(entry.getValue())
           && FilePaths.same(file, entry.getKey())) {
         if (resolved != null) {
-          // Genuine ambiguity (two suffix-colliding diff keys) - empty rather than guess.
-          return new TreeSet<>();
+          return null;
         }
-        resolved = value;
+        resolved = entry.getKey();
       }
     }
-    return resolved != null ? resolved : new TreeSet<>();
+    return resolved;
   }
 
   /**
    * Trimmed, non-blank lines of an anchor (a finding's {@code suggestion_old}), each as a matcher
-   * for a trimmed right-side line: plain equality, or — for a line the security scan redacted — the
+   * for a trimmed diff line: plain equality, or — for a line the security scan redacted — the
    * redacted form ({@link RedactedAnchor}), so a finding that quoted a secret is still located
    * (#932).
    */
@@ -426,10 +485,11 @@ public final class DiffLineResolver {
     if (file == null || requestedLine <= 0) {
       return OptionalInt.empty();
     }
-    TreeSet<Integer> lines = resolveRightSideLinesForFileOrVariant(file);
-    if (lines.isEmpty()) {
+    String key = resolveKey(file, FileSide::hasLines);
+    if (key == null) {
       return OptionalInt.empty();
     }
+    TreeSet<Integer> lines = byFile.get(key).lines();
     if (lines.contains(requestedLine)) {
       return OptionalInt.of(requestedLine);
     }
@@ -448,53 +508,35 @@ public final class DiffLineResolver {
   public record LineRange(int startLine, int endLine) {}
 
   /**
+   * Where a quote of removed code sits (#1321): its first and last line on the base (left) side,
+   * the lines a {@code side: LEFT} review comment is posted on, and the right-side lines the run
+   * stands at, where the removal sits in the new file.
+   */
+  public record RemovedRange(int startLine, int endLine, int rightStartLine, int rightEndLine) {}
+
+  /**
    * Resolves the right-side line range a finding's {@code suggestion_old} (the verbatim code it
    * replaces) occupies in the diff, so a multi-line replacement can be posted as a multi-line
    * GitHub suggestion that overwrites the whole range rather than a single anchor line.
    *
    * <p>The anchor's trimmed, non-blank lines must appear as a contiguous, in-order run of
-   * right-side lines (the same matching {@link #isFindingPresent} uses); the range spans the first
-   * to the last matched line. Returns empty — so the caller falls back to a single-line comment —
-   * when the anchor is blank or single-line, the file is not in the diff, the run cannot be
-   * located, or the same run appears more than once (ambiguous, so guessing a range is unsafe).
+   * right-side lines of one hunk (the same matching {@link #isFindingPresent} uses), so the range
+   * never straddles two hunks, which GitHub rejects (422); the range spans the first to the last
+   * matched line. Returns empty — so the caller falls back to a single-line comment — when the
+   * anchor is blank or single-line, the file is not in the diff, the run cannot be located, or the
+   * same run appears more than once (ambiguous, so guessing a range is unsafe).
    */
   public Optional<LineRange> resolveSuggestionRange(String file, String suggestionOld) {
     if (file == null) {
       return Optional.empty();
     }
     List<Predicate<String>> anchorLines = normalizedAnchorLines(suggestionOld);
-    if (anchorLines.size() < 2) {
+    String key = resolveKey(file, FileSide::hasRightText);
+    if (anchorLines.size() < 2 || key == null) {
       return Optional.empty();
     }
-    String key = resolveTextKeyForFileOrVariant(file);
-    if (key == null) {
-      return Optional.empty();
-    }
-    List<String> text = rightSideTextByFile.get(key);
-    List<Integer> lineNumbers = rightSideTextLineNumbersByFile.get(key);
-    int matchOffset = -1;
-    for (int i = 0; i + anchorLines.size() <= text.size(); i++) {
-      if (matchesAt(text, i, anchorLines)) {
-        if (matchOffset != -1) {
-          // The same block appears twice — no single range is correct, so fall back.
-          return Optional.empty();
-        }
-        matchOffset = i;
-      }
-    }
-    if (matchOffset == -1) {
-      return Optional.empty();
-    }
-    int startLine = lineNumbers.get(matchOffset);
-    int endLine = lineNumbers.get(matchOffset + anchorLines.size() - 1);
-    // GitHub rejects (422) a multi-line suggestion whose start_line and line fall in different
-    // hunks, and blank-line dropping lets a match straddle a hunk boundary — fall back to a
-    // single-line comment when any hunk begins inside (startLine, endLine].
-    TreeSet<Integer> hunkStarts = rightSideHunkStartsByFile.get(key);
-    if (!hunkStarts.subSet(startLine, false, endLine, true).isEmpty()) {
-      return Optional.empty();
-    }
-    return Optional.of(new LineRange(startLine, endLine));
+    List<LineRange> runs = byFile.get(key).rightRuns(anchorLines);
+    return runs.size() == 1 ? Optional.of(runs.getFirst()) : Optional.empty();
   }
 
   /**
@@ -503,41 +545,74 @@ public final class DiffLineResolver {
    * (#924).
    *
    * <p>The quote's trimmed, non-blank lines must appear as a contiguous, in-order run of right-side
-   * lines, as in {@link #isFindingPresent}. Of several such runs, the one holding {@code citedLine}
-   * wins, then the one within {@link #NEAR_CITED_LINE} lines of it (the quote validator's own
-   * tolerance), then the only one. Empty when the quote is blank, the file has no right side, the
-   * quote is not there (a deleted line is not), or the runs leave the choice open: a suggestion
-   * posted on a guessed location replaces code it does not quote.
+   * lines of one hunk, as in {@link #isFindingPresent}. Of several such runs, the one holding
+   * {@code citedLine} wins, then the one within {@link #NEAR_CITED_LINE} lines of it (the quote
+   * validator's own tolerance), then the only one. Empty when the quote is blank, the file has no
+   * right side, the quote is not there (a removed line is not: see {@link #locateRemovedQuote}), or
+   * the runs leave the choice open: a suggestion posted on a guessed location replaces code it does
+   * not quote.
    */
   public Optional<LineRange> locateQuote(String file, String quote, int citedLine) {
     if (file == null) {
       return Optional.empty();
     }
     List<Predicate<String>> quoteLines = normalizedAnchorLines(quote);
-    String key = resolveTextKeyForFileOrVariant(file);
+    String key = resolveKey(file, FileSide::hasRightText);
     if (quoteLines.isEmpty() || key == null) {
       return Optional.empty();
     }
-    List<String> text = rightSideTextByFile.get(key);
-    List<Integer> lineNumbers = rightSideTextLineNumbersByFile.get(key);
-    var runs = new ArrayList<LineRange>();
-    for (int i = 0; i + quoteLines.size() <= text.size(); i++) {
-      if (matchesAt(text, i, quoteLines)) {
-        runs.add(new LineRange(lineNumbers.get(i), lineNumbers.get(i + quoteLines.size() - 1)));
-      }
+    List<LineRange> runs = byFile.get(key).rightRuns(quoteLines);
+    List<LineRange> near = nearCitedLine(runs, LineRange::startLine, LineRange::endLine, citedLine);
+    return onlyOne(near.isEmpty() ? runs : near);
+  }
+
+  /**
+   * Where {@code quote} sits among the lines {@code file}'s patch removes (#1321): a contiguous,
+   * in-order run of base-side lines of one hunk, holding at least one removed line, whose
+   * right-side position is {@code citedLine} or within {@link #NEAR_CITED_LINE} lines of it.
+   *
+   * <p>Unlike {@link #locateQuote}, a run the cited line does not select is never taken just
+   * because it is the only one: removed code is often restated nearby (a replaced line's old and
+   * new form share most of their text), and a finding posted on removed lines it does not describe
+   * reads as a remark about code it never meant.
+   */
+  public Optional<RemovedRange> locateRemovedQuote(String file, String quote, int citedLine) {
+    if (file == null) {
+      return Optional.empty();
     }
+    List<Predicate<String>> quoteLines = normalizedAnchorLines(quote);
+    String key = resolveKey(file, FileSide::hasLeftText);
+    if (quoteLines.isEmpty() || key == null) {
+      return Optional.empty();
+    }
+    List<RemovedRange> runs = byFile.get(key).removedRuns(quoteLines);
+    return onlyOne(
+        nearCitedLine(runs, RemovedRange::rightStartLine, RemovedRange::rightEndLine, citedLine));
+  }
+
+  /**
+   * The runs {@code citedLine} selects: those holding it, else those within {@link
+   * #NEAR_CITED_LINE} lines of it, else none.
+   */
+  private static <R> List<R> nearCitedLine(
+      List<R> runs, ToIntFunction<R> start, ToIntFunction<R> end, int citedLine) {
     for (int tolerance : new int[] {0, NEAR_CITED_LINE}) {
-      List<LineRange> near =
+      List<R> near =
           runs.stream()
               .filter(
                   run ->
-                      citedLine >= run.startLine() - tolerance
-                          && citedLine <= run.endLine() + tolerance)
+                      citedLine >= start.applyAsInt(run) - tolerance
+                          && citedLine <= end.applyAsInt(run) + tolerance)
               .toList();
       if (!near.isEmpty()) {
-        return near.size() == 1 ? Optional.of(near.getFirst()) : Optional.empty();
+        return near;
       }
     }
+    return List.of();
+  }
+
+  /** The one run, or empty when there is none or the choice is open. */
+  private static <R> Optional<R> onlyOne(List<R> runs) {
     return runs.size() == 1 ? Optional.of(runs.getFirst()) : Optional.empty();
   }
 
@@ -547,11 +622,11 @@ public final class DiffLineResolver {
    * replaces. Empty when the file has no right side.
    */
   public List<String> rightSideLines(String file, LineRange range) {
-    String key = file == null ? null : resolveTextKeyForFileOrVariant(file);
+    String key = file == null ? null : resolveKey(file, FileSide::hasRightText);
     if (key == null) {
       return List.of();
     }
-    Map<Integer, String> lineText = rightSideLineTextByFile.get(key);
+    Map<Integer, String> lineText = byFile.get(key).lineText();
     var lines = new ArrayList<String>();
     for (int line = range.startLine(); line <= range.endLine(); line++) {
       String text = lineText.get(line);
@@ -563,128 +638,111 @@ public final class DiffLineResolver {
   }
 
   /**
-   * Resolves {@code file} to the diff key holding its right-side text — the exact key when its text
-   * is non-empty, else the unique {@link FilePaths#same} variant. Returns {@code null} on absence
-   * or genuine ambiguity (two suffix-colliding keys), mirroring {@link
-   * #resolveRightSideLinesForFileOrVariant} so a multi-line range is never bound to the wrong file.
+   * One file's patch in the shapes the lookups read, taken from its {@link PatchIndex}.
+   *
+   * @param lines the right-side line numbers, the lines a comment can be posted on
+   * @param lineText each right-side line's text by number, as the diff holds it
+   * @param added each added line's stripped text by number
+   * @param rightHunks each hunk's non-blank right-side lines; blank lines are dropped so a blank
+   *     line inside a block never breaks an otherwise adjacent match, and a run never continues
+   *     from one hunk into the next
+   * @param leftHunks each hunk's non-blank left-side lines, the same way
    */
-  private String resolveTextKeyForFileOrVariant(String file) {
-    List<String> exact = rightSideTextByFile.get(file);
-    if (exact != null && !exact.isEmpty()) {
-      return file;
-    }
-    String resolved = null;
-    for (var entry : rightSideTextByFile.entrySet()) {
-      if (!entry.getKey().equals(file)
-          && !entry.getValue().isEmpty()
-          && FilePaths.same(file, entry.getKey())) {
-        if (resolved != null) {
-          return null;
-        }
-        resolved = entry.getKey();
-      }
-    }
-    return resolved;
-  }
-
-  static TreeSet<Integer> parseRightSideLines(String patch) {
-    return parseRightSide(patch).lines();
-  }
-
-  /**
-   * The right-side line numbers and the right-side code text parsed from one file's patch. The text
-   * is the trimmed, non-blank right-side lines in diff order, so {@link #containsContiguous} can
-   * test the anchor as a contiguous run; blank lines are dropped from both sides so a blank line
-   * inside a block never breaks an otherwise-adjacent match. {@code textLineNumbers} runs parallel
-   * to {@code text}, carrying the right-side line number of each retained line so a matched anchor
-   * run can be mapped back to a concrete line range. {@code hunkStarts} holds each hunk's 1-based
-   * right-side start line, so a resolved range can be confined to a single hunk.
-   */
-  private record RightSide(
+  private record FileSide(
       TreeSet<Integer> lines,
-      List<String> text,
-      List<Integer> textLineNumbers,
       Map<Integer, String> lineText,
-      TreeSet<Integer> hunkStarts,
-      Map<Integer, String> added) {}
+      Map<Integer, String> added,
+      List<List<PatchIndex.Line>> rightHunks,
+      List<List<PatchIndex.Line>> leftHunks) {
 
-  /**
-   * Walks a unified-diff patch once, collecting the right-side line numbers and the trimmed text of
-   * every right-side line. Additions ({@code '+'}) and context ({@code ' '}) lines exist on the
-   * RIGHT side and advance its counter; deletions ({@code '-'}) exist only on the LEFT side and are
-   * skipped — which is exactly why content matched against this text distinguishes still-present
-   * code from code that was replaced (the replacement's old text survives only as a deletion). The
-   * model now quotes {@code suggestion_old} from the byte-exact fenced diff (see {@link
-   * PromptTemplateEscaper#fence}), so the raw patch is parsed directly with no neutralization
-   * (mirrors {@code FindingQuoteValidator}).
-   */
-  private static RightSide parseRightSide(String patch) {
-    var lines = new TreeSet<Integer>();
-    var text = new ArrayList<String>();
-    var textLineNumbers = new ArrayList<Integer>();
-    var lineText = new HashMap<Integer, String>();
-    var hunkStarts = new TreeSet<Integer>();
-    var added = new HashMap<Integer, String>();
-    if (patch == null || patch.isBlank()) {
-      return new RightSide(lines, text, textLineNumbers, lineText, hunkStarts, added);
-    }
-
-    var newLine = 0;
-    var inHunk = false;
-    for (String rawLine : patch.split("\n", -1)) {
-      OptionalInt hunkStart = hunkStart(rawLine);
-      if (hunkStart.isPresent()) {
-        newLine = hunkStart.getAsInt();
-        hunkStarts.add(newLine);
-        inHunk = true;
-        continue;
-      }
-      if (inHunk && isRightSideLine(rawLine)) {
-        appendRightSide(lines, text, textLineNumbers, lineText, newLine, rawLine);
-        if (rawLine.charAt(0) == '+') {
-          added.put(newLine, rawLine.substring(1).strip());
+    static FileSide of(PatchIndex patch) {
+      var lines = new TreeSet<Integer>();
+      var lineText = new HashMap<Integer, String>();
+      var added = new HashMap<Integer, String>();
+      for (PatchIndex.Line line : patch.rightSide()) {
+        lines.add(line.rightLine());
+        lineText.put(line.rightLine(), line.text());
+        if (line.added()) {
+          added.put(line.rightLine(), line.normalizedText());
         }
-        newLine++;
       }
+      var rightHunks = new ArrayList<List<PatchIndex.Line>>();
+      var leftHunks = new ArrayList<List<PatchIndex.Line>>();
+      for (List<PatchIndex.Line> hunk : patch.hunks()) {
+        rightHunks.add(nonBlank(hunk, PatchIndex.Line::onRight));
+        leftHunks.add(nonBlank(hunk, PatchIndex.Line::onLeft));
+      }
+      return new FileSide(lines, lineText, added, rightHunks, leftHunks);
     }
-    return new RightSide(lines, text, textLineNumbers, lineText, hunkStarts, added);
-  }
 
-  /** The 1-based right-side start line of a hunk header, or empty if the line is not one. */
-  private static OptionalInt hunkStart(String rawLine) {
-    if (!rawLine.startsWith("@@")) {
-      return OptionalInt.empty();
+    private static List<PatchIndex.Line> nonBlank(
+        List<PatchIndex.Line> hunk, Predicate<PatchIndex.Line> side) {
+      return hunk.stream().filter(side).filter(line -> !line.normalizedText().isEmpty()).toList();
     }
-    var matcher = HUNK_HEADER.matcher(rawLine);
-    return matcher.find()
-        ? OptionalInt.of(Integer.parseInt(matcher.group(1)))
-        : OptionalInt.empty();
-  }
 
-  /** Whether the line exists on the diff's right side — an addition or a surviving context line. */
-  private static boolean isRightSideLine(String rawLine) {
-    if (rawLine.isEmpty()) {
-      return false;
+    boolean hasLines() {
+      return !lines.isEmpty();
     }
-    var marker = rawLine.charAt(0);
-    return marker == '+' || marker == ' ';
-  }
 
-  /** Records one right-side line under {@code newLine}: its number, trimmed text, and raw text. */
-  private static void appendRightSide(
-      TreeSet<Integer> lines,
-      List<String> text,
-      List<Integer> textLineNumbers,
-      Map<Integer, String> lineText,
-      int newLine,
-      String rawLine) {
-    lines.add(newLine);
-    String content = rawLine.substring(1);
-    String stripped = content.strip();
-    if (!stripped.isEmpty()) {
-      text.add(stripped);
-      textLineNumbers.add(newLine);
+    boolean hasRightText() {
+      return rightHunks.stream().anyMatch(hunk -> !hunk.isEmpty());
     }
-    lineText.put(newLine, content);
+
+    boolean hasLeftText() {
+      return leftHunks.stream().anyMatch(hunk -> !hunk.isEmpty());
+    }
+
+    /** Every right-side run of one hunk matching {@code needle}, as its line range. */
+    List<LineRange> rightRuns(List<Predicate<String>> needle) {
+      var runs = new ArrayList<LineRange>();
+      for (List<PatchIndex.Line> hunk : rightHunks) {
+        for (int start : runStarts(hunk, needle)) {
+          runs.add(
+              new LineRange(
+                  hunk.get(start).rightLine(), hunk.get(start + needle.size() - 1).rightLine()));
+        }
+      }
+      return runs;
+    }
+
+    /** Every left-side run of one hunk matching {@code needle} and holding a removed line. */
+    List<RemovedRange> removedRuns(List<Predicate<String>> needle) {
+      var runs = new ArrayList<RemovedRange>();
+      for (List<PatchIndex.Line> hunk : leftHunks) {
+        for (int start : runStarts(hunk, needle)) {
+          List<PatchIndex.Line> run = hunk.subList(start, start + needle.size());
+          if (run.stream().anyMatch(PatchIndex.Line::deleted)) {
+            runs.add(
+                new RemovedRange(
+                    run.getFirst().leftLine(),
+                    run.getLast().leftLine(),
+                    run.getFirst().rightLine(),
+                    run.getLast().rightLine()));
+          }
+        }
+      }
+      return runs;
+    }
+
+    private static List<Integer> runStarts(
+        List<PatchIndex.Line> hunk, List<Predicate<String>> needle) {
+      var starts = new ArrayList<Integer>();
+      for (int i = 0; i + needle.size() <= hunk.size(); i++) {
+        if (matchesAt(hunk, i, needle)) {
+          starts.add(i);
+        }
+      }
+      return starts;
+    }
+
+    private static boolean matchesAt(
+        List<PatchIndex.Line> hunk, int offset, List<Predicate<String>> needle) {
+      for (int j = 0; j < needle.size(); j++) {
+        if (!needle.get(j).test(hunk.get(offset + j).normalizedText())) {
+          return false;
+        }
+      }
+      return true;
+    }
   }
 }
