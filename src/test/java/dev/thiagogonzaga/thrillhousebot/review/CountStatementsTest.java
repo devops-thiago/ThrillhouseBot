@@ -100,6 +100,12 @@ class CountStatementsTest {
         "Fixes issue #1315 where the parser failed.",
         "One of the many open and stale findings.",
         "Sets the offset to x+5.",
+        "Fixes #1315 where findings were miscounted.",
+        "Since v0.9.2 findings carry a stable id.",
+        "Screens the P1 findings first.",
+        "Replaces the old pass with a new one, findings included.",
+        "Moves the v2 files across to the new module.",
+        "Ships schema 6, files across the tree keep it.",
         "6 files are new."
       })
   void noCountOrSizeIsStated(String sentence) {

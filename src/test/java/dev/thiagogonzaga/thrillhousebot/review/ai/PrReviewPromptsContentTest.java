@@ -673,8 +673,12 @@ class PrReviewPromptsContentTest {
     String sys = PrReviewPrompts.SUMMARY_SYSTEM;
     assertContains(
         sys,
-        "Write no counts or sizes in any prose field",
-        "the summary prose must state no finding count or change size (#1323)");
+        "Write no counts or sizes in overall_assessment or pr_purpose",
+        "the purpose and assessment must state no finding count or change size (#1323)");
+    assertContains(
+        sys,
+        "may still quote the description's own figures",
+        "a description gap may still quote the description's figures (#1323)");
     assertContains(
         sys,
         "\"one medium finding remains\"",

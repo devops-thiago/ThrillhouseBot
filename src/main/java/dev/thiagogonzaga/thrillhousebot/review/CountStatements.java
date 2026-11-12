@@ -47,9 +47,18 @@ final class CountStatements {
 
   private CountStatements() {}
 
-  /** A word, or a number with an optional sign and digit groups ("+1,204"). */
+  /**
+   * A word, or a number standing on its own with an optional sign and digit groups ("+1,204"). A
+   * number joined to a letter, a digit, a dot, an underscore, a "#" or a "+" is part of a name, a
+   * reference or a version ("#1315", "P1", "v0.9.2", "C++17"), not a count.
+   */
   private static final Pattern TOKEN =
-      Pattern.compile("[+−]?\\d++(?:,\\d++)*+|\\p{L}++", Pattern.UNICODE_CHARACTER_CLASS);
+      Pattern.compile(
+          "(?<![#+._\\p{L}\\p{N}])[+−]?\\d++(?:,\\d++)*+(?!\\p{L}|\\.\\d)|\\p{L}++",
+          Pattern.UNICODE_CHARACTER_CLASS);
+
+  /** Punctuation that ends a phrase, so a count does not reach across it: "a new one, findings". */
+  private static final Pattern PHRASE_BREAK = Pattern.compile("[,;:()–—]|\\s-\\s");
 
   /** The words a count of findings ends on. */
   private static final String FINDING = "finding";
@@ -199,10 +208,11 @@ final class CountStatements {
     var tokens = tokens(sentence);
     for (var i = 0; i < tokens.size(); i++) {
       var word = tokens.get(i).word();
-      if (signedFigure(sentence, tokens.get(i))) {
+      if (signedFigure(word)) {
         return true;
       }
-      if (isNumber(word) && (countsFindings(tokens, i) || statesSize(sentence, tokens, i))) {
+      if (isNumber(word)
+          && (countsFindings(sentence, tokens, i) || statesSize(sentence, tokens, i))) {
         return true;
       }
     }
@@ -219,14 +229,13 @@ final class CountStatements {
     return tokens;
   }
 
-  /** Whether {@code token} is a number with a sign, as a diff's "+555" is; "C++17" is a name. */
-  private static boolean signedFigure(String sentence, Token token) {
-    var sign = token.word().charAt(0);
-    if (sign != '+' && sign != '−') {
-      return false;
-    }
-    var before = token.start() == 0 ? ' ' : sentence.charAt(token.start() - 1);
-    return !Character.isLetterOrDigit(before) && before != '+';
+  /**
+   * Whether {@code word} is a number with a sign, as a diff's "+555" is. A sign joined to a name
+   * ("C++17") never starts a token ({@link #TOKEN}).
+   */
+  private static boolean signedFigure(String word) {
+    var sign = word.charAt(0);
+    return sign == '+' || sign == '−';
   }
 
   /** Whether {@code word} is a number in digits, digit groups included, or in words. */
@@ -236,11 +245,12 @@ final class CountStatements {
 
   /**
    * Whether the number at {@code at} counts findings: "findings" comes within {@link #COUNT_REACH}
-   * words after it, or a "finding" that ends its phrase ({@link #SINGULAR_ENDERS}) does.
+   * words after it in the same phrase ({@link #joined}), or a "finding" that ends its phrase
+   * ({@link #SINGULAR_ENDERS}) does.
    */
-  private static boolean countsFindings(List<Token> tokens, int at) {
+  private static boolean countsFindings(String sentence, List<Token> tokens, int at) {
     var last = Math.min(tokens.size() - 1, at + COUNT_REACH);
-    for (var j = at + 1; j <= last; j++) {
+    for (var j = at + 1; j <= last && joined(sentence, tokens.get(at), tokens.get(j)); j++) {
       var word = tokens.get(j).word();
       if (word.equals(FINDINGS)) {
         return true;
@@ -250,6 +260,11 @@ final class CountStatements {
       }
     }
     return false;
+  }
+
+  /** Whether no {@link #PHRASE_BREAK} stands between {@code from} and {@code to}. */
+  private static boolean joined(String sentence, Token from, Token to) {
+    return !PHRASE_BREAK.matcher(sentence.substring(from.end(), to.start())).find();
   }
 
   /**
@@ -262,7 +277,9 @@ final class CountStatements {
     if (unit < tokens.size() && UNIT_MODIFIERS.contains(tokens.get(unit).word())) {
       unit++;
     }
-    if (unit >= tokens.size() || !SIZE_UNITS.contains(tokens.get(unit).word())) {
+    if (unit >= tokens.size()
+        || !SIZE_UNITS.contains(tokens.get(unit).word())
+        || !joined(sentence, tokens.get(at), tokens.get(unit))) {
       return false;
     }
     var hyphenated =

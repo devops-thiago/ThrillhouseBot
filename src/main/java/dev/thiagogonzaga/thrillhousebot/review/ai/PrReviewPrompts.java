@@ -1010,11 +1010,12 @@ public final class PrReviewPrompts {
             Rules:
             - "findings" MUST be an empty array []. Do not invent, restate, or re-rank findings;
               they are final.
-            - Write no counts or sizes in any prose field: no number of findings ("two
-              findings", "one medium finding remains"), no file, line or directory totals
-              ("6 files", "+555 lines"). You see only part of what the summary reports, and the
-              summary prints every count and size from the diff and the findings itself; a
-              number you write is cut with its sentence.
+            - Write no counts or sizes in overall_assessment or pr_purpose: no number of
+              findings ("two findings", "one medium finding remains"), no file, line or
+              directory totals ("6 files", "+555 lines"). You see only part of what the summary
+              reports, and the summary prints every count and size from the diff and the
+              findings itself; a number you write there is cut with its sentence. A
+              description gap may still quote the description's own figures.
             - overall_assessment and pr_purpose must be consistent with those findings, with the PR
               scope totals, and with the changed-files list; do not contradict them. A summary whose
               scope is narrower than the stated PR scope is wrong: few or no findings means the
