@@ -50,14 +50,14 @@ final class CountStatements {
   private CountStatements() {}
 
   /**
-   * A word, or a number standing on its own with an optional sign and digit groups ("+1,204"). A
-   * number joined to a letter, a digit, a dot, an underscore, a "#" or a "+" is part of a name, a
-   * reference or a version ("#1315", "P1", "v0.9.2", "C++17"), not a count.
+   * A word, or a number standing on its own with an optional sign. A grouped number ("1,204") reads
+   * as its digit groups, the last of which still sits before the unit it counts. A number joined to
+   * a letter, a digit, a dot, an underscore, a "#" or a "+" is part of a name, a reference or a
+   * version ("#1315", "P1", "v0.9.2", "C++17"), not a count.
    */
   private static final Pattern TOKEN =
       Pattern.compile(
-          "(?<![#+.\\w])[+−]?\\d++(?:,\\d++)*+(?!\\.?\\w)|\\p{L}++",
-          Pattern.UNICODE_CHARACTER_CLASS);
+          "(?<![#+.\\w])[+−]?\\d++(?!\\.?\\w)|\\p{L}++", Pattern.UNICODE_CHARACTER_CLASS);
 
   /** Punctuation that ends a phrase, so a count does not reach across it: "a new one, findings". */
   private static final Pattern PHRASE_BREAK = Pattern.compile("[,;:()–—]|\\s-\\s");
@@ -245,9 +245,9 @@ final class CountStatements {
     return sign == '+' || sign == '−';
   }
 
-  /** Whether {@code word} is a number in digits, digit groups included, or in words. */
+  /** Whether {@code word} is a number in digits or in words. */
   private static boolean isNumber(String word) {
-    return OverviewScreen.isCount(word.replace(",", ""));
+    return OverviewScreen.isCount(word);
   }
 
   /**
