@@ -84,7 +84,8 @@ class CountStatementsTest {
         "It is +40/-20 overall.",
         "Adds 4 config files.",
         "Touches 2 schema directories.",
-        "Adds 3 new migration files."
+        "Adds 3 new migration files.",
+        "It leaves 3 findings"
       })
   void aCountOrSizeIsStated(String sentence) {
     assertTrue(CountStatements.statesCount(sentence), sentence);
@@ -116,7 +117,9 @@ class CountStatementsTest {
         "Keeps a single-file layout.",
         "Sets the offset to x-5.",
         "Accepts Java 17-21.",
-        "Adds 2 checks for missing files."
+        "Adds 2 checks for missing files.",
+        "Merges the two findings columns into one query.",
+        "Splits 3 findings tables by severity."
       })
   void noCountOrSizeIsStated(String sentence) {
     assertFalse(CountStatements.statesCount(sentence), sentence);

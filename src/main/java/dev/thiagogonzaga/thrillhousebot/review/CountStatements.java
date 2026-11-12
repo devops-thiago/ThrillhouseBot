@@ -103,6 +103,35 @@ final class CountStatements {
           "needs",
           "requires");
 
+  /**
+   * Nouns a plural "findings" can modify, so the number counts them rather than findings: "the two
+   * findings columns".
+   */
+  private static final Set<String> FINDINGS_HEADS =
+      Set.of(
+          "column",
+          "columns",
+          "table",
+          "tables",
+          "stage",
+          "stages",
+          "section",
+          "sections",
+          "row",
+          "rows",
+          "page",
+          "pages",
+          "panel",
+          "panels",
+          "query",
+          "queries",
+          "field",
+          "fields",
+          "view",
+          "views",
+          "tab",
+          "tabs");
+
   /** The units a size is counted in. */
   private static final Set<String> SIZE_UNITS =
       Set.of(
@@ -255,15 +284,15 @@ final class CountStatements {
 
   /**
    * Whether the number at {@code at} counts findings: "findings" comes within {@link #COUNT_REACH}
-   * words after it in the same phrase ({@link #joined}), or a "finding" that ends its phrase
-   * ({@link #SINGULAR_ENDERS}) does.
+   * words after it in the same phrase ({@link #joined}) and does not modify a noun ({@link
+   * #FINDINGS_HEADS}), or a "finding" that ends its phrase ({@link #SINGULAR_ENDERS}) does.
    */
   private static boolean countsFindings(String sentence, List<Token> tokens, int at) {
     var last = Math.min(tokens.size() - 1, at + COUNT_REACH);
     for (var j = at + 1; j <= last && joined(sentence, tokens.get(at), tokens.get(j)); j++) {
       var word = tokens.get(j).word();
       if (word.equals(FINDINGS)) {
-        return true;
+        return j + 1 == tokens.size() || !FINDINGS_HEADS.contains(tokens.get(j + 1).word());
       }
       if (word.equals(FINDING)) {
         return j + 1 == tokens.size() || SINGULAR_ENDERS.contains(tokens.get(j + 1).word());
