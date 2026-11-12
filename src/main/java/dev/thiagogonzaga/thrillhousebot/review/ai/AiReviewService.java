@@ -73,8 +73,8 @@ public class AiReviewService {
    * because a prompt the model did not finish in 15 minutes is the same prompt on the next attempt.
    * Production saw one 503-file pull request spend 20 such attempts in a day. The repeat is kept
    * because a first token that never arrived can also be the provider queueing the request, which
-   * the next attempt need not repeat; at the shipped five retries the ceiling was 75 minutes of
-   * waiting per call, and it is 30 now.
+   * the next attempt need not repeat; at the five retries shipped then the ceiling was 75 minutes
+   * of waiting per call, and it is 30 now.
    */
   private static final int MAX_TIMED_OUT_ATTEMPTS = 2;
 
@@ -395,6 +395,7 @@ public class AiReviewService {
             attempt, maxAttempts, session.id);
         throw e;
       } catch (RuntimeException e) {
+        failIfApiKeyRejected(session, attempt, maxAttempts, e);
         failIfContextWindowExceeded(session, attempt, maxAttempts, e);
         var repaired = repaired(session, attempt, maxAttempts, lane, e);
         if (repaired.isPresent()) {
@@ -480,6 +481,23 @@ public class AiReviewService {
       }
       current = fallback;
       return true;
+    }
+  }
+
+  /**
+   * Ends the call when {@code failure} is the provider rejecting the API key (#1329): the next
+   * attempt, and the fallback model, would send the same key. No wait and no retry event. Returns
+   * for every other failure.
+   */
+  private static void failIfApiKeyRejected(
+      ReviewSession session, int attempt, int maxAttempts, RuntimeException failure) {
+    var rejection = AiApiKeyRejectedException.classify(failure);
+    if (rejection.isPresent()) {
+      Log.errorf(
+          "AI review attempt %d/%d for session %d failed: %s; not retrying (every attempt sends"
+              + " the same key)",
+          attempt, maxAttempts, session.id, rejection.get().getMessage());
+      throw rejection.get();
     }
   }
 
