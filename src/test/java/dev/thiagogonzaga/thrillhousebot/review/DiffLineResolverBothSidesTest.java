@@ -64,8 +64,9 @@ class DiffLineResolverBothSidesTest {
 
   /**
    * #1315 round 3, finding #4: its quote starts on line 843, one line before the hunk that starts
-   * at 844, and the file did not change in the next round. The patch and the head file are the ones
-   * stored for that pull request.
+   * at 844, and the file did not change in the next round. The patch is the hunk GitHub returns for
+   * that file at round 3's head ({@code a6310507}); the head file is that file at the pull
+   * request's head, byte-identical to round 3's.
    */
   @Nested
   class Pr1315 {
@@ -111,11 +112,13 @@ class DiffLineResolverBothSidesTest {
     }
 
     @Test
-    void theFixtureIsTheStoredHunk() throws IOException {
+    void thePatchIsTheHeadFilesOwnLines() throws IOException {
       var resolver = resolver(true);
       var head = headFile();
-      for (int line = 844; line <= 863; line++) {
-        assertEquals(head.get(line - 1), resolver.getLineText(PATH, line), "line " + line);
+      var rightSide = resolver.index().files().get(PATH).rightSide();
+      assertEquals(844, rightSide.getFirst().rightLine());
+      for (var line : rightSide) {
+        assertEquals(head.get(line.rightLine() - 1), line.text(), "line " + line.rightLine());
       }
       assertFalse(resolver.resolveRightSideLine(PATH, 840).isPresent());
     }
@@ -237,6 +240,18 @@ class DiffLineResolverBothSidesTest {
       assertEquals(
           Optional.of(new RemovedRange(10, 12, 10, 11)),
           resolver.locateRemovedQuote(FILE, "keep();\n" + quote, 10));
+    }
+
+    @Test
+    void aQuoteOfADeletedFileStandsAtItsFirstLine() {
+      var resolver = new DiffLineResolver(Map.of(FILE, "@@ -1,3 +0,0 @@\n-a();\n-b();\n-c();"));
+      var cited =
+          new ReviewResponse.Finding("high", "high", FILE, 0, "T", "D", "b();\nc();", "x();");
+
+      assertEquals(
+          Optional.of(new RemovedRange(2, 3, 1, 1)),
+          resolver.locateRemovedQuote(FILE, "b();\nc();", 3));
+      assertEquals(1, SuggestionAnchor.place(cited, resolver).line());
     }
 
     @Test

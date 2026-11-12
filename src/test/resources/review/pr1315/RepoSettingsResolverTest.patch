@@ -1,4 +1,4 @@
-@@ -810,25 +844,20 @@ class RepoSettingsResolverTest {
+@@ -810,48 +844,37 @@ void cachesPerRepositoryAndRefetchesAfterTheTtl() {
            java.util.List.of("gen/**"),
            resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID).ignoredFiles());
  
@@ -29,3 +29,27 @@
            resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID).ignoredFiles());
        assertEquals(
            java.util.List.of("other/**"),
+           resolver.resolve(OWNER, "other", DEFAULT_BRANCH, INSTALLATION_ID).ignoredFiles());
+     }
+ 
+     @Test
+-    void negativeResultIsCachedBrieflyThenRetried() {
++    void negativeResultIsCachedBrieflyThenRetried() throws Exception {
+       stubMissing(YML);
+       stubMissing(YAML);
+       var resolver = resolver();
+ 
+       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+ 
+-      verify(prClient, times(1))
+-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+-
+       currentTimeMs.addAndGet(RepoSettingsResolver.NEGATIVE_CACHE_TTL_MS + 1);
+       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+-
+-      verify(prClient, times(2))
+-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+     }
+ 
+     /**

@@ -716,12 +716,21 @@ public final class DiffLineResolver {
                 new RemovedRange(
                     run.getFirst().leftLine(),
                     run.getLast().leftLine(),
-                    run.getFirst().rightLine(),
-                    run.getLast().rightLine()));
+                    newFilePosition(run.getFirst()),
+                    newFilePosition(run.getLast())));
           }
         }
       }
       return runs;
+    }
+
+    /**
+     * Where a base-side line stands in the new file. A file the pull request deletes has no new
+     * file, and its removed lines are numbered 0 there; they are put at line 1, so a finding on
+     * such a file is never moved to a line that does not exist.
+     */
+    private static int newFilePosition(PatchIndex.Line line) {
+      return Math.max(1, line.rightLine());
     }
 
     private static List<Integer> runStarts(
