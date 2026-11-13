@@ -7,9 +7,11 @@ package dev.thiagogonzaga.thrillhousebot.review;
  * {@code line} by counting from the hunk headers, which it does unreliably. {@link #annotate}
  * starts every added and context line inside a {@code ```diff} block with its new-side line number
  * and a space, ahead of the diff marker: {@code 842 +code}, {@code 843 code}. Removed lines, hunk
- * headers and "no newline" markers are left as they are. Only the prompt is annotated: the
- * formatted diff the deterministic stages parse ({@code FindingQuoteValidator}, {@code
- * DiffLineResolver} and the rest) stays the plain patch.
+ * headers, "no newline" markers and a line with no marker at all are left as they are. GitHub
+ * writes an empty context line as a single space, so it is numbered like any other; a completely
+ * empty line only appears in a patch whose trailing spaces were trimmed. Only the prompt is
+ * annotated: the formatted diff the deterministic stages parse ({@code FindingQuoteValidator},
+ * {@code DiffLineResolver} and the rest) stays the plain patch.
  *
  * <p>A bare number costs about a tenth more diff tokens on the test corpus; a padded column with a
  * separator character cost four tenths. {@link CopiedLineNumbers} removes the number again when the
