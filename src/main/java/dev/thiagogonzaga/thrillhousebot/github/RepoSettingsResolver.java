@@ -16,17 +16,15 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import io.quarkiverse.githubapp.GitHubClientProvider;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.NotFoundException;
-import jakarta.ws.rs.ProcessingException;
-import jakarta.ws.rs.WebApplicationException;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
+import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
+import org.kohsuke.github.GHFileNotFoundException;
+import org.kohsuke.github.GHRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,7 +47,6 @@ import org.slf4j.LoggerFactory;
 public class RepoSettingsResolver {
 
   private static final Logger log = LoggerFactory.getLogger(RepoSettingsResolver.class);
-  private static final String ACCEPT_HEADER = "application/vnd.github+json";
 
   /** Config-file names tried in order; the first that exists wins. */
   static final List<String> CONFIG_FILE_CHAIN =
@@ -64,27 +61,19 @@ public class RepoSettingsResolver {
   static final int CACHE_SWEEP_THRESHOLD = 1_000;
 
   private final boolean enabled;
-  private final GitHubAuthClient authClient;
-  private final GitHubPullRequestClient prClient;
+  private final GitHubClientProvider clientProvider;
   private final LongSupplier clock;
 
   @Inject
-  public RepoSettingsResolver(
-      ThrillhouseConfig config,
-      GitHubAuthClient authClient,
-      @RestClient GitHubPullRequestClient prClient) {
-    this(config, authClient, prClient, System::currentTimeMillis);
+  public RepoSettingsResolver(ThrillhouseConfig config, GitHubClientProvider clientProvider) {
+    this(config, clientProvider, System::currentTimeMillis);
   }
 
   /** Visible for tests: allows controlling the cache clock. */
   RepoSettingsResolver(
-      ThrillhouseConfig config,
-      GitHubAuthClient authClient,
-      GitHubPullRequestClient prClient,
-      LongSupplier clock) {
+      ThrillhouseConfig config, GitHubClientProvider clientProvider, LongSupplier clock) {
     this.enabled = config.review().repoConfigEnabled();
-    this.authClient = authClient;
-    this.prClient = prClient;
+    this.clientProvider = clientProvider;
     this.clock = clock;
   }
 
@@ -110,11 +99,17 @@ public class RepoSettingsResolver {
       cache.remove(cacheKey, cached);
     }
 
-    var auth = authClient.getAuthHeader(installationId);
-
+    GHRepository repository;
+    try {
+      repository =
+          clientProvider.getInstallationClient(installationId).getRepository(owner + "/" + repo);
+    } catch (RuntimeException | IOException e) {
+      log.debug("Could not resolve repository {}/{}", owner, repo);
+      return RepoSettings.EMPTY;
+    }
     var unreadable = false;
     for (String path : CONFIG_FILE_CHAIN) {
-      var fetched = fetchAndParse(auth, owner, repo, defaultBranch, path);
+      var fetched = fetchAndParse(repository, defaultBranch, path, owner, repo);
       unreadable |= fetched.unreadable();
       var settings = fetched.settings();
       if (settings == null) {
@@ -184,51 +179,31 @@ public class RepoSettingsResolver {
     }
   }
 
-  /**
-   * The HTTP status a {@link WebApplicationException} carries. Every constructor of the class
-   * builds a response when it is handed none, so there is always one to read.
-   */
-  private static int statusOf(WebApplicationException e) {
-    return e.getResponse().getStatus();
-  }
-
   /** Fetches and parses one candidate path; see {@link Fetched} for what each outcome means. */
   private Fetched fetchAndParse(
-      String auth, String owner, String repo, String defaultBranch, String path) {
+      GHRepository repository, String defaultBranch, String path, String owner, String repo) {
     try {
-      var file = prClient.getFileContent(auth, ACCEPT_HEADER, owner, repo, path, defaultBranch);
-      if (file == null || file.content() == null) {
+      var file = repository.getFileContent(path, defaultBranch);
+      if (file == null) {
         return Fetched.ABSENT;
       }
-      // GitHub wraps base64 content in newlines; only the MIME decoder tolerates them.
-      var content =
-          new String(Base64.getMimeDecoder().decode(file.content()), StandardCharsets.UTF_8);
+      // hub4j's getContent() already decodes the base64 payload.
+      var content = file.getContent();
+      if (content == null) {
+        return Fetched.ABSENT;
+      }
       return Fetched.found(RepoSettingsParser.parse(content, path));
-    } catch (WebApplicationException e) {
-      // The status decides, not the subclass. The RESTEasy Reactive client never throws
-      // NotFoundException: its 404 is a ClientWebApplicationException carrying the status on the
-      // response, and a catch keyed on the subclass read every missing config as a transient
-      // failure, warned three times per review and never wrote the negative cache (#836). The
-      // other statuses are not "no config": a 5xx and the 403 secondary rate limit are transient,
-      // and treating them as a 404 pinned "this repo has no config" for a minute of reviews (#481).
-      if (e instanceof NotFoundException || statusOf(e) == 404) {
-        log.debug("Repository config file not found: {}", path);
-        return Fetched.ABSENT;
-      }
-      log.warn(
-          "Could not read repository config {} for {}/{}: {}", path, owner, repo, e.toString());
-      return Fetched.READ_FAILED;
-    } catch (ProcessingException e) {
-      log.warn(
-          "Could not read repository config {} for {}/{}: {}", path, owner, repo, e.toString());
-      return Fetched.READ_FAILED;
+    } catch (GHFileNotFoundException e) {
+      // hub4j signals a missing file with GHFileNotFoundException (an IOException).
+      log.debug("Repository config file not found: {}", path);
+      return Fetched.ABSENT;
     } catch (RuntimeException e) {
       log.warn(
-          "Failed to read repository config {} for {}/{}; continuing with the global settings only",
-          path,
-          owner,
-          repo,
-          e);
+          "Could not read repository config {} for {}/{}: {}", path, owner, repo, e.toString());
+      return Fetched.READ_FAILED;
+    } catch (IOException e) {
+      log.warn(
+          "Could not read repository config {} for {}/{}: {}", path, owner, repo, e.toString());
       return Fetched.READ_FAILED;
     }
   }

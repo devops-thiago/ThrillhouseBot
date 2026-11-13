@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
@@ -33,8 +34,9 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubGraphQLClient;
+import io.quarkiverse.githubapp.GitHubClientProvider;
+import io.smallrye.graphql.client.Response;
+import io.smallrye.graphql.client.dynamic.api.DynamicGraphQLClient;
 import jakarta.ws.rs.WebApplicationException;
 import java.util.List;
 import java.util.stream.Stream;
@@ -44,36 +46,62 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.kohsuke.github.GHFileNotFoundException;
+import org.kohsuke.github.GHIssue;
+import org.kohsuke.github.GHRepository;
+import org.kohsuke.github.GitHub;
+import org.kohsuke.github.HttpException;
 import org.mockito.ArgumentCaptor;
 
 class GitHubIssuesProviderTest {
 
   private static final ObjectMapper JSON = new ObjectMapper();
 
-  private GitHubCommentClient commentClient;
-  private GitHubGraphQLClient graphQLClient;
+  private GitHubClientProvider clientProvider;
+  private GitHub gitHub;
+  private GHRepository repository;
+  private DynamicGraphQLClient graphQLClient;
   private GitHubIssuesProvider provider;
 
   @BeforeEach
-  void setUp() {
-    commentClient = mock(GitHubCommentClient.class);
-    graphQLClient = mock(GitHubGraphQLClient.class);
-    provider = new GitHubIssuesProvider(commentClient, graphQLClient);
+  void setUp() throws Exception {
+    clientProvider = mock(GitHubClientProvider.class);
+    gitHub = mock(GitHub.class);
+    repository = mock(GHRepository.class);
+    graphQLClient = mock(DynamicGraphQLClient.class);
+    when(clientProvider.getInstallationClient(anyLong())).thenReturn(gitHub);
+    when(clientProvider.getInstallationGraphQLClient(anyLong())).thenReturn(graphQLClient);
+    when(gitHub.getRepository(anyString())).thenReturn(repository);
     // Every number reads as an issue titled after itself unless a test says otherwise.
-    when(commentClient.getIssue(anyString(), anyString(), eq("o"), eq("r"), anyInt()))
+    when(repository.getIssue(anyInt()))
         .thenAnswer(
             inv -> {
-              int n = inv.getArgument(4);
-              return new GitHubCommentClient.IssueDetails(n, "issue " + n, "body " + n);
+              int n = inv.getArgument(0);
+              var issue = mock(GHIssue.class);
+              when(issue.getTitle()).thenReturn("issue " + n);
+              when(issue.getBody()).thenReturn("body " + n);
+              when(issue.isPullRequest()).thenReturn(false);
+              return issue;
             });
+    provider = new GitHubIssuesProvider(clientProvider);
   }
 
   private static IssueTrackerProvider.TicketLookup lookup(String body, boolean fromBranch) {
-    return new IssueTrackerProvider.TicketLookup("auth", "o", "r", 42, body, fromBranch);
+    return new IssueTrackerProvider.TicketLookup("auth", "o", "r", 42, body, fromBranch, 1L);
   }
 
   private void graphQl(String json) throws Exception {
-    doReturn(JSON.readTree(json)).when(graphQLClient).execute(anyString(), any());
+    var response = mock(Response.class);
+    var parsed = JSON.readTree(json);
+    var dataNode = parsed.path("data");
+    var dataJson = (dataNode.isMissingNode() || dataNode.isNull()) ? "{}" : dataNode.toString();
+    var reader = jakarta.json.Json.createReader(new java.io.StringReader(dataJson));
+    var dataObj = reader.readObject();
+    when(response.hasData()).thenReturn(true);
+    when(response.getData()).thenReturn(dataObj);
+    when(response.hasError()).thenReturn(parsed.has("errors"));
+    when(response.getErrors()).thenReturn(List.of());
+    doReturn(response).when(graphQLClient).executeSync(anyString(), any(java.util.Map.class));
   }
 
   private static String links(String headRef, String... nameWithOwnerAndNumber) {
@@ -471,7 +499,7 @@ class GitHubIssuesProviderTest {
       graphQl(links("main", "someone/else", "3", "O/R", "4"));
 
       assertEquals(List.of("#4"), keys(provider.linkedTickets(lookup("", false), 3)));
-      verify(commentClient, never()).getIssue(any(), any(), any(), any(), eq(3));
+      verify(repository, never()).getIssue(eq(3));
     }
 
     @Test
@@ -492,7 +520,9 @@ class GitHubIssuesProviderTest {
         var body = "Prose mentioning " + marker + " mid-line.\n\nCloses #17";
         assertEquals(List.of("#17"), keys(provider.linkedTickets(lookup(body, false), 3)));
       }
-      doThrow(new IllegalStateException("down")).when(graphQLClient).execute(anyString(), any());
+      doThrow(new IllegalStateException("down"))
+          .when(graphQLClient)
+          .executeSync(anyString(), any(java.util.Map.class));
       assertEquals(
           List.of("#17"),
           keys(
@@ -512,7 +542,7 @@ class GitHubIssuesProviderTest {
       graphQl(links("fix/9-thing"));
 
       assertEquals(List.of(), provider.linkedTickets(lookup("", false), 3));
-      verifyNoInteractions(commentClient);
+      verifyNoInteractions(repository);
     }
 
     @Test
@@ -527,7 +557,7 @@ class GitHubIssuesProviderTest {
       graphQl(links("main", "o/r", "0"));
 
       assertEquals(List.of(), provider.linkedTickets(lookup("Closes #0", false), 3));
-      verifyNoInteractions(commentClient);
+      verifyNoInteractions(repository);
     }
 
     @Test
@@ -536,7 +566,7 @@ class GitHubIssuesProviderTest {
 
       assertEquals(
           List.of("#7"), keys(provider.linkedTickets(lookup("Closes #42 Fixes #7", true), 3)));
-      verify(commentClient, never()).getIssue(any(), any(), any(), any(), eq(42));
+      verify(repository, never()).getIssue(eq(42));
     }
 
     @Test
@@ -553,12 +583,13 @@ class GitHubIssuesProviderTest {
 
       provider.linkedTickets(lookup("", false), 3);
 
-      var request = ArgumentCaptor.forClass(GitHubGraphQLClient.GraphQLRequest.class);
-      verify(graphQLClient).execute(eq("auth"), request.capture());
-      assertEquals(GitHubIssuesProvider.LINKS_QUERY, request.getValue().query());
-      assertEquals("o", request.getValue().variables().get("owner"));
-      assertEquals("r", request.getValue().variables().get("name"));
-      assertEquals(42, request.getValue().variables().get("number"));
+      var queryCaptor = ArgumentCaptor.forClass(String.class);
+      var varsCaptor = ArgumentCaptor.forClass(java.util.Map.class);
+      verify(graphQLClient).executeSync(queryCaptor.capture(), varsCaptor.capture());
+      assertEquals(GitHubIssuesProvider.LINKS_QUERY, queryCaptor.getValue());
+      assertEquals("o", varsCaptor.getValue().get("owner"));
+      assertEquals("r", varsCaptor.getValue().get("name"));
+      assertEquals(42, varsCaptor.getValue().get("number"));
       assertTrue(GitHubIssuesProvider.LINKS_QUERY.contains("closingIssuesReferences(first: 10)"));
     }
   }
@@ -574,14 +605,13 @@ class GitHubIssuesProviderTest {
           provider.linkedTickets(lookup("Closes #1 Closes #2 Closes #3 Closes #4", false), 3);
 
       assertEquals(List.of("#1", "#2", "#3"), keys(tickets));
-      verify(commentClient, never()).getIssue(any(), any(), any(), any(), eq(4));
+      verify(repository, never()).getIssue(eq(4));
     }
 
     @Test
     void anUnreadableCandidateLetsTheNextOneIn() throws Exception {
       graphQl(links("main"));
-      when(commentClient.getIssue(anyString(), anyString(), eq("o"), eq("r"), eq(2)))
-          .thenThrow(new WebApplicationException(404));
+      when(repository.getIssue(eq(2))).thenThrow(new GHFileNotFoundException("not found"));
 
       var tickets = provider.linkedTickets(lookup("Closes #1 Closes #2 Closes #3", false), 2);
 
@@ -591,16 +621,14 @@ class GitHubIssuesProviderTest {
     @Test
     void triesAtMostTheCandidateCap() throws Exception {
       graphQl(links("main"));
-      when(commentClient.getIssue(anyString(), anyString(), eq("o"), eq("r"), anyInt()))
-          .thenThrow(new WebApplicationException(404));
+      when(repository.getIssue(anyInt())).thenThrow(new GHFileNotFoundException("not found"));
       var body = new StringBuilder();
       for (var i = 1; i <= 15; i++) {
         body.append("Closes #").append(i).append('\n');
       }
 
       assertEquals(List.of(), provider.linkedTickets(lookup(body.toString(), false), 5));
-      verify(commentClient, times(GitHubIssuesProvider.MAX_CANDIDATES))
-          .getIssue(any(), any(), any(), any(), anyInt());
+      verify(repository, times(GitHubIssuesProvider.MAX_CANDIDATES)).getIssue(anyInt());
     }
   }
 
@@ -610,12 +638,11 @@ class GitHubIssuesProviderTest {
     @Test
     void aMissingDeletedOrPrivateIssueIsSkipped() throws Exception {
       graphQl(links("main"));
-      when(commentClient.getIssue(anyString(), anyString(), eq("o"), eq("r"), eq(1)))
-          .thenThrow(new WebApplicationException(404));
-      when(commentClient.getIssue(anyString(), anyString(), eq("o"), eq("r"), eq(2)))
-          .thenThrow(new WebApplicationException(410));
-      when(commentClient.getIssue(anyString(), anyString(), eq("o"), eq("r"), eq(3)))
-          .thenThrow(new WebApplicationException(403));
+      when(repository.getIssue(eq(1))).thenThrow(new GHFileNotFoundException("not found"));
+      when(repository.getIssue(eq(2)))
+          .thenThrow(new HttpException("gone", 410, "Gone", "https://api.github.com"));
+      when(repository.getIssue(eq(3)))
+          .thenThrow(new HttpException("forbidden", 403, "Forbidden", "https://api.github.com"));
 
       assertEquals(
           List.of(), provider.linkedTickets(lookup("Closes #1 Closes #2 Closes #3", false), 3));
@@ -624,25 +651,56 @@ class GitHubIssuesProviderTest {
     @Test
     void aPullRequestNumberIsNotAnIssue() throws Exception {
       graphQl(links("main"));
-      when(commentClient.getIssue(anyString(), anyString(), eq("o"), eq("r"), eq(5)))
-          .thenReturn(
-              new GitHubCommentClient.IssueDetails(
-                  5, "a PR", "", new GitHubCommentClient.IssueDetails.PullRequestRef("u")));
-      when(commentClient.getIssue(anyString(), anyString(), eq("o"), eq("r"), eq(6)))
-          .thenReturn(null);
+      var prIssue = mock(GHIssue.class);
+      when(prIssue.getTitle()).thenReturn("a PR");
+      when(prIssue.getBody()).thenReturn("");
+      when(prIssue.isPullRequest()).thenReturn(true);
+      when(repository.getIssue(eq(5))).thenReturn(prIssue);
+      when(repository.getIssue(eq(6))).thenReturn(null);
 
       assertEquals(List.of(), provider.linkedTickets(lookup("Closes #5 Closes #6", false), 3));
     }
 
     @Test
     void aFailedOrPartialClosingReferenceReadKeepsTheBodyLinks() throws Exception {
-      when(graphQLClient.execute(anyString(), any())).thenThrow(new WebApplicationException(502));
+      when(graphQLClient.executeSync(anyString(), any(java.util.Map.class)))
+          .thenThrow(new WebApplicationException(502));
       assertEquals(List.of("#1"), keys(provider.linkedTickets(lookup("Closes #1", true), 3)));
 
       graphQl("{\"data\":null,\"errors\":[{\"message\":\"Resource not accessible\"}]}");
       assertEquals(List.of("#1"), keys(provider.linkedTickets(lookup("Closes #1", true), 3)));
 
-      doReturn(null).when(graphQLClient).execute(anyString(), any());
+      doReturn(null).when(graphQLClient).executeSync(anyString(), any(java.util.Map.class));
+      assertEquals(List.of("#1"), keys(provider.linkedTickets(lookup("Closes #1", true), 3)));
+
+      doThrow(new IllegalStateException("boom"))
+          .when(graphQLClient)
+          .executeSync(anyString(), any(java.util.Map.class));
+      assertEquals(List.of("#1"), keys(provider.linkedTickets(lookup("Closes #1", true), 3)));
+
+      // data present but unparseable -> catch (Exception)
+      var badResp = mock(Response.class);
+      var badData = mock(jakarta.json.JsonObject.class);
+      when(badResp.hasData()).thenReturn(true);
+      when(badResp.getData()).thenReturn(badData);
+      when(badData.toString()).thenReturn("{invalid");
+      when(badResp.hasError()).thenReturn(false);
+      doReturn(badResp).when(graphQLClient).executeSync(anyString(), any(java.util.Map.class));
+      assertEquals(List.of("#1"), keys(provider.linkedTickets(lookup("Closes #1", true), 3)));
+
+      // data == null
+      var nullDataResp = mock(Response.class);
+      when(nullDataResp.hasData()).thenReturn(true);
+      when(nullDataResp.getData()).thenReturn(null);
+      when(nullDataResp.hasError()).thenReturn(false);
+      doReturn(nullDataResp).when(graphQLClient).executeSync(anyString(), any(java.util.Map.class));
+      assertEquals(List.of("#1"), keys(provider.linkedTickets(lookup("Closes #1", true), 3)));
+
+      // hasData false
+      var noDataResp = mock(Response.class);
+      when(noDataResp.hasData()).thenReturn(false);
+      when(noDataResp.hasError()).thenReturn(false);
+      doReturn(noDataResp).when(graphQLClient).executeSync(anyString(), any(java.util.Map.class));
       assertEquals(List.of("#1"), keys(provider.linkedTickets(lookup("Closes #1", true), 3)));
     }
 
@@ -662,9 +720,20 @@ class GitHubIssuesProviderTest {
 
     provider.linkedTickets(lookup("Closes #1", true), 3);
 
-    verify(commentClient, times(2)).getIssue(any(), any(), any(), any(), anyInt());
-    verifyNoMoreInteractions(commentClient);
-    verify(graphQLClient).execute(any(), any());
+    verify(repository, times(2)).getIssue(anyInt());
+    verifyNoMoreInteractions(repository);
+    verify(graphQLClient).executeSync(anyString(), any(java.util.Map.class));
     verifyNoMoreInteractions(graphQLClient);
+  }
+
+  @Test
+  void repositoryResolutionFailureReturnsEmpty() throws Exception {
+    org.mockito.Mockito.doThrow(new java.io.IOException("boom"))
+        .when(gitHub)
+        .getRepository(org.mockito.ArgumentMatchers.anyString());
+
+    var tickets = provider.linkedTickets(lookup("Closes #1", true), 3);
+
+    assertEquals(List.of(), tickets);
   }
 }

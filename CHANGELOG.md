@@ -27,10 +27,19 @@ All notable changes to ThrillhouseBot.
   when there is no such line. (#1320)
 ### Changed
 
+- The review call's diff now shows each added and context line's line number in the new file
+  (`842 +code`), so the model reads a finding's `line` instead of counting it from the hunk
+  header. Only the prompt carries the numbers; the stages that check quotes and place threads
+  still read the plain patch, and a number the model copies into `suggestion_old` or
+  `suggestion_new` is removed before either is used. The numbers add about 10% to the diff's
+  tokens on the test corpus, and the token budget counts them. (#1320)
 - **`THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` defaults to 3, down from 5** (#1329): with the 2 s
   exponential backoff, five attempts spent about 30 s of waiting before a call that kept failing
   gave up. Throttles, timeouts and provider errors keep their handling within the smaller budget.
   Set the variable to keep the old value.
+- Linked-issue context now reads issues through the extension's installation-scoped GitHub client and GraphQL client (`GitHubClientProvider`) instead of the hand-rolled `GitHubCommentClient`/`GitHubGraphQLClient` REST clients. `GitHubIssuesProvider` no longer takes an installation token string; the installation id comes from the review request. (#1314)
+- Repository instructions (`.github/thrillhousebot.md` and fallback chain) now read through the extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of `GitHubPullRequestClient`/`GitHubAuthClient`. `InstructionsResolver` no longer takes an auth client or REST client. (#1314)
+- Repository settings (`.github/thrillhousebot.yml`) and project stack manifests now read through the extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of `GitHubPullRequestClient`/`GitHubAuthClient`. `RepoSettingsResolver` and `ProjectStackResolver` no longer take an auth client or REST client. (#1314)
 
 ### Fixed
 
@@ -98,10 +107,10 @@ delivery still gets `200`.
 
 ### Errata
 
-- The `[0.9.0]` section's **Changed** entry about the webhook entry and the Quarkiverse GitHub
-  App extension describes this release, not v0.9.0. It was added to the changelog after v0.9.0
-  was tagged, and v0.9.0 still uses `WebhookController` and `WebhookVerifier`. The change is
-  described under **Changed** above.
+- v0.9.0's changelog briefly carried a **Changed** entry about the webhook entry and the
+  Quarkiverse GitHub App extension. It was added after v0.9.0 was tagged and described this
+  release, not v0.9.0 (which still uses `WebhookController` and `WebhookVerifier`), so it has been
+  removed from the `[0.9.0]` section. The change is described under **Changed** above.
 
 ## [0.9.0] - 2026-11-04
 
@@ -309,10 +318,6 @@ and rollback details. New review features below are off by default unless stated
 - OpenTelemetry API 1.62.0 remains affected by GHSA-ccrj-gw8r-854m. A compatible dependency
   upgrade is tracked in [#1289](https://github.com/devops-thiago/ThrillhouseBot/issues/1289); the
   Guava update above does not resolve it.
-
-### Changed
-
-- The webhook entry now rides the Quarkiverse GitHub App extension (`io.quarkiverse.githubapp:quarkus-github-app`): it owns the `POST /api/webhook` route, the `X-Hub-Signature-256` check and delivery parsing, and `webhook/WebhookEvents` keeps the existing routing (dedupe, pause, trigger filters, commands, CI rechecks). `WebhookController` and `WebhookVerifier` are gone. Malformed-request answers change to the extension's (`400` for missing/mismatched signature, `500` for a signed non-JSON body, `200` with an empty body on success).
 
 ## [0.8.0] - 2026-10-21
 

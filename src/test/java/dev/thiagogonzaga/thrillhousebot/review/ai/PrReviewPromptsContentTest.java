@@ -1855,6 +1855,8 @@ class PrReviewPromptsContentTest {
   void reviewPromptRendersTheNumberedDiffAndAsksForTheShownLineNumber() {
     assertContains(
         PrReviewPrompts.USER, "{{inputs.numberedDiff}}", "the review call reads the numbered diff");
+    assertContains(
+        PrReviewPrompts.USER, "\"843  int x;\" (two spaces)", "a context line is shown too");
     assertFalse(
         PrReviewPrompts.USER.contains("{{inputs.diff}}"),
         "the plain diff slot is for the deterministic stages, not the prompt");
@@ -1866,6 +1868,10 @@ class PrReviewPromptsContentTest {
         PrReviewPrompts.CORE_FINDING_FIELDS_AND_SEVERITY,
         "the leading line number",
         "quotes leave the column out");
+    assertContains(
+        PrReviewPrompts.CORE_FINDING_FIELDS_AND_SEVERITY,
+        "which have no number, use the number of the next",
+        "a finding on removed lines still has a line to read");
   }
 
   @Test

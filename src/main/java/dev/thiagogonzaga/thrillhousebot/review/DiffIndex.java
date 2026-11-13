@@ -113,7 +113,7 @@ final class DiffIndex {
   }
 
   /** The path in a section header, without the {@code (status, +A -D)} suffix. */
-  private static String sectionFilename(String headerLine) {
+  static String sectionFilename(String headerLine) {
     String name = headerLine.substring(SECTION_HEADER.length());
     int suffix = name.lastIndexOf(" (");
     return (suffix > 0 ? name.substring(0, suffix) : name).strip();
