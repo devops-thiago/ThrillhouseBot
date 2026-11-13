@@ -6,6 +6,15 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- The summary no longer posts counts or sizes the summary call wrote. That call sees only the
+  round's findings, so on #1315 its "What this PR does" paragraph said "One medium finding
+  remains" while 17 findings were open. A sentence of the purpose paragraph or the overall
+  assessment that states a number of findings ("17 findings", "One medium finding remains") or the
+  change's size ("+555 lines", "touches 6 files") is now cut, the rest kept, and the same goes for
+  a purpose carried from an earlier round of the same commit. The summary call is no longer asked
+  for its totals or told to state sizes; the stored totals are counted from the findings, and the
+  dashboard's session total is taken from the severity counts the posted risk table shows, so the
+  two agree. Older stored sessions still load and render. (#1323)
 - A finding whose line the diff cannot take a comment on was moved to the nearest line that
   could, however far away, so its thread could land in a different hunk on code it never
   described. It now moves only when that line is at most three lines away; otherwise the finding
