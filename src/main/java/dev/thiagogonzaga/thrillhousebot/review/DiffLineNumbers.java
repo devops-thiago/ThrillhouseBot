@@ -27,7 +27,10 @@ public final class DiffLineNumbers {
   /** Room per line for its number and space: up to seven digits, so large files rarely regrow. */
   private static final int NUMBER_ROOM = 8;
 
-  /** How far a copied run's first number may be from the line the finding cites. */
+  /**
+   * How many lines before a copied run's first number or after its last the cited line may fall,
+   * for a run of two or more numbered lines.
+   */
   private static final int RUN_SLACK = 3;
 
   /** A copied number: digits, one space, then the added or context marker. */
