@@ -665,6 +665,11 @@ public class WebhookEvents {
             true));
   }
 
+  /**
+   * An installation was uninstalled, suspended, unsuspended or accepted new permissions (#1222).
+   * Nothing of a gone installation is served from then on; observers only update memory and the
+   * stored rows, so this never calls GitHub before the acknowledgement.
+   */
   private void handleInstallation(WebhookPayload payload) {
     var installation = payload.installation();
     if (installation == null || installation.id() <= 0 || payload.action() == null) {

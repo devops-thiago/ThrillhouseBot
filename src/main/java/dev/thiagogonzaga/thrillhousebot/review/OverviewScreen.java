@@ -57,6 +57,9 @@ import java.util.stream.Collectors;
  *       BLOODBANK_PORT row"), since a setting the patch does not hold is its point (#1206).
  *   <li><b>A ticket key in the purpose paragraph is one the PR text or linked issues name.</b> An
  *       invented key such as "THRILLHOUSEBOT-122" takes its sentence out of the paragraph.
+ *   <li><b>The purpose paragraph and the overall assessment state no count or size.</b> A sentence
+ *       such as "One medium finding remains" or "+555 lines across 6 directories" is cut ({@link
+ *       CountStatements}, #1323): the summary computes every number it posts.
  * </ul>
  */
 final class OverviewScreen {
@@ -266,9 +269,10 @@ final class OverviewScreen {
       Set.of("no.", "nos.", "fig.", "figs.", "vol.", "ch.", "sec.", "eq.", "ref.", "p.", "pp.");
 
   /**
-   * {@code summary} with its file summaries mapped, screened and deduplicated, and its purpose
-   * paragraph without sentences naming a ticket key {@code known} does not hold; {@code summary}
-   * itself when nothing changed. A {@code null} summary stays {@code null}.
+   * {@code summary} with its file summaries mapped, screened and deduplicated, its purpose
+   * paragraph without sentences naming a ticket key {@code known} does not hold, and its purpose
+   * and assessment without sentences stating a count or a size ({@link CountStatements}); {@code
+   * summary} itself when nothing changed. A {@code null} summary stays {@code null}.
    *
    * @param files the pull request's changed files, with their patches
    * @param known the text the call read that may name settings and keys: the PR title and
@@ -284,9 +288,12 @@ final class OverviewScreen {
     var resolver = new DiffLineResolver(Map.of(), patches.keySet());
     var source = known == null ? "" : known;
     var fileSummaries = screenedFileSummaries(summary.fileSummaries(), resolver, patches, source);
-    var purpose = withoutInventedTickets(summary.prPurpose(), source);
+    var purpose =
+        CountStatements.withoutCounts(withoutInventedTickets(summary.prPurpose(), source));
+    var assessment = CountStatements.withoutCounts(summary.overallAssessment());
     if (fileSummaries.equals(summary.fileSummaries())
-        && Objects.equals(purpose, summary.prPurpose())) {
+        && Objects.equals(purpose, summary.prPurpose())
+        && Objects.equals(assessment, summary.overallAssessment())) {
       return summary;
     }
     return new ReviewResponse.Summary(
@@ -295,7 +302,7 @@ final class OverviewScreen {
         summary.high(),
         summary.medium(),
         summary.low(),
-        summary.overallAssessment(),
+        assessment,
         purpose,
         summary.descriptionGaps(),
         summary.suggestedLabels(),
@@ -827,7 +834,7 @@ final class OverviewScreen {
    * Whether {@code word} is a number, in digits or in words ({@link #NUMBER_WORDS}). The empty word
    * a clause opening with punctuation splits into is not one.
    */
-  private static boolean isCount(String word) {
+  static boolean isCount(String word) {
     return NUMBER_WORDS.contains(word)
         || (!word.isEmpty() && word.chars().allMatch(Character::isDigit));
   }
