@@ -351,7 +351,13 @@ public class ReviewOrchestrator {
               : ciFailureContext.resolve(auth, req.owner(), req.repo(), ciFuture.join());
       // #58: the linked issues' text, read-only and best-effort; "" when the feature is off.
       var linkedIssues =
-          ticketContext.resolve(auth, req.owner(), req.repo(), req.prNumber(), req.prDescription());
+          ticketContext.resolve(
+              auth,
+              req.owner(),
+              req.repo(),
+              req.prNumber(),
+              req.prDescription(),
+              req.installationId());
 
       // #38: what maintainers taught the review on earlier pull requests, bounded and relevant to
       // the files this one changes; blank when the feature is off.

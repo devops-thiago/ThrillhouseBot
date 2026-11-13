@@ -154,7 +154,8 @@ public class TicketContextResolver {
    * The linked-issue section for the review and summary prompts, unfenced, or {@code ""} when the
    * feature is off, the pull request links no readable issue, or the section could not be built.
    */
-  String resolve(String auth, String owner, String repo, int prNumber, String prBody) {
+  String resolve(
+      String auth, String owner, String repo, int prNumber, String prBody, long installationId) {
     if (provider == null) {
       return "";
     }
@@ -162,7 +163,7 @@ public class TicketContextResolver {
       var tickets =
           provider.linkedTickets(
               new IssueTrackerProvider.TicketLookup(
-                  auth, owner, repo, prNumber, prBody, fromBranch),
+                  auth, owner, repo, prNumber, prBody, fromBranch, installationId),
               maxIssues);
       if (tickets == null || tickets.isEmpty()) {
         return "";

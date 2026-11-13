@@ -17,20 +17,18 @@ package dev.thiagogonzaga.thrillhousebot.github;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.quarkiverse.githubapp.GitHubClientProvider;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.ProcessingException;
-import jakarta.ws.rs.WebApplicationException;
-import java.nio.charset.StandardCharsets;
+import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
+import org.kohsuke.github.GHFileNotFoundException;
+import org.kohsuke.github.GHRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -42,7 +40,6 @@ import org.slf4j.LoggerFactory;
 public class ProjectStackResolver {
 
   private static final Logger log = LoggerFactory.getLogger(ProjectStackResolver.class);
-  private static final String ACCEPT_HEADER = "application/vnd.github+json";
 
   /** Dependency manifests probed at the repository root. Package-private for tests. */
   static final List<String> MANIFEST_PATHS =
@@ -85,34 +82,28 @@ public class ProjectStackResolver {
   // Package-private for tests.
   final ConcurrentHashMap<String, CachedStack> cache = new ConcurrentHashMap<>();
 
-  private final GitHubAuthClient authClient;
-  private final GitHubPullRequestClient prClient;
+  private final GitHubClientProvider clientProvider;
   private final ObjectMapper mapper;
   private final LongSupplier clock;
 
   @Inject
-  public ProjectStackResolver(
-      GitHubAuthClient authClient,
-      @RestClient GitHubPullRequestClient prClient,
-      ObjectMapper mapper) {
-    this(authClient, prClient, mapper, System::currentTimeMillis);
+  public ProjectStackResolver(GitHubClientProvider clientProvider, ObjectMapper mapper) {
+    this(clientProvider, mapper, System::currentTimeMillis);
   }
 
   /** Visible for tests: allows controlling the cache clock. */
   ProjectStackResolver(
-      GitHubAuthClient authClient,
-      GitHubPullRequestClient prClient,
-      ObjectMapper mapper,
-      LongSupplier clock) {
-    this.authClient = authClient;
-    this.prClient = prClient;
+      GitHubClientProvider clientProvider, ObjectMapper mapper, LongSupplier clock) {
+    this.clientProvider = clientProvider;
     this.mapper = mapper;
     this.clock = clock;
   }
 
   /**
    * Resolves the stack summary for a repository, empty string when no manifest is found. Results
-   * are cached per repo — manifests change far less often than PRs arrive.
+   * are cached per repo, since manifests change far less often than PRs arrive, except when a
+   * manifest could not be read: the stack built from the rest is returned uncached so the next
+   * review asks GitHub for the missing one again.
    */
   public String resolve(String owner, String repo, String defaultBranch, long installationId) {
     // Keyed by installation too (#1220): a repository of the same name under another installation
@@ -126,18 +117,33 @@ public class ProjectStackResolver {
       cache.remove(cacheKey, cached);
     }
 
-    var auth = authClient.getAuthHeader(installationId);
+    GHRepository repository;
+    try {
+      repository =
+          clientProvider.getInstallationClient(installationId).getRepository(owner + "/" + repo);
+    } catch (RuntimeException | IOException e) {
+      log.debug("Could not resolve repository {}/{}", owner, repo);
+      return "";
+    }
+
     var sections = new ArrayList<String>();
+    var readFailed = false;
     for (String path : MANIFEST_PATHS) {
       if (sections.size() >= MAX_MANIFESTS) {
         break;
       }
-      fetchManifestSection(auth, owner, repo, path, defaultBranch).ifPresent(sections::add);
+      var read = fetchManifestSection(repository, owner, repo, path, defaultBranch);
+      readFailed |= read.readFailed();
+      if (read.section() != null) {
+        sections.add(read.section());
+      }
     }
 
     String stack = String.join("\n\n", sections);
-    cache.put(cacheKey, new CachedStack(stack, clock.getAsLong() + CACHE_TTL_MS));
-    sweepExpiredEntries();
+    if (!readFailed) {
+      cache.put(cacheKey, new CachedStack(stack, clock.getAsLong() + CACHE_TTL_MS));
+      sweepExpiredEntries();
+    }
     if (!stack.isEmpty()) {
       log.info(
           "Project stack for {}/{}: {} manifest(s), {} chars",
@@ -149,26 +155,47 @@ public class ProjectStackResolver {
     return stack;
   }
 
-  /** One manifest's summarized section, or empty when the file is absent or unusable. */
-  private Optional<String> fetchManifestSection(
-      String auth, String owner, String repo, String path, String defaultBranch) {
+  /**
+   * One manifest's outcome: a summarized {@code section} when the file was read, or {@code
+   * readFailed} when the request itself failed. A failed read is not an answer, so resolve() must
+   * not cache a stack that lacks that manifest.
+   */
+  private record ManifestRead(String section, boolean readFailed) {
+
+    static final ManifestRead ABSENT = new ManifestRead(null, false);
+    static final ManifestRead READ_FAILED = new ManifestRead(null, true);
+
+    static ManifestRead found(String section) {
+      return new ManifestRead(section, false);
+    }
+  }
+
+  /**
+   * Fetches and summarizes one manifest. A missing file (404), a null file or a blank payload is
+   * {@link ManifestRead#ABSENT}, which is a fact worth caching. Any other failure, such as a 5xx or
+   * the 403 secondary rate limit, is {@link ManifestRead#READ_FAILED}: nothing was learned about
+   * the repository, so the caller must not cache a stack that lacks this manifest.
+   */
+  private ManifestRead fetchManifestSection(
+      GHRepository repository, String owner, String repo, String path, String defaultBranch) {
     try {
-      var file = prClient.getFileContent(auth, ACCEPT_HEADER, owner, repo, path, defaultBranch);
-      if (file.content() == null) {
-        // Directories, submodules, and oversized files come back without base64 content.
+      var file = repository.getFileContent(path, defaultBranch);
+      if (file == null) {
         log.debug("No content for manifest at {} in {}/{}", path, owner, repo);
-        return Optional.empty();
+        return ManifestRead.ABSENT;
       }
-      // GitHub wraps base64 content in newlines — the MIME decoder tolerates them.
-      var content =
-          new String(Base64.getMimeDecoder().decode(file.content()), StandardCharsets.UTF_8);
-      if (content.isBlank()) {
-        return Optional.empty();
+      var content = file.getContent();
+      if (content == null || content.isBlank()) {
+        log.debug("No content for manifest at {} in {}/{}", path, owner, repo);
+        return ManifestRead.ABSENT;
       }
-      return Optional.of(summarize(path, content));
-    } catch (WebApplicationException | ProcessingException | IllegalArgumentException _) {
-      log.debug("No usable manifest at {} for {}/{}", path, owner, repo);
-      return Optional.empty();
+      return ManifestRead.found(summarize(path, content));
+    } catch (GHFileNotFoundException _) {
+      log.debug("No manifest at {} for {}/{}", path, owner, repo);
+      return ManifestRead.ABSENT;
+    } catch (RuntimeException | IOException e) {
+      log.warn("Could not read manifest {} for {}/{}: {}", path, owner, repo, e.toString());
+      return ManifestRead.READ_FAILED;
     }
   }
 
