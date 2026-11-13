@@ -885,17 +885,17 @@ public class DiffBudgetPlanner {
       int diffBudgetTokens,
       Rendered rendered) {
     var tokens = promptTokens(section);
-    if (tokens > diffBudgetTokens) {
-      var clipped = clipToBudget(section, diffBudgetTokens);
-      if (clipped == null) {
-        recordName(rendered.unclippable(), file.filename());
-        return;
-      }
-      recordName(rendered.clipped(), file.filename());
-      section = clipped;
-      tokens = promptTokens(clipped);
+    if (tokens <= diffBudgetTokens) {
+      rendered.sized().add(new Sized(file, section, tokens));
+      return;
     }
-    rendered.sized().add(new Sized(file, section, tokens));
+    var clipped = clipToBudget(section, tokens, diffBudgetTokens);
+    if (clipped == null) {
+      recordName(rendered.unclippable(), file.filename());
+      return;
+    }
+    recordName(rendered.clipped(), file.filename());
+    rendered.sized().add(new Sized(file, clipped.text(), clipped.tokens()));
   }
 
   /**
@@ -993,12 +993,15 @@ public class DiffBudgetPlanner {
    * bounded loop, since {@link ReviewDiffFormatter#truncateSection} is monotonic in line count.
    * Returns {@code null} when even a one-line clip stays over budget (pathologically small
    * budgets): the caller must omit the file by name rather than present a stub as coverage.
+   *
+   * <p>{@code sectionTokens} is the size the caller already measured, and the result carries the
+   * clip's measured size, so each candidate text is annotated and counted once.
    */
-  private String clipToBudget(String section, int budgetTokens) {
+  private Clip clipToBudget(String section, int sectionTokens, int budgetTokens) {
     var target = Math.max(1, (int) (budgetTokens * 0.9));
     var lines = ReviewDiffFormatter.lineCount(section);
     var clipped = section;
-    var clippedTokens = promptTokens(clipped);
+    var clippedTokens = sectionTokens;
     for (var i = 0; i < 8 && clippedTokens > budgetTokens; i++) {
       var ratio = Math.min(0.95, (double) target / Math.max(1, clippedTokens));
       lines = Math.max(1, (int) (lines * ratio));
@@ -1011,6 +1014,9 @@ public class DiffBudgetPlanner {
           budgetTokens);
       return null;
     }
-    return clipped;
+    return new Clip(clipped, clippedTokens);
   }
+
+  /** A clipped section and its size in the review prompt. */
+  private record Clip(String text, int tokens) {}
 }

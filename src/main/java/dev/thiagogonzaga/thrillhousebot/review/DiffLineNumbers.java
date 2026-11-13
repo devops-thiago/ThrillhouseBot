@@ -24,6 +24,9 @@ public final class DiffLineNumbers {
   private static final String FENCE_OPEN = "```diff";
   private static final String FENCE = "```";
 
+  /** Room per line for its number and space: up to seven digits, so large files rarely regrow. */
+  private static final int NUMBER_ROOM = 8;
+
   /** How far a copied run's first number may be from the line the finding cites. */
   private static final int RUN_SLACK = 3;
 
@@ -42,7 +45,7 @@ public final class DiffLineNumbers {
       return diff;
     }
     var lines = diff.split("\n", -1);
-    var out = new StringBuilder(diff.length() + lines.length * 4);
+    var out = new StringBuilder(diff.length() + lines.length * NUMBER_ROOM);
     boolean inBlock = false;
     int next = -1;
     for (int i = 0; i < lines.length; i++) {
