@@ -44,6 +44,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiApiKeyRejectedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
@@ -810,6 +811,58 @@ class FindingPipelineTest {
   }
 
   @Test
+  void multiCallFailsTheReviewOnABatchWhoseKeyWasRejected() {
+    // #1329: the sequential retry would send the same key, and disclosing the files would post a
+    // review that read nothing. The review fails with the rejection instead.
+    var session =
+        ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 1, "Big PR", "sha");
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var rejection =
+        AiApiKeyRejectedException.classify(
+                new dev.langchain4j.exception.HttpException(401, "Unauthorized"))
+            .orElseThrow();
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt())).thenThrow(rejection);
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    var ctx = reviewContext();
+    var plan = multiBatchPlan();
+    var resolver = new DiffLineResolver(Map.of());
+
+    assertSame(
+        rejection,
+        assertThrows(
+            AiApiKeyRejectedException.class,
+            () -> pipeline.run(session, template, ctx, plan, resolver, ReviewEvidence.NONE)));
+
+    verify(aiReviewService, times(1)).reviewBatch(eq(session), any(), eq(1), anyInt());
+    verify(aiReviewService, never()).summarize(any(), any());
+  }
+
+  @Test
+  void aBatchRetryRejectedForItsKeyFailsTheReview() {
+    var session =
+        ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 1, "Big PR", "sha");
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
+        .thenThrow(new AiReviewException("connection reset", 3, null))
+        .thenThrow(new dev.langchain4j.exception.AuthenticationException("revoked"));
+    when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("b.java", "B")), List.of(), null));
+    var ctx = reviewContext();
+    var plan = multiBatchPlan();
+    var resolver = new DiffLineResolver(Map.of());
+
+    var thrown =
+        assertThrows(
+            AiApiKeyRejectedException.class,
+            () -> pipeline.run(session, template, ctx, plan, resolver, ReviewEvidence.NONE));
+
+    assertEquals("The AI provider rejected the API key; check AI_API_KEY", thrown.getMessage());
+    verify(aiReviewService, times(2)).reviewBatch(eq(session), any(), eq(1), anyInt());
+    verify(aiReviewService, never()).summarize(any(), any());
+  }
+
+  @Test
   void multiCallDisclosesABatchWhoseCallGaveUpOnItsTimedOutAttempts() {
     // #862: a call the AI service ended on its timed-out attempts is an ordinary spent call here.
     // The sequential pass still gives the batch the one fresh attempt it gives any transient
@@ -1040,6 +1093,82 @@ class FindingPipelineTest {
         SummaryDegradation.RESPONSE_CUT,
         plan.summaryDegradation(),
         "a salvaged summary is still a shortened one — the cut must be recorded for disclosure");
+  }
+
+  @Test
+  void aSalvagedSummaryLosesItsCountAndSizeSentencesAndTakesItsCountsFromTheFindings() {
+    // #1323: the salvaged summary skips the overview screen, so its counts are screened apart.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    var partial =
+        "{\"findings\":[],\"summary\":{\"total_findings\":9,\"critical\":4,\"high\":5,"
+            + "\"medium\":0,\"low\":0,\"overall_assessment\":\"Solid. One medium finding"
+            + " remains.\",\"pr_purpose\":\"Adds a cache. It is +555 lines across 6"
+            + " directories.\",\"description_gaps\":[]},\"previous_findings_status\":[{\"id\":7";
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenThrow(new AiResponseTruncatedException("finish_reason=length", partial, true));
+
+    var result =
+        pipeline.run(
+            session,
+            template,
+            ctx,
+            multiBatchPlan(),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    var summary = result.summary();
+    assertEquals("Adds a cache.", summary.prPurpose());
+    assertEquals("Solid.", summary.overallAssessment());
+    assertEquals(2, summary.totalFindings());
+    assertEquals(0, summary.critical());
+    assertEquals(0, summary.high());
+    assertEquals(2, summary.medium());
+    assertTrue(
+        session.getAiResponseJson().contains("\"total_findings\":2"), session.getAiResponseJson());
+  }
+
+  @Test
+  void anAnsweredSummaryIsStoredWithCountsTakenFromTheFindingsAndNoCountSentence() {
+    // #1323: #1315 round 4 said "One medium finding remains" over 17 open findings, and the
+    // summary call's own totals were stored as written.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(aiReviewService.reviewBatch(eq(session), any(), anyInt(), anyInt()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    var summary =
+        new ReviewResponse.Summary(
+            17,
+            1,
+            16,
+            0,
+            0,
+            "17 findings remain open.",
+            "Adds a cache layer. One medium finding remains.",
+            List.of());
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), summary));
+
+    var result =
+        pipeline.run(
+            session,
+            template,
+            ctx,
+            multiBatchPlan(),
+            new DiffLineResolver(Map.of()),
+            ReviewEvidence.NONE);
+
+    assertEquals("Adds a cache layer.", result.summary().prPurpose());
+    assertEquals("", result.summary().overallAssessment());
+    assertEquals(2, result.summary().totalFindings());
+    assertEquals(0, result.summary().high());
+    assertEquals(2, result.summary().medium());
+    assertTrue(
+        session.getAiResponseJson().contains("\"total_findings\":2"), session.getAiResponseJson());
   }
 
   @Test

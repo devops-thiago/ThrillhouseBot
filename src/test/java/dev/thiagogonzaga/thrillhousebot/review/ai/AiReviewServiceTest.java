@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.langchain4j.exception.AuthenticationException;
 import dev.langchain4j.exception.HttpException;
 import dev.langchain4j.exception.InternalServerException;
 import dev.langchain4j.exception.ModelNotFoundException;
@@ -2071,6 +2072,152 @@ class AiReviewServiceTest {
     assertTrue(AiReviewService.isProviderFailure(new ModelNotFoundException("gone")));
     assertFalse(AiReviewService.isProviderFailure(new HttpException(400, "Bad Request")));
     assertFalse(AiReviewService.isProviderFailure(new RuntimeException("connection reset")));
+  }
+
+  /**
+   * #1329: a rejected key is sent again by every attempt and by the fallback model, so the call
+   * ends on its first attempt with no wait, no retry event, no repair and no fallback move.
+   */
+  @Test
+  void aRejectedKeyEndsTheReviewCallOnItsFirstAttempt() {
+    for (var rejection :
+        List.<RuntimeException>of(
+            new HttpException(401, "Incorrect API key provided: sk-abc***"),
+            new HttpException(403, "Forbidden"),
+            new AuthenticationException("invalid key"),
+            new RuntimeException("wrapped", new HttpException(401, "Unauthorized")))) {
+      reset(prReviewer, broadcaster, repairService);
+      when(routing.fallbackModel()).thenReturn(Optional.of("backup"));
+      var models = recordReviewModels(new ErrorTokenStream(rejection));
+      var spiedService = spy(service);
+      var session = reviewSession();
+
+      var thrown =
+          assertThrows(
+              AiApiKeyRejectedException.class, () -> spiedService.review(session, PROMPT_INPUTS));
+
+      assertTrue(
+          thrown.getMessage().startsWith("The AI provider rejected the API key"),
+          thrown.getMessage());
+      assertTrue(thrown.getMessage().endsWith("check AI_API_KEY"), thrown.getMessage());
+      assertFalse(thrown.getMessage().contains("sk-abc"), "the provider body is never echoed");
+      assertEquals(List.of("null"), models, "one attempt, never on the fallback model");
+      verify(spiedService, never()).sleep(any(Duration.class));
+      verifyNoInteractions(repairService);
+      verify(broadcaster, never())
+          .broadcast(
+              argThat(
+                  event -> SessionEventBroadcaster.SessionEvent.TYPE_RETRY.equals(event.type())));
+    }
+  }
+
+  @Test
+  void aFailedCallGetsThreeAttemptsByDefault() throws Exception {
+    // #1329: down from 5, in the config interface and in the shipped properties alike.
+    var declared =
+        ThrillhouseConfig.ReviewConfig.class
+            .getMethod("maxAiRetries")
+            .getAnnotation(io.smallrye.config.WithDefault.class)
+            .value();
+    assertEquals("3", declared);
+    var shipped = new java.util.Properties();
+    try (var in =
+        java.nio.file.Files.newInputStream(
+            java.nio.file.Path.of("src/main/resources/application.properties"))) {
+      shipped.load(in);
+    }
+    assertEquals("3", shipped.getProperty("thrillhousebot.review.max-ai-retries"));
+  }
+
+  @Test
+  void aRejectedKeyNamesItsStatusWhenTheProviderSentOne() {
+    assertEquals(
+        "The AI provider rejected the API key (HTTP 403); check AI_API_KEY",
+        AiApiKeyRejectedException.classify(new HttpException(403, "Forbidden"))
+            .orElseThrow()
+            .getMessage());
+    assertEquals(
+        "The AI provider rejected the API key; check AI_API_KEY",
+        AiApiKeyRejectedException.classify(new AuthenticationException("bad key"))
+            .orElseThrow()
+            .getMessage());
+    var existing = new AiApiKeyRejectedException("rejected", null);
+    assertSame(
+        existing,
+        AiApiKeyRejectedException.classify(new RuntimeException("wrapped", existing))
+            .orElseThrow());
+  }
+
+  @Test
+  void onlyA401A403OrAnAuthenticationFailureIsARejectedKey() {
+    assertTrue(AiApiKeyRejectedException.isRejectedKey(new HttpException(401, "Unauthorized")));
+    assertTrue(AiApiKeyRejectedException.isRejectedKey(new AuthenticationException("bad key")));
+    assertFalse(AiApiKeyRejectedException.isRejectedKey(new HttpException(400, "Bad Request")));
+    assertFalse(AiApiKeyRejectedException.isRejectedKey(new HttpException(429, "slow down")));
+    assertFalse(AiApiKeyRejectedException.isRejectedKey(new HttpException(500, "Server Error")));
+    assertFalse(AiApiKeyRejectedException.isRejectedKey(new RuntimeException("connection reset")));
+    assertFalse(AiApiKeyRejectedException.findIn(new RuntimeException("x")).isPresent());
+  }
+
+  @Test
+  void aRejectedKeyEndsTheSummaryCallOnItsFirstAttempt() {
+    ReviewSession session = reviewSession();
+    when(prSummarizer.summarizeStream(
+            anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(new ErrorTokenStream(new HttpException(401, "Unauthorized")));
+    var spiedService = spy(service);
+    var inputs = new AiReviewService.SummaryInputs("ctx", "[]", "files", "", "");
+
+    var thrown =
+        assertThrows(
+            AiApiKeyRejectedException.class, () -> spiedService.summarize(session, inputs));
+
+    assertEquals(1, thrown.attempts());
+    verify(prSummarizer, times(1))
+        .summarizeStream(anyString(), anyString(), anyString(), anyString(), anyString());
+    verify(spiedService, never()).sleep(any(Duration.class));
+  }
+
+  @Test
+  void aRepairRejectedForItsKeyEndsTheCallInsteadOfTakingTheFullRetry() {
+    ReviewSession session = reviewSession();
+    stubReviewStreams(new FakeTokenStream("not json"), new FakeTokenStream("{\"findings\":[]}"));
+    when(parser.parse(anyString()))
+        .thenThrow(new IllegalArgumentException("Model response is not valid review JSON"));
+    var rejection =
+        AiApiKeyRejectedException.classify(new HttpException(401, "Unauthorized")).orElseThrow();
+    when(repairService.repair(anyLong(), any(), anyString(), any())).thenThrow(rejection);
+    var spiedService = spy(service);
+
+    assertSame(
+        rejection,
+        assertThrows(
+            AiApiKeyRejectedException.class, () -> spiedService.review(session, PROMPT_INPUTS)));
+
+    verifyReviewStreamCalls(1);
+    verify(spiedService, never()).sleep(any(Duration.class));
+  }
+
+  @Test
+  void otherFailuresStillTakeTheRetryBudget() {
+    for (var failure :
+        List.<RuntimeException>of(
+            new HttpException(500, "Internal Server Error"),
+            new RateLimitException(new HttpException(429, "slow down")),
+            new HttpException(400, "Bad Request"))) {
+      reset(prReviewer);
+      var models = recordReviewModels(new ErrorTokenStream(failure));
+      var spiedService = spy(service);
+      doNothing().when(spiedService).sleep(any(Duration.class));
+      var session = reviewSession();
+
+      var thrown =
+          assertThrows(AiReviewException.class, () -> spiedService.review(session, PROMPT_INPUTS));
+
+      assertFalse(thrown instanceof AiApiKeyRejectedException);
+      assertEquals(3, models.size(), "the whole budget of three attempts");
+      verify(spiedService, times(2)).sleep(any(Duration.class));
+    }
   }
 
   /** Runs a two-attempt review whose first stream is {@code failing}; returns the waits between. */

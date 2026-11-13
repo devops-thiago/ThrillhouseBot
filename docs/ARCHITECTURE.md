@@ -209,11 +209,14 @@ output cap (`REVIEW_CONCISE_MAX_OUTPUT_TOKENS`, default 8192) and reasoning sett
 
 Review and summary calls stream from the provider. Only the single-call review streams tokens to
 the dashboard; a batch emits `review.batch` progress events instead. Batches run on virtual
-threads. A batch that failed for a reason other than a cut response, a context-window rejection or
-the spend ceiling is retried once, one batch at a time, after the parallel pass.
+threads. A batch that failed for a reason other than a cut response, a context-window rejection,
+a rejected API key or the spend ceiling is retried once, one batch at a time, after the parallel
+pass.
 
 A failed call attempt is retried with backoff, up to `thrillhousebot.review.max-ai-retries`
-attempts (default 5). A response cut at its length cap is not retried, because the same call would
+attempts (default 3). A provider rejecting the API key (HTTP 401 or 403) is not retried and does
+not move to `AI_FALLBACK_MODEL`: the call fails at once, and the review fails with a reason that
+says the key was rejected. A response cut at its length cap is not retried, because the same call would
 be cut the same way: the findings completed before the cut are kept and the affected files are
 disclosed. A length stop with no content (reasoning used the whole cap) is repeated once at a
 lower effort: `low` when reasoning is enabled (no repeat on a lane already at `low` or `none`),
