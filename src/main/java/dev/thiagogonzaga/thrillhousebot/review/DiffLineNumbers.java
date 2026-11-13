@@ -97,10 +97,10 @@ public final class DiffLineNumbers {
    * consecutively, which is what a copied run of the diff looks like and plain code practically
    * never does. The removed lines and markers are dropped, so a block copied across a change keeps
    * only its new-side code. Blank lines before or inside the run are kept as they are. The run must
-   * also start where the finding points: a single numbered line only at {@code citedLine}, since on
-   * its own {@code 1 + 2} is as likely to be code, and a longer run within {@link #RUN_SLACK} lines
-   * of it, so a quote of a numbered list elsewhere in a data file is left alone. Anything else is
-   * returned unchanged.
+   * also reach where the finding points: a single numbered line only at {@code citedLine}, since on
+   * its own {@code 1 + 2} is as likely to be code, and a longer run when its span, widened by
+   * {@link #RUN_SLACK} lines, holds it, so a quote of a numbered list elsewhere in a data file is
+   * left alone. Anything else is returned unchanged.
    */
   public static String stripLeaked(String quote, int citedLine) {
     if (quote == null || quote.isBlank() || !Character.isDigit(quote.stripLeading().charAt(0))) {
@@ -153,6 +153,7 @@ public final class DiffLineNumbers {
       expected = value + 1;
     }
     var slack = numbered > 1 ? RUN_SLACK : 0;
-    return citedLine > 0 && Math.abs(first - citedLine) <= slack;
+    var last = expected - 1;
+    return citedLine > 0 && citedLine >= first - slack && citedLine <= last + slack;
   }
 }

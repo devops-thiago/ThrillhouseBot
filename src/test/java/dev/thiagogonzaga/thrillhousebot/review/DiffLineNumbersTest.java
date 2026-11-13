@@ -150,6 +150,17 @@ class DiffLineNumbersTest {
       assertSame(list, DiffLineNumbers.stripLeaked(list, 40));
       assertSame(list, DiffLineNumbers.stripLeaked(list, -1));
       assertEquals("item one\nitem two", DiffLineNumbers.stripLeaked(list, 4));
+      assertSame(list, DiffLineNumbers.stripLeaked(list, 6));
+    }
+
+    @Test
+    void aRunEndingAtOrAroundTheCitedLineIsStripped() {
+      var run = "45 +a();\n46 +b();\n47 +c();\n48 +d();\n49 +e();";
+      var code = "a();\nb();\nc();\nd();\ne();";
+      assertEquals(code, DiffLineNumbers.stripLeaked(run, 50));
+      assertEquals(code, DiffLineNumbers.stripLeaked(run, 47));
+      assertEquals(code, DiffLineNumbers.stripLeaked(run, 52));
+      assertSame(run, DiffLineNumbers.stripLeaked(run, 53));
     }
 
     @Test
