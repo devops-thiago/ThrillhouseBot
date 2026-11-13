@@ -102,7 +102,9 @@ class DiffLineNumbersTest {
 
     @Test
     void everyNumberAgreesWithTheResolver() {
-      var patch = "@@ -5,3 +7,4 @@\n keep\n-gone\n+one\n+two\n keep2\n@@ -40 +43,2 @@\n+tail\n end";
+      // The empty line is one the formatter or a trimmed patch can leave: neither side counts it.
+      var patch =
+          "@@ -5,3 +7,4 @@\n keep\n-gone\n+one\n\n+two\n keep2\n@@ -40 +43,2 @@\n+tail\n end";
       var resolver = new DiffLineResolver(Map.of("F.java", patch));
       var numbered = Pattern.compile("^(\\d+) [+ ](.*)$");
       int checked = 0;
