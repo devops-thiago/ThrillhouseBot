@@ -28,8 +28,8 @@
              parsing, event dispatch). Built against Quarkus 3.36.x, forward compatible with
              this platform. Bump only together with the quarkus-github-api it pulls. -->
         <quarkus-github-app.version>2.16.0</quarkus-github-app.version>
-        <opentelemetry.version>1.68.0</opentelemetry.version>
-        <opentelemetry.alpha.version>1.68.0-alpha</opentelemetry.alpha.version>
+        <opentelemetry.version>1.62.0</opentelemetry.version>
+        <opentelemetry.alpha.version>1.62.0-alpha</opentelemetry.alpha.version>
         <!-- Keep in lockstep with the prometheus-metrics version opentelemetry-exporter-prometheus ships -->
         <prometheus-metrics.version>1.10.0</prometheus-metrics.version>
         <jackson-bom.version>2.23.0</jackson-bom.version>
