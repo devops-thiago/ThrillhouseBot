@@ -21,14 +21,18 @@ import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiTruncated;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.langchain4j.exception.AuthenticationException;
+import dev.langchain4j.exception.HttpException;
 import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.service.Result;
@@ -218,6 +222,27 @@ class ResponseRepairServiceTest {
     when(reviewRepairer.repair(anyString(), anyString(), anyString()))
         .thenThrow(new IllegalStateException("provider down"));
     assertTrue(service.repair(SESSION, ModelLane.ACTIVE, BROKEN_REVIEW, refusal()).isEmpty());
+  }
+
+  /** #1329: the full retry would send the same key, so the rejection is the caller's to end on. */
+  @Test
+  void aRepairRejectedForItsKeyIsThrownAfterOneCall() {
+    when(reviewRepairer.repair(anyString(), anyString(), anyString()))
+        .thenThrow(new HttpException(401, "Unauthorized"));
+    var parseFailure = refusal();
+    var thrown =
+        assertThrows(
+            AiApiKeyRejectedException.class,
+            () -> service.repair(SESSION, ModelLane.ACTIVE, BROKEN_REVIEW, parseFailure));
+    assertEquals(
+        "The AI provider rejected the API key (HTTP 401); check AI_API_KEY", thrown.getMessage());
+    verify(reviewRepairer, times(1)).repair(anyString(), anyString(), anyString());
+
+    when(summaryRepairer.repair(anyString(), anyString(), anyString()))
+        .thenThrow(new AuthenticationException("bad key"));
+    assertThrows(
+        AiApiKeyRejectedException.class, () -> service.fileSummaries(SESSION, "src/a.py does x"));
+    verify(summaryRepairer, times(1)).repair(anyString(), anyString(), anyString());
   }
 
   @Test

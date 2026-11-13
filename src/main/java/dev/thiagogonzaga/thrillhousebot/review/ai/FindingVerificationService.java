@@ -2121,24 +2121,30 @@ public class FindingVerificationService {
     };
   }
 
-  /** Recomputes the summary counts after filtering, preserving the prose fields. */
+  /**
+   * Recomputes the summary counts from {@code findings}, preserving every other field; {@code
+   * original} itself when its counts already match.
+   */
   public static ReviewResponse.Summary recount(
       ReviewResponse.Summary original, List<ReviewResponse.Finding> findings) {
     if (original == null) {
       return null;
     }
-    return new ReviewResponse.Summary(
-        findings.size(),
-        countRisk(findings, RiskLevel.CRITICAL),
-        countRisk(findings, RiskLevel.HIGH),
-        countRisk(findings, RiskLevel.MEDIUM),
-        countRisk(findings, RiskLevel.LOW),
-        original.overallAssessment(),
-        original.prPurpose(),
-        original.descriptionGaps(),
-        original.suggestedLabels(),
-        original.fileSummaries(),
-        original.walkthroughDiagram());
+    var recounted =
+        new ReviewResponse.Summary(
+            findings.size(),
+            countRisk(findings, RiskLevel.CRITICAL),
+            countRisk(findings, RiskLevel.HIGH),
+            countRisk(findings, RiskLevel.MEDIUM),
+            countRisk(findings, RiskLevel.LOW),
+            original.overallAssessment(),
+            original.prPurpose(),
+            original.descriptionGaps(),
+            original.suggestedLabels(),
+            original.fileSummaries(),
+            original.walkthroughDiagram(),
+            original.addressedGaps());
+    return recounted.equals(original) ? original : recounted;
   }
 
   private static int countRisk(List<ReviewResponse.Finding> findings, RiskLevel risk) {

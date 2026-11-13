@@ -312,7 +312,7 @@ export default function SessionsPage() {
                 {parsedAi?.summary && (
                   <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>
                     {parsedAi.summary.overall_assessment ||
-                      `${parsedAi.summary.total_findings ?? parsedAi.findings?.length ?? 0} findings`}
+                      findingTotalLabel(detail, parsedAi.findings)}
                   </p>
                 )}
 
@@ -380,6 +380,19 @@ function Meta({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+/**
+ * The session's finding total as the risk table it posted counts it: the severity counts stored
+ * when the review completed, which cover every finding still open, not only this round's. A
+ * session that did not complete posted no table, so its stored findings are counted instead.
+ */
+function findingTotalLabel(detail: SessionDetail, findings?: unknown[]) {
+  const total =
+    detail.status === 'completed'
+      ? detail.criticalFindings + detail.highFindings + detail.mediumFindings + detail.lowFindings
+      : (findings?.length ?? 0);
+  return `${total} ${total === 1 ? 'finding' : 'findings'}`;
+}
+
 function parseAiResponse(raw?: string | null) {
   if (!raw) return null;
   try {
@@ -394,7 +407,6 @@ function parseAiResponse(raw?: string | null) {
         suggestion_new?: string;
       }>;
       summary?: {
-        total_findings?: number;
         overall_assessment?: string;
       };
     };

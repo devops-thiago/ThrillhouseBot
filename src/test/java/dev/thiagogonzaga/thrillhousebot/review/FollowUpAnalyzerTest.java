@@ -2330,6 +2330,29 @@ class FollowUpAnalyzerTest {
         "a round that legitimately found nothing did persist a response");
   }
 
+  /**
+   * #1323: the summary call is no longer asked for its totals, so a stored round may lack them,
+   * while a round stored before still carries the model's. Both read back with their overview.
+   */
+  @Test
+  void aStoredSummaryReadsBackWithOrWithoutItsCountFields() {
+    var old =
+        analyzer.parseResponse(
+            "{\"findings\":[],\"previous_findings_status\":[],\"summary\":{\"total_findings\":3,"
+                + "\"critical\":0,\"high\":1,\"medium\":2,\"low\":0,\"overall_assessment\":\"ok\","
+                + "\"pr_purpose\":\"Adds a cache.\"}}");
+    var current =
+        analyzer.parseResponse(
+            "{\"findings\":[],\"previous_findings_status\":[],\"summary\":{"
+                + "\"overall_assessment\":\"ok\",\"pr_purpose\":\"Adds a cache.\"}}");
+
+    assertEquals(3, old.summary().totalFindings());
+    assertEquals(2, old.summary().medium());
+    assertEquals("Adds a cache.", old.summary().prPurpose());
+    assertEquals(0, current.summary().totalFindings());
+    assertEquals("Adds a cache.", current.summary().prPurpose());
+  }
+
   @Test
   void toStatusesShouldReturnEmptyForNull() {
     assertTrue(analyzer.toStatuses(null).isEmpty());
