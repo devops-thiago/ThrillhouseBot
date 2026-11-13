@@ -305,6 +305,8 @@ class DiffLineResolverBothSidesTest {
 
       assertTrue(resolver.isFindingPresent(FILE, "verify(client).close();", Side.LEFT));
       assertFalse(resolver.isFindingPresent(FILE, "verify(client).close();", Side.RIGHT));
+      // Context the patch keeps is not removed code, and no head file is read for it here.
+      assertFalse(resolver.isFindingPresent(FILE, "keep();", Side.LEFT));
     }
 
     @Test
