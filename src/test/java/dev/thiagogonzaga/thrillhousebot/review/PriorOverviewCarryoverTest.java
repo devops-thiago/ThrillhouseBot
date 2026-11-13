@@ -341,6 +341,50 @@ class PriorOverviewCarryoverTest {
     assertFalse(PriorOverviewCarryover.carried(carried, context(List.of(), true)));
   }
 
+  /** #1323: a round stored before the count screen ran wrote "One medium finding remains". */
+  private static final ReviewResponse.Summary PRIOR_WITH_COUNT =
+      new ReviewResponse.Summary(
+          1,
+          0,
+          0,
+          1,
+          0,
+          "ok",
+          "Adds a cache layer in front of the store. One medium finding remains.",
+          List.of(),
+          List.of(),
+          FILES,
+          null,
+          List.of());
+
+  @Test
+  void aCarriedPurposeLosesItsCountSentences() {
+    var ctx = context(List.of(round(PRIOR_WITH_COUNT)), true);
+
+    var whole = PriorOverviewCarryover.fill(null, ctx);
+    var bare = new ReviewResponse.Summary(0, 0, 0, 0, 0, null, null, List.of());
+    var filled = PriorOverviewCarryover.fill(bare, ctx);
+
+    assertEquals("Adds a cache layer in front of the store.", whole.prPurpose());
+    assertEquals("Adds a cache layer in front of the store.", filled.prPurpose());
+    // The banner still reads the screened purpose as the previous round's.
+    assertTrue(PriorOverviewCarryover.carried(whole, ctx));
+  }
+
+  @Test
+  void aCarriedPurposeOfCountsAloneIsNotTakenOverAnEmptiedOne() {
+    var prior =
+        new ReviewResponse.Summary(
+            1, 0, 0, 1, 0, "ok", "17 findings remain open.", List.of(), List.of(), List.of(), null);
+    var current =
+        new ReviewResponse.Summary(
+            0, 0, 0, 0, 0, null, "", List.of(), List.of(), FILES, null, List.of());
+
+    var kept = PriorOverviewCarryover.fill(current, context(List.of(round(prior)), true));
+
+    assertSame(current, kept);
+  }
+
   @Test
   void aMovedHeadKeepsTheDegradedShape() {
     assertNull(PriorOverviewCarryover.fill(null, context(List.of(round(PRIOR)), false)));
