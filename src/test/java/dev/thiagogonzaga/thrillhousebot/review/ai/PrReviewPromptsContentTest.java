@@ -1866,6 +1866,10 @@ class PrReviewPromptsContentTest {
         PrReviewPrompts.CORE_FINDING_FIELDS_AND_SEVERITY,
         "the leading line number",
         "quotes leave the column out");
+    assertContains(
+        PrReviewPrompts.CORE_FINDING_FIELDS_AND_SEVERITY,
+        "which have no number, use the number of the next",
+        "a finding on removed lines still has a line to read");
   }
 
   @Test

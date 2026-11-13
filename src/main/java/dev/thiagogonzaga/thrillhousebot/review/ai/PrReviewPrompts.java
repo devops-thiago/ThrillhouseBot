@@ -376,7 +376,10 @@ public final class PrReviewPrompts {
             - confidence: "high" | "medium" | "low" — how verifiable the issue is (see calibration rules)
             - file: path relative to repo root
             - line: the line number the diff shows at the start of the first flagged line
-              (integer). Read it from the diff; never count lines from a hunk header.
+              (integer). Read it from the diff; never count lines from a hunk header. When the
+              flagged code is on removed lines, which have no number, use the number of the next
+              numbered line after them in the same hunk, or the closest one before them when none
+              follows.
             - title: short summary (max 100 chars)
             - description: detailed explanation
             - suggestion_old: the EXACT current code to replace (full lines, no backticks, without
