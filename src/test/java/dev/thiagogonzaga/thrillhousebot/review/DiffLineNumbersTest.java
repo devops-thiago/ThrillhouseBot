@@ -135,6 +135,16 @@ class DiffLineNumbersTest {
     }
 
     @Test
+    void aRunCopiedAcrossAChangeKeepsOnlyItsNewSideCode() {
+      assertEquals(
+          "int a;\nint c;", DiffLineNumbers.stripLeaked("11  int a;\n-int b;\n12 +int c;", 11));
+      assertEquals(
+          "x\ny", DiffLineNumbers.stripLeaked("3 +x\n\\ No newline at end of file\n4 +y", 3));
+      var listWithDash = "1  item one\n- note\nplain";
+      assertSame(listWithDash, DiffLineNumbers.stripLeaked(listWithDash, 1));
+    }
+
+    @Test
     void aRunIsStrippedOnlyNearTheCitedLine() {
       var list = "1  item one\n2  item two";
       assertSame(list, DiffLineNumbers.stripLeaked(list, 40));

@@ -1,5 +1,6 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import java.util.ArrayList;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -79,9 +80,11 @@ public final class DiffLineNumbers {
 
   /**
    * The quote without the line numbers and diff markers the model copied from the annotated diff.
-   * Applied only when every non-blank line starts with a number, a space and a marker, and the
-   * numbers run consecutively, which is what a copied run of the diff looks like and plain code
-   * practically never does. Blank lines before or inside the run are kept as they are. The run must
+   * Applied only when every non-blank line starts with a number, a space and a marker, or is an
+   * unnumbered removed line or "no newline" marker of the annotated diff, and the numbers run
+   * consecutively, which is what a copied run of the diff looks like and plain code practically
+   * never does. The removed lines and markers are dropped, so a block copied across a change keeps
+   * only its new-side code. Blank lines before or inside the run are kept as they are. The run must
    * also start where the finding points: a single numbered line only at {@code citedLine}, since on
    * its own {@code 1 + 2} is as likely to be code, and a longer run within {@link #RUN_SLACK} lines
    * of it, so a quote of a numbered list elsewhere in a data file is left alone. Anything else is
@@ -95,15 +98,21 @@ public final class DiffLineNumbers {
     if (!isCopiedRun(lines, citedLine)) {
       return quote;
     }
-    var out = new StringBuilder(quote.length());
-    for (int i = 0; i < lines.length; i++) {
-      var number = LEAKED_NUMBER.matcher(lines[i]);
-      out.append(number.lookingAt() ? lines[i].substring(number.end()) : lines[i]);
-      if (i < lines.length - 1) {
-        out.append('\n');
+    var kept = new ArrayList<String>(lines.length);
+    for (var line : lines) {
+      var number = LEAKED_NUMBER.matcher(line);
+      if (number.lookingAt()) {
+        kept.add(line.substring(number.end()));
+      } else if (!isUnnumberedDiffLine(line)) {
+        kept.add(line);
       }
     }
-    return out.toString();
+    return String.join("\n", kept);
+  }
+
+  /** A removed line or a "no newline" marker, which the annotated diff leaves unnumbered. */
+  private static boolean isUnnumberedDiffLine(String line) {
+    return line.startsWith("-") || line.startsWith("\\");
   }
 
   /**
@@ -120,6 +129,9 @@ public final class DiffLineNumbers {
       }
       var number = LEAKED_NUMBER.matcher(line);
       if (!number.lookingAt()) {
+        if (isUnnumberedDiffLine(line)) {
+          continue;
+        }
         return false;
       }
       int value = Integer.parseInt(number.group(1));
