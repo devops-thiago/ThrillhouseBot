@@ -416,7 +416,12 @@ public final class DiffLineResolver {
     return lines;
   }
 
-  /** Returns the requested line or the nearest commentable line in the same file diff. */
+  /**
+   * The requested line when the diff can take a comment on it, else the nearest commentable line no
+   * more than {@link #NEAR_CITED_LINE} lines away (#1320). A line further from every hunk is empty
+   * rather than moved into some other hunk: the caller files the finding on the file, where it
+   * cannot read as a remark about code it never described.
+   */
   public OptionalInt resolveRightSideLine(String file, int requestedLine) {
     if (file == null || requestedLine <= 0) {
       return OptionalInt.empty();
@@ -430,14 +435,12 @@ public final class DiffLineResolver {
     }
     var floor = lines.floor(requestedLine);
     var ceiling = lines.ceiling(requestedLine);
-    if (floor == null) {
-      return ceiling != null ? OptionalInt.of(ceiling) : OptionalInt.empty();
+    int floorDistance = floor == null ? Integer.MAX_VALUE : requestedLine - floor;
+    int ceilingDistance = ceiling == null ? Integer.MAX_VALUE : ceiling - requestedLine;
+    int nearest = floorDistance <= ceilingDistance ? floorDistance : ceilingDistance;
+    if (nearest > NEAR_CITED_LINE) {
+      return OptionalInt.empty();
     }
-    if (ceiling == null) {
-      return OptionalInt.of(floor);
-    }
-    var floorDistance = requestedLine - floor;
-    var ceilingDistance = ceiling - requestedLine;
     return OptionalInt.of(floorDistance <= ceilingDistance ? floor : ceiling);
   }
 

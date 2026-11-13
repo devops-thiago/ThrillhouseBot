@@ -114,7 +114,7 @@ public class ResponseRepairService {
    * The failed answer {@code body} in the required shape, read by the lane's parser, or empty
    * whenever the step is off, the ceiling is reached, or the repair fails or is rejected. {@code
    * ledgerKey} is the review's {@link ReviewTokenLedger#keyFor ledger key}; {@code parseFailure} is
-   * the parser's refusal of {@code body}.
+   * the parser's refusal of {@code body}. A rejected API key is thrown, as by every call here.
    */
   public Optional<Repair> repair(
       long ledgerKey, ModelLane lane, String body, IllegalArgumentException parseFailure) {
@@ -157,7 +157,7 @@ public class ResponseRepairService {
    * The file summaries read from {@code text}, the string a summary answer wrote where the {@code
    * file_summaries} array belongs, by one re-ask for that field alone; only the entries whose path
    * is in {@code text} are kept. Empty whenever the step is off, the ceiling is reached, the call
-   * fails, or nothing usable comes back.
+   * fails, or nothing usable comes back. A rejected API key is thrown.
    */
   public Optional<List<ReviewResponse.FileSummary>> fileSummaries(long ledgerKey, String text) {
     if (!enabled || text == null || text.isBlank()) {
@@ -238,7 +238,8 @@ public class ResponseRepairService {
    * One repair call's answer text, or empty when the ceiling is reached, the call fails, or the
    * answer is empty or cut. The usage is recorded before the answer is read: a cut answer was still
    * billed. A call whose reasoning spent the whole cap before any answer is repeated once at a
-   * lower effort (#1169).
+   * lower effort (#1169). A rejected API key is thrown as {@link AiApiKeyRejectedException} instead
+   * of read as a failed repair (#1329).
    */
   private Optional<String> call(
       long ledgerKey, ModelLane lane, String contract, String error, String answer) {
@@ -273,6 +274,15 @@ public class ResponseRepairService {
       }
       return Optional.of(raw);
     } catch (RuntimeException e) {
+      // A rejected key is not a failed repair (#1329): the full retry would send the same key, so
+      // the rejection ends the call the repair was for.
+      var rejection = AiApiKeyRejectedException.classify(e);
+      if (rejection.isPresent()) {
+        Log.errorf(
+            "Response repair for review session %d failed: %s",
+            ledgerKey, rejection.get().getMessage());
+        throw rejection.get();
+      }
       // Only the type is logged: the message can carry provider or model text.
       Log.warnf(
           "Response repair for review session %d failed (%s)",

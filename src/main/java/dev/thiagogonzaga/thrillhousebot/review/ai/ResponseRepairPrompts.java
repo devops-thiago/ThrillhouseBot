@@ -85,7 +85,6 @@ public final class ResponseRepairPrompts {
       """
             {"findings": [], "previous_findings_status": [], "summary": { ... }}
             The "summary" object may hold these fields, each only when the answer has it:
-            - total_findings, critical, high, medium, low: integers
             - overall_assessment: a string
             - pr_purpose: a string
             - description_gaps: an array of strings
