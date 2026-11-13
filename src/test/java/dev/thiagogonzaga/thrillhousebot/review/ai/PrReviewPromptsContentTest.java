@@ -1855,6 +1855,8 @@ class PrReviewPromptsContentTest {
   void reviewPromptRendersTheNumberedDiffAndAsksForTheShownLineNumber() {
     assertContains(
         PrReviewPrompts.USER, "{{inputs.numberedDiff}}", "the review call reads the numbered diff");
+    assertContains(
+        PrReviewPrompts.USER, "\"843  int x;\" (two spaces)", "a context line is shown too");
     assertFalse(
         PrReviewPrompts.USER.contains("{{inputs.diff}}"),
         "the plain diff slot is for the deterministic stages, not the prompt");

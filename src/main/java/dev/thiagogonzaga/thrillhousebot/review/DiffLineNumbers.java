@@ -1,9 +1,5 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
-import java.util.ArrayList;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
 /**
  * Line numbers for the diff the review call reads (#1320).
  *
@@ -16,7 +12,7 @@ import java.util.regex.Pattern;
  * DiffLineResolver} and the rest) stays the plain patch.
  *
  * <p>A bare number costs about a tenth more diff tokens on the test corpus; a padded column with a
- * separator character cost four tenths. {@link #stripLeaked} removes the number again when the
+ * separator character cost four tenths. {@link CopiedLineNumbers} removes the number again when the
  * model copies it into a quote.
  */
 public final class DiffLineNumbers {
@@ -26,15 +22,6 @@ public final class DiffLineNumbers {
 
   /** Room per line for its number and space: up to seven digits, so large files rarely regrow. */
   private static final int NUMBER_ROOM = 8;
-
-  /**
-   * How many lines before a copied run's first number or after its last the cited line may fall,
-   * for a run of two or more numbered lines.
-   */
-  private static final int RUN_SLACK = 3;
-
-  /** A copied number: digits, one space, then the added or context marker. */
-  private static final Pattern LEAKED_NUMBER = Pattern.compile("^(\\d{1,9}) [+ ]");
 
   private DiffLineNumbers() {}
 
@@ -61,9 +48,9 @@ public final class DiffLineNumbers {
       } else if (line.equals(FENCE)) {
         inBlock = false;
       } else {
-        Matcher header = DiffLineResolver.HUNK_HEADER.matcher(line);
-        if (line.startsWith("@@") && header.lookingAt()) {
-          next = Integer.parseInt(header.group(1));
+        var header = DiffLineResolver.hunkStart(line);
+        if (header.isPresent()) {
+          next = header.getAsInt();
         } else if (next >= 0 && isNewSide(line)) {
           out.append(next++).append(' ');
         }
@@ -82,72 +69,5 @@ public final class DiffLineNumbers {
    */
   private static boolean isNewSide(String line) {
     return !line.isEmpty() && (line.charAt(0) == '+' || line.charAt(0) == ' ');
-  }
-
-  /**
-   * The quote without the line numbers and diff markers the model copied from the annotated diff.
-   * Applied only when every non-blank line starts with a number, a space and a marker, or is an
-   * unnumbered removed line or "no newline" marker of the annotated diff, and the numbers run
-   * consecutively, which is what a copied run of the diff looks like and plain code practically
-   * never does. The removed lines and markers are dropped, so a block copied across a change keeps
-   * only its new-side code. Blank lines before or inside the run are kept as they are. The run must
-   * also reach where the finding points: a single numbered line only at {@code citedLine}, since on
-   * its own {@code 1 + 2} is as likely to be code, and a longer run when its span, widened by
-   * {@link #RUN_SLACK} lines, holds it, so a quote of a numbered list elsewhere in a data file is
-   * left alone. Anything else is returned unchanged.
-   */
-  public static String stripLeaked(String quote, int citedLine) {
-    if (quote == null || quote.isBlank() || !Character.isDigit(quote.stripLeading().charAt(0))) {
-      return quote;
-    }
-    var lines = quote.split("\n", -1);
-    if (!isCopiedRun(lines, citedLine)) {
-      return quote;
-    }
-    var kept = new ArrayList<String>(lines.length);
-    for (var line : lines) {
-      var number = LEAKED_NUMBER.matcher(line);
-      if (number.lookingAt()) {
-        kept.add(line.substring(number.end()));
-      } else if (!isUnnumberedDiffLine(line)) {
-        kept.add(line);
-      }
-    }
-    return String.join("\n", kept);
-  }
-
-  /** A removed line or a "no newline" marker, which the annotated diff leaves unnumbered. */
-  private static boolean isUnnumberedDiffLine(String line) {
-    return line.startsWith("-") || line.startsWith("\\");
-  }
-
-  /**
-   * Whether every non-blank line carries a copied number and the numbers run on consecutively, with
-   * a lone numbered line accepted only at {@code citedLine}.
-   */
-  private static boolean isCopiedRun(String[] lines, int citedLine) {
-    int expected = -1;
-    int numbered = 0;
-    int first = -1;
-    for (var line : lines) {
-      if (line.isBlank() || isUnnumberedDiffLine(line)) {
-        continue;
-      }
-      var number = LEAKED_NUMBER.matcher(line);
-      if (!number.lookingAt()) {
-        return false;
-      }
-      int value = Integer.parseInt(number.group(1));
-      if (expected >= 0 && value != expected) {
-        return false;
-      }
-      if (numbered++ == 0) {
-        first = value;
-      }
-      expected = value + 1;
-    }
-    var slack = numbered > 1 ? RUN_SLACK : 0;
-    var last = expected - 1;
-    return citedLine > 0 && citedLine >= first - slack && citedLine <= last + slack;
   }
 }

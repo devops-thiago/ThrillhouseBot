@@ -632,7 +632,8 @@ public class FindingQuoteValidator {
     return raw;
   }
 
-  private static String sectionFilename(String headerLine) {
+  /** The path of a {@code "### path (status, +A -D)"} section header. */
+  static String sectionFilename(String headerLine) {
     String name = headerLine.substring(4);
     int suffix = name.lastIndexOf(" (");
     return (suffix > 0 ? name.substring(0, suffix) : name).strip();

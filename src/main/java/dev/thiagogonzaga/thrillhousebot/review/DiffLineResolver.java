@@ -650,8 +650,11 @@ public final class DiffLineResolver {
     return new RightSide(lines, text, textLineNumbers, lineText, hunkStarts, added);
   }
 
-  /** The 1-based right-side start line of a hunk header, or empty if the line is not one. */
-  private static OptionalInt hunkStart(String rawLine) {
+  /**
+   * The 1-based right-side start line of a hunk header, or empty if the line is not one. {@code
+   * DiffLineNumbers} numbers the review call's diff with it, so the two never disagree.
+   */
+  static OptionalInt hunkStart(String rawLine) {
     if (!rawLine.startsWith("@@")) {
       return OptionalInt.empty();
     }
