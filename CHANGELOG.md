@@ -4,6 +4,18 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- A finding whose line the diff cannot take a comment on was moved to the nearest line that
+  could, however far away, so its thread could land in a different hunk on code it never
+  described. It now moves only when that line is at most three lines away; otherwise the finding
+  is filed on the file. The line it moves to is now stored on the finding before any later step
+  reads it, so the summary, the stored round and the thread agree, and a `file:line` mention of
+  the finding's own location in its description follows the move. (#1320)
+- `/add-docs` placed a single-line doc suggestion on the line the model cited without checking
+  that the line holds the quoted declaration, so accepting it could rewrite another line. It is
+  now placed on the line that holds the quoted declaration, indentation included, and skipped
+  when there is no such line. (#1320)
 ### Changed
 
 - **`THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` defaults to 3, down from 5** (#1329): with the 2 s

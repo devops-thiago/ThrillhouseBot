@@ -48,11 +48,14 @@ class DiffLineResolverTest {
   }
 
   @Test
-  void shouldSnapToNearestCommentableLine() {
+  void shouldSnapToTheNearestCommentableLineOnlyWithinThreeLines() {
     var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
 
     assertEquals(OptionalInt.of(12), resolver.resolveRightSideLine("main.py", 15));
-    assertEquals(OptionalInt.of(10), resolver.resolveRightSideLine("main.py", 5));
+    assertEquals(OptionalInt.of(10), resolver.resolveRightSideLine("main.py", 7));
+    // #1320: further away is not moved into the hunk; the publisher files it on the file.
+    assertTrue(resolver.resolveRightSideLine("main.py", 16).isEmpty());
+    assertTrue(resolver.resolveRightSideLine("main.py", 6).isEmpty());
   }
 
   @Test
@@ -123,7 +126,8 @@ class DiffLineResolverTest {
         """;
     var resolver = new DiffLineResolver(Map.of("main.py", patch));
 
-    assertEquals(OptionalInt.of(20), resolver.resolveRightSideLine("main.py", 5));
+    assertEquals(OptionalInt.of(20), resolver.resolveRightSideLine("main.py", 17));
+    assertTrue(resolver.resolveRightSideLine("main.py", 16).isEmpty());
   }
 
   @Test
@@ -136,7 +140,8 @@ class DiffLineResolverTest {
         """;
     var resolver = new DiffLineResolver(Map.of("main.py", patch));
 
-    assertEquals(OptionalInt.of(5), resolver.resolveRightSideLine("main.py", 99));
+    assertEquals(OptionalInt.of(5), resolver.resolveRightSideLine("main.py", 8));
+    assertTrue(resolver.resolveRightSideLine("main.py", 99).isEmpty());
   }
 
   @Test
@@ -149,12 +154,12 @@ class DiffLineResolverTest {
   }
 
   @Test
-  void isLineInDiffShouldRejectLineFarFromDiffUnlikeResolveRightSideLine() {
+  void isLineInDiffShouldRejectLineFarFromDiff() {
     var resolver = new DiffLineResolver(Map.of("main.py", PATCH));
 
-    // resolveRightSideLine snaps a far line onto the nearest hunk line; isLineInDiff must not, so
-    // the approve backstop never treats a merely-touched file as a still-present finding.
-    assertEquals(OptionalInt.of(12), resolver.resolveRightSideLine("main.py", 99));
+    // Neither snaps a far line onto the nearest hunk line (#1320), so the approve backstop never
+    // treats a merely-touched file as a still-present finding.
+    assertTrue(resolver.resolveRightSideLine("main.py", 99).isEmpty());
     assertFalse(resolver.isLineInDiff("main.py", 99, 3)); // only a floor exists, far below
     assertFalse(resolver.isLineInDiff("main.py", 2, 3)); // only a ceiling exists, far above
   }
@@ -616,7 +621,10 @@ class DiffLineResolverTest {
         new DiffLineResolver(
             Map.of("dir/F.java", exactAtLine20, "src/dir/F.java", variantAtLine50));
 
-    assertEquals(OptionalInt.of(20), resolver.resolveRightSideLine("dir/F.java", 50));
+    // The exact path's lines are the only ones considered: its line 20 is too far from 50 to take
+    // the comment (#1320), and the variant's own line 50 is never used.
+    assertTrue(resolver.resolveRightSideLine("dir/F.java", 50).isEmpty());
+    assertEquals(OptionalInt.of(20), resolver.resolveRightSideLine("dir/F.java", 22));
   }
 
   @Test
