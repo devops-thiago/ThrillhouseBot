@@ -161,6 +161,7 @@ class DiffLineNumbersTest {
       assertEquals(code, DiffLineNumbers.stripLeaked(run, 47));
       assertEquals(code, DiffLineNumbers.stripLeaked(run, 52));
       assertSame(run, DiffLineNumbers.stripLeaked(run, 53));
+      assertSame(run, DiffLineNumbers.stripLeaked(run, 41));
     }
 
     @Test
