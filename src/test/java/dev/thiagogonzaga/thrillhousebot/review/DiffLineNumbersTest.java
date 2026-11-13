@@ -102,7 +102,9 @@ class DiffLineNumbersTest {
 
     @Test
     void everyNumberAgreesWithTheResolver() {
-      var patch = "@@ -5,3 +7,4 @@\n keep\n-gone\n+one\n+two\n keep2\n@@ -40 +43,2 @@\n+tail\n end";
+      // The empty line is one the formatter or a trimmed patch can leave: neither side counts it.
+      var patch =
+          "@@ -5,3 +7,4 @@\n keep\n-gone\n+one\n\n+two\n keep2\n@@ -40 +43,2 @@\n+tail\n end";
       var resolver = new DiffLineResolver(Map.of("F.java", patch));
       var numbered = Pattern.compile("^(\\d+) [+ ](.*)$");
       int checked = 0;
@@ -130,6 +132,16 @@ class DiffLineNumbersTest {
       assertEquals("int a;", DiffLineNumbers.stripLeaked("10  int a;", 10));
       assertEquals(
           "\n  int a;\nint b;", DiffLineNumbers.stripLeaked("\n10    int a;\n11 +int b;", 12));
+    }
+
+    @Test
+    void aRunCopiedAcrossAChangeKeepsOnlyItsNewSideCode() {
+      assertEquals(
+          "int a;\nint c;", DiffLineNumbers.stripLeaked("11  int a;\n-int b;\n12 +int c;", 11));
+      assertEquals(
+          "x\ny", DiffLineNumbers.stripLeaked("3 +x\n\\ No newline at end of file\n4 +y", 3));
+      var listWithDash = "1  item one\n- note\nplain";
+      assertSame(listWithDash, DiffLineNumbers.stripLeaked(listWithDash, 1));
     }
 
     @Test
