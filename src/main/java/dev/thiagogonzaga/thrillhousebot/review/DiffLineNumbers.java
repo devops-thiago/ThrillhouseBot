@@ -124,14 +124,11 @@ public final class DiffLineNumbers {
     int numbered = 0;
     int first = -1;
     for (var line : lines) {
-      if (line.isBlank()) {
+      if (line.isBlank() || isUnnumberedDiffLine(line)) {
         continue;
       }
       var number = LEAKED_NUMBER.matcher(line);
       if (!number.lookingAt()) {
-        if (isUnnumberedDiffLine(line)) {
-          continue;
-        }
         return false;
       }
       int value = Integer.parseInt(number.group(1));
