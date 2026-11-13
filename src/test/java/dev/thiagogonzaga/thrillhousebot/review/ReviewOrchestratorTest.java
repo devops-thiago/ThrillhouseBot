@@ -5300,7 +5300,7 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldPostToNearestLineWhenExactLineMissing() {
-      var finding = new Finding(RiskLevel.HIGH, "src/Main.java", 15, "Bug", "desc", null, null);
+      var finding = new Finding(RiskLevel.HIGH, "src/Main.java", 12, "Bug", "desc", null, null);
       var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
       var resolver =
           new DiffLineResolver(
@@ -5322,6 +5322,28 @@ class ReviewOrchestratorTest {
               anyString(),
               anyInt(),
               argThat(req -> req.line() == 10));
+    }
+
+    @Test
+    void filesAFindingFarFromEveryHunkOnTheFileInsteadOfMovingIt() {
+      var finding = new Finding(RiskLevel.HIGH, "src/Main.java", 15, "Bug", "desc", null, null);
+      var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", fileDiffWithLine("src/Main.java", 10).patch()));
+      when(suggestionFormatter.formatReviewComment(finding, true)).thenReturn("comment body");
+      when(suggestionFormatter.formatReviewComment(finding, false)).thenReturn("comment body");
+
+      reviewPublisher.postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      verify(reviewClient)
+          .createPullRequestComment(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(req -> GitHubReviewClient.SUBJECT_TYPE_FILE.equals(req.subjectType())));
     }
 
     @Test
@@ -6613,6 +6635,70 @@ class ReviewOrchestratorTest {
       assertEquals("def unchanged():", updated.findings().get(2).suggestionOld());
 
       assertNull(updated.findings().get(3).suggestionOld());
+    }
+
+    @Test
+    void movesAFindingNearAHunkOntoItsNearestLineAndKeepsItsMentionsInStep() {
+      var patch =
+          """
+          @@ -10,3 +10,4 @@
+           def unchanged():
+          -    old_line()
+          +    new_line()
+          +    added_line()
+          """;
+      var lineResolver = new DiffLineResolver(Map.of("main.py", patch));
+      var near =
+          new ReviewResponse.Finding(
+              "high", "high", "main.py", 15, "Near", "Called at `main.py:15`.", null, null);
+      var far =
+          new ReviewResponse.Finding(
+              "high", "high", "main.py", 30, "Far", "main.py:30", null, null);
+
+      var updated =
+          findingPipeline.populateMissingAnchors(
+              new ReviewResponse(List.of(near, far), List.of(), null), lineResolver);
+
+      var moved = updated.findings().get(0);
+      assertEquals(12, moved.line());
+      assertEquals("Called at `main.py:12`.", moved.description());
+      assertEquals("    added_line()", moved.suggestionOld());
+      // #1320: too far from every hunk to move; the publisher files it on the file.
+      assertSame(far, updated.findings().get(1));
+    }
+
+    @Test
+    void aFindingMovedOntoItsQuoteNamesTheLineItIsPostedOn() {
+      var patch =
+          """
+          @@ -10,3 +10,4 @@
+           def unchanged():
+          -    old_line()
+          +    new_line()
+          +    added_line()
+          """;
+      var lineResolver = new DiffLineResolver(Map.of("main.py", patch));
+      var finding =
+          new ReviewResponse.Finding(
+              "high",
+              "high",
+              "main.py",
+              10,
+              "Quoted",
+              "The call at main.py:10 drops the result; main.py:100 is fine.",
+              "added_line()",
+              null);
+
+      var placed =
+          findingPipeline
+              .populateMissingAnchors(
+                  new ReviewResponse(List.of(finding), List.of(), null), lineResolver)
+              .findings()
+              .getFirst();
+
+      assertEquals(12, placed.line());
+      assertEquals(
+          "The call at main.py:12 drops the result; main.py:100 is fine.", placed.description());
     }
 
     @Test
