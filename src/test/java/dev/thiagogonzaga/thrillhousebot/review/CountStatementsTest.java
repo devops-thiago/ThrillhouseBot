@@ -132,7 +132,9 @@ class CountStatementsTest {
         "Merges the three findings passes into one.",
         "Sets the offset to -5.",
         "Allows a retry limit of -1 to disable it.",
-        "Accepts negative offsets of -1."
+        "Accepts negative offsets of -1.",
+        "+5 is the default offset.",
+        "Shifts the offsets +4 -2 apart."
       })
   void noCountOrSizeIsStated(String sentence) {
     assertFalse(CountStatements.statesCount(sentence), sentence);

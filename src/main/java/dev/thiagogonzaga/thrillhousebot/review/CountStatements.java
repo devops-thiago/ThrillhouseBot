@@ -298,24 +298,23 @@ final class CountStatements {
   /**
    * Whether the signed figure at {@code at} is a size of the change rather than a value the code
    * uses ("sets the offset to -5"): a unit follows it ("+555 lines"), it is paired with another
-   * signed figure ("+40/-20"), or "by" or a {@link #SIZE_CUES_BEFORE} word comes before it
-   * ("shrinks by -20").
+   * signed figure that follows it ("+40/-20"; the first of a pair is always read first), or "by" or
+   * a {@link #SIZE_CUES_BEFORE} word comes before it ("shrinks by -20").
    */
   private static boolean signedSize(String sentence, List<Token> tokens, int at) {
-    if (unitAfter(sentence, tokens, at) >= 0
-        || pairedSigned(sentence, tokens, at, at + 1)
-        || pairedSigned(sentence, tokens, at - 1, at)) {
+    if (unitAfter(sentence, tokens, at) >= 0 || pairedSigned(sentence, tokens, at, at + 1)) {
       return true;
     }
     var before = at > 0 ? tokens.get(at - 1).word() : "";
     return before.equals("by") || SIZE_CUES_BEFORE.contains(before);
   }
 
-  /** Whether the tokens at {@code left} and {@code right} are signed figures split by a slash. */
+  /**
+   * Whether the token at {@code right} is a signed figure split by a slash from the signed figure
+   * at {@code left}.
+   */
   private static boolean pairedSigned(String sentence, List<Token> tokens, int left, int right) {
-    return left >= 0
-        && right < tokens.size()
-        && signedFigure(tokens.get(left).word())
+    return right < tokens.size()
         && signedFigure(tokens.get(right).word())
         && sentence.substring(tokens.get(left).end(), tokens.get(right).start()).equals("/");
   }
