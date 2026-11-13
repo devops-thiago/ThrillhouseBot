@@ -536,6 +536,9 @@ public class FindingPipeline {
 
     var aggregated = new ReviewResponse(allFindings, mergeBatchStatuses(batchStatuses), null);
     var refined = deduplicator.dedupe(aggregated);
+    // #1320: placed before any later stage reads a finding's line, so calibration, the replied and
+    // litigated checks, the persisted round and the thread all use the line it is posted on.
+    refined = populateMissingAnchors(refined, lineResolver);
     // #1077: the same last word on the graded fields as the single-call lane, so an anchored
     // infrastructure class is placed inline or under "Things to double-check" by the same grade
     // whichever lane reviewed it (FindingPlacement).
@@ -555,7 +558,6 @@ public class FindingPipeline {
             ctx.inlineComments(),
             ctx.conversationComments(),
             botIdentity);
-    refined = populateMissingAnchors(refined, lineResolver);
     // #60: as in the single-call lane, after every model stage and before the summary call.
     var mentions = pathMentions(ctx, promptInputs, evidence);
     refined = finish(refined, ctx, lineResolver, promptInputs.linkedIssues(), evidence, mentions);
@@ -1737,11 +1739,15 @@ public class FindingPipeline {
     // Evidence, quote validation, framework filter, dedupe, rejection memory, then the verifier.
     aiResponse =
         findingScreen.screenSingleCall(session, aiResponse, diff, promptInputs, plan, evidence);
+    // #1320: placed before any later stage reads a finding's line (see the batched lane).
+    aiResponse = populateMissingAnchors(aiResponse, lineResolver);
     // #773: the last word on the two graded fields, so the anchored infrastructure classes cannot
     // be re-spread by the verifier's own lowering, and the grade the publisher routes on is the
     // one persisted below for the next round to compare against. The diff's lines let it recognize
-    // an unpinned-reference finding anchored on a versioned COPY --from source (#926); the line is
-    // read at the diff's spelling of the path, since that mapping (#1022) is only applied below.
+    // an unpinned-reference finding anchored on a versioned COPY --from source (#926). Placement
+    // above already put the path in the diff's spelling (#1022); diffPathFor keeps the read safe
+    // for
+    // a path it could not map.
     aiResponse =
         SeverityCalibrator.calibrate(
             aiResponse,
@@ -1758,7 +1764,7 @@ public class FindingPipeline {
             ctx.inlineComments(),
             ctx.conversationComments(),
             botIdentity);
-    return populateMissingAnchors(aiResponse, lineResolver);
+    return aiResponse;
   }
 
   void persistAiResponse(ReviewSession session, ReviewResponse aiResponse) {
@@ -1780,7 +1786,10 @@ public class FindingPipeline {
       // resolves case-sensitively opens and later rounds compare against the same path.
       // #924: then onto the lines its suggestion_old quotes, or without a suggestion block that
       // cannot be placed there.
-      var finding = SuggestionAnchor.place(lineResolver.withDiffPath(cited), lineResolver);
+      var finding =
+          onCommentableLine(
+              SuggestionAnchor.place(lineResolver.withDiffPath(cited), lineResolver), lineResolver);
+      finding = withLineMentionsMoved(finding, cited.line());
       changed |= finding != cited;
       if (finding.suggestionOld() == null || finding.suggestionOld().isBlank()) {
         String fallback = lineResolver.getLineText(finding.file(), finding.line());
@@ -1807,5 +1816,50 @@ public class FindingPipeline {
     return changed
         ? new ReviewResponse(adjusted, response.previousFindingsStatus(), response.summary())
         : response;
+  }
+
+  /**
+   * {@code finding} on the line its thread is posted on (#1320): the cited line when the diff can
+   * take a comment there, else the nearest such line within {@link
+   * DiffLineResolver#NEAR_CITED_LINE} lines. Written back here, before any later stage reads the
+   * line, so the summary, the persisted round and the thread agree. A line further from every hunk
+   * is kept: the publisher files that finding on the file rather than on code it does not describe.
+   */
+  private static ReviewResponse.Finding onCommentableLine(
+      ReviewResponse.Finding finding, DiffLineResolver lineResolver) {
+    var line = lineResolver.resolveRightSideLine(finding.file(), finding.line());
+    if (line.isEmpty() || line.getAsInt() == finding.line()) {
+      return finding;
+    }
+    Log.infof(
+        "Finding '%s' cites %s:%d, which the diff cannot take a comment on; moving it to line %d",
+        LogSafe.oneLine(finding.title()),
+        LogSafe.oneLine(finding.file()),
+        finding.line(),
+        line.getAsInt());
+    return atLine(finding, line.getAsInt(), finding.description());
+  }
+
+  /** {@code finding} with its own {@code file:line} mentions following a move from {@code from}. */
+  private static ReviewResponse.Finding withLineMentionsMoved(
+      ReviewResponse.Finding finding, int from) {
+    var description =
+        LineMentions.moved(finding.description(), finding.file(), from, finding.line());
+    return Objects.equals(description, finding.description())
+        ? finding
+        : atLine(finding, finding.line(), description);
+  }
+
+  private static ReviewResponse.Finding atLine(
+      ReviewResponse.Finding finding, int line, String description) {
+    return new ReviewResponse.Finding(
+        finding.risk(),
+        finding.confidence(),
+        finding.file(),
+        line,
+        finding.title(),
+        description,
+        finding.suggestionOld(),
+        finding.suggestionNew());
   }
 }

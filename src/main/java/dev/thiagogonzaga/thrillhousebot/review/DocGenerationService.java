@@ -37,7 +37,9 @@ import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalInt;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
@@ -424,18 +426,59 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
     return new DocPostOutcome(suggestions, notes, skippedByCap);
   }
 
+  /**
+   * The diff line holding a single-line doc suggestion's quoted declaration: where the quote sits
+   * on the right side, chosen for the cited line, and only when that line reads exactly as quoted,
+   * indentation included (trailing whitespace aside), since the suggestion replaces the whole line.
+   * Empty otherwise.
+   */
+  private static OptionalInt declarationLine(
+      DocGenerationResponse.DocSuggestion doc, DiffLineResolver lineResolver) {
+    var location = lineResolver.locateQuote(doc.file(), doc.suggestionOld(), doc.line());
+    if (location.isEmpty()) {
+      return OptionalInt.empty();
+    }
+    int line = location.get().startLine();
+    String current = Objects.toString(lineResolver.getLineText(doc.file(), line), "");
+    return current.stripTrailing().equals(doc.suggestionOld().stripTrailing())
+        ? OptionalInt.of(line)
+        : OptionalInt.empty();
+  }
+
+  private static DocGenerationResponse.DocSuggestion atLine(
+      DocGenerationResponse.DocSuggestion doc, int line) {
+    return line == doc.line()
+        ? doc
+        : new DocGenerationResponse.DocSuggestion(
+            doc.file(), line, doc.symbol(), doc.suggestionOld(), doc.suggestionNew());
+  }
+
   private DocPostResult postDoc(
       String auth,
       DocTask task,
       String commitSha,
-      DocGenerationResponse.DocSuggestion doc,
+      DocGenerationResponse.DocSuggestion proposed,
       DiffLineResolver lineResolver) {
+    var doc = proposed;
     boolean multiLine = doc.suggestionOld().strip().contains("\n");
+    if (!multiLine) {
+      // #1320: a single-line docstring rewrites the declaration it quotes, so it goes on the line
+      // that holds that declaration, wherever the model's line points. A quote the diff does not
+      // hold exactly once near the cited line is not posted: a guessed line would be rewritten.
+      var declaration = declarationLine(doc, lineResolver);
+      if (declaration.isEmpty()) {
+        Log.debugf(
+            "Skipping /add-docs suggestion for %s:%d — the quoted declaration is not on one diff"
+                + " line",
+            LogSafe.oneLine(doc.file()), doc.line());
+        return DocPostResult.SKIPPED;
+      }
+      doc = atLine(doc, declaration.getAsInt());
+    }
     var resolved = lineResolver.resolveRightSideLine(doc.file(), doc.line());
-    // A single-line docstring must anchor at doc.line() exactly — a snapped-to neighbour would
-    // rewrite the wrong line on commit. A multi-line declaration is anchored by its verbatim
-    // range below, so it only needs the file to be in the diff.
-    if (resolved.isEmpty() || (!multiLine && resolved.getAsInt() != doc.line())) {
+    // A multi-line declaration is anchored by its verbatim range below. It still needs its cited
+    // line in the diff or within a few lines of a hunk; one cited further away is skipped.
+    if (resolved.isEmpty()) {
       Log.debugf(
           "Skipping /add-docs suggestion for %s:%d — declaration line is not in the diff",
           LogSafe.oneLine(doc.file()), doc.line());
