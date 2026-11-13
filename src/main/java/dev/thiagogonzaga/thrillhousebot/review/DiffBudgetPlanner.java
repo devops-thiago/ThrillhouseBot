@@ -884,18 +884,18 @@ public class DiffBudgetPlanner {
       String section,
       int diffBudgetTokens,
       Rendered rendered) {
-    var tokens = tokenCounter.estimateTokens(section);
-    if (tokens > diffBudgetTokens) {
-      var clipped = clipToBudget(section, diffBudgetTokens);
-      if (clipped == null) {
-        recordName(rendered.unclippable(), file.filename());
-        return;
-      }
-      recordName(rendered.clipped(), file.filename());
-      section = clipped;
-      tokens = tokenCounter.estimateTokens(clipped);
+    var tokens = promptTokens(section);
+    if (tokens <= diffBudgetTokens) {
+      rendered.sized().add(new Sized(file, section, tokens));
+      return;
     }
-    rendered.sized().add(new Sized(file, section, tokens));
+    var clipped = clipToBudget(section, tokens, diffBudgetTokens);
+    if (clipped == null) {
+      recordName(rendered.unclippable(), file.filename());
+      return;
+    }
+    recordName(rendered.clipped(), file.filename());
+    rendered.sized().add(new Sized(file, clipped.text(), clipped.tokens()));
   }
 
   /**
@@ -980,22 +980,33 @@ public class DiffBudgetPlanner {
   }
 
   /**
+   * The tokens a section costs in the review prompt, which carries it with each line's number
+   * (#1320). The batch keeps the plain section; only its size is measured on the numbered text.
+   */
+  private int promptTokens(String section) {
+    return tokenCounter.estimateTokens(DiffLineNumbers.annotate(section));
+  }
+
+  /**
    * Hunk-clips a single oversized file section down to {@code budgetTokens}. Converts the token
    * budget to a line budget by ratio and re-clips from the original a few times until it fits — a
    * bounded loop, since {@link ReviewDiffFormatter#truncateSection} is monotonic in line count.
    * Returns {@code null} when even a one-line clip stays over budget (pathologically small
    * budgets): the caller must omit the file by name rather than present a stub as coverage.
+   *
+   * <p>{@code sectionTokens} is the size the caller already measured, and the result carries the
+   * clip's measured size, so each candidate text is annotated and counted once.
    */
-  private String clipToBudget(String section, int budgetTokens) {
+  private Clip clipToBudget(String section, int sectionTokens, int budgetTokens) {
     var target = Math.max(1, (int) (budgetTokens * 0.9));
     var lines = ReviewDiffFormatter.lineCount(section);
     var clipped = section;
-    var clippedTokens = tokenCounter.estimateTokens(clipped);
+    var clippedTokens = sectionTokens;
     for (var i = 0; i < 8 && clippedTokens > budgetTokens; i++) {
       var ratio = Math.min(0.95, (double) target / Math.max(1, clippedTokens));
       lines = Math.max(1, (int) (lines * ratio));
       clipped = ReviewDiffFormatter.truncateSection(section, lines);
-      clippedTokens = tokenCounter.estimateTokens(clipped);
+      clippedTokens = promptTokens(clipped);
     }
     if (clippedTokens > budgetTokens) {
       Log.warnf(
@@ -1003,6 +1014,9 @@ public class DiffBudgetPlanner {
           budgetTokens);
       return null;
     }
-    return clipped;
+    return new Clip(clipped, clippedTokens);
   }
+
+  /** A clipped section and its size in the review prompt. */
+  private record Clip(String text, int tokens) {}
 }

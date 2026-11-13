@@ -27,6 +27,12 @@ All notable changes to ThrillhouseBot.
   when there is no such line. (#1320)
 ### Changed
 
+- The review call's diff now shows each added and context line's line number in the new file
+  (`842 +code`), so the model reads a finding's `line` instead of counting it from the hunk
+  header. Only the prompt carries the numbers; the stages that check quotes and place threads
+  still read the plain patch, and a number the model copies into `suggestion_old` or
+  `suggestion_new` is removed before either is used. The numbers add about 10% to the diff's
+  tokens on the test corpus, and the token budget counts them. (#1320)
 - **`THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` defaults to 3, down from 5** (#1329): with the 2 s
   exponential backoff, five attempts spent about 30 s of waiting before a call that kept failing
   gave up. Throttles, timeouts and provider errors keep their handling within the smaller budget.
