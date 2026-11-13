@@ -273,6 +273,18 @@ class DiffLineResolverBothSidesTest {
     }
 
     @Test
+    void aQuoteStillInTheNewFileIsNeverPlacedOnRemovedLines() {
+      // foo() is removed near line 5 and still added twice further on, so locateQuote cannot
+      // choose between the two right-side runs; the quote is still not about removed code.
+      var patch =
+          "@@ -4,3 +4,4 @@\n keep();\n-foo();\n+bar();\n+foo();\n@@ -20 +21,2 @@\n end();\n+foo();";
+      var resolver = new DiffLineResolver(Map.of(FILE, patch));
+
+      assertEquals(Optional.empty(), resolver.locateQuote(FILE, "foo();", 40));
+      assertEquals(Optional.empty(), resolver.locateRemovedQuote(FILE, "foo();", 5));
+    }
+
+    @Test
     void twoRemovedRunsEquallyNearLeaveTheLocationOpen() {
       var twice =
           """
@@ -329,6 +341,22 @@ class DiffLineResolverBothSidesTest {
       assertTrue(resolver.isFindingPresent(FILE, "a();\nb();\nc();"));
       assertFalse(resolver.isFindingPresent(FILE, "b();\na();"));
       assertFalse(resolver.isFindingPresent(FILE, "c();\ncontext();\nmissing();"));
+    }
+
+    @Test
+    void aShortPathReadsTheVariantThatKeepsTheFileNotADeletedNamesake() {
+      var deleted = "a/util/H.java";
+      var kept = "b/util/H.java";
+      var head = new RecordingHeadFiles(Map.of(kept, List.of("x();", "y();", "z();")));
+      var resolver =
+          new DiffLineResolver(
+              Map.of(
+                  deleted, "@@ -1,2 +0,0 @@\n-old();\n-gone();", kept, "@@ -3 +3 @@\n-q();\n+z();"),
+              List.of(deleted, kept),
+              head);
+
+      assertTrue(resolver.isFindingPresent("util/H.java", "x();\ny();"));
+      assertEquals(List.of(kept), head.asked);
     }
 
     @Test

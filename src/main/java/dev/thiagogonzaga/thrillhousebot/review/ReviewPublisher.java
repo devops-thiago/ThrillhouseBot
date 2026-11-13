@@ -1191,7 +1191,7 @@ public class ReviewPublisher {
 
   /**
    * Where {@code finding}'s quote sits among the lines the pull request removes, when it quotes no
-   * right-side code and its line selects removed lines ({@link
+   * right-side code anywhere in the file and its line selects removed lines ({@link
    * DiffLineResolver#locateRemovedQuote}, #1321); empty otherwise.
    */
   private static Optional<DiffLineResolver.RemovedRange> removedCodeLocation(

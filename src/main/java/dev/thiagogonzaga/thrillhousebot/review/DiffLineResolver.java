@@ -207,7 +207,9 @@ public final class DiffLineResolver {
    * that cannot be read.
    */
   private Optional<List<String>> headFileLines(String file) {
-    String key = byFile.containsKey(file) ? file : uniqueVariant(file, patch -> true);
+    // The same variant rule the presence check uses: a deletion-only patch that shares a suffix
+    // with the file is not a second candidate, so it never hides the one to read.
+    String key = byFile.containsKey(file) ? file : uniqueVariant(file, FileSide::hasRightText);
     if (key == null || !byFile.get(key).hasLines()) {
       return Optional.empty();
     }
@@ -571,6 +573,10 @@ public final class DiffLineResolver {
    * in-order run of base-side lines of one hunk, holding at least one removed line, whose
    * right-side position is {@code citedLine} or within {@link #NEAR_CITED_LINE} lines of it.
    *
+   * <p>A quote that matches right-side code anywhere in the file is never placed here, even when
+   * {@link #locateQuote} leaves its location open between several runs: the code it quotes is still
+   * in the new file, so the finding is not about removed code.
+   *
    * <p>Unlike {@link #locateQuote}, a run the cited line does not select is never taken just
    * because it is the only one: removed code is often restated nearby (a replaced line's old and
    * new form share most of their text), and a finding posted on removed lines it does not describe
@@ -583,6 +589,10 @@ public final class DiffLineResolver {
     List<Predicate<String>> quoteLines = normalizedAnchorLines(quote);
     String key = resolveKey(file, FileSide::hasLeftText);
     if (quoteLines.isEmpty() || key == null) {
+      return Optional.empty();
+    }
+    String right = resolveKey(file, FileSide::hasRightText);
+    if (right != null && !byFile.get(right).rightRuns(quoteLines).isEmpty()) {
       return Optional.empty();
     }
     List<RemovedRange> runs = byFile.get(key).removedRuns(quoteLines);
