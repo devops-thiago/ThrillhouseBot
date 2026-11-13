@@ -21,7 +21,7 @@
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.version>3.40.1.2</quarkus.platform.version>
-        <quarkus-langchain4j.version>1.14.2</quarkus-langchain4j.version>
+        <quarkus-langchain4j.version>1.15.0</quarkus-langchain4j.version>
         <!-- Quarkus 3.40 is incompatible with OTel 1.67; keep both BOMs at 1.62 until #1289
              can be upgraded together with the platform. The known advisory remains tracked there. -->
         <!-- Quarkiverse GitHub App: handles the webhook entry (HMAC signature, delivery
@@ -32,7 +32,7 @@
         <opentelemetry.alpha.version>1.62.0-alpha</opentelemetry.alpha.version>
         <!-- Keep in lockstep with the prometheus-metrics version opentelemetry-exporter-prometheus ships -->
         <prometheus-metrics.version>1.10.0</prometheus-metrics.version>
-        <jackson-bom.version>2.22.4</jackson-bom.version>
+        <jackson-bom.version>2.23.0</jackson-bom.version>
         <guava-bom.version>33.8.0-jre</guava-bom.version>
         <skipITs>true</skipITs>
         <!-- JUnit tag filters for surefire; the eval profile flips them to run PromptEvalTest -->
