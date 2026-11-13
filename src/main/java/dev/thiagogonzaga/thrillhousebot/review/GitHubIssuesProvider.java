@@ -18,11 +18,11 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.MissingNode;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubGraphQLClient;
+import io.quarkiverse.githubapp.GitHubClientProvider;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -31,7 +31,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
+import org.kohsuke.github.GHRepository;
 
 /**
  * The GitHub Issues {@link IssueTrackerProvider} (#58): links a pull request to issues of its own
@@ -61,8 +61,6 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  */
 @ApplicationScoped
 public class GitHubIssuesProvider implements IssueTrackerProvider {
-
-  private static final String ACCEPT = "application/vnd.github+json";
 
   /** Candidate numbers tried per review, so a body full of references cannot fan out requests. */
   static final int MAX_CANDIDATES = 10;
@@ -115,15 +113,11 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
 
   private static final String NUMBER = "number";
 
-  private final GitHubCommentClient commentClient;
-  private final GitHubGraphQLClient graphQLClient;
+  private final GitHubClientProvider clientProvider;
 
   @Inject
-  public GitHubIssuesProvider(
-      @RestClient GitHubCommentClient commentClient,
-      @RestClient GitHubGraphQLClient graphQLClient) {
-    this.commentClient = commentClient;
-    this.graphQLClient = graphQLClient;
+  public GitHubIssuesProvider(GitHubClientProvider clientProvider) {
+    this.clientProvider = clientProvider;
   }
 
   @Override
@@ -133,12 +127,21 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
 
   @Override
   public List<LinkedTicket> linkedTickets(TicketLookup lookup, int limit) {
+    GHRepository repository = null;
+    try {
+      repository =
+          clientProvider
+              .getInstallationClient(lookup.installationId())
+              .getRepository(lookup.owner() + "/" + lookup.repo());
+    } catch (RuntimeException | IOException e) {
+      Log.debugf("Could not resolve repository %s/%s", lookup.owner(), lookup.repo());
+    }
     var tickets = new ArrayList<LinkedTicket>();
     for (var candidate : candidates(lookup, limit).entrySet()) {
       if (tickets.size() >= limit) {
         break;
       }
-      var ticket = read(lookup, candidate.getKey(), candidate.getValue());
+      var ticket = read(lookup, candidate.getKey(), candidate.getValue(), repository);
       if (ticket != null) {
         tickets.add(ticket);
       }
@@ -478,20 +481,33 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
       variables.put("owner", lookup.owner());
       variables.put("name", lookup.repo());
       variables.put(NUMBER, lookup.prNumber());
-      var response =
-          graphQLClient.execute(
-              lookup.auth(), new GitHubGraphQLClient.GraphQLRequest(LINKS_QUERY, variables));
-      if (response == null) {
+      var client = clientProvider.getInstallationGraphQLClient(lookup.installationId());
+      var response = client.executeSync(LINKS_QUERY, variables);
+      if (response == null || !response.hasData()) {
         return MissingNode.getInstance();
       }
-      if (response.has("errors")) {
+      if (response.hasError()) {
         // Partial data is still usable: a field the app may not read comes back null with an error.
         Log.debugf(
             "Closing references of %s/%s#%d came back with %d error(s)",
-            lookup.owner(), lookup.repo(), lookup.prNumber(), response.path("errors").size());
+            lookup.owner(), lookup.repo(), lookup.prNumber(), response.getErrors().size());
       }
-      return response.path("data").path("repository").path("pullRequest");
+      var data = response.getData();
+      if (data == null) {
+        return MissingNode.getInstance();
+      }
+      var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+      var tree = mapper.readTree(data.toString());
+      return tree.path("repository").path("pullRequest");
     } catch (RuntimeException e) {
+      Log.debugf(
+          e,
+          "Could not read the closing references of %s/%s#%d; using the PR body's links only",
+          lookup.owner(),
+          lookup.repo(),
+          lookup.prNumber());
+      return MissingNode.getInstance();
+    } catch (Exception e) {
       Log.debugf(
           e,
           "Could not read the closing references of %s/%s#%d; using the PR body's links only",
@@ -535,11 +551,20 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
   }
 
   /** The issue, or {@code null} when it is a pull request or could not be read. */
-  private LinkedTicket read(TicketLookup lookup, int number, String via) {
-    GitHubCommentClient.IssueDetails issue;
+  private LinkedTicket read(TicketLookup lookup, int number, String via, GHRepository repository) {
     try {
-      issue = commentClient.getIssue(lookup.auth(), ACCEPT, lookup.owner(), lookup.repo(), number);
-    } catch (RuntimeException e) {
+      if (repository == null) {
+        return null;
+      }
+      var issue = repository.getIssue(number);
+      if (issue == null || issue.isPullRequest()) {
+        Log.debugf(
+            "%s/%s#%d is not an issue; not used as linked-issue context",
+            lookup.owner(), lookup.repo(), number);
+        return null;
+      }
+      return new LinkedTicket("#" + number, via, issue.getTitle(), issue.getBody());
+    } catch (Exception e) {
       // A 404 (never existed, or private to this credential), a 410 (deleted) or an outage: the
       // review goes on without this issue.
       Log.infof(
@@ -547,12 +572,5 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
           lookup.owner(), lookup.repo(), number, e.getClass().getSimpleName());
       return null;
     }
-    if (issue == null || issue.isPullRequest()) {
-      Log.debugf(
-          "%s/%s#%d is not an issue; not used as linked-issue context",
-          lookup.owner(), lookup.repo(), number);
-      return null;
-    }
-    return new LinkedTicket("#" + number, via, issue.title(), issue.body());
   }
 }

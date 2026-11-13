@@ -4,6 +4,50 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- The summary no longer posts counts or sizes the summary call wrote. That call sees only the
+  round's findings, so on #1315 its "What this PR does" paragraph said "One medium finding
+  remains" while 17 findings were open. A sentence of the purpose paragraph or the overall
+  assessment that states a number of findings ("17 findings", "One medium finding remains") or the
+  change's size ("+555 lines", "touches 6 files") is now cut, the rest kept, and the same goes for
+  a purpose carried from an earlier round of the same commit. The summary call is no longer asked
+  for its totals or told to state sizes; the stored totals are counted from the findings, and the
+  dashboard's session total is taken from the severity counts the posted risk table shows, so the
+  two agree. Older stored sessions still load and render. (#1323)
+- A finding whose line the diff cannot take a comment on was moved to the nearest line that
+  could, however far away, so its thread could land in a different hunk on code it never
+  described. It now moves only when that line is at most three lines away; otherwise the finding
+  is filed on the file. The line it moves to is now stored on the finding before any later step
+  reads it, so the summary, the stored round and the thread agree, and a `file:line` mention of
+  the finding's own location in its description follows the move. (#1320)
+- `/add-docs` placed a single-line doc suggestion on the line the model cited without checking
+  that the line holds the quoted declaration, so accepting it could rewrite another line. It is
+  now placed on the line that holds the quoted declaration, indentation included, and skipped
+  when there is no such line. (#1320)
+### Changed
+
+- **`THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` defaults to 3, down from 5** (#1329): with the 2 s
+  exponential backoff, five attempts spent about 30 s of waiting before a call that kept failing
+  gave up. Throttles, timeouts and provider errors keep their handling within the smaller budget.
+  Set the variable to keep the old value.
+- Linked-issue context now reads issues through the extension's installation-scoped GitHub client and GraphQL client (`GitHubClientProvider`) instead of the hand-rolled `GitHubCommentClient`/`GitHubGraphQLClient` REST clients. `GitHubIssuesProvider` no longer takes an installation token string; the installation id comes from the review request. (#1314)
+- Repository instructions (`.github/thrillhousebot.md` and fallback chain) now read through the extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of `GitHubPullRequestClient`/`GitHubAuthClient`. `InstructionsResolver` no longer takes an auth client or REST client. (#1314)
+- Repository settings (`.github/thrillhousebot.yml`) and project stack manifests now read through the extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of `GitHubPullRequestClient`/`GitHubAuthClient`. `RepoSettingsResolver` and `ProjectStackResolver` no longer take an auth client or REST client. (#1314)
+
+### Fixed
+
+- **A rejected API key fails the call on its first attempt** (#1329): an HTTP 401 or 403, or
+  LangChain4j's `AuthenticationException`, was retried like any transient failure, so a wrong or
+  revoked key cost every review all its attempts and the backoff waits, and the failure read as a
+  generic retry exhaustion. The review, batch and summary calls and the repair step now stop at
+  once, with no wait and no move to `AI_FALLBACK_MODEL`, and the log line and the session's
+  failure reason say the provider rejected the API key and name `AI_API_KEY`. A multi-call review
+  fails instead of retrying each batch. `PromptEvalTest` stops the whole suite at the first
+  rejected call, including a verifier, summary check or repair call that fails open, and fails at
+  once when `QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY` is not set beside
+  `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY`, since those calls use the concise client's key
+
 ## [0.9.1] - 2026-11-09
 
 The webhook endpoint now runs on the Quarkiverse GitHub App extension. There are no new settings,
@@ -28,10 +72,10 @@ delivery still gets `200`.
 
 ### Errata
 
-- The `[0.9.0]` section's **Changed** entry about the webhook entry and the Quarkiverse GitHub
-  App extension describes this release, not v0.9.0. It was added to the changelog after v0.9.0
-  was tagged, and v0.9.0 still uses `WebhookController` and `WebhookVerifier`. The change is
-  described under **Changed** above.
+- v0.9.0's changelog briefly carried a **Changed** entry about the webhook entry and the
+  Quarkiverse GitHub App extension. It was added after v0.9.0 was tagged and described this
+  release, not v0.9.0 (which still uses `WebhookController` and `WebhookVerifier`), so it has been
+  removed from the `[0.9.0]` section. The change is described under **Changed** above.
 
 ## [0.9.0] - 2026-11-04
 
@@ -239,10 +283,6 @@ and rollback details. New review features below are off by default unless stated
 - OpenTelemetry API 1.62.0 remains affected by GHSA-ccrj-gw8r-854m. A compatible dependency
   upgrade is tracked in [#1289](https://github.com/devops-thiago/ThrillhouseBot/issues/1289); the
   Guava update above does not resolve it.
-
-### Changed
-
-- The webhook entry now rides the Quarkiverse GitHub App extension (`io.quarkiverse.githubapp:quarkus-github-app`): it owns the `POST /api/webhook` route, the `X-Hub-Signature-256` check and delivery parsing, and `webhook/WebhookEvents` keeps the existing routing (dedupe, pause, trigger filters, commands, CI rechecks). `WebhookController` and `WebhookVerifier` are gone. Malformed-request answers change to the extension's (`400` for missing/mismatched signature, `500` for a signed non-JSON body, `200` with an empty body on success).
 
 ## [0.8.0] - 2026-10-21
 

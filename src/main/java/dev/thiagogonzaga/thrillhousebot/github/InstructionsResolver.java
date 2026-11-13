@@ -16,17 +16,16 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import io.quarkiverse.githubapp.GitHubClientProvider;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.ProcessingException;
-import jakarta.ws.rs.WebApplicationException;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
+import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
 import java.util.stream.Stream;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
+import org.kohsuke.github.GHFileNotFoundException;
+import org.kohsuke.github.GHRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,7 +33,6 @@ import org.slf4j.LoggerFactory;
 public class InstructionsResolver {
 
   private static final Logger log = LoggerFactory.getLogger(InstructionsResolver.class);
-  private static final String ACCEPT_HEADER = "application/vnd.github+json";
 
   /** Default fallback chain when the configured instructions file is not found. */
   private static final List<String> DEFAULT_FALLBACK_CHAIN =
@@ -46,8 +44,7 @@ public class InstructionsResolver {
           "AGENT.md");
 
   private final List<String> fallbackChain;
-  private final GitHubAuthClient authClient;
-  private final GitHubPullRequestClient prClient;
+  private final GitHubClientProvider clientProvider;
 
   private record CachedInstructions(String content, String source, long expiresAt) {}
 
@@ -59,22 +56,15 @@ public class InstructionsResolver {
   private final LongSupplier clock;
 
   @Inject
-  public InstructionsResolver(
-      ThrillhouseConfig config,
-      GitHubAuthClient authClient,
-      @RestClient GitHubPullRequestClient prClient) {
-    this(config, authClient, prClient, System::currentTimeMillis);
+  public InstructionsResolver(ThrillhouseConfig config, GitHubClientProvider clientProvider) {
+    this(config, clientProvider, System::currentTimeMillis);
   }
 
   /** Visible for tests: allows controlling the cache clock. */
   InstructionsResolver(
-      ThrillhouseConfig config,
-      GitHubAuthClient authClient,
-      GitHubPullRequestClient prClient,
-      LongSupplier clock) {
+      ThrillhouseConfig config, GitHubClientProvider clientProvider, LongSupplier clock) {
     this.fallbackChain = buildFallbackChain(config);
-    this.authClient = authClient;
-    this.prClient = prClient;
+    this.clientProvider = clientProvider;
     this.clock = clock;
   }
 
@@ -94,6 +84,10 @@ public class InstructionsResolver {
   /**
    * Resolves the instructions file for a repository using the priority fallback chain.
    *
+   * <p>A path that could not be read (a 5xx, the 403 secondary rate limit, a transport error) is
+   * not a 404, so when no later path answers the empty result is not cached and the next review
+   * asks GitHub again.
+   *
    * @return ResolvedInstructions containing the content and source filename, or empty if none found
    */
   public ResolvedInstructions resolve(
@@ -112,14 +106,27 @@ public class InstructionsResolver {
       cache.remove(cacheKey, cached);
     }
 
-    var auth = authClient.getAuthHeader(installationId);
+    GHRepository repository;
+    try {
+      repository =
+          clientProvider.getInstallationClient(installationId).getRepository(owner + "/" + repo);
+    } catch (RuntimeException | IOException e) {
+      log.debug("Could not resolve repository {}/{}", owner, repo);
+      return ResolvedInstructions.EMPTY;
+    }
 
+    var readFailed = false;
     for (String path : fallbackChain) {
       try {
-        var file = prClient.getFileContent(auth, ACCEPT_HEADER, owner, repo, path, defaultBranch);
-        // GitHub wraps base64 content in newlines; only the MIME decoder tolerates them.
-        var content =
-            new String(Base64.getMimeDecoder().decode(file.content()), StandardCharsets.UTF_8);
+        var file = repository.getFileContent(path, defaultBranch);
+        if (file == null || !file.isFile()) {
+          continue;
+        }
+        // hub4j's getContent() already decodes the base64 payload.
+        var content = file.getContent();
+        if (content == null) {
+          continue;
+        }
 
         cache.put(
             cacheKey, new CachedInstructions(content, path, clock.getAsLong() + CACHE_TTL_MS));
@@ -127,9 +134,17 @@ public class InstructionsResolver {
 
         log.info("Using instructions file: {} ({} bytes)", path, content.length());
         return new ResolvedInstructions(content, path);
-      } catch (WebApplicationException | ProcessingException _) {
+      } catch (GHFileNotFoundException _) {
         log.debug("Instructions file not found: {}", path);
+      } catch (RuntimeException | IOException e) {
+        log.warn(
+            "Could not read instructions file {} for {}/{}: {}", path, owner, repo, e.toString());
+        readFailed = true;
       }
+    }
+
+    if (readFailed) {
+      return ResolvedInstructions.EMPTY;
     }
 
     // Cache the negative result briefly (1 min).
