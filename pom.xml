@@ -20,7 +20,7 @@
         <project.build.outputTimestamp>2026-11-09T22:26:39Z</project.build.outputTimestamp>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
-        <quarkus.platform.version>3.40.1.1</quarkus.platform.version>
+        <quarkus.platform.version>3.40.1.2</quarkus.platform.version>
         <quarkus-langchain4j.version>1.14.2</quarkus-langchain4j.version>
         <!-- Quarkus 3.40 is incompatible with OTel 1.67; keep both BOMs at 1.62 until #1289
              can be upgraded together with the platform. The known advisory remains tracked there. -->

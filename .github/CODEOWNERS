@@ -1,7 +1,7 @@
 # Protect CI/CD workflows — require owner review for any changes
-/.github/workflows/ @devops-thiago
-/.github/CODEOWNERS @devops-thiago
+/.github/workflows/ @devops-thiago @omatheusmesmo @matheusandre1
+/.github/CODEOWNERS @devops-thiago @omatheusmesmo @matheusandre1
 # The required DCO check delegates to this validator and its regression tests.
-/scripts/dco/ @devops-thiago
+/scripts/dco/ @devops-thiago @omatheusmesmo @matheusandre1
 # Deletes container image versions; a wrong rule removes published images.
-/scripts/ghcr-prune/ @devops-thiago
+/scripts/ghcr-prune/ @devops-thiago @omatheusmesmo @matheusandre1
