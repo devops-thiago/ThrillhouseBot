@@ -243,24 +243,30 @@ final class CopiedLineNumbers {
   }
 
   /**
-   * New code without the numbers it copied from inside {@code span}, read in the shape the old code
-   * was copied in; everything else is kept.
+   * New code without the numbers it copied from inside {@code span}; everything else is kept. A
+   * line written {@code N +code} kept its added marker and loses it with the number. Otherwise
+   * {@code N code} is a context marker plus code when the old code was copied with its markers, and
+   * indented code when any of its lines dropped them, as the confirmed old quote shows.
    */
   private static String strippedNew(String quote, Span span) {
     if (quote == null) {
       return null;
     }
-    // New code copied the way the old code was: without markers, a line's code is everything after
-    // the number and one space, indentation included.
-    var shape = span.unmarked() ? UNMARKED : NUMBERED;
     var lines = quote.split("\n", -1);
     for (int i = 0; i < lines.length; i++) {
-      var number = shape.matcher(lines[i].stripTrailing());
+      var number = newCodeLine(lines[i].stripTrailing(), span);
       if (number.matches() && span.holds(numberOf(number))) {
         lines[i] = codeOf(number);
       }
     }
     return String.join("\n", lines);
+  }
+
+  /** {@code line} read in the shape {@link #strippedNew} reads it in. */
+  private static Matcher newCodeLine(String line, Span span) {
+    var marked = NUMBERED.matcher(line);
+    var added = marked.matches() && line.startsWith(marked.group(1) + " +");
+    return added || !span.unmarked() ? marked : UNMARKED.matcher(line);
   }
 
   /** The code after a copied number and marker; empty for a bare number. */

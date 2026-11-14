@@ -74,6 +74,18 @@ class CopiedLineNumbersTest {
   }
 
   @Test
+  void newCodeOfAMixedCopyLosesEachLinesOwnMarker() {
+    // The old quote mixes an unmarked line (10) with a marked one (11): an added-marker line of
+    // the new code still loses its "+", and an unmarked one keeps its indentation.
+    var result =
+        copied.strip(
+            finding("src/A.java", 11, "10 int a;\n11 +int c;", "11 +long c;\n10   int a2;"));
+
+    assertEquals("int a;\nint c;", result.suggestionOld());
+    assertEquals("long c;\n  int a2;", result.suggestionNew());
+  }
+
+  @Test
   void anUnmarkedCopyWhoseCodeDiffersOrWhoseLineIsMissingIsLeftAsWritten() {
     for (var quote :
         new String[] {
