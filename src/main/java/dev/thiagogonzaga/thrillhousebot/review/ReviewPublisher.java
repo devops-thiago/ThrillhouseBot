@@ -1374,17 +1374,6 @@ public class ReviewPublisher {
       DiffLineResolver.Side side, int line, Optional<DiffLineResolver.LineRange> range) {}
 
   /**
-   * Posts one inline comment. When the anchor's range is present the comment spans {@code
-   * start_line}..{@code line}, both on the anchor's side; otherwise it anchors to the single {@code
-   * line}. On the right side the retry without a suggestion block always passes an empty range — a
-   * multi-line span is only meaningful there with a suggestion to apply across it.
-   *
-   * <p>Returns empty when the comment landed, and otherwise what GitHub said, so the caller can put
-   * the reason in the one line it logs rather than discarding it (#722). A first attempt that fails
-   * is ordinary — it is how a rejected suggestion block is discovered — so it stays at debug; only
-   * the attempt the caller gives up on is worth a warning.
-   */
-  /**
    * The inline comment's text. A thread on removed lines also carries the finding's head-side line
    * in its marker, since GitHub numbers that thread on the base side (#1360).
    */
@@ -1396,6 +1385,17 @@ public class ReviewPublisher {
         : body;
   }
 
+  /**
+   * Posts one inline comment. When the anchor's range is present the comment spans {@code
+   * start_line}..{@code line}, both on the anchor's side; otherwise it anchors to the single {@code
+   * line}. On the right side the retry without a suggestion block always passes an empty range — a
+   * multi-line span is only meaningful there with a suggestion to apply across it.
+   *
+   * <p>Returns empty when the comment landed, and otherwise what GitHub said, so the caller can put
+   * the reason in the one line it logs rather than discarding it (#722). A first attempt that fails
+   * is ordinary — it is how a rejected suggestion block is discovered — so it stays at debug; only
+   * the attempt the caller gives up on is worth a warning.
+   */
   private Optional<Rejection> tryPostInlineComment(
       CommentTarget target,
       Finding finding,
