@@ -161,6 +161,49 @@ class RelatedReferencesTest {
   }
 
   @Test
+  void pythonImportsSpanningLinesOrNamingSeveralModulesResolveEachName() {
+    var repository =
+        Set.of(
+            "app/api/views.py",
+            "app/api/schemas.py",
+            "app/api/forms.py",
+            "app/core/security.py",
+            "app/core/tokens.py",
+            "app/core/audit.py",
+            "app/core/__init__.py");
+
+    assertEquals(
+        Set.of(
+            "app/api/schemas.py",
+            "app/api/forms.py",
+            "app/core/security.py",
+            "app/core/tokens.py",
+            "app/core/audit.py"),
+        Set.copyOf(
+            paths(
+                extract(
+                    repository,
+                    changed(
+                        "app/api/views.py",
+                        "+from . import (",
+                        "+    schemas,",
+                        "+    forms as f,",
+                        "+)",
+                        "+from app.core import (security,",
+                        "+    tokens)",
+                        "+import app.core.audit as audit, os")))));
+    var unclosed =
+        new FileDiff(
+            "app/api/views.py",
+            "modified",
+            2,
+            0,
+            2,
+            "@@ -1 +1 @@\n+from app.core import (\n@@ -9 +9 @@\n+    security,\n+x = (1)");
+    assertEquals(List.of(), paths(extract(repository, unclosed)), "a hunk ends an open import");
+  }
+
+  @Test
   void scriptImportsResolveRelativePathsExtensionsAndIndexFiles() {
     var repository =
         Set.of(

@@ -135,7 +135,12 @@ final class RelatedReferences {
       Pattern.compile("^\\s*import\\s+(static\\s+)?([\\w.]+?)(\\.\\*)?\\s*(?:;|as\\s|$)");
   private static final Pattern PYTHON_FROM =
       Pattern.compile("^\\s*from\\s+(\\.*)([\\w.]*)\\s+import\\s+([\\w\\s,()*]+)");
-  private static final Pattern PYTHON_IMPORT = Pattern.compile("^\\s*import\\s+([\\w.]+)");
+  private static final Pattern PYTHON_IMPORT = Pattern.compile("^\\s*import\\s+([\\w.,\\s]+)");
+
+  /** A from-import whose name list opens a parenthesis it does not close on the same line. */
+  private static final Pattern PYTHON_FROM_OPEN =
+      Pattern.compile("^(\\s*from\\s+\\.*[\\w.]*\\s+import)\\s*\\(([^)]*)$");
+
   private static final Pattern SCRIPT_IMPORT =
       Pattern.compile(
           "(?:\\bfrom\\s+|\\bimport\\s+|\\brequire\\(\\s*|\\bimport\\(\\s*)['\"](\\.{1,2}/[^'\"]+)['\"]");
@@ -204,19 +209,38 @@ final class RelatedReferences {
     var members = new LinkedHashSet<String>();
     var referred = new LinkedHashSet<Found>();
     var inHunk = false;
+    // The "from x import" a parenthesized Python import opened, until its closing parenthesis:
+    // the names on the lines between are read as if each stood on that line.
+    String openFrom = null;
     for (var raw : file.patch().split("\n", -1)) {
       if (raw.startsWith("@@")) {
         inHunk = true;
+        openFrom = null;
         continue;
       }
       if (!inHunk || raw.isEmpty() || raw.length() > MAX_LINE_CHARS || raw.charAt(0) == '-') {
         continue;
       }
       var added = raw.charAt(0) == '+';
-      var line = raw.substring(1);
+      var text = raw.substring(1);
       // A comment refers to nothing: a commented-out import would rank as a live one.
-      if (isComment(line)) {
+      if (isComment(text)) {
         continue;
+      }
+      var closes = false;
+      if (language == Language.PYTHON) {
+        var opening = PYTHON_FROM_OPEN.matcher(text);
+        if (opening.find()) {
+          openFrom = opening.group(1);
+          text = opening.group(2);
+        } else if (openFrom != null && text.indexOf(')') >= 0) {
+          text = text.substring(0, text.indexOf(')'));
+          closes = true;
+        }
+      }
+      var line = openFrom == null ? text : openFrom + " " + text.strip();
+      if (closes) {
+        openFrom = null;
       }
       for (var imported : imports(line, language, referrer, index)) {
         // The one place the language rule is enforced: an import may name any path of the
@@ -330,11 +354,15 @@ final class RelatedReferences {
     if (!plain.find()) {
       return List.of();
     }
-    var module = List.of(plain.group(1).split("\\."));
-    var symbol = module.get(module.size() - 1);
-    return pythonModule(module, null, index).stream()
-        .map(path -> new Reference(path, symbol))
-        .toList();
+    var references = new ArrayList<Reference>();
+    for (var name : plain.group(1).split(",")) {
+      // "import a.b as c, d": each name is a module, up to its alias.
+      var module = List.of(name.strip().split("\\s+")[0].split("\\."));
+      var symbol = module.get(module.size() - 1);
+      pythonModule(module, null, index)
+          .forEach(path -> references.add(new Reference(path, symbol)));
+    }
+    return references;
   }
 
   /** The file of a Python module: relative to {@code base} when given, else by path suffix. */
