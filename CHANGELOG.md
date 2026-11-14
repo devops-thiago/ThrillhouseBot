@@ -57,13 +57,16 @@ All notable changes to ThrillhouseBot.
 - **A rejected API key fails the call on its first attempt** (#1329): an HTTP 401 or 403, or
   LangChain4j's `AuthenticationException`, was retried like any transient failure, so a wrong or
   revoked key cost every review all its attempts and the backoff waits, and the failure read as a
-  generic retry exhaustion. The review, batch and summary calls and the repair step now stop at
-  once, with no wait and no move to `AI_FALLBACK_MODEL`, and the log line and the session's
-  failure reason say the provider rejected the API key and name `AI_API_KEY`. A multi-call review
-  fails instead of retrying each batch. `PromptEvalTest` stops the whole suite at the first
-  rejected call, including a verifier, summary check or repair call that fails open, and fails at
-  once when `QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY` is not set beside
-  `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY`, since those calls use the concise client's key.
+  generic retry exhaustion. Every call now stops at its first rejection, with no wait and no move
+  to `AI_FALLBACK_MODEL`, and the log line says the provider rejected the API key. On the review
+  and batch calls and the review repair, the review fails and the session's failure reason names
+  `AI_API_KEY`; a multi-call review fails instead of retrying each batch. On the summary call the
+  review keeps its findings under the counts-only summary, and on the verifier call it keeps them
+  unscreened, as for any other failure of those calls. `PromptEvalTest` stops the whole suite at
+  the first rejected call, including one that fails open, and fails at once when
+  `QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY` is not set beside
+  `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY`, since the summary, verifier, summary check and summary
+  repair calls use the concise client's key.
 - **A finding is no longer superseded because its quote starts just outside the patch** (#1321,
   #1318): presence was checked against the patch's added and context lines only, so a quote that
   began one line before its hunk read as gone, and the next round superseded the finding even

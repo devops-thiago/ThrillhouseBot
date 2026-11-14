@@ -553,8 +553,9 @@ live `fence(...)` (#604).
   `EvalCorpusTest` validates the schema and routing coverage in every build. The live
   `PromptEvalTest` is tagged `eval`, runs only with `-Peval`, skips itself without
   `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY`, and fails without
-  `QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY` (the verifier, summary check and repair use the
-  `concise` client, whose key is the test profile's dummy otherwise):
+  `QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY` (the summary, verifier, summary check and summary
+  repair calls use the `concise` client, whose key is the test profile's dummy otherwise; the
+  review call and the review repair use the main key):
   `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY=… QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY=… ./mvnw test -Peval -Dtest=PromptEvalTest`.
   The suite fails at the first call the provider refuses for its key, including one that failed
   open, as `EvalCallRecorder.onError` records it (#1329). Run it before
