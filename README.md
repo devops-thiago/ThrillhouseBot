@@ -1071,6 +1071,41 @@ Text inside a fenced code block, a blockquote or an HTML comment is not read as
 a claim. A criterion with no citation, a citation that cannot be found, or a
 repository that cannot be read keeps the entry listed.
 
+### Related context
+
+A review reads the diff, so it cannot see the method a changed line calls, the
+interface a changed class implements or the validator a value passes through.
+`REVIEW_RELATED_CONTEXT_ENABLED=true` shows it a few of those files, read-only:
+
+1. The candidates are found without a model call, from the import lines in the
+   diff (added, or shown as context around a hunk) and the type names its added
+   lines use, matched against the repository's file listing. Java, Kotlin,
+   Scala, Groovy, Python, JavaScript/TypeScript, Go, Rust, Ruby, C/C++, PHP, C#,
+   Swift and Dart are read, each only as deep as its import line. A candidate is
+   always a source file of the changed file's own language that the pull request
+   does not change.
+2. One call on the concise model gets the changed files' paths and hunk headers
+   (no diff) and the candidate list, and picks at most
+   `REVIEW_RELATED_CONTEXT_MAX_FILES` (default 4, 1 to 10) by number, each with
+   a reason: `caller`, `interface`, `sanitizer-or-validator` or
+   `config-consumer`.
+3. The picked files are read at the head commit and clipped to the parts the
+   changed code uses: where a called member is declared and where the file's
+   type is named. Every review call gets them in a fenced
+   `## Related context (read-only, not part of the change)` section, as
+   untrusted data. Findings stay on changed lines.
+4. A finding that names one of those files carries its excerpt to the verifier,
+   which otherwise sees only the diff.
+
+The selection call counts in `REVIEW_MAX_AI_CALLS`, which must be 3 or more
+with this on (the bot refuses to start otherwise), and its tokens count toward
+`REVIEW_MAX_TOKENS_PER_REVIEW`. The section takes at most 15% of the per-call
+input budget and 4,000 characters per file. It costs one repository listing and
+one read per picked file. No candidate, a failed or empty selection, or an
+unreadable file leaves the review as it is with the setting off. Files matching
+`THRILLHOUSEBOT_REVIEW_IGNORED_FILES` are never read for it; the ignore list in a repository's
+`.github/thrillhousebot.yml` is not applied to related files yet.
+
 ### Review learnings
 
 `REVIEW_LEARNINGS_ENABLED=true` lets the bot remember what maintainers taught it

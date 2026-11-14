@@ -91,6 +91,12 @@ public class CitedLocationResolver {
    */
   static final int MAX_CITED_FILES_FETCHED = 8;
 
+  /**
+   * Repository files read per review as related context ({@link Round#relatedFileLines}), counted
+   * apart from the other two caps; the largest {@code REVIEW_RELATED_CONTEXT_MAX_FILES} accepted.
+   */
+  static final int MAX_RELATED_FILES_FETCHED = 10;
+
   /** A source file is never megabytes; anything larger is skipped rather than decoded. */
   static final long MAX_FILE_BYTES = 512L * 1024;
 
@@ -175,6 +181,8 @@ public class CitedLocationResolver {
 
     private final AtomicInteger citedFetches = new AtomicInteger();
 
+    private final AtomicInteger relatedFetches = new AtomicInteger();
+
     /** The review's evidence budget, shared with the other resolvers that attach notes (#475). */
     private final EvidenceBudget budget;
 
@@ -241,6 +249,25 @@ public class CitedLocationResolver {
         return contents.get(path);
       }
       if (citedFetches.incrementAndGet() > MAX_CITED_FILES_FETCHED) {
+        return Optional.empty();
+      }
+      return contents.computeIfAbsent(path, this::fetch);
+    }
+
+    /**
+     * The lines of a repository file picked as related context (#55), at the round's ref, read once
+     * per round and at most {@link #MAX_RELATED_FILES_FETCHED} files, counted apart from the other
+     * reads; empty when the file is past that cap, unreadable, or there is no repository access.
+     * The caller passes only paths of {@link #repositoryPaths()}.
+     */
+    public Optional<List<String>> relatedFileLines(String path) {
+      if (prClient == null) {
+        return Optional.empty();
+      }
+      if (contents.containsKey(path)) {
+        return contents.get(path);
+      }
+      if (relatedFetches.incrementAndGet() > MAX_RELATED_FILES_FETCHED) {
         return Optional.empty();
       }
       return contents.computeIfAbsent(path, this::fetch);

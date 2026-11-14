@@ -640,4 +640,27 @@ class CitedLocationResolverTest {
     verify(prClient, never()).getFileContent(any(), any(), any(), any(), eq("one-too-many"), any());
     assertTrue(CitedLocationResolver.disabled().citedFileLines("docs/A.md").isEmpty());
   }
+
+  @Test
+  void relatedFilesAreReadOncePerRoundUpToTheirOwnCap() {
+    // #55: counted apart from the findings' and the description's reads.
+    when(prClient.getFileContent(any(), any(), any(), any(), any(), any()))
+        .thenAnswer(
+            call ->
+                new GitHubPullRequestClient.FileContent(
+                    "f",
+                    call.getArgument(4),
+                    Base64.getEncoder().encodeToString("a\nb\n".getBytes(StandardCharsets.UTF_8)),
+                    "base64",
+                    4));
+    var round = round(changed(PATH));
+
+    for (var i = 0; i < CitedLocationResolver.MAX_RELATED_FILES_FETCHED; i++) {
+      assertEquals(List.of("a", "b"), round.relatedFileLines("src/R" + i + ".java").orElseThrow());
+    }
+    assertEquals(List.of("a", "b"), round.relatedFileLines("src/R0.java").orElseThrow());
+    assertTrue(round.relatedFileLines("src/one-too-many.java").isEmpty());
+    verify(prClient, times(1)).getFileContent(any(), any(), any(), any(), eq("src/R0.java"), any());
+    assertTrue(CitedLocationResolver.disabled().relatedFileLines("src/R0.java").isEmpty());
+  }
 }

@@ -84,6 +84,7 @@ same diff.
 | Early CI reading and the opt-in CI-failure section | `review/CiStatusEvaluator`, `review/CiFailureContextResolver`; TAP `TODO` and `SKIP` directives are expected outcomes, excluded both when collecting failed tests and when reading them back via `CiFailureCitations` (#1110). When the early reading counted a pending check or saw no check besides the bot's own (`CiFailures.reported`), the summary's citations are read from a section refreshed after the model call (`ReviewOrchestrator.refreshCiFailures` → `CiStatusEvaluator.checkRunFailures`, or the gate's own re-read, then `CiFailureContextResolver.refresh`, #1092), and `FindingVerificationService.floorCiCitedConfidence` lifts a low-confidence finding citing it, the round persisted again (`floorOnRefreshedCi`); the review and verifier calls keep the review-start section |
 | Opt-in review learnings: recall before the call (ranked, capped section and typed selection) | `review/ReviewLearnings.recall` (reads `ReviewLearningService.listActive` once) |
 | Opt-in linked-issue context: resolve the PR's linked issues, read them, extract acceptance criteria, sanitize and cap | `review/TicketContextResolver.resolve` over an `review/IssueTrackerProvider` (`review/GitHubIssuesProvider.linkedTickets`: PR-body closing keywords, then `closingIssuesReferences`, then optionally the branch name), called from `ReviewOrchestrator` and handed to `ReviewPromptAssembler.assemble(ctx, req, ciFailures, linkedIssues)` |
+| Opt-in related context (#55): candidate files from the diff's import lines and type names against the repository listing (no model call), one selection call on the concise model that answers with candidate numbers, then the picked files read at the head commit and clipped to the members the added lines call and the names they use, capped per file and at `RELATED_CONTEXT_BUDGET_SHARE` of the per-call input budget. A finding naming a related file carries its excerpt in `context_evidence` | `review/RelatedContextResolver.resolve` over `review/RelatedReferences.extract`, `review/ai/RelatedContextSelectionService` (`RelatedContextSelector`, `RelatedContextPrompts`), `CitedLocationResolver.Round.relatedFileLines`, `DiffBudgetPlanner.relatedContextTokenBudget`; the value is `review/RelatedContext` (`section`, `noteFor`), attached by `ContextEvidenceResolver.Round.withRelatedContext` |
 | Fence untrusted input, build review and summary guidance, pick the system prompt | `review/ReviewPromptAssembler` (with `PromptSections`, `PromptTemplateEscaper`, `ReviewDimensionRouter`) |
 | Token budget and batches | `review/DiffBudgetPlanner` (`plan`, `boundPreviousFindings`, `perCallInputBudget`) |
 | Model calls: single call, batches, retries, sequential retry, truncation salvage, summary call. Before a full retry of an answer the parser refused (never a timeout, provider error, throttle or length stop), one repair call gets only that answer, fenced, the parser's error and the contract, on the lane's model; a repaired review answer is rejected when the scan of the failed answer lost its structure, or when it has fewer findings than the failed answer has titles, a title that is none of the failed answer's, one of those titles fewer times than the failed answer wrote it (#1176), or more statuses than it wrote (read by `AnswerKeys` from the elements of the findings and statuses arrays); an accepted repair gets back the file and line the failed answer wrote for each title (the n-th copy of a title paired with its n-th copy) and the id, key and status it wrote for each status position, a changed value restored and logged (`ResponseRepairService.restored`, #1322), a failed or rejected repair leaves the retry as it was, and a repaired summary answer gets the same `file_summaries` re-ask as a parsed one. A `file_summaries` string holding JSON is read as that JSON; any other string gets one re-ask for that field, keeping rows whose whole path the string names (#1079, `REVIEW_RESPONSE_REPAIR_ENABLED`) | `review/FindingPipeline.run` → `review/ai/AiReviewService` (`review`, `reviewBatch`, `summarize`, `repaired`, `withReadFileSummaries`) → `review/ai/ResponseRepairService` (`ResponseRepairer`, `SummaryResponseRepairer`, `ResponseRepairPrompts`) |
@@ -117,13 +118,18 @@ same diff.
   `ensureCallAllowed` in `AiReviewService`. The blocking verifier records its own usage and checks
   `ceilingReached` in `FindingVerificationService` (including its one repeat after an empty body,
   #1079), and so does the opt-in summary check in `SummaryVerificationService` and the repair call
-  in `ResponseRepairService`. A new review-path call must do one or the other. The on-request commands and maintainer replies are outside the ledger: a command is
+  in `ResponseRepairService`, and the related-context selection in
+  `RelatedContextSelectionService`, which also opens the entry because it runs before the
+  pipeline (`ReviewOrchestrator` clears it for a run that never reaches the pipeline). A new
+  review-path call must do one or the other. The on-request commands and maintainer replies are outside the ledger: a command is
   bounded by `REVIEW_MAX_AI_CALLS`, a reply is one call, and both hold a gate slot.
 - **`REVIEW_MAX_AI_CALLS` counts planned calls, not retries.** `DiffBudgetPlanner.plan` packs at
   most `max-ai-calls - 1` batches and reserves one call for the summary on both lanes. At `1`,
   `callCapLeavesNoSummaryCall()` makes the pipeline skip the summary and disclose it
   (`SummaryDegradation.SKIPPED_AT_CALL_CAP`). The commands take `max-ai-calls` minus their own
-  reserved reduce calls (`AbstractPrSuggestionGenerator.maxBatches`). The token ceiling, not this
+  reserved reduce calls (`AbstractPrSuggestionGenerator.maxBatches`). The related-context
+  selection (#55) is a planned call: when it was made, `plan(files, inputs, callsMade)` packs one
+  batch fewer, and `StartupConfigValidator` refuses the feature below `max-ai-calls=3`. The token ceiling, not this
   cap, is what bounds actual spend.
 - **The review call returns findings and `previous_findings_status` only**
   (`PrReviewPrompts.FINDINGS_RESPONSE_CONTRACT`). Every lane ends with the summary call
@@ -476,8 +482,9 @@ Two patterns. Pick the first unless the section must sit somewhere else in the u
 1. **Trailing-guidance slot (the default).** Review-only guidance and data ride
    `PromptInputs.repoInstructions`, which `ReviewPromptAssembler.assemble` builds with
    `combineSections` (mock fidelity, bug-fix efficacy with linked issue text, config-key context,
-   heuristic failure modes, patch coverage, then CI failures, linked issues and learnings in that
-   fixed order, then repo instructions). The three opt-in sections arrive together as one
+   heuristic failure modes, patch coverage, then CI failures, related context, linked issues and
+   learnings in that fixed order, then repo instructions). The four opt-in sections arrive together
+   as one
    `ReviewPromptAssembler.TrailingContext` passed to `assemble(ctx, req, extra)`; add a component
    there rather than another overload. Add a static `…Section` method that returns `""` when there
    is no data and emits the guidance constant only together with its fenced data (see
@@ -537,7 +544,8 @@ live `fence(...)` (#604).
 - **Prompt-content tests pin guidance** that specific issues fought for:
   `PrReviewPromptsContentTest`, `FindingVerifierPromptsContentTest`,
   `PrImproveAssistantPromptsContentTest`, `UnitTestAssistantPromptsContentTest`,
-  `TicketContextPromptsContentTest`, `SummaryVerifierPromptsContentTest`,
+  `TicketContextPromptsContentTest`, `RelatedContextPromptsContentTest`,
+  `SummaryVerifierPromptsContentTest`,
   `ResponseRepairPromptsContentTest`. Update a pin
   deliberately when you reword it. Never delete one to make a build pass.
 - **The eval corpus is the recall gate.** `src/test/resources/evalcorpus/` holds labeled cases:
@@ -572,6 +580,12 @@ live `fence(...)` (#604).
   path-scoped). Use `PromptTemplateEscaper.fence`, which wraps text in per-call CSPRNG fence
   lines and passes it byte-exact, and give it a heading in the prompt that calls it untrusted data.
   `escape` / `neutralizeMarkers` only rewrite legacy markers. They are not an injection defense.
+- **Related context reads only listed paths, and its text is untrusted** (#55). A candidate is a
+  path of the repository listing in the changed file's own language, and the selection call
+  answers with candidate numbers, so neither the diff's text nor the model can put a path in
+  front of the contents API. The excerpts are repository text: fenced in the review call, and
+  the selection call's file lists are fenced too. The verifier prompt is unchanged; the excerpt
+  reaches it as a `context_evidence` note under that field's general rule.
 - **Linked issues are read, never written, and their text is untrusted.** An
   `IssueTrackerProvider` only reads: no comment, label or state change on the issue, ever
   (`GitHubIssuesProviderTest.onlyReadsNeverWrites`). PR-body fence indentation uses absolute

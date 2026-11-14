@@ -30,6 +30,7 @@ import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TicketContextPrompts;
 import java.util.List;
 import java.util.Map;
@@ -864,7 +865,9 @@ class ReviewPromptAssemblerTest {
               "main",
               false);
       return assembler.assemble(
-          ctx, req, new ReviewPromptAssembler.TrailingContext(ciFailures, linkedIssues, learnings));
+          ctx,
+          req,
+          new ReviewPromptAssembler.TrailingContext(ciFailures, linkedIssues, learnings, ""));
     }
   }
 
@@ -1072,7 +1075,7 @@ class ReviewPromptAssemblerTest {
               "main",
               false);
       return assembler.assemble(
-          ctx, req, new ReviewPromptAssembler.TrailingContext("", linkedIssues, ""));
+          ctx, req, new ReviewPromptAssembler.TrailingContext("", linkedIssues, "", ""));
     }
   }
 
@@ -1109,8 +1112,37 @@ class ReviewPromptAssemblerTest {
     }
 
     @Test
+    void theRelatedContextIsFencedUnderItsRequestBetweenCiFailuresAndLinkedIssues() {
+      // #55: repository text is untrusted, and the request travels with it or not at all.
+      var excerpt =
+          "File: src/Util.java (interface; 9 lines in all)\nLines 1-1:\n1 | class Util {}";
+      var section = ReviewPromptAssembler.relatedContextSection(excerpt);
+
+      assertTrue(section.startsWith(RelatedContextPrompts.REVIEW_REQUEST), section);
+      assertTrue(
+          section.indexOf(PromptTemplateEscaper.fencePrefix()) < section.indexOf("File: src/Util"),
+          section);
+      assertEquals("", ReviewPromptAssembler.relatedContextSection(" "));
+      assertEquals("", ReviewPromptAssembler.relatedContextSection(null));
+
+      var order =
+          ReviewPromptAssembler.combineSections(
+              ReviewPromptAssembler.ciFailuresSection("### unit-tests"),
+              ReviewPromptAssembler.combineSections(
+                  section,
+                  ReviewPromptAssembler.linkedIssuesSection(
+                      TicketContextPrompts.REVIEW_REQUEST, "### Issue #7")));
+      assertTrue(
+          order.indexOf(PrReviewPrompts.CI_FAILURES_REQUEST)
+                  < order.indexOf(RelatedContextPrompts.REVIEW_REQUEST)
+              && order.indexOf(RelatedContextPrompts.REVIEW_REQUEST)
+                  < order.indexOf(TicketContextPrompts.REVIEW_REQUEST),
+          order);
+    }
+
+    @Test
     void nullSectionsReadAsAbsent() {
-      var none = new ReviewPromptAssembler.TrailingContext(null, null, null);
+      var none = new ReviewPromptAssembler.TrailingContext(null, null, null, null);
       assertEquals(ReviewPromptAssembler.TrailingContext.NONE, none);
       assertFalse(none.hasLinkedIssues());
     }

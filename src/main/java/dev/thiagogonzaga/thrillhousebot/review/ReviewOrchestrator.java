@@ -95,6 +95,7 @@ public class ReviewOrchestrator {
   private final CiStatusEvaluator ciStatusEvaluator;
   private final CiFailureContextResolver ciFailureContext;
   private final TicketContextResolver ticketContext;
+  private final RelatedContextResolver relatedContext;
   private final ReviewLearnings learnings;
 
   private final CheckRunManager checkRunManager;
@@ -257,6 +258,7 @@ public class ReviewOrchestrator {
       ReviewNotifier notifier,
       CiFailureContextResolver ciFailureContext,
       TicketContextResolver ticketContext,
+      RelatedContextResolver relatedContext,
       ReviewLearnings learnings) {
     this.config = config;
     this.authClient = authClient;
@@ -265,6 +267,7 @@ public class ReviewOrchestrator {
     this.ciStatusEvaluator = ciStatusEvaluator;
     this.ciFailureContext = ciFailureContext;
     this.ticketContext = ticketContext;
+    this.relatedContext = relatedContext;
     this.learnings = learnings;
     this.checkRunManager = checkRunManager;
     this.contextLoader = contextLoader;
@@ -362,26 +365,11 @@ public class ReviewOrchestrator {
       // #38: what maintainers taught the review on earlier pull requests, bounded and relevant to
       // the files this one changes; blank when the feature is off.
       var learned = recallLearnings(req, ctx);
-      // Bound the one prompt section that grows every round before anything is sized or sent, so
-      // the plan's overhead estimate and the text the calls actually carry are the same (#583).
-      var promptInputs =
-          budgetPlanner.boundPreviousFindings(
-              promptAssembler.assemble(
-                  ctx,
-                  req,
-                  new ReviewPromptAssembler.TrailingContext(
-                      ciFailures, linkedIssues, learned.section())));
-      var plan = budgetPlanner.plan(ctx.reviewableFiles(), promptInputs);
-
-      if (ciFuture == null) {
-        ciFuture = startCiEvaluation(auth, ciReq);
-      }
-
       // #650/#475: one evidence round for the whole review, so the batches share its fetch budget,
       // its file cache, and the single character budget every attached note is charged to. The
       // findings' evidence reads only files this pull request changes; the summary reads at most a
       // few more, the ones the description cites as already meeting a linked-issue criterion.
-      var evidence =
+      var repositoryEvidence =
           ReviewEvidence.forReview(
                   citedLocationResolver,
                   auth,
@@ -391,6 +379,27 @@ public class ReviewOrchestrator {
                   ctx,
                   ciFailures)
               .withLearnings(learned.selected());
+      // #55: repository code the diff refers to but does not change, picked by one small call and
+      // read through the same round; empty when the feature is off or nothing could be read. A
+      // finding naming one of those files carries its excerpt to the verifier.
+      var related = relatedContext.resolve(session, ctx, repositoryEvidence.citedLocations());
+      var evidence = repositoryEvidence.withRelatedContext(related);
+      // Bound the one prompt section that grows every round before anything is sized or sent, so
+      // the plan's overhead estimate and the text the calls actually carry are the same (#583).
+      var promptInputs =
+          budgetPlanner.boundPreviousFindings(
+              promptAssembler.assemble(
+                  ctx,
+                  req,
+                  new ReviewPromptAssembler.TrailingContext(
+                      ciFailures, linkedIssues, learned.section(), related.section())));
+      // The selection call, when one was made, is one of the calls REVIEW_MAX_AI_CALLS allows.
+      var plan = budgetPlanner.plan(ctx.reviewableFiles(), promptInputs, related.selectionCalls());
+
+      if (ciFuture == null) {
+        ciFuture = startCiEvaluation(auth, ciReq);
+      }
+
       broadcastPhase(session, SessionEventBroadcaster.SessionEvent.Phase.REVIEW);
       var reviewed = findingPipeline.run(session, promptInputs, ctx, plan, lineResolver, evidence);
 
@@ -555,6 +564,9 @@ public class ReviewOrchestrator {
         handleReviewFailure(auth, req, session, checkRunId, e);
       }
     } finally {
+      // #55: the spend-ledger entry the selection call opened, for a run that never reached the
+      // pipeline, which clears it itself.
+      relatedContext.close(session);
       // Every outcome but a CI hold — a verdict with findings, a failure, a superseded run — is
       // final for this head, so a CI completion for it has nothing to revisit. A run that failed
       // before it tracked its head leaves whatever the pull request held alone.

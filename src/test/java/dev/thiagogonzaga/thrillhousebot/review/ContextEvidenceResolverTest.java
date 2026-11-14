@@ -659,4 +659,46 @@ class ContextEvidenceResolverTest {
     assertTrue(ContextEvidenceResolver.rangesContain("12-18, and 3 more range(s)", 15));
     assertFalse(ContextEvidenceResolver.rangesContain("12-18, and 3 more range(s)", 99));
   }
+
+  @Test
+  void aFindingNamingARelatedFileCarriesItsExcerptBesideItsOtherEvidence() {
+    // #55: the verifier is not given the related-context section, only this note.
+    var related =
+        new RelatedContext(
+            List.of(
+                new RelatedContext.RelatedFile(
+                    "src/main/java/app/Escaper.java",
+                    "sanitizer-or-validator",
+                    List.of(PATH),
+                    30,
+                    List.of(
+                        new RelatedContext.Region(
+                            7, List.of("  static String escape(String raw) { return raw; }"))))),
+            1);
+    var round = round(COVERAGE_SECTION, PathScopedInstructions.NONE).withRelatedContext(related);
+    var naming = finding(PATH, 42, "`Escaper.escape` returns its input unchanged.");
+    var other = finding(PATH, 42, "The branch here is never executed.");
+
+    var note = evidence(round, naming);
+    assertTrue(note.contains("lists line 42"), note);
+    assertTrue(note.contains("Related context this review supplied"), note);
+    assertTrue(note.contains("7 |   static String escape"), note);
+    assertFalse(evidence(round, other).contains("Related context"), "names no related file");
+  }
+
+  @Test
+  void aRoundWithoutRelatedContextOrASilentOneIsReturnedAsItIs() {
+    var round = round(COVERAGE_SECTION, PathScopedInstructions.NONE);
+    var silent = ContextEvidenceResolver.disabled();
+    var related =
+        new RelatedContext(
+            List.of(
+                new RelatedContext.RelatedFile(
+                    "a/Escaper.java", "interface", List.of(), 1, List.of())),
+            1);
+
+    assertSame(round, round.withRelatedContext(RelatedContext.NONE));
+    assertSame(round, round.withRelatedContext(null));
+    assertSame(silent, silent.withRelatedContext(related));
+  }
 }

@@ -120,6 +120,7 @@ public class StartupConfigValidator {
     validateCiGating(problems, config.review());
     validateCiContext(problems, config.review().ciContext());
     validateTicketContext(problems, config.review().ticketContext());
+    validateRelatedContext(problems, config.review());
     validateLearnings(problems, config.review());
     validateBlockingStrictness(problems, config.review());
     validateSecurityScan(problems, config.review().securityScan());
@@ -729,6 +730,35 @@ public class StartupConfigValidator {
         ThrillhouseConfig.TicketContextConfig.MAX_MAX_CHARS,
         "REVIEW_TICKET_CONTEXT_MAX_CHARS",
         "thrillhousebot.review.ticket-context.max-chars");
+  }
+
+  /**
+   * Validates the opt-in related context (#55), only while it is on. Its selection call is counted
+   * in {@code REVIEW_MAX_AI_CALLS} beside the review and summary calls, so an allowance below three
+   * would leave the feature on and never run it; the file count is bounded so a typo cannot turn
+   * the section into one that crowds out the diff.
+   */
+  private static void validateRelatedContext(
+      List<String> problems, ThrillhouseConfig.ReviewConfig review) {
+    var relatedContext = review.relatedContext();
+    if (!relatedContext.enabled()) {
+      return;
+    }
+    if (review.maxAiCalls() < ThrillhouseConfig.RelatedContextConfig.MIN_AI_CALLS) {
+      problems.add(
+          "REVIEW_RELATED_CONTEXT_ENABLED=true requires REVIEW_MAX_AI_CALLS >= "
+              + ThrillhouseConfig.RelatedContextConfig.MIN_AI_CALLS
+              + ": the selection call is counted beside the review call and the summary call"
+              + " (thrillhousebot.review.max-ai-calls): "
+              + review.maxAiCalls());
+    }
+    requireWithin(
+        problems,
+        relatedContext.maxFiles(),
+        ThrillhouseConfig.RelatedContextConfig.MIN_MAX_FILES,
+        ThrillhouseConfig.RelatedContextConfig.MAX_MAX_FILES,
+        "REVIEW_RELATED_CONTEXT_MAX_FILES",
+        "thrillhousebot.review.related-context.max-files");
   }
 
   /** Adds a problem naming {@code env} and {@code key} when {@code value} is outside min..max. */

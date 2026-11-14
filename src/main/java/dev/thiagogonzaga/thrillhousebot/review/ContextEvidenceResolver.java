@@ -161,7 +161,8 @@ public final class ContextEvidenceResolver {
         pathInstructions,
         CiFailureCitations.parse(ciFailures, files),
         budget,
-        false);
+        false,
+        RelatedContext.NONE);
   }
 
   /**
@@ -171,7 +172,7 @@ public final class ContextEvidenceResolver {
    * caller rather than about the review (#475 review).
    */
   public static Round disabled() {
-    return new Round(null, null, CiFailureCitations.NONE, null, true);
+    return new Round(null, null, CiFailureCitations.NONE, null, true, RelatedContext.NONE);
   }
 
   /** One review's parsed context sections and the budget their notes are charged to. */
@@ -202,12 +203,24 @@ public final class ContextEvidenceResolver {
     /** Whether this round speaks at all; see {@link ContextEvidenceResolver#disabled()}. */
     private final boolean silent;
 
+    /** The repository code outside the diff the review call was shown (#55). */
+    private final RelatedContext relatedContext;
+
+    /** The source sections, kept so {@link #withRelatedContext} can rebuild the round. */
+    private final String patchCoverage;
+
+    private final PathScopedInstructions pathInstructions;
+
     private Round(
         String patchCoverage,
         PathScopedInstructions pathInstructions,
         CiFailureCitations ciFailures,
         EvidenceBudget budget,
-        boolean silent) {
+        boolean silent,
+        RelatedContext relatedContext) {
+      this.patchCoverage = patchCoverage;
+      this.pathInstructions = pathInstructions;
+      this.relatedContext = relatedContext;
       this.ciFailures = ciFailures;
       this.coverageSupplied = patchCoverage != null && !patchCoverage.isBlank();
       this.coverage = coverageSupplied ? parseSection(patchCoverage) : Coverage.NONE;
@@ -216,6 +229,17 @@ public final class ContextEvidenceResolver {
       index(pathInstructions);
       this.budget = budget;
       this.silent = silent;
+    }
+
+    /**
+     * This round with the review's related context (#55), on the same budget: a finding naming a
+     * related file then carries its excerpt. A silent round stays silent.
+     */
+    public Round withRelatedContext(RelatedContext related) {
+      if (silent || related == null || related.isEmpty()) {
+        return this;
+      }
+      return new Round(patchCoverage, pathInstructions, ciFailures, budget, false, related);
     }
 
     /** The scope and name indexes one review's governed files are looked up through. */
@@ -271,7 +295,9 @@ public final class ContextEvidenceResolver {
     /** The sentences attached to one finding, or {@code null} when nothing could be said. */
     private String noteFor(ReviewResponse.Finding finding) {
       var note =
-          join(join(coverageNote(finding), pathRuleNote(finding)), ciFailures.noteFor(finding));
+          join(
+              join(join(coverageNote(finding), pathRuleNote(finding)), ciFailures.noteFor(finding)),
+              relatedContext.noteFor(finding));
       if (note == null) {
         return null;
       }

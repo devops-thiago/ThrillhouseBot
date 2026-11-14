@@ -57,6 +57,15 @@ public record ReviewEvidence(
     return new ReviewEvidence(citedLocations, contextEvidence, selected, criterionVerdicts);
   }
 
+  /** The same evidence with the related context the review call was shown (#55). */
+  ReviewEvidence withRelatedContext(RelatedContext related) {
+    return new ReviewEvidence(
+        citedLocations,
+        contextEvidence.withRelatedContext(related),
+        selectedLearnings,
+        criterionVerdicts);
+  }
+
   /** Attaches nothing at all, for a caller with no repository access and no loaded context. */
   public static final ReviewEvidence NONE =
       new ReviewEvidence(

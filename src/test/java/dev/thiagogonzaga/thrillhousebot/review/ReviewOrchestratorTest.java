@@ -344,6 +344,7 @@ class ReviewOrchestratorTest {
         notifier,
         ciFailureContext,
         ticketContext,
+        RelatedContextResolver.disabled(),
         learnings);
   }
 

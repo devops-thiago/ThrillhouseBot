@@ -69,6 +69,7 @@ class AiServicePromptRenderingTest {
   @Inject ReplyAssistant replyAssistant;
   @Inject FindingVerifier findingVerifier;
   @Inject SummaryVerifier summaryVerifier;
+  @Inject RelatedContextSelector relatedContextSelector;
   @Inject ResponseRepairer responseRepairer;
   @Inject SummaryResponseRepairer summaryResponseRepairer;
   @Inject PrReviewer prReviewer;
@@ -313,6 +314,27 @@ class AiServicePromptRenderingTest {
     assertTrue(user.contains("## PR Diff"), "the diff section must render when a diff is sent");
     assertTrue(
         systemText(request).contains("\"contradicted\""),
+        "the system prompt must state the answer shape");
+  }
+
+  @Test
+  void relatedContextSelectionPromptCarriesBothListsAndTheLimit() {
+    // #55: a dropped @V would ask the call to pick from a list it never saw.
+    ChatRequest request =
+        captureBlockingRequest(
+            conciseChatModel,
+            () ->
+                relatedContextSelector.select(
+                    PromptTemplateEscaper.fence("CHANGED_SENTINEL"),
+                    PromptTemplateEscaper.fence("CANDIDATES_SENTINEL"),
+                    7));
+    String user = userText(request);
+
+    assertTrue(user.contains("CHANGED_SENTINEL"), "changed files missing");
+    assertTrue(user.contains("CANDIDATES_SENTINEL"), "candidates missing");
+    assertTrue(user.contains("Pick at most 7 candidate(s)."), "limit missing");
+    assertTrue(
+        systemText(request).contains("\"related\""),
         "the system prompt must state the answer shape");
   }
 
