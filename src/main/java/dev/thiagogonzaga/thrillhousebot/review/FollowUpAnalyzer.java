@@ -4015,6 +4015,34 @@ public class FollowUpAnalyzer {
   }
 
   /**
+   * {@code response} with its {@code previous_findings_status} screened by {@link
+   * ModelStatusScreen} (#1322): each status must echo its finding's key, and a {@code resolved} is
+   * held to the code. The same instance when nothing changed.
+   *
+   * @param previous the findings the prompt listed by number, in order
+   * @param renameTargets each renamed file's new path, blank for a content-identical rename
+   */
+  static ReviewResponse screenModelStatuses(
+      ReviewResponse response,
+      List<ReviewResponse.Finding> previous,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets) {
+    return new ModelStatusScreen(previous, lineResolver, renameTargets).screen(response);
+  }
+
+  /**
+   * {@code statuses} screened the way {@link #screenModelStatuses(ReviewResponse, List,
+   * DiffLineResolver, Map)} screens a response's.
+   */
+  static List<ReviewResponse.PreviousFindingStatus> screenModelStatuses(
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      List<ReviewResponse.Finding> previous,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets) {
+    return new ModelStatusScreen(previous, lineResolver, renameTargets).screen(statuses);
+  }
+
+  /**
    * Whether a finding's flagged code is still in the current diff, resolving a renamed-and-edited
    * file to its rename target as {@link #hasVanished} does. A content-identical pure rename (blank
    * target) leaves the anchor resolvable at neither path but the finding unchanged, so it counts as

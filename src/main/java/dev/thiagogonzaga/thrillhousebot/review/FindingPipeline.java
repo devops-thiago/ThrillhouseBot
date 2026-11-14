@@ -98,11 +98,11 @@ public class FindingPipeline {
    * Everything one multi-call review's batch lane needs beyond the index of the batch being worked
    * on: the planned batches, the session the calls are billed to, the shared prompt template, the
    * plan the coverage disclosures are recorded on, the previous-finding file index the statuses are
-   * scoped against, the screen each batch's statuses pass first ({@link ModelStatusScreen}, #1322),
-   * and the evidence round whose budget and caches the batches share. One value because they are
-   * fixed for the whole lane and travel together through every step of it — the parallel pass, the
-   * join, the sequential retry and the truncation salvage — so the step a batch is in is the only
-   * thing its signature has to say.
+   * scoped against, the screen each batch's statuses pass first ({@link StatusScreen}, #1322), and
+   * the evidence round whose budget and caches the batches share. One value because they are fixed
+   * for the whole lane and travel together through every step of it — the parallel pass, the join,
+   * the sequential retry and the truncation salvage — so the step a batch is in is the only thing
+   * its signature has to say.
    */
   private record BatchRun(
       List<DiffBudgetPlanner.DiffBatch> batches,
@@ -110,8 +110,28 @@ public class FindingPipeline {
       BatchPrompts prompts,
       DiffBudgetPlanner.BudgetPlan plan,
       Map<Integer, String> previousFilesById,
-      ModelStatusScreen statusScreen,
+      StatusScreen statusScreen,
       ReviewEvidence evidence) {}
+
+  /**
+   * What a review call's {@code previous_findings_status} is screened against as soon as it returns
+   * ({@link FollowUpAnalyzer#screenModelStatuses}, #1322): the prior findings the prompt listed by
+   * number, the current diff, and each renamed file's new path.
+   */
+  private record StatusScreen(
+      List<ReviewResponse.Finding> previous,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets) {
+
+    ReviewResponse screen(ReviewResponse response) {
+      return FollowUpAnalyzer.screenModelStatuses(response, previous, lineResolver, renameTargets);
+    }
+
+    List<ReviewResponse.PreviousFindingStatus> screen(
+        List<ReviewResponse.PreviousFindingStatus> statuses) {
+      return FollowUpAnalyzer.screenModelStatuses(statuses, previous, lineResolver, renameTargets);
+    }
+  }
 
   /** The rendered file-section header {@link ReviewDiffFormatter#formatFileSection} emits. */
   private static final String SECTION_HEADER_PREFIX = "### ";
@@ -1139,9 +1159,9 @@ public class FindingPipeline {
    * The screen a review call's statuses pass as soon as it returns (#1322): against the prior
    * findings the prompt listed by number and the current diff.
    */
-  private static ModelStatusScreen statusScreen(
+  private static StatusScreen statusScreen(
       ReviewContextLoader.ReviewContext ctx, DiffLineResolver lineResolver) {
-    return new ModelStatusScreen(
+    return new StatusScreen(
         ctx.previousFindingsList(), lineResolver, VerdictBuilder.renameTargets(ctx.files()));
   }
 
