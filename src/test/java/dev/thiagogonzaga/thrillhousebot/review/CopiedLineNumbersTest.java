@@ -63,6 +63,17 @@ class CopiedLineNumbersTest {
   }
 
   @Test
+  void anIndentedCopyThatDroppedTheMarkerKeepsItsIndentation() {
+    // "2   - a" reads like a context line holding " - a", but line 2 is "+  - a": its code, two
+    // spaces included, follows the number and one space.
+    assertEquals("items:\n  - a\n  - b", strip("src/list.yml", "1 items:\n2   - a\n3   - b"));
+
+    var result = copied.strip(finding("src/list.yml", 2, "2   - a", "2   - c\n9   - d"));
+    assertEquals("  - a", result.suggestionOld());
+    assertEquals("  - c\n9   - d", result.suggestionNew());
+  }
+
+  @Test
   void anUnmarkedCopyWhoseCodeDiffersOrWhoseLineIsMissingIsLeftAsWritten() {
     for (var quote :
         new String[] {

@@ -60,10 +60,12 @@ final class CopiedLineNumbers {
   private static final Pattern NUMBERED = Pattern.compile("(\\d{1,9})(?: ?| [+ ](.*))");
 
   /**
-   * A numbered line copied without its marker: the number, one space, then code that does not start
-   * with a space, so it is never a context line that kept its marker (#1357).
+   * A numbered line copied without its marker: the number, one space, then the code as the line
+   * holds it, indentation included (#1357). A context line that kept its marker reads the same way
+   * with one more leading space, so a copy is only taken in this shape when its code equals that
+   * numbered line's code.
    */
-  private static final Pattern UNMARKED = Pattern.compile("(\\d{1,9}) (\\S.*)");
+  private static final Pattern UNMARKED = Pattern.compile("(\\d{1,9}) (.+)");
 
   /**
    * Each section's numbered lines by number, the code each of them holds, and its unnumbered
@@ -72,12 +74,21 @@ final class CopiedLineNumbers {
   private record Section(
       Map<Integer, String> numbered, Map<Integer, String> code, Set<String> unnumbered) {}
 
-  /** The inclusive range of numbers a confirmed {@code suggestion_old} copied. */
-  private record Span(int first, int last) {
+  /**
+   * The inclusive range of numbers a confirmed {@code suggestion_old} copied, and whether it copied
+   * them without their markers.
+   */
+  private record Span(int first, int last, boolean unmarked) {
     boolean holds(int number) {
       return number >= first && number <= last;
     }
   }
+
+  /** One quote line confirmed as a copy of numbered line {@code number}, holding {@code code}. */
+  private record Copy(int number, String code, boolean unmarked) {}
+
+  /** A confirmed {@code suggestion_old}: its span and its text without numbers or markers. */
+  private record Copied(Span span, String old) {}
 
   private final Map<String, Section> sections;
 
@@ -142,8 +153,8 @@ final class CopiedLineNumbers {
     }
     var lines = old.split("\n", -1);
     for (var section : sectionsFor(finding.file())) {
-      var span = copiedSpan(section, lines);
-      if (span != null) {
+      var copied = copied(section, lines);
+      if (copied != null) {
         return new ReviewResponse.Finding(
             finding.risk(),
             finding.confidence(),
@@ -151,8 +162,8 @@ final class CopiedLineNumbers {
             finding.line(),
             finding.title(),
             finding.description(),
-            strippedOld(lines),
-            strippedNew(finding.suggestionNew(), span));
+            copied.old(),
+            strippedNew(finding.suggestionNew(), copied.span()));
       }
     }
     return finding;
@@ -181,44 +192,50 @@ final class CopiedLineNumbers {
   }
 
   /**
-   * The span of numbers the quote copied from {@code section}, or {@code null} unless every
-   * non-blank line is confirmed there and at least one is numbered.
+   * The quote as copied from {@code section}, or {@code null} unless every non-blank line is
+   * confirmed there and at least one is numbered. Its text keeps the code of each numbered line and
+   * the blank lines, and drops the removed lines and markers.
    */
-  private static Span copiedSpan(Section section, String[] lines) {
+  private static Copied copied(Section section, String[] lines) {
     int first = Integer.MAX_VALUE;
     int last = Integer.MIN_VALUE;
+    boolean unmarked = false;
+    var kept = new ArrayList<String>(lines.length);
     for (var line : lines) {
       var trimmed = line.stripTrailing();
       if (trimmed.isEmpty()) {
+        kept.add(line);
         continue;
       }
-      var confirmed = confirmedNumber(section, trimmed);
-      if (confirmed != null) {
-        first = Math.min(first, confirmed);
-        last = Math.max(last, confirmed);
+      var copy = copy(section, trimmed);
+      if (copy != null) {
+        first = Math.min(first, copy.number());
+        last = Math.max(last, copy.number());
+        unmarked |= copy.unmarked();
+        kept.add(copy.code());
       } else if (!section.unnumbered().contains(trimmed)) {
         return null;
       }
     }
-    return first <= last ? new Span(first, last) : null;
+    return first <= last
+        ? new Copied(new Span(first, last, unmarked), String.join("\n", kept))
+        : null;
   }
 
   /**
-   * The number of the section's numbered line that {@code line} copies, with or without its marker,
-   * or {@code null} when it copies none.
+   * {@code line} as a copy of one of the section's numbered lines, with or without its marker, or
+   * {@code null} when it copies none.
    */
-  private static Integer confirmedNumber(Section section, String line) {
+  private static Copy copy(Section section, String line) {
     var number = NUMBERED.matcher(line);
-    if (number.matches()) {
-      return line.equals(section.numbered().get(numberOf(number))) ? numberOf(number) : null;
+    if (number.matches() && line.equals(section.numbered().get(numberOf(number)))) {
+      return new Copy(numberOf(number), codeOf(number), false);
     }
     var unmarked = UNMARKED.matcher(line);
-    if (!unmarked.matches()) {
-      return null;
+    if (unmarked.matches() && unmarked.group(2).equals(section.code().get(numberOf(unmarked)))) {
+      return new Copy(numberOf(unmarked), unmarked.group(2), true);
     }
-    return unmarked.group(2).equals(section.code().get(numberOf(unmarked)))
-        ? numberOf(unmarked)
-        : null;
+    return null;
   }
 
   private static int numberOf(Matcher number) {
@@ -226,40 +243,21 @@ final class CopiedLineNumbers {
   }
 
   /**
-   * A confirmed copy without its numbers, removed lines and markers. Every non-blank line of a
-   * confirmed copy is numbered or one of those, so only blank lines are kept as they are.
+   * New code without the numbers it copied from inside {@code span}, read in the shape the old code
+   * was copied in; everything else is kept.
    */
-  private static String strippedOld(String[] lines) {
-    var kept = new ArrayList<String>(lines.length);
-    for (var line : lines) {
-      var trimmed = line.stripTrailing();
-      var number = NUMBERED.matcher(trimmed);
-      var unmarked = UNMARKED.matcher(trimmed);
-      if (number.matches()) {
-        kept.add(codeOf(number));
-      } else if (unmarked.matches()) {
-        kept.add(unmarked.group(2));
-      } else if (line.isBlank()) {
-        kept.add(line);
-      }
-    }
-    return String.join("\n", kept);
-  }
-
-  /** New code without the numbers it copied from inside {@code span}; everything else is kept. */
   private static String strippedNew(String quote, Span span) {
     if (quote == null) {
       return null;
     }
+    // New code copied the way the old code was: without markers, a line's code is everything after
+    // the number and one space, indentation included.
+    var shape = span.unmarked() ? UNMARKED : NUMBERED;
     var lines = quote.split("\n", -1);
     for (int i = 0; i < lines.length; i++) {
-      var trimmed = lines[i].stripTrailing();
-      var number = NUMBERED.matcher(trimmed);
-      var unmarked = UNMARKED.matcher(trimmed);
+      var number = shape.matcher(lines[i].stripTrailing());
       if (number.matches() && span.holds(numberOf(number))) {
         lines[i] = codeOf(number);
-      } else if (unmarked.matches() && span.holds(numberOf(unmarked))) {
-        lines[i] = unmarked.group(2);
       }
     }
     return String.join("\n", lines);
