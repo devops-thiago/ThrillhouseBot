@@ -34,11 +34,13 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.CapturedLog;
 import io.quarkiverse.githubapp.GitHubClientProvider;
 import io.smallrye.graphql.client.Response;
 import io.smallrye.graphql.client.dynamic.api.DynamicGraphQLClient;
 import jakarta.ws.rs.WebApplicationException;
 import java.util.List;
+import java.util.logging.Level;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -724,6 +726,33 @@ class GitHubIssuesProviderTest {
     verifyNoMoreInteractions(repository);
     verify(graphQLClient).executeSync(anyString(), any(java.util.Map.class));
     verifyNoMoreInteractions(graphQLClient);
+  }
+
+  @Test
+  void aFailedRepositoryLookupIsLoggedAtWarnWithItsError() throws Exception {
+    // #1355: a 5xx or rate limit on the lookup drops the linked issues, so it must show.
+    doThrow(new HttpException("unavailable", 503, "Service Unavailable", "https://api.github.com"))
+        .when(gitHub)
+        .getRepository(anyString());
+
+    try (var log = CapturedLog.of(GitHubIssuesProvider.class)) {
+      provider.linkedTickets(lookup("Closes #1", true), 3);
+
+      var warnings = log.at(Level.WARNING);
+      assertEquals(1, warnings.size(), warnings.toString());
+      assertTrue(warnings.getFirst().contains("unavailable"), warnings.getFirst());
+    }
+  }
+
+  @Test
+  void aRepositoryThatIsNotFoundIsLoggedAtDebugOnly() throws Exception {
+    doThrow(new GHFileNotFoundException("Not Found")).when(gitHub).getRepository(anyString());
+
+    try (var log = CapturedLog.of(GitHubIssuesProvider.class)) {
+      provider.linkedTickets(lookup("Closes #1", true), 3);
+
+      assertEquals(List.of(), log.at(Level.WARNING));
+    }
   }
 
   @Test

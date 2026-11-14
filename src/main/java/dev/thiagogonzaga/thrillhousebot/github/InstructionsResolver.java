@@ -110,8 +110,11 @@ public class InstructionsResolver {
     try {
       repository =
           clientProvider.getInstallationClient(installationId).getRepository(owner + "/" + repo);
+    } catch (GHFileNotFoundException _) {
+      log.debug("Repository {}/{} not found", owner, repo);
+      return ResolvedInstructions.EMPTY;
     } catch (RuntimeException | IOException e) {
-      log.debug("Could not resolve repository {}/{}", owner, repo);
+      log.warn("Could not resolve repository {}/{}: {}", owner, repo, e.toString());
       return ResolvedInstructions.EMPTY;
     }
 
