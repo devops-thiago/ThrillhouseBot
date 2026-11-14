@@ -98,11 +98,11 @@ public class FindingPipeline {
    * Everything one multi-call review's batch lane needs beyond the index of the batch being worked
    * on: the planned batches, the session the calls are billed to, the shared prompt template, the
    * plan the coverage disclosures are recorded on, the previous-finding file index the statuses are
-   * scoped against, the screen each batch's statuses pass first ({@link StatusScreen}, #1322), and
-   * the evidence round whose budget and caches the batches share. One value because they are fixed
-   * for the whole lane and travel together through every step of it — the parallel pass, the join,
-   * the sequential retry and the truncation salvage — so the step a batch is in is the only thing
-   * its signature has to say.
+   * scoped against, the review context and diff each batch's statuses are screened against first
+   * ({@link #screenStatuses}, #1322), and the evidence round whose budget and caches the batches
+   * share. One value because they are fixed for the whole lane and travel together through every
+   * step of it — the parallel pass, the join, the sequential retry and the truncation salvage — so
+   * the step a batch is in is the only thing its signature has to say.
    */
   private record BatchRun(
       List<DiffBudgetPlanner.DiffBatch> batches,
@@ -110,28 +110,9 @@ public class FindingPipeline {
       BatchPrompts prompts,
       DiffBudgetPlanner.BudgetPlan plan,
       Map<Integer, String> previousFilesById,
-      StatusScreen statusScreen,
-      ReviewEvidence evidence) {}
-
-  /**
-   * What a review call's {@code previous_findings_status} is screened against as soon as it returns
-   * ({@link FollowUpAnalyzer#screenModelStatuses}, #1322): the prior findings the prompt listed by
-   * number, the current diff, and each renamed file's new path.
-   */
-  private record StatusScreen(
-      List<ReviewResponse.Finding> previous,
+      ReviewContextLoader.ReviewContext ctx,
       DiffLineResolver lineResolver,
-      Map<String, String> renameTargets) {
-
-    ReviewResponse screen(ReviewResponse response) {
-      return FollowUpAnalyzer.screenModelStatuses(response, previous, lineResolver, renameTargets);
-    }
-
-    List<ReviewResponse.PreviousFindingStatus> screen(
-        List<ReviewResponse.PreviousFindingStatus> statuses) {
-      return FollowUpAnalyzer.screenModelStatuses(statuses, previous, lineResolver, renameTargets);
-    }
-  }
+      ReviewEvidence evidence) {}
 
   /** The rendered file-section header {@link ReviewDiffFormatter#formatFileSection} emits. */
   private static final String SECTION_HEADER_PREFIX = "### ";
@@ -349,7 +330,12 @@ public class FindingPipeline {
     }
     // #1322: every status names its finding by key and a "resolved" is held to the code, before
     // anything stores or reads the statuses.
-    aiResponse = statusScreen(ctx, lineResolver).screen(aiResponse);
+    aiResponse =
+        FollowUpAnalyzer.screenModelStatuses(
+            aiResponse,
+            ctx.previousFindingsList(),
+            lineResolver,
+            VerdictBuilder.renameTargets(ctx.files()));
     if (budgetedBatch != null && !aiResponse.previousFindingsStatus().isEmpty()) {
       // Same scoping as the multi-call path: the single budgeted batch may carry clipped files
       // (and, at maxBatches=1, omit others entirely), so a "resolved" claim is only trusted for a
@@ -512,7 +498,8 @@ public class FindingPipeline {
             new BatchPrompts(promptInputs, withheldMaterialNotice(ctx, plan), dimensionRouter),
             plan,
             previousFilesById,
-            statusScreen(ctx, lineResolver),
+            ctx,
+            lineResolver,
             evidence);
     for (int i = 0; i < batches.size(); i++) {
       logDimensionRouting(
@@ -1149,7 +1136,7 @@ public class FindingPipeline {
         index,
         verified.findings(),
         scopeStatusesToBatch(
-            run.statusScreen().screen(batchResponse.previousFindingsStatus()),
+            screenStatuses(batchResponse.previousFindingsStatus(), run),
             batch,
             run.plan(),
             run.previousFilesById()));
@@ -1159,10 +1146,13 @@ public class FindingPipeline {
    * The screen a review call's statuses pass as soon as it returns (#1322): against the prior
    * findings the prompt listed by number and the current diff.
    */
-  private static StatusScreen statusScreen(
-      ReviewContextLoader.ReviewContext ctx, DiffLineResolver lineResolver) {
-    return new StatusScreen(
-        ctx.previousFindingsList(), lineResolver, VerdictBuilder.renameTargets(ctx.files()));
+  private static List<ReviewResponse.PreviousFindingStatus> screenStatuses(
+      List<ReviewResponse.PreviousFindingStatus> statuses, BatchRun run) {
+    return FollowUpAnalyzer.screenModelStatuses(
+        statuses,
+        run.ctx().previousFindingsList(),
+        run.lineResolver(),
+        VerdictBuilder.renameTargets(run.ctx().files()));
   }
 
   /**
