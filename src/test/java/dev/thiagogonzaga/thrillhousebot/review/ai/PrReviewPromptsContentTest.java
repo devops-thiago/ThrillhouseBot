@@ -51,6 +51,19 @@ class PrReviewPromptsContentTest {
   }
 
   @Test
+  void eachStatusEchoesTheListedFindingsKey() {
+    // #1322: the key beside the id is what lets a swapped id be caught.
+    assertContains(
+        PrReviewPrompts.CORE_SELF_CHECK,
+        "\"key\": \"<the finding's key>\"",
+        "the status shape must carry the echoed key");
+    assertContains(
+        PrReviewPrompts.CORE_SELF_CHECK,
+        "the key shown in parentheses after that number",
+        "the prompt must say where the key is listed");
+  }
+
+  @Test
   void systemPromptsCarryTheBlanketUntrustedDataStatement() {
     assertContains(
         PrReviewPrompts.CORE_IDENTITY,

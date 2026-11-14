@@ -1235,9 +1235,9 @@ class FollowUpAnalyzerTest {
         analyzer.buildPreviousFindingsContext(
             previous, true, List.of(), List.of(), List.of(), BOT_ID, Set.of(2));
 
-    assertTrue(context.contains("1. [CRITICAL] src/A.java:10 — First"), context);
+    assertTrue(context.contains(listed(1, "CRITICAL", "src/A.java", 10, "First")), context);
     assertFalse(context.contains("Second"), context);
-    assertTrue(context.contains("3. [HIGH] src/C.java:7 — Third"), context);
+    assertTrue(context.contains(listed(3, "HIGH", "src/C.java", 7, "Third")), context);
   }
 
   @Test
@@ -2156,9 +2156,31 @@ class FollowUpAnalyzerTest {
 
     var context = analyzer.buildPreviousFindingsContext(json, List.of(), BOT_ID);
 
-    assertTrue(context.contains("1. [HIGH] src/A.java:10 — SQL injection"));
+    assertTrue(context.contains(listed(1, "HIGH", "src/A.java", 10, "SQL injection")));
     assertTrue(context.contains("Concatenated query"));
-    assertTrue(context.contains("2. [LOW] src/B.java:5 — Magic number"));
+    assertTrue(context.contains(listed(2, "LOW", "src/B.java", 5, "Magic number")));
+    // #1322: the key the model echoes is the one the finding's thread marker carries.
+    assertTrue(
+        context.contains(
+            "1. (key "
+                + SuggestionFormatter.findingKey("src/A.java", 10, "SQL injection")
+                + ") [HIGH]"),
+        context);
+  }
+
+  /** How the previous-findings section lists a finding: its number, key, risk and place (#1322). */
+  private static String listed(int id, String risk, String file, int line, String title) {
+    return id
+        + ". (key "
+        + SuggestionFormatter.findingKey(file, line, title)
+        + ") ["
+        + risk
+        + "] "
+        + file
+        + ":"
+        + line
+        + " — "
+        + title;
   }
 
   @Test
@@ -2172,7 +2194,7 @@ class FollowUpAnalyzerTest {
 
     var context = analyzer.buildPreviousFindingsContext(json, List.of(), BOT_ID);
 
-    assertTrue(context.contains("1. [UNKNOWN] src/C.java:3 — Mystery issue"));
+    assertTrue(context.contains(listed(1, "UNKNOWN", "src/C.java", 3, "Mystery issue")));
     assertEquals(1, context.lines().count());
   }
 

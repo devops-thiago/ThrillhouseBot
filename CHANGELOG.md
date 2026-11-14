@@ -6,6 +6,19 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- A follow-up round's status for a previous finding, and a verifier verdict, named its finding
+  only by its position in the list, so a swapped number could close, reject or downgrade the wrong
+  finding unnoticed. Each previous finding and each verifier candidate is now listed with its key
+  (the one its thread marker carries), and each status and verdict must repeat that key beside the
+  number. One that does not is dropped and logged: the finding of a dropped status stays held as
+  open, and the candidate of a dropped verdict is kept as one the verifier did not judge. A
+  "resolved" status now stands only when the finding's flagged code has left the diff or its
+  suggested fix is in it; otherwise the finding is kept open and the contradiction is logged. A
+  finding with no flagged code to look for, whose file is still in the diff, can no longer be
+  closed by the model; a maintainer can still clear it. A repaired answer can no
+  longer move a finding to another file or line or renumber a status: the failed answer's values
+  are put back, and an answer whose structure cannot be read is not repaired at all, so the full
+  retry runs. (#1322)
 - The summary no longer posts counts or sizes the summary call wrote. That call sees only the
   round's findings, so on #1315 its "What this PR does" paragraph said "One medium finding
   remains" while 17 findings were open. A sentence of the purpose paragraph or the overall

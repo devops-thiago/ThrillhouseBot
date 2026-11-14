@@ -32,7 +32,7 @@ class VerificationResponseTest {
   @Test
   void shouldCopyVerdictsDefensively() {
     var verdicts = new ArrayList<VerificationResponse.Verdict>();
-    verdicts.add(new VerificationResponse.Verdict(1, "confirmed", "low", "high", "ok"));
+    verdicts.add(new VerificationResponse.Verdict(1, "k1", "confirmed", "low", "high", "ok"));
 
     var response = new VerificationResponse(verdicts);
     verdicts.clear();
@@ -44,9 +44,11 @@ class VerificationResponseTest {
 
   @Test
   void verdictShouldExposeAllFields() {
-    var verdict = new VerificationResponse.Verdict(2, "rejected", "medium", "low", "speculative");
+    var verdict =
+        new VerificationResponse.Verdict(2, "k2", "rejected", "medium", "low", "speculative");
 
     assertEquals(2, verdict.id());
+    assertEquals("k2", verdict.key());
     assertEquals("rejected", verdict.verdict());
     assertEquals("medium", verdict.risk());
     assertEquals("low", verdict.confidence());
@@ -60,13 +62,14 @@ class VerificationResponseTest {
         new ObjectMapper()
             .readValue(
                 """
-                {"verdicts": [{"id": 1, "verdict": "confirmed", "suggestion": "replace",
+                {"verdicts": [{"id": 1, "key": "ab12cd34", "verdict": "confirmed", "suggestion": "replace",
                   "suggestion_new": "COPY --from=build /out/pickbatch /usr/local/bin/pickbatchd",
                   "cut": ["The constant is misspelt."]}]}
                 """,
                 VerificationResponse.class);
 
     var verdict = response.verdicts().get(0);
+    assertEquals("ab12cd34", verdict.key());
     assertEquals("replace", verdict.suggestion());
     assertEquals(
         "COPY --from=build /out/pickbatch /usr/local/bin/pickbatchd", verdict.suggestionNew());
@@ -101,14 +104,22 @@ class VerificationResponseTest {
 
   @Test
   void aVerdictWithoutTheNewFieldsHasNothingToApply() {
-    var verdict = new VerificationResponse.Verdict(1, "confirmed", "low", "high", "ok");
+    var verdict = new VerificationResponse.Verdict(1, "k1", "confirmed", "low", "high", "ok");
 
     assertNull(verdict.suggestion());
     assertNull(verdict.suggestionNew());
     assertEquals(List.of(), verdict.cut());
     var withNulls =
         new VerificationResponse.Verdict(
-            1, "confirmed", "low", "high", "ok", null, null, java.util.Arrays.asList("a", null));
+            1,
+            "k1",
+            "confirmed",
+            "low",
+            "high",
+            "ok",
+            null,
+            null,
+            java.util.Arrays.asList("a", null));
     assertEquals(List.of("a"), withNulls.cut());
   }
 

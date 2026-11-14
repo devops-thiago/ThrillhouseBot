@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.service.Result;
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses.ModelLane;
@@ -28,6 +29,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -50,10 +53,12 @@ import java.util.stream.Collectors;
  * has titles, every finding title must be one of the failed answer's, each of those titles must
  * come back at least as often as the failed answer wrote it (#1176), and it may not hold more
  * statuses than the failed answer has. Those are read by {@link AnswerKeys} from the failed
- * answer's structure, so JSON quoted inside a field counts for nothing; when the scan loses track
- * of the structure, every {@code "title"} and {@code "status"} key in the text counts instead, and
- * a title may come back no more often than the text holds it. A re-asked file summary is kept only
- * when its whole path is named in the string it came from.
+ * answer's structure, so JSON quoted inside a field counts for nothing. The repair also cannot move
+ * a finding or renumber a status (#1322): each finding keeps the file and line the failed answer
+ * wrote for its title, and each status the id, key and status the failed answer wrote at its
+ * position; a value the repair changed is restored. When the scan loses track of the failed
+ * answer's structure none of that can be read, and the repair is rejected. A re-asked file summary
+ * is kept only when its whole path is named in the string it came from.
  *
  * <p>It fails open: disabled, the spend ceiling reached, an error, an empty or cut answer, an
  * answer the parser still refuses or one the checks above reject, each returns nothing, and the
@@ -67,8 +72,6 @@ public class ResponseRepairService {
   /** The longest parser detail the repair prompt states. */
   static final int MAX_ERROR_DETAIL = 300;
 
-  private static final Pattern TITLE_KEY = Pattern.compile("\"title\"\\s*:");
-  private static final Pattern STATUS_KEY = Pattern.compile("\"status\"\\s*:");
   private static final Pattern ESCAPES_AND_SPACE = Pattern.compile("\\\\|\\s+");
 
   private final ResponseRepairer reviewRepairer;
@@ -132,12 +135,16 @@ public class ResponseRepairService {
     }
     try {
       var repaired = summaryLane ? parser.parseSummary(raw.get()) : parser.parse(raw.get());
-      var rejection = summaryLane ? Optional.<String>empty() : rejection(repaired, body);
-      if (rejection.isPresent()) {
-        Log.warnf(
-            "Response repair for review session %d rejected: %s; the full retry runs",
-            ledgerKey, rejection.get());
-        return Optional.empty();
+      if (!summaryLane) {
+        var keys = AnswerKeys.of(body);
+        var rejection = rejection(repaired, keys);
+        if (rejection.isPresent()) {
+          Log.warnf(
+              "Response repair for review session %d rejected: %s; the full retry runs",
+              ledgerKey, rejection.get());
+          return Optional.empty();
+        }
+        repaired = restored(ledgerKey, repaired, keys);
       }
       Log.infof(
           "Response repair for review session %d reshaped the answer the parser refused (%s);"
@@ -292,15 +299,19 @@ public class ResponseRepairService {
   }
 
   /**
-   * Why a repaired review answer cannot stand for the failed {@code body}, empty when it can: it
-   * dropped findings, holds a finding whose title is none of the failed answer's, repeats one
-   * finding's title in place of another's, or holds more statuses than the failed answer wrote.
+   * Why a repaired review answer cannot stand for the failed answer {@code keys} were read from,
+   * empty when it can: the scan lost the failed answer's structure, so the file, line and id each
+   * finding and status must keep cannot be read from it (#1322); or the repair dropped findings,
+   * holds a finding whose title is none of the failed answer's, repeats one finding's title in
+   * place of another's, or holds more statuses than the failed answer wrote.
    */
-  static Optional<String> rejection(ReviewResponse repaired, String body) {
-    // The structure the scan read, or, when it lost track of it, every key in the raw text: the
-    // stricter count, so a scan that went astray can only cost a full retry.
-    var keys = AnswerKeys.of(body);
-    var titles = keys.readable() ? keys.titleCount() : count(TITLE_KEY, body);
+  static Optional<String> rejection(ReviewResponse repaired, AnswerKeys keys) {
+    if (!keys.readable()) {
+      return Optional.of(
+          "the failed answer's structure could not be read, so the file, line and id of each"
+              + " finding and status cannot be checked");
+    }
+    var titles = keys.titleCount();
     if (repaired.findings().size() < titles) {
       return Optional.of(
           "it holds "
@@ -309,12 +320,9 @@ public class ResponseRepairService {
               + titles
               + " title(s)");
     }
-    // Without the structure, every "title" value the text holds as a string, so JSON quoted
-    // inside another string (a description's escaped example) holds no title (#1176).
     var written =
-        (keys.readable() ? keys.titles() : AnswerKeys.titleValues(body))
-            .stream()
-                .collect(Collectors.toMap(ResponseRepairService::plain, title -> 1, Integer::sum));
+        keys.titles().stream()
+            .collect(Collectors.toMap(ResponseRepairService::plain, title -> 1, Integer::sum));
     var held = new HashMap<String, Integer>();
     for (var finding : repaired.findings()) {
       var title = finding.title() == null ? null : plain(finding.title());
@@ -332,7 +340,9 @@ public class ResponseRepairService {
       return Optional.of(
           "it repeats a finding's title in place of another finding of the failed answer");
     }
-    var statuses = keys.readable() ? keys.statuses() : count(STATUS_KEY, body);
+    // Each status is restored from the failed answer's status at its position (#1322), so there
+    // must be one: an element writing "status" twice counts once here.
+    var statuses = Math.min(keys.statuses(), keys.statusEntries().size());
     if (repaired.previousFindingsStatus().size() > statuses) {
       return Optional.of(
           "it holds "
@@ -343,13 +353,120 @@ public class ResponseRepairService {
     return Optional.empty();
   }
 
-  private static int count(Pattern key, String text) {
-    var matcher = key.matcher(text);
-    var found = 0;
-    while (matcher.find()) {
-      found++;
+  /**
+   * {@code repaired} holding the file and line the failed answer wrote for each finding, and the
+   * id, key and status it wrote for each status (#1322): the repair reshapes, so a value it changed
+   * is put back, and the change is logged. A finding is paired with the failed answer's finding of
+   * the same title, the n-th copy of a title with its n-th copy (an extra copy with the last one);
+   * a status with the failed answer's status at the same position. A field the failed answer does
+   * not write is absent from the restored one too, since the repair may not make a value up.
+   */
+  static ReviewResponse restored(long ledgerKey, ReviewResponse repaired, AnswerKeys keys) {
+    var originals = new HashMap<String, List<Map<String, String>>>();
+    for (var original : keys.findings()) {
+      var title = original.get("title");
+      if (title != null) {
+        originals.computeIfAbsent(plain(title), t -> new ArrayList<>()).add(original);
+      }
     }
-    return found;
+    var seen = new HashMap<String, Integer>();
+    var findings = new ArrayList<ReviewResponse.Finding>(repaired.findings().size());
+    var changed = false;
+    for (var finding : repaired.findings()) {
+      // The rejection checks leave no finding without a title the failed answer wrote.
+      var copies = originals.get(plain(finding.title()));
+      var copy = seen.merge(plain(finding.title()), 1, Integer::sum) - 1;
+      var original = copies.get(Math.min(copy, copies.size() - 1));
+      var restored = withOriginalPlace(ledgerKey, finding, original);
+      changed |= restored != finding;
+      findings.add(restored);
+    }
+    var statuses =
+        new ArrayList<ReviewResponse.PreviousFindingStatus>(
+            repaired.previousFindingsStatus().size());
+    for (var i = 0; i < repaired.previousFindingsStatus().size(); i++) {
+      var status = repaired.previousFindingsStatus().get(i);
+      // The rejection checks leave no status beyond the failed answer's.
+      var restored = withOriginalId(ledgerKey, status, keys.statusEntries().get(i));
+      changed |= restored != status;
+      statuses.add(restored);
+    }
+    if (!changed) {
+      return repaired;
+    }
+    return new ReviewResponse(
+        findings,
+        statuses,
+        repaired.summary(),
+        repaired.closedEarlierRound(),
+        repaired.linkedIssueCriteria());
+  }
+
+  /** {@code finding} at the file and line {@code original} writes; itself when they agree. */
+  private static ReviewResponse.Finding withOriginalPlace(
+      long ledgerKey, ReviewResponse.Finding finding, Map<String, String> original) {
+    var file = original.get("file");
+    var line = lineOf(original.get("line"), finding.line());
+    if (Objects.equals(file, finding.file()) && line == finding.line()) {
+      return finding;
+    }
+    Log.infof(
+        "Response repair for review session %d moved finding '%s' to %s:%d; restored the failed"
+            + " answer's %s:%d",
+        ledgerKey,
+        LogSafe.oneLine(finding.title()),
+        LogSafe.oneLine(finding.file()),
+        finding.line(),
+        LogSafe.oneLine(file),
+        line);
+    return new ReviewResponse.Finding(
+        finding.risk(),
+        finding.confidence(),
+        file,
+        line,
+        finding.title(),
+        finding.description(),
+        finding.suggestionOld(),
+        finding.suggestionNew());
+  }
+
+  /**
+   * The line {@code written} states, 0 when the failed answer wrote none (what the parser reads
+   * then), or {@code fallback} when it wrote one that is no integer and so cannot be compared.
+   */
+  private static int lineOf(String written, int fallback) {
+    if (written == null) {
+      return 0;
+    }
+    try {
+      return Integer.parseInt(written.strip());
+    } catch (NumberFormatException _) {
+      return fallback;
+    }
+  }
+
+  /** {@code status} with the id, key and status {@code original} writes; itself when they agree. */
+  private static ReviewResponse.PreviousFindingStatus withOriginalId(
+      long ledgerKey, ReviewResponse.PreviousFindingStatus status, Map<String, String> original) {
+    var id = lineOf(original.get("id"), status.id());
+    var key = original.get("key");
+    var value = original.getOrDefault("status", status.status());
+    if (id == status.id()
+        && Objects.equals(key, status.key())
+        && Objects.equals(value, status.status())) {
+      return status;
+    }
+    Log.infof(
+        "Response repair for review session %d changed previous-finding status #%d (key '%s', %s);"
+            + " restored the failed answer's #%d (key '%s', %s)",
+        ledgerKey,
+        status.id(),
+        LogSafe.oneLine(status.key()),
+        LogSafe.oneLine(status.status()),
+        id,
+        LogSafe.oneLine(key),
+        LogSafe.oneLine(value));
+    return new ReviewResponse.PreviousFindingStatus(id, value, status.note(), key);
   }
 
   /** {@code text} without backslashes and whitespace, so an escape the repair resolved matches. */

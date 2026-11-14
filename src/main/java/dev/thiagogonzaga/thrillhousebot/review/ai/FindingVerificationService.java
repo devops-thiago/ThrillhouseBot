@@ -25,6 +25,7 @@ import dev.thiagogonzaga.thrillhousebot.review.Confidence;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
 import dev.thiagogonzaga.thrillhousebot.review.RiskLevel;
+import dev.thiagogonzaga.thrillhousebot.review.SuggestionFormatter;
 import dev.thiagogonzaga.thrillhousebot.review.VerificationCoverage;
 import io.quarkus.logging.Log;
 import io.quarkus.runtime.annotations.RegisterForReflection;
@@ -872,14 +873,14 @@ public class FindingVerificationService {
         coverageSink.accept(new VerificationCoverage(screened.findings().size(), 0));
         return markUnscreened(screened);
       }
-      var verification = parseOrSalvage(raw, screened.findings().size());
+      var verification = parseOrSalvage(raw, screened.findings());
       var applied = apply(screened, verification);
       // Accepted only after apply() succeeded: the fail-open catch below records (N, 0) for any
       // failure, so recording before it could double this attempt's candidates if apply threw.
       coverageSink.accept(
           new VerificationCoverage(
               screened.findings().size(),
-              (int) candidatesCovered(verification.verdicts(), screened.findings().size())));
+              (int) candidatesCovered(verification.verdicts(), screened.findings())));
       return applied;
     } catch (AiResponseTruncatedException e) {
       return salvageTruncatedVerdicts(screened, e, coverageSink);
@@ -908,7 +909,8 @@ public class FindingVerificationService {
    * anything. When nothing at all is recoverable the parse failure is rethrown, so the caller logs
    * and fails open as before.
    */
-  private VerificationResponse parseOrSalvage(String raw, int candidates) throws IOException {
+  private VerificationResponse parseOrSalvage(String raw, List<ReviewResponse.Finding> findings)
+      throws IOException {
     try {
       return mapper.readValue(ReviewResponseParser.extractJson(raw), VerificationResponse.class);
     } catch (IOException | RuntimeException e) {
@@ -916,7 +918,8 @@ public class FindingVerificationService {
       if (salvaged.isEmpty()) {
         throw e;
       }
-      var verified = candidatesCovered(salvaged, candidates);
+      var candidates = findings.size();
+      var verified = candidatesCovered(salvaged, findings);
       Log.warnf(
           "Finding verification response was cut mid-JSON (%s); salvaged %d verdict(s) covering %d"
               + " of %d candidate finding(s) — the remaining %d stay unverified",
@@ -952,7 +955,7 @@ public class FindingVerificationService {
       coverageSink.accept(new VerificationCoverage(candidates, 0));
       return markUnscreened(screened);
     }
-    var verified = candidatesCovered(salvaged, candidates);
+    var verified = candidatesCovered(salvaged, screened.findings());
     Log.warnf(
         "Finding verification was cut at the model's response-length cap; salvaged %d verdict(s)"
             + " covering %d of %d candidate finding(s) — the remaining %d stay unverified. %s",
@@ -994,12 +997,14 @@ public class FindingVerificationService {
    * finding did receive a decision the audit applied, and disclosing a gap would tell the reader a
    * fully screened set was not screened. The cut is logged either way, so an operator chasing the
    * response-length cap keeps the signal the reader does not need.
+   *
+   * <p>A verdict whose echoed key is not its candidate's (#1322) is not coverage either: {@link
+   * #byCandidateId} leaves it out for both readers.
    */
   private static long candidatesCovered(
-      List<VerificationResponse.Verdict> salvaged, int candidates) {
-    return byCandidateId(salvaged).entrySet().stream()
-        .filter(entry -> entry.getKey() >= 1 && entry.getKey() <= candidates)
-        .filter(entry -> ACTED_ON_DECISIONS.contains(decisionOf(entry.getValue())))
+      List<VerificationResponse.Verdict> salvaged, List<ReviewResponse.Finding> candidates) {
+    return byCandidateId(salvaged, candidates).values().stream()
+        .filter(verdict -> ACTED_ON_DECISIONS.contains(decisionOf(verdict)))
         .count();
   }
 
@@ -1021,14 +1026,41 @@ public class FindingVerificationService {
    * <p>Duplicates are model output, not a hypothetical: the collapse predates this fix, first-wins
    * is the behaviour the audit already applies, and the count now inherits it rather than inventing
    * a second resolution.
+   *
+   * <p>Only a verdict that names its candidate both ways counts (#1322): an id in range, and the
+   * candidate's key ({@link #candidateKey}) echoed beside it. A verdict with no key, or the key of
+   * another candidate or round, is left out, so its candidate posts unscreened as if the verifier
+   * had not ruled on it: a swapped id can neither reject nor downgrade the wrong finding.
    */
   private static Map<Integer, VerificationResponse.Verdict> byCandidateId(
-      List<VerificationResponse.Verdict> verdicts) {
+      List<VerificationResponse.Verdict> verdicts, List<ReviewResponse.Finding> candidates) {
     var byId = new HashMap<Integer, VerificationResponse.Verdict>();
     for (VerificationResponse.Verdict verdict : verdicts) {
-      byId.putIfAbsent(verdict.id(), verdict);
+      if (namesItsCandidate(verdict, candidates)) {
+        byId.putIfAbsent(verdict.id(), verdict);
+      }
     }
     return byId;
+  }
+
+  /** Whether {@code verdict}'s id is a candidate's and its echoed key is that candidate's. */
+  private static boolean namesItsCandidate(
+      VerificationResponse.Verdict verdict, List<ReviewResponse.Finding> candidates) {
+    var id = verdict.id();
+    if (id < 1 || id > candidates.size()) {
+      return false;
+    }
+    var echoed = verdict.key() == null ? "" : verdict.key().strip().toLowerCase(Locale.ROOT);
+    return candidateKey(candidates.get(id - 1)).equals(echoed);
+  }
+
+  /**
+   * The key a candidate is shown with and its verdict must echo: the finding key over its file,
+   * line and title ({@link SuggestionFormatter#findingKey}), the same digest the thread marker
+   * carries.
+   */
+  static String candidateKey(ReviewResponse.Finding finding) {
+    return SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title());
   }
 
   /**
@@ -1824,6 +1856,7 @@ public class FindingVerificationService {
   @RegisterForReflection
   record Candidate(
       int id,
+      String key,
       String risk,
       String confidence,
       String file,
@@ -1840,6 +1873,7 @@ public class FindingVerificationService {
     static Candidate of(int id, ReviewResponse.Finding f, FindingEvidence evidence) {
       return new Candidate(
           id,
+          candidateKey(f),
           f.risk(),
           f.confidence(),
           f.file(),
@@ -1925,7 +1959,8 @@ public class FindingVerificationService {
   }
 
   ReviewResponse apply(ReviewResponse response, VerificationResponse verification) {
-    var byId = byCandidateId(verification.verdicts());
+    var byId = byCandidateId(verification.verdicts(), response.findings());
+    logUnmatched(verification.verdicts(), response.findings());
     var kept = new ArrayList<ReviewResponse.Finding>();
     var rejected = 0;
     var downgraded = 0;
@@ -1974,6 +2009,23 @@ public class FindingVerificationService {
         kept.size() - downgraded - unscreened, downgraded, rejected, unscreened);
     return new ReviewResponse(
         kept, response.previousFindingsStatus(), recount(response.summary(), kept));
+  }
+
+  /**
+   * Logs each verdict {@link #byCandidateId} left out because it does not name its candidate by id
+   * and key (#1322), so a dropped verdict is visible.
+   */
+  private static void logUnmatched(
+      List<VerificationResponse.Verdict> verdicts, List<ReviewResponse.Finding> candidates) {
+    for (var verdict : verdicts) {
+      if (!namesItsCandidate(verdict, candidates)) {
+        Log.infof(
+            "Ignoring the verifier's '%s' verdict for candidate #%d: it echoes key '%s', which is"
+                + " not that candidate's; the candidate stays unscreened unless another verdict"
+                + " names it",
+            LogSafe.oneLine(verdict.verdict()), verdict.id(), LogSafe.oneLine(verdict.key()));
+      }
+    }
   }
 
   /**

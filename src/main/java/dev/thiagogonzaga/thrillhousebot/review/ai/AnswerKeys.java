@@ -18,7 +18,9 @@ package dev.thiagogonzaga.thrillhousebot.review.ai;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The finding titles and status entries a failed review answer holds, read by a tolerant JSON scan
@@ -29,11 +31,20 @@ import java.util.List;
  * array of either name nested deeper counts for nothing. Trailing commas, prose between documents
  * and several documents are read through.
  *
+ * <p>Each such element's own string and number fields are kept too, in order ({@link #findings},
+ * {@link #statusEntries}), so a repaired answer can be held to the file, line and id the failed
+ * answer wrote (#1322).
+ *
  * <p>A scan that ends inside a string or with a bracket left open lost track of the structure (a
- * quote left unescaped can do that); it reports itself not {@link #readable()}, and the caller
- * falls back to a stricter reading.
+ * quote left unescaped can do that); it reports itself not {@link #readable()}, and the caller does
+ * not trust what it read.
  */
-record AnswerKeys(List<String> titles, int statuses, boolean readable) {
+record AnswerKeys(
+    List<String> titles,
+    int statuses,
+    boolean readable,
+    List<Map<String, String>> findings,
+    List<Map<String, String>> statusEntries) {
 
   static final String FINDINGS_KEY = "findings";
   static final String STATUSES_KEY = "previous_findings_status";
@@ -41,51 +52,12 @@ record AnswerKeys(List<String> titles, int statuses, boolean readable) {
 
   AnswerKeys {
     titles = List.copyOf(titles);
+    findings = findings.stream().map(Map::copyOf).toList();
+    statusEntries = statusEntries.stream().map(Map::copyOf).toList();
   }
 
   static AnswerKeys of(String body) {
     return new Scan(body).run();
-  }
-
-  /**
-   * Every {@code title} value {@code body} writes, at any depth, read string by string so a quote
-   * escaped inside a string ends nothing: the reading when the scan lost the structure. A value the
-   * text cuts off before its closing quote counts as far as it goes.
-   */
-  static List<String> titleValues(String body) {
-    var values = new ArrayList<String>();
-    var titleValueNext = false;
-    var at = 0;
-    while (at < body.length()) {
-      var c = body.charAt(at);
-      if (c == '"') {
-        var end = stringEnd(body, at);
-        var literal = Scan.unescaped(body.substring(at + 1, end));
-        if (titleValueNext) {
-          values.add(literal);
-        }
-        at = end + 1;
-        titleValueNext = "title".equals(literal) && nextIsColon(body, at);
-      } else {
-        at++;
-        titleValueNext = titleValueNext && (c == ':' || Character.isWhitespace(c));
-      }
-    }
-    return values;
-  }
-
-  /** Where the string opened at {@code open} ends: its closing quote, or the end of the text. */
-  private static int stringEnd(String body, int open) {
-    var close = Scan.closingQuote(body, open + 1);
-    return close < 0 ? body.length() : close;
-  }
-
-  private static boolean nextIsColon(String body, int from) {
-    var i = from;
-    while (i < body.length() && Character.isWhitespace(body.charAt(i))) {
-      i++;
-    }
-    return i < body.length() && body.charAt(i) == ':';
   }
 
   /** How many finding titles the scan found. */
@@ -104,10 +76,24 @@ record AnswerKeys(List<String> titles, int statuses, boolean readable) {
     private final String body;
     private final Deque<Frame> frames = new ArrayDeque<>();
     private final List<String> titles = new ArrayList<>();
+    private final List<Map<String, String>> findings = new ArrayList<>();
+    private final List<Map<String, String>> statusEntries = new ArrayList<>();
     private int statuses;
     private String lastKey;
     private boolean titleValueNext;
     private int at;
+
+    /** The fields of the findings or statuses element open now, or {@code null}. */
+    private Map<String, String> element;
+
+    /** Where {@link #element} goes when it closes. */
+    private List<Map<String, String>> elementList;
+
+    /** How many brackets are open while {@link #element} is the innermost one. */
+    private int elementDepth;
+
+    /** The key of {@link #element} whose value comes next, or {@code null}. */
+    private String valueKey;
 
     Scan(String body) {
       this.body = body;
@@ -117,9 +103,15 @@ record AnswerKeys(List<String> titles, int statuses, boolean readable) {
       var lost = false;
       while (at < body.length() && !lost) {
         var c = body.charAt(at);
-        lost = c == '"' ? !string() : !punctuation(c);
+        if (c == '"') {
+          lost = !string();
+        } else if (valueKey != null && (c == '-' || Character.isDigit(c))) {
+          number();
+        } else {
+          lost = !punctuation(c);
+        }
       }
-      return new AnswerKeys(titles, statuses, !lost && frames.isEmpty());
+      return new AnswerKeys(titles, statuses, !lost && frames.isEmpty(), findings, statusEntries);
     }
 
     /** Reads the string at {@link #at}; false when it never closes. */
@@ -136,18 +128,38 @@ record AnswerKeys(List<String> titles, int statuses, boolean readable) {
         if (titleValueNext) {
           titles.add(literal);
         }
+        if (valueKey != null) {
+          element.put(valueKey, literal);
+        }
         titleValueNext = false;
+        valueKey = null;
       }
       return true;
     }
 
+    /** Reads the number at {@link #at} as the value of {@link #valueKey}. */
+    private void number() {
+      var start = at;
+      while (at < body.length() && isNumberChar(body.charAt(at))) {
+        at++;
+      }
+      element.put(valueKey, body.substring(start, at));
+      valueKey = null;
+      titleValueNext = false;
+    }
+
+    private static boolean isNumberChar(char c) {
+      return Character.isDigit(c) || c == '-' || c == '+' || c == '.' || c == 'e' || c == 'E';
+    }
+
     private void key(String literal) {
       lastKey = literal;
-      var element = elementOf();
-      titleValueNext = FINDINGS_KEY.equals(element) && "title".equals(literal);
-      if (STATUSES_KEY.equals(element) && "status".equals(literal)) {
+      var kind = elementOf();
+      titleValueNext = FINDINGS_KEY.equals(kind) && "title".equals(literal);
+      if (STATUSES_KEY.equals(kind) && "status".equals(literal)) {
         statuses++;
       }
+      valueKey = element != null && frames.size() == elementDepth ? literal : null;
     }
 
     /** Reads one character outside a string; false on a bracket that closes nothing. */
@@ -157,13 +169,37 @@ record AnswerKeys(List<String> titles, int statuses, boolean readable) {
         frames.push(new Frame(true, arrayKey()));
       } else if (c == '{') {
         frames.push(new Frame(false, null));
-      } else if ((c == ']' || c == '}') && frames.poll() == null) {
-        return false;
+        openElement();
+      } else if (c == ']' || c == '}') {
+        closeElement();
+        if (frames.poll() == null) {
+          return false;
+        }
       }
       if (!Character.isWhitespace(c) && c != ':') {
         titleValueNext = false;
+        valueKey = null;
       }
       return true;
+    }
+
+    /** Starts recording the object just opened when it is a findings or statuses element. */
+    private void openElement() {
+      var kind = elementOf();
+      if (kind == null) {
+        return;
+      }
+      element = new HashMap<>();
+      elementList = FINDINGS_KEY.equals(kind) ? findings : statusEntries;
+      elementDepth = frames.size();
+    }
+
+    /** Keeps the element being recorded when the bracket about to close is its own. */
+    private void closeElement() {
+      if (element != null && frames.size() == elementDepth) {
+        elementList.add(element);
+        element = null;
+      }
     }
 
     /** The key an array opened now is the value of: the last key in an object, else none. */
@@ -209,14 +245,8 @@ record AnswerKeys(List<String> titles, int statuses, boolean readable) {
       return path.size() == 3 && named ? key : null;
     }
 
+    /** The index of the quote closing a string opened before {@code from}, or -1. */
     private int closingQuote(int from) {
-      return closingQuote(body, from);
-    }
-
-    /**
-     * The index of the quote closing a string of {@code body} opened before {@code from}, or -1.
-     */
-    static int closingQuote(String body, int from) {
       var i = from;
       while (i < body.length()) {
         var c = body.charAt(i);
@@ -229,17 +259,16 @@ record AnswerKeys(List<String> titles, int statuses, boolean readable) {
     }
 
     /**
-     * A string literal's content with its escapes resolved as far as a title needs; a lone
-     * backslash ending a literal the text cuts off is dropped.
+     * A closed string literal's content with its escapes resolved as far as a title needs. A closed
+     * literal never ends in a lone backslash: {@link #closingQuote} skips the character after each
+     * one.
      */
     static String unescaped(String literal) {
       var out = new StringBuilder(literal.length());
       var i = 0;
       while (i < literal.length()) {
         var c = literal.charAt(i);
-        if (c == '\\' && i + 1 == literal.length()) {
-          i++;
-        } else if (c == '\\') {
+        if (c == '\\') {
           out.append(escaped(literal.charAt(i + 1)));
           i += 2;
         } else {

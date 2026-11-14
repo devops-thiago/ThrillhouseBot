@@ -424,7 +424,9 @@ public class FollowUpAnalyzer {
 
   /**
    * Numbered findings parsed from the previous session's persisted AI response. The numbers are the
-   * ids the model references in previous_findings_status.
+   * ids the model references in previous_findings_status, and each carries its key ({@link
+   * SuggestionFormatter#findingKey}, the one its thread marker holds), which the model echoes
+   * beside the id so a swapped id is caught ({@link ModelStatusScreen}, #1322).
    */
   private String formatStructuredFindings(
       List<ReviewResponse.Finding> previous,
@@ -445,7 +447,9 @@ public class FollowUpAnalyzer {
         continue;
       }
       sb.append(id)
-          .append(". [")
+          .append(". (key ")
+          .append(SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title()))
+          .append(") [")
           .append(finding.risk() == null ? "UNKNOWN" : finding.risk().toUpperCase(Locale.ROOT))
           .append("] ")
           .append(finding.file())

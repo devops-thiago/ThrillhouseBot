@@ -47,6 +47,21 @@ class ReviewContextLoaderTest {
 
   private static final String BOT_LOGIN = "thrillhousebot[bot]";
 
+  /** How the previous-findings section lists a finding: its number, key, risk and place (#1322). */
+  static String listed(int id, String risk, String file, int line, String title) {
+    return id
+        + ". (key "
+        + SuggestionFormatter.findingKey(file, line, title)
+        + ") ["
+        + risk
+        + "] "
+        + file
+        + ":"
+        + line
+        + " — "
+        + title;
+  }
+
   @Mock private GitHubPullRequestClient prClient;
   @Mock private GitHubReviewClient reviewClient;
   @Mock private GitHubCommentClient commentClient;
@@ -950,7 +965,8 @@ class ReviewContextLoaderTest {
       assertEquals(1, ctx.priorAiResponseJsons().size());
       assertTrue(ctx.previousAiResponseJson().contains("Carried finding"));
       assertTrue(
-          ctx.previousFindings().contains("1. [HIGH] src/Main.java:10 — Carried finding"),
+          ctx.previousFindings()
+              .contains(listed(1, "HIGH", "src/Main.java", 10, "Carried finding")),
           ctx.previousFindings());
       // Consumed: the next load of this pull request starts without it.
       assertTrue(carryover.take("owner", "repo", 1, "headsha1").isEmpty());
@@ -966,8 +982,10 @@ class ReviewContextLoaderTest {
       assertEquals(2, ctx.previousFindingsList().size());
       assertEquals("Posted finding", ctx.previousFindingsList().get(0).title());
       assertEquals(CARRIED, ctx.previousFindingsList().get(1));
-      assertTrue(ctx.previousFindings().contains("1. [LOW] a.java:1 — Posted finding"));
-      assertTrue(ctx.previousFindings().contains("2. [HIGH] src/Main.java:10 — Carried finding"));
+      assertTrue(ctx.previousFindings().contains(listed(1, "LOW", "a.java", 1, "Posted finding")));
+      assertTrue(
+          ctx.previousFindings()
+              .contains(listed(2, "HIGH", "src/Main.java", 10, "Carried finding")));
       assertTrue(ctx.previousAiResponseJson().contains("Carried finding"));
     }
 
@@ -1786,8 +1804,7 @@ class ReviewContextLoaderTest {
           "the zero-finding round evicted the still-open finding from the id space");
       assertEquals(CARRIED_TITLE, ctx.previousFindingsList().get(0).title());
       assertTrue(
-          ctx.previousFindings()
-              .contains("1. [MEDIUM] " + CARRIED_FILE + ":166 — " + CARRIED_TITLE),
+          ctx.previousFindings().contains(listed(1, "MEDIUM", CARRIED_FILE, 166, CARRIED_TITLE)),
           "previous-findings section was: " + ctx.previousFindings());
       assertFalse(
           ctx.previousFindings().contains("remain unresolved"),
