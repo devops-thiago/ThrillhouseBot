@@ -544,22 +544,11 @@ public class PrSummaryGenerator {
     if (result.previousStatuses().isEmpty()) {
       return;
     }
-    var resolved =
-        result.previousStatuses().stream()
-            .filter(s -> "resolved".equalsIgnoreCase(s.status()))
-            .count();
-    var unresolved =
-        result.previousStatuses().stream()
-            .filter(s -> "unresolved".equalsIgnoreCase(s.status()))
-            .count();
-    var justified =
-        result.previousStatuses().stream()
-            .filter(s -> "justified".equalsIgnoreCase(s.status()))
-            .count();
-    var superseded =
-        result.previousStatuses().stream()
-            .filter(s -> "superseded".equalsIgnoreCase(s.status()))
-            .count();
+    // #1319: the counts the delta section and the check run read, each defect once.
+    var resolved = result.resolvedPreviousCount();
+    var unresolved = result.unresolvedPreviousCount();
+    var justified = result.previousCount("justified");
+    var superseded = result.supersededPreviousCount();
     sb.append("### Previous Findings Status\n");
     sb.append("| Status | Count |\n");
     sb.append("|--------|-------|\n");

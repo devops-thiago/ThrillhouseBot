@@ -1,0 +1,35 @@
+{
+  "findings": [
+    {
+      "risk": "medium",
+      "confidence": "high",
+      "file": "src/test/java/dev/thiagogonzaga/thrillhousebot/github/InstructionsResolverTest.java",
+      "line": 176,
+      "title": "Per-repository cache test now stubs one shared missing-file result for both repos",
+      "description": "The test was gutted so that it can no longer distinguish per-repository negative-cache keying from a shared or absent key. It stubs a single shared collaborator for every lookup: setUp maps `when(gitHub.getRepository(anyString())).thenReturn(repository);` and the test stubs `doThrow(new RuntimeException(\"not found\")).when(repository).getFileContent(anyString(), anyString());` — so `resolve(\"owner-a\", \"repo-a\", ...)` and `resolve(\"owner-b\", \"repo-b\", ...)` both exercise only the all-files-missing path against the same stub. The half that gave the test its discriminating power was deleted in this diff: the removed lines `-    assertTrue(resultB.isPresent());` and `-    assertEquals(\"Repo B instructions\", resultB.content());` are gone, replaced by `assertFalse(resultB.isPresent())` on the second resolve. With both resolves expecting empty and one shared stub, a resolver that keys its negative cache only by owner, globally, or not at all still passes. Fix by giving owner-a and owner-b distinct repository mocks (stub `gitHub.getRepository(eq(\"owner-a/repo-a\"))` to miss and `eq(\"owner-b/repo-b\")` to return content) and restoring the positive assertion on repo B.",
+      "suggestion_old": "",
+      "suggestion_new": ""
+    },
+    {
+      "risk": "medium",
+      "confidence": "medium",
+      "file": "src/test/java/dev/thiagogonzaga/thrillhousebot/github/ProjectStackResolverTest.java",
+      "line": 338,
+      "title": "shouldSkipManifestsThatDecodeToBlankContent now stubs a read failure, not blank decoding",
+      "description": "The test keeps both its name and its comment while the stub now covers a different path entirely. The comment still reads `// The MIME decoder skips non-alphabet characters, so \"!!!\" decodes to empty content`, but the stub is now `org.mockito.Mockito.doThrow(new java.io.IOException(\"bad\")).when(bad).getContent();` on a mocked GHContent — a content read that throws, not a payload that decodes to blank. Production no longer decodes anything here: ProjectStackResolver.fetchManifestSection reads `var content = file.getContent();` directly (hub4j returns the already-decoded string), so the MIME-decoding sentence describes a step that does not exist anymore. The assertion `assertEquals(\"\", resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));` passes through the read-failure catch (`catch (RuntimeException | IOException _)` → Optional.empty) whether or not any blank-decode behavior exists, so the behavior the method name promises is not what is being verified — the actual blank case moved to the newly added shouldSkipManifestWithBlankDecodedContent, which stubs `makeFileContent(\"pom.xml\", \"   \")`. Rename/re-comment the test as a read-failure case (or fold it into the sibling IOException test) and drop the stale MIME sentence.",
+      "suggestion_old": "",
+      "suggestion_new": ""
+    },
+    {
+      "risk": "low",
+      "confidence": "medium",
+      "file": "src/test/java/dev/thiagogonzaga/thrillhousebot/github/RepoSettingsResolverTest.java",
+      "line": 682,
+      "title": "Stale null-payload comment on the null-file test, duplicated by a new identical test",
+      "description": "The comment still describes the old missing-payload shape: `// The contents endpoint can answer without an inline payload (e.g. an over-size blob); // decoding null would NPE, so it must be handled as \"nothing readable here\".` But the stub beneath it is `doReturn(null).when(repository).getFileContent(YML, DEFAULT_BRANCH);` — the whole file lookup returns null, which is the absent-file case, not the missing-payload case the comment names; that case is now covered separately by nullContentIsTreatedAsAbsent (`doReturn(null).when(nullContent).getContent();`). The comment's claim that \"decoding null would NPE\" also describes the removed Base64 decode path; production now consumes hub4j's already-decoded content (`var content = file.getContent();` in RepoSettingsResolver.fetchAndParse). Additionally, the new test nullFileIsTreatedAsAbsent in the same nested class stubs the identical call identically (`doReturn(null).when(repository).getFileContent(YML, DEFAULT_BRANCH); stubFile(YAML, ...)`) and asserts the same fall-through to the .yaml candidate, so the pair is a duplicate — one copy plus the comment fix is enough.",
+      "suggestion_old": "",
+      "suggestion_new": ""
+    }
+  ],
+  "previous_findings_status": []
+}

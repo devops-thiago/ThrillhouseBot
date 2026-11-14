@@ -441,6 +441,7 @@ public class ReviewPublisher {
           && !result.isFirstReview()
           && result.unresolvedPreviousCount() == 0
           && result.resolvedPreviousCount() == 0
+          && result.supersededPreviousCount() == 0
           && !result.truncated()
           && result.reviewState() == ReviewState.APPROVE
           && latestBotReviewApproves(post.priorReviews(), commitSha)) {

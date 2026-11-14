@@ -210,9 +210,21 @@ public interface GitHubPullRequestClient {
     }
   }
 
-  record CompareResponse(@JsonProperty("total_commits") int totalCommits, List<FileDiff> files) {
+  /**
+   * A comparison of two commits. {@code status} is GitHub's word for how the head relates to the
+   * base ({@code ahead}, {@code behind}, {@code identical} or {@code diverged}); with a three-dot
+   * comparison, {@code files} is the change from their merge base, which is the change from the
+   * base only when the head is {@code ahead} of it or {@code identical} to it.
+   */
+  record CompareResponse(
+      @JsonProperty("total_commits") int totalCommits, List<FileDiff> files, String status) {
     public CompareResponse {
       files = files == null ? List.of() : List.copyOf(files);
+    }
+
+    /** A comparison whose status is not known. */
+    public CompareResponse(int totalCommits, List<FileDiff> files) {
+      this(totalCommits, files, null);
     }
   }
 

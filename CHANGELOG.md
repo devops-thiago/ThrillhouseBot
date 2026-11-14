@@ -28,13 +28,25 @@ All notable changes to ThrillhouseBot.
   (the one its thread marker carries), and each status and verdict must repeat that key beside the
   number. One that does not is dropped and logged: the finding of a dropped status stays held as
   open, and the candidate of a dropped verdict is kept as one the verifier did not judge. A
-  "resolved" status now stands only when the finding's flagged code has left the diff or its
-  suggested fix is in it; otherwise the finding is kept open and the contradiction is logged. A
-  finding with no flagged code to look for, whose file is still in the diff, can no longer be
-  closed by the model; a maintainer can still clear it. A repaired answer can no
+  "resolved" status on a finding whose file is unchanged since the round that raised it is now
+  kept open and the contradiction is logged; on a changed file it stands, wherever in the file
+  the fix sits. When the two commits cannot be compared, it stands only when the finding's flagged
+  code has left the diff or its suggested fix is in it. A repaired answer can no
   longer move a finding to another file or line or renumber a status: the failed answer's values
   are put back, and an answer whose structure cannot be read is not repaired at all, so the full
   retry runs. (#1322)
+- **Follow-up rounds count each previous finding once and decide its status from its file**
+  (#1316, #1317, #1318): a finding raised two or more rounds back was never checked again, so a
+  fixed one stayed open; the same defect raised again from an older round, or from another file it
+  names, was counted twice; and a finding could be superseded while its file was unchanged, with
+  the delta comment leaving superseded findings out of its counts. A finding whose file is
+  unchanged since the round that raised it now stays open and is never superseded; an older
+  round's open finding on a changed file is listed to the model for a status like the previous
+  round's; a finding whose flagged code is gone while the change it suggested is in the file is
+  resolved; and a new finding is matched against every open finding of every round, by the code it
+  quotes and by the sites it names, before it counts as new. The summary, the delta comment and
+  the check run take their numbers from the same statuses, and the delta comment counts and names
+  superseded findings.
 - The summary no longer posts counts or sizes the summary call wrote. That call sees only the
   round's findings, so on #1315 its "What this PR does" paragraph said "One medium finding
   remains" while 17 findings were open. A sentence of the purpose paragraph or the overall

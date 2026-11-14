@@ -446,25 +446,31 @@ public class FollowUpAnalyzer {
         id++;
         continue;
       }
-      sb.append(id)
-          .append(". (key ")
-          .append(SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title()))
-          .append(") [")
-          .append(finding.risk() == null ? "UNKNOWN" : finding.risk().toUpperCase(Locale.ROOT))
-          .append("] ")
-          .append(finding.file())
-          .append(":")
-          .append(finding.line())
-          .append(" — ")
-          .append(finding.title())
-          .append("\n");
-      if (finding.description() != null && !finding.description().isBlank()) {
-        sb.append("   ").append(finding.description()).append("\n");
-      }
+      appendNumberedEntry(sb, id, finding);
       appendThreadReplies(sb, finding, id, inlineComments, botIdentity);
       id++;
     }
     return sb.toString();
+  }
+
+  /** One numbered entry: id, key, risk, location and title, then the description. */
+  private static void appendNumberedEntry(
+      StringBuilder sb, int id, ReviewResponse.Finding finding) {
+    sb.append(id)
+        .append(". (key ")
+        .append(SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title()))
+        .append(") [")
+        .append(finding.risk() == null ? "UNKNOWN" : finding.risk().toUpperCase(Locale.ROOT))
+        .append("] ")
+        .append(finding.file())
+        .append(":")
+        .append(finding.line())
+        .append(" — ")
+        .append(finding.title())
+        .append("\n");
+    if (finding.description() != null && !finding.description().isBlank()) {
+      sb.append("   ").append(finding.description()).append("\n");
+    }
   }
 
   private static void appendThreadReplies(
@@ -2086,6 +2092,24 @@ public class FollowUpAnalyzer {
       DiffLineResolver lineResolver,
       Map<String, String> renameTargets,
       Set<Integer> settledIds) {
+    return supersedeVanished(
+        previousAiResponseJson, statuses, lineResolver, renameTargets, settledIds, -1);
+  }
+
+  /**
+   * Variant that knows the position among the prior rounds (newest first) of the round the statuses
+   * report on, {@code previousRound}, so a finding whose file is unchanged since that round is
+   * never superseded, whatever its anchor reads (#1318, #1319), and a finding whose flagged code
+   * left the diff while the replacement it suggested landed is {@code resolved} rather than
+   * superseded ({@link #replacementLanded}). {@code -1} when the round is not known.
+   */
+  public List<ReviewResponse.PreviousFindingStatus> supersedeVanished(
+      String previousAiResponseJson,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets,
+      Set<Integer> settledIds,
+      int previousRound) {
     if (statuses == null || statuses.isEmpty() || lineResolver == null) {
       return statuses == null ? List.of() : statuses;
     }
@@ -2096,19 +2120,38 @@ public class FollowUpAnalyzer {
     var rewritten = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
     for (var status : statuses) {
       if (!settledIds.contains(status.id())
-          && hasVanished(status, previous, lineResolver, renameTargets)) {
-        Log.infof(
-            "Superseding unresolved previous finding #%d — its targeted code is no longer in the"
-                + " current diff",
-            status.id());
+          && hasVanished(status, previous, lineResolver, renameTargets, previousRound)) {
         rewritten.add(
-            new ReviewResponse.PreviousFindingStatus(
-                status.id(), STATUS_SUPERSEDED, SUPERSEDED_NOTE));
+            vanishedStatus(
+                status.id(), previous.get(status.id() - 1), lineResolver, renameTargets));
       } else {
         rewritten.add(status);
       }
     }
     return rewritten;
+  }
+
+  /**
+   * The status of a finding of the effective previous round whose flagged code left the diff:
+   * {@code resolved} when the replacement it suggested is in its file ({@link #replacementLanded}),
+   * else {@code superseded}.
+   */
+  private static ReviewResponse.PreviousFindingStatus vanishedStatus(
+      int id,
+      ReviewResponse.Finding finding,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets) {
+    if (replacementLanded(finding, lineResolver, renameTargets)) {
+      Log.infof(
+          "Resolving previous finding #%d — its targeted code left the diff and its suggested"
+              + " replacement is in the file",
+          id);
+      return new ReviewResponse.PreviousFindingStatus(id, STATUS_RESOLVED, REPLACEMENT_LANDED_NOTE);
+    }
+    Log.infof(
+        "Superseding previous finding #%d — its targeted code is no longer in the current diff",
+        id);
+    return new ReviewResponse.PreviousFindingStatus(id, STATUS_SUPERSEDED, SUPERSEDED_NOTE);
   }
 
   /**
@@ -2138,6 +2181,22 @@ public class FollowUpAnalyzer {
       DiffLineResolver lineResolver,
       Map<String, String> renameTargets,
       Set<Integer> settledIds) {
+    return addUnreportedVanished(previous, statuses, lineResolver, renameTargets, settledIds, -1);
+  }
+
+  /**
+   * Variant that knows the position among the prior rounds (newest first) of the round {@code
+   * previous} came from, {@code previousRound}: an unreported finding whose file is unchanged since
+   * then gets no status here, so the backstop holds it (#1318, #1319), and one whose suggested
+   * replacement landed is {@code resolved} ({@link #replacementLanded}).
+   */
+  public List<ReviewResponse.PreviousFindingStatus> addUnreportedVanished(
+      List<ReviewResponse.Finding> previous,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets,
+      Set<Integer> settledIds,
+      int previousRound) {
     if (previous == null || previous.isEmpty() || lineResolver == null) {
       return statuses == null ? List.of() : statuses;
     }
@@ -2160,9 +2219,9 @@ public class FollowUpAnalyzer {
         result.add(
             new ReviewResponse.PreviousFindingStatus(
                 id, STATUS_UNRESOLVED, PURE_RENAME_UNRESOLVED_NOTE));
-      } else if (!lineResolver.isFindingPresent(currentPath, finding.suggestionOld())) {
-        result.add(
-            new ReviewResponse.PreviousFindingStatus(id, STATUS_SUPERSEDED, SUPERSEDED_NOTE));
+      } else if (!unchangedSince(previousRound, finding, lineResolver)
+          && !lineResolver.isFindingPresent(currentPath, finding.suggestionOld())) {
+        result.add(vanishedStatus(id, finding, lineResolver, renameTargets));
       }
     }
     return result;
@@ -2200,7 +2259,8 @@ public class FollowUpAnalyzer {
       ReviewResponse.PreviousFindingStatus status,
       List<ReviewResponse.Finding> previous,
       DiffLineResolver lineResolver,
-      Map<String, String> renameTargets) {
+      Map<String, String> renameTargets,
+      int previousRound) {
     if (!STATUS_UNRESOLVED.equalsIgnoreCase(status.status())) {
       return false;
     }
@@ -2209,7 +2269,7 @@ public class FollowUpAnalyzer {
       return false;
     }
     var finding = previous.get(id - 1);
-    if (finding.file() == null) {
+    if (finding.file() == null || unchangedSince(previousRound, finding, lineResolver)) {
       return false;
     }
     var currentPath = renameTargets.getOrDefault(finding.file(), finding.file());
@@ -2906,6 +2966,20 @@ public class FollowUpAnalyzer {
    */
   static final int MIN_FIX_LINE_CHARS = 12;
 
+  /**
+   * Note on the {@code resolved} status of a finding whose flagged code left the diff while the
+   * replacement it suggested is now in its file ({@link #replacementLanded}, #1319).
+   */
+  static final String REPLACEMENT_LANDED_NOTE =
+      "Its flagged code left the diff, and the change it suggested is now in the file.";
+
+  /**
+   * Note on the {@code resolved} status of an earlier round's finding this round's model reported
+   * resolved, on a file that changed since the round that raised it (#1319).
+   */
+  static final String MODEL_RESOLVED_NOTE =
+      "Raised in an earlier review; reported resolved on a file that changed since.";
+
   /** Note on the {@code unresolved} status of a finding the backstop holds without a reply. */
   static final String HELD_NOTE =
       "Flagged in an earlier round and still present; not addressed in this revision.";
@@ -2995,7 +3069,30 @@ public class FollowUpAnalyzer {
             renameTargets,
             reviewedCode,
             supersededThisRound,
-            accountedThisRound));
+            accountedThisRound,
+            earlierRoundResolutionKeys(currentStatuses)));
+  }
+
+  /**
+   * The keys of the older rounds' findings this round's model reported {@code resolved} (#1319):
+   * the statuses {@link PriorListing#earlierRoundResolutions} moved to {@link #EARLIER_ROUND_ID},
+   * each carrying its finding's key. The screen already held each to the code ({@link
+   * ModelStatusScreen}).
+   */
+  private static Set<String> earlierRoundResolutionKeys(
+      List<ReviewResponse.PreviousFindingStatus> statuses) {
+    var keys = new HashSet<String>();
+    if (statuses == null) {
+      return keys;
+    }
+    for (var status : statuses) {
+      if (status.id() == EARLIER_ROUND_ID
+          && STATUS_RESOLVED.equalsIgnoreCase(status.status())
+          && status.key() != null) {
+        keys.add(status.key());
+      }
+    }
+    return keys;
   }
 
   /**
@@ -3051,7 +3148,8 @@ public class FollowUpAnalyzer {
       Map<String, String> renameTargets,
       Supplier<String> reviewedCode,
       Set<String> supersededThisRound,
-      List<ReviewResponse.Finding> accountedThisRound) {}
+      List<ReviewResponse.Finding> accountedThisRound,
+      Set<String> modelResolvedKeys) {}
 
   /**
    * {@code statuses} without the {@code unresolved} entries that name no finding: an id outside the
@@ -3175,7 +3273,7 @@ public class FollowUpAnalyzer {
       var round = chrono.get(r);
       closeAddressed(open, reportedRound, round.previousFindingsStatus());
       closeEarlierRound(open, round.closedEarlierRound());
-      addOpenFindings(open, round.findings(), r);
+      addOpenFindings(open, round.findings(), r, chrono.size() - 1 - r);
       if (!round.findings().isEmpty()) {
         reportedRound = round.findings();
       }
@@ -3240,8 +3338,8 @@ public class FollowUpAnalyzer {
         .filter(
             prior ->
                 rootCommentId(prior.finding(), prior.id(), inlineComments, botIdentity) != null)
+        .filter(prior -> isStillOpen(prior, lineResolver, renameTargets))
         .map(OpenFinding::finding)
-        .filter(finding -> isStillPresent(finding, lineResolver, renameTargets))
         .toList();
   }
 
@@ -3384,7 +3482,7 @@ public class FollowUpAnalyzer {
     var threaded = new ArrayList<ReviewResponse.Finding>();
     var listed = new ArrayList<ReviewResponse.Finding>();
     for (var prior : replay.open().values()) {
-      if (!isStillPresent(prior.finding(), lineResolver, renameTargets)) {
+      if (!isStillOpen(prior, lineResolver, renameTargets)) {
         continue;
       }
       if (rootCommentId(prior.finding(), prior.id(), inlineComments, botIdentity) != null) {
@@ -3557,6 +3655,7 @@ public class FollowUpAnalyzer {
       if (finding == null || !replaced.contains(finding)) {
         kept.add(status);
       } else if (replacedNow.containsKey(finding)) {
+        logPromotion(replacedNow.get(finding), finding);
         kept.add(new ReviewResponse.PreviousFindingStatus(id, STATUS_UNRESOLVED, REPLACED_NOTE));
       }
     }
@@ -3579,6 +3678,7 @@ public class FollowUpAnalyzer {
     if (!hold.holdsOpen() || !replacedNow.containsKey(hold.finding())) {
       return null;
     }
+    logPromotion(replacedNow.get(hold.finding()), hold.finding());
     return new HeldPrevious(hold.status().withNote(REPLACED_NOTE), hold.finding());
   }
 
@@ -3622,6 +3722,24 @@ public class FollowUpAnalyzer {
       }
     }
     return replaced;
+  }
+
+  /**
+   * Logs that this round's {@code finding} carries {@code prior}, an open double-check item it
+   * replaced, so a round that posts a thread for it and counts it as still open rather than new
+   * says which match did it (#1319: two threads posted on ThrillhouseBot-test#295 and #296, one new
+   * finding counted).
+   */
+  private static void logPromotion(ReviewResponse.Finding finding, ReviewResponse.Finding prior) {
+    Log.infof(
+        "Counting '%s' (%s:%d) as the earlier double-check item '%s' (%s:%d) it replaces: still"
+            + " open since an earlier review, not new",
+        LogSafe.oneLine(finding.title()),
+        LogSafe.oneLine(finding.file()),
+        finding.line(),
+        LogSafe.oneLine(prior.title()),
+        LogSafe.oneLine(prior.file()),
+        prior.line());
   }
 
   /**
@@ -3736,8 +3854,12 @@ public class FollowUpAnalyzer {
       var cleared = target != null ? target : facts.mostSevere();
       return closed(cluster, cleared, STATUS_RESOLVED, facts.clearedNote(), in);
     }
+    if (facts.modelResolved()) {
+      var resolved = target != null ? target : facts.mostSevere();
+      return closed(cluster, resolved, STATUS_RESOLVED, MODEL_RESOLVED_NOTE, in);
+    }
     if (target == null) {
-      return closed(cluster, facts.mostSevere(), STATUS_SUPERSEDED, SUPERSEDED_NOTE, in);
+      return vanishedEntry(cluster, facts.mostSevere(), in);
     }
     if (!facts.declines().isEmpty()) {
       return conversationDeclineEntry(target, facts, in, code);
@@ -3748,6 +3870,21 @@ public class FollowUpAnalyzer {
           : hold(target, HELD_NOTE);
     }
     return threadReplyEntry(target, facts, in, code);
+  }
+
+  /**
+   * {@link #backstopEntry}'s entry for a cluster no member of which is still there: {@code
+   * resolved} when a member's suggested replacement is in the file ({@link #replacementLanded}),
+   * else {@code superseded}.
+   */
+  private static HeldPrevious vanishedEntry(
+      List<OpenFinding> cluster, OpenFinding mostSevere, BackstopInputs in) {
+    var landed =
+        cluster.stream()
+            .anyMatch(m -> replacementLanded(m.finding(), in.lineResolver(), in.renameTargets()));
+    return landed
+        ? closed(cluster, mostSevere, STATUS_RESOLVED, REPLACEMENT_LANDED_NOTE, in)
+        : closed(cluster, mostSevere, STATUS_SUPERSEDED, SUPERSEDED_NOTE, in);
   }
 
   /**
@@ -3802,7 +3939,8 @@ public class FollowUpAnalyzer {
       OpenFinding answered,
       Long answeredRoot,
       String clearedNote,
-      Set<ConversationDecline> declines) {}
+      Set<ConversationDecline> declines,
+      boolean modelResolved) {}
 
   private ClusterFacts clusterFacts(
       List<OpenFinding> cluster, List<ConversationDecline> directives, BackstopInputs in) {
@@ -3811,6 +3949,7 @@ public class FollowUpAnalyzer {
     OpenFinding answered = null;
     Long answeredRoot = null;
     String clearedNote = null;
+    var modelResolved = false;
     var declines = Collections.<ConversationDecline>newSetFromMap(new IdentityHashMap<>());
     for (var member : cluster) {
       var finding = member.finding();
@@ -3818,9 +3957,13 @@ public class FollowUpAnalyzer {
         mostSevere = member;
       }
       if ((present == null || moreSevere(finding, present.finding()))
-          && isStillPresent(finding, in.lineResolver(), in.renameTargets())) {
+          && isStillOpen(member, in.lineResolver(), in.renameTargets())) {
         present = member;
       }
+      modelResolved |=
+          in.modelResolvedKeys()
+              .contains(
+                  SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title()));
       var root =
           answered == null
               ? answeredRootComment(finding, member.id(), in.inlineComments(), in.botIdentity())
@@ -3832,7 +3975,8 @@ public class FollowUpAnalyzer {
       clearedNote = strongerClear(clearedNote, member, in);
       declines.addAll(namingDeclines(finding, directives));
     }
-    return new ClusterFacts(mostSevere, present, answered, answeredRoot, clearedNote, declines);
+    return new ClusterFacts(
+        mostSevere, present, answered, answeredRoot, clearedNote, declines, modelResolved);
   }
 
   /**
@@ -3844,8 +3988,8 @@ public class FollowUpAnalyzer {
   private static boolean suggestedFixLandedEverywhere(
       List<OpenFinding> cluster, BackstopInputs in) {
     return cluster.stream()
+        .filter(member -> isStillOpen(member, in.lineResolver(), in.renameTargets()))
         .map(OpenFinding::finding)
-        .filter(finding -> isStillPresent(finding, in.lineResolver(), in.renameTargets()))
         .allMatch(finding -> suggestedFixLanded(finding, in.lineResolver(), in.renameTargets()));
   }
 
@@ -3869,16 +4013,51 @@ public class FollowUpAnalyzer {
       ReviewResponse.Finding finding,
       DiffLineResolver lineResolver,
       Map<String, String> renameTargets) {
-    var suggested = strippedLines(finding.suggestionNew());
-    var fixLines = new LinkedHashSet<>(suggested);
-    fixLines.removeAll(strippedLines(finding.suggestionOld()));
-    if (fixLines.stream().noneMatch(line -> nonWhitespaceLength(line) >= MIN_FIX_LINE_CHARS)) {
+    var fixLines = fixLines(finding);
+    if (fixLines.isEmpty()) {
       return false;
     }
     var path = renameTargets.getOrDefault(finding.file(), finding.file());
     return !path.isBlank()
         && lineResolver.addsEveryLineNear(
-            path, finding.suggestionOld(), finding.line(), fixLines, suggested.size());
+            path,
+            finding.suggestionOld(),
+            finding.line(),
+            fixLines,
+            strippedLines(finding.suggestionNew()).size());
+  }
+
+  /**
+   * Whether a finding whose flagged code left the diff was fixed by the replacement it suggested
+   * (#1319): every line of {@code suggestion_new} that {@code suggestion_old} does not carry is an
+   * added line of its file, anywhere in it, since there is no flagged code left to measure the
+   * distance from. Held to the same bar as {@link #suggestedFixLanded}: one line of at least {@link
+   * #MIN_FIX_LINE_CHARS} non-whitespace characters, and a file the pull request still changes.
+   */
+  static boolean replacementLanded(
+      ReviewResponse.Finding finding,
+      DiffLineResolver lineResolver,
+      Map<String, String> renameTargets) {
+    var fixLines = fixLines(finding);
+    if (fixLines.isEmpty() || finding.file() == null) {
+      return false;
+    }
+    var path = renameTargets.getOrDefault(finding.file(), finding.file());
+    return !path.isBlank() && lineResolver.addsEveryLine(path, fixLines);
+  }
+
+  /**
+   * The lines a finding's suggestion adds, stripped: {@code suggestion_new} less the lines of
+   * {@code suggestion_old}; empty when none of them holds {@link #MIN_FIX_LINE_CHARS}
+   * non-whitespace characters, since a lone brace says nothing about where it came from.
+   */
+  private static Set<String> fixLines(ReviewResponse.Finding finding) {
+    var fixLines = new LinkedHashSet<>(strippedLines(finding.suggestionNew()));
+    fixLines.removeAll(strippedLines(finding.suggestionOld()));
+    if (fixLines.stream().noneMatch(line -> nonWhitespaceLength(line) >= MIN_FIX_LINE_CHARS)) {
+      return Set.of();
+    }
+    return fixLines;
   }
 
   /** The non-blank lines of {@code text}, stripped, in order; empty for a null text. */
@@ -4050,30 +4229,146 @@ public class FollowUpAnalyzer {
 
   /**
    * {@code response} with its {@code previous_findings_status} screened by {@link
-   * ModelStatusScreen} (#1322): each status must echo its finding's key, and a {@code resolved} is
-   * held to the code. The same instance when nothing changed.
-   *
-   * @param previous the findings the prompt listed by number, in order
-   * @param renameTargets each renamed file's new path, blank for a content-identical rename
+   * ModelStatusScreen} (#1322): each status must echo the key of the finding the prompt listed
+   * under its id ({@link #priorListing}), and a {@code resolved} is held to the finding's file
+   * (#1319). The same instance when nothing changed.
    */
   static ReviewResponse screenModelStatuses(
       ReviewResponse response,
-      List<ReviewResponse.Finding> previous,
+      ReviewContextLoader.ReviewContext ctx,
       DiffLineResolver lineResolver,
-      Map<String, String> renameTargets) {
-    return new ModelStatusScreen(previous, lineResolver, renameTargets).screen(response);
+      BotIdentity botIdentity) {
+    return statusScreen(ctx, lineResolver, botIdentity).screen(response);
   }
 
   /**
-   * {@code statuses} screened the way {@link #screenModelStatuses(ReviewResponse, List,
-   * DiffLineResolver, Map)} screens a response's.
+   * {@code statuses} screened the way {@link #screenModelStatuses(ReviewResponse,
+   * ReviewContextLoader.ReviewContext, DiffLineResolver, BotIdentity)} screens a response's.
    */
   static List<ReviewResponse.PreviousFindingStatus> screenModelStatuses(
       List<ReviewResponse.PreviousFindingStatus> statuses,
-      List<ReviewResponse.Finding> previous,
+      ReviewContextLoader.ReviewContext ctx,
       DiffLineResolver lineResolver,
-      Map<String, String> renameTargets) {
-    return new ModelStatusScreen(previous, lineResolver, renameTargets).screen(statuses);
+      BotIdentity botIdentity) {
+    return statusScreen(ctx, lineResolver, botIdentity).screen(statuses);
+  }
+
+  private static ModelStatusScreen statusScreen(
+      ReviewContextLoader.ReviewContext ctx,
+      DiffLineResolver lineResolver,
+      BotIdentity botIdentity) {
+    return new ModelStatusScreen(
+        priorListing(ctx, () -> lineResolver, botIdentity),
+        lineResolver,
+        VerdictBuilder.renameTargets(ctx.files()));
+  }
+
+  /**
+   * The findings the prompt lists by number this round ({@link PriorListing}), as {@link
+   * #priorListing(List, Supplier, List, BotIdentity)} lists them for {@code ctx}.
+   */
+  static PriorListing priorListing(
+      ReviewContextLoader.ReviewContext ctx,
+      Supplier<DiffLineResolver> lineResolver,
+      BotIdentity botIdentity) {
+    return priorListing(ctx.priorAiResponses(), lineResolver, ctx.inlineComments(), botIdentity);
+  }
+
+  /**
+   * The findings a follow-up round lists to the model by number (#1319): the effective previous
+   * round's, then every finding an older round left open whose file changed since the round that
+   * raised it, so it gets a status this round (#1316). An older finding whose file is unchanged is
+   * still open without asking, and one a maintainer answered on its thread is weighed by the
+   * backstop and listed among the answered ones, so neither is listed. Read only from the stored
+   * rounds and the diff, so the prompt, the screen and the verdict list the same findings.
+   *
+   * @param priorAiResponses every completed prior round's parsed response, newest first
+   * @param lineResolver the review's diff, read only when an older round left something open
+   */
+  static PriorListing priorListing(
+      List<ReviewResponse> priorAiResponses,
+      Supplier<DiffLineResolver> lineResolver,
+      List<GitHubReviewClient.PullRequestComment> inlineComments,
+      BotIdentity botIdentity) {
+    var effective = effectivePreviousFindings(priorAiResponses);
+    var findings = new ArrayList<>(effective);
+    var rounds =
+        new ArrayList<>(
+            Collections.nCopies(effective.size(), effectivePreviousRoundIndex(priorAiResponses)));
+    if (priorAiResponses != null && !priorAiResponses.isEmpty()) {
+      var replay = replayRounds(toChronological(priorAiResponses));
+      var effectiveKeys = new HashSet<String>();
+      replay.reportedRound().forEach(finding -> effectiveKeys.add(findingKey(finding)));
+      for (var entry : replay.open().entrySet()) {
+        var open = entry.getValue();
+        if (!effectiveKeys.contains(entry.getKey())
+            && lineResolver.get().fileChangeSince(open.priorRound(), open.finding().file())
+                == DiffLineResolver.FileChange.CHANGED
+            && answeredRootComment(open.finding(), open.id(), inlineComments, botIdentity)
+                == null) {
+          findings.add(open.finding());
+          rounds.add(open.priorRound());
+        }
+      }
+    }
+    return new PriorListing(findings, rounds, effective.size());
+  }
+
+  /**
+   * The findings {@link #priorListing} lists for {@code ctx}, in listing order (id = index + 1).
+   */
+  static List<ReviewResponse.Finding> listedPreviousFindings(
+      ReviewContextLoader.ReviewContext ctx,
+      DiffLineResolver lineResolver,
+      BotIdentity botIdentity) {
+    return priorListing(ctx, () -> lineResolver, botIdentity).findings();
+  }
+
+  /**
+   * The model's statuses on the effective previous round's findings: {@code statuses} without those
+   * on an older round's finding the prompt numbered after them ({@link
+   * PriorListing#ofEffectiveRound}).
+   */
+  static List<ReviewResponse.PreviousFindingStatus> effectiveRoundStatuses(
+      ReviewContextLoader.ReviewContext ctx,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      BotIdentity botIdentity) {
+    return priorListing(ctx, ctx::lineResolver, botIdentity).ofEffectiveRound(statuses);
+  }
+
+  /**
+   * The model's {@code resolved} statuses on an older round's finding the prompt numbered, each
+   * under {@link #EARLIER_ROUND_ID} with that finding's key ({@link
+   * PriorListing#earlierRoundResolutions}), for the backstop ({@link #heldPreviousFindings}).
+   */
+  static List<ReviewResponse.PreviousFindingStatus> earlierRoundResolutions(
+      ReviewContextLoader.ReviewContext ctx,
+      List<ReviewResponse.PreviousFindingStatus> statuses,
+      BotIdentity botIdentity) {
+    return priorListing(ctx, ctx::lineResolver, botIdentity).earlierRoundResolutions(statuses);
+  }
+
+  /**
+   * The numbered entries of the older rounds' findings {@code listing} lists after the effective
+   * round's (#1319), each under its listing id and key, or an empty string when there are none. The
+   * model reports on them in {@code previous_findings_status} like any listed finding.
+   */
+  static String formatEarlierListed(PriorListing listing) {
+    var findings = listing.findings();
+    if (findings.size() == listing.effective()) {
+      return "";
+    }
+    var sb =
+        new StringBuilder(
+            """
+
+            Raised in earlier rounds and still open, in files changed since — report each in \
+            previous_findings_status under its number and key:
+            """);
+    for (var id = listing.effective() + 1; id <= findings.size(); id++) {
+      appendNumberedEntry(sb, id, findings.get(id - 1));
+    }
+    return sb.toString();
   }
 
   /**
@@ -4102,23 +4397,49 @@ public class FollowUpAnalyzer {
     return lineResolver.isFindingPresent(currentPath, finding.suggestionOld());
   }
 
+  /**
+   * Whether an open finding is still there: its file is unchanged since the round that raised it
+   * (#1319), whatever its anchor reads, or its flagged code is still in the diff ({@link
+   * #isStillPresent}). An anchor that did not match in its own round, or that runs past what the
+   * patch shows, cannot make a finding on an unchanged file read as gone (#1318).
+   */
+  private static boolean isStillOpen(
+      OpenFinding open, DiffLineResolver lineResolver, Map<String, String> renameTargets) {
+    return unchangedSince(open.priorRound(), open.finding(), lineResolver)
+        || isStillPresent(open.finding(), lineResolver, renameTargets);
+  }
+
+  /**
+   * Whether {@code finding}'s file holds the same content as at the head of the prior round at
+   * {@code priorRound} (newest first), the round that raised it (#1319).
+   */
+  static boolean unchangedSince(
+      int priorRound, ReviewResponse.Finding finding, DiffLineResolver lineResolver) {
+    return lineResolver.fileChangeSince(priorRound, finding.file())
+        == DiffLineResolver.FileChange.UNCHANGED;
+  }
+
   /** Whether {@code finding} is rated strictly more severe than {@code than}. */
   private static boolean moreSevere(ReviewResponse.Finding finding, ReviewResponse.Finding than) {
     return RiskLevel.fromString(finding.risk()).compareTo(RiskLevel.fromString(than.risk())) < 0;
   }
 
   /**
-   * A still-open prior finding, the 1-based id it carried within the round that raised it, and that
-   * round's position (oldest first).
+   * A still-open prior finding, the 1-based id it carried within the round that raised it, that
+   * round's position (oldest first), and the same round's position among the prior rounds newest
+   * first, the order {@link DiffLineResolver#fileChangeSince} reads (#1319).
    */
-  private record OpenFinding(ReviewResponse.Finding finding, int id, int round) {}
+  private record OpenFinding(ReviewResponse.Finding finding, int id, int round, int priorRound) {}
 
   private static void addOpenFindings(
-      Map<String, OpenFinding> open, List<ReviewResponse.Finding> findings, int round) {
+      Map<String, OpenFinding> open,
+      List<ReviewResponse.Finding> findings,
+      int round,
+      int priorRound) {
     for (var i = 0; i < findings.size(); i++) {
       var key = findingKey(findings.get(i));
       if (key != null) {
-        open.put(key, new OpenFinding(findings.get(i), i + 1, round));
+        open.put(key, new OpenFinding(findings.get(i), i + 1, round, priorRound));
       }
     }
   }
