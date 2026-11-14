@@ -21,6 +21,7 @@ import static dev.thiagogonzaga.thrillhousebot.review.ai.AiResults.aiTruncated;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -478,70 +479,208 @@ class ResponseRepairServiceTest {
   }
 
   @Test
-  void anAnswerTheScanCannotFollowIsCountedByEveryKeyInTheText() {
-    // An unterminated string: the scan gives up, and every "title" key in the text counts.
+  void anAnswerTheScanCannotFollowIsNotRepaired() {
+    // #1322: with the structure lost, the file, line and id each finding and status must keep
+    // cannot be read, so even a repair that keeps every title is rejected and the full retry runs.
     var body = "{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B\", \"note\": \"cut";
-    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}]}"));
+    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B\"}]}"));
     assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isEmpty());
-
-    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B\"}]}"));
-    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isPresent());
-
-    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"Z\"}]}"));
-    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isEmpty());
-
-    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"A\"}]}"));
-    assertTrue(
-        service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isEmpty(),
-        "the text holds one copy of A, so B was lost");
-
-    // A title inside another title or in another field's prose is no copy of it.
-    var nested =
-        "{\"findings\": [{\"title\": \"error\", \"description\": \"an error case\"},"
-            + " {\"title\": \"error X\", \"note\": \"cut";
-    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"error\"}, {\"title\": \"error\"}]}"));
-    assertTrue(
-        service.repair(SESSION, ModelLane.ACTIVE, nested, refusal()).isEmpty(),
-        "\"error\" is the value of one title only, so \"error X\" was lost");
-    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"error\"}, {\"title\": \"error X\"}]}"));
-    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, nested, refusal()).isPresent());
-    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"error\"}, {\"title\": \"case\"}]}"));
-    assertTrue(
-        service.repair(SESSION, ModelLane.ACTIVE, nested, refusal()).isEmpty(),
-        "\"case\" is only in a description, not a title");
-
-    // A title the text cuts off before its closing quote still counts.
-    var openTitle = "{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B";
-    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B\"}]}"));
-    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, openTitle, refusal()).isPresent());
-
-    // JSON a description quotes, escaped inside its string, holds no title (#1176).
-    var quoted =
-        "{\"findings\":[{\"title\":\"A\",\"description\":\"example {\\\"title\\\":\\\"A\\\"}\"},"
-            + "{\"title\":\"B\",\"note\":\"cut";
-    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"A\"}]}"));
-    assertTrue(
-        service.repair(SESSION, ModelLane.ACTIVE, quoted, refusal()).isEmpty(),
-        "the escaped example is part of a description, so B was lost");
-    reviewAnswer(aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B\"}]}"));
-    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, quoted, refusal()).isPresent());
-
-    // A title the failed answer writes twice must come back twice here too.
-    var twice =
-        "{\"findings\": [{\"title\": \"A\"}, {\"title\": \"A\"}, {\"title\": \"B\", \"note\": \"cut";
-    reviewAnswer(
-        aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"B\"}, {\"title\": \"B\"}]}"));
-    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, twice, refusal()).isEmpty());
-    reviewAnswer(
-        aiOk("{\"findings\": [{\"title\": \"A\"}, {\"title\": \"A\"}, {\"title\": \"B\"}]}"));
-    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, twice, refusal()).isPresent());
 
     var statusBody =
         "{\"findings\": [], \"previous_findings_status\": [{\"id\": 1, \"status\": \"open";
     reviewAnswer(
         aiOk(
-            "{\"findings\": [], \"previous_findings_status\": [{\"id\": 1, \"status\": \"resolved\"}]}"));
-    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, statusBody, refusal()).isPresent());
+            "{\"findings\": [], \"previous_findings_status\": [{\"id\": 1, \"status\":"
+                + " \"resolved\"}]}"));
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, statusBody, refusal()).isEmpty());
+  }
+
+  @Test
+  void aRepairCannotMoveAFindingToAnotherFileOrLine() {
+    var body =
+        """
+        {"findings": [
+          {"file": "app.py", "line": 3, "title": "Cursor loop never runs", "risk": "high",},
+          {"file": "lib/db.py", "line": 40, "title": "Query is built by concatenation"}]}
+        """;
+    reviewAnswer(
+        aiOk(
+            """
+            {"findings": [
+              {"file": "lib/db.py", "line": 40, "title": "Cursor loop never runs",
+               "risk": "high", "description": "d"},
+              {"file": "lib/db.py", "line": 41, "title": "Query is built by concatenation"}]}
+            """));
+
+    var repaired = service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).orElseThrow();
+
+    var findings = repaired.response().findings();
+    assertEquals("app.py", findings.get(0).file());
+    assertEquals(3, findings.get(0).line());
+    assertEquals("high", findings.get(0).risk());
+    assertEquals("d", findings.get(0).description());
+    assertEquals("lib/db.py", findings.get(1).file());
+    assertEquals(40, findings.get(1).line());
+  }
+
+  @Test
+  void copiesOfATitleArePairedInOrderAndAnExtraCopyWithTheLastOne() {
+    var body =
+        "{\"findings\": [{\"file\": \"a.py\", \"line\": 1, \"title\": \"T\"},"
+            + " {\"file\": \"b.py\", \"line\": 2, \"title\": \"T\"},]}";
+    reviewAnswer(
+        aiOk(
+            "{\"findings\": [{\"file\": \"b.py\", \"line\": 2, \"title\": \"T\"},"
+                + " {\"file\": \"a.py\", \"line\": 1, \"title\": \"T\"},"
+                + " {\"file\": \"c.py\", \"line\": 9, \"title\": \"T\"}]}"));
+
+    var findings =
+        service
+            .repair(SESSION, ModelLane.ACTIVE, body, refusal())
+            .orElseThrow()
+            .response()
+            .findings();
+
+    assertEquals(
+        List.of("a.py:1", "b.py:2", "b.py:2"),
+        findings.stream().map(f -> f.file() + ":" + f.line()).toList());
+  }
+
+  @Test
+  void aFieldTheFailedAnswerDoesNotWriteIsNotMadeUpAndALineIsItsLeadingNumber() {
+    var body =
+        "{\"findings\": [{\"title\": \"No place\"}, {\"file\": \"a.py\", \"line\": \"3-5\","
+            + " \"title\": \"Range\"}, {\"file\": \"b.py\", \"line\": \"near the top\","
+            + " \"title\": \"Prose\"},]}";
+    reviewAnswer(
+        aiOk(
+            "{\"findings\": [{\"file\": \"made/up.py\", \"line\": 8, \"title\": \"No place\"},"
+                + " {\"file\": \"a.py\", \"line\": 4, \"title\": \"Range\"},"
+                + " {\"file\": \"b.py\", \"line\": 2, \"title\": \"Prose\"}]}"));
+
+    var findings =
+        service
+            .repair(SESSION, ModelLane.ACTIVE, body, refusal())
+            .orElseThrow()
+            .response()
+            .findings();
+
+    assertNull(findings.get(0).file());
+    assertEquals(0, findings.get(0).line());
+    assertEquals("a.py", findings.get(1).file());
+    assertEquals(3, findings.get(1).line(), "\"3-5\" starts at line 3");
+    assertEquals(0, findings.get(2).line(), "a line written as prose is none, not the repair's");
+  }
+
+  @Test
+  void aRepairCannotChangeAStatusIdKeyOrValue() {
+    var body =
+        """
+        {"findings": [], "previous_findings_status": [
+          {"id": 1, "key": "e0d70f6d", "status": "unresolved", "note": "still there",},
+          {"id": 2, "key": "0a1b2c3d", "status": "resolved", "note": "fixed"}]}
+        """;
+    reviewAnswer(
+        aiOk(
+            """
+            {"findings": [], "previous_findings_status": [
+              {"id": 2, "key": "0a1b2c3d", "status": "resolved", "note": "still there"},
+              {"id": 2, "key": "0a1b2c3d", "status": "resolved", "note": "fixed"}]}
+            """));
+
+    var statuses =
+        service
+            .repair(SESSION, ModelLane.ACTIVE, body, refusal())
+            .orElseThrow()
+            .response()
+            .previousFindingsStatus();
+
+    assertEquals(
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there", "e0d70f6d"),
+            new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed", "0a1b2c3d")),
+        statuses);
+  }
+
+  @Test
+  void aChangedKeyOrStatusAloneIsRestoredToo() {
+    var body =
+        "{\"findings\": [{\"file\": \"a.py\", \"line\": 1}, {\"file\": \"b.py\", \"line\": 2,"
+            + " \"title\": \"T\"}], \"previous_findings_status\": [{\"id\": 1, \"key\":"
+            + " \"e0d70f6d\", \"status\": \"unresolved\"}, {\"id\": 2, \"key\": \"0a1b2c3d\","
+            + " \"status\": \"unresolved\"},]}";
+    reviewAnswer(
+        aiOk(
+            "{\"findings\": [{\"file\": \"b.py\", \"line\": 2, \"title\": \"T\"}],"
+                + " \"previous_findings_status\": [{\"id\": 1, \"key\": \"0a1b2c3d\", \"status\":"
+                + " \"unresolved\"}, {\"id\": 2, \"key\": \"0a1b2c3d\", \"status\":"
+                + " \"resolved\"}]}"));
+
+    var response =
+        service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).orElseThrow().response();
+
+    assertEquals("b.py", response.findings().get(0).file(), "an untitled element pairs with none");
+    assertEquals(
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(1, "unresolved", null, "e0d70f6d"),
+            new ReviewResponse.PreviousFindingStatus(2, "unresolved", null, "0a1b2c3d")),
+        response.previousFindingsStatus());
+  }
+
+  @Test
+  void aStatusElementWritingItsStatusTwiceAllowsOneRepairedStatus() {
+    var body =
+        "{\"findings\": [], \"previous_findings_status\": [{\"id\": 1, \"status\": \"x\","
+            + " \"status\": \"resolved\"},]}";
+    reviewAnswer(
+        aiOk(
+            "{\"findings\": [], \"previous_findings_status\": [{\"id\": 1, \"status\":"
+                + " \"resolved\"}, {\"id\": 2, \"status\": \"resolved\"}]}"));
+
+    assertTrue(service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).isEmpty());
+  }
+
+  @Test
+  void aStatusKeyOrIdTheFailedAnswerDoesNotWriteIsNotMadeUp() {
+    var body =
+        "{\"findings\": [], \"previous_findings_status\": [{\"status\": \"resolved\","
+            + " \"note\": \"n\"},]}";
+    reviewAnswer(
+        aiOk(
+            "{\"findings\": [], \"previous_findings_status\": [{\"id\": 4, \"key\": \"e0d70f6d\","
+                + " \"status\": \"resolved\", \"note\": \"n\"}]}"));
+
+    var statuses =
+        service
+            .repair(SESSION, ModelLane.ACTIVE, body, refusal())
+            .orElseThrow()
+            .response()
+            .previousFindingsStatus();
+
+    assertEquals(
+        List.of(new ReviewResponse.PreviousFindingStatus(0, "resolved", "n", null)), statuses);
+  }
+
+  @Test
+  void anAnswerTheRepairKeepsAsItWasIsReturnedAsTheParserReadIt() {
+    var body =
+        "{\"findings\": [{\"file\": \"a.py\", \"line\": 1, \"title\": \"T\"},],"
+            + " \"previous_findings_status\": [{\"id\": 1, \"key\": \"e0d70f6d\", \"status\":"
+            + " \"resolved\"}]}";
+    reviewAnswer(
+        aiOk(
+            "{\"findings\": [{\"file\": \"a.py\", \"line\": 1, \"title\": \"T\"}],"
+                + " \"previous_findings_status\": [{\"id\": 1, \"key\": \"e0d70f6d\", \"status\":"
+                + " \"resolved\"}]}"));
+    var parsed =
+        parser.parse(
+            "{\"findings\": [{\"file\": \"a.py\", \"line\": 1, \"title\": \"T\"}],"
+                + " \"previous_findings_status\": [{\"id\": 1, \"key\": \"e0d70f6d\", \"status\":"
+                + " \"resolved\"}]}");
+
+    assertEquals(
+        parsed,
+        service.repair(SESSION, ModelLane.ACTIVE, body, refusal()).orElseThrow().response());
   }
 
   @Test

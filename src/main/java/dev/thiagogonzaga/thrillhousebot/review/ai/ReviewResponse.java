@@ -108,11 +108,25 @@ public record ReviewResponse(
     }
   }
 
+  /**
+   * The model's status for one prior finding. {@code id} is the number the prompt lists the finding
+   * under, and {@code key} the finding's key the model echoes beside it (the thread marker's key,
+   * #1322): a status whose key is not the listed finding's is dropped, so a swapped id cannot close
+   * the wrong finding. Statuses the code writes itself, and every round stored before #1322, carry
+   * no key.
+   */
   @RegisterForReflection
   public record PreviousFindingStatus(
       int id,
       String status, // resolved, unresolved, justified
-      String note) {}
+      String note,
+      @JsonInclude(JsonInclude.Include.NON_NULL) String key) {
+
+    /** A status with no echoed key: every status the code writes itself. */
+    public PreviousFindingStatus(int id, String status, String note) {
+      this(id, status, note, null);
+    }
+  }
 
   /** One changed file the model summarized: its path and a one-line description of the change. */
   @RegisterForReflection

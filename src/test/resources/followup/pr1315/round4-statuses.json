@@ -1,0 +1,34 @@
+{
+  "previous_findings_status": [
+    {
+      "id": 1,
+      "status": "unresolved",
+      "note": "All four sites still fetch a fresh installation client and repository handle inside their per-candidate loops: for each CONFIG_FILE_CHAIN path, InstructionsResolver does per fallback path, fetchManifestSection per manifest path, and GitHubIssuesProvider.read per candidate issue \u2014 no hoisting was made."
+    },
+    {
+      "id": 2,
+      "status": "unresolved",
+      "note": "shouldCacheStackAndNotHitApiOnSecondCall still consists of two resolves plus assertEquals(first, second); no verify against the repository mock was restored, so the assertion still passes with or without a cache."
+    },
+    {
+      "id": 3,
+      "status": "unresolved",
+      "note": "The comment '// The freshly cached entry is served on the next call (System clock is within TTL)' is still directly followed by the closing brace; the second resolve and the verify remain deleted."
+    },
+    {
+      "id": 4,
+      "status": "unresolved",
+      "note": "The four caching tests still end with resolves and no verify; aReadableButUnusableConfigIsCachedLikeAnyOtherAnswer still carries only the bare '// configured file was the only one read' comment in place of the call-count observation its javadoc claims is tested."
+    },
+    {
+      "id": 5,
+      "status": "unresolved",
+      "note": "The test still stubs doThrow(new RuntimeException(\"bad\")).when(bad).getContent(); \u2014 a read failure, not undecodable content \u2014 so it still exercises the READ_FAILED path the name does not describe."
+    },
+    {
+      "id": 6,
+      "status": "resolved",
+      "note": "The jakarta.ws.rs.NotFoundException instanceof branch quoted in the finding is gone: fetchAndParse's RuntimeException catch now simply warns and returns READ_FAILED, and the 404 classification moved to its own catch block (though that block is keyed on the wrong exception type \u2014 see the new finding)."
+    }
+  ]
+}

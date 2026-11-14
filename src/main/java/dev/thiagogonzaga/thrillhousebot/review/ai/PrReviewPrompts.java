@@ -782,10 +782,13 @@ public final class PrReviewPrompts {
 
             If there is a previous review context:
             - previous_findings_status MUST be a JSON ARRAY of objects — never an object/map:
-              [{"id": 1, "status": "resolved", "note": "<short reason>"}, ...]
+              [{"id": 1, "key": "<the finding's key>", "status": "resolved", "note": "<short
+              reason>"}, ...]
               Emit an empty array [] when there is no previous review context.
             - For each prior finding, mark status: "resolved" | "unresolved" | "justified"
-            - Use the finding's listed number as its "id" in previous_findings_status
+            - Use the finding's listed number as its "id" in previous_findings_status, and copy
+              the key shown in parentheses after that number into "key". An entry whose key is
+              not the key of the finding listed under its id is discarded
             - "resolved" requires the code change to actually address the issue — verify it in
               the diff; a reply that merely promises or claims a fix is not enough
             - "justified" means the issue is intentionally not fixed and a thread reply gives a

@@ -170,6 +170,45 @@ class FindingPipelineTest {
   /** Same context with an explicit reviewable-file set and GitHub's PR totals (may be null). */
   private static ReviewContextLoader.ReviewContext reviewContext(
       List<FileDiff> files, List<FileDiff> reviewableFiles, ReviewContextLoader.PrTotals prTotals) {
+    return reviewContext(files, reviewableFiles, prTotals, List.of());
+  }
+
+  /**
+   * A prior round's findings, one per file, that a follow-up round's statuses name by id and key
+   * (#1322). None is in any test diff, so a "resolved" naming one stands.
+   */
+  private static final List<ReviewResponse.Finding> PRIOR =
+      List.of(
+          new ReviewResponse.Finding("high", "b.java", 1, "P1", "d", "p1();", null),
+          new ReviewResponse.Finding("high", "a.java", 1, "P2", "d", "p2();", null),
+          new ReviewResponse.Finding("high", "c.java", 1, "P3", "d", "p3();", null));
+
+  /** The default context on a follow-up round after {@link #PRIOR}. */
+  private static ReviewContextLoader.ReviewContext reviewContextAfterPrior() {
+    return reviewContext(
+        List.of(),
+        List.of(
+            new FileDiff("a.java", "modified", 3, 0, 3, ""),
+            new FileDiff("b.java", "modified", 2, 0, 2, "")),
+        null,
+        List.of(new ReviewResponse(PRIOR, List.of(), null)));
+  }
+
+  /** A status for {@link #PRIOR}'s finding {@code id}, echoing its key as the prompt asks. */
+  private static ReviewResponse.PreviousFindingStatus keyed(int id, String status, String note) {
+    var prior = PRIOR.get(id - 1);
+    return new ReviewResponse.PreviousFindingStatus(
+        id,
+        status,
+        note,
+        SuggestionFormatter.findingKey(prior.file(), prior.line(), prior.title()));
+  }
+
+  private static ReviewContextLoader.ReviewContext reviewContext(
+      List<FileDiff> files,
+      List<FileDiff> reviewableFiles,
+      ReviewContextLoader.PrTotals prTotals,
+      List<ReviewResponse> priorAiResponses) {
     return new ReviewContextLoader.ReviewContext(
         files,
         "raw legacy diff",
@@ -177,7 +216,7 @@ class FindingPipelineTest {
         0,
         List.of(),
         List.of(),
-        List.of(),
+        priorAiResponses,
         true,
         false,
         null,
@@ -298,11 +337,11 @@ class FindingPipelineTest {
   void multiCallReviewsEachBatchAggregatesAndSummarizes() {
     var session =
         ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 1, "Big PR", "sha");
-    var ctx = reviewContext();
+    var ctx = reviewContextAfterPrior();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
 
-    var batchOneStatus = new ReviewResponse.PreviousFindingStatus(1, "unresolved", "not in slice");
-    var batchTwoStatus = new ReviewResponse.PreviousFindingStatus(1, "resolved", "fixed");
+    var batchOneStatus = keyed(1, "unresolved", "not in slice");
+    var batchTwoStatus = keyed(1, "resolved", "fixed");
     when(followUpAnalyzer.previousFindingFilesById(
             org.mockito.ArgumentMatchers
                 .<java.util.List<dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse.Finding>>
@@ -913,7 +952,9 @@ class FindingPipelineTest {
         + bodyFinding("S2")
         + ","
         + bodyFinding("S3")
-        + "],\"previous_findings_status\":[{\"id\":1,\"status\":\"unresolved\",\"note\":\"n\"},"
+        + "],\"previous_findings_status\":[{\"id\":1,\"key\":\""
+        + keyed(1, "unresolved", "n").key()
+        + "\",\"status\":\"unresolved\",\"note\":\"n\"},"
         + "{\"id\":2,\"status\":\"resol";
   }
 
@@ -924,7 +965,7 @@ class FindingPipelineTest {
     // batch's files disclosed as PARTIALLY reviewed — not dropped and disclosed as not reviewed.
     var session =
         ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 1, "Big PR", "sha");
-    var ctx = reviewContext();
+    var ctx = reviewContextAfterPrior();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
         .thenThrow(
@@ -2196,7 +2237,7 @@ class FindingPipelineTest {
     // complete leading findings through the normal validate/verify chain, and the batch's files
     // disclosed as PARTIALLY reviewed so approval is held and the posted review says why.
     var session = persistedSession();
-    var ctx = reviewContext();
+    var ctx = reviewContextAfterPrior();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     var plan = singleBatchPlan(batch("a.java"), List.of());
     when(aiReviewService.review(eq(session), any()))
@@ -2473,7 +2514,7 @@ class FindingPipelineTest {
   void resolvedFromABatchThatNeverSawTheFileIsDemotedToUnresolved() {
     var session =
         ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 1, "Big PR", "sha");
-    var ctx = reviewContext();
+    var ctx = reviewContextAfterPrior();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     when(followUpAnalyzer.previousFindingFilesById(
             org.mockito.ArgumentMatchers
@@ -2486,16 +2527,13 @@ class FindingPipelineTest {
             new ReviewResponse(
                 List.of(),
                 List.of(
-                    new ReviewResponse.PreviousFindingStatus(1, "resolved", "looks done"),
-                    new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed here"),
-                    new ReviewResponse.PreviousFindingStatus(3, "resolved", "no map entry")),
+                    keyed(1, "resolved", "looks done"),
+                    keyed(2, "resolved", "fixed here"),
+                    keyed(3, "resolved", "no map entry")),
                 null));
     when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
         .thenReturn(
-            new ReviewResponse(
-                List.of(),
-                List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still broken")),
-                null));
+            new ReviewResponse(List.of(), List.of(keyed(1, "unresolved", "still broken")), null));
     when(aiReviewService.summarize(eq(session), any()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
 
@@ -2519,7 +2557,7 @@ class FindingPipelineTest {
     var session =
         ReviewSession.create(
             TestScopes.scope("owner/repo"), "owner/repo", 1, "One clipped file", "sha");
-    var ctx = reviewContext();
+    var ctx = reviewContextAfterPrior();
     var template = new AiReviewService.PromptInputs("raw", "ctx", "base", "s", "t", "", "");
     when(followUpAnalyzer.previousFindingFilesById(
             org.mockito.ArgumentMatchers
@@ -2538,9 +2576,7 @@ class FindingPipelineTest {
         .thenReturn(
             new ReviewResponse(
                 List.of(),
-                List.of(
-                    new ReviewResponse.PreviousFindingStatus(1, "resolved", "looks fixed"),
-                    new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed here")),
+                List.of(keyed(1, "resolved", "looks fixed"), keyed(2, "resolved", "fixed here")),
                 null));
 
     var result =
@@ -2555,7 +2591,7 @@ class FindingPipelineTest {
   void resolvedFromABatchThatOnlySawTheClippedFileIsDemoted() {
     var session =
         ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 1, "Big PR", "sha");
-    var ctx = reviewContext();
+    var ctx = reviewContextAfterPrior();
     var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
     when(followUpAnalyzer.previousFindingFilesById(
             org.mockito.ArgumentMatchers
@@ -2574,10 +2610,7 @@ class FindingPipelineTest {
             null);
     when(aiReviewService.reviewBatch(eq(session), any(), eq(1), anyInt()))
         .thenReturn(
-            new ReviewResponse(
-                List.of(),
-                List.of(new ReviewResponse.PreviousFindingStatus(1, "resolved", "looks fixed")),
-                null));
+            new ReviewResponse(List.of(), List.of(keyed(1, "resolved", "looks fixed")), null));
     when(aiReviewService.reviewBatch(eq(session), any(), eq(2), anyInt()))
         .thenReturn(new ReviewResponse(List.of(), List.of(), null));
     when(aiReviewService.summarize(eq(session), any()))
@@ -2589,6 +2622,56 @@ class FindingPipelineTest {
 
     assertEquals(1, result.previousFindingsStatus().size());
     assertEquals("unresolved", result.previousFindingsStatus().get(0).status());
+  }
+
+  /**
+   * #1322: the screen runs before the round is stored, so a "resolved" the code contradicts is
+   * stored unresolved and a later round's replay cannot read it as a close, and a status naming
+   * another finding's key is not stored at all.
+   */
+  @Test
+  void aContradictedResolvedIsStoredUnresolvedAndAMismatchedStatusIsNotStored() throws Exception {
+    var session = persistedSession();
+    var ctx = reviewContextAfterPrior();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    when(followUpAnalyzer.previousFindingFilesById(
+            org.mockito.ArgumentMatchers
+                .<java.util.List<dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse.Finding>>
+                    any()))
+        .thenReturn(Map.of(1, "b.java", 2, "a.java"));
+    var mismatched = new ReviewResponse.PreviousFindingStatus(2, "resolved", "fixed", "deadbeef");
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(
+            new ReviewResponse(
+                List.of(), List.of(keyed(1, "resolved", "looks fixed"), mismatched), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(), List.of(), null));
+    // PRIOR's first finding flags "p1();", still on the right side of b.java's patch.
+    var diff = new DiffLineResolver(Map.of("b.java", "@@ -1 +1,2 @@\n p1();\n+other();"));
+
+    var result =
+        pipeline.run(
+            session,
+            template,
+            ctx,
+            singleBatchPlan(batch("b.java"), List.of()),
+            diff,
+            ReviewEvidence.NONE);
+
+    assertEquals(
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(
+                1, "unresolved", ModelStatusScreen.CONTRADICTED_NOTE, keyed(1, "", "").key())),
+        result.previousFindingsStatus());
+    var stored = new ObjectMapper().readValue(session.getAiResponseJson(), ReviewResponse.class);
+    assertEquals(result.previousFindingsStatus(), stored.previousFindingsStatus());
+    assertEquals(
+        java.util.Set.of(),
+        FollowUpAnalyzer.settledPreviousIds(
+            List.of(
+                new ReviewResponse(List.of(), stored.previousFindingsStatus(), null),
+                new ReviewResponse(PRIOR, List.of(), null))),
+        "the next round's replay finds nothing this round closed");
   }
 
   // The rollup note at this budget is covered by the two #486 P4 cases at the end of this class:
@@ -3123,7 +3206,7 @@ class FindingPipelineTest {
     var findingVerifier = mock(dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerifier.class);
     var realVerificationService =
         new FindingVerificationService(
-            findingVerifier,
+            dev.thiagogonzaga.thrillhousebot.review.ai.KeyEchoingVerifier.around(findingVerifier),
             thrillhouseConfig,
             new ObjectMapper(),
             tokenLedger,

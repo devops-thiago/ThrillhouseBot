@@ -98,10 +98,11 @@ public class FindingPipeline {
    * Everything one multi-call review's batch lane needs beyond the index of the batch being worked
    * on: the planned batches, the session the calls are billed to, the shared prompt template, the
    * plan the coverage disclosures are recorded on, the previous-finding file index the statuses are
-   * scoped against, and the evidence round whose budget and caches the batches share. One value
-   * because they are fixed for the whole lane and travel together through every step of it — the
-   * parallel pass, the join, the sequential retry and the truncation salvage — so the step a batch
-   * is in is the only thing its signature has to say.
+   * scoped against, the review context and diff each batch's statuses are screened against first
+   * ({@link #screenStatuses}, #1322), and the evidence round whose budget and caches the batches
+   * share. One value because they are fixed for the whole lane and travel together through every
+   * step of it — the parallel pass, the join, the sequential retry and the truncation salvage — so
+   * the step a batch is in is the only thing its signature has to say.
    */
   private record BatchRun(
       List<DiffBudgetPlanner.DiffBatch> batches,
@@ -109,6 +110,8 @@ public class FindingPipeline {
       BatchPrompts prompts,
       DiffBudgetPlanner.BudgetPlan plan,
       Map<Integer, String> previousFilesById,
+      ReviewContextLoader.ReviewContext ctx,
+      DiffLineResolver lineResolver,
       ReviewEvidence evidence) {}
 
   /** The rendered file-section header {@link ReviewDiffFormatter#formatFileSection} emits. */
@@ -325,6 +328,14 @@ public class FindingPipeline {
       // whole review to it would discard exactly the paid work the multi-call lane already keeps.
       aiResponse = salvageTruncatedSingleCall(session, e, budgetedBatch, plan);
     }
+    // #1322: every status names its finding by key and a "resolved" is held to the code, before
+    // anything stores or reads the statuses.
+    aiResponse =
+        FollowUpAnalyzer.screenModelStatuses(
+            aiResponse,
+            ctx.previousFindingsList(),
+            lineResolver,
+            VerdictBuilder.renameTargets(ctx.files()));
     if (budgetedBatch != null && !aiResponse.previousFindingsStatus().isEmpty()) {
       // Same scoping as the multi-call path: the single budgeted batch may carry clipped files
       // (and, at maxBatches=1, omit others entirely), so a "resolved" claim is only trusted for a
@@ -487,6 +498,8 @@ public class FindingPipeline {
             new BatchPrompts(promptInputs, withheldMaterialNotice(ctx, plan), dimensionRouter),
             plan,
             previousFilesById,
+            ctx,
+            lineResolver,
             evidence);
     for (int i = 0; i < batches.size(); i++) {
       logDimensionRouting(
@@ -1123,7 +1136,23 @@ public class FindingPipeline {
         index,
         verified.findings(),
         scopeStatusesToBatch(
-            batchResponse.previousFindingsStatus(), batch, run.plan(), run.previousFilesById()));
+            screenStatuses(batchResponse.previousFindingsStatus(), run),
+            batch,
+            run.plan(),
+            run.previousFilesById()));
+  }
+
+  /**
+   * The screen a review call's statuses pass as soon as it returns (#1322): against the prior
+   * findings the prompt listed by number and the current diff.
+   */
+  private static List<ReviewResponse.PreviousFindingStatus> screenStatuses(
+      List<ReviewResponse.PreviousFindingStatus> statuses, BatchRun run) {
+    return FollowUpAnalyzer.screenModelStatuses(
+        statuses,
+        run.ctx().previousFindingsList(),
+        run.lineResolver(),
+        VerdictBuilder.renameTargets(run.ctx().files()));
   }
 
   /**
