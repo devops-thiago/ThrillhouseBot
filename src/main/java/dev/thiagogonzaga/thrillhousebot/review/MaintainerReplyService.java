@@ -35,7 +35,6 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -240,7 +239,7 @@ public class MaintainerReplyService {
     } else if (botRoot == null) {
       ack = THREAD_CLEAR_NOT_A_FINDING_ACK;
     } else if (!FollowUpAnalyzer.threadDirectiveNamesItsFinding(
-        task.question(), botRoot.path(), Arrays.asList(botRoot.line(), botRoot.originalLine()))) {
+        task.question(), botRoot.path(), FollowUpAnalyzer.threadLines(botRoot))) {
       ack = THREAD_CLEAR_OTHER_FINDING_ACK;
     } else {
       ack = resolveThread(auth, task) ? threadClearedAck(botIdentity) : THREAD_CLEAR_PENDING_ACK;

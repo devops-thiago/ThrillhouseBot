@@ -1847,7 +1847,8 @@ public class FollowUpAnalyzer {
           && !botIdentity.matches(c.user().login())
           && mayHoldWriteAccess(c.authorAssociation())
           && isClearDirective(c.body(), botIdentity)
-          && threadDirectiveNamesItsFinding(c.body(), finding.file(), List.of(finding.line()))) {
+          && threadDirectiveNamesItsFinding(
+              c.body(), finding.file(), ownThreadLines(finding, root, inlineComments))) {
         Log.infof(
             "Clearing previous finding '%s' (%s:%d) — a maintainer replied an @thrillhousebot"
                 + " resolved directive on its review thread",
@@ -1856,6 +1857,39 @@ public class FollowUpAnalyzer {
       }
     }
     return false;
+  }
+
+  /**
+   * The lines a directive on a bot thread may name for that thread's finding: the lines GitHub
+   * shows the thread at now and when it was posted, and, on a thread posted on removed lines, the
+   * finding's own head-side line its marker carries (#1360). {@link MaintainerReplyService} and
+   * {@link #ownThreadLines} use the same set, so the reply and the review agree.
+   */
+  static List<Integer> threadLines(GitHubReviewClient.PullRequestComment root) {
+    var lines = new ArrayList<Integer>();
+    lines.add(root.line());
+    lines.add(root.originalLine());
+    SuggestionFormatter.parseMarkedLine(root.body()).ifPresent(lines::add);
+    return lines;
+  }
+
+  /**
+   * The lines a directive on the finding's own thread may name: its line, and, when the thread is
+   * on removed lines (its marker carries the line), the lines GitHub shows it at too ({@link
+   * #threadLines}). A thread on the new file keeps its finding's line only, as before.
+   */
+  private static List<Integer> ownThreadLines(
+      ReviewResponse.Finding finding,
+      long rootId,
+      List<GitHubReviewClient.PullRequestComment> inlineComments) {
+    for (var c : inlineComments) {
+      if (c.id() == rootId && SuggestionFormatter.parseMarkedLine(c.body()).isPresent()) {
+        var lines = threadLines(c);
+        lines.add(finding.line());
+        return lines;
+      }
+    }
+    return List.of(finding.line());
   }
 
   /** A non-bot conversation comment with a body and a write-capable author association. */

@@ -1375,6 +1375,18 @@ public class ReviewPublisher {
       DiffLineResolver.Side side, int line, Optional<DiffLineResolver.LineRange> range) {}
 
   /**
+   * The inline comment's text. A thread on removed lines also carries the finding's head-side line
+   * in its marker, since GitHub numbers that thread on the base side (#1360).
+   */
+  private String commentBody(
+      Finding finding, int findingId, InlineAnchor anchor, boolean includeSuggestion) {
+    var body = suggestionFormatter.formatReviewComment(finding, includeSuggestion, findingId);
+    return anchor.side() == DiffLineResolver.Side.LEFT
+        ? SuggestionFormatter.withMarkedLine(body, finding.line())
+        : body;
+  }
+
+  /**
    * Posts one inline comment. When the anchor's range is present the comment spans {@code
    * start_line}..{@code line}, both on the anchor's side; otherwise it anchors to the single {@code
    * line}. On the right side the retry without a suggestion block always passes an empty range — a
@@ -1404,7 +1416,7 @@ public class ReviewPublisher {
           target.prNumber(),
           new GitHubReviewClient.CreatePullRequestCommentRequest(
               target.commitSha(),
-              suggestionFormatter.formatReviewComment(finding, includeSuggestion, findingId),
+              commentBody(finding, findingId, anchor, includeSuggestion),
               finding.file(),
               endLine,
               side,
