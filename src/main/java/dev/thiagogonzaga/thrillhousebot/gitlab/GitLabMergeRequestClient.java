@@ -121,7 +121,12 @@ public interface GitLabMergeRequestClient {
       @JsonProperty("deleted_file") boolean deletedFile) {}
 
   @RegisterForReflection
-  record Comparison(List<Commit> commits, List<Diff> diffs) {}
+  record Comparison(List<Commit> commits, List<Diff> diffs) {
+    public Comparison {
+      commits = commits == null ? List.of() : List.copyOf(commits);
+      diffs = diffs == null ? List.of() : List.copyOf(diffs);
+    }
+  }
 
   @RegisterForReflection
   record Commit(String id) {}
@@ -129,8 +134,8 @@ public interface GitLabMergeRequestClient {
   /** {@code content} is in {@code encoding}, which GitLab always answers as {@code base64}. */
   @RegisterForReflection
   record RepositoryFile(
-      @JsonProperty("file_name") String fileName,
-      @JsonProperty("file_path") String filePath,
+      @JsonProperty("file_name") String name,
+      @JsonProperty("file_path") String path,
       long size,
       String encoding,
       String content) {}

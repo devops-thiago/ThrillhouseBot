@@ -49,8 +49,14 @@ public final class GitLabCodeHost implements CodeHost {
       return null;
     }
     var refs = mr.diffRefs();
-    var headSha = mr.sha() != null || refs == null ? mr.sha() : refs.headSha();
-    var baseSha = refs == null ? null : refs.baseSha();
+    var headSha = mr.sha();
+    String baseSha = null;
+    if (refs != null) {
+      baseSha = refs.baseSha();
+      if (headSha == null) {
+        headSha = refs.headSha();
+      }
+    }
     return new PullRequestDetails(
         mr.title(),
         mr.description(),
@@ -85,10 +91,9 @@ public final class GitLabCodeHost implements CodeHost {
     if (comparison == null) {
       return null;
     }
-    var commits = comparison.commits() == null ? 0 : comparison.commits().size();
-    var diffs =
-        comparison.diffs() == null ? List.<GitLabMergeRequestClient.Diff>of() : comparison.diffs();
-    return new CompareResponse(commits, diffs.stream().map(GitLabCodeHost::fileDiff).toList());
+    return new CompareResponse(
+        comparison.commits().size(),
+        comparison.diffs().stream().map(GitLabCodeHost::fileDiff).toList());
   }
 
   @Override
@@ -98,8 +103,7 @@ public final class GitLabCodeHost implements CodeHost {
     if (file == null) {
       return null;
     }
-    return new FileContent(
-        file.fileName(), file.filePath(), file.content(), file.encoding(), file.size());
+    return new FileContent(file.name(), file.path(), file.content(), file.encoding(), file.size());
   }
 
   @Override

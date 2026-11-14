@@ -158,8 +158,8 @@ class GitLabMergeRequestClientTest {
     assertEquals(
         List.of("/api/v4/projects/group%2Fapp/repository/files/docs%2FREADME.md?ref=main"),
         requests);
-    assertEquals("README.md", file.fileName());
-    assertEquals("docs/README.md", file.filePath());
+    assertEquals("README.md", file.name());
+    assertEquals("docs/README.md", file.path());
     assertEquals(5, file.size());
     assertEquals("base64", file.encoding());
     assertEquals("aGVsbG8=", file.content());

@@ -175,6 +175,8 @@ class GitLabCodeHostTest {
     assertEquals(
         GitLabCodeHost.PER_PAGE * GitLabCodeHost.MAX_DIFF_PAGES,
         host.getPullRequestFiles(AUTH, "group/sub", "app", 7).size());
+    when(client.getMergeRequestDiffsPage(eq(AUTH), eq(PROJECT), eq(8), anyInt(), anyInt()))
+        .thenReturn(null);
     assertTrue(host.getPullRequestFiles(AUTH, "group/sub", "app", 8).isEmpty());
   }
 
@@ -243,7 +245,11 @@ class GitLabCodeHostTest {
 
     assertTrue(tree.truncated());
     assertEquals(GitLabCodeHost.PER_PAGE * GitLabCodeHost.MAX_TREE_PAGES, tree.tree().size());
-    assertFalse(host.getTree(AUTH, "group/sub", "app", "other").truncated());
+    when(client.getTreePage(eq(AUTH), eq(PROJECT), eq("other"), eq(true), anyInt(), anyInt()))
+        .thenReturn(null);
+    var missing = host.getTree(AUTH, "group/sub", "app", "other");
+    assertFalse(missing.truncated());
+    assertTrue(missing.tree().isEmpty());
   }
 
   private static Diff diff(String text, boolean added, boolean renamed, boolean deleted) {
