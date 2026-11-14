@@ -21,12 +21,12 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubLabelClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -53,7 +53,7 @@ public class ReviewContextLoader {
 
   private static final String ACCEPT = "application/vnd.github+json";
 
-  private final GitHubPullRequestClient prClient;
+  private final CodeHost prClient;
   private final GitHubReviewClient reviewClient;
   private final GitHubCommentClient commentClient;
   private final InstructionsResolver instructionsResolver;
@@ -72,7 +72,7 @@ public class ReviewContextLoader {
 
   @Inject
   public ReviewContextLoader(
-      @RestClient GitHubPullRequestClient prClient,
+      CodeHost prClient,
       @RestClient GitHubReviewClient reviewClient,
       @RestClient GitHubCommentClient commentClient,
       InstructionsResolver instructionsResolver,
@@ -122,7 +122,7 @@ public class ReviewContextLoader {
    *     or that cannot be established. Nothing can be superseded on an unchanged head (#932).
    */
   public record ReviewContext(
-      List<GitHubPullRequestClient.FileDiff> files,
+      List<CodeHost.FileDiff> files,
       String diff,
       String baseComparison,
       int omittedFiles,
@@ -141,7 +141,7 @@ public class ReviewContextLoader {
       String linkedIssuesContext,
       String configKeyContext,
       String patchCoverage,
-      List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+      List<CodeHost.FileDiff> reviewableFiles,
       Supplier<DiffLineResolver> lineResolverSupplier,
       PrTotals prTotals,
       List<GitHubCommentClient.IssueComment> conversationComments,
@@ -168,7 +168,7 @@ public class ReviewContextLoader {
      */
     @SuppressWarnings("java:S107")
     public ReviewContext(
-        List<GitHubPullRequestClient.FileDiff> files,
+        List<CodeHost.FileDiff> files,
         String diff,
         String baseComparison,
         int omittedFiles,
@@ -187,7 +187,7 @@ public class ReviewContextLoader {
         String linkedIssuesContext,
         String configKeyContext,
         String patchCoverage,
-        List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+        List<CodeHost.FileDiff> reviewableFiles,
         Supplier<DiffLineResolver> lineResolverSupplier,
         PrTotals prTotals,
         List<GitHubCommentClient.IssueComment> conversationComments,
@@ -231,7 +231,7 @@ public class ReviewContextLoader {
      */
     @SuppressWarnings("java:S107")
     public ReviewContext(
-        List<GitHubPullRequestClient.FileDiff> files,
+        List<CodeHost.FileDiff> files,
         String diff,
         String baseComparison,
         int omittedFiles,
@@ -250,7 +250,7 @@ public class ReviewContextLoader {
         String linkedIssuesContext,
         String configKeyContext,
         String patchCoverage,
-        List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+        List<CodeHost.FileDiff> reviewableFiles,
         Supplier<DiffLineResolver> lineResolverSupplier,
         PrTotals prTotals,
         List<GitHubCommentClient.IssueComment> conversationComments,
@@ -293,7 +293,7 @@ public class ReviewContextLoader {
      */
     @SuppressWarnings("java:S107")
     public ReviewContext(
-        List<GitHubPullRequestClient.FileDiff> files,
+        List<CodeHost.FileDiff> files,
         String diff,
         String baseComparison,
         int omittedFiles,
@@ -312,7 +312,7 @@ public class ReviewContextLoader {
         String linkedIssuesContext,
         String configKeyContext,
         String patchCoverage,
-        List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+        List<CodeHost.FileDiff> reviewableFiles,
         Supplier<DiffLineResolver> lineResolverSupplier,
         PrTotals prTotals,
         List<GitHubCommentClient.IssueComment> conversationComments,
@@ -352,7 +352,7 @@ public class ReviewContextLoader {
      */
     @SuppressWarnings("java:S107")
     public ReviewContext(
-        List<GitHubPullRequestClient.FileDiff> files,
+        List<CodeHost.FileDiff> files,
         String diff,
         String baseComparison,
         int omittedFiles,
@@ -371,7 +371,7 @@ public class ReviewContextLoader {
         String linkedIssuesContext,
         String configKeyContext,
         String patchCoverage,
-        List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+        List<CodeHost.FileDiff> reviewableFiles,
         Supplier<DiffLineResolver> lineResolverSupplier,
         PrTotals prTotals,
         List<GitHubCommentClient.IssueComment> conversationComments) {
@@ -409,7 +409,7 @@ public class ReviewContextLoader {
      */
     @SuppressWarnings("java:S107")
     public ReviewContext(
-        List<GitHubPullRequestClient.FileDiff> files,
+        List<CodeHost.FileDiff> files,
         String diff,
         String baseComparison,
         int omittedFiles,
@@ -428,7 +428,7 @@ public class ReviewContextLoader {
         String linkedIssuesContext,
         String configKeyContext,
         String patchCoverage,
-        List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+        List<CodeHost.FileDiff> reviewableFiles,
         Supplier<DiffLineResolver> lineResolverSupplier,
         PrTotals prTotals) {
       this(
@@ -503,15 +503,13 @@ public class ReviewContextLoader {
     // filter, and only when the repository declared something of its own.
     var unmatchedIgnoreGlobs =
         ReviewDiffFormatter.unmatchedPatterns(
-            repoSettings.ignoredFiles(),
-            files.stream().map(GitHubPullRequestClient.FileDiff::filename).toList());
+            repoSettings.ignoredFiles(), files.stream().map(CodeHost.FileDiff::filename).toList());
     // Which declared scopes govern which files, resolved once against the post-ignore-filter list:
     // rules never apply to a file the ignore set already took out of review scope, and no later
     // stage re-walks a glob per finding.
     var pathInstructions =
         PathScopedInstructions.resolve(
-            repoSettings,
-            reviewableFiles.stream().map(GitHubPullRequestClient.FileDiff::filename).toList());
+            repoSettings, reviewableFiles.stream().map(CodeHost.FileDiff::filename).toList());
     var tokenBudgeted = activeModel.maxInputTokens() > 0;
     var diffResult =
         tokenBudgeted
@@ -528,7 +526,7 @@ public class ReviewContextLoader {
     // false) does not pay for a full patch parse.
     // Every changed path too, patch or not: the only paths GitHub opens a thread on (#945, #925).
     var patchesByFile = diffFormatter.patchesByReviewableFiles(reviewableFiles);
-    var changedPaths = files.stream().map(GitHubPullRequestClient.FileDiff::filename).toList();
+    var changedPaths = files.stream().map(CodeHost.FileDiff::filename).toList();
     Supplier<DiffLineResolver> lineResolverSupplier =
         memoize(() -> new DiffLineResolver(patchesByFile, changedPaths));
 
@@ -728,7 +726,7 @@ public class ReviewContextLoader {
     if (req.commitSha() != null && !req.commitSha().isBlank()) {
       return req;
     }
-    var pr = prClient.getPullRequest(auth, ACCEPT, req.owner(), req.repo(), req.prNumber());
+    var pr = prClient.getPullRequest(auth, req.owner(), req.repo(), req.prNumber());
     return new ReviewOrchestrator.ReviewRequest(
         req.owner(),
         req.repo(),
@@ -777,7 +775,7 @@ public class ReviewContextLoader {
   String resolveConfigKeyContext(
       String auth,
       ReviewOrchestrator.ReviewRequest req,
-      List<GitHubPullRequestClient.FileDiff> reviewableFiles,
+      List<CodeHost.FileDiff> reviewableFiles,
       ReviewDiffFormatter.IgnoreGlobs ignoreGlobs) {
     try {
       return configKeyContextResolver.resolve(
@@ -799,9 +797,8 @@ public class ReviewContextLoader {
         "review");
   }
 
-  List<GitHubPullRequestClient.FileDiff> fetchPrFiles(
-      String auth, String owner, String repo, int prNumber) {
-    return prClient.getPullRequestFiles(auth, ACCEPT, owner, repo, prNumber);
+  List<CodeHost.FileDiff> fetchPrFiles(String auth, String owner, String repo, int prNumber) {
+    return prClient.getPullRequestFiles(auth, owner, repo, prNumber);
   }
 
   /**
@@ -814,7 +811,7 @@ public class ReviewContextLoader {
    */
   PrTotals fetchPrTotals(String auth, String owner, String repo, int prNumber) {
     try {
-      var pr = prClient.getPullRequest(auth, ACCEPT, owner, repo, prNumber);
+      var pr = prClient.getPullRequest(auth, owner, repo, prNumber);
       return new PrTotals(pr.changedFiles(), pr.additions(), pr.deletions());
     } catch (RuntimeException e) {
       Log.warn("Failed to fetch PR totals; summary will fall back to diff-derived counts", e);
@@ -825,16 +822,16 @@ public class ReviewContextLoader {
   /**
    * The PR's head SHA as GitHub reports it right now — a fresh read, taken just before the run
    * posts, so a head that moved during the minutes-long model call is caught (#704). Goes through
-   * {@link GitHubPullRequestClient#getPullRequest}, so a credential that expired mid-run is healed
-   * the same way every other late read is (#626/#693). Fail-open: a failed or headless read returns
-   * empty, and the caller posts rather than losing a finished review to this guard.
+   * {@link CodeHost#getPullRequest}, so a credential that expired mid-run is healed the same way
+   * every other late read is (#626/#693). Fail-open: a failed or headless read returns empty, and
+   * the caller posts rather than losing a finished review to this guard.
    */
   Optional<String> currentHeadSha(String auth, ReviewOrchestrator.ReviewRequest req) {
     try {
-      var pr = prClient.getPullRequest(auth, ACCEPT, req.owner(), req.repo(), req.prNumber());
+      var pr = prClient.getPullRequest(auth, req.owner(), req.repo(), req.prNumber());
       return Optional.ofNullable(pr)
-          .map(GitHubPullRequestClient.PullRequestDetails::head)
-          .map(GitHubPullRequestClient.Ref::sha)
+          .map(CodeHost.PullRequestDetails::head)
+          .map(CodeHost.Ref::sha)
           .filter(sha -> !sha.isBlank());
     } catch (RuntimeException e) {
       Log.warnf(
@@ -855,7 +852,7 @@ public class ReviewContextLoader {
    */
   private PrTotals fetchPrTotalsForReview(String auth, ReviewOrchestrator.ReviewRequest req) {
     try {
-      var pr = prClient.getPullRequest(auth, ACCEPT, req.owner(), req.repo(), req.prNumber());
+      var pr = prClient.getPullRequest(auth, req.owner(), req.repo(), req.prNumber());
       var currentHead = pr != null && pr.head() != null ? pr.head().sha() : null;
       if (currentHead == null
           || req.commitSha() == null
@@ -915,7 +912,7 @@ public class ReviewContextLoader {
           "(regression comparison unavailable — refs too short)", 0);
     }
     try {
-      var comparison = prClient.compareCommits(auth, ACCEPT, owner, repo, base, head);
+      var comparison = prClient.compareCommits(auth, owner, repo, base, head);
       return diffFormatter.buildBaseComparisonWithStats(
           comparison, base, head, applyLineBudget, ignoreGlobs);
     } catch (RuntimeException e) {

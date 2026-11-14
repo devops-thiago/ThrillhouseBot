@@ -18,8 +18,8 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.ArtifactZipFetcher;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubActionsClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -141,7 +141,7 @@ public class PatchCoverageResolver {
       String auth,
       ReviewOrchestrator.ReviewRequest req,
       RepoSettings repoSettings,
-      List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
+      List<CodeHost.FileDiff> reviewableFiles) {
     if (!enabled) {
       return Resolution.NONE;
     }
@@ -303,13 +303,13 @@ public class PatchCoverageResolver {
    * this review's responsibility.
    */
   static List<UncoveredFile> intersectWithAddedLines(
-      JacocoCoverageReport report, List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
+      JacocoCoverageReport report, List<CodeHost.FileDiff> reviewableFiles) {
     // Resolve the whole file list at once so a report entry that suffix-matches more than one of
     // these repository paths (a multi-module build's same-named class) is dropped rather than
     // attributed to each — a per-file lookup cannot see that cross-file collision.
     var uncoveredByPath =
         report.uncoveredLinesByPath(
-            reviewableFiles.stream().map(GitHubPullRequestClient.FileDiff::filename).toList());
+            reviewableFiles.stream().map(CodeHost.FileDiff::filename).toList());
     var result = new ArrayList<UncoveredFile>();
     for (var file : reviewableFiles) {
       // Absent means either the report says nothing about this file or the attribution was

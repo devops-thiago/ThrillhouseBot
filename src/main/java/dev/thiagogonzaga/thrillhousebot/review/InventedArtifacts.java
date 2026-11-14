@@ -15,7 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.SentenceBreaks;
 import java.util.ArrayList;
@@ -382,7 +382,7 @@ final class InventedArtifacts {
    * null}.
    */
   static ReviewResponse.Summary screen(
-      ReviewResponse.Summary summary, List<GitHubPullRequestClient.FileDiff> files) {
+      ReviewResponse.Summary summary, List<CodeHost.FileDiff> files) {
     if (summary == null || files.isEmpty()) {
       return summary;
     }
@@ -817,7 +817,7 @@ final class InventedArtifacts {
   record Change(
       List<List<String>> pathWords, List<List<String>> addedLines, boolean linesComplete) {
 
-    static Change of(List<GitHubPullRequestClient.FileDiff> files) {
+    static Change of(List<CodeHost.FileDiff> files) {
       var paths = new ArrayList<List<String>>();
       var added = new ArrayList<List<String>>();
       var complete = true;

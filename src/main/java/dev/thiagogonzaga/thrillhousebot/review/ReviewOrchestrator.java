@@ -24,6 +24,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.SessionEventBroadcaster;
 import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.notification.ReviewNotifier;
 import dev.thiagogonzaga.thrillhousebot.observability.ReviewOutcomeMetrics;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
@@ -572,7 +573,7 @@ public class ReviewOrchestrator {
             req.scope(),
             req.owner(),
             req.repo(),
-            ctx.reviewableFiles().stream().map(GitHubPullRequestClient.FileDiff::filename).toList())
+            ctx.reviewableFiles().stream().map(CodeHost.FileDiff::filename).toList())
         : ReviewLearnings.Recall.EMPTY;
   }
 
@@ -754,7 +755,7 @@ public class ReviewOrchestrator {
       ReviewResponse reviewed,
       String section,
       String refreshed,
-      List<GitHubPullRequestClient.FileDiff> files) {
+      List<CodeHost.FileDiff> files) {
     if (refreshed.equals(section)) {
       return reviewed;
     }

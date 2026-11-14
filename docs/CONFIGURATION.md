@@ -23,6 +23,7 @@ These variables set Quarkus and LangChain4j keys rather than a `thrillhousebot.*
 | `DATASOURCE_DB_KIND` | `h2` or `postgresql`. Quarkus fixes this at build time, so released images are PostgreSQL builds and ignore `h2`. | `h2`; `%prod`: `postgresql` | `quarkus.datasource.db-kind` |
 | `DS_INPUT_PRICE` | Price of 1,000 input tokens on `deepseek-chat`, in US dollars. | `0.00014` | `thrillhousebot.ai.pricing.deepseek-chat.input-per-1k` |
 | `DS_OUTPUT_PRICE` | Price of 1,000 output tokens on `deepseek-chat`, in US dollars. | `0.00028` | `thrillhousebot.ai.pricing.deepseek-chat.output-per-1k` |
+| `GITLAB_API_URL` | Base URL of the GitLab REST API, read when `GIT_PLATFORM` is `gitlab`. Point it at a self-managed instance as `https://gitlab.example.com/api/v4`. | `https://gitlab.com/api/v4` | `gitlab-api/mp-rest/url` |
 | `OTEL_EXPORTER_ENDPOINT` | OTLP endpoint traces, metrics and logs are exported to. | `http://localhost:4317` | `quarkus.otel.exporter.otlp.endpoint` |
 | `OTEL_EXPORTER_TIMEOUT` | How long one OTLP export may wait for the collector. Keep it above the collector's 60-second HTTP/2 keep-alive: below it, an export after an idle pause can be sent twice. | `65s` | `quarkus.otel.exporter.otlp.traces.timeout`<br>`quarkus.otel.exporter.otlp.metrics.timeout`<br>`quarkus.otel.exporter.otlp.logs.timeout` |
 | `OTEL_HTTP_SERVER_METRICS_ENABLED` | Record Quarkus's HTTP server metrics (`http.server.request.duration`), exported over OTLP and served on `/metrics`. | `true` | `quarkus.otel.instrument.http-server-metrics` |
@@ -38,6 +39,7 @@ These variables set Quarkus and LangChain4j keys rather than a `thrillhousebot.*
 |---|---|---|---|
 | `HTTP_CONNECT_TIMEOUT`<br>`thrillhousebot.http-connect-timeout` | Outbound HTTP connect timeout (GitHub API, OAuth). | duration | `10s` |
 | `HTTP_REQUEST_TIMEOUT`<br>`thrillhousebot.http-request-timeout` | Outbound HTTP request timeout (GitHub API, OAuth). | duration | `10s` |
+| `GIT_PLATFORM`<br>`thrillhousebot.platform` | Platform hosting the repositories this deployment reviews: `github` or `gitlab`. GitLab support is being added in stages and so far covers only reading a merge request, so keep `github`. | string | `github` |
 | `WEBSOCKET_KEEPALIVE_MS`<br>`thrillhousebot.websocket-keepalive-ms` | Dashboard WebSocket keepalive in milliseconds, so reverse proxies do not close idle connections. `0` or less disables it and stale replay-buffer eviction. | integer | `25000` |
 
 ## `thrillhousebot.ai`

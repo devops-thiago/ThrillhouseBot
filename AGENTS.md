@@ -66,7 +66,9 @@ same diff.
 | `webhook/` | The webhook entry (`WebhookEvents`, driven by the Quarkiverse GitHub App extension's route on `POST /api/webhook`; it owns the HMAC check), triggers and filters (`TriggerDetector`, `ReviewTriggerFilter`), dedupe, pause state, the comment commands (`CommentCommandService`) |
 | `review/` | Everything between "a review was requested" and "the result is on GitHub": orchestration, context loading, prompt assembly, budgeting, the post-model finding chain, verdict, publishing, CI gating, follow-ups, the on-request commands |
 | `review/ai/` | The LangChain4j layer: AI service interfaces and their prompt constants (`*Prompts`), streaming and retries (`AiReviewService`), parsing and salvage, the verifier, the token ledger, the call gate |
-| `github/` | REST and GraphQL clients, app auth, write pacing and retry (`GitHubWritePacer`, `GitHubWriteRetry`), instructions and repo-settings resolution |
+| `platform/` | The platform seam (#37): `CodeHost`, what a review reads from the hosting platform, and its neutral records; `CodeHostProducer` hands out the implementation `GIT_PLATFORM` names (`Platform`, validated by `StartupConfigValidator`). A deployment serves one platform, so no request carries one. Add to the interface only together with the second implementation that needs it |
+| `gitlab/` | GitLab's side of the seam: the REST client (`GitLabMergeRequestClient`, API v4, project and file paths sent as one encoded segment) and `GitLabCodeHost`, which reads a merge request as a pull request. Read path only so far |
+| `github/` | `GitHubCodeHost` (the seam over `GitHubPullRequestClient`, which keeps its wire records and credential healing), REST and GraphQL clients, app auth, write pacing and retry (`GitHubWritePacer`, `GitHubWriteRetry`), instructions and repo-settings resolution |
 | `dashboard/` | OAuth sessions, the WebSocket broadcaster, `ReviewSession` persistence, finding-feedback aggregates |
 | `notification/` | The opt-in outgoing review-outcome webhook |
 | `config/` | `ThrillhouseConfig` (typed config), `StartupConfigValidator`, the review executor, HTTP client, `ActiveModelSettings`, `BotIdentity` |

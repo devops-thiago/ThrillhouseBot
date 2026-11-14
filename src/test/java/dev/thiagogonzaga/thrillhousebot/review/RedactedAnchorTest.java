@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.FileDiff;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;

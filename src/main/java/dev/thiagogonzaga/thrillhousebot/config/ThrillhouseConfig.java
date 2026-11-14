@@ -56,6 +56,13 @@ public interface ThrillhouseConfig {
   @WithName("websocket-keepalive-ms")
   long websocketKeepAliveMs();
 
+  /**
+   * Platform hosting the repositories this deployment reviews: `github` or `gitlab`. GitLab support
+   * is being added in stages and so far covers only reading a merge request, so keep `github`.
+   */
+  @WithDefault("github")
+  String platform();
+
   GitHubConfig github();
 
   WebhookConfig webhook();

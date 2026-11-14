@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTimeout;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.time.Duration;
 import java.util.ArrayList;

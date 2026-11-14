@@ -26,11 +26,11 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReplyAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TestResponseCaps;
@@ -53,7 +53,7 @@ class MaintainerReplyServiceTest {
   @Mock private ManualReviewAuthorizer authorizer;
   @Mock private GitHubReviewClient reviewClient;
   @Mock private GitHubCommentClient commentClient;
-  @Mock private GitHubPullRequestClient prClient;
+  @Mock private CodeHost prClient;
   @Mock private ReviewDiffFormatter diffFormatter;
   @Mock private ReplyAssistant replyAssistant;
   @Mock private RepoSettingsResolver repoSettingsResolver;
@@ -110,10 +110,8 @@ class MaintainerReplyServiceTest {
         tokenLedger);
   }
 
-  private static GitHubPullRequestClient.FileDiff fileDiff(
-      String filename, String patch, int additions) {
-    return new GitHubPullRequestClient.FileDiff(
-        filename, "modified", additions, 0, additions, patch);
+  private static CodeHost.FileDiff fileDiff(String filename, String patch, int additions) {
+    return new CodeHost.FileDiff(filename, "modified", additions, 0, additions, patch);
   }
 
   private static GitHubReviewClient.PullRequestComment comment(
@@ -506,7 +504,7 @@ class MaintainerReplyServiceTest {
   @Test
   void mentionReplyScrubKeepsAFileOfThePullRequest() {
     authorize();
-    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(List.of(fileDiff("path/to/File.java", "@@ -1 +1 @@\n-a\n+b", 1)));
     when(diffFormatter.reviewableFiles(any(), any())).thenReturn(List.of());
     when(diffFormatter.buildDiffStringWithStats(any(), any()))
@@ -564,7 +562,7 @@ class MaintainerReplyServiceTest {
   @Test
   void mentionFetchesDiffAndPostsIssueComment() {
     authorize();
-    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(List.of());
     when(diffFormatter.reviewableFiles(any(), any())).thenReturn(List.of());
     when(diffFormatter.buildDiffStringWithStats(any(), any()))
@@ -718,7 +716,7 @@ class MaintainerReplyServiceTest {
   @Test
   void mentionStillRepliesWhenDiffFetchFailsAndPrContextIsBlank() {
     authorize();
-    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(42)))
         .thenThrow(new RuntimeException("files 500"));
     when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("Answer."));
 
@@ -768,7 +766,7 @@ class MaintainerReplyServiceTest {
   @Test
   void mentionWithBlankReplyPostsNothing() {
     authorize();
-    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(List.of());
     when(diffFormatter.reviewableFiles(any(), any())).thenReturn(List.of());
     when(diffFormatter.buildDiffStringWithStats(any(), any()))
@@ -881,7 +879,7 @@ class MaintainerReplyServiceTest {
   @Test
   void blankButNonNullPrContextFieldsAreOmitted() {
     authorize();
-    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(List.of());
     when(diffFormatter.reviewableFiles(any(), any())).thenReturn(List.of());
     when(diffFormatter.buildDiffStringWithStats(any(), any()))
@@ -919,7 +917,7 @@ class MaintainerReplyServiceTest {
     authorize();
     // Empty global ignore list: secret.txt is reviewable globally, excluded only per-repo.
     var realService = serviceWith(new ReviewDiffFormatter(List.of(), 5000));
-    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(
             List.of(
                 fileDiff("src/Foo.java", "@@ -1 +1 @@\n-old\n+VISIBLE_CHANGE", 1),
@@ -945,7 +943,7 @@ class MaintainerReplyServiceTest {
   void mentionWithNoRepoConfigSendsGloballyReviewableFile() {
     authorize();
     var realService = serviceWith(new ReviewDiffFormatter(List.of(), 5000));
-    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(
             List.of(fileDiff("vendor/secret.txt", "@@ -0,0 +1 @@\n+TOPSECRET_VENDORED_KEY", 1)));
     // No repo config: resolver returns EMPTY (the default mock returns null → SoftLoaders → EMPTY).
@@ -969,7 +967,7 @@ class MaintainerReplyServiceTest {
     authorize();
     // A 3-line cap against two multi-line files forces at least one omitted file.
     var realService = serviceWith(new ReviewDiffFormatter(List.of(), 3));
-    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(
             List.of(
                 fileDiff("src/A.java", "@@ -1 +1 @@\n-a\n+aa\n+aaa\n+aaaa", 3),
@@ -1249,7 +1247,7 @@ class MaintainerReplyServiceTest {
   @Test
   void anOrdinaryMentionStillGetsAnAssistantAnswer() {
     authorize();
-    when(prClient.getPullRequestFiles(eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(42)))
         .thenReturn(List.of(fileDiff("src/A.java", "@@ -1 +1 @@\n-a\n+aa", 1)));
     when(repoSettingsResolver.resolve(eq("owner"), eq("repo"), any(), anyLong()))
         .thenReturn(RepoSettings.EMPTY);

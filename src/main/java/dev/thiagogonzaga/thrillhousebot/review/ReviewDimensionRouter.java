@@ -17,7 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewDimension;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -322,7 +322,7 @@ public class ReviewDimensionRouter {
    * The review system prompt for a call reviewing {@code files}: {@link PrReviewPrompts#SYSTEM}
    * with routing off, otherwise the routed prompt for {@link #routeFiles}.
    */
-  public String systemPromptFor(List<GitHubPullRequestClient.FileDiff> files) {
+  public String systemPromptFor(List<CodeHost.FileDiff> files) {
     return enabled
         ? PrReviewPrompts.reviewSystemPrompt(routeFiles(files).dimensions())
         : PrReviewPrompts.SYSTEM;
@@ -333,7 +333,7 @@ public class ReviewDimensionRouter {
    * some file brings in, with the first such file as the reason. A call with no file to decide on
    * gets every dimension — there is no signal, so nothing is left out.
    */
-  public static Routing routeFiles(List<GitHubPullRequestClient.FileDiff> files) {
+  public static Routing routeFiles(List<CodeHost.FileDiff> files) {
     if (files == null || files.isEmpty()) {
       return everyDimension("no file to route on");
     }

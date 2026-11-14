@@ -26,15 +26,15 @@ import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.PullRequestDetails;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.Ref;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.PullRequestDetails;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.Ref;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerationParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerator;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGeneratorPrompts;
@@ -76,7 +76,7 @@ class DocGenerationServiceTest {
       +}""";
 
   @Mock private GitHubAuthClient authClient;
-  @Mock private GitHubPullRequestClient prClient;
+  @Mock private CodeHost prClient;
   @Mock private GitHubReviewClient reviewClient;
   @Mock private GitHubCommentClient commentClient;
   @Mock private InstructionsResolver instructionsResolver;
@@ -159,9 +159,9 @@ class DocGenerationServiceTest {
   }
 
   private void prWithFiles(FileDiff... files) {
-    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("Title", "Body", new Ref(HEAD_SHA), new Ref("basesha")));
-    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(files));
   }
 
@@ -509,10 +509,9 @@ class DocGenerationServiceTest {
 
   @Test
   void reportsNoFilesWhenDiffIsEmpty() {
-    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("Title", "Body", new Ref(HEAD_SHA), new Ref("basesha")));
-    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(List.of());
+    when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(List.of());
 
     service.handle(task());
 
@@ -522,7 +521,7 @@ class DocGenerationServiceTest {
 
   @Test
   void reportsWhenPullRequestCannotBeLoaded() {
-    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
         .thenThrow(new RuntimeException("404"));
 
     service.handle(task());
@@ -573,11 +572,11 @@ class DocGenerationServiceTest {
 
   @Test
   void feedsRepositoryInstructionsAndProjectStackIntoThePrompt() {
-    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(
             new PullRequestDetails(
                 "Add cache", "Speeds up reads", new Ref(HEAD_SHA), new Ref("b")));
-    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(fooWithPatch()));
     when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
         .thenReturn(
@@ -631,9 +630,9 @@ class DocGenerationServiceTest {
 
   @Test
   void handlesPullRequestWithNoTitleOrBody() {
-    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails(null, null, new Ref(HEAD_SHA), new Ref("base")));
-    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(fooWithPatch()));
     when(docGenerator.generate(any(), any(), any(), any()))
         .thenReturn(
@@ -652,7 +651,7 @@ class DocGenerationServiceTest {
 
   @Test
   void reportsWhenHeadIsMissing() {
-    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("T", "B", null, new Ref("base")));
 
     service.handle(task());
@@ -663,7 +662,7 @@ class DocGenerationServiceTest {
 
   @Test
   void reportsWhenHeadShaIsBlank() {
-    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("T", "B", new Ref(" "), new Ref("base")));
 
     service.handle(task());
@@ -674,9 +673,9 @@ class DocGenerationServiceTest {
 
   @Test
   void reportsNoFilesWhenFileFetchFails() {
-    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("T", "B", new Ref(HEAD_SHA), new Ref("base")));
-    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(7)))
         .thenThrow(new RuntimeException("files down"));
 
     service.handle(task());
@@ -687,10 +686,9 @@ class DocGenerationServiceTest {
 
   @Test
   void reportsNoFilesWhenFileListIsNull() {
-    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("T", "B", new Ref(HEAD_SHA), new Ref("base")));
-    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(null);
+    when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(7))).thenReturn(null);
 
     service.handle(task());
 
@@ -718,9 +716,9 @@ class DocGenerationServiceTest {
 
   @Test
   void handlesBlankTitleAndBody() {
-    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("  ", "  ", new Ref(HEAD_SHA), new Ref("base")));
-    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(fooWithPatch()));
     when(docGenerator.generate(any(), any(), any(), any())).thenReturn(aiOk("{\"docs\":[]}"));
 
@@ -731,7 +729,7 @@ class DocGenerationServiceTest {
 
   @Test
   void reportsWhenHeadShaIsNull() {
-    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("T", "B", new Ref((String) null), new Ref("base")));
 
     service.handle(task());

@@ -18,9 +18,9 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.langchain4j.service.Result;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningRepeat;
@@ -78,7 +78,7 @@ public abstract class AbstractPrSuggestionGenerator {
       String body,
       String instructions,
       String headSha,
-      List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
+      List<CodeHost.FileDiff> reviewableFiles) {
     protected Inputs {
       reviewableFiles = reviewableFiles == null ? List.of() : List.copyOf(reviewableFiles);
     }
@@ -92,7 +92,7 @@ public abstract class AbstractPrSuggestionGenerator {
   protected record CommandTarget(
       String owner, String repo, String defaultBranch, long installationId) {}
 
-  private GitHubPullRequestClient prClient;
+  private CodeHost prClient;
   private ReviewDiffFormatter diffFormatter;
   private InstructionsResolver instructionsResolver;
   private RepoSettingsResolver repoSettingsResolver;
@@ -110,7 +110,7 @@ public abstract class AbstractPrSuggestionGenerator {
 
   /** The collaborators every command generator shares, handed over by its CDI constructor. */
   record Shared(
-      GitHubPullRequestClient prClient,
+      CodeHost prClient,
       ReviewDiffFormatter diffFormatter,
       InstructionsResolver instructionsResolver,
       RepoSettingsResolver repoSettingsResolver,
@@ -209,10 +209,8 @@ public abstract class AbstractPrSuggestionGenerator {
    * command that plans batches from the filtered list but resolves lines from the unfiltered one
    * can still land a committable suggestion on a file the repository asked the bot to leave alone.
    */
-  protected List<GitHubPullRequestClient.FileDiff> respectPerRepoIgnores(
-      CommandTarget target,
-      String command,
-      List<GitHubPullRequestClient.FileDiff> globallyFiltered) {
+  protected List<CodeHost.FileDiff> respectPerRepoIgnores(
+      CommandTarget target, String command, List<CodeHost.FileDiff> globallyFiltered) {
     var repoSettings =
         SoftLoaders.repoSettings(
             repoSettingsResolver,
@@ -243,7 +241,7 @@ public abstract class AbstractPrSuggestionGenerator {
    * batch.
    */
   protected DiffBudgetPlanner.BudgetPlan planBatches(
-      List<GitHubPullRequestClient.FileDiff> reviewable,
+      List<CodeHost.FileDiff> reviewable,
       Inputs inputs,
       String systemPrompt,
       String userPrompt,
@@ -264,7 +262,7 @@ public abstract class AbstractPrSuggestionGenerator {
    * than rely on the five-argument form.
    */
   protected DiffBudgetPlanner.BudgetPlan planBatches(
-      List<GitHubPullRequestClient.FileDiff> reviewable,
+      List<CodeHost.FileDiff> reviewable,
       Inputs inputs,
       String systemPrompt,
       String userPrompt,

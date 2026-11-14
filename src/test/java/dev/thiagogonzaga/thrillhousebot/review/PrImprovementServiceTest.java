@@ -25,14 +25,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.PullRequestDetails;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.Ref;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.PullRequestDetails;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.Ref;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ImprovementParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrImproveAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrImproveAssistantPrompts;
@@ -75,7 +75,7 @@ class PrImprovementServiceTest {
       +    var in = Files.newInputStream(path);
       +    int total = 0;  \s""";
 
-  @Mock private GitHubPullRequestClient prClient;
+  @Mock private CodeHost prClient;
   @Mock private GitHubReviewClient reviewClient;
   @Mock private GitHubCommentClient commentClient;
   @Mock private InstructionsResolver instructionsResolver;
@@ -131,9 +131,9 @@ class PrImprovementServiceTest {
   }
 
   private void prWithFiles(FileDiff... files) {
-    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("Title", "Body", new Ref(HEAD_SHA), new Ref("basesha")));
-    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(files));
   }
 
@@ -421,9 +421,9 @@ class PrImprovementServiceTest {
   void fallsBackToCopyPasteWhenThePrHasNoHeadSha() {
     // An inline comment needs a commit to anchor to; without one the improvements must still be
     // delivered rather than silently dropped.
-    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("Title", "Body", new Ref("  "), new Ref("basesha")));
-    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(foo()));
     assistantReturns(
         """
@@ -445,9 +445,9 @@ class PrImprovementServiceTest {
   @Test
   void fallsBackToCopyPasteWhenThePrDetailsCarryNoHeadRef() {
     // A PR payload can arrive with a null head ref; that must degrade, not NPE.
-    when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("Title", "Body", null, new Ref("basesha")));
-    when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(foo()));
     assistantReturns(
         """
@@ -478,7 +478,7 @@ class PrImprovementServiceTest {
     verify(nothingReviewable, never()).buildDiffStringWithStats(anyList(), anyList());
     assertEquals(PrImprovementService.NO_CHANGES, postedSummary());
     verifyNoInteractions(improveAssistant);
-    verify(prClient, never()).getPullRequest(any(), any(), any(), any(), anyInt());
+    verify(prClient, never()).getPullRequest(any(), any(), any(), anyInt());
   }
 
   @Test

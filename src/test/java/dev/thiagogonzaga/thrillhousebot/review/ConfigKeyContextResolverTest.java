@@ -20,12 +20,12 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.TreeEntry;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.TreeResponse;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.TreeEntry;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.TreeResponse;
 import jakarta.ws.rs.WebApplicationException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -72,7 +72,7 @@ class ConfigKeyContextResolverTest {
       thrillhousebot.review.ci-gating=${REVIEW_CI_GATING:strict}
       """;
 
-  private final GitHubPullRequestClient prClient = mock(GitHubPullRequestClient.class);
+  private final CodeHost prClient = mock(CodeHost.class);
   private final ConfigKeyContextResolver resolver = new ConfigKeyContextResolver(prClient);
 
   private void givenRepository(String... paths) {
@@ -80,14 +80,14 @@ class ConfigKeyContextResolverTest {
     for (String path : paths) {
       entries.add(new TreeEntry(path, "blob", 4_000));
     }
-    when(prClient.getTree(any(), any(), eq("o"), eq("r"), eq("headsha"), eq("1")))
+    when(prClient.getTree(any(), eq("o"), eq("r"), eq("headsha")))
         .thenReturn(new TreeResponse("treesha", entries, false));
   }
 
   private void givenFile(String path, String content) {
-    when(prClient.getFileContent(any(), any(), eq("o"), eq("r"), eq(path), eq("headsha")))
+    when(prClient.getFileContent(any(), eq("o"), eq("r"), eq(path), eq("headsha")))
         .thenReturn(
-            new GitHubPullRequestClient.FileContent(
+            new CodeHost.FileContent(
                 path,
                 path,
                 Base64.getEncoder().encodeToString(content.getBytes(StandardCharsets.UTF_8)),
@@ -728,7 +728,7 @@ class ConfigKeyContextResolverTest {
     }
 
     private void verifyNeverFetched(String path) {
-      verify(prClient, never()).getFileContent(any(), any(), any(), any(), eq(path), any());
+      verify(prClient, never()).getFileContent(any(), any(), any(), eq(path), any());
     }
 
     @Test
@@ -790,17 +790,17 @@ class ConfigKeyContextResolverTest {
 
     @Test
     void shouldReturnEmptyAndSkipContentFetchesWhenTreeListingFails() {
-      when(prClient.getTree(any(), any(), any(), any(), any(), any()))
+      when(prClient.getTree(any(), any(), any(), any()))
           .thenThrow(new WebApplicationException(404));
 
       assertEquals("", resolve(List.of(docDiff(".env.example", "WEBHOOK_DEDUP_TTL=24h"))));
-      verify(prClient, never()).getFileContent(any(), any(), any(), any(), any(), any());
+      verify(prClient, never()).getFileContent(any(), any(), any(), any(), any());
     }
 
     @Test
     void shouldSkipAFileWhoseContentCannotBeRead() {
       givenRepository(PROPERTIES_PATH, CONFIG_PATH);
-      when(prClient.getFileContent(any(), any(), any(), any(), eq(PROPERTIES_PATH), any()))
+      when(prClient.getFileContent(any(), any(), any(), eq(PROPERTIES_PATH), any()))
           .thenThrow(new WebApplicationException(500));
       givenFile(CONFIG_PATH, CONFIG_SOURCE);
 
@@ -821,20 +821,20 @@ class ConfigKeyContextResolverTest {
       givenRepository("src/main/java/App.java", "docs/guide.md");
 
       assertEquals("", resolve(List.of(docDiff(".env.example", "WEBHOOK_DEDUP_TTL=24h"))));
-      verify(prClient, never()).getFileContent(any(), any(), any(), any(), any(), any());
+      verify(prClient, never()).getFileContent(any(), any(), any(), any(), any());
     }
 
     @Test
     void shouldReturnEmptyWhenTheTreeListingComesBackNull() {
-      when(prClient.getTree(any(), any(), any(), any(), any(), any())).thenReturn(null);
+      when(prClient.getTree(any(), any(), any(), any())).thenReturn(null);
 
       assertEquals("", resolve(List.of(docDiff(".env.example", "WEBHOOK_DEDUP_TTL=24h"))));
-      verify(prClient, never()).getFileContent(any(), any(), any(), any(), any(), any());
+      verify(prClient, never()).getFileContent(any(), any(), any(), any(), any());
     }
 
     @Test
     void shouldStillResolveFromATruncatedTreeListing() {
-      when(prClient.getTree(any(), any(), eq("o"), eq("r"), eq("headsha"), eq("1")))
+      when(prClient.getTree(any(), eq("o"), eq("r"), eq("headsha")))
           .thenReturn(
               new TreeResponse(
                   "treesha", List.of(new TreeEntry(PROPERTIES_PATH, "blob", 4_000)), true));
@@ -849,7 +849,7 @@ class ConfigKeyContextResolverTest {
 
     @Test
     void shouldSkipTreeEntriesWithoutAPath() {
-      when(prClient.getTree(any(), any(), eq("o"), eq("r"), eq("headsha"), eq("1")))
+      when(prClient.getTree(any(), eq("o"), eq("r"), eq("headsha")))
           .thenReturn(
               new TreeResponse(
                   "treesha",
@@ -869,17 +869,15 @@ class ConfigKeyContextResolverTest {
           "blank/application.properties",
           "nobody/application.properties",
           "missing/application.properties");
+      when(prClient.getFileContent(any(), any(), any(), eq("nobody/application.properties"), any()))
+          .thenReturn(new CodeHost.FileContent("a", "a", null, "base64", 0)); // directory
       when(prClient.getFileContent(
-              any(), any(), any(), any(), eq("nobody/application.properties"), any()))
-          .thenReturn(
-              new GitHubPullRequestClient.FileContent("a", "a", null, "base64", 0)); // directory
-      when(prClient.getFileContent(
-              any(), any(), any(), any(), eq("missing/application.properties"), any()))
+              any(), any(), any(), eq("missing/application.properties"), any()))
           .thenReturn(null);
       givenFile("blank/application.properties", "   \n  \n");
 
       assertEquals("", resolve(List.of(docDiff(".env.example", "WEBHOOK_DEDUP_TTL=24h"))));
-      verify(prClient, times(3)).getFileContent(any(), any(), any(), any(), any(), eq("headsha"));
+      verify(prClient, times(3)).getFileContent(any(), any(), any(), any(), eq("headsha"));
     }
 
     @Test
@@ -895,7 +893,7 @@ class ConfigKeyContextResolverTest {
 
     @Test
     void shouldRankConfigResourcesFirstAndSkipTestsAndOversizedFiles() {
-      when(prClient.getTree(any(), any(), eq("o"), eq("r"), eq("headsha"), eq("1")))
+      when(prClient.getTree(any(), eq("o"), eq("r"), eq("headsha")))
           .thenReturn(
               new TreeResponse(
                   "treesha",
@@ -934,7 +932,7 @@ class ConfigKeyContextResolverTest {
 
       assertEquals("", resolve(List.of(docDiff(".env.example", "WEBHOOK_DEDUP_TTL=24h"))));
       verify(prClient, times(ConfigKeyContextResolver.MAX_FILES_FETCHED))
-          .getFileContent(any(), any(), any(), any(), any(), eq("headsha"));
+          .getFileContent(any(), any(), any(), any(), eq("headsha"));
     }
 
     @Test
@@ -954,7 +952,7 @@ class ConfigKeyContextResolverTest {
 
       assertEquals("", resolve(List.of(docDiff(".env.example", "WEBHOOK_DEDUP_TTL=24h"))));
       verify(prClient, times(ConfigKeyContextResolver.MAX_FILES_FETCHED))
-          .getFileContent(any(), any(), any(), any(), any(), eq("headsha"));
+          .getFileContent(any(), any(), any(), any(), eq("headsha"));
     }
 
     @Test
@@ -1009,7 +1007,7 @@ class ConfigKeyContextResolverTest {
           ConfigKeyContextResolver.MAX_KEYS_RENDERED,
           context.lines().filter(line -> line.startsWith("#### ")).count(),
           context);
-      verify(prClient, times(1)).getFileContent(any(), any(), any(), any(), any(), eq("headsha"));
+      verify(prClient, times(1)).getFileContent(any(), any(), any(), any(), eq("headsha"));
     }
 
     @Test

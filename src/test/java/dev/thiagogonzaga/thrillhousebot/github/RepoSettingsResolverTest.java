@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.ProcessingException;
 import jakarta.ws.rs.ServerErrorException;
@@ -41,7 +42,7 @@ import org.mockito.MockitoAnnotations;
 class RepoSettingsResolverTest {
 
   @Mock private GitHubAuthClient authClient;
-  @Mock private GitHubPullRequestClient prClient;
+  @Mock private CodeHost prClient;
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
 
@@ -52,7 +53,6 @@ class RepoSettingsResolverTest {
   private static final String DEFAULT_BRANCH = "main";
   private static final long INSTALLATION_ID = 42L;
   private static final String AUTH_HEADER = "Bearer test-jwt";
-  private static final String ACCEPT = "application/vnd.github+json";
   private static final String YML = ".github/thrillhousebot.yml";
   private static final String YAML = ".github/thrillhousebot.yaml";
 
@@ -68,19 +68,19 @@ class RepoSettingsResolverTest {
     return new RepoSettingsResolver(config, authClient, prClient, currentTimeMs::get);
   }
 
-  private static GitHubPullRequestClient.FileContent content(String text) {
+  private static CodeHost.FileContent content(String text) {
     var encoded = Base64.getEncoder().encodeToString(text.getBytes(StandardCharsets.UTF_8));
-    return new GitHubPullRequestClient.FileContent(
+    return new CodeHost.FileContent(
         "thrillhousebot.yml", ".github/thrillhousebot.yml", encoded, "base64", text.length());
   }
 
   private void stubFile(String path, String text) {
-    when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, path, DEFAULT_BRANCH))
+    when(prClient.getFileContent(AUTH_HEADER, OWNER, REPO, path, DEFAULT_BRANCH))
         .thenReturn(content(text));
   }
 
   private void stubMissing(String path) {
-    when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, path, DEFAULT_BRANCH))
+    when(prClient.getFileContent(AUTH_HEADER, OWNER, REPO, path, DEFAULT_BRANCH))
         .thenThrow(new NotFoundException(Response.status(404).build()));
   }
 
@@ -687,9 +687,8 @@ class RepoSettingsResolverTest {
     void nullFileContentIsTreatedAsAbsentAndFallsThroughTheChain() {
       // The contents endpoint can answer without an inline payload (e.g. an over-size blob);
       // decoding null would NPE, so it must be handled as "nothing readable here".
-      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH))
-          .thenReturn(
-              new GitHubPullRequestClient.FileContent("thrillhousebot.yml", YML, null, "none", 0));
+      when(prClient.getFileContent(AUTH_HEADER, OWNER, REPO, YML, DEFAULT_BRANCH))
+          .thenReturn(new CodeHost.FileContent("thrillhousebot.yml", YML, null, "none", 0));
       stubFile(YAML, "review:\n  ignored-files:\n    - \"from-yaml/**\"\n");
 
       var settings = assertDoesNotThrow(RepoSettingsResolverTest.this::resolve);
@@ -707,7 +706,7 @@ class RepoSettingsResolverTest {
 
     @Test
     void transportFailureDegradesToEmpty() {
-      when(prClient.getFileContent(any(), any(), any(), any(), any(), any()))
+      when(prClient.getFileContent(any(), any(), any(), any(), any()))
           .thenThrow(new ProcessingException("connection reset"));
 
       assertEquals(RepoSettings.EMPTY, resolve());
@@ -715,9 +714,9 @@ class RepoSettingsResolverTest {
 
     @Test
     void undecodableContentDegradesToEmpty() {
-      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH))
+      when(prClient.getFileContent(AUTH_HEADER, OWNER, REPO, YML, DEFAULT_BRANCH))
           .thenReturn(
-              new GitHubPullRequestClient.FileContent(
+              new CodeHost.FileContent(
                   "thrillhousebot.yml", YML, "!!! not base64 !!!", "base64", 3));
       stubMissing(YAML);
 
@@ -810,20 +809,18 @@ class RepoSettingsResolverTest {
           java.util.List.of("gen/**"),
           resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID).ignoredFiles());
 
-      verify(prClient, times(1))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(prClient, times(1)).getFileContent(AUTH_HEADER, OWNER, REPO, YML, DEFAULT_BRANCH);
 
       currentTimeMs.addAndGet(RepoSettingsResolver.CACHE_TTL_MS + 1);
       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
-      verify(prClient, times(2))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(prClient, times(2)).getFileContent(AUTH_HEADER, OWNER, REPO, YML, DEFAULT_BRANCH);
     }
 
     @Test
     void cachesAreKeyedPerRepository() {
       stubFile(YML, "review:\n  ignored-files:\n    - \"gen/**\"\n");
-      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, "other", YML, DEFAULT_BRANCH))
+      when(prClient.getFileContent(AUTH_HEADER, OWNER, "other", YML, DEFAULT_BRANCH))
           .thenReturn(content("review:\n  ignored-files:\n    - \"other/**\"\n"));
       var resolver = resolver();
 
@@ -844,14 +841,12 @@ class RepoSettingsResolverTest {
       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
-      verify(prClient, times(1))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(prClient, times(1)).getFileContent(AUTH_HEADER, OWNER, REPO, YML, DEFAULT_BRANCH);
 
       currentTimeMs.addAndGet(RepoSettingsResolver.NEGATIVE_CACHE_TTL_MS + 1);
       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
-      verify(prClient, times(2))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(prClient, times(2)).getFileContent(AUTH_HEADER, OWNER, REPO, YML, DEFAULT_BRANCH);
     }
 
     /**
@@ -862,7 +857,7 @@ class RepoSettingsResolverTest {
      */
     @Test
     void aTransientFailureIsNotCachedAsNoConfig() {
-      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH))
+      when(prClient.getFileContent(AUTH_HEADER, OWNER, REPO, YML, DEFAULT_BRANCH))
           .thenThrow(new ServerErrorException(Response.status(503).build()));
       stubMissing(YAML);
       var resolver = resolver();
@@ -873,13 +868,12 @@ class RepoSettingsResolverTest {
 
       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
-      verify(prClient, times(2))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(prClient, times(2)).getFileContent(AUTH_HEADER, OWNER, REPO, YML, DEFAULT_BRANCH);
     }
 
     @Test
     void aFailureOnOneCandidateStillLetsTheNextOneInTheChainWin() {
-      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH))
+      when(prClient.getFileContent(AUTH_HEADER, OWNER, REPO, YML, DEFAULT_BRANCH))
           .thenThrow(new ServerErrorException(Response.status(502).build()));
       stubFile(YAML, "review:\n  ignored-files:\n    - \"from-yaml/**\"\n");
 
@@ -907,10 +901,8 @@ class RepoSettingsResolverTest {
       assertEquals(
           RepoSettings.EMPTY, resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
 
-      verify(prClient, times(1))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
-      verify(prClient, never())
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YAML, DEFAULT_BRANCH);
+      verify(prClient, times(1)).getFileContent(AUTH_HEADER, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(prClient, never()).getFileContent(AUTH_HEADER, OWNER, REPO, YAML, DEFAULT_BRANCH);
     }
 
     /**
@@ -927,13 +919,11 @@ class RepoSettingsResolverTest {
 
       currentTimeMs.addAndGet(RepoSettingsResolver.NEGATIVE_CACHE_TTL_MS + 1);
       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
-      verify(prClient, times(1))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(prClient, times(1)).getFileContent(AUTH_HEADER, OWNER, REPO, YML, DEFAULT_BRANCH);
 
       currentTimeMs.addAndGet(RepoSettingsResolver.CACHE_TTL_MS + 1);
       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
-      verify(prClient, times(2))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(prClient, times(2)).getFileContent(AUTH_HEADER, OWNER, REPO, YML, DEFAULT_BRANCH);
     }
 
     @Test
@@ -957,7 +947,7 @@ class RepoSettingsResolverTest {
     @Test
     void theClientsOwn404IsNoConfigAndIsCachedLikeOne() {
       for (var path : java.util.List.of(YML, YAML)) {
-        when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, path, DEFAULT_BRANCH))
+        when(prClient.getFileContent(AUTH_HEADER, OWNER, REPO, path, DEFAULT_BRANCH))
             .thenThrow(
                 new org.jboss.resteasy.reactive.ClientWebApplicationException(
                     Response.status(404).build()));
@@ -969,14 +959,13 @@ class RepoSettingsResolverTest {
       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
       assertEquals(1, resolver.cache.size(), "the client's 404 is a real answer and is cached");
-      verify(prClient, times(1))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(prClient, times(1)).getFileContent(AUTH_HEADER, OWNER, REPO, YML, DEFAULT_BRANCH);
     }
 
     /** The status decides, not the subclass: the client's 503 is still a read that failed. */
     @Test
     void theClientsOwn503IsStillAFailedReadAndIsNotCached() {
-      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH))
+      when(prClient.getFileContent(AUTH_HEADER, OWNER, REPO, YML, DEFAULT_BRANCH))
           .thenThrow(
               new org.jboss.resteasy.reactive.ClientWebApplicationException(
                   Response.status(503).build()));

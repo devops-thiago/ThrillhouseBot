@@ -17,7 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
@@ -573,7 +573,7 @@ public class SecurityScan {
   }
 
   /** Reads every file the review covers, minus the skipped globs and files with no patch text. */
-  Result scan(List<GitHubPullRequestClient.FileDiff> files) {
+  Result scan(List<CodeHost.FileDiff> files) {
     var detections = new ArrayList<Detection>();
     var redactions = new ArrayList<Redaction>();
     var scanned = new ArrayList<String>();
@@ -670,7 +670,7 @@ public class SecurityScan {
   }
 
   private static void scanIac(
-      GitHubPullRequestClient.FileDiff file, PatchLines patch, List<Detection> detections) {
+      CodeHost.FileDiff file, PatchLines patch, List<Detection> detections) {
     var lines = patch.lines();
     for (var hit : IacScanner.scan(file.filename(), patch, "added".equals(file.status()))) {
       if (!allowed(lines, hit.index(), ALLOW_IAC_MARKER)) {

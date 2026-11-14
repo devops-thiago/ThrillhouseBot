@@ -16,7 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.LogSafe;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import java.util.ArrayList;
@@ -366,7 +366,7 @@ final class PathMentions {
   }
 
   private PathMentions(
-      List<GitHubPullRequestClient.FileDiff> files,
+      List<CodeHost.FileDiff> files,
       String known,
       Supplier<Optional<CitedLocationResolver.RepositoryPaths>> repository) {
     var paths = new HashSet<String>();
@@ -413,7 +413,7 @@ final class PathMentions {
    * @param repository the repository's paths at the head, read on first use; empty when unknown
    */
   static PathMentions of(
-      List<GitHubPullRequestClient.FileDiff> files,
+      List<CodeHost.FileDiff> files,
       String known,
       Supplier<Optional<CitedLocationResolver.RepositoryPaths>> repository) {
     return new PathMentions(files, known, repository);

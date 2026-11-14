@@ -27,7 +27,7 @@ import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningStepDown;

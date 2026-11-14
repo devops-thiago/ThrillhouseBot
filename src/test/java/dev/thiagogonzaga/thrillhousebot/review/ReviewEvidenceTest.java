@@ -23,9 +23,9 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -40,7 +40,7 @@ import org.junit.jupiter.api.Test;
  */
 class ReviewEvidenceTest {
 
-  private final GitHubPullRequestClient prClient = mock(GitHubPullRequestClient.class);
+  private final CodeHost prClient = mock(CodeHost.class);
 
   private static String path(int i) {
     return "src/main/java/app/File" + i + ".java";
@@ -50,9 +50,9 @@ class ReviewEvidenceTest {
   private static final String WIDE = ("var x = \"" + "y".repeat(300) + "\";\n").repeat(8);
 
   private void givenFile(String p) {
-    when(prClient.getFileContent(any(), any(), eq("o"), eq("r"), eq(p), eq("sha")))
+    when(prClient.getFileContent(any(), eq("o"), eq("r"), eq(p), eq("sha")))
         .thenReturn(
-            new GitHubPullRequestClient.FileContent(
+            new CodeHost.FileContent(
                 p,
                 p,
                 Base64.getEncoder().encodeToString(WIDE.getBytes(StandardCharsets.UTF_8)),

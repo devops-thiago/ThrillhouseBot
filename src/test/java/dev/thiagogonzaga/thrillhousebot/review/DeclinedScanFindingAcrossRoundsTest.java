@@ -20,9 +20,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
 import java.util.HashMap;

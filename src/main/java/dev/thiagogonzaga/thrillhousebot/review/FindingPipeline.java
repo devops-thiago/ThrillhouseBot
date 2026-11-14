@@ -21,7 +21,7 @@ import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ReviewExecutorProducer;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
@@ -964,7 +964,7 @@ public class FindingPipeline {
    * routing off, when every call carries every dimension.
    */
   private void logDimensionRouting(
-      ReviewSession session, String call, List<GitHubPullRequestClient.FileDiff> files) {
+      ReviewSession session, String call, List<CodeHost.FileDiff> files) {
     if (!dimensionRouter.enabled()) {
       return;
     }
@@ -1151,8 +1151,8 @@ public class FindingPipeline {
     return refineBatchOutcome(index, batch, batchInputs, partialResponse, run);
   }
 
-  private static List<String> filenamesOf(List<GitHubPullRequestClient.FileDiff> files) {
-    return files.stream().map(GitHubPullRequestClient.FileDiff::filename).toList();
+  private static List<String> filenamesOf(List<CodeHost.FileDiff> files) {
+    return files.stream().map(CodeHost.FileDiff::filename).toList();
   }
 
   /**
@@ -1214,7 +1214,7 @@ public class FindingPipeline {
     }
     var batchFiles =
         batch.files().stream()
-            .map(GitHubPullRequestClient.FileDiff::filename)
+            .map(CodeHost.FileDiff::filename)
             .collect(Collectors.toCollection(HashSet::new));
     plan.clippedFiles().forEach(batchFiles::remove);
     var scoped = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
@@ -1483,7 +1483,7 @@ public class FindingPipeline {
   }
 
   /** "old → new" for a rename that carries its previous path, else the current path alone. */
-  private static String renamePath(GitHubPullRequestClient.FileDiff file) {
+  private static String renamePath(CodeHost.FileDiff file) {
     var previous = file.previousFilename();
     return previous == null || previous.isBlank()
         ? file.filename()
@@ -1669,8 +1669,7 @@ public class FindingPipeline {
    * "directory: N files (+a -d)" rows, most files first, so a change spread over several packages
    * cannot read as a single-file edit. Bounded so a wide PR cannot crowd out the file list.
    */
-  private static void appendDirectoryBreakdown(
-      StringBuilder sb, List<GitHubPullRequestClient.FileDiff> files) {
+  private static void appendDirectoryBreakdown(StringBuilder sb, List<CodeHost.FileDiff> files) {
     if (files.isEmpty()) {
       return;
     }

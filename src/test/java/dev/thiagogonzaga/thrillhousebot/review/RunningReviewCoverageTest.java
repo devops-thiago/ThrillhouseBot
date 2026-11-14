@@ -27,8 +27,8 @@ import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -45,7 +45,7 @@ class RunningReviewCoverageTest {
   private static final String ACCEPT = "application/vnd.github+json";
 
   private final GitHubAuthClient authClient = mock(GitHubAuthClient.class);
-  private final GitHubPullRequestClient prClient = mock(GitHubPullRequestClient.class);
+  private final CodeHost prClient = mock(CodeHost.class);
   private final GitHubCommentClient commentClient = mock(GitHubCommentClient.class);
   private final RunningReviewCoverage coverage =
       new RunningReviewCoverage(authClient, prClient, commentClient);
@@ -70,15 +70,15 @@ class RunningReviewCoverageTest {
 
   @Test
   void shouldReadTheCurrentHead() {
-    when(prClient.getPullRequest("Bearer t", ACCEPT, "owner", "repo", 7))
-        .thenReturn(details(new GitHubPullRequestClient.Ref("abc1234def")));
+    when(prClient.getPullRequest("Bearer t", "owner", "repo", 7))
+        .thenReturn(details(new CodeHost.Ref("abc1234def")));
 
     assertEquals(Optional.of("abc1234def"), coverage.currentHead(req));
   }
 
   @Test
   void shouldFallBackAndLogWhenTheHeadReadFails() {
-    when(prClient.getPullRequest(anyString(), anyString(), anyString(), anyString(), anyInt()))
+    when(prClient.getPullRequest(anyString(), anyString(), anyString(), anyInt()))
         .thenThrow(new IllegalStateException("502"));
 
     var logged = captureLog(() -> assertEquals(Optional.empty(), coverage.currentHead(req)));
@@ -97,9 +97,9 @@ class RunningReviewCoverageTest {
 
   @Test
   void shouldFallBackAndLogWhenGitHubNamesNoHead() {
-    when(prClient.getPullRequest("Bearer t", ACCEPT, "owner", "repo", 7))
+    when(prClient.getPullRequest("Bearer t", "owner", "repo", 7))
         .thenReturn(details(null))
-        .thenReturn(details(new GitHubPullRequestClient.Ref(" ")))
+        .thenReturn(details(new CodeHost.Ref(" ")))
         .thenReturn(null);
 
     var logged =
@@ -144,9 +144,8 @@ class RunningReviewCoverageTest {
         .createComment(eq("Bearer t"), eq(ACCEPT), eq("owner"), eq("repo"), eq(7), any());
   }
 
-  private static GitHubPullRequestClient.PullRequestDetails details(
-      GitHubPullRequestClient.Ref head) {
-    return new GitHubPullRequestClient.PullRequestDetails("title", "", head, null);
+  private static CodeHost.PullRequestDetails details(CodeHost.Ref head) {
+    return new CodeHost.PullRequestDetails("title", "", head, null);
   }
 
   private static void assertWarned(List<LogRecord> logged, String message) {

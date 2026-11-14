@@ -16,7 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.LogSafe;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import io.quarkus.logging.Log;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -133,13 +133,13 @@ final class BaseCodeCitations {
   private record Passage(String text, String lead) {}
 
   private final List<Passage> passages;
-  private final Map<String, GitHubPullRequestClient.FileDiff> changed;
+  private final Map<String, CodeHost.FileDiff> changed;
   private final Supplier<Optional<CitedLocationResolver.RepositoryPaths>> paths;
   private final Function<String, Optional<List<String>>> lines;
 
   private BaseCodeCitations(
       String description,
-      List<GitHubPullRequestClient.FileDiff> files,
+      List<CodeHost.FileDiff> files,
       Supplier<Optional<CitedLocationResolver.RepositoryPaths>> paths,
       Function<String, Optional<List<String>>> lines) {
     this.passages = passages(description);
@@ -156,16 +156,14 @@ final class BaseCodeCitations {
    * changes and a repository read at its head.
    */
   static BaseCodeCitations of(
-      String description,
-      List<GitHubPullRequestClient.FileDiff> files,
-      CitedLocationResolver.Round repository) {
+      String description, List<CodeHost.FileDiff> files, CitedLocationResolver.Round repository) {
     return of(description, files, repository::repositoryPaths, repository::citedFileLines);
   }
 
   /** {@link #of(String, List, CitedLocationResolver.Round)} over the two reads it needs. */
   static BaseCodeCitations of(
       String description,
-      List<GitHubPullRequestClient.FileDiff> files,
+      List<CodeHost.FileDiff> files,
       Supplier<Optional<CitedLocationResolver.RepositoryPaths>> paths,
       Function<String, Optional<List<String>>> lines) {
     if (description == null || description.isBlank()) {

@@ -17,7 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningStepDown;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -710,14 +710,12 @@ public class VerdictBuilder {
           totals.filesChanged(), totals.additions(), totals.deletions(), omittedFiles, truncation);
     }
 
-    static DiffStats fromFiles(List<GitHubPullRequestClient.FileDiff> files, int omittedFiles) {
+    static DiffStats fromFiles(List<CodeHost.FileDiff> files, int omittedFiles) {
       return fromFiles(files, omittedFiles, ReviewResult.TruncationDetail.EMPTY);
     }
 
     static DiffStats fromFiles(
-        List<GitHubPullRequestClient.FileDiff> files,
-        int omittedFiles,
-        ReviewResult.TruncationDetail truncation) {
+        List<CodeHost.FileDiff> files, int omittedFiles, ReviewResult.TruncationDetail truncation) {
       var additions = 0;
       var deletions = 0;
       for (var file : files) {
@@ -732,15 +730,13 @@ public class VerdictBuilder {
    * Reviewable files plus pure renames — the fallback set for Changes Overview counts when GitHub
    * PR totals are unavailable. Pure renames are omitted from AI input but still part of the PR.
    */
-  static List<GitHubPullRequestClient.FileDiff> overviewFiles(
-      ReviewContextLoader.ReviewContext ctx) {
+  static List<CodeHost.FileDiff> overviewFiles(ReviewContextLoader.ReviewContext ctx) {
     var pureRenames = ReviewDiffFormatter.pureRenameFiles(ctx.files());
     if (pureRenames.isEmpty()) {
       return ctx.reviewableFiles();
     }
     var merged =
-        new ArrayList<GitHubPullRequestClient.FileDiff>(
-            ctx.reviewableFiles().size() + pureRenames.size());
+        new ArrayList<CodeHost.FileDiff>(ctx.reviewableFiles().size() + pureRenames.size());
     merged.addAll(ctx.reviewableFiles());
     merged.addAll(pureRenames);
     return merged;
@@ -777,7 +773,7 @@ public class VerdictBuilder {
   /**
    * Maps a prior path to its current rename target; blank means a content-identical pure rename.
    */
-  static Map<String, String> renameTargets(List<GitHubPullRequestClient.FileDiff> files) {
+  static Map<String, String> renameTargets(List<CodeHost.FileDiff> files) {
     var targets = new HashMap<String, String>();
     for (var file : files) {
       if (file != null
@@ -796,8 +792,7 @@ public class VerdictBuilder {
    * walkthrough renders. The pure-rename flag travels with the row so the walkthrough can say why
    * such a file carries no model summary instead of rendering a bare dash (#536).
    */
-  static List<PrSummaryGenerator.ChangedFile> toChangedFiles(
-      List<GitHubPullRequestClient.FileDiff> files) {
+  static List<PrSummaryGenerator.ChangedFile> toChangedFiles(List<CodeHost.FileDiff> files) {
     return files.stream()
         .map(
             f ->

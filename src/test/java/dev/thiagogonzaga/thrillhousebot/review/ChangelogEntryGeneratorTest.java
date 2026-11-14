@@ -23,13 +23,13 @@ import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.PullRequestDetails;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver.ResolvedInstructions;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.PullRequestDetails;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ChangelogAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ChangelogAssistantPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrSuggestionPrompts;
@@ -114,7 +114,7 @@ class ChangelogEntryGeneratorTest {
     return patch.toString();
   }
 
-  @Mock private GitHubPullRequestClient prClient;
+  @Mock private CodeHost prClient;
   @Mock private InstructionsResolver instructionsResolver;
   @Mock private RepoSettingsResolver repoSettingsResolver;
   @Mock private ActiveModelSettings activeModel;
@@ -167,16 +167,15 @@ class ChangelogEntryGeneratorTest {
   }
 
   private void prWithFiles(FileDiff... files) {
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("Title", "Body", null, null));
-    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(files));
   }
 
   private void prWithFilesAndDetails(PullRequestDetails details) {
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(details);
-    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(eq(AUTH), eq("owner"), eq("repo"), eq(7))).thenReturn(details);
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(foo()));
   }
 
@@ -262,7 +261,7 @@ class ChangelogEntryGeneratorTest {
 
   @Test
   void returnsNullWhenThereIsNoDiff() {
-    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of());
 
     assertNull(generate());
@@ -320,9 +319,9 @@ class ChangelogEntryGeneratorTest {
 
   @Test
   void stillDraftsWhenPrDetailsFetchFails() {
-    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(foo()));
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenThrow(new RuntimeException("404"));
     draftReturns("### Added\n- x (#7)");
 
@@ -352,7 +351,7 @@ class ChangelogEntryGeneratorTest {
 
   @Test
   void returnsNullWhenDiffFetchFails() {
-    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenThrow(new RuntimeException("boom"));
 
     assertNull(generate());

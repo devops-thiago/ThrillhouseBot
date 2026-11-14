@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.github;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.ProcessingException;
@@ -30,7 +31,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -42,7 +42,6 @@ import org.slf4j.LoggerFactory;
 public class ProjectStackResolver {
 
   private static final Logger log = LoggerFactory.getLogger(ProjectStackResolver.class);
-  private static final String ACCEPT_HEADER = "application/vnd.github+json";
 
   /** Dependency manifests probed at the repository root. Package-private for tests. */
   static final List<String> MANIFEST_PATHS =
@@ -86,24 +85,18 @@ public class ProjectStackResolver {
   final ConcurrentHashMap<String, CachedStack> cache = new ConcurrentHashMap<>();
 
   private final GitHubAuthClient authClient;
-  private final GitHubPullRequestClient prClient;
+  private final CodeHost prClient;
   private final ObjectMapper mapper;
   private final LongSupplier clock;
 
   @Inject
-  public ProjectStackResolver(
-      GitHubAuthClient authClient,
-      @RestClient GitHubPullRequestClient prClient,
-      ObjectMapper mapper) {
+  public ProjectStackResolver(GitHubAuthClient authClient, CodeHost prClient, ObjectMapper mapper) {
     this(authClient, prClient, mapper, System::currentTimeMillis);
   }
 
   /** Visible for tests: allows controlling the cache clock. */
   ProjectStackResolver(
-      GitHubAuthClient authClient,
-      GitHubPullRequestClient prClient,
-      ObjectMapper mapper,
-      LongSupplier clock) {
+      GitHubAuthClient authClient, CodeHost prClient, ObjectMapper mapper, LongSupplier clock) {
     this.authClient = authClient;
     this.prClient = prClient;
     this.mapper = mapper;
@@ -153,7 +146,7 @@ public class ProjectStackResolver {
   private Optional<String> fetchManifestSection(
       String auth, String owner, String repo, String path, String defaultBranch) {
     try {
-      var file = prClient.getFileContent(auth, ACCEPT_HEADER, owner, repo, path, defaultBranch);
+      var file = prClient.getFileContent(auth, owner, repo, path, defaultBranch);
       if (file.content() == null) {
         // Directories, submodules, and oversized files come back without base64 content.
         log.debug("No content for manifest at {} in {}/{}", path, owner, repo);

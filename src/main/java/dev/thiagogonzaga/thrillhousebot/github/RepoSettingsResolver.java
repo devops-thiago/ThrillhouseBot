@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.NotFoundException;
@@ -26,7 +27,6 @@ import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,7 +49,6 @@ import org.slf4j.LoggerFactory;
 public class RepoSettingsResolver {
 
   private static final Logger log = LoggerFactory.getLogger(RepoSettingsResolver.class);
-  private static final String ACCEPT_HEADER = "application/vnd.github+json";
 
   /** Config-file names tried in order; the first that exists wins. */
   static final List<String> CONFIG_FILE_CHAIN =
@@ -65,14 +64,12 @@ public class RepoSettingsResolver {
 
   private final boolean enabled;
   private final GitHubAuthClient authClient;
-  private final GitHubPullRequestClient prClient;
+  private final CodeHost prClient;
   private final LongSupplier clock;
 
   @Inject
   public RepoSettingsResolver(
-      ThrillhouseConfig config,
-      GitHubAuthClient authClient,
-      @RestClient GitHubPullRequestClient prClient) {
+      ThrillhouseConfig config, GitHubAuthClient authClient, CodeHost prClient) {
     this(config, authClient, prClient, System::currentTimeMillis);
   }
 
@@ -80,7 +77,7 @@ public class RepoSettingsResolver {
   RepoSettingsResolver(
       ThrillhouseConfig config,
       GitHubAuthClient authClient,
-      GitHubPullRequestClient prClient,
+      CodeHost prClient,
       LongSupplier clock) {
     this.enabled = config.review().repoConfigEnabled();
     this.authClient = authClient;
@@ -196,7 +193,7 @@ public class RepoSettingsResolver {
   private Fetched fetchAndParse(
       String auth, String owner, String repo, String defaultBranch, String path) {
     try {
-      var file = prClient.getFileContent(auth, ACCEPT_HEADER, owner, repo, path, defaultBranch);
+      var file = prClient.getFileContent(auth, owner, repo, path, defaultBranch);
       if (file == null || file.content() == null) {
         return Fetched.ABSENT;
       }

@@ -4,6 +4,15 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- **The review's read path goes through a platform interface, with a GitLab implementation**
+  (#37). `CodeHost` covers what a review reads from the hosting platform (the pull request, its
+  changed files, a comparison, a file's content and the file listing). `GIT_PLATFORM` (`github`
+  by default, or `gitlab`) picks the implementation for the deployment and `GITLAB_API_URL` points
+  at a self-managed instance. This is the first stage of GitLab support: a GitLab deployment cannot
+  receive webhooks or post reviews yet, so keep `github`. GitHub behavior is unchanged.
+
 ## [0.9.1] - 2026-11-09
 
 The webhook endpoint now runs on the Quarkiverse GitHub App extension. There are no new settings,

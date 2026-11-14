@@ -15,7 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import java.util.ArrayList;
@@ -275,7 +275,7 @@ final class OverviewScreen {
    *     description, the linked issues, and the findings
    */
   static ReviewResponse.Summary screen(
-      ReviewResponse.Summary summary, List<GitHubPullRequestClient.FileDiff> files, String known) {
+      ReviewResponse.Summary summary, List<CodeHost.FileDiff> files, String known) {
     if (summary == null) {
       return null;
     }

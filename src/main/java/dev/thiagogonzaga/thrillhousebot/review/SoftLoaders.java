@@ -15,11 +15,11 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import io.quarkus.logging.Log;
 import java.util.List;
 
@@ -32,20 +32,13 @@ import java.util.List;
  */
 final class SoftLoaders {
 
-  private static final String ACCEPT = "application/vnd.github+json";
-
   private SoftLoaders() {}
 
   /** The PR's current title/body/refs, or {@code null} if it could not be fetched. */
-  static GitHubPullRequestClient.PullRequestDetails pullRequest(
-      GitHubPullRequestClient prClient,
-      String auth,
-      String owner,
-      String repo,
-      int prNumber,
-      String context) {
+  static CodeHost.PullRequestDetails pullRequest(
+      CodeHost prClient, String auth, String owner, String repo, int prNumber, String context) {
     try {
-      return prClient.getPullRequest(auth, ACCEPT, owner, repo, prNumber);
+      return prClient.getPullRequest(auth, owner, repo, prNumber);
     } catch (RuntimeException e) {
       Log.warnf(e, "Failed to fetch PR for %s on %s/%s #%d", context, owner, repo, prNumber);
       return null;
@@ -53,15 +46,10 @@ final class SoftLoaders {
   }
 
   /** The PR's changed files, or an empty list if they could not be fetched. */
-  static List<GitHubPullRequestClient.FileDiff> files(
-      GitHubPullRequestClient prClient,
-      String auth,
-      String owner,
-      String repo,
-      int prNumber,
-      String context) {
+  static List<CodeHost.FileDiff> files(
+      CodeHost prClient, String auth, String owner, String repo, int prNumber, String context) {
     try {
-      return prClient.getPullRequestFiles(auth, ACCEPT, owner, repo, prNumber);
+      return prClient.getPullRequestFiles(auth, owner, repo, prNumber);
     } catch (RuntimeException e) {
       Log.warnf(e, "Failed to fetch PR files for %s on %s/%s #%d", context, owner, repo, prNumber);
       return List.of();

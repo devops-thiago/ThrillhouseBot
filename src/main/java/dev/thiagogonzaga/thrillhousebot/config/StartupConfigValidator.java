@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.config;
 
 import dev.thiagogonzaga.thrillhousebot.notification.NotificationSettings;
+import dev.thiagogonzaga.thrillhousebot.platform.Platform;
 import dev.thiagogonzaga.thrillhousebot.review.BlockingStrictness;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -107,6 +108,7 @@ public class StartupConfigValidator {
   void validate() {
     var problems = new ArrayList<String>();
 
+    validatePlatform(problems, config.platform());
     var github = config.github();
     validateAppId(problems, github.appId());
     validatePrivateKey(problems, github.privateKey());
@@ -691,6 +693,14 @@ public class StartupConfigValidator {
               + ThrillhouseConfig.CiContextConfig.MAX_MAX_CHARS
               + " (thrillhousebot.review.ci-context.max-chars): "
               + maxChars);
+    }
+  }
+
+  /** Rejects a {@code GIT_PLATFORM} that names no platform (#37), instead of guessing one. */
+  private static void validatePlatform(List<String> problems, String platform) {
+    if (Platform.parse(platform).isEmpty()) {
+      problems.add(
+          "GIT_PLATFORM must be one of [github, gitlab] (thrillhousebot.platform): " + platform);
     }
   }
 

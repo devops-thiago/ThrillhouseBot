@@ -15,7 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -159,7 +159,7 @@ final class TestAssertions {
   }
 
   /** The new-side lines of every changed file with a patch. */
-  static TestAssertions of(List<GitHubPullRequestClient.FileDiff> files) {
+  static TestAssertions of(List<CodeHost.FileDiff> files) {
     if (files == null || files.isEmpty()) {
       return NONE;
     }
