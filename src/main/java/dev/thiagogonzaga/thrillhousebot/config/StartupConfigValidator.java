@@ -741,7 +741,7 @@ public class StartupConfigValidator {
   private static void validateRelatedContext(
       List<String> problems, ThrillhouseConfig.ReviewConfig review) {
     var relatedContext = review.relatedContext();
-    if (relatedContext == null || !relatedContext.enabled()) {
+    if (!relatedContext.enabled()) {
       return;
     }
     if (review.maxAiCalls() < ThrillhouseConfig.RelatedContextConfig.MIN_AI_CALLS) {

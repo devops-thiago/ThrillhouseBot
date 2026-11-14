@@ -265,7 +265,7 @@ public class RelatedContextSelectionService {
   List<Selected> selected(String raw, Request request) throws IOException {
     var json = ReviewResponseParser.extractJson(raw, List.of(ROOT_KEY));
     JsonNode root = mapper.readTree(json);
-    if (!root.isObject() || !root.path(ROOT_KEY).isArray()) {
+    if (!root.path(ROOT_KEY).isArray()) {
       throw new IOException("related-context selection answer has no " + ROOT_KEY + " array");
     }
     var candidates = request.candidates();

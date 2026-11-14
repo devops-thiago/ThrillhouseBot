@@ -28,6 +28,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
@@ -308,5 +309,72 @@ class RelatedContextResolverTest {
     resolver(true, 6).close(session);
     verify(selection).release(anyLong());
     RelatedContextResolver.disabled().close(session);
+  }
+
+  @Test
+  void theInjectedResolverReadsItsSwitchesFromTheConfiguration() {
+    var config = mock(ThrillhouseConfig.class, org.mockito.Answers.RETURNS_DEEP_STUBS);
+    when(config.review().relatedContext().enabled()).thenReturn(true);
+    when(config.review().relatedContext().maxFiles()).thenReturn(4);
+    when(config.review().maxAiCalls()).thenReturn(6);
+    var injected =
+        new RelatedContextResolver(
+            config,
+            selection,
+            planner,
+            new TokenCounter(),
+            new ReviewDiffFormatter(List.of("**/util/**"), 5000));
+    when(selection.select(anyLong(), any())).thenReturn(new Outcome(List.of(), false));
+
+    assertTrue(injected.enabled());
+    var related = injected.resolve(session, context(List.of(handler)), round());
+
+    assertSame(RelatedContext.NONE, related, "every candidate is under an ignored path");
+    verifyNoInteractions(selection);
+  }
+
+  @Test
+  void aSelectionThatMadeNoCallCountsNoneAndARenameSourceIsNotACandidate() {
+    when(selection.select(anyLong(), any())).thenReturn(new Outcome(List.of(), false));
+    var renamed = new FileDiff("src/app/util/Caps.java", "renamed", 0, 0, 0, null, LIMITS);
+
+    var related = resolver(true, 6).resolve(session, context(List.of(handler, renamed)), round());
+
+    assertEquals(0, related.selectionCalls());
+    var request = ArgumentCaptor.forClass(RelatedContextSelectionService.Request.class);
+    verify(selection).select(anyLong(), request.capture());
+    assertEquals(1, request.getValue().candidates().size());
+  }
+
+  @Test
+  void hitsAreCappedLongLinesSkippedAndARepeatedNameCountsOnce() {
+    var named =
+        new RelatedReferences.Candidate(
+            "p", RelatedReferences.Via.SYMBOL, List.of(), List.of("Limits"), List.of("check"));
+    var lines = new ArrayList<String>();
+    lines.add("void check() {} // " + "x".repeat(RelatedReferences.MAX_LINE_CHARS));
+    lines.add("class Limits {");
+    for (var i = 0; i < 400; i++) {
+      lines.add(i % 30 == 0 ? "  void check() { Limits.other(); }" : "  // filler");
+    }
+
+    var regions = RelatedContextResolver.regions(lines, named);
+
+    var onlyLong =
+        RelatedContextResolver.regions(
+            List.of("void check() {} // " + "x".repeat(RelatedReferences.MAX_LINE_CHARS)), named);
+    assertEquals(1, onlyLong.size(), "a line too long to scan is no hit; the top is shown");
+    assertTrue(regions.size() <= RelatedContextResolver.MAX_HITS, regions.toString());
+    assertEquals(List.of(), RelatedContextResolver.regions(List.of(), named));
+    var byName =
+        new RelatedReferences.Candidate(
+            "p", RelatedReferences.Via.SYMBOL, List.of(), List.of("Limits"), List.of());
+    var twice = new ArrayList<String>();
+    twice.add("class Limits {");
+    for (var i = 0; i < 60; i++) {
+      twice.add("  // filler");
+    }
+    twice.add("  Limits copy() { return this; }");
+    assertEquals(1, RelatedContextResolver.regions(twice, byName).size(), "the first use only");
   }
 }

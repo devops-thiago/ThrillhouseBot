@@ -170,4 +170,45 @@ class RelatedContextSelectionServiceTest {
     assertEquals(Reason.RELATED, Reason.of(null));
     assertEquals("config-consumer", Reason.CONFIG_CONSUMER.label());
   }
+
+  @Test
+  void anAnswerPickingNothingOrNamingAnOversizedNumberSelectsNothing() {
+    answers("{\"related\": []}");
+    assertEquals(List.of(), service.select(SESSION, request(4)).selected());
+    answers("{\"related\": [{\"id\": \"123456\"}, {\"id\": \"none\"}]}");
+    assertEquals(List.of(), service.select(SESSION, request(4)).selected());
+    when(selector.select(anyString(), anyString(), anyInt())).thenReturn(aiOk("   "));
+    assertEquals(List.of(), service.select(SESSION, request(4)).selected());
+    when(selector.select(anyString(), anyString(), anyInt())).thenReturn(null);
+    var absent = service.select(SESSION, request(4));
+    assertTrue(absent.called());
+    assertEquals(List.of(), absent.selected());
+  }
+
+  @Test
+  void aCallThatReasonedItsCapAwayIsRepeatedOnceAtTheLanesEffort() {
+    var ai = mock(ThrillhouseConfig.AiPricingConfig.class);
+    var reasoning = mock(ThrillhouseConfig.AiPricingConfig.ReasoningConfig.class);
+    when(config.ai()).thenReturn(ai);
+    when(ai.reasoning()).thenReturn(reasoning);
+    when(reasoning.enabled()).thenReturn(false);
+    when(reasoning.effort()).thenReturn("max");
+    when(reasoning.conciseEffort()).thenReturn(java.util.Optional.empty());
+    when(reasoning.repeatEffort()).thenReturn(java.util.Optional.empty());
+    var efforts = new java.util.ArrayList<String>();
+    when(selector.select(anyString(), anyString(), anyInt()))
+        .thenAnswer(
+            invocation -> {
+              efforts.add(ReasoningRepeat.current());
+              return efforts.size() == 1
+                  ? Result.<String>builder().content(null).finishReason(FinishReason.LENGTH).build()
+                  : aiOk("{\"related\": [{\"id\": 2, \"reason\": \"caller\"}]}");
+            });
+
+    var outcome = service.select(SESSION, request(4));
+
+    assertEquals(List.of(new Selected("src/B.java", Reason.CALLER)), outcome.selected());
+    assertEquals(java.util.Arrays.asList(null, "low"), efforts);
+    verify(ledger).recordReasoningStepDown(SESSION);
+  }
 }

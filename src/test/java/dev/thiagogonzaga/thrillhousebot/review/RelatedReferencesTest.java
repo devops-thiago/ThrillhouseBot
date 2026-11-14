@@ -185,6 +185,26 @@ class RelatedReferencesTest {
   }
 
   @Test
+  void anImportOfAFileThatIsNotSourceOfTheSameLanguageIsNeverACandidate() {
+    assertEquals(
+        List.of(),
+        paths(
+            extract(
+                Set.of("web/app.js", "web/infra/secrets.json", "web/keys.env", "web/tool.py"),
+                changed(
+                    "web/app.js",
+                    "+import settings from './infra/secrets.json';",
+                    "+const keys = require('./keys.env');",
+                    "+import tool from './tool.py';"))));
+    assertEquals(
+        List.of(),
+        paths(
+            extract(
+                Set.of("src/main.c", "src/config/credentials.env"),
+                changed("src/main.c", "+#include \"config/credentials.env\""))));
+  }
+
+  @Test
   void aCommentedOutImportRefersToNothing() {
     var repository =
         Set.of("web/src/pages/Cart.tsx", "web/src/lib/money.ts", "app/a.py", "app/b.py");
@@ -304,5 +324,186 @@ class RelatedReferencesTest {
         RelatedReferences.hunkHeaders(patch, 2, 20));
     assertTrue(RelatedReferences.hunkHeaders(null, 2, 20).isEmpty());
     assertEquals("a/b", RelatedReferences.normalize("a/c", "../b"));
+  }
+
+  @Test
+  void linesThatAreNotImportsOrThatResolveNothingAddNoCandidate() {
+    var repository =
+        Set.of(
+            "cmd/main.go",
+            "root.go",
+            "core/src/api.rs",
+            "lib/billing/invoice.rb",
+            "src/Http/Checkout.php",
+            "src/app/Handler.java",
+            "a.py",
+            "Makefile");
+
+    assertEquals(
+        List.of(),
+        paths(
+            extract(
+                repository,
+                new FileDiff(
+                    "cmd/main.go",
+                    "modified",
+                    2,
+                    0,
+                    2,
+                    "+ignored before the first hunk\n@@ -1 +1 @@\n+x := 1\n\n+\t\"fmt/unknown\""),
+                changed("core/src/api.rs", "+let x = 1;", "+use crate::nothing::Here;"),
+                changed("lib/billing/invoice.rb", "+x = 1", "+require_relative '../../../gone'"),
+                changed("src/Http/Checkout.php", "+$x = 1;", "+use const App\\Limits\\MAX;"),
+                changed(
+                    "src/app/Handler.java",
+                    "+import java.util.List;",
+                    "+import a.b.c.d.Missing;",
+                    "+/* Handler in a block comment */",
+                    "+    Ab x; int y;"),
+                changed(
+                    "a.py",
+                    "+from ... import x",
+                    "+from . import *",
+                    "+from missing import *",
+                    "+from missing import a, , b"),
+                new FileDiff(null, "modified", 1, 0, 1, "@@ -1 +1 @@\n+x"))));
+    assertEquals(
+        List.of(), RelatedReferences.extract(List.of(), Set.of(), repository, path -> false));
+    assertEquals(
+        List.of(),
+        RelatedReferences.extract(
+            List.of(changed("a.py", "+import b")), Set.of(), null, path -> false));
+  }
+
+  @Test
+  void rootFilesRelativePathsAndSuffixIncludesResolve() {
+    assertEquals(
+        List.of("b.py"),
+        paths(extract(Set.of("a.py", "b.py"), changed("a.py", "+from . import b"))));
+    assertEquals(
+        List.of("util.js"),
+        paths(extract(Set.of("app.js", "util.js"), changed("app.js", "+import u from './util';"))));
+    assertEquals(
+        List.of("lib/billing/tax.rb"),
+        paths(
+            extract(
+                Set.of("lib/billing/invoice.rb", "lib/billing/tax.rb"),
+                changed("lib/billing/invoice.rb", "+require_relative 'tax.rb'"))));
+    assertEquals(
+        List.of("include/net/buffer.h"),
+        paths(
+            extract(
+                Set.of("src/socket.c", "include/net/buffer.h"),
+                changed("src/socket.c", "+#include \"net/buffer.h\""))));
+    assertEquals(
+        List.of(),
+        paths(
+            extract(
+                Set.of("src/socket.c", "a/net/buffer.h", "b/net/buffer.h"),
+                changed("src/socket.c", "+#include \"../../net/buffer.h\""))));
+    assertEquals(
+        List.of("core/src/limits.rs"),
+        paths(
+            extract(
+                Set.of("core/src/api.rs", "core/src/limits.rs"),
+                changed("core/src/api.rs", "+#[derive(Debug)]", "+use crate::limits::Quota;"))));
+    assertEquals("a/b", RelatedReferences.normalize("", "./a//b"));
+    assertEquals(null, RelatedReferences.normalize("", "."));
+  }
+
+  @Test
+  void goImportsPickTheDeepestPackageDirectory() {
+    var repository =
+        Set.of(
+            "main.go",
+            "auth/a.go",
+            "internal/auth/b.go",
+            "internal/auth/c.go",
+            "pkg/auth/d.go",
+            "x/y/z.go");
+
+    assertEquals(
+        List.of("internal/auth/b.go", "internal/auth/c.go"),
+        paths(extract(repository, changed("x/y/z.go", "+\t\"example.com/internal/auth\""))));
+    assertEquals(
+        List.of("internal/auth/b.go", "internal/auth/c.go"),
+        paths(extract(repository, changed("x/y/z.go", "+import a \"internal/auth\""))));
+  }
+
+  @Test
+  void aPhpNameAloneMatchesOnlyWhenOneFileHasIt() {
+    assertEquals(
+        List.of("src/Billing/Tax.php"),
+        paths(
+            extract(
+                Set.of("src/Http/Checkout.php", "src/Billing/Tax.php"),
+                changed("src/Http/Checkout.php", "+use Vendor\\Tax;"))));
+    assertEquals(
+        List.of(),
+        paths(
+            extract(
+                Set.of("src/Http/Checkout.php", "src/Billing/Tax.php", "src/Legacy/Tax.php"),
+                changed("src/Http/Checkout.php", "+use Vendor\\Tax;"))));
+  }
+
+  @Test
+  void typeNamesReadOnlyTheirOwnLanguageAndEveryLanguageFamily() {
+    assertEquals(
+        List.of(),
+        paths(
+            extract(
+                Set.of("src/Handler.java", "tools/RateLimiter.py"),
+                changed(
+                    "src/Handler.java", "+    RateLimiter.acquire(); RateLimiter.release();"))));
+    assertEquals(
+        List.of("Api/RateLimiter.cs"),
+        paths(
+            extract(
+                Set.of("Api/Handler.cs", "Api/RateLimiter.cs"),
+                changed("Api/Handler.cs", "+using Api.Limits;", "+    RateLimiter.Acquire();"))));
+    for (var extension : List.of("rb", "rs", "go", "dart")) {
+      assertEquals(
+          List.of("lib/rate_limiter." + extension),
+          paths(
+              extract(
+                  Set.of("lib/handler." + extension, "lib/rate_limiter." + extension),
+                  changed("lib/handler." + extension, "+    RateLimiter.acquire()"))),
+          extension);
+    }
+  }
+
+  @Test
+  void theNearestOfSeveralFilesIsMeasuredByLeadingDirectories() {
+    assertEquals(
+        List.of("a/Config.java"),
+        paths(
+            extract(
+                Set.of("a/b/c/Handler.java", "a/Config.java", "x/Config.java"),
+                changed("a/b/c/Handler.java", "+    Config.load();"))));
+    assertEquals(
+        List.of("a/b/c/Config.java"),
+        paths(
+            extract(
+                Set.of("a/Handler.java", "a/b/c/Config.java", "x/Config.java"),
+                changed("a/Handler.java", "+    Config.load();"))));
+    assertEquals(
+        List.of(),
+        paths(
+            extract(
+                Set.of("Handler.java", "Config.java", "x/Config.java"),
+                changed("Handler.java", "+    Config.load();"))));
+  }
+
+  @Test
+  void theCalledMembersKeptPerCandidateAreCapped() {
+    var calls = new StringBuilder("+    Limits.check()");
+    for (var i = 0; i < RelatedReferences.MAX_MEMBERS + 5; i++) {
+      calls.append(".step").append(i).append("()");
+    }
+
+    var candidates =
+        extract(Set.of("src/A.java", "src/Limits.java"), changed("src/A.java", calls.toString()));
+
+    assertEquals(RelatedReferences.MAX_MEMBERS, candidates.get(0).members().size());
   }
 }

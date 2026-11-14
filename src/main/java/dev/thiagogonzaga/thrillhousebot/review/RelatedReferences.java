@@ -113,7 +113,7 @@ final class RelatedReferences {
 
     /** Whether files of this language are named in snake case after the type they declare. */
     boolean snakeCaseFiles() {
-      return this == PYTHON || this == RUBY || this == RUST || this == GO || this == DART;
+      return SNAKE_CASE_FILES.contains(name());
     }
 
     static Language of(String path) {
@@ -126,6 +126,10 @@ final class RelatedReferences {
       return null;
     }
   }
+
+  /** The languages whose files are named in snake case; by name, as an enum cannot hold itself. */
+  private static final Set<String> SNAKE_CASE_FILES =
+      Set.of("PYTHON", "RUBY", "RUST", "GO", "DART");
 
   private static final Pattern JVM_IMPORT =
       Pattern.compile("^\\s*import\\s+(static\\s+)?([\\w.]+?)(\\.\\*)?\\s*(?:;|as\\s|$)");
@@ -176,7 +180,7 @@ final class RelatedReferences {
     var index = new Index(repositoryPaths);
     var found = new LinkedHashMap<String, Found>();
     for (var file : files) {
-      var language = file == null ? null : Language.of(file.filename());
+      var language = Language.of(file.filename());
       if (language == null || file.patch() == null || "removed".equals(file.status())) {
         continue;
       }
@@ -215,6 +219,12 @@ final class RelatedReferences {
         continue;
       }
       for (var imported : imports(line, language, referrer, index)) {
+        // The one place the language rule is enforced: an import may name any path of the
+        // listing (a relative "./settings.json", an included "secrets.env"), and only a source
+        // file of the changed file's own language is ever a candidate.
+        if (Language.of(imported.path()) != language) {
+          continue;
+        }
         var entry = found.computeIfAbsent(imported.path(), Found::new);
         entry.imported(added, imported.symbol());
         entry.referrers.add(referrer);
@@ -379,12 +389,7 @@ final class RelatedReferences {
     if (!matcher.find()) {
       return List.of();
     }
-    var segments = new ArrayList<String>();
-    for (var segment : matcher.group(1).split("::")) {
-      if (!segment.isEmpty()) {
-        segments.add(segment);
-      }
-    }
+    var segments = new ArrayList<>(List.of(matcher.group(1).split("::")));
     // The last segments may name an item of the module rather than the module itself.
     while (!segments.isEmpty()) {
       var relative = String.join("/", segments);
@@ -436,15 +441,8 @@ final class RelatedReferences {
     if (!matcher.find()) {
       return List.of();
     }
-    var segments = new ArrayList<String>();
-    for (var segment : matcher.group(1).split("\\\\")) {
-      if (!segment.isEmpty()) {
-        segments.add(segment);
-      }
-    }
-    if (segments.isEmpty()
-        || "function".equals(segments.get(0))
-        || "const".equals(segments.get(0))) {
+    var segments = List.of(matcher.group(1).split("\\\\"));
+    if (Set.of("function", "const").contains(segments.get(0))) {
       return List.of();
     }
     var symbol = segments.get(segments.size() - 1);
@@ -564,19 +562,13 @@ final class RelatedReferences {
 
     /** The files of the Go package an import path names: the deepest directory it ends with. */
     List<String> goPackage(String imported) {
-      String best = null;
-      for (var directory : goFilesByDirectory.keySet()) {
-        var matches =
-            !directory.isEmpty()
-                && (imported.equals(directory) || imported.endsWith("/" + directory));
-        if (matches && (best == null || directory.length() > best.length())) {
-          best = directory;
-        }
-      }
-      if (best == null) {
-        return List.of();
-      }
-      return goFilesByDirectory.get(best).stream().sorted().limit(MAX_PACKAGE_FILES).toList();
+      return goFilesByDirectory.keySet().stream()
+          .filter(directory -> !directory.isEmpty())
+          .filter(directory -> imported.equals(directory) || imported.endsWith("/" + directory))
+          .max(Comparator.comparingInt(String::length))
+          .map(best -> goFilesByDirectory.get(best).stream().sorted().limit(MAX_PACKAGE_FILES))
+          .map(java.util.stream.Stream::toList)
+          .orElse(List.of());
     }
 
     /**
@@ -612,9 +604,7 @@ final class RelatedReferences {
 
     private static void addOfLanguage(List<String> from, Language language, List<String> into) {
       if (from != null) {
-        from.stream()
-            .filter(path -> Language.of(path) == language && !into.contains(path))
-            .forEach(into::add);
+        from.stream().filter(path -> Language.of(path) == language).forEach(into::add);
       }
     }
   }

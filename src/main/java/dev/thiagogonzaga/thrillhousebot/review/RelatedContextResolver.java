@@ -200,7 +200,7 @@ public class RelatedContextResolver {
    * selection call opened, which the pipeline clears itself when the review reaches it.
    */
   void close(ReviewSession session) {
-    if (enabled && selection != null) {
+    if (selection != null) {
       selection.release(ReviewTokenLedger.keyFor(session));
     }
   }
@@ -208,12 +208,8 @@ public class RelatedContextResolver {
   private static Set<String> changedPaths(List<GitHubPullRequestClient.FileDiff> files) {
     var paths = new HashSet<String>();
     for (var file : files) {
-      if (file.filename() != null) {
-        paths.add(file.filename());
-      }
-      if (file.previousFilename() != null) {
-        paths.add(file.previousFilename());
-      }
+      paths.add(file.filename());
+      paths.add(file.previousFilename());
     }
     return paths;
   }
@@ -260,6 +256,9 @@ public class RelatedContextResolver {
    */
   static List<RelatedContext.Region> regions(
       List<String> lines, RelatedReferences.Candidate candidate) {
+    if (lines.isEmpty()) {
+      return List.of();
+    }
     var hits = new TreeSet<Integer>();
     addHits(lines, declarationOf(candidate.members()), hits, false);
     addHits(lines, wordOf(candidate.symbols()), hits, true);
@@ -288,9 +287,7 @@ public class RelatedContextResolver {
         room -= clipped.length() + 1;
         shown.add(clipped);
       }
-      if (!shown.isEmpty()) {
-        regions.add(new RelatedContext.Region(window[0] + 1, shown));
-      }
+      regions.add(new RelatedContext.Region(window[0] + 1, shown));
       if (room <= 0) {
         break;
       }

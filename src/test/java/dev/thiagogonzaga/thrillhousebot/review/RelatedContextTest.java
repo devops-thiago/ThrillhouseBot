@@ -110,4 +110,29 @@ class RelatedContextTest {
     assertTrue(note.length() < RelatedContext.MAX_NOTE_EXCERPT_CHARS + 400, note);
     assertTrue(file.heading().startsWith("File: " + PATH + " (interface; 1 lines"), file.heading());
   }
+
+  @Test
+  void aSecondRegionThatDoesNotFitIsLeftOutWhole() {
+    var first = new RelatedContext.Region(1, List.of("String clean(String raw) { clean(raw); }"));
+    var second =
+        new RelatedContext.Region(50, List.of("y".repeat(RelatedContext.MAX_NOTE_EXCERPT_CHARS)));
+    var file =
+        new RelatedContext.RelatedFile(PATH, "interface", List.of(), 90, List.of(second, first));
+
+    var note = new RelatedContext(List.of(file), 1).noteFor(finding("clean", PATH));
+
+    assertTrue(note.contains("Lines 1-1:"), note);
+    assertFalse(note.contains("Lines 50-50:"), note);
+    assertFalse(note.endsWith("…"), note);
+  }
+
+  @Test
+  void aNameInsideALongerWordOrAnExtensionlessPathIsReadExactly() {
+    assertFalse(RelatedContext.names("InputSanitizerImpl strips only", PATH));
+    assertFalse(RelatedContext.names("MyInputSanitizer strips only", PATH));
+    assertFalse(RelatedContext.names("_InputSanitizer strips only", PATH));
+    assertTrue(RelatedContext.names("MyInputSanitizer wraps InputSanitizer", PATH));
+    assertTrue(RelatedContext.names("the JobRunner script", "bin/JobRunner"));
+    assertFalse(RelatedContext.names("some other script", "bin/JobRunner"));
+  }
 }
