@@ -547,14 +547,16 @@ class ResponseRepairServiceTest {
   }
 
   @Test
-  void aFieldTheFailedAnswerDoesNotWriteIsNotMadeUpAndANonIntegerLineIsLeft() {
+  void aFieldTheFailedAnswerDoesNotWriteIsNotMadeUpAndALineIsItsLeadingNumber() {
     var body =
         "{\"findings\": [{\"title\": \"No place\"}, {\"file\": \"a.py\", \"line\": \"3-5\","
-            + " \"title\": \"Range\"},]}";
+            + " \"title\": \"Range\"}, {\"file\": \"b.py\", \"line\": \"near the top\","
+            + " \"title\": \"Prose\"},]}";
     reviewAnswer(
         aiOk(
             "{\"findings\": [{\"file\": \"made/up.py\", \"line\": 8, \"title\": \"No place\"},"
-                + " {\"file\": \"a.py\", \"line\": 4, \"title\": \"Range\"}]}"));
+                + " {\"file\": \"a.py\", \"line\": 4, \"title\": \"Range\"},"
+                + " {\"file\": \"b.py\", \"line\": 2, \"title\": \"Prose\"}]}"));
 
     var findings =
         service
@@ -566,7 +568,8 @@ class ResponseRepairServiceTest {
     assertNull(findings.get(0).file());
     assertEquals(0, findings.get(0).line());
     assertEquals("a.py", findings.get(1).file());
-    assertEquals(4, findings.get(1).line(), "\"3-5\" is no line to compare with");
+    assertEquals(3, findings.get(1).line(), "\"3-5\" starts at line 3");
+    assertEquals(0, findings.get(2).line(), "a line written as prose is none, not the repair's");
   }
 
   @Test

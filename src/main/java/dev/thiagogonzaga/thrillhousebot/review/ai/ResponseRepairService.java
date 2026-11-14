@@ -74,6 +74,9 @@ public class ResponseRepairService {
 
   private static final Pattern ESCAPES_AND_SPACE = Pattern.compile("\\\\|\\s+");
 
+  /** A number at the start of a value, short enough to be an int. */
+  private static final Pattern LEADING_NUMBER = Pattern.compile("\\s*(-?\\d{1,9})");
+
   private final ResponseRepairer reviewRepairer;
   private final SummaryResponseRepairer summaryRepairer;
   private final ReviewResponseParser parser;
@@ -406,7 +409,7 @@ public class ResponseRepairService {
   private static ReviewResponse.Finding withOriginalPlace(
       long ledgerKey, ReviewResponse.Finding finding, Map<String, String> original) {
     var file = original.get("file");
-    var line = lineOf(original.get("line"), finding.line());
+    var line = numberOf(original.get("line"));
     if (Objects.equals(file, finding.file()) && line == finding.line()) {
       return finding;
     }
@@ -431,24 +434,19 @@ public class ResponseRepairService {
   }
 
   /**
-   * The line {@code written} states, 0 when the failed answer wrote none (what the parser reads
-   * then), or {@code fallback} when it wrote one that is no integer and so cannot be compared.
+   * The number {@code written} starts with ({@code 3} of {@code "3-5"}, {@code 42} of {@code
+   * 42.0}), or 0 when the failed answer wrote none, the value the parser reads then. The repair's
+   * own number never stands in for it.
    */
-  private static int lineOf(String written, int fallback) {
-    if (written == null) {
-      return 0;
-    }
-    try {
-      return Integer.parseInt(written.strip());
-    } catch (NumberFormatException _) {
-      return fallback;
-    }
+  private static int numberOf(String written) {
+    var leading = written == null ? null : LEADING_NUMBER.matcher(written);
+    return leading != null && leading.lookingAt() ? Integer.parseInt(leading.group(1)) : 0;
   }
 
   /** {@code status} with the id, key and status {@code original} writes; itself when they agree. */
   private static ReviewResponse.PreviousFindingStatus withOriginalId(
       long ledgerKey, ReviewResponse.PreviousFindingStatus status, Map<String, String> original) {
-    var id = lineOf(original.get("id"), status.id());
+    var id = numberOf(original.get("id"));
     var key = original.get("key");
     var value = original.getOrDefault("status", status.status());
     if (id == status.id()
