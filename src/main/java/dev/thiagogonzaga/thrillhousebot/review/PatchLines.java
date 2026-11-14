@@ -15,9 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
-import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Pattern;
 
 /**
  * The new-side lines of one file's unified-diff patch, in order: every added and context line with
@@ -36,11 +34,6 @@ import java.util.regex.Pattern;
  */
 record PatchLines(List<Line> lines, boolean lastHunkReachesEndOfFile, int lastHunk) {
 
-  /** Context lines a unified diff carries after a change when the file does not end first. */
-  private static final int DIFF_CONTEXT_LINES = 3;
-
-  private static final Pattern HUNK_HEADER = Pattern.compile("^@@ -\\d+(?:,\\d+)? \\+(\\d+)");
-
   /**
    * One new-side line.
    *
@@ -57,33 +50,15 @@ record PatchLines(List<Line> lines, boolean lastHunkReachesEndOfFile, int lastHu
 
   /** Parses a GitHub file patch; a {@code null} or blank patch parses to no lines. */
   static PatchLines parse(String patch) {
-    var lines = new ArrayList<Line>();
-    if (patch == null || patch.isBlank()) {
-      return new PatchLines(lines, false, -1);
-    }
-    int next = 0;
-    int hunk = -1;
-    int trailingContext = 0;
-    for (String raw : patch.split("\n", -1)) {
-      var header = HUNK_HEADER.matcher(raw);
-      if (header.find()) {
-        next = Integer.parseInt(header.group(1));
-        hunk++;
-        trailingContext = 0;
-      } else if (hunk >= 0 && !raw.isEmpty()) {
-        char marker = raw.charAt(0);
-        if (marker == '+') {
-          lines.add(new Line(next++, true, raw.substring(1), hunk));
-          trailingContext = 0;
-        } else if (marker == ' ') {
-          lines.add(new Line(next++, false, raw.substring(1), hunk));
-          trailingContext++;
-        } else if (marker == '-') {
-          trailingContext = 0;
-        }
-        // "\ No newline at end of file" and anything else carries no new-side line.
-      }
-    }
-    return new PatchLines(lines, hunk >= 0 && trailingContext < DIFF_CONTEXT_LINES, hunk);
+    return of(PatchIndex.parse(patch));
+  }
+
+  /** The new-side view of an already parsed patch (#1321: one parser for every reader). */
+  static PatchLines of(PatchIndex patch) {
+    var lines =
+        patch.rightSide().stream()
+            .map(line -> new Line(line.rightLine(), line.added(), line.text(), line.hunk()))
+            .toList();
+    return new PatchLines(lines, patch.lastHunkReachesEndOfFile(), patch.lastHunk());
   }
 }

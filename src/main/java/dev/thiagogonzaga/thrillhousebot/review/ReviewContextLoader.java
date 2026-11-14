@@ -529,8 +529,10 @@ public class ReviewContextLoader {
     // Every changed path too, patch or not: the only paths GitHub opens a thread on (#945, #925).
     var patchesByFile = diffFormatter.patchesByReviewableFiles(reviewableFiles);
     var changedPaths = files.stream().map(GitHubPullRequestClient.FileDiff::filename).toList();
+    // #1321: presence reads a changed file at the head when an anchor runs past its patch.
+    var headFiles = new HeadFileLines(prClient, auth, req.owner(), req.repo(), req.commitSha());
     Supplier<DiffLineResolver> lineResolverSupplier =
-        memoize(() -> new DiffLineResolver(patchesByFile, changedPaths));
+        memoize(() -> new DiffLineResolver(patchesByFile, changedPaths, headFiles));
 
     var priorReviews = fetchPriorReviews(auth, req.owner(), req.repo(), req.prNumber());
     // isFirstVisibleReview keys off the summary comment directly, not reviews alone: a first

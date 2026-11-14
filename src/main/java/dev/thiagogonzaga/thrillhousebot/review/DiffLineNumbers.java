@@ -1,5 +1,10 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 /**
  * Line numbers for the diff the review call reads (#1320).
  *
@@ -30,46 +35,55 @@ public final class DiffLineNumbers {
   /**
    * The diff with each added and context line of its {@code ```diff} blocks prefixed by its
    * new-side line number. Text outside those blocks is unchanged. Lines that precede any hunk
-   * header (a clipped section) are left unnumbered rather than given a guessed number.
+   * header (a clipped section) are left unnumbered rather than given a guessed number. The numbers
+   * come from {@link PatchIndex}, the parser every deterministic stage reads (#1321), so a number
+   * the model copies is the one those stages place the finding by.
    */
   public static String annotate(String diff) {
     if (diff == null || !diff.contains(FENCE_OPEN)) {
       return diff;
     }
-    var lines = diff.split("\n", -1);
-    var out = new StringBuilder(diff.length() + lines.length * NUMBER_ROOM);
-    boolean inBlock = false;
-    int next = -1;
-    for (int i = 0; i < lines.length; i++) {
-      var line = lines[i];
-      // Fences are matched whole: inside a block every patch line starts with its marker, so a
-      // context line " ```" from a Markdown file is code, not the end of the block.
-      if (!inBlock) {
-        inBlock = line.equals(FENCE_OPEN);
-        next = -1;
-      } else if (line.equals(FENCE)) {
-        inBlock = false;
-      } else {
-        var header = DiffLineResolver.hunkStart(line);
-        if (header.isPresent()) {
-          next = header.getAsInt();
-        } else if (next >= 0 && isNewSide(line)) {
-          out.append(next++).append(' ');
+    var lines = Arrays.asList(diff.split("\n", -1));
+    var out = new StringBuilder(diff.length() + lines.size() * NUMBER_ROOM);
+    int i = 0;
+    while (i < lines.size()) {
+      appendLine(out, lines, i, null);
+      if (lines.get(i).equals(FENCE_OPEN)) {
+        // Fences are matched whole: inside a block every patch line starts with its marker, so a
+        // context line " ```" from a Markdown file is code, not the end of the block.
+        int end = i + 1;
+        while (end < lines.size() && !lines.get(end).equals(FENCE)) {
+          end++;
         }
-      }
-      out.append(line);
-      if (i < lines.length - 1) {
-        out.append('\n');
+        var numbers = rightLineNumbers(lines.subList(i + 1, end));
+        for (int j = i + 1; j < end; j++) {
+          appendLine(out, lines, j, numbers.get(j - i - 1));
+        }
+        i = end;
+      } else {
+        i++;
       }
     }
     return out.toString();
   }
 
-  /**
-   * Added and context lines exist on the new side. An empty line carries no marker and is not
-   * counted, the same rule {@code DiffLineResolver} uses, so the two never disagree on a number.
-   */
-  private static boolean isNewSide(String line) {
-    return !line.isEmpty() && (line.charAt(0) == '+' || line.charAt(0) == ' ');
+  /** The new-side number of each added and context line of a block, by its index in the block. */
+  private static Map<Integer, Integer> rightLineNumbers(List<String> block) {
+    var numbers = new HashMap<Integer, Integer>();
+    PatchIndex.parse(block)
+        .rightSide()
+        .forEach(line -> numbers.put(line.position(), line.rightLine()));
+    return numbers;
+  }
+
+  /** Appends line {@code index}, after {@code number} when there is one, and its line break. */
+  private static void appendLine(StringBuilder out, List<String> lines, int index, Integer number) {
+    if (number != null) {
+      out.append(number).append(' ');
+    }
+    out.append(lines.get(index));
+    if (index < lines.size() - 1) {
+      out.append('\n');
+    }
   }
 }

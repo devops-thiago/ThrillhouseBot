@@ -1583,6 +1583,33 @@ class ReviewContextLoaderTest {
       assertEquals(1, DiffLineResolver.CONSTRUCTION_COUNT.get());
     }
 
+    /** #1321: presence reads a changed file at the review's head when the patch lacks an anchor. */
+    @Test
+    void lineResolverReadsAChangedFileAtTheReviewedHead() {
+      stubLoad(
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x")),
+          List.of());
+      var encoded =
+          java.util.Base64.getEncoder()
+              .encodeToString("x\noutside();\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      when(prClient.getFileContent(any(), any(), eq("owner"), eq("repo"), eq("a.java"), any()))
+          .thenReturn(
+              new GitHubPullRequestClient.FileContent("a.java", "a.java", encoded, "base64", 20));
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = loader.load("auth", request(), session);
+
+      assertTrue(ctx.lineResolver().isFindingPresent("a.java", "outside();"));
+      verify(prClient)
+          .getFileContent(
+              any(), any(), eq("owner"), eq("repo"), eq("a.java"), eq(request().commitSha()));
+    }
+
     @Test
     void lineResolverIsNotBuiltWhenNeverAccessed() {
       stubLoad(

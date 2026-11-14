@@ -66,6 +66,35 @@ All notable changes to ThrillhouseBot.
   rejected call, including a verifier, summary check or repair call that fails open, and fails at
   once when `QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY` is not set beside
   `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY`, since those calls use the concise client's key
+- The review call's diff now shows each added and context line's line number in the new file
+  (`842 +code`), so the model reads a finding's `line` instead of counting it from the hunk
+  header. Only the prompt carries the numbers; the stages that check quotes and place threads
+  still read the plain patch, and a number the model copies into `suggestion_old` or
+  `suggestion_new` is removed before either is used. The numbers add about 10% to the diff's
+  tokens on the test corpus, and the token budget counts them. (#1320)
+### Fixed
+
+- A finding whose line the diff cannot take a comment on was moved to the nearest line that
+  could, however far away, so its thread could land in a different hunk on code it never
+  described. It now moves only when that line is at most three lines away; otherwise the finding
+  is filed on the file. The line it moves to is now stored on the finding before any later step
+  reads it, so the summary, the stored round and the thread agree, and a `file:line` mention of
+  the finding's own location in its description follows the move. (#1320)
+- `/add-docs` placed a single-line doc suggestion on the line the model cited without checking
+  that the line holds the quoted declaration, so accepting it could rewrite another line. It is
+  now placed on the line that holds the quoted declaration, indentation included, and skipped
+  when there is no such line. (#1320)
+- **A finding is no longer superseded because its quote starts just outside the patch** (#1321,
+  #1318): presence was checked against the patch's added and context lines only, so a quote that
+  began one line before its hunk read as gone, and the next round superseded the finding even
+  though its file had not changed. A quote that is not in the patch is now looked for in the
+  whole file at the head commit, read the way cited locations are (at most 16 files per review).
+  The patch is parsed once with both sides, and the quote check, the thread placement, the
+  security scan, the patch-coverage reader and the prompt's line numbers all read it, so they
+  agree on every line number. A quote never matches across two hunks. A finding that quotes lines
+  the pull request removes is now posted on those lines, on the diff's base side, without a
+  suggestion block, when its line points at them; before, it was posted on a nearby line of the
+  new file.
 
 ## [0.9.1] - 2026-11-09
 
