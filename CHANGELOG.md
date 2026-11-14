@@ -4,6 +4,19 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- **Related context: the review can read code the diff refers to but does not change** (#55,
+  opt-in, `REVIEW_RELATED_CONTEXT_ENABLED`). A review saw only the diff, so it could not check a
+  called method's contract or a validator a value passes through, and the verifier downgraded
+  findings whose evidence was outside it. The files the diff's import lines and type names refer
+  to are now found without a model call, one call on the concise model picks at most
+  `REVIEW_RELATED_CONTEXT_MAX_FILES` of them, and the parts the changed code uses are shown to
+  every review call as fenced, read-only data, capped at 15% of the per-call input budget. A
+  finding naming one of those files carries its excerpt to the verifier. The selection call
+  counts in `REVIEW_MAX_AI_CALLS` (3 or more is required) and in the spend ceiling, and any
+  failure leaves the review as it is with the setting off.
+
 ### Fixed
 
 - The summary no longer posts counts or sizes the summary call wrote. That call sees only the

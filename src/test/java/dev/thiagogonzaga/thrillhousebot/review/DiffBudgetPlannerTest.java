@@ -1408,4 +1408,39 @@ class DiffBudgetPlannerTest {
             .contains(DiffBudgetPlanner.UNNAMED_FILE),
         "the coverage placeholder has no business in the previous-findings prompt text");
   }
+
+  @Test
+  void aCallMadeBeforeTheReviewComesOutOfTheBatchAllowance() {
+    // #55: the related-context selection is one of the calls REVIEW_MAX_AI_CALLS allows.
+    var f1 = file("dir/f1.java", 5, patch(5));
+    var files = List.of(f1, file("dir/f2.java", 5, patch(5)), file("dir/f3.java", 5, patch(5)));
+    var inputs = new AiReviewService.PromptInputs("d", "ctx", "base", "s", "t", "", "");
+    var overhead =
+        tokenCounter.estimateTokens(
+            PrReviewPrompts.SYSTEM
+                + PrReviewPrompts.USER
+                + PromptTemplateEscaper.fenceForBudgeting()
+                + "ctx"
+                + "base"
+                + "s"
+                + "t");
+    budget(overhead + sectionTokens(f1) + 5);
+    when(reviewConfig.maxAiCalls()).thenReturn(4);
+
+    assertEquals(3, planner.plan(files, inputs).batches().size());
+    assertEquals(3, planner.plan(files, inputs, 0).batches().size());
+    assertEquals(2, planner.plan(files, inputs, 1).batches().size());
+    assertEquals(1, planner.plan(files, inputs, 9).batches().size(), "one review call is kept");
+  }
+
+  @Test
+  void theRelatedContextGetsAFixedShareOfThePerCallBudget() {
+    budget(20_000);
+    assertEquals(
+        (int) (20_000 * DiffBudgetPlanner.RELATED_CONTEXT_BUDGET_SHARE),
+        planner.relatedContextTokenBudget());
+    when(reviewConfig.maxInputTokens()).thenReturn(0);
+    models.clear();
+    assertEquals(Integer.MAX_VALUE, planner.relatedContextTokenBudget());
+  }
 }

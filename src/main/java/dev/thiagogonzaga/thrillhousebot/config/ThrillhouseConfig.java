@@ -586,6 +586,9 @@ public interface ThrillhouseConfig {
     @WithName("ticket-context")
     TicketContextConfig ticketContext();
 
+    @WithName("related-context")
+    RelatedContextConfig relatedContext();
+
     LearningsConfig learnings();
 
     @WithName("follow-up-summary")
@@ -832,6 +835,53 @@ public interface ThrillhouseConfig {
     @WithName("from-branch")
     @WithDefault("false")
     boolean fromBranch();
+  }
+
+  /**
+   * Opt-in related context (#55). When {@link #enabled()}, the review reads a few repository files
+   * the diff refers to but does not change, and shows the review call the parts of them the changed
+   * code uses, as read-only context. The candidates are found without a model call, from the import
+   * lines and the type names in the diff; one call on the concise model picks at most {@link
+   * #maxFiles()} of them; the findings that name one of those files carry its excerpt to the
+   * verifier. Off by default: it adds one model call, one repository listing and up to {@link
+   * #maxFiles()} file reads per review, and prompt tokens to every review call.
+   */
+  interface RelatedContextConfig {
+    /** Lower bound accepted for {@link #maxFiles()}. */
+    int MIN_MAX_FILES = 1;
+
+    /** Upper bound accepted for {@link #maxFiles()}. */
+    int MAX_MAX_FILES = 10;
+
+    /**
+     * The fewest calls {@code REVIEW_MAX_AI_CALLS} must allow with this on: the selection call, one
+     * review call and the summary call.
+     */
+    int MIN_AI_CALLS = 3;
+
+    /**
+     * Show the review code the diff refers to but does not change: callers' contracts, interfaces,
+     * validators. One more call per review, on the concise model, picks the files. Requires {@code
+     * REVIEW_MAX_AI_CALLS} of 3 or more. See <a
+     * href="https://github.com/devops-thiago/ThrillhouseBot#related-context">Related context</a>.
+     *
+     * <p>No file outside the pull request is read for this unless it is {@code true}. The call is
+     * counted in {@code REVIEW_MAX_AI_CALLS} and metered by the spend ceiling; any failure leaves
+     * the review as it is with this off.
+     */
+    @WithDefault("false")
+    boolean enabled();
+
+    /**
+     * Related files read per review ({@value #MIN_MAX_FILES}–{@value #MAX_MAX_FILES}); the
+     * selection call picks at most this many.
+     *
+     * <p>The section is also capped at a fixed share of the per-call input budget ({@code
+     * DiffBudgetPlanner.RELATED_CONTEXT_BUDGET_SHARE}), whatever this is set to.
+     */
+    @WithName("max-files")
+    @WithDefault("4")
+    int maxFiles();
   }
 
   /**

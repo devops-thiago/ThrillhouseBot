@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
+import dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TicketContextPrompts;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -81,19 +82,22 @@ public class ReviewPromptAssembler {
   /**
    * The opt-in, per-review sections the orchestrator resolves before assembly, each the unfenced
    * text its resolver built or blank when there is none: the CI-failure list (#59, {@link
-   * CiFailureContextResolver}), the linked issues (#58, {@link TicketContextResolver}) and the
-   * learnings (#38, {@link ReviewLearnings#promptSection}). One record rather than an overload per
-   * section, so a new section is one component and every caller is visible to the compiler.
+   * CiFailureContextResolver}), the linked issues (#58, {@link TicketContextResolver}), the
+   * learnings (#38, {@link ReviewLearnings#promptSection}) and the related context (#55, {@link
+   * RelatedContext#section}). One record rather than an overload per section, so a new section is
+   * one component and every caller is visible to the compiler.
    */
-  record TrailingContext(String ciFailures, String linkedIssues, String learnings) {
+  record TrailingContext(
+      String ciFailures, String linkedIssues, String learnings, String relatedContext) {
 
     /** No opt-in section: the review as it is with every feature off. */
-    static final TrailingContext NONE = new TrailingContext("", "", "");
+    static final TrailingContext NONE = new TrailingContext("", "", "", "");
 
     TrailingContext {
       ciFailures = ciFailures == null ? "" : ciFailures;
       linkedIssues = linkedIssues == null ? "" : linkedIssues;
       learnings = learnings == null ? "" : learnings;
+      relatedContext = relatedContext == null ? "" : relatedContext;
     }
 
     boolean hasLinkedIssues() {
@@ -107,17 +111,18 @@ public class ReviewPromptAssembler {
   }
 
   /**
-   * Assembles the prompt inputs with the opt-in sections in {@code extra}. All three ride the
+   * Assembles the prompt inputs with the opt-in sections in {@code extra}. All of them ride the
    * review call's trailing guidance, so every batch carries them and the planner counts them in the
    * shared overhead with the rest of that slot; the linked issues also ride the summary call's
    * guidance (with a different request), counted in its clamp, and when they are present the
    * bug-fix efficacy section drops its own copy of the linked issues' text.
    *
-   * <p>Order in the review call's slot, fixed and pinned by a test: CI failures, then linked
-   * issues, then learnings, then the repository instructions. Evidence about this commit comes
-   * first, then what the change is meant to do, then the repository's standing maintainer guidance
-   * — learnings next to the instructions they refine. Each section is fenced separately with its
-   * own request above its fence, so none can read as part of another.
+   * <p>Order in the review call's slot, fixed and pinned by a test: CI failures, then the related
+   * context, then linked issues, then learnings, then the repository instructions. Evidence about
+   * this commit and the code around it comes first, then what the change is meant to do, then the
+   * repository's standing maintainer guidance — learnings next to the instructions they refine.
+   * Each section is fenced separately with its own request above its fence, so none can read as
+   * part of another.
    */
   AiReviewService.PromptInputs assemble(
       ReviewContextLoader.ReviewContext ctx,
@@ -155,9 +160,11 @@ public class ReviewPromptAssembler {
                             combineSections(
                                 ciFailuresSection(ciFailures),
                                 combineSections(
-                                    linkedIssuesSection(
-                                        TicketContextPrompts.REVIEW_REQUEST, linkedIssues),
-                                    learningsSection(extra.learnings()))))))),
+                                    relatedContextSection(extra.relatedContext()),
+                                    combineSections(
+                                        linkedIssuesSection(
+                                            TicketContextPrompts.REVIEW_REQUEST, linkedIssues),
+                                        learningsSection(extra.learnings())))))))),
             // Global instructions first, then the scopes that matched a file in this PR — the
             // scoped blocks read as refinements of the project-wide rules, not replacements.
             combineSections(
@@ -300,6 +307,20 @@ public class ReviewPromptAssembler {
       return "";
     }
     return PrReviewPrompts.LEARNINGS_REQUEST + "\n\n" + PromptTemplateEscaper.fence(learnings);
+  }
+
+  /**
+   * The related-context request plus the excerpts (#55) — empty when the feature is off, the diff
+   * refers to no file outside it, or nothing could be read. The excerpts are repository text, so
+   * they are fenced and framed as data, and the request travels with them or not at all.
+   */
+  static String relatedContextSection(String relatedContext) {
+    if (relatedContext == null || relatedContext.isBlank()) {
+      return "";
+    }
+    return RelatedContextPrompts.REVIEW_REQUEST
+        + "\n\n"
+        + PromptTemplateEscaper.fence(relatedContext);
   }
 
   /**

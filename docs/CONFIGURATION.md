@@ -225,6 +225,13 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 |---|---|---|---|
 | `REVIEW_PATCH_COVERAGE_ENABLED`<br>`thrillhousebot.review.patch-coverage.enabled` | Tell the review which added lines the repository's own coverage report never ran. Needs `coverage-artifact` in `.github/thrillhousebot.yml` (see [Repository configuration](https://github.com/devops-thiago/ThrillhouseBot#repository-configuration)). | boolean | `false` |
 
+## `thrillhousebot.review.related-context`
+
+| Variable | Description | Type | Default |
+|---|---|---|---|
+| `REVIEW_RELATED_CONTEXT_ENABLED`<br>`thrillhousebot.review.related-context.enabled` | Show the review code the diff refers to but does not change: callers' contracts, interfaces, validators. One more call per review, on the concise model, picks the files. Requires `REVIEW_MAX_AI_CALLS` of 3 or more. See [Related context](https://github.com/devops-thiago/ThrillhouseBot#related-context). | boolean | `false` |
+| `REVIEW_RELATED_CONTEXT_MAX_FILES`<br>`thrillhousebot.review.related-context.max-files` | Related files read per review (1–10); the selection call picks at most this many. | integer | `4` |
+
 ## `thrillhousebot.review.security-scan`
 
 | Variable | Description | Type | Default |
