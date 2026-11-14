@@ -361,6 +361,50 @@ class DiffLineResolverBothSidesTest {
       assertEquals(List.of(kept), head.asked);
     }
 
+    /**
+     * #1361: two changed files share the short path. The anchor is outside both patches and only in
+     * the second file's head, so presence reads both, in path order, each once.
+     */
+    @Test
+    void aShortPathMatchingTwoChangedFilesReadsBothHeadFiles() {
+      var first = "a/util/H.java";
+      var second = "b/util/H.java";
+      var head =
+          new RecordingHeadFiles(
+              Map.of(first, List.of("p();", "q2();"), second, List.of("x();", "y();", "z();")));
+      var resolver =
+          new DiffLineResolver(
+              Map.of(first, "@@ -2 +2 @@\n-q();\n+q2();", second, "@@ -3 +3 @@\n-q();\n+z();"),
+              List.of(first, second),
+              head);
+
+      assertTrue(resolver.isFindingPresent("util/H.java", "x();\ny();"));
+      assertEquals(List.of(first, second), head.asked);
+      assertFalse(resolver.isFindingPresent("util/H.java", "gone();"));
+    }
+
+    @Test
+    void aRemovalUnderAShortPathIsPresentWhileEitherMatchingHeadFileLacksIt() {
+      var first = "a/util/H.java";
+      var second = "b/util/H.java";
+      var patches = Map.of(first, "@@ -1 +1 @@\n-x();\n+y();", second, "@@ -1 +1 @@\n-x();\n+y();");
+      var restoredInOne =
+          new DiffLineResolver(
+              patches,
+              List.of(first, second),
+              new RecordingHeadFiles(
+                  Map.of(first, List.of("y();", "old();"), second, List.of("y();"))));
+      var restoredInBoth =
+          new DiffLineResolver(
+              patches,
+              List.of(first, second),
+              new RecordingHeadFiles(
+                  Map.of(first, List.of("y();", "old();"), second, List.of("old();"))));
+
+      assertTrue(restoredInOne.isFindingPresent("util/H.java", "old();", Side.LEFT));
+      assertFalse(restoredInBoth.isFindingPresent("util/H.java", "old();", Side.LEFT));
+    }
+
     @Test
     void aRunCutOffByTheEndOfTheFileIsNotPresent() {
       var endsInABlank = Map.of(FILE, List.of("a();", ""));

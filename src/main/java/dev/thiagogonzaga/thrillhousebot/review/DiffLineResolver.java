@@ -32,6 +32,7 @@ import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 import java.util.function.ToIntFunction;
+import java.util.stream.Stream;
 
 /**
  * Maps AI-reported file line numbers to lines that exist in the PR diff — required for GitHub
@@ -184,8 +185,7 @@ public final class DiffLineResolver {
         file, FileSide::hasRightText, patch -> !patch.rightRuns(anchorLines).isEmpty())) {
       return true;
     }
-    boolean inHeadFile =
-        headFileLines(file).filter(lines -> holdsRun(lines, anchorLines)).isPresent();
+    boolean inHeadFile = headFileLines(file).anyMatch(lines -> holdsRun(lines, anchorLines));
     if (inHeadFile) {
       Log.infof(
           "A finding's anchor on %s is outside the patch's context but in the head file; it is"
@@ -198,22 +198,29 @@ public final class DiffLineResolver {
   private boolean isRemovalPresent(String file, List<Predicate<String>> anchorLines) {
     return presentInFileOrVariant(
             file, FileSide::hasLeftText, patch -> !patch.removedRuns(anchorLines).isEmpty())
-        || headFileLines(file).filter(lines -> !holdsRun(lines, anchorLines)).isPresent();
+        || headFileLines(file).anyMatch(lines -> !holdsRun(lines, anchorLines));
   }
 
   /**
-   * {@code file}'s lines at the head commit, read only for a file the pull request changes and
-   * whose patch leaves it in place; empty for a removed file, a path no patch resolves, or a file
-   * that cannot be read.
+   * The lines at the head commit of each changed file {@code file} names, read lazily and only for
+   * a file whose patch leaves it in place; none for a removed file, a path no patch resolves, or a
+   * file that cannot be read. An exact path names that file. A shortened path names every changed
+   * file it is a variant of, in path order, as the patch check scans every variant (#1361): a
+   * deletion-only patch is not a candidate, and when two files match, the anchor may be in either.
    */
-  private Optional<List<String>> headFileLines(String file) {
-    // The same variant rule the presence check uses: a deletion-only patch that shares a suffix
-    // with the file is not a second candidate, so it never hides the one to read.
-    String key = byFile.containsKey(file) ? file : uniqueVariant(file, FileSide::hasRightText);
-    if (key == null || !byFile.get(key).hasLines()) {
-      return Optional.empty();
-    }
-    return headFiles.lines(key);
+  private Stream<List<String>> headFileLines(String file) {
+    var keys =
+        byFile.containsKey(file)
+            ? Stream.of(file)
+            : byFile.entrySet().stream()
+                .filter(
+                    entry ->
+                        entry.getValue().hasRightText() && FilePaths.same(file, entry.getKey()))
+                .map(Map.Entry::getKey)
+                .sorted();
+    return keys.filter(key -> byFile.get(key).hasLines())
+        .map(headFiles::lines)
+        .flatMap(Optional::stream);
   }
 
   /**
