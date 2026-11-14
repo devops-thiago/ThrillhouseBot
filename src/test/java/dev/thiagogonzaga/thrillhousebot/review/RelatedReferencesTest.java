@@ -186,7 +186,7 @@ class RelatedReferencesTest {
                     changed(
                         "app/api/views.py",
                         "+from . import (",
-                        "+    schemas,",
+                        "+    schemas,  # see render(page)",
                         "+    forms as f,",
                         "+)",
                         "+from app.core import (security,",

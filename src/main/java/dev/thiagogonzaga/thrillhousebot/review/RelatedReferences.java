@@ -233,9 +233,12 @@ final class RelatedReferences {
         if (opening.find()) {
           openFrom = opening.group(1);
           text = opening.group(2);
-        } else if (openFrom != null && text.indexOf(')') >= 0) {
-          text = text.substring(0, text.indexOf(')'));
-          closes = true;
+        } else if (openFrom != null) {
+          // A trailing comment may hold a parenthesis of its own; only one that ends the code
+          // closes the import.
+          var code = text.replaceFirst("#.*$", "").stripTrailing();
+          closes = code.endsWith(")");
+          text = closes ? code.substring(0, code.length() - 1) : code;
         }
       }
       var line = openFrom == null ? text : openFrom + " " + text.strip();
