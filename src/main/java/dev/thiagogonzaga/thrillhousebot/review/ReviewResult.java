@@ -51,6 +51,9 @@ public record ReviewResult(
     // findings. Not part of findings(), which stays this round's set for the verdict, the check
     // run and the inline comments.
     List<Finding> openPreviousFindings) {
+
+  private static final String STATUS_SUPERSEDED = "superseded";
+
   public ReviewResult {
     findings = List.copyOf(findings);
     previousStatuses = List.copyOf(previousStatuses);
@@ -475,7 +478,7 @@ public record ReviewResult(
    */
   public boolean hasSupersededPrevious() {
     return previousStatuses.stream()
-        .anyMatch(s -> !s.fromEarlierRound() && "superseded".equalsIgnoreCase(s.status()));
+        .anyMatch(s -> !s.fromEarlierRound() && STATUS_SUPERSEDED.equalsIgnoreCase(s.status()));
   }
 
   /**
@@ -519,7 +522,7 @@ public record ReviewResult(
    * earlier rounds', each defect once (#1318).
    */
   public long supersededPreviousCount() {
-    return previousCount("superseded");
+    return previousCount(STATUS_SUPERSEDED);
   }
 
   /**
@@ -1181,7 +1184,7 @@ public record ReviewResult(
      */
     public boolean closesEarlierRound() {
       return fromEarlierRound()
-          && ("resolved".equalsIgnoreCase(status) || "superseded".equalsIgnoreCase(status));
+          && ("resolved".equalsIgnoreCase(status) || STATUS_SUPERSEDED.equalsIgnoreCase(status));
     }
 
     /** The same status under another note. */

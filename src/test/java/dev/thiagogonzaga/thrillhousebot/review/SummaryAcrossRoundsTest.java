@@ -1923,11 +1923,17 @@ class SummaryAcrossRoundsTest {
     patches =
         Map.of(
             doc,
-            "@@ -0,0 +9,2 @@\n+| `LIFTPASS_PASSBACK_WINDOW` | Passback window. | 120 |\n"
-                + "+| `LIFTPASS_GATE_API_URL` | Base URL of the gate controller API. | |",
+            """
+            @@ -0,0 +9,2 @@
+            +| `LIFTPASS_PASSBACK_WINDOW` | Passback window. | 120 |
+            +| `LIFTPASS_GATE_API_URL` | Base URL of the gate controller API. | |\
+            """,
             store,
-            "@@ -0,0 +38,2 @@\n+var sql = \"WHERE holder = '\" + holder + \"'\";\n"
-                + "+sql += \" AND zones LIKE '%\" + zone + \"%'\";");
+            """
+            @@ -0,0 +38,2 @@
+            +var sql = "WHERE holder = '" + holder + "'";
+            +sql += " AND zones LIKE '%" + zone + "%'";\
+            """);
     var injection =
         new ReviewResponse.Finding(
             "critical",

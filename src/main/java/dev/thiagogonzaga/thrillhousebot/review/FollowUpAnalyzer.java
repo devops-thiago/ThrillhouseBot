@@ -4360,8 +4360,11 @@ public class FollowUpAnalyzer {
     }
     var sb =
         new StringBuilder(
-            "\nRaised in earlier rounds and still open, in files changed since — report each in"
-                + " previous_findings_status under its number and key:\n");
+            """
+
+            Raised in earlier rounds and still open, in files changed since — report each in \
+            previous_findings_status under its number and key:
+            """);
     for (var id = listing.effective() + 1; id <= findings.size(); id++) {
       appendNumberedEntry(sb, id, findings.get(id - 1));
     }

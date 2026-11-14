@@ -326,10 +326,7 @@ class Pr1315ReplayTest {
             Map.of(),
             finding -> finding == round1Fix404);
     assertEquals("resolved", r2.result().previousStatuses().get(0).status());
-    assertEquals(1, count(r2.delta(), "- **Previous findings resolved:** "));
-    assertEquals(3, count(r2.delta(), "- **New findings this round:** "));
-    assertEquals(9, count(r2.delta(), "- **Previous findings still open:** "));
-    assertSurfacesAgree(r2);
+    assertCounts(r2, 1, 3, 9);
 
     // Round 3 (a6310507): round 1 #3 was fixed (stubMissing now throws GHFileNotFoundException).
     var round3 = read("round3-response.json");
@@ -346,8 +343,6 @@ class Pr1315ReplayTest {
     assertEquals(List.of(round1StubsJaxRs), r3.result().earlierRoundCloses("resolved"));
     assertEquals(List.of(round1StubsJaxRs), r3.stored().closedEarlierRound());
     // ...and leaves the still-open count: round 2's nine and round 2's own three, less it.
-    assertEquals(1, count(r3.delta(), "- **Previous findings resolved:** "));
-    assertEquals(11, count(r3.delta(), "- **Previous findings still open:** "));
     // #1317: round 3 #1 restates round 1 #7 (the same four resolvers), so it is not posted again,
     // and round 1 #5's double-check item is carried by round 3's inline copy, counted once.
     assertFalse(
@@ -361,8 +356,7 @@ class Pr1315ReplayTest {
         r3.result().openPreviousFindings().stream()
             .anyMatch(f -> f.title().equals(round1CacheAsserts.title())),
         "round 1 #5 is counted as the round-3 finding that replaced it");
-    assertEquals(4, count(r3.delta(), "- **New findings this round:** "));
-    assertSurfacesAgree(r3);
+    assertCounts(r3, 1, 4, 11);
 
     // Round 4 (d8f86021): only RepoSettingsResolver.java changed. The stored answer, keyed.
     var stored3 = r3.stored().findings();
@@ -401,9 +395,14 @@ class Pr1315ReplayTest {
     assertTrue(
         r4.result().openPreviousFindings().stream()
             .anyMatch(f -> f.title().startsWith("Caching tests had their API-call verifies")));
-    assertEquals(1, count(r4.delta(), "- **Previous findings resolved:** "));
-    assertEquals(1, count(r4.delta(), "- **New findings this round:** "));
-    assertEquals(14, count(r4.delta(), "- **Previous findings still open:** "));
-    assertSurfacesAgree(r4);
+    assertCounts(r4, 1, 1, 14);
+  }
+
+  /** The round's delta counts, and every surface agreeing with them. */
+  private static void assertCounts(Round round, int resolved, int raised, int stillOpen) {
+    assertEquals(resolved, count(round.delta(), "- **Previous findings resolved:** "));
+    assertEquals(raised, count(round.delta(), "- **New findings this round:** "));
+    assertEquals(stillOpen, count(round.delta(), "- **Previous findings still open:** "));
+    assertSurfacesAgree(round);
   }
 }

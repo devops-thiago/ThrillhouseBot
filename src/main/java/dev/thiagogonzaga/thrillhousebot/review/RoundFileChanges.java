@@ -82,8 +82,7 @@ final class RoundFileChanges implements DiffLineResolver.RoundChanges {
    * rounds' heads cannot be told: a history whose heads do not line up with its responses, findings
    * carried from a run that stood down (they join a round that has no single head), or no head.
    *
-   * @param roundHeads each prior round's head, newest first, beside the prior responses
-   * @param roundCount how many prior responses the review read
+   * @param rounds the prior rounds the review read
    */
   static DiffLineResolver.RoundChanges of(
       GitHubPullRequestClient prClient,
@@ -91,14 +90,24 @@ final class RoundFileChanges implements DiffLineResolver.RoundChanges {
       String owner,
       String repo,
       String head,
-      List<String> roundHeads,
-      int roundCount,
-      boolean carried) {
-    if (carried || roundHeads.size() != roundCount || head == null || head.isBlank()) {
+      Rounds rounds) {
+    if (rounds.carried()
+        || rounds.heads().size() != rounds.count()
+        || head == null
+        || head.isBlank()) {
       return DiffLineResolver.RoundChanges.NONE;
     }
-    return new RoundFileChanges(prClient, auth, owner, repo, head, roundHeads);
+    return new RoundFileChanges(prClient, auth, owner, repo, head, rounds.heads());
   }
+
+  /**
+   * The prior rounds a review read.
+   *
+   * @param heads each prior round's head, newest first, beside the prior responses
+   * @param count how many prior responses the review read
+   * @param carried whether findings were carried from a run that stood down
+   */
+  record Rounds(List<String> heads, int count, boolean carried) {}
 
   @Override
   public FileChange since(int round, String path) {

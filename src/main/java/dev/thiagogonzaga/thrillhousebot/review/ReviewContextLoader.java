@@ -569,9 +569,8 @@ public class ReviewContextLoader {
             req.owner(),
             req.repo(),
             req.commitSha(),
-            priorCommitShas,
-            priorAiResponseJsons.size(),
-            !carried.isEmpty());
+            new RoundFileChanges.Rounds(
+                priorCommitShas, priorAiResponseJsons.size(), !carried.isEmpty()));
     Supplier<DiffLineResolver> lineResolverSupplier =
         memoize(() -> new DiffLineResolver(patchesByFile, changedPaths, headFiles, roundChanges));
     var hasContext = !priorAiResponseJsons.isEmpty();

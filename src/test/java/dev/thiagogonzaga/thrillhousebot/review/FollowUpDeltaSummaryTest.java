@@ -106,11 +106,13 @@ class FollowUpDeltaSummaryTest {
 
     assertTrue(
         body.contains(
-            "- **Previous findings resolved:** 0\n"
-                + "- **Previous findings superseded (targeted code left the diff):** 2\n"
-                + "  - `src/Gone.java:4` — Removed handler still logs the token\n"
-                + "  - `src/Old.java:9` — Older finding whose code left\n"
-                + "- **Previous findings still open:** 1\n"),
+            """
+            - **Previous findings resolved:** 0
+            - **Previous findings superseded (targeted code left the diff):** 2
+              - `src/Gone.java:4` — Removed handler still logs the token
+              - `src/Old.java:9` — Older finding whose code left
+            - **Previous findings still open:** 1
+            """),
         body);
     var lines = List.of(body.split("\n", -1));
     var end = FollowUpDeltaSummary.endOfSection(lines, 0);

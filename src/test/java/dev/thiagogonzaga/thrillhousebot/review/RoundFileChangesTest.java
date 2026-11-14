@@ -44,7 +44,12 @@ class RoundFileChangesTest {
 
   private DiffLineResolver.RoundChanges changes(String... heads) {
     return RoundFileChanges.of(
-        prClient, "auth", "o", "r", HEAD, Arrays.asList(heads), heads.length, false);
+        prClient,
+        "auth",
+        "o",
+        "r",
+        HEAD,
+        new RoundFileChanges.Rounds(Arrays.asList(heads), heads.length, false));
   }
 
   private void compares(String base, CompareResponse response) {
@@ -159,10 +164,22 @@ class RoundFileChangesTest {
     var heads = List.of(ROUND);
     var none = DiffLineResolver.RoundChanges.NONE;
 
-    assertSame(none, RoundFileChanges.of(prClient, "a", "o", "r", HEAD, heads, 2, false));
-    assertSame(none, RoundFileChanges.of(prClient, "a", "o", "r", HEAD, heads, 1, true));
-    assertSame(none, RoundFileChanges.of(prClient, "a", "o", "r", null, heads, 1, false));
-    assertSame(none, RoundFileChanges.of(prClient, "a", "o", "r", " ", heads, 1, false));
+    assertSame(
+        none,
+        RoundFileChanges.of(
+            prClient, "a", "o", "r", HEAD, new RoundFileChanges.Rounds(heads, 2, false)));
+    assertSame(
+        none,
+        RoundFileChanges.of(
+            prClient, "a", "o", "r", HEAD, new RoundFileChanges.Rounds(heads, 1, true)));
+    assertSame(
+        none,
+        RoundFileChanges.of(
+            prClient, "a", "o", "r", null, new RoundFileChanges.Rounds(heads, 1, false)));
+    assertSame(
+        none,
+        RoundFileChanges.of(
+            prClient, "a", "o", "r", " ", new RoundFileChanges.Rounds(heads, 1, false)));
     assertEquals(FileChange.UNKNOWN, none.since(0, "src/A.java"));
   }
 
