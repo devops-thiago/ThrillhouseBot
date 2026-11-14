@@ -73,7 +73,7 @@ class FindingVerificationServiceTest {
   private FindingVerificationService serviceWith(ReviewTokenLedger ledger) {
     var mapper = new ObjectMapper();
     return new FindingVerificationService(
-        verifier,
+        KeyEchoingVerifier.around(verifier),
         config,
         mapper,
         ledger,
@@ -3244,5 +3244,108 @@ class FindingVerificationServiceTest {
 
     assertFalse(rendered.contains("cited_location"), rendered);
     assertFalse(rendered.contains("context_evidence"), rendered);
+  }
+
+  // --- #1322: a verdict names its candidate by id and by the candidate's key
+
+  private static String keyOf(ReviewResponse.Finding finding) {
+    return FindingVerificationService.candidateKey(finding);
+  }
+
+  /** The service reading the verifier's answer as it is, with no key added to a keyless verdict. */
+  private FindingVerificationService serviceReadingVerdictsAsWritten() {
+    var mapper = new ObjectMapper();
+    return new FindingVerificationService(
+        verifier,
+        config,
+        mapper,
+        tokenLedger,
+        new TruncatedResponseSalvager(mapper),
+        TestResponseCaps.defaults());
+  }
+
+  @Test
+  void eachCandidateIsShownWithItsKey() throws Exception {
+    var only = finding("high", "high", "Unescaped splice");
+
+    var rendered =
+        service.renderCandidates(List.of(only), FindingVerificationService.FindingEvidence.NONE);
+
+    assertEquals(
+        dev.thiagogonzaga.thrillhousebot.review.SuggestionFormatter.findingKey(
+            "src/Main.java", 10, "Unescaped splice"),
+        keyOf(only));
+    assertTrue(rendered.contains("\"key\" : \"" + keyOf(only) + "\""), rendered);
+  }
+
+  @Test
+  void swappedVerdictIdsRejectAndDowngradeNeitherFinding() {
+    var real = finding("critical", "high", "Real defect");
+    var noise = finding("high", "high", "Speculative");
+    ReviewResponse original = response(real, noise);
+    // The rejection written for #2 and the downgrade for #1, each under the other's id but each
+    // still echoing the key of the finding it judged.
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                "{\"verdicts\": [{\"id\": 1, \"key\": \""
+                    + keyOf(noise)
+                    + "\", \"verdict\": \"rejected\", \"reason\": \"idiom\"},"
+                    + " {\"id\": 2, \"key\": \""
+                    + keyOf(real)
+                    + "\", \"verdict\": \"downgraded\", \"risk\": \"low\", \"confidence\":"
+                    + " \"low\", \"reason\": \"minor\"}]}"));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertKeptUnscreened(original, result);
+    assertEquals(List.of(new VerificationCoverage(2, 0)), reported);
+  }
+
+  @Test
+  void aVerdictWithNoKeyOrAKeyFromAnotherRoundLeavesItsCandidateUnscreened() {
+    var first = finding("critical", "high", "Missing null check");
+    var second = finding("high", "high", "Unbounded retry");
+    ReviewResponse original = response(first, second);
+    // A candidate of an earlier verification call, same file and line, another title.
+    var earlier = finding("high", "high", "Missing null check in the old loop");
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                "{\"verdicts\": [{\"id\": 1, \"verdict\": \"rejected\", \"reason\": \"fp\"},"
+                    + " {\"id\": 2, \"key\": \""
+                    + keyOf(earlier)
+                    + "\", \"verdict\": \"rejected\", \"reason\": \"fp\"}]}"));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result =
+        serviceReadingVerdictsAsWritten()
+            .verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertKeptUnscreened(original, result);
+    assertEquals(List.of(new VerificationCoverage(2, 0)), reported);
+  }
+
+  @Test
+  void aMismatchedVerdictBeforeTheCandidatesOwnDoesNotHideIt() {
+    var only = finding("critical", "high", "Missing null check");
+    ReviewResponse original = response(only);
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                "{\"verdicts\": [{\"id\": 1, \"key\": \"DEADBEEF\", \"verdict\": \"rejected\","
+                    + " \"reason\": \"fp\"}, {\"id\": 1, \"key\": \" "
+                    + keyOf(only).toUpperCase(java.util.Locale.ROOT)
+                    + " \", \"verdict\": \"confirmed\", \"reason\": \"real\"}]}"));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertSame(original, result, "the verdict naming the candidate confirms it");
+    assertEquals(List.of(new VerificationCoverage(1, 1)), reported);
   }
 }

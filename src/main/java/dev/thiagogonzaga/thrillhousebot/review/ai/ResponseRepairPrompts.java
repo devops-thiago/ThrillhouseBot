@@ -75,8 +75,8 @@ public final class ResponseRepairPrompts {
             - description: detailed explanation
             - suggestion_old: the exact current code to replace, or absent
             - suggestion_new: the exact fixed code, or absent
-            Each previous_findings_status entry is {"id": <integer>, "status": "resolved" |
-            "unresolved" | "justified", "note": "..."}.
+            Each previous_findings_status entry is {"id": <integer>, "key": "...", "status":
+            "resolved" | "unresolved" | "justified", "note": "..."}.
             "findings" is [] when the answer holds no finding; never omit it.
             """;
 

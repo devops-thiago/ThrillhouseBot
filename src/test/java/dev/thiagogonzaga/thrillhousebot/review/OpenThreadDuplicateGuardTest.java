@@ -414,7 +414,10 @@ class OpenThreadDuplicateGuardTest {
             Set.of(),
             List.of(offByOne, pagination, offByOne));
 
-    assertTrue(context.startsWith("1. [HIGH] " + READING + ":5 — " + quadratic.title()), context);
+    assertTrue(
+        context.startsWith(
+            ReviewContextLoaderTest.listed(1, "HIGH", READING, 5, quadratic.title())),
+        context);
     assertTrue(
         context.contains(
             "Still open from earlier rounds, each already posted on its own thread — do NOT raise"

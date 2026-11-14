@@ -454,13 +454,16 @@ public final class FindingVerifierPrompts {
   public static final String RESPONSE_SCHEMA =
       """
             Response schema:
-            {"verdicts": [{"id": <finding id>, "verdict": "confirmed" | "downgraded" | "rejected",
+            {"verdicts": [{"id": <finding id>, "key": "<finding key>",
+            "verdict": "confirmed" | "downgraded" | "rejected",
             "risk": "critical" | "high" | "medium" | "low",
             "confidence": "high" | "medium" | "low", "reason": "<one short sentence>",
             "suggestion": "keep" | "replace" | "drop", "suggestion_new": "<corrected code, only
             with replace>", "cut": ["<a sentence copied exactly from the description>"]}]}
 
-            Include exactly one verdict per candidate finding, keyed by its "id". For
+            Include exactly one verdict per candidate finding, keyed by its "id", with the
+            candidate's "key" copied beside it; a verdict whose key is not its candidate's is
+            discarded. For
             "confirmed", repeat the original risk and confidence. Leave out "suggestion" for a
             finding with no suggestion_new, and "cut" when nothing is to be cut.
             """;

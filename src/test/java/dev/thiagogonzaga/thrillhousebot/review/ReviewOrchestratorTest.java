@@ -9697,7 +9697,13 @@ class ReviewOrchestratorTest {
                     List.of(),
                     List.of(
                         new ReviewResponse.PreviousFindingStatus(
-                            1, "unresolved", "the guard is still gone")),
+                            1,
+                            "unresolved",
+                            "the guard is still gone",
+                            SuggestionFormatter.findingKey(
+                                VERIFIED_BY_SUPERSEDED_RUN.file(),
+                                VERIFIED_BY_SUPERSEDED_RUN.line(),
+                                VERIFIED_BY_SUPERSEDED_RUN.title()))),
                     null));
 
         assertFalse(orchestrator.review(requestFor("abcdefgh")));

@@ -35,6 +35,7 @@ import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerifier;
+import dev.thiagogonzaga.thrillhousebot.review.ai.KeyEchoingVerifier;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.SummaryVerificationService;
@@ -503,7 +504,7 @@ class ModelSuppliedTextInLogLinesTest {
             aiOk("{\"verdicts\": [{\"id\": 1, \"verdict\": \"rejected\", \"reason\": \"fp\"}]}"));
     var service =
         new FindingVerificationService(
-            verifier,
+            KeyEchoingVerifier.around(verifier),
             config,
             mapper,
             mock(ReviewTokenLedger.class),

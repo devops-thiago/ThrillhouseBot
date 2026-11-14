@@ -1,0 +1,81 @@
+{
+  "findings": [
+    {
+      "risk": "medium",
+      "confidence": "low",
+      "file": "src/main/java/dev/thiagogonzaga/thrillhousebot/github/ProjectStackResolver.java",
+      "line": 145,
+      "title": "A fresh installation-client repository lookup now runs inside every candidate-path loop",
+      "description": "The migration replaced the single pre-fetched auth header with a per-iteration repository lookup, and the lookup is performed inside each resolver's candidate loop, so one repository fetch now happens per probed path or issue instead of once per resolve. In ProjectStackResolver.resolve the loop calls fetchManifestSection per manifest path (\"fetchManifestSection(owner, repo, path, defaultBranch, installationId).ifPresent(sections::add);\"), and fetchManifestSection opens with \"clientProvider.getInstallationClient(installationId).getRepository(owner + \"/\" + repo);\". The same shape appears in InstructionsResolver.resolve (\"for (String path : fallbackChain) { ... clientProvider.getInstallationClient(installationId).getRepository(owner + \"/\" + repo);\"), in RepoSettingsResolver.resolve via fetchAndParse (inside \"for (String path : CONFIG_FILE_CHAIN)\" at RepoSettingsResolver.java around line 178), and in GitHubIssuesProvider.read at GitHubIssuesProvider.java around line 549, where every candidate issue number issues its own getRepository call before getIssue \u2014 the migration previously never issued a repository-metadata call at all. hub4j's GitHub.getRepository is a per-invocation API request rather than a cached handle (worth confirming against the quarkus-github-app hub4j client if in doubt), so a review pays up to roughly 30 extra API round-trips against the installation's rate limit (manifest probing, the two config candidates, the instructions fallback chain, and up to MAX_CANDIDATES linked issues). Fetch the GHRepository handle once per resolve (once per candidate issue read) before the loop and pass it into the per-path/per-issue calls; the file-missing and read-failure semantics already catch the same exception types either way.",
+      "suggestion_old": "      var repository =",
+      "suggestion_new": ""
+    },
+    {
+      "risk": "medium",
+      "confidence": "high",
+      "file": "src/test/java/dev/thiagogonzaga/thrillhousebot/github/ProjectStackResolverTest.java",
+      "line": 320,
+      "title": "Cache tests no longer observe API-call counts, so they cannot distinguish caching from refetch",
+      "description": "shouldCacheStackAndNotHitApiOnSecondCall kept its name but lost every assert that made it meaningful: the removed lines were the only observation of API traffic (\"// One probe per manifest path on the first call only\" / \"verify(prClient, times(ProjectStackResolver.MANIFEST_PATHS.size())) ...\"). What remains is \"var first = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);\" followed by \"var second = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);\" and \"assertEquals(first, second);\" \u2014 with a deterministic stub, a second uncached resolve re-probes the same paths and returns the identical string, so this assertion passes with or without any cache. productionConstructorShouldResolveWithSystemClock (around line 350) lost both its second resolve and its verify in the same hunk. A resolver whose cache break is never exercised passes this suite; the verify against the new collaborator would restore the check, e.g. verify(repository, times(ProjectStackResolver.MANIFEST_PATHS.size())).getFileContent(anyString(), anyString()); after the two resolves in shouldCacheStackAndNotHitApiOnSecondCall.",
+      "suggestion_old": "    var first = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);\n    var second = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);\n\n    assertEquals(first, second);\n  }",
+      "suggestion_new": "    var first = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);\n    var second = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);\n\n    assertEquals(first, second);\n    verify(repository, times(ProjectStackResolver.MANIFEST_PATHS.size()))\n        .getFileContent(anyString(), anyString());\n  }"
+    },
+    {
+      "risk": "medium",
+      "confidence": "high",
+      "file": "src/test/java/dev/thiagogonzaga/thrillhousebot/github/ProjectStackResolverTest.java",
+      "line": 359,
+      "title": "productionConstructor comment promises a cached second call the test no longer makes",
+      "description": "The test still claims, \"// The freshly cached entry is served on the next call (System clock is within TTL)\", but this diff deleted the very next-call code beneath that comment: \"- productionResolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);\" and the verify block were removed, leaving the comment followed directly by the closing brace. A reader trusting the comment would believe the test exercises the cached second resolve when it does not; either the call and a verify must come back, or the comment must go.",
+      "suggestion_old": "    assertTrue(stack.contains(\"Maven artifacts: a\"));\n    // The freshly cached entry is served on the next call (System clock is within TTL)\n  }",
+      "suggestion_new": "    assertTrue(stack.contains(\"Maven artifacts: a\"));\n    // The freshly cached entry is served on the next call (System clock is within TTL)\n    productionResolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);\n    verify(repository, times(ProjectStackResolver.MANIFEST_PATHS.size()))\n        .getFileContent(anyString(), anyString());\n  }"
+    },
+    {
+      "risk": "medium",
+      "confidence": "high",
+      "file": "src/test/java/dev/thiagogonzaga/thrillhousebot/github/RepoSettingsResolverTest.java",
+      "line": 848,
+      "title": "Caching tests had their API-call verifies removed, leaving non-discriminating assertions",
+      "description": "Four tests in the Caching and FailSoft-adjacent contract lost the only assertions that could fail: cachesPerRepositoryAndRefetchesAfterTheTtl (around line 848) now ends with \"resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);\" after the TTL bump with no verify, though an uncached refetch would also just return gen/** again; negativeResultIsCachedBrieflyThenRetried (~883) calls resolve three times with no verify and no cache observation; and aReadableButUnusableConfigIsCachedLikeAnyOtherAnswer (~921) replaced its verifies with the bare comment \"// configured file was the only one read\" while asserting the same EMPTY value both rounds. That last test's own javadoc line \u2014 \"\\u007b@code Fetched\\u007d javadoc's \\\"cacheable\\\" is a tested property rather than a claim.\" \u2014 is now false in this same file, because the call-count observation that tested it was deleted directly beneath the javadoc. aReadableButUnusableConfigIsHeldForTheFullTtlNotTheNegativeOne (~946) likewise lost the negative-TTL vs full-TTL distinction, which was only observable through API-call counts. A resolver that never caches (or never retries after the negative window) passes all four tests; restoring verifies against the new collaborator, e.g. verify(repository, times(1)).getFileContent(YML, DEFAULT_BRANCH); after the first resolve in cachesPerRepositoryAndRefetchesAfterTheTtl, would restore the discriminating power.",
+      "suggestion_old": "      assertEquals(\n          java.util.List.of(\"gen/**\"),\n          resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID).ignoredFiles());",
+      "suggestion_new": null
+    },
+    {
+      "risk": "medium",
+      "confidence": "high",
+      "file": "src/test/java/dev/thiagogonzaga/thrillhousebot/github/RepoSettingsResolverTest.java",
+      "line": 773,
+      "title": "undecodableContentDegradesToEmpty now stubs a read failure, not undecodable content",
+      "description": "The test keeps the name that promised base64-undecodability while its stub now covers a different path: \"org.mockito.Mockito.doThrow(new RuntimeException(\\\"bad\\\")).when(bad).getContent();\" is a content read that throws, and production no longer decodes anything on this side \u2014 RepoSettingsResolver.fetchAndParse states \"// hub4j's getContent() already decodes the base64 payload.\" right before reading the string. The assertion \"assertEquals(RepoSettings.EMPTY, assertDoesNotThrow(RepoSettingsResolver.this::resolve));\" passes through the read-failure catch (READ_FAILED) whether or not any undecodable-content handling exists, so the behavior the name promises is not what is being verified; there is no way for hub4j to hand back undecodable base64 at this layer at all. The same runtime-failure-on-getContent scenario is already covered more accurately by runtimeExceptionOnReadIsTreatedAsReadFailed and ioExceptionOnReadIsTreatedAsReadFailed, so renaming this test to describe the read-failure path (or folding it into one of those) is the fix.",
+      "suggestion_old": "    @Test",
+      "suggestion_new": ""
+    },
+    {
+      "risk": "low",
+      "confidence": "low",
+      "file": "src/main/java/dev/thiagogonzaga/thrillhousebot/github/RepoSettingsResolver.java",
+      "line": 191,
+      "title": "Dead 404 classification keyed on a JAX-RS exception the new client cannot throw",
+      "description": "Inside the RuntimeException catch: \"if (e instanceof jakarta.ws.rs.NotFoundException) {\\n      log.debug(\\\"Repository config file not found: {}\\\", path);\\n      return Fetched.ABSENT;\\n    }\". This PR removed every REST client from this path \u2014 getInstallationClient/getRepository/hub4j's getFileContent replaced the JAX-RS clients \u2014 and the catch two blocks down documents the actual 404 signal: \"// hub4j signals a missing file with FileNotFoundException (an IOException).\" with \"catch (java.io.FileNotFoundException e)\" returning ABSENT. Nothing remaining on this path (the Quarkiverse client provider and its hub4j calls, and snakeyaml parsing) produces a jakarta.ws.rs.NotFoundException, so the instanceof can never be true. It is unreachable leftover from the client migration; a reader trusting it would believe JAX-RS 404s still arrive here. Removing the branch is behavior-neutral; it misleads rather than misbehaves, but a maintainer migrating the next resolver should not copy it.",
+      "suggestion_old": "      if (e instanceof jakarta.ws.rs.NotFoundException) {",
+      "suggestion_new": ""
+    }
+  ],
+  "previous_findings_status": [
+    {
+      "id": 1,
+      "status": "unresolved",
+      "note": "shouldCacheNegativeResultForSeparateRepos still stubs one shared repository mock for every lookup and still expects a missing result for repo B; the deleted repo-B-positive assertions were not restored, so per-repository keying remains undistinguishable."
+    },
+    {
+      "id": 2,
+      "status": "unresolved",
+      "note": "shouldSkipManifestsThatDecodeToBlankContent still stubs doThrow(new java.io.IOException(\"bad\")).when(bad).getContent() under the unchanged MIME-decoder comment; production reads hub4j's decoded content directly, so the named blank-decode behavior is still not what the test exercises."
+    },
+    {
+      "id": 3,
+      "status": "unresolved",
+      "note": "The stale 'contents endpoint can answer without an inline payload' comment still sits over a whole-file null stub, the duplicate nullFileIsTreatedAsAbsent test stubs the identical call identically, and the removed Base64 path the comment describes is still gone."
+    }
+  ]
+}

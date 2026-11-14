@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /** #1079: the titles and statuses a failed answer holds, read without a parser. */
@@ -71,6 +72,14 @@ class AnswerKeysTest {
     assertFalse(AnswerKeys.of("{\"findings\": [{\"title\": \"x\"}]").readable());
     assertFalse(AnswerKeys.of("{\"findings\": []}]}").readable());
     assertFalse(AnswerKeys.of("{\"title\": \"x\\").readable());
+    assertFalse(AnswerKeys.of("{\"findings\": [{\"line\": 12").readable());
+  }
+
+  @Test
+  void aNumberWithAnExponentIsReadWhole() {
+    var keys = AnswerKeys.of("{\"findings\": [{\"title\": \"A\", \"line\": 1E+2}]}");
+
+    assertEquals(List.of(Map.of("title", "A", "line", "1E+2")), keys.findings());
   }
 
   @Test
@@ -109,19 +118,41 @@ class AnswerKeysTest {
   }
 
   @Test
-  void titleValuesAreReadStringByStringAtAnyDepth() {
+  void eachElementKeepsItsOwnStringAndNumberFields() {
+    // #1322: the file, line and id a repaired answer is held to.
+    var keys =
+        AnswerKeys.of(
+            """
+            {"findings": [
+              {"file": "a.py", "line": 12, "title": "A", "example": {"file": "b.py", "line": 9},
+               "lines": [3, 4], "ok": true, "description": "uses {\\"line\\": 7}",},
+              {"title": "B", "line": -2.5e1, "file": "c.py"}],
+             "previous_findings_status": [{"id": 2, "key": "e0d70f6d", "status": "resolved"},
+               {"id": 1, "status": "unresolved"}]}
+            """);
+
+    assertTrue(keys.readable());
     assertEquals(
-        List.of("A", "inner", "B"),
-        AnswerKeys.titleValues(
-            "{\"findings\": [{\"title\": \"A\", \"description\": \"e.g. {\\\"title\\\": \\\"x\\\"}\","
-                + " \"meta\": {\"title\" : \"inner\"}}, {\"title\": \"B\", \"note\": \"cut"));
+        List.of(
+            Map.of("file", "a.py", "line", "12", "title", "A", "description", "uses {\"line\": 7}"),
+            Map.of("title", "B", "line", "-2.5e1", "file", "c.py")),
+        keys.findings());
     assertEquals(
-        List.of("A"),
-        AnswerKeys.titleValues("{\"title\": 5, \"name\": \"title\", \"title\": \"A\"}"),
-        "a title that is no string, and \"title\" as a value, hold no title");
-    assertEquals(
-        List.of("A", "B"), AnswerKeys.titleValues("[{\"title\": \"A\"}, {\"title\": \"B\\"));
-    assertEquals(List.of(), AnswerKeys.titleValues("{\"title\": "));
-    assertEquals(List.of(), AnswerKeys.titleValues("{\"title\" "));
+        List.of(
+            Map.of("id", "2", "key", "e0d70f6d", "status", "resolved"),
+            Map.of("id", "1", "status", "unresolved")),
+        keys.statusEntries());
+  }
+
+  @Test
+  void aBareArrayOfFindingsKeepsItsFieldsAndNothingDeeperIsAnElement() {
+    var keys =
+        AnswerKeys.of(
+            "[{\"file\": \"a.py\", \"line\": 3, \"title\": \"A\"}, [{\"file\": \"x\"}]] {\"summary\":"
+                + " {\"line\": 4}}");
+
+    assertTrue(keys.readable());
+    assertEquals(List.of(Map.of("file", "a.py", "line", "3", "title", "A")), keys.findings());
+    assertEquals(List.of(), keys.statusEntries());
   }
 }
