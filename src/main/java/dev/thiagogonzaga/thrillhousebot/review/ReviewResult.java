@@ -478,42 +478,71 @@ public record ReviewResult(
         .anyMatch(s -> !s.fromEarlierRound() && "superseded".equalsIgnoreCase(s.status()));
   }
 
+  /**
+   * How many previous findings this round gives {@code status}, each defect once (#1319). This is
+   * the one count the summary's status table, the delta section, the review body and the check run
+   * read, so their numbers cannot drift (#1199, #934). An earlier round's close that only repeats
+   * the round's own status on the same defect ({@link EarlierRound#namedByTheRound}) is not counted
+   * a second time; every other status, the effective previous round's and the backstop's, is.
+   */
+  public long previousCount(String status) {
+    return previousStatuses.stream()
+        .filter(s -> status.equalsIgnoreCase(s.status()))
+        .filter(s -> !s.fromEarlierRound() || !s.earlierRound().namedByTheRound())
+        .count();
+  }
+
   /** How many previous findings the model (or the backstop) still reports as unresolved. */
   public long unresolvedPreviousCount() {
-    return previousStatuses.stream().filter(s -> "unresolved".equalsIgnoreCase(s.status())).count();
+    return previousCount("unresolved");
   }
 
   /**
-   * How many previous findings this round closed as fixed. For the effective previous round,
-   * strictly the {@code resolved} status: {@code justified} is a maintainer's decline, not a fix,
-   * and {@code superseded} is an auto-close because the targeted code left the diff — counting
-   * either as "resolved" would overstate what the round actually fixed.
+   * How many previous findings this round closed as fixed: the {@code resolved} statuses, the
+   * effective previous round's and the earlier rounds' ({@link #earlierRoundCloses}), each defect
+   * once ({@link #previousCount}). {@code justified} is a maintainer's decline, not a fix, and
+   * {@code superseded} is an auto-close because the targeted code left the diff; each has its own
+   * count ({@link #supersededPreviousCount}), so resolved, still open, justified and superseded add
+   * up to the findings carried in (#1318).
    *
-   * <p>An earlier round's finding has no model verdict, so its code leaving the diff is what says
-   * it was fixed: its {@code resolved} and {@code superseded} statuses ({@link
-   * #earlierRoundCloses}) count here, and {@code ClosedFindingNames} names each (#1066). The round
-   * records those closes with its response, so a later round no longer carries the finding and does
-   * not count it again (#470). {@link #hasSupersededPrevious} still leaves earlier rounds out: the
-   * summary is edited in place, and a re-post for an older round's close is the noise #470 removed.
+   * <p>The round records an earlier round's close with its response, so a later round no longer
+   * carries the finding and does not count it again (#470). {@link #hasSupersededPrevious} still
+   * leaves earlier rounds out: the summary is edited in place, and a re-post for an older round's
+   * close is the noise #470 removed.
    */
   public long resolvedPreviousCount() {
-    return previousStatuses.stream()
-            .filter(s -> !s.fromEarlierRound() && "resolved".equalsIgnoreCase(s.status()))
-            .count()
-        + earlierRoundCloses().size();
+    return previousCount("resolved");
+  }
+
+  /**
+   * How many previous findings this round superseded, the effective previous round's and the
+   * earlier rounds', each defect once (#1318).
+   */
+  public long supersededPreviousCount() {
+    return previousCount("superseded");
   }
 
   /**
    * The earlier rounds' findings this round closed (#1066): each {@code resolved} (a maintainer's
-   * clear, or its suggested fix landed) or {@code superseded} (its code left the diff) status the
-   * backstop gave a finding raised before the effective previous round, one per defect, in status
-   * order, leaving out a defect the round's own status already names. They are named under the
-   * round's closures.
+   * clear, its suggested fix landed, or the model reported it resolved on a changed file) or {@code
+   * superseded} (its code left the diff) status the backstop gave a finding raised before the
+   * effective previous round, one per defect, in status order, leaving out a defect the round's own
+   * status already names. They are named under the round's closures.
    */
   public List<ReviewResponse.Finding> earlierRoundCloses() {
     return previousStatuses.stream()
         .filter(PreviousFindingStatus::closesEarlierRound)
         .filter(s -> !s.earlierRound().namedByTheRound())
+        .map(s -> s.earlierRound().finding())
+        .toList();
+  }
+
+  /** The {@link #earlierRoundCloses} the backstop gave {@code status}. */
+  public List<ReviewResponse.Finding> earlierRoundCloses(String status) {
+    return previousStatuses.stream()
+        .filter(PreviousFindingStatus::closesEarlierRound)
+        .filter(s -> !s.earlierRound().namedByTheRound())
+        .filter(s -> status.equalsIgnoreCase(s.status()))
         .map(s -> s.earlierRound().finding())
         .toList();
   }

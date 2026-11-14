@@ -77,12 +77,47 @@ class FollowUpDeltaSummaryTest {
   }
 
   @Test
-  void justifiedOrSupersededAloneIsNotADelta() {
-    // Neither is a fix this round: justified is a maintainer's decline, superseded re-posts the
-    // full summary instead (and the publisher then skips this comment anyway).
-    var result = followUp(List.of(), List.of(status(1, "justified"), status(2, "superseded")), 0);
+  void justifiedAloneIsNotADelta() {
+    // A maintainer's decline is not a fix and moves nothing the section counts.
+    var result = followUp(List.of(), List.of(status(1, "justified")), 0);
 
     assertEquals(Optional.empty(), render(result));
+  }
+
+  @Test
+  void supersededFindingsAreCountedAndNamedOnTheirOwnLine() {
+    // #1318: the section left superseded findings out, so its counts did not add up to the
+    // findings carried in and the superseded one was never named.
+    var gone = previous("src/Gone.java", 4, "Removed handler still logs the token");
+    var older = previous("src/Old.java", 9, "Older finding whose code left");
+    var result =
+        followUp(
+            List.of(),
+            List.of(
+                status(1, "superseded"),
+                status(2, "unresolved"),
+                new ReviewResult.PreviousFindingStatus(
+                    0, "superseded", "note", new ReviewResult.EarlierRound(older, null))),
+            0);
+
+    var body =
+        FollowUpDeltaSummary.render(result, List.of(gone, previous("a.java", 1, "open")))
+            .orElseThrow();
+
+    assertTrue(
+        body.contains(
+            "- **Previous findings resolved:** 0\n"
+                + "- **Previous findings superseded (targeted code left the diff):** 2\n"
+                + "  - `src/Gone.java:4` — Removed handler still logs the token\n"
+                + "  - `src/Old.java:9` — Older finding whose code left\n"
+                + "- **Previous findings still open:** 1\n"),
+        body);
+    var lines = List.of(body.split("\n", -1));
+    var end = FollowUpDeltaSummary.endOfSection(lines, 0);
+    assertTrue(lines.get(end - 1).startsWith("- **Previous findings still open:** 1"), body);
+    assertTrue(
+        ClosedFindingNames.reviewBodySection(result, List.of(gone))
+            .startsWith(ClosedFindingNames.REVIEW_BODY_LEAD_IN + "2 previous finding(s)"));
   }
 
   @Test

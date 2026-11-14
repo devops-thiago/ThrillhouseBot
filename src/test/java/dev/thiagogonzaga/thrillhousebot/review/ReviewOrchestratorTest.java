@@ -776,6 +776,54 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void aSummaryOnlyRerunThatSupersededAFindingStillPostsTheBodyThatNamesIt() {
+      // #1318: a superseded finding is its own count now. On a summary-only re-run of a head the
+      // bot already approved, the body is the surface that names the closure, so it is not skipped.
+      var gone = new ReviewResponse.Finding("high", "src/Gone.java", 7, "Gone", "d", null, null);
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.APPROVE,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "superseded", "left the diff")),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth",
+              "owner",
+              "repo",
+              5,
+              "sha",
+              result,
+              resolverFor(fileDiffWithLine("src/Main.java", 10)),
+              true,
+              List.of(gone),
+              "",
+              List.of(
+                  new GitHubReviewClient.ReviewResponse(
+                      1L,
+                      "",
+                      "APPROVED",
+                      "sha",
+                      new GitHubReviewClient.ReviewResponse.User(BOT_LOGIN)))));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertTrue(
+          captor.getValue().body().contains("- `src/Gone.java:7` — Gone"),
+          captor.getValue().body());
+    }
+
+    @Test
     void closedFindingIsNamedWhenNoFindingCouldBeAnchoredAndStaysAboveTheCoverageBanner() {
       // The other with-findings branch: nothing landed inline, so the body already lists the
       // findings GitHub took no thread for. The closure names ride below that list — the body's
@@ -9634,7 +9682,7 @@ class ReviewOrchestratorTest {
 
     /** The verdict passes the carried statuses go through, on the real analyzer. */
     private void delegateVerdictPasses() {
-      when(followUpAnalyzer.supersedeVanished(any(), any(), any(), any(), any()))
+      when(followUpAnalyzer.supersedeVanished(any(), any(), any(), any(), any(), anyInt()))
           .thenAnswer(
               inv ->
                   realAnalyzer.supersedeVanished(
@@ -9642,8 +9690,9 @@ class ReviewOrchestratorTest {
                       inv.getArgument(1),
                       inv.getArgument(2),
                       inv.getArgument(3),
-                      inv.getArgument(4)));
-      when(followUpAnalyzer.addUnreportedVanished(any(), any(), any(), any(), any()))
+                      inv.getArgument(4),
+                      inv.<Integer>getArgument(5)));
+      when(followUpAnalyzer.addUnreportedVanished(any(), any(), any(), any(), any(), anyInt()))
           .thenAnswer(
               inv ->
                   realAnalyzer.addUnreportedVanished(
@@ -9651,7 +9700,8 @@ class ReviewOrchestratorTest {
                       inv.getArgument(1),
                       inv.getArgument(2),
                       inv.getArgument(3),
-                      inv.getArgument(4)));
+                      inv.getArgument(4),
+                      inv.<Integer>getArgument(5)));
       when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any(), any()))
           .thenAnswer(inv -> inv.getArgument(1));
       when(followUpAnalyzer.unresolvedFindings(

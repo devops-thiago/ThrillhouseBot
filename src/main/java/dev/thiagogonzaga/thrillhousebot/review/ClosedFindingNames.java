@@ -66,34 +66,47 @@ final class ClosedFindingNames {
    */
   static final String REVIEW_BODY_LEAD_IN = "ThrillhouseBot closed ";
 
+  /** The status a fixed finding closes under. */
+  static final String RESOLVED = "resolved";
+
+  /** The status a finding whose code left the diff closes under (#1318). */
+  static final String SUPERSEDED = "superseded";
+
   /**
    * The review-body section naming this round's closures, or an empty string when nothing can be
-   * named. Renders the authoritative {@link ReviewResult#resolvedPreviousCount()} above the names,
-   * the same order the delta comment puts them in.
+   * named. Renders the round's resolved and superseded counts together ({@link
+   * ReviewResult#resolvedPreviousCount()}, {@link ReviewResult#supersededPreviousCount()}) above
+   * the names, resolved first, the order the delta comment puts them in.
    */
   static String reviewBodySection(
       ReviewResult result, List<ReviewResponse.Finding> previousFindings) {
-    var bullets = bulletList(result, previousFindings, "");
+    var bullets =
+        bulletList(result, previousFindings, "", RESOLVED)
+            + bulletList(result, previousFindings, "", SUPERSEDED);
     if (bullets.isEmpty()) {
       return "";
     }
     return REVIEW_BODY_LEAD_IN
-        + result.resolvedPreviousCount()
+        + (result.resolvedPreviousCount() + result.supersededPreviousCount())
         + " previous finding(s) this round:\n\n"
         + bullets;
   }
 
   /**
-   * The bullet list naming each finding the {@code resolved} count covers, one {@code path:line} —
-   * title line each at {@code indent}, or an empty string when none can be named.
+   * The bullet list naming each finding the round gave {@code closedAs} ({@link #RESOLVED} or
+   * {@link #SUPERSEDED}), one {@code path:line} — title line each at {@code indent}, or an empty
+   * string when none can be named.
    */
   static String bulletList(
-      ReviewResult result, List<ReviewResponse.Finding> previousFindings, String indent) {
+      ReviewResult result,
+      List<ReviewResponse.Finding> previousFindings,
+      String indent,
+      String closedAs) {
     var previous = previousFindings == null ? List.<ReviewResponse.Finding>of() : previousFindings;
     var named = new ArrayList<String>();
     for (var status : result.previousStatuses()) {
       // An earlier round's status carries id 0, which names no finding here.
-      if (!"resolved".equalsIgnoreCase(status.status())
+      if (!closedAs.equalsIgnoreCase(status.status())
           || status.id() < 1
           || status.id() > previous.size()) {
         continue;
@@ -101,7 +114,7 @@ final class ClosedFindingNames {
       named.add(describe(previous.get(status.id() - 1)));
     }
     // An earlier round's finding carries itself, not an id into the previous round (#1066).
-    result.earlierRoundCloses().forEach(finding -> named.add(describe(finding)));
+    result.earlierRoundCloses(closedAs).forEach(finding -> named.add(describe(finding)));
     if (named.isEmpty()) {
       return "";
     }

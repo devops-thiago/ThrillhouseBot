@@ -59,7 +59,16 @@ import java.util.regex.Pattern;
  *       restatement on the paired doc or code file (#956) or on the file that calls the code
  *       (#972);
  *   <li>in any file, one finding's description cites the other's {@code file:line} and names a
- *       symbol from its title, and the titles share two content words or a defect class.
+ *       symbol from its title, and the titles share two content words or a defect class;
+ *   <li>in the same file, both quote one line of code of at least {@link
+ *       FollowUpAnalyzer#MIN_FIX_LINE_CHARS} characters in their {@code suggestion_old}, and the
+ *       titles share two content words or a defect class: the same flagged code, raised again at a
+ *       line that moved (#1319);
+ *   <li>in any file, both name the same set of sites, at least {@value #SHARED_SITES} long code
+ *       names ({@link #SITE_NAME}) in their titles and descriptions, those shared being at least
+ *       three quarters of the shorter list, and the titles share two content words or a defect
+ *       class: one defect reported again from another of the files it spans, as #1315's "repository
+ *       lookup in every candidate loop" was on two of the four resolvers it names (#1317).
  * </ul>
  *
  * <p>The two arms across files never pair a finding on a test file with one on the code it tests. A
@@ -81,6 +90,20 @@ final class DefectIdentity {
 
   /** Content words two same-line titles must share when neither names a common identifier. */
   static final int SHARED_TITLE_WORDS = 2;
+
+  /** Long code names two findings must both name before they name one set of sites (#1317). */
+  static final int SHARED_SITES = 3;
+
+  /** The fewest characters a code name needs to count as a site: short names recur by chance. */
+  static final int MIN_SITE_NAME = 12;
+
+  /**
+   * A code name of two words or more in {@code camelCase} or {@code PascalCase}, such as {@code
+   * getRepository} or {@code RepoSettingsResolver}: the methods, tests and types a finding names as
+   * the places its defect sits. Bounded like {@link #IDENTIFIER_SHAPES}.
+   */
+  static final Pattern SITE_NAME =
+      Pattern.compile("\\b([A-Za-z][a-z0-9]{0,63}(?:[A-Z][a-z0-9]{1,63}){1,16})\\b");
 
   /**
    * Identifier shapes in a finding title, in order of preference where two start at the same
@@ -165,7 +188,10 @@ final class DefectIdentity {
     if (ReviewDiffFormatter.isTestFile(a.file()) != ReviewDiffFormatter.isTestFile(b.file())) {
       return false;
     }
-    return sharesSubject(a, b) || citesLocation(a, b) || citesLocation(b, a);
+    return sharesSubject(a, b)
+        || citesLocation(a, b)
+        || citesLocation(b, a)
+        || namesSameSites(a, b);
   }
 
   /** The arms that need both findings in one file. */
@@ -187,7 +213,78 @@ final class DefectIdentity {
             || namesIdentifierOf(b.title(), a))) {
       return true;
     }
-    return SummarySurfaceDeduplicator.titlesRestate(a.title(), b.title());
+    return SummarySurfaceDeduplicator.titlesRestate(a.title(), b.title()) || sharesAnchor(a, b);
+  }
+
+  /**
+   * Whether two findings in one file quote the same line of flagged code, one of at least {@link
+   * FollowUpAnalyzer#MIN_FIX_LINE_CHARS} non-whitespace characters, and their titles share {@value
+   * #SHARED_TITLE_WORDS} content words or a defect class (#1319). The anchor follows the code when
+   * a later push moves it, where the line number does not: a round that raises a finding again five
+   * lines down still quotes the same code.
+   */
+  private static boolean sharesAnchor(Finding a, Finding b) {
+    var lines = anchorLines(a.suggestionOld());
+    lines.retainAll(anchorLines(b.suggestionOld()));
+    return !lines.isEmpty() && titlesAgree(a.title(), b.title());
+  }
+
+  /** The stripped lines of {@code anchor} long enough to identify the code they quote. */
+  private static Set<String> anchorLines(String anchor) {
+    var lines = new HashSet<String>();
+    if (anchor == null) {
+      return lines;
+    }
+    for (var line : anchor.split("\n", -1)) {
+      var stripped = line.strip();
+      if (stripped.codePoints().filter(c -> !Character.isWhitespace(c)).count()
+          >= FollowUpAnalyzer.MIN_FIX_LINE_CHARS) {
+        lines.add(stripped);
+      }
+    }
+    return lines;
+  }
+
+  /**
+   * Whether two findings name the same set of sites (#1317): each names at least {@value
+   * #SHARED_SITES} {@link #sites}, at least {@value #SHARED_SITES} of them are named by both and
+   * make up three quarters of the shorter list, and the titles share {@value #SHARED_TITLE_WORDS}
+   * content words or a defect class. The same defect reported once from each of the files it spans
+   * names the same methods and types, while two defects that merely touch the same class rarely
+   * share three of its long names and most of their own.
+   */
+  private static boolean namesSameSites(Finding a, Finding b) {
+    var sitesA = sites(a);
+    var sitesB = sites(b);
+    var shared = new HashSet<>(sitesA);
+    shared.retainAll(sitesB);
+    return shared.size() >= SHARED_SITES
+        && shared.size() * 4 >= Math.min(sitesA.size(), sitesB.size()) * 3
+        && titlesAgree(a.title(), b.title());
+  }
+
+  /**
+   * The long code names ({@link #SITE_NAME}, at least {@link #MIN_SITE_NAME} characters) a
+   * finding's title and own description name, lowercased.
+   */
+  static Set<String> sites(Finding finding) {
+    var names = new HashSet<String>();
+    var text =
+        Objects.toString(finding.title(), "") + " " + Objects.toString(ownDescription(finding), "");
+    var matcher = SITE_NAME.matcher(text);
+    while (matcher.find()) {
+      var name = matcher.group(1);
+      if (name.length() >= MIN_SITE_NAME) {
+        names.add(name.toLowerCase(Locale.ROOT));
+      }
+    }
+    return names;
+  }
+
+  /** Whether two titles share {@value #SHARED_TITLE_WORDS} content words or a defect class. */
+  private static boolean titlesAgree(String title, String otherTitle) {
+    return sharedTitleWords(title, otherTitle) >= SHARED_TITLE_WORDS
+        || sharesClass(title, otherTitle);
   }
 
   /**

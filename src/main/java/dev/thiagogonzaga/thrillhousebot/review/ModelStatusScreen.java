@@ -33,12 +33,18 @@ import java.util.Map;
  *       a key of another finding or round, or an id that lists nothing is dropped and logged. The
  *       finding is then unreported, so the approve backstop holds it as it holds any finding the
  *       model left out: a swapped id can neither close nor keep open the wrong finding.
- *   <li>A {@code resolved} entry stands only when the finding's flagged code is no longer in the
- *       diff ({@link FollowUpAnalyzer#isStillPresent}) or its suggested fix landed beside it
- *       ({@link FollowUpAnalyzer#suggestedFixLanded}). Otherwise it is rewritten to {@code
- *       unresolved} under {@link #CONTRADICTED_NOTE} and the contradiction is logged. A finding
- *       with no file cannot be placed, so its {@code resolved} is held too.
+ *   <li>A {@code resolved} entry is held to the finding's file as it stands since the round that
+ *       raised the finding (#1319). It stands when the file changed since then: the fix may sit
+ *       anywhere in the file, not only on the flagged line (#1364). It is rewritten to {@code
+ *       unresolved} under {@link #CONTRADICTED_NOTE}, and the contradiction logged, when the file
+ *       is unchanged. When that cannot be told (no comparison of the two heads), it stands only
+ *       when the flagged code is no longer in the diff ({@link FollowUpAnalyzer#isStillPresent}) or
+ *       its suggested fix landed beside it ({@link FollowUpAnalyzer#suggestedFixLanded}), the rule
+ *       #1322 set. A finding with no file cannot be placed, so its {@code resolved} is held.
  * </ol>
+ *
+ * <p>The ids are the listing's ({@link PriorListing}): the effective previous round's findings,
+ * then the older rounds' findings listed after them.
  *
  * <p>Stored rounds are never screened: they carry no key, and the replay that reads them trusts
  * what was screened when they were written.
@@ -47,18 +53,18 @@ final class ModelStatusScreen {
 
   /** The note a {@code resolved} the code contradicts is held {@code unresolved} under. */
   static final String CONTRADICTED_NOTE =
-      "reported resolved, but the flagged code is still in the diff and the suggested fix is not";
+      "reported resolved, but the finding's file is unchanged or its flagged code is still in the"
+          + " diff and the suggested fix is not";
 
   private static final String STATUS_RESOLVED = "resolved";
   private static final String STATUS_UNRESOLVED = "unresolved";
 
-  private final List<ReviewResponse.Finding> previous;
+  private final PriorListing listing;
   private final DiffLineResolver lineResolver;
   private final Map<String, String> renameTargets;
 
   /**
-   * @param previous the findings the prompt listed by number, in order (the effective previous
-   *     round, {@link FollowUpAnalyzer#effectivePreviousFindings})
+   * @param previous the findings the prompt listed by number, in order, raised by rounds not known
    * @param lineResolver the current diff
    * @param renameTargets each renamed file's new path, blank for a content-identical rename
    */
@@ -66,7 +72,17 @@ final class ModelStatusScreen {
       List<ReviewResponse.Finding> previous,
       DiffLineResolver lineResolver,
       Map<String, String> renameTargets) {
-    this.previous = List.copyOf(previous);
+    this(PriorListing.of(previous), lineResolver, renameTargets);
+  }
+
+  /**
+   * @param listing the findings the prompt listed by number, each with the round that raised it
+   * @param lineResolver the current diff, and the files changed since each prior round
+   * @param renameTargets each renamed file's new path, blank for a content-identical rename
+   */
+  ModelStatusScreen(
+      PriorListing listing, DiffLineResolver lineResolver, Map<String, String> renameTargets) {
+    this.listing = listing;
     this.lineResolver = lineResolver;
     this.renameTargets = Map.copyOf(renameTargets);
   }
@@ -94,7 +110,8 @@ final class ModelStatusScreen {
       if (finding == null) {
         continue;
       }
-      screened.add(contradicted(status, finding) ? held(status, finding) : status);
+      var round = listing.rounds().get(status.id() - 1);
+      screened.add(contradicted(status, finding, round) ? held(status, finding) : status);
     }
     return List.copyOf(screened);
   }
@@ -102,6 +119,7 @@ final class ModelStatusScreen {
   /** The finding {@code status} names by id and echoed key, or {@code null} after logging why. */
   private ReviewResponse.Finding listedFinding(ReviewResponse.PreviousFindingStatus status) {
     var id = status.id();
+    var previous = listing.findings();
     if (id < 1 || id > previous.size()) {
       Log.infof(
           "Dropping the status for previous finding #%d: no finding is listed under that id", id);
@@ -126,24 +144,34 @@ final class ModelStatusScreen {
     return finding;
   }
 
-  /** Whether {@code status} is a {@code resolved} the code does not bear out. */
+  /**
+   * Whether {@code status} is a {@code resolved} the code does not bear out, for a finding the
+   * prior round at {@code round} (newest first) raised.
+   */
   private boolean contradicted(
-      ReviewResponse.PreviousFindingStatus status, ReviewResponse.Finding finding) {
+      ReviewResponse.PreviousFindingStatus status, ReviewResponse.Finding finding, int round) {
     if (!STATUS_RESOLVED.equalsIgnoreCase(status.status())) {
       return false;
     }
     if (finding.file() == null) {
       return true;
     }
-    return FollowUpAnalyzer.isStillPresent(finding, lineResolver, renameTargets)
-        && !FollowUpAnalyzer.suggestedFixLanded(finding, lineResolver, renameTargets);
+    return switch (lineResolver.fileChangeSince(round, finding.file())) {
+      case CHANGED -> false;
+      case UNCHANGED -> true;
+      case UNKNOWN ->
+          FollowUpAnalyzer.isStillPresent(finding, lineResolver, renameTargets)
+              && !FollowUpAnalyzer.suggestedFixLanded(finding, lineResolver, renameTargets);
+    };
   }
 
   private static ReviewResponse.PreviousFindingStatus held(
       ReviewResponse.PreviousFindingStatus status, ReviewResponse.Finding finding) {
     Log.infof(
         "Holding previous finding #%d '%s' (%s:%d) unresolved: the model reported it resolved,"
-            + " but its flagged code is still in the diff and its suggested fix did not land",
+            + " but the content check contradicts it (its file is unchanged since the round that"
+            + " raised it, or its flagged code is still in the diff and its suggested fix did not"
+            + " land)",
         status.id(),
         LogSafe.oneLine(finding.title()),
         LogSafe.oneLine(finding.file()),

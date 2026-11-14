@@ -72,12 +72,37 @@ public final class DiffLineResolver {
     Optional<List<String>> lines(String path);
   }
 
+  /** Whether a file's content changed since the head an earlier round reviewed (#1319). */
+  public enum FileChange {
+    /** The file holds the same content as at that round's head. */
+    UNCHANGED,
+    /** The file's content differs from that round's head. */
+    CHANGED,
+    /** The comparison could not be made; the content checks decide as they did before. */
+    UNKNOWN
+  }
+
+  /**
+   * Tells whether a file changed since the head an earlier round reviewed (#1319), by the round's
+   * position among the review's prior rounds, newest first, the order the review context holds them
+   * in.
+   */
+  @FunctionalInterface
+  public interface RoundChanges {
+
+    /** Knows nothing: every answer is {@link FileChange#UNKNOWN}. */
+    RoundChanges NONE = (round, path) -> FileChange.UNKNOWN;
+
+    FileChange since(int round, String path);
+  }
+
   /** The review's one parse of every patch (#1321). */
   private final DiffIndex index;
 
   private final Map<String, FileSide> byFile;
   private final Set<String> changedFiles;
   private final HeadFiles headFiles;
+  private final RoundChanges roundChanges;
 
   public DiffLineResolver(Map<String, String> patchesByFile) {
     this(patchesByFile, List.of());
@@ -100,10 +125,24 @@ public final class DiffLineResolver {
    */
   public DiffLineResolver(
       Map<String, String> patchesByFile, Collection<String> changedFiles, HeadFiles headFiles) {
+    this(patchesByFile, changedFiles, headFiles, RoundChanges.NONE);
+  }
+
+  /**
+   * A resolver that also knows, through {@code roundChanges}, which files changed since the head
+   * each earlier round reviewed, so a finding whose file is unchanged since the round that raised
+   * it is held open whatever its anchor reads (#1319).
+   */
+  public DiffLineResolver(
+      Map<String, String> patchesByFile,
+      Collection<String> changedFiles,
+      HeadFiles headFiles,
+      RoundChanges roundChanges) {
     CONSTRUCTION_COUNT.incrementAndGet();
     this.changedFiles = new HashSet<>(changedFiles);
     this.changedFiles.addAll(patchesByFile.keySet());
     this.headFiles = headFiles;
+    this.roundChanges = roundChanges;
     this.index = DiffIndex.ofPatches(patchesByFile);
     this.byFile = new HashMap<>();
     index.files().forEach((file, patch) -> byFile.put(file, FileSide.of(patch)));
@@ -112,6 +151,14 @@ public final class DiffLineResolver {
   /** Every patch of the review, parsed once with both sides. */
   DiffIndex index() {
     return index;
+  }
+
+  /**
+   * Whether {@code file} changed since the head the prior round at {@code round} (newest first)
+   * reviewed (#1319); {@link FileChange#UNKNOWN} when that cannot be told.
+   */
+  public FileChange fileChangeSince(int round, String file) {
+    return file == null ? FileChange.UNKNOWN : roundChanges.since(round, file);
   }
 
   /**
@@ -279,6 +326,19 @@ public final class DiffLineResolver {
                 added.entrySet().stream()
                     .anyMatch(
                         e -> e.getKey() >= from && e.getKey() <= to && e.getValue().equals(line)));
+  }
+
+  /**
+   * Whether every one of {@code lines} (each already stripped) is an added line of {@code file}
+   * anywhere in the current diff (#1319). {@code false} with no lines to look for, or the file in
+   * no single diff entry.
+   */
+  public boolean addsEveryLine(String file, Collection<String> lines) {
+    var key = resolveKey(file, FileSide::hasRightText);
+    if (key == null || lines.isEmpty()) {
+      return false;
+    }
+    return byFile.get(key).added().values().containsAll(lines);
   }
 
   /**

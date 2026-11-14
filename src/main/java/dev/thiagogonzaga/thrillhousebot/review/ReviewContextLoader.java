@@ -31,6 +31,8 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Supplier;
@@ -531,8 +533,6 @@ public class ReviewContextLoader {
     var changedPaths = files.stream().map(GitHubPullRequestClient.FileDiff::filename).toList();
     // #1321: presence reads a changed file at the head when an anchor runs past its patch.
     var headFiles = new HeadFileLines(prClient, auth, req.owner(), req.repo(), req.commitSha());
-    Supplier<DiffLineResolver> lineResolverSupplier =
-        memoize(() -> new DiffLineResolver(patchesByFile, changedPaths, headFiles));
 
     var priorReviews = fetchPriorReviews(auth, req.owner(), req.repo(), req.prNumber());
     // isFirstVisibleReview keys off the summary comment directly, not reviews alone: a first
@@ -561,6 +561,19 @@ public class ReviewContextLoader {
       priorAiResponseJsons = rounds.jsons();
       priorAiResponses = rounds.parsed();
     }
+    // #1319: which files changed since the head each earlier round reviewed, compared on first use.
+    var roundChanges =
+        RoundFileChanges.of(
+            prClient,
+            auth,
+            req.owner(),
+            req.repo(),
+            req.commitSha(),
+            priorCommitShas,
+            priorAiResponseJsons.size(),
+            !carried.isEmpty());
+    Supplier<DiffLineResolver> lineResolverSupplier =
+        memoize(() -> new DiffLineResolver(patchesByFile, changedPaths, headFiles, roundChanges));
     var hasContext = !priorAiResponseJsons.isEmpty();
     // The round this review reports on is the newest prior round that actually raised findings: a
     // round that legitimately found nothing exposes no ids, and treating it as "the previous round"
@@ -601,26 +614,40 @@ public class ReviewContextLoader {
     // Findings the rounds before the effective one left open are listed too, or a round after one
     // that raised something new is shown them as never reported and raises them again (#939).
     List<ReviewResponse.Finding> openEarlier = List.of();
+    var earlierListed = "";
     if (hasContext && !olderAiResponses.isEmpty()) {
+      // #1319: an older round's open finding whose file changed since is numbered for a status;
+      // the unnumbered list keeps the rest.
+      var listing =
+          FollowUpAnalyzer.priorListing(
+              priorAiResponses, lineResolverSupplier, inlineComments, botIdentity);
+      var listed =
+          Collections.newSetFromMap(new IdentityHashMap<ReviewResponse.Finding, Boolean>());
+      listed.addAll(listing.findings());
       openEarlier =
           FollowUpAnalyzer.openEarlierRoundFindings(
-              priorAiResponses,
-              lineResolverSupplier.get(),
-              VerdictBuilder.renameTargets(files),
-              inlineComments,
-              botIdentity);
+                  priorAiResponses,
+                  lineResolverSupplier.get(),
+                  VerdictBuilder.renameTargets(files),
+                  inlineComments,
+                  botIdentity)
+              .stream()
+              .filter(finding -> !listed.contains(finding))
+              .toList();
+      earlierListed = FollowUpAnalyzer.formatEarlierListed(listing);
     }
     String previousFindings =
         hasContext
             ? followUpAnalyzer.buildPreviousFindingsContext(
-                previousFindingsSource,
-                previousResponsePersisted,
-                priorReviews,
-                inlineComments,
-                olderAiResponses,
-                botIdentity,
-                settledPreviousIds,
-                openEarlier)
+                    previousFindingsSource,
+                    previousResponsePersisted,
+                    priorReviews,
+                    inlineComments,
+                    olderAiResponses,
+                    botIdentity,
+                    settledPreviousIds,
+                    openEarlier)
+                + earlierListed
             : "";
 
     var instructions =

@@ -1,0 +1,105 @@
+{
+  "findings": [
+    {
+      "risk": "medium",
+      "confidence": "low",
+      "file": "src/main/java/dev/thiagogonzaga/thrillhousebot/github/RepoSettingsResolver.java",
+      "line": 198,
+      "title": "hub4j signals a 404 with FileNotFoundException (IOException), so missing config files land in the READ_FAILED branch and the negative cache is never written",
+      "description": "The migration keeps the 404/absent distinction on the wrong exception type. The RuntimeException catch now guards the absent case with `if (e instanceof jakarta.ws.rs.NotFoundException)`, but the Quarkiverse GitHub App extension hands you a hub4j `GHRepository`, whose `getFileContent(path, ref)` declares `throws IOException` and signals a missing file with a `FileNotFoundException` subclass (`GHFileNotFoundException`) — it never throws a Jakarta REST exception. So a genuine 404 for `.github/thrillhousebot.yml` falls into `catch (IOException e)` at line 197, which returns `Fetched.READ_FAILED`: the resolver warns on every review (once per candidate path) and, because `READ_FAILED` results are deliberately not cached (the fail-soft rule the tests describe as \"a failure we cannot read is not an answer to cache\"), the negative cache is never written for repos without a config file. That recreates exactly the behavior the file's own history documents as a bug (##481: \"treating them as a 404 pinned 'this repo has no config'\" was the OLD wrong direction; the new structure re-loses \"a real 404 is a real answer and is cached\"). Please verify against the hub4j version resolved by `quarkus-github-app` that `getFileContent` throws `GHFileNotFoundException` on 404; if so, catch it explicitly as an absent answer. The tests keep passing only because `stubMissing` stubs the impossible exception type (see the separate mock finding on RepoSettingsResolverTest).",
+      "suggestion_old": "",
+      "suggestion_new": ""
+    },
+    {
+      "risk": "high",
+      "confidence": "medium",
+      "file": "src/main/java/dev/thiagogonzaga/thrillhousebot/github/InstructionsResolver.java",
+      "line": 113,
+      "title": "InstructionsResolver caches a null-content file and then swallows its own NPE, so later resolves return null instructions from the cache",
+      "description": "Both sibling resolvers changed in this PR guard the null payload; this one lost the guard. The diff's own evidence establishes the GitHub behavior: ProjectStackResolverTest keeps the comment \"Submodules, directories, and oversized files come back without base64 content\", RepoSettingsResolverTest keeps \"The contents endpoint can answer without an inline payload (e.g. an over-size blob); decoding null would NPE, so it must be handled as 'nothing readable here'\", and ProjectStackResolver.java adds `if (content == null || content.isBlank())` plus `if (content == null)`. RepoSettingsResolver mirrors it. InstructionsResolver instead does, unguarded:\n\n        var content = file.getContent();\n        cache.put(cacheKey, new CachedInstructions(content, path, clock.getAsLong() + CACHE_TTL_MS));\n        ...\n        log.info(\"Using instructions file: {} ({} bytes)\", path, content.length());\n\nFor an oversized-but-type-\"file\" entry (`isFile()` is true, `getContent()` is null), the cache is populated with the null content first, then `content.length()` throws an NPE that the broad `catch (RuntimeException | IOException _)` swallows as \"Instructions file not found\". The fallback continues, but the poisoned entry stays live: on the next `resolve` for the same repo within `CACHE_TTL_MS`, the cache hit path returns `Optional.of(new ResolvedInstructions(null, path))`, handing callers null instructions. Both the null and blank cases need to be treated as an unusable candidate before the cache write. Verify that hub4j's `GHContent.getContent()` returns null for such entries (the above comments say the contents API answers without an inline payload).",
+      "suggestion_old": "",
+      "suggestion_new": "        // hub4j's getContent() already decodes the base64 payload.\n        var content = file.getContent();\n        if (content == null || content.isBlank()) {\n          continue;\n        }"
+    },
+    {
+      "risk": "medium",
+      "confidence": "low",
+      "file": "src/test/java/dev/thiagogonzaga/thrillhousebot/github/RepoSettingsResolverTest.java",
+      "line": 72,
+      "title": "Tests stub jakarta.ws.rs.NotFoundException from GHRepository.getFileContent — an exception the real hub4j method cannot throw",
+      "description": "`stubMissing` now reads:\n\n    doThrow(new jakarta.ws.rs.NotFoundException())\n        .when(repository)\n        .getFileContent(path, DEFAULT_BRANCH);\n\nand `theClientsOwn404IsNoConfigAndIsCachedLikeOne` stubs the same exception on every path. The real collaborator is hub4j's `GHRepository`, whose `getFileContent(String, String)` declares `throws IOException` and reports a missing file with a `FileNotFoundException` subclass; it never raises `jakarta.ws.rs.NotFoundException`. Because the stub throws an unchecked exception, the tests compile and pass — but they no longer test the production 404 path at all: `aRealNotFoundIsStillCachedAsNoConfig` (\"the client's 404 is a real answer and is cached\") verifies a code path that only exists for an exception hub4j never emits, which is why the corresponding regression in the catch structure of `RepoSettingsResolver.fetchAndParse` is invisible to the suite. Please confirm the hub4j behavior with the resolved `github-api` version (404 ⇒ `GHFileNotFoundException`, a checked `IOException`) and stub that type instead.",
+      "suggestion_old": "",
+      "suggestion_new": ""
+    },
+    {
+      "risk": "medium",
+      "confidence": "high",
+      "file": "src/test/java/dev/thiagogonzaga/thrillhousebot/github/RepoSettingsResolverTest.java",
+      "line": 865,
+      "title": "cachesAreKeyedPerRepository had its expected value changed to match a stub override, and now verifies nothing",
+      "description": "The test stubs the same call twice:\n\n    stubFile(YML, \"review:\\n  ignored-files:\\n    - \\\"gen/**\\\"\\n\");\n    doReturn(content(\"review:\\n  ignored-files:\\n    - \\\"other/**\\\"\\n\"))\n        .when(repository)\n        .getFileContent(YML, DEFAULT_BRANCH);\n\nIn Mockito the later `doReturn` on the identical method+matchers replaces the first, so the first resolve returns \"other/**\" — and the assertion was changed from `java.util.List.of(\"gen/**\")` to `java.util.List.of(\"other/**\")` instead of the stub order being fixed. Worse, the migration made `setUp` stub `gitHub.getRepository(anyString())` to return one shared `repository` mock regardless of owner/repo, so `resolve(OWNER, \"other\", ...)` hits the same stub and the two resolves produce identical results whether the cache is keyed per repository, keyed globally, or disabled entirely. The test's name promises per-repository keying; it now can no longer detect a cache-key regression. Give `gitHub.getRepository` distinct repository mocks per owner/name (or per-name stubbing) and restore the `gen/**` / `other/**` expectations.",
+      "suggestion_old": "",
+      "suggestion_new": ""
+    },
+    {
+      "risk": "medium",
+      "confidence": "low",
+      "file": "src/test/java/dev/thiagogonzaga/thrillhousebot/github/RepoSettingsResolverTest.java",
+      "line": 853,
+      "title": "Caching tests across this migration dropped their fetch-count assertions, so TTL expiry and refetch regressions now pass silently",
+      "description": "The old tests pinned the fetch counts that prove caching works; the migration deleted them without replacement. In `cachesPerRepositoryAndRefetchesAfterTheTtl` the pair `verify(prClient, times(1)).getFileContent(...)` / `verify(prClient, times(2)).getFileContent(...)` around the TTL advance is gone, so a resolver that never caches (or never expires) still passes — both resolves return the same value. The same happened in `negativeResultIsCachedBrieflyThenRetried` (the post-TTL `resolve` result isn't even assigned or asserted anymore), `aReadableButUnusableConfigIsCachedLikeAnyOtherAnswer` (now just the comment \"// configured file was the only one read\"), `aReadableButUnusableConfigIsHeldForTheFullTtlNotTheNegativeOne`, `theClientsOwn404IsNoConfigAndIsCachedLikeOne`, and in ProjectStackResolverTest's `shouldCacheStackAndNotHitApiOnSecondCall` and `productionConstructorShouldResolveWithSystemClock`. The negative-cache TTLs (CACHE_TTL_MS, NEGATIVE_CACHE_TTL_MS) are exactly the behavior class this PR's history shows has regressed before, so they should keep a count-based assertion — e.g. `verify(repository, times(2)).getFileContent(anyString(), anyString())` after the TTL advance.",
+      "suggestion_old": "",
+      "suggestion_new": ""
+    },
+    {
+      "risk": "medium",
+      "confidence": "high",
+      "file": "docs/SECURITY_MODEL.md",
+      "line": 102,
+      "title": "A git merge-conflict marker was committed into the security model document",
+      "description": "The added text contains a diff3-style conflict label as real document content:\n\n    Organization membership is granted only on GitHub's explicit answer. Optional context and outgoing\n    ||||||| parent of 602b19b (refactor(webhook): adopt Quarkiverse GitHub App extension for webhook entry)\n    `WebhookEvents` runs behind the Quarkiverse GitHub App extension's route, which rejects a\n    request when the signature header is missing or when no secret is configured. The dashboard refuses every login\n    when the App owner cannot be resolved. Optional context and outgoing\n    notifications are off until enabled, and a manual `/review` needs write access\n\nThe `||||||| parent of 602b19b (...)` line is unresolved-conflict residue, and the paragraph is left garbled with \"Optional context and outgoing\" duplicated on both sides of it. The intended merged sentence appears to be: extension route rejects a request when the signature header is missing or no secret is configured, dashboard refuses every login when the App owner cannot be resolved, then \"Optional context and outgoing notifications are off until enabled...\".",
+      "suggestion_old": "",
+      "suggestion_new": "`WebhookEvents` runs behind the Quarkiverse GitHub App extension's route, which rejects a\nrequest when the signature header is missing or when no secret is configured. The dashboard refuses every login\nwhen the App owner cannot be resolved. Optional context and outgoing"
+    },
+    {
+      "risk": "medium",
+      "confidence": "low",
+      "file": "src/main/java/dev/thiagogonzaga/thrillhousebot/github/InstructionsResolver.java",
+      "line": 107,
+      "title": "Each candidate path now re-issues the repository lookup — repeated GitHub API round trips per resolve where one would do",
+      "description": "The new code fetches the repository inside the per-path loop:\n\n    for (String path : fallbackChain) {\n      try {\n        var repository =\n            clientProvider.getInstallationClient(installationId).getRepository(owner + \"/\" + repo);\n\nhub4j's `GitHub.getRepository(name)` eagerly performs `GET /repos/{owner}/{repo}`, so every fallback candidate costs its own API round trip for data that does not vary with the path. For a repo with none of the instruction files, that is 5 chain entries × 1 metadata call per resolve, where one lookup hoisted above the loop suffices. The identical pattern was added in RepoSettingsResolver (`fetchAndParse` calls `getRepository(owner + \"/\" + repo)` per CONFIG_FILE_CHAIN entry) and ProjectStackResolver (per MANIFEST_PATHS entry), and in `GitHubIssuesProvider.read` once per candidate issue (each of up to MAX_CANDIDATES reads re-resolves the repository). Please verify that `GitHub.getRepository` is indeed an eager HTTP call in the resolved hub4j version; if so, hoist the client+repository resolution to once per resolve call. Note the hoist moves a throwing call outside the current per-path try; keep the failure soft by wrapping it once.",
+      "suggestion_old": "",
+      "suggestion_new": ""
+    },
+    {
+      "risk": "medium",
+      "confidence": "high",
+      "file": "src/test/java/dev/thiagogonzaga/thrillhousebot/github/RepoSettingsResolverTest.java",
+      "line": 778,
+      "title": "Feature-disabled check verifies the same mock twice; the migrated authClient assertion has no replacement",
+      "description": "`doesNotFetchAnythingWhenTheFeatureIsDisabled` now reads:\n\n      verifyNoInteractions(repository);\n      verifyNoInteractions(repository);\n\nThe old pair was `verifyNoInteractions(prClient)` + `verifyNoInteractions(authClient)`. The migration replaced both with the identical `repository` check, so the second line is a no-op and nothing asserts that the disabled path leaves the client machinery (`clientProvider` / `gitHub`) untouched. Duplicate line visible verbatim in the diff; restore a second, distinct verification or delete the duplicate.",
+      "suggestion_old": "",
+      "suggestion_new": "      verifyNoInteractions(repository);"
+    },
+    {
+      "risk": "low",
+      "confidence": "high",
+      "file": "CHANGELOG.md",
+      "line": 249,
+      "title": "Webhook-entry changelog bullet duplicated verbatim under a re-opened '### Changed' heading",
+      "description": "The diff adds a new `### Changed` heading immediately followed by a bullet that repeats, word for word, the already-present entry at the end of the previous section:\n\n    - The webhook entry now rides the Quarkiverse GitHub App extension (`io.quarkiverse.githubapp:quarkus-github-app`): it owns the `POST /api/webhook` route, the `X-Hub-Signature-256` check and delivery parsing, and `webhook/WebhookEvents` keeps the existing routing (dedupe, pause, trigger filters, commands, CI rechecks). `WebhookController` and `WebhookVerifier` are gone. Malformed-request answers change to the extension's (`400` for missing/mismatched signature, `500` for a signed non-JSON body, `200` with an empty body on success).\n\nThat text appears twice in the release notes now, and the extra `### Changed` heading is redundant under the section that already contains it. Drop the heading and the duplicated bullet and keep only the three new migration bullets.",
+      "suggestion_old": "",
+      "suggestion_new": ""
+    },
+    {
+      "risk": "low",
+      "confidence": "high",
+      "file": "src/test/java/dev/thiagogonzaga/thrillhousebot/github/InstructionsResolverTest.java",
+      "line": 247,
+      "title": "shouldDecodeMimeWrappedBase64 keeps its MIME-wrapping scaffolding but stubs the unwrapped content",
+      "description": "The test still builds and asserts on a MIME-wrapped payload:\n\n    var wrapped =\n        Base64.getMimeEncoder(60, \"\\n\".getBytes(java.nio.charset.StandardCharsets.UTF_8))\n            .encodeToString(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));\n    assertTrue(wrapped.contains(\"\\n\"));\n\nbut then stubs the resolver with the plain variable: `doReturn(makeFileContent(content)).when(repository).getFileContent(...)`. The wrapped value never reaches the resolver, production no longer MIME-decodes anything (it consumes hub4j's already-decoded string), and the method name claims coverage that no longer exists. The scaffolding is dead; either delete it and rename the test to what it actually verifies, or acknowledge in the name that it now only round-trips decoded content.",
+      "suggestion_old": "",
+      "suggestion_new": "    // hub4j decodes the base64 payload itself, so no MIME wrapping reaches the resolver."
+    }
+  ],
+  "previous_findings_status": []
+}
