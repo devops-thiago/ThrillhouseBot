@@ -2382,6 +2382,32 @@ class FindingPipelineTest {
   }
 
   @Test
+  void aKeyRejectedOnTheSummaryCallKeepsTheFindingsUnderTheCountsOnlySummary() {
+    // #1329/#1359: the summary call stops at the rejection like every other call, but the review
+    // calls are paid for, so the review keeps their findings instead of failing on the summary.
+    var session = persistedSession();
+    var ctx = reviewContext();
+    var template = new AiReviewService.PromptInputs("d", "ctx", "base", "stack", "tests", "", "");
+    var plan = singleBatchPlan(batch("a.java"), List.of());
+    when(aiReviewService.review(eq(session), any()))
+        .thenReturn(new ReviewResponse(List.of(finding("a.java", "A")), List.of(), null));
+    when(aiReviewService.summarize(eq(session), any()))
+        .thenThrow(
+            AiApiKeyRejectedException.classify(
+                    new dev.langchain4j.exception.HttpException(401, "Unauthorized"))
+                .orElseThrow());
+
+    var result =
+        pipeline.run(
+            session, template, ctx, plan, new DiffLineResolver(Map.of()), ReviewEvidence.NONE);
+
+    assertEquals(1, result.findings().size());
+    assertNull(result.summary());
+    assertEquals(SummaryDegradation.SUMMARY_FAILED, plan.summaryDegradation());
+    verify(aiReviewService, times(1)).summarize(eq(session), any());
+  }
+
+  @Test
   void aCallCapOfOneSkipsTheSummaryCallAndSaysSo() {
     // #664: max-ai-calls=1 is spent by the review call, so the summary call — which would be the
     // second — is not made; the findings post under the counts-only summary and the skip is
