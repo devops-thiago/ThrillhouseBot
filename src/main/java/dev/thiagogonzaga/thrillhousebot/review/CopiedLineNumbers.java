@@ -33,7 +33,8 @@ import java.util.regex.Pattern;
  * line the finding cites. The index is built from {@link DiffLineNumbers#annotate} of the very text
  * the call was given, so a number is confirmed only when the quote line is exactly the numbered
  * line the model saw ({@code 843 +code}, {@code 843 code}, or a bare {@code 843} for an empty
- * context line whose trailing spaces were not copied).
+ * context line whose trailing spaces were not copied). A copy that kept the number but dropped the
+ * marker ({@code 843 code}) is confirmed when its code equals that numbered line's code (#1357).
  *
  * <p>{@code suggestion_old} is stripped only when every non-blank line is confirmed in one file
  * section: a numbered line equal to that line of the numbered diff, or an unnumbered removed line
@@ -43,8 +44,9 @@ import java.util.regex.Pattern;
  *
  * <p>{@code suggestion_new} is new code, which no diff line can confirm. Its numbers come off only
  * when the same finding's {@code suggestion_old} was a confirmed copy, and only on lines whose
- * number falls inside that copy's span. Its lines starting with {@code -} or {@code \} are always
- * kept, since in new code they can be content such as a list item.
+ * number falls inside that copy's span, with or without a marker after it. Its lines starting with
+ * {@code -} or {@code \} are always kept, since in new code they can be content such as a list
+ * item.
  */
 final class CopiedLineNumbers {
 
@@ -57,8 +59,18 @@ final class CopiedLineNumbers {
    */
   private static final Pattern NUMBERED = Pattern.compile("(\\d{1,9})(?: ?| [+ ](.*))");
 
-  /** Each section's numbered lines by number and its unnumbered removed lines and markers. */
-  private record Section(Map<Integer, String> numbered, Set<String> unnumbered) {}
+  /**
+   * A numbered line copied without its marker: the number, one space, then code that does not start
+   * with a space, so it is never a context line that kept its marker (#1357).
+   */
+  private static final Pattern UNMARKED = Pattern.compile("(\\d{1,9}) (\\S.*)");
+
+  /**
+   * Each section's numbered lines by number, the code each of them holds, and its unnumbered
+   * removed lines and markers.
+   */
+  private record Section(
+      Map<Integer, String> numbered, Map<Integer, String> code, Set<String> unnumbered) {}
 
   /** The inclusive range of numbers a confirmed {@code suggestion_old} copied. */
   private record Span(int first, int last) {
@@ -88,7 +100,7 @@ final class CopiedLineNumbers {
           current =
               sections.computeIfAbsent(
                   DiffIndex.sectionFilename(line),
-                  k -> new Section(new HashMap<>(), new HashSet<>()));
+                  k -> new Section(new HashMap<>(), new HashMap<>(), new HashSet<>()));
         }
         inBlock = current != null && line.equals(FENCE_OPEN);
       } else if (line.equals(FENCE)) {
@@ -108,7 +120,8 @@ final class CopiedLineNumbers {
     var trimmed = line.stripTrailing();
     var number = NUMBERED.matcher(trimmed);
     if (number.matches()) {
-      section.numbered().put(Integer.parseInt(number.group(1)), trimmed);
+      section.numbered().put(numberOf(number), trimmed);
+      section.code().put(numberOf(number), codeOf(number));
     } else if (isUnnumbered(trimmed)) {
       section.unnumbered().add(trimmed);
     }
@@ -179,15 +192,33 @@ final class CopiedLineNumbers {
       if (trimmed.isEmpty()) {
         continue;
       }
-      var number = NUMBERED.matcher(trimmed);
-      if (number.matches() && trimmed.equals(section.numbered().get(numberOf(number)))) {
-        first = Math.min(first, numberOf(number));
-        last = Math.max(last, numberOf(number));
+      var confirmed = confirmedNumber(section, trimmed);
+      if (confirmed != null) {
+        first = Math.min(first, confirmed);
+        last = Math.max(last, confirmed);
       } else if (!section.unnumbered().contains(trimmed)) {
         return null;
       }
     }
     return first <= last ? new Span(first, last) : null;
+  }
+
+  /**
+   * The number of the section's numbered line that {@code line} copies, with or without its marker,
+   * or {@code null} when it copies none.
+   */
+  private static Integer confirmedNumber(Section section, String line) {
+    var number = NUMBERED.matcher(line);
+    if (number.matches()) {
+      return line.equals(section.numbered().get(numberOf(number))) ? numberOf(number) : null;
+    }
+    var unmarked = UNMARKED.matcher(line);
+    if (!unmarked.matches()) {
+      return null;
+    }
+    return unmarked.group(2).equals(section.code().get(numberOf(unmarked)))
+        ? numberOf(unmarked)
+        : null;
   }
 
   private static int numberOf(Matcher number) {
@@ -201,9 +232,13 @@ final class CopiedLineNumbers {
   private static String strippedOld(String[] lines) {
     var kept = new ArrayList<String>(lines.length);
     for (var line : lines) {
-      var number = NUMBERED.matcher(line.stripTrailing());
+      var trimmed = line.stripTrailing();
+      var number = NUMBERED.matcher(trimmed);
+      var unmarked = UNMARKED.matcher(trimmed);
       if (number.matches()) {
         kept.add(codeOf(number));
+      } else if (unmarked.matches()) {
+        kept.add(unmarked.group(2));
       } else if (line.isBlank()) {
         kept.add(line);
       }
@@ -218,9 +253,13 @@ final class CopiedLineNumbers {
     }
     var lines = quote.split("\n", -1);
     for (int i = 0; i < lines.length; i++) {
-      var number = NUMBERED.matcher(lines[i].stripTrailing());
+      var trimmed = lines[i].stripTrailing();
+      var number = NUMBERED.matcher(trimmed);
+      var unmarked = UNMARKED.matcher(trimmed);
       if (number.matches() && span.holds(numberOf(number))) {
         lines[i] = codeOf(number);
+      } else if (unmarked.matches() && span.holds(numberOf(unmarked))) {
+        lines[i] = unmarked.group(2);
       }
     }
     return String.join("\n", lines);

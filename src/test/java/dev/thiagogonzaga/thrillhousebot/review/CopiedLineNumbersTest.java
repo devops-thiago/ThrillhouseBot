@@ -53,6 +53,38 @@ class CopiedLineNumbersTest {
   }
 
   @Test
+  void aCopyThatDroppedTheMarkerIsStrippedWhenItsCodeMatches() {
+    // #1357: the model kept the number but not the "+" or the context space.
+    assertEquals("int c;", strip("src/A.java", "11 int c;"));
+    assertEquals("int a;", strip("src/A.java", "10 int a;"));
+    assertEquals(
+        "int a;\nint c;\n\nint f;",
+        strip("src/A.java", "10 int a;\n-int b;\n11 +int c;\n14\n15 int f;"));
+  }
+
+  @Test
+  void anUnmarkedCopyWhoseCodeDiffersOrWhoseLineIsMissingIsLeftAsWritten() {
+    for (var quote :
+        new String[] {
+          "11 int x;", // line 11 holds "int c;"
+          "10 int a;\n11 int x;", // one line of the run does not match
+          "99 int c;", // no line 99
+          "1 2" // no line 1
+        }) {
+      var finding = finding("src/A.java", 11, quote, null);
+      assertSame(finding, copied.strip(finding), quote);
+    }
+  }
+
+  @Test
+  void newCodeLosesUnmarkedNumbersInsideTheConfirmedCopyOnly() {
+    var result = copied.strip(finding("src/A.java", 11, "11 int c;", "11 long c;\n9 w;"));
+
+    assertEquals("int c;", result.suggestionOld());
+    assertEquals("long c;\n9 w;", result.suggestionNew());
+  }
+
+  @Test
   void aRunStartingOnARemovedLineKeepsOnlyItsNewSideCode() {
     assertEquals("int c;", strip("src/A.java", "-int b;\n11 +int c;"));
     assertEquals("int a;\nint c;", strip("src/A.java", "10  int a;\n-int b;\n11 +int c;"));
