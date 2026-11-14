@@ -81,7 +81,7 @@ final class RelatedReferences {
    * @param via how the strongest reference to it was found
    * @param referencedBy the changed files that refer to it, at most {@link #MAX_REFERRERS}
    * @param symbols the type or module names the diff uses for it
-   * @param members the member names the referring files' added lines call
+   * @param members the member names the referring files' added lines call on this file
    */
   record Candidate(
       String path, Via via, List<String> referencedBy, List<String> symbols, List<String> members) {
@@ -156,8 +156,12 @@ final class RelatedReferences {
   /** A capitalised identifier with a lower-case letter in it: a type name, not a constant. */
   private static final Pattern TYPE_NAME = Pattern.compile("\\b[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*");
 
-  /** A member called on something: {@code .name(}. */
-  private static final Pattern MEMBER_CALL = Pattern.compile("\\.\\s*([A-Za-z_]\\w{2,})\\s*\\(");
+  /** A member called on something: {@code receiver.name(}, the receiver when it is a name. */
+  private static final Pattern MEMBER_CALL =
+      Pattern.compile("(?:([A-Za-z_]\\w*)\\s*)?\\.\\s*([A-Za-z_]\\w{2,})\\s*\\(");
+
+  /** A receiver shorter than this ({@code db}, {@code it}) is not read as named after a file. */
+  static final int MIN_RECEIVER_CHARS = 3;
 
   /** Before a capital that follows a lower-case letter or digit, or that ends an acronym. */
   private static final Pattern CAMEL_BOUNDARY =
@@ -206,7 +210,7 @@ final class RelatedReferences {
       Index index,
       Map<String, Found> found) {
     var referrer = file.filename();
-    var members = new LinkedHashSet<String>();
+    var calls = new ArrayList<Call>();
     var referred = new LinkedHashSet<Found>();
     var inHunk = false;
     // The "from x import" a parenthesized Python import opened, until its closing parenthesis:
@@ -229,7 +233,8 @@ final class RelatedReferences {
       }
       var closes = false;
       if (language == Language.PYTHON) {
-        var opening = PYTHON_FROM_OPEN.matcher(text);
+        // A trailing comment may hold a parenthesis of its own; it is no part of the name list.
+        var opening = PYTHON_FROM_OPEN.matcher(text.replaceFirst("#.*$", "").stripTrailing());
         if (opening.find()) {
           openFrom = opening.group(1);
           text = opening.group(2);
@@ -258,7 +263,7 @@ final class RelatedReferences {
         referred.add(entry);
       }
       if (added) {
-        collectMembers(line, members);
+        collectCalls(line, calls);
         for (var typed : typeReferences(line, language, referrer, index)) {
           var entry = found.computeIfAbsent(typed.path(), Found::new);
           entry.named(typed.symbol());
@@ -267,13 +272,46 @@ final class RelatedReferences {
         }
       }
     }
-    referred.forEach(entry -> entry.members.addAll(members));
+    // A call belongs to the candidate it was made on, not to every file this one refers to.
+    for (var entry : referred) {
+      calls.stream()
+          .filter(call -> call.madeOn(entry.symbols))
+          .forEach(call -> entry.members.add(call.member()));
+    }
   }
 
-  private static void collectMembers(String line, Set<String> members) {
+  /**
+   * One member call on an added line: the identifier it was made on, or {@code null} when it
+   * follows a call or an expression, the member's name, and the line.
+   */
+  private record Call(String receiver, String member, String line) {
+
+    /**
+     * Whether the call was made on a file known by {@code symbols}: its receiver is one of the
+     * names or a variable named after one ({@code sanitizer} for {@code InputSanitizer}), or it has
+     * no receiver of its own and its line uses one of the names.
+     */
+    boolean madeOn(Set<String> symbols) {
+      for (var symbol : symbols) {
+        if (receiver == null ? line.contains(symbol) : namedAfter(receiver, symbol)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    private static boolean namedAfter(String receiver, String symbol) {
+      var variable = receiver.toLowerCase(Locale.ROOT);
+      var name = symbol.toLowerCase(Locale.ROOT);
+      return variable.length() >= MIN_RECEIVER_CHARS
+          && (name.contains(variable) || variable.contains(name));
+    }
+  }
+
+  private static void collectCalls(String line, List<Call> calls) {
     var matcher = MEMBER_CALL.matcher(line);
-    while (matcher.find() && members.size() < MAX_MEMBERS) {
-      members.add(matcher.group(1));
+    while (matcher.find()) {
+      calls.add(new Call(matcher.group(1), matcher.group(2), line));
     }
   }
 

@@ -204,6 +204,52 @@ class RelatedReferencesTest {
   }
 
   @Test
+  void aFromImportOpenedBeforeATrailingCommentStillReadsItsNames() {
+    var candidates =
+        extract(
+            Set.of("app/api/views.py", "app/core/keys.py", "app/core/__init__.py"),
+            changed(
+                "app/api/views.py",
+                "+from app.core import (  # the validators (all of them)",
+                "+    keys,",
+                "+)"));
+
+    assertEquals(List.of("app/core/keys.py"), paths(candidates));
+  }
+
+  @Test
+  void aMemberCallBelongsOnlyToTheCandidateItWasMadeOn() {
+    var candidates =
+        extract(
+            Set.of(
+                "src/app/web/Handler.java",
+                "src/app/util/InputSanitizer.java",
+                "src/app/util/Limits.java"),
+            changed(
+                "src/app/web/Handler.java",
+                "+import app.util.InputSanitizer;",
+                "+    var id = sanitizer.clean(raw).strip();",
+                "+    if (id.length() > Limits.MAX_ID || db.find(id) == null) return;",
+                "+    Limits.check(id).orElseThrow();",
+                "+    limitsHolder.reset();"));
+
+    assertEquals(
+        List.of("clean"),
+        candidates.stream()
+            .filter(c -> c.path().endsWith("InputSanitizer.java"))
+            .findFirst()
+            .orElseThrow()
+            .members());
+    assertEquals(
+        List.of("check", "orElseThrow", "reset"),
+        candidates.stream()
+            .filter(c -> c.path().endsWith("Limits.java"))
+            .findFirst()
+            .orElseThrow()
+            .members());
+  }
+
+  @Test
   void scriptImportsResolveRelativePathsExtensionsAndIndexFiles() {
     var repository =
         Set.of(

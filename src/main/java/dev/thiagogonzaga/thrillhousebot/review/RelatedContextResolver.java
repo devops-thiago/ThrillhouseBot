@@ -260,8 +260,10 @@ public class RelatedContextResolver {
       return List.of();
     }
     var hits = new TreeSet<Integer>();
-    addHits(lines, declarationOf(candidate.members()), hits, false);
+    // The names first: a member's many matches must not use up the hits before the file's own
+    // declaration is found.
     addHits(lines, wordOf(candidate.symbols()), hits, true);
+    addHits(lines, declarationOf(candidate.members()), hits, false);
     var windows = new ArrayList<int[]>();
     if (hits.isEmpty()) {
       windows.add(new int[] {0, Math.min(lines.size(), HEAD_LINES) - 1});
