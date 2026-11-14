@@ -1113,6 +1113,10 @@ public class ReviewPublisher {
   /** The routes themselves, in preference order. See {@link #postFindingComment}. */
   private Delivery postFindingCommentRoutes(
       CommentTarget target, Finding finding, int findingId, DiffLineResolver lineResolver) {
+    var removed = removedCodeLocation(lineResolver, finding);
+    if (removed.isPresent()) {
+      return postOnRemovedLines(target, finding, findingId, removed.get());
+    }
     var line = lineResolver.resolveRightSideLine(finding.file(), finding.line());
     if (line.isEmpty()) {
       Log.debugf(
@@ -1138,7 +1142,12 @@ public class ReviewPublisher {
     var includeSuggestion = suggestionFits(lineResolver, finding, resolvedLine, range.isPresent());
 
     var rejection =
-        tryPostInlineComment(target, finding, findingId, resolvedLine, range, includeSuggestion);
+        tryPostInlineComment(
+            target,
+            finding,
+            findingId,
+            new InlineAnchor(DiffLineResolver.Side.RIGHT, resolvedLine, range),
+            includeSuggestion);
     if (rejection.isEmpty()) {
       return Delivery.THREADED;
     }
@@ -1149,7 +1158,12 @@ public class ReviewPublisher {
     var reason = first.diagnostics();
     if (includeSuggestion) {
       var withoutSuggestion =
-          tryPostInlineComment(target, finding, findingId, resolvedLine, Optional.empty(), false);
+          tryPostInlineComment(
+              target,
+              finding,
+              findingId,
+              new InlineAnchor(DiffLineResolver.Side.RIGHT, resolvedLine, Optional.empty()),
+              false);
       if (withoutSuggestion.isEmpty()) {
         return Delivery.THREADED;
       }
@@ -1172,6 +1186,57 @@ public class ReviewPublisher {
     Log.warnf(
         "GitHub rejected inline comment for %s:%d (%s) — filing it on the file instead",
         LogSafe.oneLine(finding.file()), finding.line(), reason);
+    return postFileLevelComment(target, finding, findingId);
+  }
+
+  /**
+   * Where {@code finding}'s quote sits among the lines the pull request removes, when it quotes no
+   * right-side code anywhere in the file and its line selects removed lines ({@link
+   * DiffLineResolver#locateRemovedQuote}, #1321); empty otherwise.
+   */
+  private static Optional<DiffLineResolver.RemovedRange> removedCodeLocation(
+      DiffLineResolver lineResolver, Finding finding) {
+    String quote = finding.suggestionOld();
+    if (quote == null
+        || quote.isBlank()
+        || lineResolver.locateQuote(finding.file(), quote, finding.line()).isPresent()) {
+      return Optional.empty();
+    }
+    return lineResolver.locateRemovedQuote(finding.file(), quote, finding.line());
+  }
+
+  /**
+   * Posts a finding about removed code on the removed lines themselves, on the diff's base side
+   * ({@code side: LEFT}, #1321), where the lines it quotes are shown. It carries no suggestion
+   * block: GitHub applies a suggestion to head-side lines only. A refusal other than a throttle
+   * files the finding on the file, as on the right side.
+   */
+  private Delivery postOnRemovedLines(
+      CommentTarget target, Finding finding, int findingId, DiffLineResolver.RemovedRange removed) {
+    var range =
+        removed.startLine() == removed.endLine()
+            ? Optional.<DiffLineResolver.LineRange>empty()
+            : Optional.of(new DiffLineResolver.LineRange(removed.startLine(), removed.endLine()));
+    var rejection =
+        tryPostInlineComment(
+            target,
+            finding,
+            findingId,
+            new InlineAnchor(DiffLineResolver.Side.LEFT, removed.endLine(), range),
+            false);
+    if (rejection.isEmpty()) {
+      return Delivery.THREADED;
+    }
+    if (rejection.get().throttled()) {
+      return throttledOut(finding, rejection.get().diagnostics());
+    }
+    Log.warnf(
+        "GitHub rejected the comment on removed lines %d-%d of %s (%s) — filing it on the file"
+            + " instead",
+        removed.startLine(),
+        removed.endLine(),
+        LogSafe.oneLine(finding.file()),
+        rejection.get().diagnostics());
     return postFileLevelComment(target, finding, findingId);
   }
 
@@ -1302,10 +1367,17 @@ public class ReviewPublisher {
   }
 
   /**
-   * Posts one inline comment. When {@code range} is present the comment spans {@code
-   * start_line}..{@code line} (both RIGHT side); otherwise it anchors to the single {@code line}.
-   * The retry without a suggestion block always passes an empty range — a multi-line span is only
-   * meaningful with a suggestion to apply across it.
+   * Where an inline comment goes: the diff side, the line (the range's last line) and, for a
+   * multi-line comment, the range, whose lines are all on that side.
+   */
+  private record InlineAnchor(
+      DiffLineResolver.Side side, int line, Optional<DiffLineResolver.LineRange> range) {}
+
+  /**
+   * Posts one inline comment. When the anchor's range is present the comment spans {@code
+   * start_line}..{@code line}, both on the anchor's side; otherwise it anchors to the single {@code
+   * line}. On the right side the retry without a suggestion block always passes an empty range — a
+   * multi-line span is only meaningful there with a suggestion to apply across it.
    *
    * <p>Returns empty when the comment landed, and otherwise what GitHub said, so the caller can put
    * the reason in the one line it logs rather than discarding it (#722). A first attempt that fails
@@ -1316,12 +1388,12 @@ public class ReviewPublisher {
       CommentTarget target,
       Finding finding,
       int findingId,
-      int line,
-      Optional<DiffLineResolver.LineRange> range,
+      InlineAnchor anchor,
       boolean includeSuggestion) {
-    int endLine = range.map(DiffLineResolver.LineRange::endLine).orElse(line);
-    Integer startLine = range.map(DiffLineResolver.LineRange::startLine).orElse(null);
-    String startSide = startLine != null ? "RIGHT" : null;
+    int endLine = anchor.range().map(DiffLineResolver.LineRange::endLine).orElse(anchor.line());
+    Integer startLine = anchor.range().map(DiffLineResolver.LineRange::startLine).orElse(null);
+    String side = anchor.side().name();
+    String startSide = startLine != null ? side : null;
     try {
       reviewClient.createPullRequestComment(
           target.auth(),
@@ -1334,7 +1406,7 @@ public class ReviewPublisher {
               suggestionFormatter.formatReviewComment(finding, includeSuggestion, findingId),
               finding.file(),
               endLine,
-              "RIGHT",
+              side,
               startLine,
               startSide));
       return Optional.empty();

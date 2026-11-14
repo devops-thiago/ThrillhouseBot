@@ -2013,7 +2013,10 @@ class FollowUpAnalyzerTest {
         """;
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch));
 
-    assertFalse(resolver.isLineInDiff("src/A.java", 10, 3)); // old line drifted out of range
+    assertFalse(
+        resolver
+            .resolveRightSideLine("src/A.java", 10)
+            .isPresent()); // old line drifted out of range
     var held =
         analyzer.unreportedUnresolvedStatuses(
             List.of(json), List.of(), List.of(), resolver, BOT_ID);
@@ -2045,7 +2048,10 @@ class FollowUpAnalyzerTest {
         """;
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch));
 
-    assertTrue(resolver.isLineInDiff("src/A.java", 42, 3)); // raw proxy would over-block here
+    assertTrue(
+        resolver
+            .resolveRightSideLine("src/A.java", 42)
+            .isPresent()); // raw proxy would over-block here
     var held =
         analyzer.unreportedUnresolvedStatuses(
             List.of(json), List.of(), List.of(), resolver, BOT_ID);

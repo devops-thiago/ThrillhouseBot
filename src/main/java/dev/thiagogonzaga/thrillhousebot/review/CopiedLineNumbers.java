@@ -87,7 +87,7 @@ final class CopiedLineNumbers {
         if (line.startsWith(SECTION_HEADER)) {
           current =
               sections.computeIfAbsent(
-                  FindingQuoteValidator.sectionFilename(line),
+                  DiffIndex.sectionFilename(line),
                   k -> new Section(new HashMap<>(), new HashSet<>()));
         }
         inBlock = current != null && line.equals(FENCE_OPEN);

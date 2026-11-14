@@ -155,7 +155,7 @@ class CopiedLineNumbersTest {
     String file = null;
     for (var line : DiffLineNumbers.annotate(DIFF).split("\n")) {
       if (line.startsWith("### ")) {
-        file = FindingQuoteValidator.sectionFilename(line);
+        file = DiffIndex.sectionFilename(line);
       }
       var m = numbered.matcher(line);
       if (m.matches()) {

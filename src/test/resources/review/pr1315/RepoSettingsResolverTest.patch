@@ -1,0 +1,55 @@
+@@ -810,48 +844,37 @@ void cachesPerRepositoryAndRefetchesAfterTheTtl() {
+           java.util.List.of("gen/**"),
+           resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID).ignoredFiles());
+ 
+-      verify(prClient, times(1))
+-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+-
+       currentTimeMs.addAndGet(RepoSettingsResolver.CACHE_TTL_MS + 1);
+       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+-
+-      verify(prClient, times(2))
+-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+     }
+ 
+     @Test
+-    void cachesAreKeyedPerRepository() {
++    void cachesAreKeyedPerRepository() throws Exception {
+       stubFile(YML, "review:\n  ignored-files:\n    - \"gen/**\"\n");
+-      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, "other", YML, DEFAULT_BRANCH))
+-          .thenReturn(content("review:\n  ignored-files:\n    - \"other/**\"\n"));
++      doReturn(content("review:\n  ignored-files:\n    - \"other/**\"\n"))
++          .when(repository)
++          .getFileContent(YML, DEFAULT_BRANCH);
+       var resolver = resolver();
+ 
+       assertEquals(
+-          java.util.List.of("gen/**"),
++          java.util.List.of("other/**"),
+           resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID).ignoredFiles());
+       assertEquals(
+           java.util.List.of("other/**"),
+           resolver.resolve(OWNER, "other", DEFAULT_BRANCH, INSTALLATION_ID).ignoredFiles());
+     }
+ 
+     @Test
+-    void negativeResultIsCachedBrieflyThenRetried() {
++    void negativeResultIsCachedBrieflyThenRetried() throws Exception {
+       stubMissing(YML);
+       stubMissing(YAML);
+       var resolver = resolver();
+ 
+       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+ 
+-      verify(prClient, times(1))
+-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+-
+       currentTimeMs.addAndGet(RepoSettingsResolver.NEGATIVE_CACHE_TTL_MS + 1);
+       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+-
+-      verify(prClient, times(2))
+-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+     }
+ 
+     /**

@@ -35,9 +35,13 @@ import java.util.Objects;
  * <ul>
  *   <li>a quote found at one location ({@link DiffLineResolver#locateQuote}) that does not hold the
  *       cited line moves the finding there;
- *   <li>a quote that cannot be placed (absent from the right side, or at several locations none of
- *       which the cited line selects) keeps the finding where it is and drops {@code
- *       suggestion_new}, so no suggestion block is posted on lines it does not quote;
+ *   <li>a quote of lines the pull request removes, selected by the cited line ({@link
+ *       DiffLineResolver#locateRemovedQuote}), moves the finding to where they stood in the new
+ *       file and drops {@code suggestion_new}: the thread goes on the removed lines (#1321), where
+ *       no suggestion applies;
+ *   <li>a quote that cannot be placed (absent from the diff, or at several locations none of which
+ *       the cited line selects) keeps the finding where it is and drops {@code suggestion_new}, so
+ *       no suggestion block is posted on lines it does not quote;
  *   <li>a suggestion for markdown table rows whose rows do not keep the quoted row's cell count is
  *       dropped the same way: applied, it shifts every later cell under the wrong column (#964);
  *   <li>a multi-line suggestion that lost the replaced lines' indentation the way its quote did
@@ -59,7 +63,10 @@ final class SuggestionAnchor {
     }
     var location = resolver.locateQuote(finding.file(), quote, finding.line());
     if (location.isEmpty()) {
-      return withoutSuggestionBlock(finding, "quotes code it cannot be placed on");
+      var removed = resolver.locateRemovedQuote(finding.file(), quote, finding.line());
+      return removed.isPresent()
+          ? onRemovedCode(finding, removed.get())
+          : withoutSuggestionBlock(finding, "quotes code it cannot be placed on");
     }
     var range = location.get();
     var placed = finding;
@@ -86,6 +93,29 @@ final class SuggestionAnchor {
     return changesTableShape(quote, placed.suggestionNew())
         ? withoutSuggestionBlock(placed, "suggests table rows with a different cell count")
         : placed;
+  }
+
+  /**
+   * {@code finding} at the place in the new file where the removed lines it quotes stood, without a
+   * suggestion block (#1321): GitHub applies a suggestion to head-side lines only, and the thread
+   * is posted on the removed lines themselves ({@code ReviewPublisher}).
+   */
+  private static ReviewResponse.Finding onRemovedCode(
+      ReviewResponse.Finding finding, DiffLineResolver.RemovedRange removed) {
+    var placed = finding;
+    if (finding.line() < removed.rightStartLine() || finding.line() > removed.rightEndLine()) {
+      Log.infof(
+          "Finding '%s' cites %s:%d but quotes removed lines %d-%d of the base; moving it to line"
+              + " %d, where they stood",
+          LogSafe.oneLine(finding.title()),
+          LogSafe.oneLine(finding.file()),
+          finding.line(),
+          removed.startLine(),
+          removed.endLine(),
+          removed.rightStartLine());
+      placed = atLine(finding, removed.rightStartLine(), finding.suggestionNew());
+    }
+    return withoutSuggestionBlock(placed, "quotes removed code, which a suggestion cannot rewrite");
   }
 
   /**

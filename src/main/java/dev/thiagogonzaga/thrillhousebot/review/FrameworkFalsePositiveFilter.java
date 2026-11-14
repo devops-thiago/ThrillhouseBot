@@ -67,7 +67,7 @@ public class FrameworkFalsePositiveFilter {
     if (response.findings().isEmpty() || diff == null || diff.isBlank()) {
       return response;
     }
-    FindingQuoteValidator.DiffIndex index = FindingQuoteValidator.indexDiff(diff);
+    DiffIndex index = DiffIndex.ofFormattedDiff(diff);
     var kept = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     var changed = false;
     for (ReviewResponse.Finding finding : response.findings()) {
@@ -92,7 +92,7 @@ public class FrameworkFalsePositiveFilter {
   }
 
   private static boolean isRefutedNoArgConstructorClaim(
-      ReviewResponse.Finding finding, FindingQuoteValidator.DiffIndex index) {
+      ReviewResponse.Finding finding, DiffIndex index) {
     if (!claimsMissingNoArgConstructor(finding)) {
       return false;
     }
@@ -100,7 +100,7 @@ public class FrameworkFalsePositiveFilter {
     if (className.isEmpty()) {
       return false;
     }
-    return hasInjectedConstructor(index.diffLinesFor(finding.file()), className);
+    return hasInjectedConstructor(index.quotableLines(finding.file()), className);
   }
 
   private static boolean claimsMissingNoArgConstructor(ReviewResponse.Finding finding) {
@@ -139,12 +139,11 @@ public class FrameworkFalsePositiveFilter {
    * one of the few preceding lines, with only further annotation lines allowed in between. Deleted
    * lines never count — an {@code @Inject} the PR removes is not evidence the bean still has it.
    */
-  private static boolean hasInjectedConstructor(
-      List<FindingQuoteValidator.DiffLine> diffLines, String className) {
+  private static boolean hasInjectedConstructor(List<PatchIndex.Line> diffLines, String className) {
     var keptLines =
         diffLines.stream()
-            .filter(line -> line.marker() != '-')
-            .map(FindingQuoteValidator.DiffLine::normalizedText)
+            .filter(PatchIndex.Line::onRight)
+            .map(PatchIndex.Line::normalizedText)
             .toList();
     Pattern constructorDecl = Pattern.compile("(?<![\\w.])" + Pattern.quote(className) + "\\s*\\(");
     for (int i = 0; i < keptLines.size(); i++) {
