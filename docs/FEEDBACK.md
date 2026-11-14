@@ -40,7 +40,8 @@ Only comments with the hidden `<!-- thrillhousebot:finding=N key=… -->` marker
 (or `<!-- thrillhousebot:finding=N -->` on comments posted before the key) count,
 and only reactions and replies from people with write access to the repository.
 The bot's own reactions, such as the 👀 it adds to acknowledge a command, are
-ignored.
+ignored. A comment posted on removed lines also carries `line=…` in its marker:
+the finding's line in the new file, which the summary shows.
 
 ## Data model
 

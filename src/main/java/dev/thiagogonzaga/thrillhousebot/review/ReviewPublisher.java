@@ -1384,6 +1384,18 @@ public class ReviewPublisher {
    * is ordinary — it is how a rejected suggestion block is discovered — so it stays at debug; only
    * the attempt the caller gives up on is worth a warning.
    */
+  /**
+   * The inline comment's text. A thread on removed lines also carries the finding's head-side line
+   * in its marker, since GitHub numbers that thread on the base side (#1360).
+   */
+  private String commentBody(
+      Finding finding, int findingId, InlineAnchor anchor, boolean includeSuggestion) {
+    var body = suggestionFormatter.formatReviewComment(finding, includeSuggestion, findingId);
+    return anchor.side() == DiffLineResolver.Side.LEFT
+        ? SuggestionFormatter.withMarkedLine(body, finding.line())
+        : body;
+  }
+
   private Optional<Rejection> tryPostInlineComment(
       CommentTarget target,
       Finding finding,
@@ -1403,7 +1415,7 @@ public class ReviewPublisher {
           target.prNumber(),
           new GitHubReviewClient.CreatePullRequestCommentRequest(
               target.commitSha(),
-              suggestionFormatter.formatReviewComment(finding, includeSuggestion, findingId),
+              commentBody(finding, findingId, anchor, includeSuggestion),
               finding.file(),
               endLine,
               side,
