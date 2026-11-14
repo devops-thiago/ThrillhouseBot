@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.core.Response;
 import java.nio.charset.StandardCharsets;
@@ -34,7 +35,7 @@ class ProjectStackResolverTest {
 
   @Mock private GitHubAuthClient authClient;
 
-  @Mock private GitHubPullRequestClient prClient;
+  @Mock private CodeHost prClient;
 
   private final AtomicLong currentTimeMs = new AtomicLong(1_000_000L);
 
@@ -45,28 +46,24 @@ class ProjectStackResolverTest {
   private static final String DEFAULT_BRANCH = "main";
   private static final long INSTALLATION_ID = 42L;
   private static final String AUTH_HEADER = "Bearer test-jwt";
-  private static final String ACCEPT = "application/vnd.github+json";
 
   @BeforeEach
   void setUp() {
     MockitoAnnotations.openMocks(this);
     when(authClient.getAuthHeader(INSTALLATION_ID)).thenReturn(AUTH_HEADER);
-    when(prClient.getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+    when(prClient.getFileContent(anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenThrow(new NotFoundException(Response.status(404).build()));
     resolver =
         new ProjectStackResolver(authClient, prClient, new ObjectMapper(), currentTimeMs::get);
   }
 
-  private GitHubPullRequestClient.FileContent makeFileContent(String name, String content) {
+  private CodeHost.FileContent makeFileContent(String name, String content) {
     var encoded = Base64.getEncoder().encodeToString(content.getBytes(StandardCharsets.UTF_8));
-    return new GitHubPullRequestClient.FileContent(name, name, encoded, "base64", content.length());
+    return new CodeHost.FileContent(name, name, encoded, "base64", content.length());
   }
 
-  private void stubManifest(String path, GitHubPullRequestClient.FileContent content) {
-    doReturn(content)
-        .when(prClient)
-        .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, path, DEFAULT_BRANCH);
+  private void stubManifest(String path, CodeHost.FileContent content) {
+    doReturn(content).when(prClient).getFileContent(AUTH_HEADER, OWNER, REPO, path, DEFAULT_BRANCH);
   }
 
   @Test
@@ -265,8 +262,7 @@ class ProjectStackResolverTest {
     assertTrue(wrapped.contains("\n"));
     stubManifest(
         "pom.xml",
-        new GitHubPullRequestClient.FileContent(
-            "pom.xml", "pom.xml", wrapped, "base64", content.length()));
+        new CodeHost.FileContent("pom.xml", "pom.xml", wrapped, "base64", content.length()));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -276,8 +272,7 @@ class ProjectStackResolverTest {
   @Test
   void shouldSkipManifestWithNullContentAndContinueProbing() {
     // Submodules, directories, and oversized files come back without base64 content
-    stubManifest(
-        "pom.xml", new GitHubPullRequestClient.FileContent("pom.xml", "pom.xml", null, "none", 0));
+    stubManifest("pom.xml", new CodeHost.FileContent("pom.xml", "pom.xml", null, "none", 0));
     stubManifest("build.gradle", makeFileContent("build.gradle", "implementation 'x:y:1'"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -289,9 +284,7 @@ class ProjectStackResolverTest {
   @Test
   void shouldSkipManifestsThatDecodeToBlankContent() {
     // The MIME decoder skips non-alphabet characters, so "!!!" decodes to empty content
-    stubManifest(
-        "pom.xml",
-        new GitHubPullRequestClient.FileContent("pom.xml", "pom.xml", "!!!", "base64", 3));
+    stubManifest("pom.xml", new CodeHost.FileContent("pom.xml", "pom.xml", "!!!", "base64", 3));
 
     assertEquals("", resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
   }
@@ -306,8 +299,7 @@ class ProjectStackResolverTest {
     assertEquals(first, second);
     // One probe per manifest path on the first call only
     verify(prClient, times(ProjectStackResolver.MANIFEST_PATHS.size()))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        .getFileContent(anyString(), anyString(), anyString(), anyString(), anyString());
   }
 
   @Test
@@ -347,8 +339,7 @@ class ProjectStackResolverTest {
     // The freshly cached entry is served on the next call (System clock is within TTL)
     productionResolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
     verify(prClient, times(ProjectStackResolver.MANIFEST_PATHS.size()))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        .getFileContent(anyString(), anyString(), anyString(), anyString(), anyString());
   }
 
   @Test

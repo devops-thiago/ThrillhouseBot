@@ -16,7 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -358,10 +358,10 @@ public class ReviewDiffFormatter {
   /**
    * Whether a set of file names holds this file's name, tolerating a null name the way {@link
    * IgnoreGlobs#matches(String)} does — {@code filename()} on a Jackson-deserialized {@link
-   * GitHubPullRequestClient.FileDiff} is not validated at construction (its {@code patch} and
-   * {@code previousFilename} siblings are legitimately null), and the name sets these lookups run
-   * against are immutable, whose {@code contains(null)} throws instead of returning false. A file
-   * with no name is simply not in the set.
+   * CodeHost.FileDiff} is not validated at construction (its {@code patch} and {@code
+   * previousFilename} siblings are legitimately null), and the name sets these lookups run against
+   * are immutable, whose {@code contains(null)} throws instead of returning false. A file with no
+   * name is simply not in the set.
    */
   static boolean namesContain(Set<String> names, String filename) {
     return filename != null && names.contains(filename);
@@ -372,7 +372,7 @@ public class ReviewDiffFormatter {
    * without anything to review — exclude them from model input (see #386). Rename+edit (non-empty
    * patch and/or non-zero add/del) is still reviewable.
    */
-  static boolean isPureRename(GitHubPullRequestClient.FileDiff file) {
+  static boolean isPureRename(CodeHost.FileDiff file) {
     if (file == null || file.status() == null) {
       return false;
     }
@@ -386,8 +386,7 @@ public class ReviewDiffFormatter {
   }
 
   /** Pure renames in {@code files}, preserving order. */
-  static List<GitHubPullRequestClient.FileDiff> pureRenameFiles(
-      List<GitHubPullRequestClient.FileDiff> files) {
+  static List<CodeHost.FileDiff> pureRenameFiles(List<CodeHost.FileDiff> files) {
     if (files == null || files.isEmpty()) {
       return List.of();
     }
@@ -440,19 +439,16 @@ public class ReviewDiffFormatter {
    * Pure renames are disclosed by {@link #formatPureRenameRollup} and are not repeated here.
    */
   static String formatIgnoredFiles(
-      List<GitHubPullRequestClient.FileDiff> files,
-      List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
+      List<CodeHost.FileDiff> files, List<CodeHost.FileDiff> reviewableFiles) {
     if (files == null || files.isEmpty()) {
       return "";
     }
     var reviewable =
-        reviewableFiles.stream()
-            .map(GitHubPullRequestClient.FileDiff::filename)
-            .collect(Collectors.toSet());
+        reviewableFiles.stream().map(CodeHost.FileDiff::filename).collect(Collectors.toSet());
     var ignored =
         files.stream()
             .filter(f -> !isPureRename(f) && !reviewable.contains(f.filename()))
-            .map(GitHubPullRequestClient.FileDiff::filename)
+            .map(CodeHost.FileDiff::filename)
             .toList();
     if (ignored.isEmpty()) {
       return "";
@@ -470,7 +466,7 @@ public class ReviewDiffFormatter {
    * One-line disclosure for the summary / diff overview. Caps the path sample so bulk package moves
    * do not dominate the prompt.
    */
-  static String formatPureRenameRollup(List<GitHubPullRequestClient.FileDiff> pureRenames) {
+  static String formatPureRenameRollup(List<CodeHost.FileDiff> pureRenames) {
     if (pureRenames == null || pureRenames.isEmpty()) {
       return "";
     }
@@ -498,8 +494,7 @@ public class ReviewDiffFormatter {
    * Files that are included in AI review scope (non-ignored, non–pure-rename), using the global
    * ignore list only.
    */
-  List<GitHubPullRequestClient.FileDiff> reviewableFiles(
-      List<GitHubPullRequestClient.FileDiff> files) {
+  List<CodeHost.FileDiff> reviewableFiles(List<CodeHost.FileDiff> files) {
     return reviewableFiles(files, globalGlobs);
   }
 
@@ -507,8 +502,7 @@ public class ReviewDiffFormatter {
    * Same, but scoped by an explicit ignore set — normally {@link #ignoreGlobs(List)} applied to the
    * patterns the repository declared, so its own globs are honored on top of the global list.
    */
-  List<GitHubPullRequestClient.FileDiff> reviewableFiles(
-      List<GitHubPullRequestClient.FileDiff> files, IgnoreGlobs globs) {
+  List<CodeHost.FileDiff> reviewableFiles(List<CodeHost.FileDiff> files, IgnoreGlobs globs) {
     if (files == null || files.isEmpty()) {
       return List.of();
     }
@@ -524,15 +518,13 @@ public class ReviewDiffFormatter {
    * (related-tests list, summary walkthrough counts) without putting empty rename hunks in the
    * model diff.
    */
-  static List<GitHubPullRequestClient.FileDiff> withPureRenames(
-      List<GitHubPullRequestClient.FileDiff> reviewable,
-      List<GitHubPullRequestClient.FileDiff> allFiles) {
+  static List<CodeHost.FileDiff> withPureRenames(
+      List<CodeHost.FileDiff> reviewable, List<CodeHost.FileDiff> allFiles) {
     var renames = pureRenameFiles(allFiles);
     if (renames.isEmpty()) {
       return reviewable;
     }
-    var merged =
-        new ArrayList<GitHubPullRequestClient.FileDiff>(reviewable.size() + renames.size());
+    var merged = new ArrayList<CodeHost.FileDiff>(reviewable.size() + renames.size());
     merged.addAll(reviewable);
     merged.addAll(renames);
     return merged;
@@ -543,7 +535,7 @@ public class ReviewDiffFormatter {
    * DiffLineResolver} parses to map AI-reported line numbers back onto the diff. Ignored files are
    * dropped, so the resolver never anchors a comment to a file outside review scope.
    */
-  Map<String, String> patchesByFile(List<GitHubPullRequestClient.FileDiff> files) {
+  Map<String, String> patchesByFile(List<CodeHost.FileDiff> files) {
     return patchesByReviewableFiles(reviewableFiles(files));
   }
 
@@ -551,8 +543,7 @@ public class ReviewDiffFormatter {
    * Same as {@link #patchesByFile} but for a list already filtered to reviewable files, so the
    * ignore-glob filter is not walked a second time when the caller has already computed it.
    */
-  Map<String, String> patchesByReviewableFiles(
-      List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
+  Map<String, String> patchesByReviewableFiles(List<CodeHost.FileDiff> reviewableFiles) {
     var patches = new HashMap<String, String>();
     for (var file : reviewableFiles) {
       if (file.patch() != null && !file.patch().isBlank()) {
@@ -562,12 +553,12 @@ public class ReviewDiffFormatter {
     return patches;
   }
 
-  String buildDiffString(List<GitHubPullRequestClient.FileDiff> files) {
+  String buildDiffString(List<CodeHost.FileDiff> files) {
     return buildDiffStringWithStats(files).text();
   }
 
   /** Like {@link #buildDiffString} but also reports how many files the line budget omitted. */
-  FormattedDiff buildDiffStringWithStats(List<GitHubPullRequestClient.FileDiff> files) {
+  FormattedDiff buildDiffStringWithStats(List<CodeHost.FileDiff> files) {
     return buildDiffStringWithStats(files, reviewableFiles(files));
   }
 
@@ -578,8 +569,7 @@ public class ReviewDiffFormatter {
    * review.
    */
   FormattedDiff buildDiffStringWithStats(
-      List<GitHubPullRequestClient.FileDiff> files,
-      List<GitHubPullRequestClient.FileDiff> reviewableFiles) {
+      List<CodeHost.FileDiff> files, List<CodeHost.FileDiff> reviewableFiles) {
     if (files == null || files.isEmpty()) {
       return new FormattedDiff("(no changes detected)", 0);
     }
@@ -606,23 +596,21 @@ public class ReviewDiffFormatter {
     return formatWithLineBudget(header.toString(), sectionFiles, namesOf(reviewableFiles));
   }
 
-  static Set<String> namesOf(List<GitHubPullRequestClient.FileDiff> files) {
-    return files.stream()
-        .map(GitHubPullRequestClient.FileDiff::filename)
-        .collect(Collectors.toSet());
+  static Set<String> namesOf(List<CodeHost.FileDiff> files) {
+    return files.stream().map(CodeHost.FileDiff::filename).collect(Collectors.toSet());
   }
 
   /**
    * Newline-separated list of test files in the PR, surfaced to the model as evidence of intended
    * behavior — a claim that changed code is broken must reconcile with tests that exercise it.
    */
-  String buildRelatedTests(List<GitHubPullRequestClient.FileDiff> files) {
+  String buildRelatedTests(List<CodeHost.FileDiff> files) {
     if (files == null || files.isEmpty()) {
       return "";
     }
     List<String> tests =
         files.stream()
-            .map(GitHubPullRequestClient.FileDiff::filename)
+            .map(CodeHost.FileDiff::filename)
             .filter(ReviewDiffFormatter::isTestFile)
             .toList();
     return String.join("\n", tests);
@@ -650,14 +638,13 @@ public class ReviewDiffFormatter {
         || baseName.endsWith("Tests");
   }
 
-  String buildBaseComparison(
-      GitHubPullRequestClient.CompareResponse comparison, String base, String head) {
+  String buildBaseComparison(CodeHost.CompareResponse comparison, String base, String head) {
     return buildBaseComparisonWithStats(comparison, base, head).text();
   }
 
   /** Like {@link #buildBaseComparison} but also reports how many files the line budget omitted. */
   FormattedDiff buildBaseComparisonWithStats(
-      GitHubPullRequestClient.CompareResponse comparison, String base, String head) {
+      CodeHost.CompareResponse comparison, String base, String head) {
     return buildBaseComparisonWithStats(comparison, base, head, true);
   }
 
@@ -667,10 +654,7 @@ public class ReviewDiffFormatter {
    * overhead and decides what still fits the per-call token budget.
    */
   FormattedDiff buildBaseComparisonWithStats(
-      GitHubPullRequestClient.CompareResponse comparison,
-      String base,
-      String head,
-      boolean applyLineBudget) {
+      CodeHost.CompareResponse comparison, String base, String head, boolean applyLineBudget) {
     return buildBaseComparisonWithStats(comparison, base, head, applyLineBudget, globalGlobs);
   }
 
@@ -679,7 +663,7 @@ public class ReviewDiffFormatter {
    * diff hides for this repository (global ∪ per-repo).
    */
   FormattedDiff buildBaseComparisonWithStats(
-      GitHubPullRequestClient.CompareResponse comparison,
+      CodeHost.CompareResponse comparison,
       String base,
       String head,
       boolean applyLineBudget,
@@ -711,15 +695,12 @@ public class ReviewDiffFormatter {
    * budgeting-disabled reviews with {@code max-diff-lines=0} and for on-demand commands.
    */
   private FormattedDiff formatWithLineBudget(
-      String header, List<GitHubPullRequestClient.FileDiff> files, Set<String> reviewableNames) {
+      String header, List<CodeHost.FileDiff> files, Set<String> reviewableNames) {
     return formatWithLineBudget(header, files, reviewableNames, maxDiffLines);
   }
 
   private FormattedDiff formatWithLineBudget(
-      String header,
-      List<GitHubPullRequestClient.FileDiff> files,
-      Set<String> reviewableNames,
-      int maxLines) {
+      String header, List<CodeHost.FileDiff> files, Set<String> reviewableNames, int maxLines) {
     if (maxLines <= 0) {
       var sb = new StringBuilder(header);
       for (var file : files) {
@@ -730,7 +711,7 @@ public class ReviewDiffFormatter {
 
     var output = new StringBuilder(header);
     var usedLines = lineCount(header);
-    var omitted = new ArrayList<GitHubPullRequestClient.FileDiff>();
+    var omitted = new ArrayList<CodeHost.FileDiff>();
 
     for (var i = 0; i < files.size(); i++) {
       var file = files.get(i);
@@ -767,13 +748,12 @@ public class ReviewDiffFormatter {
     return new FormattedDiff(output.toString(), omitted.size());
   }
 
-  void appendTruncationFooter(
-      StringBuilder output, List<GitHubPullRequestClient.FileDiff> omitted) {
+  void appendTruncationFooter(StringBuilder output, List<CodeHost.FileDiff> omitted) {
     appendTruncationFooter(output, omitted, lineCount(output.toString()));
   }
 
   void appendTruncationFooter(
-      StringBuilder output, List<GitHubPullRequestClient.FileDiff> omitted, int usedLines) {
+      StringBuilder output, List<CodeHost.FileDiff> omitted, int usedLines) {
     var maxLines = maxDiffLines;
     if (maxLines - usedLines < 1) {
       return;
@@ -785,7 +765,7 @@ public class ReviewDiffFormatter {
     output.append(summaryBlock);
     usedLines += lineCount(summaryBlock);
 
-    for (GitHubPullRequestClient.FileDiff file : omitted) {
+    for (CodeHost.FileDiff file : omitted) {
       if (maxLines - usedLines < 1) {
         break;
       }
@@ -798,7 +778,7 @@ public class ReviewDiffFormatter {
     }
   }
 
-  String formatFileSection(GitHubPullRequestClient.FileDiff file, Set<String> reviewableNames) {
+  String formatFileSection(CodeHost.FileDiff file, Set<String> reviewableNames) {
     var sb =
         new StringBuilder("### ")
             .append(file.filename())

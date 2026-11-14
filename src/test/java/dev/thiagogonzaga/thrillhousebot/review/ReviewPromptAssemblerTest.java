@@ -24,10 +24,10 @@ import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubLabelClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TicketContextPrompts;
@@ -224,8 +224,7 @@ class ReviewPromptAssemblerTest {
     private static String assemblePrContext(String title, String body) {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "src/main/java/A.java", "modified", 1, 0, 1, "@@ -1 +1 @@"));
+              new CodeHost.FileDiff("src/main/java/A.java", "modified", 1, 0, 1, "@@ -1 +1 @@"));
       var config = mock(ThrillhouseConfig.class, RETURNS_DEEP_STUBS);
       when(config.review().diagram().enabled()).thenReturn(false);
       var labeler = mock(PrLabeler.class);
@@ -287,9 +286,9 @@ class ReviewPromptAssemblerTest {
   @Nested
   class SystemPromptRouting {
 
-    private final List<GitHubPullRequestClient.FileDiff> docsOnly =
+    private final List<CodeHost.FileDiff> docsOnly =
         List.of(
-            new GitHubPullRequestClient.FileDiff(
+            new CodeHost.FileDiff(
                 "README.md", "modified", 1, 0, 1, "@@ -1 +1 @@\n+| `X` | y | `z` |"));
 
     @Test
@@ -446,9 +445,7 @@ class ReviewPromptAssemblerTest {
 
     private static AiReviewService.PromptInputs assembleFor(
         RepoSettings settings, String filename) {
-      var files =
-          List.of(
-              new GitHubPullRequestClient.FileDiff(filename, "modified", 1, 0, 1, "@@ -1 +1 @@"));
+      var files = List.of(new CodeHost.FileDiff(filename, "modified", 1, 0, 1, "@@ -1 +1 @@"));
       var config = mock(ThrillhouseConfig.class, RETURNS_DEEP_STUBS);
       when(config.review().diagram().enabled()).thenReturn(false);
       var labeler = mock(PrLabeler.class);
@@ -551,9 +548,7 @@ class ReviewPromptAssemblerTest {
     private static AiReviewService.PromptInputs assemble(
         boolean diagram, List<GitHubLabelClient.Label> labels) {
       var filename = "payments/ChargeTest.java";
-      var files =
-          List.of(
-              new GitHubPullRequestClient.FileDiff(filename, "modified", 1, 0, 1, "@@ -1 +1 @@"));
+      var files = List.of(new CodeHost.FileDiff(filename, "modified", 1, 0, 1, "@@ -1 +1 @@"));
       var config = mock(ThrillhouseConfig.class, RETURNS_DEEP_STUBS);
       when(config.review().diagram().enabled()).thenReturn(diagram);
       var labeler = mock(PrLabeler.class);
@@ -669,8 +664,7 @@ class ReviewPromptAssemblerTest {
     private static AiReviewService.PromptInputs assembleWithCoverage(String patchCoverage) {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "src/main/java/A.java", "modified", 1, 0, 1, "@@ -1 +1 @@"));
+              new CodeHost.FileDiff("src/main/java/A.java", "modified", 1, 0, 1, "@@ -1 +1 @@"));
       var config = mock(ThrillhouseConfig.class, RETURNS_DEEP_STUBS);
       when(config.review().diagram().enabled()).thenReturn(false);
       var labeler = mock(PrLabeler.class);
@@ -812,8 +806,7 @@ class ReviewPromptAssemblerTest {
         String ciFailures, String linkedIssues, String learnings) {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "src/main/java/A.java", "modified", 1, 0, 1, "@@ -1 +1 @@"));
+              new CodeHost.FileDiff("src/main/java/A.java", "modified", 1, 0, 1, "@@ -1 +1 @@"));
       var config = mock(ThrillhouseConfig.class, RETURNS_DEEP_STUBS);
       when(config.review().diagram().enabled()).thenReturn(false);
       var labeler = mock(PrLabeler.class);
@@ -1020,8 +1013,7 @@ class ReviewPromptAssemblerTest {
         String linkedIssues, String bugFixIssueText, String prBody) {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "src/main/java/A.java", "modified", 1, 0, 1, "@@ -1 +1 @@"));
+              new CodeHost.FileDiff("src/main/java/A.java", "modified", 1, 0, 1, "@@ -1 +1 @@"));
       var config = mock(ThrillhouseConfig.class, RETURNS_DEEP_STUBS);
       when(config.review().diagram().enabled()).thenReturn(false);
       var labeler = mock(PrLabeler.class);

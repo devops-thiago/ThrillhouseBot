@@ -15,7 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
@@ -335,7 +335,7 @@ final class CiFailureCitations implements FindingVerificationService.FailingChec
    * {@link #parse(String)}, with each failing test's assertions read from its body in {@code
    * files}, the pull request's changed files, so a finding quoting one cites the test.
    */
-  static CiFailureCitations parse(String section, List<GitHubPullRequestClient.FileDiff> files) {
+  static CiFailureCitations parse(String section, List<CodeHost.FileDiff> files) {
     if (section == null || section.isBlank()) {
       return NONE;
     }

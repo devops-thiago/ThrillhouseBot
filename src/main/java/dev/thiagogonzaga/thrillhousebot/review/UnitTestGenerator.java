@@ -18,11 +18,11 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.UnitTestAssistant;
@@ -38,7 +38,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
  * Builds the {@code /generate-tests} suggestion: unit tests for the code the PR changed, posted as
@@ -132,7 +131,7 @@ public class UnitTestGenerator extends AbstractPrSuggestionGenerator {
 
   @Inject
   public UnitTestGenerator(
-      @RestClient GitHubPullRequestClient prClient,
+      CodeHost prClient,
       ReviewDiffFormatter diffFormatter,
       InstructionsResolver instructionsResolver,
       RepoSettingsResolver repoSettingsResolver,

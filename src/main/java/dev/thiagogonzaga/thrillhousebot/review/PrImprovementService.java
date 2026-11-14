@@ -19,10 +19,10 @@ import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ImprovementParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ImprovementResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrImproveAssistant;
@@ -94,7 +94,7 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
 
   @Inject
   public PrImprovementService(
-      @RestClient GitHubPullRequestClient prClient,
+      CodeHost prClient,
       @RestClient GitHubReviewClient reviewClient,
       @RestClient GitHubCommentClient commentClient,
       ReviewDiffFormatter diffFormatter,
@@ -282,7 +282,7 @@ public class PrImprovementService extends AbstractPrSuggestionGenerator {
       String auth,
       ImproveTask task,
       Inputs inputs,
-      List<GitHubPullRequestClient.FileDiff> reviewable,
+      List<CodeHost.FileDiff> reviewable,
       List<ImprovementResponse.Improvement> improvements) {
     var lineResolver = new DiffLineResolver(diffFormatter().patchesByReviewableFiles(reviewable));
     boolean canPostInline = inputs.headSha() != null && !inputs.headSha().isBlank();

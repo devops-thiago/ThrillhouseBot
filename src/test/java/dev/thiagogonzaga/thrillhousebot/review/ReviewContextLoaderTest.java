@@ -26,6 +26,7 @@ import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
 import dev.thiagogonzaga.thrillhousebot.github.*;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -47,7 +48,7 @@ class ReviewContextLoaderTest {
 
   private static final String BOT_LOGIN = "thrillhousebot[bot]";
 
-  @Mock private GitHubPullRequestClient prClient;
+  @Mock private CodeHost prClient;
   @Mock private GitHubReviewClient reviewClient;
   @Mock private GitHubCommentClient commentClient;
   @Mock private InstructionsResolver instructionsResolver;
@@ -114,7 +115,7 @@ class ReviewContextLoaderTest {
     void shouldFormatSingleFileWithPatch() {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
+              new CodeHost.FileDiff(
                   "src/main/Foo.java",
                   "modified",
                   5,
@@ -132,9 +133,7 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldFormatSingleFileWithoutPatch() {
-      var files =
-          List.of(
-              new GitHubPullRequestClient.FileDiff("binary-file.png", "modified", 0, 0, 0, null));
+      var files = List.of(new CodeHost.FileDiff("binary-file.png", "modified", 0, 0, 0, null));
 
       var result = diffFormatter.buildDiffString(files);
 
@@ -146,9 +145,9 @@ class ReviewContextLoaderTest {
     void shouldAccumulateTotalsAcrossMultipleFiles() {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff("a.java", "modified", 10, 2, 12, "@@ patch a"),
-              new GitHubPullRequestClient.FileDiff("b.java", "added", 25, 0, 25, "@@ patch b"),
-              new GitHubPullRequestClient.FileDiff("c.java", "modified", 3, 5, 8, null));
+              new CodeHost.FileDiff("a.java", "modified", 10, 2, 12, "@@ patch a"),
+              new CodeHost.FileDiff("b.java", "added", 25, 0, 25, "@@ patch b"),
+              new CodeHost.FileDiff("c.java", "modified", 3, 5, 8, null));
 
       var result = diffFormatter.buildDiffString(files);
 
@@ -162,8 +161,7 @@ class ReviewContextLoaderTest {
     void shouldHandleFilesWithZeroChanges() {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "renamed-only.txt", "renamed", 0, 0, 0, null, "old-name.txt"));
+              new CodeHost.FileDiff("renamed-only.txt", "renamed", 0, 0, 0, null, "old-name.txt"));
 
       var result = diffFormatter.buildDiffString(files);
 
@@ -215,9 +213,8 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldReturnNoChangesMessageWhenComparisonHasEmptyFiles() {
-      var emptyComparison = new GitHubPullRequestClient.CompareResponse(3, List.of());
-      when(prClient.compareCommits(
-              any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
+      var emptyComparison = new CodeHost.CompareResponse(3, List.of());
+      when(prClient.compareCommits(any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
           .thenReturn(emptyComparison);
 
       var result =
@@ -230,9 +227,8 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldReturnNoChangesMessageWhenComparisonHasNullFiles() {
-      var nullFilesComparison = new GitHubPullRequestClient.CompareResponse(0, null);
-      when(prClient.compareCommits(
-              any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
+      var nullFilesComparison = new CodeHost.CompareResponse(0, null);
+      when(prClient.compareCommits(any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
           .thenReturn(nullFilesComparison);
 
       var result =
@@ -246,13 +242,12 @@ class ReviewContextLoaderTest {
     @Test
     void shouldBuildComparisonWithFiles() {
       var comparison =
-          new GitHubPullRequestClient.CompareResponse(
+          new CodeHost.CompareResponse(
               2,
               List.of(
-                  new GitHubPullRequestClient.FileDiff(
+                  new CodeHost.FileDiff(
                       "src/Bar.java", "modified", 3, 1, 4, "@@ -1 +1,3 @@\n-old\n+new\n+extra")));
-      when(prClient.compareCommits(
-              any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
+      when(prClient.compareCommits(any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
           .thenReturn(comparison);
 
       var result =
@@ -270,14 +265,12 @@ class ReviewContextLoaderTest {
     @Test
     void shouldSkipFilesWithoutPatchInComparison() {
       var comparison =
-          new GitHubPullRequestClient.CompareResponse(
+          new CodeHost.CompareResponse(
               1,
               List.of(
-                  new GitHubPullRequestClient.FileDiff("binary.bin", "modified", 0, 0, 0, null),
-                  new GitHubPullRequestClient.FileDiff(
-                      "src/Text.java", "modified", 1, 1, 2, "@@ patch")));
-      when(prClient.compareCommits(
-              any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
+                  new CodeHost.FileDiff("binary.bin", "modified", 0, 0, 0, null),
+                  new CodeHost.FileDiff("src/Text.java", "modified", 1, 1, 2, "@@ patch")));
+      when(prClient.compareCommits(any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
           .thenReturn(comparison);
 
       var result =
@@ -291,8 +284,7 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldReturnUnavailableOnException() {
-      when(prClient.compareCommits(
-              any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
+      when(prClient.compareCommits(any(), eq("owner"), eq("repo"), eq("abcdefgh"), eq("hijklmn")))
           .thenThrow(new RuntimeException("API down"));
 
       var result =
@@ -324,29 +316,25 @@ class ReviewContextLoaderTest {
           false);
     }
 
-    private void stubCommonLoadDeps(List<GitHubPullRequestClient.FileDiff> files) {
-      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(1)))
-          .thenReturn(files);
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(1)))
+    private void stubCommonLoadDeps(List<CodeHost.FileDiff> files) {
+      when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(1))).thenReturn(files);
+      when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(1)))
           .thenReturn(
-              new GitHubPullRequestClient.PullRequestDetails(
+              new CodeHost.PullRequestDetails(
                   "Title",
                   "body",
-                  new GitHubPullRequestClient.Ref("headsha1"),
-                  new GitHubPullRequestClient.Ref("basesha1"),
+                  new CodeHost.Ref("headsha1"),
+                  new CodeHost.Ref("basesha1"),
                   2,
                   10,
                   3));
-      when(prClient.compareCommits(
-              any(), any(), eq("owner"), eq("repo"), eq("basesha1"), eq("headsha1")))
+      when(prClient.compareCommits(any(), eq("owner"), eq("repo"), eq("basesha1"), eq("headsha1")))
           .thenReturn(
-              new GitHubPullRequestClient.CompareResponse(
+              new CodeHost.CompareResponse(
                   1,
                   List.of(
-                      new GitHubPullRequestClient.FileDiff(
-                          "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
-                      new GitHubPullRequestClient.FileDiff(
-                          "b.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+b"))));
+                      new CodeHost.FileDiff("a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
+                      new CodeHost.FileDiff("b.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+b"))));
       when(reviewClient.listReviews(any(), any(), eq("owner"), eq("repo"), eq(1)))
           .thenReturn(List.of());
       when(commentClient.listComments(any(), any(), eq("owner"), eq("repo"), eq(1)))
@@ -365,9 +353,9 @@ class ReviewContextLoaderTest {
       var manyLines = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10";
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff("a.java", "modified", 5, 0, 5, manyLines),
-              new GitHubPullRequestClient.FileDiff("b.java", "modified", 5, 0, 5, manyLines),
-              new GitHubPullRequestClient.FileDiff("c.java", "modified", 5, 0, 5, manyLines));
+              new CodeHost.FileDiff("a.java", "modified", 5, 0, 5, manyLines),
+              new CodeHost.FileDiff("b.java", "modified", 5, 0, 5, manyLines),
+              new CodeHost.FileDiff("c.java", "modified", 5, 0, 5, manyLines));
       stubCommonLoadDeps(files);
       var session =
           ReviewSession.create(
@@ -382,17 +370,14 @@ class ReviewContextLoaderTest {
       assertEquals(3, ctx.reviewableFiles().size());
       // Line-capped mega-diff and uncapped base comparison must not run when budgeting is on —
       // both would only inflate shared prompt overhead for multi-call batches.
-      verify(prClient).getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(1));
-      verify(prClient, never()).compareCommits(any(), any(), any(), any(), any(), any());
+      verify(prClient).getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(1));
+      verify(prClient, never()).compareCommits(any(), any(), any(), any(), any());
     }
 
     @Test
     void budgetingDisabledStillBuildsLineCappedDiff() {
       when(activeModel.maxInputTokens()).thenReturn(0);
-      var files =
-          List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x"));
+      var files = List.of(new CodeHost.FileDiff("a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x"));
       stubCommonLoadDeps(files);
       var session =
           ReviewSession.create(
@@ -415,9 +400,8 @@ class ReviewContextLoaderTest {
     void perRepoIgnorePatternsNarrowTheReviewableFileSet() {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
-              new GitHubPullRequestClient.FileDiff(
+              new CodeHost.FileDiff("src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
+              new CodeHost.FileDiff(
                   "docs/generated/api.md", "modified", 90, 0, 90, "@@ -1 +1 @@\n+gen"));
       stubCommonLoadDeps(files);
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
@@ -448,9 +432,8 @@ class ReviewContextLoaderTest {
     void recordsWhichDeclaredIgnoreGlobsMatchedNoFileInThisPullRequest() {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
-              new GitHubPullRequestClient.FileDiff(
+              new CodeHost.FileDiff("src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
+              new CodeHost.FileDiff(
                   "docs/generated/api.md", "modified", 90, 0, 90, "@@ -1 +1 @@\n+gen"));
       stubCommonLoadDeps(files);
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
@@ -472,9 +455,7 @@ class ReviewContextLoaderTest {
     @Test
     void recordsNoUnmatchedGlobsForARepositoryThatDeclaredNone() {
       var files =
-          List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"));
+          List.of(new CodeHost.FileDiff("src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"));
       stubCommonLoadDeps(files);
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
           .thenReturn(RepoSettings.EMPTY);
@@ -496,12 +477,11 @@ class ReviewContextLoaderTest {
     @Test
     void configKeyResolutionSeesOnlyFilesThatSurvivedTheIgnoreFilter() {
       var ignoredDoc =
-          new GitHubPullRequestClient.FileDiff(
+          new CodeHost.FileDiff(
               "docs/generated/api.md", "modified", 1, 0, 1, "@@ -1 +1 @@\n+`IGNORED_DOC_KEY`");
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
+              new CodeHost.FileDiff("src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
               ignoredDoc);
       stubCommonLoadDeps(files);
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
@@ -539,9 +519,8 @@ class ReviewContextLoaderTest {
     void repoWithNoDeclaredPatternsKeepsEveryFileTheGlobalListAllows() {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
-              new GitHubPullRequestClient.FileDiff(
+              new CodeHost.FileDiff("src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
+              new CodeHost.FileDiff(
                   "docs/generated/api.md", "modified", 90, 0, 90, "@@ -1 +1 @@\n+gen"));
       stubCommonLoadDeps(files);
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
@@ -560,9 +539,7 @@ class ReviewContextLoaderTest {
     @Test
     void aFailingRepoSettingsResolverFallsBackToTheGlobalListInsteadOfFailingTheReview() {
       var files =
-          List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"));
+          List.of(new CodeHost.FileDiff("src/App.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"));
       stubCommonLoadDeps(files);
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
           .thenThrow(new IllegalStateException("boom"));
@@ -587,11 +564,9 @@ class ReviewContextLoaderTest {
     void resolvesPathScopedRulesOnceAgainstTheReviewableFiles() {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "payments/Charge.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
-              new GitHubPullRequestClient.FileDiff(
-                  "web/Landing.tsx", "modified", 1, 0, 1, "@@ -1 +1 @@\n+b"),
-              new GitHubPullRequestClient.FileDiff(
+              new CodeHost.FileDiff("payments/Charge.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
+              new CodeHost.FileDiff("web/Landing.tsx", "modified", 1, 0, 1, "@@ -1 +1 @@\n+b"),
+              new CodeHost.FileDiff(
                   "payments/generated/Api.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+c"));
       stubCommonLoadDeps(files);
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
@@ -624,7 +599,7 @@ class ReviewContextLoaderTest {
     void repoWithNoDeclaredScopesCarriesNoPathScopedRules() {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
+              new CodeHost.FileDiff(
                   "payments/Charge.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"));
       stubCommonLoadDeps(files);
       when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
@@ -647,12 +622,11 @@ class ReviewContextLoaderTest {
     @Test
     void patchCoverageIsResolvedFromTheOneSettingsReadAndReachesTheContext() {
       var ignored =
-          new GitHubPullRequestClient.FileDiff(
+          new CodeHost.FileDiff(
               "payments/generated/Api.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+c");
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "payments/Charge.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
+              new CodeHost.FileDiff("payments/Charge.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"),
               ignored);
       stubCommonLoadDeps(files);
       var settings =
@@ -687,7 +661,7 @@ class ReviewContextLoaderTest {
     void aRefusedCoverageArtifactReachesTheContextForTheSummaryToDisclose() {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
+              new CodeHost.FileDiff(
                   "payments/Charge.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+a"));
       stubCommonLoadDeps(files);
       var settings =
@@ -740,13 +714,10 @@ class ReviewContextLoaderTest {
 
     @Test
     void currentHeadShaReturnsTheFreshHead() {
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+      when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(42)))
           .thenReturn(
-              new GitHubPullRequestClient.PullRequestDetails(
-                  "Title",
-                  "",
-                  new GitHubPullRequestClient.Ref("fresh-sha"),
-                  new GitHubPullRequestClient.Ref("base-sha")));
+              new CodeHost.PullRequestDetails(
+                  "Title", "", new CodeHost.Ref("fresh-sha"), new CodeHost.Ref("base-sha")));
 
       assertEquals(java.util.Optional.of("fresh-sha"), loader.currentHeadSha("auth", request()));
     }
@@ -754,18 +725,14 @@ class ReviewContextLoaderTest {
     @Test
     void currentHeadShaIsEmptyWhenTheReadFailsOrTheHeadIsMissing() {
       // Fail-open: a guard read that fails must not lose a finished review.
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+      when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(42)))
           .thenThrow(new RuntimeException("GitHub unavailable"))
           .thenReturn(null)
           .thenReturn(
-              new GitHubPullRequestClient.PullRequestDetails(
-                  "Title", "", null, new GitHubPullRequestClient.Ref("base-sha")))
+              new CodeHost.PullRequestDetails("Title", "", null, new CodeHost.Ref("base-sha")))
           .thenReturn(
-              new GitHubPullRequestClient.PullRequestDetails(
-                  "Title",
-                  "",
-                  new GitHubPullRequestClient.Ref(""),
-                  new GitHubPullRequestClient.Ref("base-sha")));
+              new CodeHost.PullRequestDetails(
+                  "Title", "", new CodeHost.Ref(""), new CodeHost.Ref("base-sha")));
 
       for (var ignored = 0; ignored < 4; ignored++) {
         assertTrue(loader.currentHeadSha("auth", request()).isEmpty());
@@ -774,15 +741,12 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldRejectWhenHeadChangesAfterFilesAreFetched() {
-      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(42)))
+      when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(42)))
           .thenReturn(List.of());
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+      when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(42)))
           .thenReturn(
-              new GitHubPullRequestClient.PullRequestDetails(
-                  "Title",
-                  "",
-                  new GitHubPullRequestClient.Ref("new-sha"),
-                  new GitHubPullRequestClient.Ref("base-sha")));
+              new CodeHost.PullRequestDetails(
+                  "Title", "", new CodeHost.Ref("new-sha"), new CodeHost.Ref("base-sha")));
 
       var error =
           assertThrows(
@@ -794,18 +758,14 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldRejectNullPullRequestHeadAndCurrentSha() {
-      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(42)))
+      when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(42)))
           .thenReturn(List.of());
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+      when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(42)))
           .thenReturn(
               null,
-              new GitHubPullRequestClient.PullRequestDetails(
-                  "Title", "", null, new GitHubPullRequestClient.Ref("base-sha")),
-              new GitHubPullRequestClient.PullRequestDetails(
-                  "Title",
-                  "",
-                  new GitHubPullRequestClient.Ref(null),
-                  new GitHubPullRequestClient.Ref("base-sha")));
+              new CodeHost.PullRequestDetails("Title", "", null, new CodeHost.Ref("base-sha")),
+              new CodeHost.PullRequestDetails(
+                  "Title", "", new CodeHost.Ref(null), new CodeHost.Ref("base-sha")));
 
       for (var ignored = 0; ignored < 3; ignored++) {
         var error =
@@ -818,15 +778,12 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldRejectNullRequestedSha() {
-      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(42)))
+      when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(42)))
           .thenReturn(List.of());
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+      when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(42)))
           .thenReturn(
-              new GitHubPullRequestClient.PullRequestDetails(
-                  "Title",
-                  "",
-                  new GitHubPullRequestClient.Ref("current-sha"),
-                  new GitHubPullRequestClient.Ref("base-sha")));
+              new CodeHost.PullRequestDetails(
+                  "Title", "", new CodeHost.Ref("current-sha"), new CodeHost.Ref("base-sha")));
 
       var error =
           assertThrows(
@@ -838,9 +795,9 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldFailClosedWhenCurrentHeadCannotBeRead() {
-      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(42)))
+      when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(42)))
           .thenReturn(List.of());
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+      when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(42)))
           .thenThrow(new RuntimeException("GitHub unavailable"));
 
       var reviewRequest = request();
@@ -903,24 +860,23 @@ class ReviewContextLoaderTest {
     }
 
     private void stubLoad(List<String> priorJsons) {
-      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(1)))
+      when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(1)))
           .thenReturn(
               List.of(
-                  new GitHubPullRequestClient.FileDiff(
+                  new CodeHost.FileDiff(
                       "src/Main.java", "modified", 1, 0, 1, "@@ -10 +10 @@\n+guard(x)")));
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(1)))
+      when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(1)))
           .thenReturn(
-              new GitHubPullRequestClient.PullRequestDetails(
+              new CodeHost.PullRequestDetails(
                   "Title",
                   "body",
-                  new GitHubPullRequestClient.Ref("headsha1"),
-                  new GitHubPullRequestClient.Ref("basesha1"),
+                  new CodeHost.Ref("headsha1"),
+                  new CodeHost.Ref("basesha1"),
                   1,
                   1,
                   0));
-      when(prClient.compareCommits(
-              any(), any(), eq("owner"), eq("repo"), eq("basesha1"), eq("headsha1")))
-          .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+      when(prClient.compareCommits(any(), eq("owner"), eq("repo"), eq("basesha1"), eq("headsha1")))
+          .thenReturn(new CodeHost.CompareResponse(0, List.of()));
       when(sessionPersistence.findAllPriorAiResponseJsons(any(), eq(1), anyLong()))
           .thenReturn(priorJsons);
       when(instructionsResolver.resolve(any(), any(), any(), anyLong()))
@@ -1063,7 +1019,7 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldPropagateExceptionSoTheReviewFailsInsteadOfApproving() {
-      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(42)))
+      when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(42)))
           .thenThrow(new RuntimeException("GitHub API error"));
 
       assertThrows(RuntimeException.class, () -> loader.fetchPrFiles("auth", "owner", "repo", 42));
@@ -1071,7 +1027,7 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldPropagateNotAuthorizedRatherThanReturnEmpty() {
-      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(123)))
+      when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(123)))
           .thenThrow(new jakarta.ws.rs.NotAuthorizedException("Bad credentials"));
 
       assertThrows(
@@ -1081,10 +1037,8 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldReturnFilesOnSuccess() {
-      var expected =
-          List.of(
-              new GitHubPullRequestClient.FileDiff("README.md", "modified", 2, 1, 3, "@@ patch"));
-      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(1)))
+      var expected = List.of(new CodeHost.FileDiff("README.md", "modified", 2, 1, 3, "@@ patch"));
+      when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(1)))
           .thenReturn(expected);
 
       var result = loader.fetchPrFiles("auth", "owner", "repo", 1);
@@ -1159,13 +1113,13 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldFetchPrDetailsWhenShaIsBlank() {
-      when(prClient.getPullRequest(anyString(), anyString(), eq("owner"), eq("repo"), eq(7)))
+      when(prClient.getPullRequest(anyString(), eq("owner"), eq("repo"), eq(7)))
           .thenReturn(
-              new GitHubPullRequestClient.PullRequestDetails(
+              new CodeHost.PullRequestDetails(
                   "add new API",
                   "Adds a new API endpoint",
-                  new GitHubPullRequestClient.Ref("headsha1234"),
-                  new GitHubPullRequestClient.Ref("basesha5678")));
+                  new CodeHost.Ref("headsha1234"),
+                  new CodeHost.Ref("basesha5678")));
 
       var resolved = loader.resolveMissingPrDetails("Bearer tok", manualRequest(""));
 
@@ -1188,8 +1142,8 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldTolerateMissingRefsInPrDetails() {
-      when(prClient.getPullRequest(anyString(), anyString(), eq("owner"), eq("repo"), eq(7)))
-          .thenReturn(new GitHubPullRequestClient.PullRequestDetails(null, null, null, null));
+      when(prClient.getPullRequest(anyString(), eq("owner"), eq("repo"), eq(7)))
+          .thenReturn(new CodeHost.PullRequestDetails(null, null, null, null));
 
       var resolved = loader.resolveMissingPrDetails("Bearer tok", manualRequest(null));
 
@@ -1205,13 +1159,13 @@ class ReviewContextLoaderTest {
 
     @Test
     void returnsGitHubAuthoritativeTotalsFromThePullRequest() {
-      when(prClient.getPullRequest(anyString(), anyString(), eq("owner"), eq("repo"), eq(46)))
+      when(prClient.getPullRequest(anyString(), eq("owner"), eq("repo"), eq(46)))
           .thenReturn(
-              new GitHubPullRequestClient.PullRequestDetails(
+              new CodeHost.PullRequestDetails(
                   "add API",
                   "body",
-                  new GitHubPullRequestClient.Ref("headsha"),
-                  new GitHubPullRequestClient.Ref("basesha"),
+                  new CodeHost.Ref("headsha"),
+                  new CodeHost.Ref("basesha"),
                   27,
                   975,
                   196));
@@ -1226,7 +1180,7 @@ class ReviewContextLoaderTest {
 
     @Test
     void returnsNullWhenTheFetchThrowsSoTheSummaryFallsBackToDiffCounts() {
-      when(prClient.getPullRequest(anyString(), anyString(), eq("owner"), eq("repo"), eq(46)))
+      when(prClient.getPullRequest(anyString(), eq("owner"), eq("repo"), eq(46)))
           .thenThrow(new RuntimeException("PR fetch failed"));
 
       assertNull(loader.fetchPrTotals("Bearer tok", "owner", "repo", 46));
@@ -1473,8 +1427,7 @@ class ReviewContextLoaderTest {
 
     @Test
     void shouldResolveAtThePrHeadShaWithTheReviewsIgnoreGlobs() {
-      var files =
-          List.of(new GitHubPullRequestClient.FileDiff("README.md", "modified", 1, 0, 1, ""));
+      var files = List.of(new CodeHost.FileDiff("README.md", "modified", 1, 0, 1, ""));
       when(configKeyContextResolver.resolve("auth", "owner", "repo", "headsha", files, GLOBS))
           .thenReturn("### definitions");
 
@@ -1515,16 +1468,15 @@ class ReviewContextLoaderTest {
           false);
     }
 
-    private void stubLoad(List<GitHubPullRequestClient.FileDiff> files, List<String> priorJsons) {
-      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(1)))
-          .thenReturn(files);
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(1)))
+    private void stubLoad(List<CodeHost.FileDiff> files, List<String> priorJsons) {
+      when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(1))).thenReturn(files);
+      when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(1)))
           .thenReturn(
-              new GitHubPullRequestClient.PullRequestDetails(
+              new CodeHost.PullRequestDetails(
                   "Title",
                   "body",
-                  new GitHubPullRequestClient.Ref("headsha1"),
-                  new GitHubPullRequestClient.Ref("basesha1"),
+                  new CodeHost.Ref("headsha1"),
+                  new CodeHost.Ref("basesha1"),
                   1,
                   1,
                   0));
@@ -1545,9 +1497,7 @@ class ReviewContextLoaderTest {
     @Test
     void lineResolverIsBuiltOnceAndSharedAcrossAccesses() {
       stubLoad(
-          List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x")),
+          List.of(new CodeHost.FileDiff("a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x")),
           List.of());
       var session =
           ReviewSession.create(
@@ -1568,9 +1518,7 @@ class ReviewContextLoaderTest {
     @Test
     void lineResolverIsNotBuiltWhenNeverAccessed() {
       stubLoad(
-          List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x")),
+          List.of(new CodeHost.FileDiff("a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x")),
           List.of());
       var session =
           ReviewSession.create(
@@ -1616,9 +1564,7 @@ class ReviewContextLoaderTest {
               anyList(), anyBoolean(), any(), any(), any(), any(BotIdentity.class), any(), any()))
           .thenReturn("ctx");
       stubLoad(
-          List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x")),
+          List.of(new CodeHost.FileDiff("a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x")),
           List.of(priorJson, olderJson));
       var session =
           ReviewSession.create(
@@ -1731,18 +1677,18 @@ class ReviewContextLoaderTest {
 
     /** Round 2 posted the bot's own "1 previous finding(s) remain unresolved" body, as on #449. */
     private void stubRoundThree(List<String> priorJsons) {
-      when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(1)))
+      when(prClient.getPullRequestFiles(any(), eq("owner"), eq("repo"), eq(1)))
           .thenReturn(
               List.of(
-                  new GitHubPullRequestClient.FileDiff(
+                  new CodeHost.FileDiff(
                       CARRIED_FILE, "modified", 1, 0, 1, "@@ -166 +166 @@\n+" + CARRIED_ANCHOR)));
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(1)))
+      when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(1)))
           .thenReturn(
-              new GitHubPullRequestClient.PullRequestDetails(
+              new CodeHost.PullRequestDetails(
                   "Title",
                   "body",
-                  new GitHubPullRequestClient.Ref("headsha1"),
-                  new GitHubPullRequestClient.Ref("basesha1"),
+                  new CodeHost.Ref("headsha1"),
+                  new CodeHost.Ref("basesha1"),
                   1,
                   1,
                   0));

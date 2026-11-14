@@ -17,7 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.Optional;
@@ -38,13 +38,13 @@ public class RunningReviewCoverage {
   private static final String ACCEPT = "application/vnd.github+json";
 
   private final GitHubAuthClient authClient;
-  private final GitHubPullRequestClient prClient;
+  private final CodeHost prClient;
   private final GitHubCommentClient commentClient;
 
   @Inject
   public RunningReviewCoverage(
       GitHubAuthClient authClient,
-      @RestClient GitHubPullRequestClient prClient,
+      CodeHost prClient,
       @RestClient GitHubCommentClient commentClient) {
     this.authClient = authClient;
     this.prClient = prClient;
@@ -58,11 +58,11 @@ public class RunningReviewCoverage {
   public Optional<String> currentHead(ReviewOrchestrator.ReviewRequest req) {
     try {
       var auth = authClient.getAuthHeader(req.installationId());
-      var pr = prClient.getPullRequest(auth, ACCEPT, req.owner(), req.repo(), req.prNumber());
+      var pr = prClient.getPullRequest(auth, req.owner(), req.repo(), req.prNumber());
       var head =
           Optional.ofNullable(pr)
-              .map(GitHubPullRequestClient.PullRequestDetails::head)
-              .map(GitHubPullRequestClient.Ref::sha)
+              .map(CodeHost.PullRequestDetails::head)
+              .map(CodeHost.Ref::sha)
               .filter(sha -> !sha.isBlank());
       if (head.isEmpty()) {
         log.warn(

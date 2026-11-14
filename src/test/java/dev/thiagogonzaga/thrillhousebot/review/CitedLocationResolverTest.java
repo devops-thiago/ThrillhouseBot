@@ -19,8 +19,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import jakarta.ws.rs.WebApplicationException;
@@ -60,7 +60,7 @@ class CitedLocationResolverTest {
       }
       """;
 
-  private final GitHubPullRequestClient prClient = mock(GitHubPullRequestClient.class);
+  private final CodeHost prClient = mock(CodeHost.class);
   private final CitedLocationResolver resolver = new CitedLocationResolver(prClient);
 
   private CitedLocationResolver.Round round(FileDiff... files) {
@@ -72,9 +72,9 @@ class CitedLocationResolverTest {
   }
 
   private void givenFile(String path, String content) {
-    when(prClient.getFileContent(any(), any(), eq("o"), eq("r"), eq(path), eq("headsha")))
+    when(prClient.getFileContent(any(), eq("o"), eq("r"), eq(path), eq("headsha")))
         .thenReturn(
-            new GitHubPullRequestClient.FileContent(
+            new CodeHost.FileContent(
                 path,
                 path,
                 Base64.getEncoder().encodeToString(content.getBytes(StandardCharsets.UTF_8)),
@@ -244,7 +244,7 @@ class CitedLocationResolverTest {
 
   @Test
   void failsOpenWhenTheFileCannotBeRead() {
-    when(prClient.getFileContent(any(), any(), any(), any(), any(), any()))
+    when(prClient.getFileContent(any(), any(), any(), any(), any()))
         .thenThrow(new WebApplicationException(404));
     var finding = finding(PATH, 10, "return \"<p>\" + purpose + \"</p>\";");
 
@@ -253,9 +253,9 @@ class CitedLocationResolverTest {
 
   @Test
   void skipsAFileTooLargeToBeSource() {
-    when(prClient.getFileContent(any(), any(), eq("o"), eq("r"), eq(PATH), eq("headsha")))
+    when(prClient.getFileContent(any(), eq("o"), eq("r"), eq(PATH), eq("headsha")))
         .thenReturn(
-            new GitHubPullRequestClient.FileContent(
+            new CodeHost.FileContent(
                 PATH,
                 PATH,
                 Base64.getEncoder().encodeToString(RENDERER.getBytes(StandardCharsets.UTF_8)),
@@ -276,7 +276,7 @@ class CitedLocationResolverTest {
     assertNotNull(round.locate(List.of(first)).forFinding(first));
     assertNotNull(round.locate(List.of(second)).forFinding(second));
 
-    verify(prClient, times(1)).getFileContent(any(), any(), any(), any(), eq(PATH), any());
+    verify(prClient, times(1)).getFileContent(any(), any(), any(), eq(PATH), any());
   }
 
   @Test
@@ -298,7 +298,7 @@ class CitedLocationResolverTest {
         located.forFinding(findings[files.length - 1]),
         "the finding past the round's fetch budget resolves to nothing");
     verify(prClient, times(CitedLocationResolver.MAX_FILES_FETCHED))
-        .getFileContent(any(), any(), any(), any(), any(), any());
+        .getFileContent(any(), any(), any(), any(), any());
   }
 
   @Test
@@ -510,12 +510,11 @@ class CitedLocationResolverTest {
   @Test
   void failsOpenOnAnAbsentOrEmptyResponseBody() {
     var finding = finding(PATH, 10, "return x;");
-    when(prClient.getFileContent(any(), any(), any(), any(), eq(PATH), any())).thenReturn(null);
+    when(prClient.getFileContent(any(), any(), any(), eq(PATH), any())).thenReturn(null);
     assertNull(resolve(round(changed(PATH)), finding), "no body");
 
-    var contentless = new GitHubPullRequestClient.FileContent(PATH, PATH, null, "base64", 10);
-    when(prClient.getFileContent(any(), any(), any(), any(), eq(PATH), any()))
-        .thenReturn(contentless);
+    var contentless = new CodeHost.FileContent(PATH, PATH, null, "base64", 10);
+    when(prClient.getFileContent(any(), any(), any(), eq(PATH), any())).thenReturn(contentless);
     assertNull(resolve(round(changed(PATH)), finding), "no content");
 
     givenFile(PATH, "");
@@ -588,13 +587,13 @@ class CitedLocationResolverTest {
   /** #1076: the repository is listed once per round, on first use, at the review's revision. */
   @Test
   void listsTheRepositoryOnceAtTheHead() {
-    when(prClient.getTree(any(), any(), eq("o"), eq("r"), eq("headsha"), eq("1")))
+    when(prClient.getTree(any(), eq("o"), eq("r"), eq("headsha")))
         .thenReturn(
-            new GitHubPullRequestClient.TreeResponse(
+            new CodeHost.TreeResponse(
                 "headsha",
                 List.of(
-                    new GitHubPullRequestClient.TreeEntry("docs/A.md", "blob", 1),
-                    new GitHubPullRequestClient.TreeEntry(null, "blob", 1)),
+                    new CodeHost.TreeEntry("docs/A.md", "blob", 1),
+                    new CodeHost.TreeEntry(null, "blob", 1)),
                 true));
     var round = round(changed(PATH));
 
@@ -603,18 +602,17 @@ class CitedLocationResolverTest {
 
     assertEquals(java.util.Set.of("docs/A.md"), paths.paths());
     assertTrue(paths.truncated());
-    verify(prClient, times(1)).getTree(any(), any(), any(), any(), any(), any());
+    verify(prClient, times(1)).getTree(any(), any(), any(), any());
   }
 
   /** A listing that fails, or comes back empty-handed, leaves the paths unknown. */
   @Test
   void anUnreadableRepositoryIsUnknown() {
-    when(prClient.getTree(any(), any(), any(), any(), any(), any()))
-        .thenThrow(new WebApplicationException(502));
+    when(prClient.getTree(any(), any(), any(), any())).thenThrow(new WebApplicationException(502));
     assertTrue(round(changed(PATH)).repositoryPaths().isEmpty());
 
     reset(prClient);
-    when(prClient.getTree(any(), any(), any(), any(), any(), any())).thenReturn(null);
+    when(prClient.getTree(any(), any(), any(), any())).thenReturn(null);
     assertTrue(round(changed(PATH)).repositoryPaths().isEmpty());
 
     assertTrue(CitedLocationResolver.disabled().repositoryPaths().isEmpty());
@@ -631,13 +629,13 @@ class CitedLocationResolverTest {
 
     assertEquals(List.of("one", "two"), round.citedFileLines("docs/A.md").orElseThrow());
     assertEquals(List.of("one", "two"), round.citedFileLines("docs/A.md").orElseThrow());
-    verify(prClient, times(1)).getFileContent(any(), any(), any(), any(), eq("docs/A.md"), any());
+    verify(prClient, times(1)).getFileContent(any(), any(), any(), eq("docs/A.md"), any());
 
     for (int i = 1; i < CitedLocationResolver.MAX_CITED_FILES_FETCHED; i++) {
       round.citedFileLines("other" + i);
     }
     assertTrue(round.citedFileLines("one-too-many").isEmpty());
-    verify(prClient, never()).getFileContent(any(), any(), any(), any(), eq("one-too-many"), any());
+    verify(prClient, never()).getFileContent(any(), any(), any(), eq("one-too-many"), any());
     assertTrue(CitedLocationResolver.disabled().citedFileLines("docs/A.md").isEmpty());
   }
 }

@@ -15,7 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -29,7 +29,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
  * Resolves the configuration keys a documentation-only diff <em>describes</em> to the code that
@@ -55,8 +54,6 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  */
 @ApplicationScoped
 public class ConfigKeyContextResolver {
-
-  private static final String ACCEPT = "application/vnd.github+json";
 
   /** Doc/config files scanned for key tokens; the rest of a large PR's docs are ignored. */
   static final int MAX_DOC_FILES = 20;
@@ -167,10 +164,10 @@ public class ConfigKeyContextResolver {
   private static final List<String> CONFIG_STEMS =
       List.of("config", "configuration", "settings", "properties", "env");
 
-  private final GitHubPullRequestClient prClient;
+  private final CodeHost prClient;
 
   @Inject
-  public ConfigKeyContextResolver(@RestClient GitHubPullRequestClient prClient) {
+  public ConfigKeyContextResolver(CodeHost prClient) {
     this.prClient = prClient;
   }
 
@@ -197,7 +194,7 @@ public class ConfigKeyContextResolver {
       String owner,
       String repo,
       String ref,
-      List<GitHubPullRequestClient.FileDiff> files,
+      List<CodeHost.FileDiff> files,
       ReviewDiffFormatter.IgnoreGlobs ignoreGlobs) {
     var tokens = extractTokens(files);
     if (tokens.isEmpty()) {
@@ -224,7 +221,7 @@ public class ConfigKeyContextResolver {
    * first-mention order and deduplicated. Only added lines are scanned: the documentation this PR
    * is being reviewed for is what needs its implementation checked.
    */
-  static List<String> extractTokens(List<GitHubPullRequestClient.FileDiff> files) {
+  static List<String> extractTokens(List<CodeHost.FileDiff> files) {
     if (files == null || files.isEmpty()) {
       return List.of();
     }
@@ -331,9 +328,9 @@ public class ConfigKeyContextResolver {
       String repo,
       String ref,
       ReviewDiffFormatter.IgnoreGlobs ignoreGlobs) {
-    List<GitHubPullRequestClient.TreeEntry> entries;
+    List<CodeHost.TreeEntry> entries;
     try {
-      var tree = prClient.getTree(auth, ACCEPT, owner, repo, ref, "1");
+      var tree = prClient.getTree(auth, owner, repo, ref);
       entries = tree == null ? List.of() : tree.tree();
       if (tree != null && tree.truncated()) {
         // GitHub caps a recursive listing and flags it. The definitions we do find are still
@@ -391,7 +388,7 @@ public class ConfigKeyContextResolver {
    * {@code TreeResponse} copies the list with {@code List.copyOf}, which rejects null elements
    * before the walk begins — but a null path inside an entry is not.
    */
-  static boolean isWorthReading(GitHubPullRequestClient.TreeEntry entry) {
+  static boolean isWorthReading(CodeHost.TreeEntry entry) {
     return "blob".equals(entry.type())
         && entry.path() != null
         && entry.size() <= MAX_CANDIDATE_BYTES
@@ -515,7 +512,7 @@ public class ConfigKeyContextResolver {
   /** A repository file's decoded text, or {@code null} when it cannot be read. */
   private String fetchContent(String auth, String owner, String repo, String path, String ref) {
     try {
-      var file = prClient.getFileContent(auth, ACCEPT, owner, repo, path, ref);
+      var file = prClient.getFileContent(auth, owner, repo, path, ref);
       if (file == null || file.content() == null) {
         return null;
       }

@@ -22,8 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient.IssueComment;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -71,8 +71,8 @@ class BaseCodeCitationsTest {
   }
 
   /** A patch adding one line at {@code line}, a modified file's own change. */
-  private static GitHubPullRequestClient.FileDiff modified(String path, int line) {
-    return new GitHubPullRequestClient.FileDiff(
+  private static CodeHost.FileDiff modified(String path, int line) {
+    return new CodeHost.FileDiff(
         path, "modified", 1, 0, 1, "@@ -" + line + ",0 +" + line + ",1 @@\n+  // new");
   }
 
@@ -132,7 +132,7 @@ class BaseCodeCitationsTest {
       contents.put(path, lines);
     }
 
-    BaseCodeCitations citations(String description, List<GitHubPullRequestClient.FileDiff> files) {
+    BaseCodeCitations citations(String description, List<CodeHost.FileDiff> files) {
       return BaseCodeCitations.of(
           description,
           files,
@@ -145,7 +145,7 @@ class BaseCodeCitationsTest {
   }
 
   /** #1141's changed files that the description cites: both modified away from the cited lines. */
-  private static List<GitHubPullRequestClient.FileDiff> pr1141Files() {
+  private static List<CodeHost.FileDiff> pr1141Files() {
     return List.of(
         modified(REVIEW + "SecurityScan.java", 1200),
         modified(TESTS + "SecurityScanTest.java", 880),
@@ -239,7 +239,7 @@ class BaseCodeCitationsTest {
 
     var addedFile = new ArrayList<>(pr1141Files());
     addedFile.add(
-        new GitHubPullRequestClient.FileDiff(
+        new CodeHost.FileDiff(
             REVIEW + "VerdictBuilder.java", "added", 900, 0, 900, "@@ -0,0 +1,1 @@\n+x"));
     assertEquals(
         List.of(CHECK_RUN_GAP),
@@ -248,8 +248,7 @@ class BaseCodeCitationsTest {
 
     var patchless = new ArrayList<>(pr1141Files());
     patchless.add(
-        new GitHubPullRequestClient.FileDiff(
-            REVIEW + "VerdictBuilder.java", "modified", 900, 0, 900, null));
+        new CodeHost.FileDiff(REVIEW + "VerdictBuilder.java", "modified", 900, 0, 900, null));
     assertEquals(
         List.of(CHECK_RUN_GAP),
         new Repository().citations(body, patchless).split(List.of(CHECK_RUN_GAP)).unmet(),
@@ -583,8 +582,7 @@ class BaseCodeCitationsTest {
     for (var patch : new String[] {null, " "}) {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  REVIEW + "VerdictBuilder.java", "modified", 1, 0, 1, patch));
+              new CodeHost.FileDiff(REVIEW + "VerdictBuilder.java", "modified", 1, 0, 1, patch));
       assertEquals(
           gaps,
           repository

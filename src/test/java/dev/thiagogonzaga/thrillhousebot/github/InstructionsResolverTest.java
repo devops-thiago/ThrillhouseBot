@@ -20,6 +20,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
@@ -34,7 +35,7 @@ class InstructionsResolverTest {
 
   @Mock private GitHubAuthClient authClient;
 
-  @Mock private GitHubPullRequestClient prClient;
+  @Mock private CodeHost prClient;
 
   @Mock private ThrillhouseConfig config;
 
@@ -59,11 +60,11 @@ class InstructionsResolverTest {
     resolver = new InstructionsResolver(config, authClient, prClient, currentTimeMs::get);
   }
 
-  private GitHubPullRequestClient.FileContent makeFileContent(String content) {
+  private CodeHost.FileContent makeFileContent(String content) {
     var encoded =
         Base64.getEncoder()
             .encodeToString(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-    return new GitHubPullRequestClient.FileContent(
+    return new CodeHost.FileContent(
         "file.md", "path/to/file.md", encoded, "base64", content.length());
   }
 
@@ -71,21 +72,11 @@ class InstructionsResolverTest {
   void shouldResolveFirstFileInFallbackChain() {
     // thrillhousebot.md (first in chain) returns 404, copilot-instructions.md (second) succeeds
     when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
+            AUTH_HEADER, OWNER, REPO, ".github/thrillhousebot.md", DEFAULT_BRANCH))
         .thenThrow(new NotFoundException(Response.status(404).build()));
 
     when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/copilot-instructions.md",
-            DEFAULT_BRANCH))
+            AUTH_HEADER, OWNER, REPO, ".github/copilot-instructions.md", DEFAULT_BRANCH))
         .thenReturn(makeFileContent("# Copilot Instructions"));
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -98,12 +89,7 @@ class InstructionsResolverTest {
   @Test
   void shouldResolveThrillhousebotMd() {
     when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
+            AUTH_HEADER, OWNER, REPO, ".github/thrillhousebot.md", DEFAULT_BRANCH))
         .thenReturn(makeFileContent("Custom bot instructions"));
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -117,25 +103,14 @@ class InstructionsResolverTest {
   void shouldTryClaudeMdAsFallback() {
     // First two in chain fail (404), CLAUDE.md succeeds
     when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
+            AUTH_HEADER, OWNER, REPO, ".github/thrillhousebot.md", DEFAULT_BRANCH))
         .thenThrow(new NotFoundException(Response.status(404).build()));
 
     when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/copilot-instructions.md",
-            DEFAULT_BRANCH))
+            AUTH_HEADER, OWNER, REPO, ".github/copilot-instructions.md", DEFAULT_BRANCH))
         .thenThrow(new NotFoundException(Response.status(404).build()));
 
-    when(prClient.getFileContent(
-            AUTH_HEADER, "application/vnd.github+json", OWNER, REPO, "CLAUDE.md", DEFAULT_BRANCH))
+    when(prClient.getFileContent(AUTH_HEADER, OWNER, REPO, "CLAUDE.md", DEFAULT_BRANCH))
         .thenReturn(makeFileContent("# CLAUDE.md content"));
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -148,8 +123,7 @@ class InstructionsResolverTest {
   @Test
   void shouldReturnEmptyWhenNoFilesFound() {
     // All files throw 404
-    when(prClient.getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+    when(prClient.getFileContent(anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenThrow(new NotFoundException(Response.status(404).build()));
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -163,12 +137,7 @@ class InstructionsResolverTest {
   @Test
   void shouldCacheResultAndNotHitApiOnSecondCall() {
     when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
+            AUTH_HEADER, OWNER, REPO, ".github/thrillhousebot.md", DEFAULT_BRANCH))
         .thenReturn(makeFileContent("Cached content"));
 
     // First call — hits API
@@ -181,19 +150,13 @@ class InstructionsResolverTest {
 
     // API should only be called once per file path (only the first one since it succeeded)
     verify(prClient, times(1))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        .getFileContent(anyString(), anyString(), anyString(), anyString(), anyString());
   }
 
   @Test
   void shouldRemoveExpiredCacheEntryBeforeRefetch() {
     when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
+            AUTH_HEADER, OWNER, REPO, ".github/thrillhousebot.md", DEFAULT_BRANCH))
         .thenReturn(makeFileContent("Cached content"));
 
     resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -202,12 +165,7 @@ class InstructionsResolverTest {
     currentTimeMs.addAndGet(InstructionsResolver.CACHE_TTL_MS + 1);
 
     when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
+            AUTH_HEADER, OWNER, REPO, ".github/thrillhousebot.md", DEFAULT_BRANCH))
         .thenReturn(makeFileContent("Refreshed content"));
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -215,19 +173,13 @@ class InstructionsResolverTest {
     assertEquals("Refreshed content", result.content());
     assertEquals(1, resolver.cache.size());
     verify(prClient, times(2))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        .getFileContent(anyString(), anyString(), anyString(), anyString(), anyString());
   }
 
   @Test
   void shouldRefetchAfterCacheExpiry() {
     when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
+            AUTH_HEADER, OWNER, REPO, ".github/thrillhousebot.md", DEFAULT_BRANCH))
         .thenReturn(makeFileContent("Fresh content"));
 
     // First call — populate cache
@@ -238,12 +190,7 @@ class InstructionsResolverTest {
 
     // Second call — should refetch since the cached entry is expired
     when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
+            AUTH_HEADER, OWNER, REPO, ".github/thrillhousebot.md", DEFAULT_BRANCH))
         .thenReturn(makeFileContent("Refreshed content"));
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -252,30 +199,19 @@ class InstructionsResolverTest {
 
     // API should have been called twice total
     verify(prClient, times(2))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        .getFileContent(anyString(), anyString(), anyString(), anyString(), anyString());
   }
 
   @Test
   void shouldCacheNegativeResultForSeparateRepos() {
     // No files found for repo A
     when(prClient.getFileContent(
-            eq(AUTH_HEADER),
-            eq("application/vnd.github+json"),
-            eq("owner-a"),
-            eq("repo-a"),
-            anyString(),
-            eq(DEFAULT_BRANCH)))
+            eq(AUTH_HEADER), eq("owner-a"), eq("repo-a"), anyString(), eq(DEFAULT_BRANCH)))
         .thenThrow(new NotFoundException(Response.status(404).build()));
 
     // thrillhousebot.md found for repo B
     when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            "owner-b",
-            "repo-b",
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
+            AUTH_HEADER, "owner-b", "repo-b", ".github/thrillhousebot.md", DEFAULT_BRANCH))
         .thenReturn(makeFileContent("Repo B instructions"));
 
     var resultA = resolver.resolve("owner-a", "repo-a", DEFAULT_BRANCH, INSTALLATION_ID);
@@ -295,14 +231,9 @@ class InstructionsResolverTest {
             .encodeToString(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     assertTrue(wrapped.contains("\n"));
     when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
+            AUTH_HEADER, OWNER, REPO, ".github/thrillhousebot.md", DEFAULT_BRANCH))
         .thenReturn(
-            new GitHubPullRequestClient.FileContent(
+            new CodeHost.FileContent(
                 "thrillhousebot.md",
                 ".github/thrillhousebot.md",
                 wrapped,
@@ -316,8 +247,7 @@ class InstructionsResolverTest {
 
   @Test
   void shouldHandleWebApplicationException() {
-    when(prClient.getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+    when(prClient.getFileContent(anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenThrow(new WebApplicationException(Response.status(500).build()));
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -327,34 +257,25 @@ class InstructionsResolverTest {
 
   @Test
   void shouldRefetchAfterNegativeCacheExpiry() {
-    when(prClient.getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+    when(prClient.getFileContent(anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenThrow(new NotFoundException(Response.status(404).build()));
 
     // First call — every fallback path 404s, negative result is cached
     assertFalse(resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID).isPresent());
     verify(prClient, times(5))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        .getFileContent(anyString(), anyString(), anyString(), anyString(), anyString());
 
     // Still inside the 60s negative-cache window — no new API calls
     currentTimeMs.addAndGet(59_999);
     assertFalse(resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID).isPresent());
     verify(prClient, times(5))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        .getFileContent(anyString(), anyString(), anyString(), anyString(), anyString());
 
     // Past the negative-cache TTL — the resolver retries and finds a newly added file
     currentTimeMs.addAndGet(2);
     doReturn(makeFileContent("Added later"))
         .when(prClient)
-        .getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH);
+        .getFileContent(AUTH_HEADER, OWNER, REPO, ".github/thrillhousebot.md", DEFAULT_BRANCH);
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -389,13 +310,7 @@ class InstructionsResolverTest {
     when(reviewConfig.instructionsFile()).thenReturn("docs/CUSTOM.md");
     resolver = new InstructionsResolver(config, authClient, prClient, currentTimeMs::get);
 
-    when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            "docs/CUSTOM.md",
-            DEFAULT_BRANCH))
+    when(prClient.getFileContent(AUTH_HEADER, OWNER, REPO, "docs/CUSTOM.md", DEFAULT_BRANCH))
         .thenReturn(makeFileContent("# Custom instructions"));
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -403,13 +318,7 @@ class InstructionsResolverTest {
     assertEquals("# Custom instructions", result.content());
     assertEquals("docs/CUSTOM.md", result.source());
     verify(prClient, never())
-        .getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH);
+        .getFileContent(AUTH_HEADER, OWNER, REPO, ".github/thrillhousebot.md", DEFAULT_BRANCH);
   }
 
   @Test
@@ -417,12 +326,7 @@ class InstructionsResolverTest {
     var productionResolver = new InstructionsResolver(config, authClient, prClient);
 
     when(prClient.getFileContent(
-            AUTH_HEADER,
-            "application/vnd.github+json",
-            OWNER,
-            REPO,
-            ".github/thrillhousebot.md",
-            DEFAULT_BRANCH))
+            AUTH_HEADER, OWNER, REPO, ".github/thrillhousebot.md", DEFAULT_BRANCH))
         .thenReturn(makeFileContent("Prod instructions"));
 
     var result = productionResolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -432,14 +336,12 @@ class InstructionsResolverTest {
     // The freshly cached entry is served on the next call (System clock is within TTL)
     productionResolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
     verify(prClient, times(1))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        .getFileContent(anyString(), anyString(), anyString(), anyString(), anyString());
   }
 
   @Test
   void sweepShouldEvictExpiredEntriesAboveThreshold() {
-    when(prClient.getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+    when(prClient.getFileContent(anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenReturn(makeFileContent("instructions"));
     for (var i = 0; i < InstructionsResolver.CACHE_SWEEP_THRESHOLD; i++) {
       resolver.resolve(OWNER, "repo-" + i, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -455,8 +357,7 @@ class InstructionsResolverTest {
 
   @Test
   void sweepShouldNotRunBelowThreshold() {
-    when(prClient.getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+    when(prClient.getFileContent(anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenReturn(makeFileContent("instructions"));
     resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
     currentTimeMs.addAndGet(InstructionsResolver.CACHE_TTL_MS + 1);

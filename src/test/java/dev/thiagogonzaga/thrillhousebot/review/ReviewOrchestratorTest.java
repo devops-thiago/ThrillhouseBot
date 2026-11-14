@@ -31,6 +31,7 @@ import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.notification.ReviewNotifier;
 import dev.thiagogonzaga.thrillhousebot.observability.ReviewOutcomeMetrics;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
@@ -97,7 +98,7 @@ class ReviewOrchestratorTest {
 
   @Mock private GitHubCommentClient commentClient;
 
-  @Mock private GitHubPullRequestClient prClient;
+  @Mock private CodeHost prClient;
 
   @Mock private ReviewThreadService reviewThreadService;
 
@@ -226,13 +227,13 @@ class ReviewOrchestratorTest {
         .when(checkRunClient.getAllCombinedStatus(any(), any(), any(), any(), any()))
         .thenReturn(List.of());
     lenient()
-        .when(prClient.getPullRequest(any(), any(), any(), any(), anyInt()))
+        .when(prClient.getPullRequest(any(), any(), any(), anyInt()))
         .thenReturn(
-            new GitHubPullRequestClient.PullRequestDetails(
+            new CodeHost.PullRequestDetails(
                 "Test PR",
                 "",
-                new GitHubPullRequestClient.Ref("abcdefgh"),
-                new GitHubPullRequestClient.Ref("base-sha"),
+                new CodeHost.Ref("abcdefgh"),
+                new CodeHost.Ref("base-sha"),
                 1,
                 1,
                 1));
@@ -402,15 +403,14 @@ class ReviewOrchestratorTest {
     return resolver;
   }
 
-  private DiffLineResolver resolverFor(GitHubPullRequestClient.FileDiff... files) {
+  private DiffLineResolver resolverFor(CodeHost.FileDiff... files) {
     return new DiffLineResolver(diffFormatter.patchesByFile(List.of(files)));
   }
 
-  private static GitHubPullRequestClient.FileDiff fileDiffWithLine(
-      String filename, int lineInPatch) {
+  private static CodeHost.FileDiff fileDiffWithLine(String filename, int lineInPatch) {
     // Plain concatenation: patches always use \n regardless of platform, so %n would be wrong
     var patch = "@@ -" + lineInPatch + ",1 +" + lineInPatch + ",1 @@\n-old\n+new";
-    return new GitHubPullRequestClient.FileDiff(filename, "modified", 1, 1, 2, patch);
+    return new CodeHost.FileDiff(filename, "modified", 1, 1, 2, patch);
   }
 
   @Nested
@@ -1700,8 +1700,7 @@ class ReviewOrchestratorTest {
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(checkRunClient.getRequiredStatusChecks(
                 anyString(), anyString(), anyString(), anyString(), anyString()))
@@ -1709,8 +1708,8 @@ class ReviewOrchestratorTest {
                 new GitHubCheckRunClient.RequiredStatusChecks(
                     List.of("required-build"), List.of()));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -1763,7 +1762,7 @@ class ReviewOrchestratorTest {
     void shouldInjectMockFidelityCheckWhenPrChangesTests() {
       assertTrue(
           captureRepoInstructions(
-                  new GitHubPullRequestClient.FileDiff(
+                  new CodeHost.FileDiff(
                       "src/test/java/dev/thiagogonzaga/thrillhousebot/webhook/WebhookEventsTest.java",
                       "modified",
                       1,
@@ -1781,13 +1780,13 @@ class ReviewOrchestratorTest {
     void shouldNotInjectMockFidelityCheckWhenPrHasNoTests() {
       assertFalse(
           captureRepoInstructions(
-                  new GitHubPullRequestClient.FileDiff(
+                  new CodeHost.FileDiff(
                       "src/main/java/Foo.java", "modified", 1, 0, 1, "@@\n+class Foo {}\n"))
               .contains("Mock Fidelity Check"));
     }
 
     /** Runs review() far enough to capture the prompt and returns its repoInstructions slot. */
-    private String captureRepoInstructions(GitHubPullRequestClient.FileDiff... files) {
+    private String captureRepoInstructions(CodeHost.FileDiff... files) {
       return capturePromptInputs(files).repoInstructions();
     }
 
@@ -1904,8 +1903,7 @@ class ReviewOrchestratorTest {
     }
 
     /** Runs review() far enough to capture the prompt inputs the review call was given. */
-    private AiReviewService.PromptInputs capturePromptInputs(
-        GitHubPullRequestClient.FileDiff... files) {
+    private AiReviewService.PromptInputs capturePromptInputs(CodeHost.FileDiff... files) {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -1923,12 +1921,11 @@ class ReviewOrchestratorTest {
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of(files));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -1978,15 +1975,12 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(
-                List.of(
-                    new GitHubPullRequestClient.FileDiff(
-                        "src/Main.java", "modified", 5, 3, 8, "@@ patch")));
+                List.of(new CodeHost.FileDiff("src/Main.java", "modified", 5, 3, 8, "@@ patch")));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -2101,8 +2095,7 @@ class ReviewOrchestratorTest {
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(checkRunClient.getRequiredStatusChecks(
                 anyString(), anyString(), anyString(), anyString(), anyString()))
@@ -2110,8 +2103,8 @@ class ReviewOrchestratorTest {
                 new GitHubCheckRunClient.RequiredStatusChecks(
                     List.of("required-build"), List.of()));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -2165,8 +2158,7 @@ class ReviewOrchestratorTest {
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(checkRunClient.getRequiredStatusChecks(
                 anyString(), anyString(), anyString(), anyString(), anyString()))
@@ -2174,8 +2166,8 @@ class ReviewOrchestratorTest {
                 new GitHubCheckRunClient.RequiredStatusChecks(
                     List.of("required-build"), List.of()));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -2236,15 +2228,14 @@ class ReviewOrchestratorTest {
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(checkRunClient.getRequiredStatusChecks(
                 anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(new GitHubCheckRunClient.RequiredStatusChecks(List.of(), List.of()));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -2297,12 +2288,11 @@ class ReviewOrchestratorTest {
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -2361,12 +2351,11 @@ class ReviewOrchestratorTest {
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -2418,12 +2407,11 @@ class ReviewOrchestratorTest {
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -2492,8 +2480,7 @@ class ReviewOrchestratorTest {
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenThrow(new RuntimeException("500 Server Error"));
 
         orchestrator.review(
@@ -2546,8 +2533,7 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(checkRunClient.getRequiredStatusChecks(
                 anyString(), anyString(), anyString(), anyString(), anyString()))
@@ -2555,8 +2541,8 @@ class ReviewOrchestratorTest {
                 new GitHubCheckRunClient.RequiredStatusChecks(
                     List.of("required-build"), List.of()));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -2632,12 +2618,11 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -2696,12 +2681,11 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -2773,12 +2757,11 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         var pending =
             new GitHubReviewClient.ReviewResponse(
                 99L, "", "PENDING", "sha", new GitHubReviewClient.ReviewResponse.User(BOT_LOGIN));
@@ -2838,8 +2821,7 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(checkRunClient.getRequiredStatusChecks(
                 anyString(), anyString(), anyString(), anyString(), anyString()))
@@ -2847,8 +2829,8 @@ class ReviewOrchestratorTest {
                 new GitHubCheckRunClient.RequiredStatusChecks(
                     List.of("required-build"), List.of()));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -2910,12 +2892,11 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -2974,12 +2955,11 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -3052,8 +3032,7 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(checkRunClient.getRequiredStatusChecks(
                 anyString(), anyString(), anyString(), anyString(), anyString()))
@@ -3061,8 +3040,8 @@ class ReviewOrchestratorTest {
                 new GitHubCheckRunClient.RequiredStatusChecks(
                     List.of("required-build"), List.of()));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(
                 List.of(
@@ -3152,12 +3131,11 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(
                 List.of(
@@ -3369,12 +3347,10 @@ class ReviewOrchestratorTest {
       doNothing()
           .when(checkRunClient)
           .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-      when(prClient.getPullRequestFiles(
-              anyString(), anyString(), anyString(), anyString(), anyInt()))
+      when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(List.of());
-      when(prClient.compareCommits(
-              anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-          .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+      when(prClient.compareCommits(anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(new CodeHost.CompareResponse(0, List.of()));
       when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(
               List.of(
@@ -3508,12 +3484,10 @@ class ReviewOrchestratorTest {
       doNothing()
           .when(checkRunClient)
           .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-      when(prClient.getPullRequestFiles(
-              anyString(), anyString(), anyString(), anyString(), anyInt()))
+      when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(List.of());
-      when(prClient.compareCommits(
-              anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-          .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+      when(prClient.compareCommits(anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(new CodeHost.CompareResponse(0, List.of()));
       when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(List.of(priorBotReview));
       when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -3562,12 +3536,11 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(
                 List.of(
@@ -3654,15 +3627,14 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(checkRunClient.getRequiredStatusChecks(
                 anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(new GitHubCheckRunClient.RequiredStatusChecks(List.of(), List.of()));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(
                 List.of(
@@ -3738,15 +3710,14 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(checkRunClient.getRequiredStatusChecks(
                 anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenReturn(new GitHubCheckRunClient.RequiredStatusChecks(List.of(), List.of()));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(
                 List.of(
@@ -3813,12 +3784,11 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(commentClient.listComments(
@@ -3906,14 +3876,11 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(
-                List.of(
-                    new GitHubPullRequestClient.FileDiff(
-                        "src/Main.java", "modified", 5, 3, 8, "@@ patch")));
+                List.of(new CodeHost.FileDiff("src/Main.java", "modified", 5, 3, 8, "@@ patch")));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString()))
             .thenThrow(new RuntimeException("Compare API error"));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
@@ -4038,12 +4005,11 @@ class ReviewOrchestratorTest {
         doNothing()
             .when(checkRunClient)
             .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -4134,12 +4100,11 @@ class ReviewOrchestratorTest {
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -4148,22 +4113,22 @@ class ReviewOrchestratorTest {
             .thenReturn(new ReviewResponse(List.of(), List.of(), null));
         // The head is the reviewed sha while the context loads, then moves before the post — the
         // #701 shape: a push landing during the minutes-long model call.
-        when(prClient.getPullRequest(anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequest(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(
-                new GitHubPullRequestClient.PullRequestDetails(
+                new CodeHost.PullRequestDetails(
                     "Test PR",
                     "",
-                    new GitHubPullRequestClient.Ref("abcdefgh"),
-                    new GitHubPullRequestClient.Ref("base-sha"),
+                    new CodeHost.Ref("abcdefgh"),
+                    new CodeHost.Ref("base-sha"),
                     1,
                     1,
                     1))
             .thenReturn(
-                new GitHubPullRequestClient.PullRequestDetails(
+                new CodeHost.PullRequestDetails(
                     "Test PR",
                     "",
-                    new GitHubPullRequestClient.Ref("d4389d2aa"),
-                    new GitHubPullRequestClient.Ref("base-sha"),
+                    new CodeHost.Ref("d4389d2aa"),
+                    new CodeHost.Ref("base-sha"),
                     1,
                     1,
                     1));
@@ -6111,8 +6076,8 @@ class ReviewOrchestratorTest {
           "sha",
           result,
           resolverFor(
-              new GitHubPullRequestClient.FileDiff("empty.java", "modified", 0, 0, 0, ""),
-              new GitHubPullRequestClient.FileDiff("nopatch.java", "modified", 1, 1, 2, null),
+              new CodeHost.FileDiff("empty.java", "modified", 0, 0, 0, ""),
+              new CodeHost.FileDiff("nopatch.java", "modified", 1, 1, 2, null),
               fileDiffWithLine("src/Main.java", 10)));
 
       verify(reviewClient, times(1))
@@ -6376,8 +6341,8 @@ class ReviewOrchestratorTest {
     void shouldAggregateAdditionsAndDeletionsFromFiles() {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff("a.java", "modified", 3, 2, 5, "patch"),
-              new GitHubPullRequestClient.FileDiff("b.java", "modified", 1, 4, 5, "patch"));
+              new CodeHost.FileDiff("a.java", "modified", 3, 2, 5, "patch"),
+              new CodeHost.FileDiff("b.java", "modified", 1, 4, 5, "patch"));
 
       VerdictBuilder.DiffStats stats = VerdictBuilder.DiffStats.fromFiles(files, 0);
 
@@ -6392,8 +6357,8 @@ class ReviewOrchestratorTest {
     void toChangedFilesShouldProjectPathAndStatusInOrder() {
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff("a.java", "added", 3, 0, 3, "patch"),
-              new GitHubPullRequestClient.FileDiff("b.java", "renamed", 0, 0, 0, null));
+              new CodeHost.FileDiff("a.java", "added", 3, 0, 3, "patch"),
+              new CodeHost.FileDiff("b.java", "renamed", 0, 0, 0, null));
 
       var changed = VerdictBuilder.toChangedFiles(files);
 
@@ -7513,8 +7478,7 @@ class ReviewOrchestratorTest {
         delegateStatusGate();
         delegateBackstopComputation();
         // The persisted "new" anchor must remain in the diff, or presence correctly clears it.
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)));
         // A matchable bot root exists, but no maintainer replied to justify dropping the finding.
         when(reviewClient.listPullRequestComments(
@@ -7653,12 +7617,10 @@ class ReviewOrchestratorTest {
       doNothing()
           .when(checkRunClient)
           .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-      when(prClient.getPullRequestFiles(
-              anyString(), anyString(), anyString(), anyString(), anyInt()))
+      when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(List.of());
-      when(prClient.compareCommits(
-              anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-          .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+      when(prClient.compareCommits(anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(new CodeHost.CompareResponse(0, List.of()));
       when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
           .thenReturn(InstructionsResolver.ResolvedInstructions.EMPTY);
       return session;
@@ -7901,7 +7863,7 @@ class ReviewOrchestratorTest {
             .thenReturn(session);
 
         when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
-        when(prClient.getPullRequest(anyString(), anyString(), eq("owner"), eq("repo"), eq(7)))
+        when(prClient.getPullRequest(anyString(), eq("owner"), eq("repo"), eq(7)))
             .thenThrow(new RuntimeException("PR was deleted"));
 
         orchestrator.review(manualRequest(""));
@@ -7937,18 +7899,17 @@ class ReviewOrchestratorTest {
             .thenReturn(session);
 
         when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
-        when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
             .thenReturn(
-                new GitHubPullRequestClient.PullRequestDetails(
+                new CodeHost.PullRequestDetails(
                     "add new API",
                     "Adds a new API endpoint",
-                    new GitHubPullRequestClient.Ref("headsha1234", "feature"),
-                    new GitHubPullRequestClient.Ref("basesha5678", "main")));
+                    new CodeHost.Ref("headsha1234", "feature"),
+                    new CodeHost.Ref("basesha5678", "main")));
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(checkRunClient.getRequiredStatusChecks(
                 anyString(), anyString(), anyString(), anyString(), anyString()))
@@ -7956,8 +7917,8 @@ class ReviewOrchestratorTest {
                 new GitHubCheckRunClient.RequiredStatusChecks(
                     List.of("required-build"), List.of()));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -7994,15 +7955,14 @@ class ReviewOrchestratorTest {
             .thenReturn(session);
 
         when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
-        when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(7)))
+        when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(7)))
             .thenReturn(
-                new GitHubPullRequestClient.PullRequestDetails(
+                new CodeHost.PullRequestDetails(
                     "add new API",
                     "Adds a new API endpoint",
-                    new GitHubPullRequestClient.Ref("headsha1234", "feature"),
-                    new GitHubPullRequestClient.Ref("basesha5678", "main")));
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+                    new CodeHost.Ref("headsha1234", "feature"),
+                    new CodeHost.Ref("basesha5678", "main")));
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(checkRunClient.getRequiredStatusChecks(
                 anyString(), anyString(), anyString(), anyString(), anyString()))
@@ -8011,8 +7971,8 @@ class ReviewOrchestratorTest {
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -8047,20 +8007,19 @@ class ReviewOrchestratorTest {
 
     private void stubCommonReviewMocks(GitHubCheckRunClient.CheckRunsResponse checkRuns) {
       when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
-      when(prClient.getPullRequest(any(), any(), eq("owner"), eq("repo"), eq(42)))
+      when(prClient.getPullRequest(any(), eq("owner"), eq("repo"), eq(42)))
           .thenReturn(
-              new GitHubPullRequestClient.PullRequestDetails(
+              new CodeHost.PullRequestDetails(
                   "Test PR",
                   "",
-                  new GitHubPullRequestClient.Ref("abcdefgh", "feature"),
-                  new GitHubPullRequestClient.Ref("base1234567", "main")));
+                  new CodeHost.Ref("abcdefgh", "feature"),
+                  new CodeHost.Ref("base1234567", "main")));
       when(checkRunClient.createCheckRun(anyString(), anyString(), anyString(), anyString(), any()))
           .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
       doNothing()
           .when(checkRunClient)
           .updateCheckRun(anyString(), anyString(), anyString(), anyString(), anyLong(), any());
-      when(prClient.getPullRequestFiles(
-              anyString(), anyString(), anyString(), anyString(), anyInt()))
+      when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(List.of());
       when(checkRunClient.getRequiredStatusChecks(
               anyString(), anyString(), anyString(), anyString(), anyString()))
@@ -8069,9 +8028,8 @@ class ReviewOrchestratorTest {
           .thenReturn(checkRuns.checkRuns());
       when(checkRunClient.getAllCombinedStatus(any(), any(), any(), any(), any()))
           .thenReturn(List.of());
-      when(prClient.compareCommits(
-              anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-          .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+      when(prClient.compareCommits(anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(new CodeHost.CompareResponse(0, List.of()));
       when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(List.of());
       when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -8419,11 +8377,10 @@ class ReviewOrchestratorTest {
       when(checkRunClient.getAllCheckRuns(any(), any(), any(), any(), any()))
           .thenReturn(
               buildPassedTest("in_progress", null), buildPassedTest("completed", "failure"));
-      when(prClient.getPullRequestFiles(
-              anyString(), anyString(), anyString(), anyString(), anyInt()))
+      when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(
               List.of(
-                  new GitHubPullRequestClient.FileDiff(
+                  new CodeHost.FileDiff(
                       "src/ingest.rs",
                       "added",
                       3,
@@ -8492,11 +8449,10 @@ class ReviewOrchestratorTest {
           .thenReturn(
               "test rms_uses_exactly_the_last_window_values ... FAILED\ngot 4\n"
                   .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-      when(prClient.getPullRequestFiles(
-              anyString(), anyString(), anyString(), anyString(), anyInt()))
+      when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(
               List.of(
-                  new GitHubPullRequestClient.FileDiff(
+                  new CodeHost.FileDiff(
                       "tests/ingest_test.rs",
                       "added",
                       4,
@@ -8553,13 +8509,13 @@ class ReviewOrchestratorTest {
     void theSummaryReadsTheDescriptionsCitationsAgainstTheRepository() {
       stubCommonReviewMocks(buildCheck("completed", "success"));
       var builder = "src/main/java/dev/thiagogonzaga/thrillhousebot/review/VerdictBuilder.java";
-      when(prClient.getTree(any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), any()))
+      when(prClient.getTree(any(), eq("owner"), eq("repo"), eq("abcdefgh")))
           .thenReturn(
-              new GitHubPullRequestClient.TreeResponse(
-                  "t", List.of(new GitHubPullRequestClient.TreeEntry(builder, "blob", 40)), false));
-      when(prClient.getFileContent(any(), any(), eq("owner"), eq("repo"), eq(builder), any()))
+              new CodeHost.TreeResponse(
+                  "t", List.of(new CodeHost.TreeEntry(builder, "blob", 40)), false));
+      when(prClient.getFileContent(any(), eq("owner"), eq("repo"), eq(builder), any()))
           .thenReturn(
-              new GitHubPullRequestClient.FileContent(
+              new CodeHost.FileContent(
                   "VerdictBuilder.java",
                   builder,
                   java.util.Base64.getEncoder()
@@ -9431,15 +9387,9 @@ class ReviewOrchestratorTest {
             "new",
             "fixed");
 
-    private static GitHubPullRequestClient.PullRequestDetails headAt(String sha) {
-      return new GitHubPullRequestClient.PullRequestDetails(
-          "Test PR",
-          "",
-          new GitHubPullRequestClient.Ref(sha),
-          new GitHubPullRequestClient.Ref("base-sha"),
-          1,
-          1,
-          1);
+    private static CodeHost.PullRequestDetails headAt(String sha) {
+      return new CodeHost.PullRequestDetails(
+          "Test PR", "", new CodeHost.Ref(sha), new CodeHost.Ref("base-sha"), 1, 1, 1);
     }
 
     private static ReviewOrchestrator.ReviewRequest requestFor(String sha) {
@@ -9473,12 +9423,10 @@ class ReviewOrchestratorTest {
       when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
       when(checkRunClient.createCheckRun(anyString(), anyString(), anyString(), anyString(), any()))
           .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-      when(prClient.getPullRequestFiles(
-              anyString(), anyString(), anyString(), anyString(), anyInt()))
+      when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)));
-      when(prClient.compareCommits(
-              anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-          .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+      when(prClient.compareCommits(anyString(), anyString(), anyString(), anyString(), anyString()))
+          .thenReturn(new CodeHost.CompareResponse(0, List.of()));
       when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(List.of());
       when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -9505,7 +9453,7 @@ class ReviewOrchestratorTest {
           .thenReturn(new ReviewResponse(List.of(), List.of(), null));
       // The head is abcdefgh while run 1 loads its context and d4389d2aa by the time it would
       // post; every later read (run 2's whole life) sees d4389d2aa.
-      when(prClient.getPullRequest(anyString(), anyString(), anyString(), anyString(), anyInt()))
+      when(prClient.getPullRequest(anyString(), anyString(), anyString(), anyInt()))
           .thenReturn(headAt("abcdefgh"))
           .thenReturn(headAt("d4389d2aa"));
     }
@@ -9640,12 +9588,11 @@ class ReviewOrchestratorTest {
         stubTwoRuns();
         delegateVerdictPasses();
         // The new head rewrote the line the finding anchored on.
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)))
             .thenReturn(
                 List.of(
-                    new GitHubPullRequestClient.FileDiff(
+                    new CodeHost.FileDiff(
                         "src/Main.java", "modified", 1, 1, 2, "@@ -10,1 +10,1 @@\n-old\n+other")));
         when(aiReviewService.review(any(ReviewSession.class), any()))
             .thenReturn(new ReviewResponse(List.of(VERIFIED_BY_SUPERSEDED_RUN), List.of(), null))
@@ -9669,12 +9616,11 @@ class ReviewOrchestratorTest {
   @Nested
   class LearningsThroughReview {
 
-    private void runReview(GitHubPullRequestClient.FileDiff... files) {
+    private void runReview(CodeHost.FileDiff... files) {
       runReview(new ReviewResponse(List.of(), List.of(), null), files);
     }
 
-    private ReviewSession runReview(
-        ReviewResponse response, GitHubPullRequestClient.FileDiff... files) {
+    private ReviewSession runReview(ReviewResponse response, CodeHost.FileDiff... files) {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
         session.id = 1L;
@@ -9691,12 +9637,11 @@ class ReviewOrchestratorTest {
         when(checkRunClient.createCheckRun(
                 anyString(), anyString(), anyString(), anyString(), any()))
             .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
-        when(prClient.getPullRequestFiles(
-                anyString(), anyString(), anyString(), anyString(), anyInt()))
+        when(prClient.getPullRequestFiles(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of(files));
         when(prClient.compareCommits(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-            .thenReturn(new GitHubPullRequestClient.CompareResponse(0, List.of()));
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(new CodeHost.CompareResponse(0, List.of()));
         when(reviewClient.listReviews(anyString(), anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
         when(instructionsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
@@ -9761,7 +9706,7 @@ class ReviewOrchestratorTest {
       var session =
           runReview(
               new ReviewResponse(List.of(raw), List.of(), null),
-              new GitHubPullRequestClient.FileDiff(
+              new CodeHost.FileDiff(
                   "b/Dockerfile",
                   "modified",
                   1,
@@ -9808,7 +9753,7 @@ class ReviewOrchestratorTest {
       var session =
           runReview(
               new ReviewResponse(List.of(raw), List.of(), null),
-              new GitHubPullRequestClient.FileDiff(
+              new CodeHost.FileDiff(
                   "b/Dockerfile",
                   "modified",
                   1,
@@ -9924,8 +9869,8 @@ class ReviewOrchestratorTest {
       verify(store).listActive(new RepoScope(123L, TestScopes.REPOSITORY_ID), 100);
     }
 
-    private static GitHubPullRequestClient.FileDiff javaFile() {
-      return new GitHubPullRequestClient.FileDiff(
+    private static CodeHost.FileDiff javaFile() {
+      return new CodeHost.FileDiff(
           "src/main/java/A.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+int a = 1;");
     }
 
@@ -9998,7 +9943,7 @@ class ReviewOrchestratorTest {
       orchestrator = newOrchestrator();
 
       runReview(
-          new GitHubPullRequestClient.FileDiff(
+          new CodeHost.FileDiff(
               "b/Dockerfile", "modified", 1, 1, 2, "@@ -1 +1 @@\n-FROM x:1\n+FROM python:3-slim"));
 
       var inputs = ArgumentCaptor.forClass(AiReviewService.PromptInputs.class);

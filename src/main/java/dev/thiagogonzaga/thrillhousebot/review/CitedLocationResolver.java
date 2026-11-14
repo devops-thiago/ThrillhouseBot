@@ -16,7 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.LogSafe;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
@@ -37,7 +37,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
  * Resolves each candidate finding's cited {@code path:line} against the file it names, at the pull
@@ -77,11 +76,6 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 @ApplicationScoped
 public class CitedLocationResolver {
 
-  private static final String ACCEPT = "application/vnd.github+json";
-
-  /** The {@code recursive} query value that makes a tree listing walk every directory. */
-  private static final String RECURSIVE = "1";
-
   /** Distinct files read per review round; findings citing further files resolve to nothing. */
   static final int MAX_FILES_FETCHED = 8;
 
@@ -111,10 +105,10 @@ public class CitedLocationResolver {
   /** The phrase joining a line number to the path it belongs to, used in every rendered note. */
   private static final String OF_PATH = " of `";
 
-  private final GitHubPullRequestClient prClient;
+  private final CodeHost prClient;
 
   @Inject
-  public CitedLocationResolver(@RestClient GitHubPullRequestClient prClient) {
+  public CitedLocationResolver(CodeHost prClient) {
     this.prClient = prClient;
   }
 
@@ -133,7 +127,7 @@ public class CitedLocationResolver {
       String owner,
       String repo,
       String ref,
-      List<GitHubPullRequestClient.FileDiff> files,
+      List<CodeHost.FileDiff> files,
       EvidenceBudget budget) {
     return new Round(prClient, auth, owner, repo, ref, files, budget);
   }
@@ -156,14 +150,14 @@ public class CitedLocationResolver {
   /** One review round's budget, cache and path index. */
   public static final class Round {
 
-    private final GitHubPullRequestClient prClient;
+    private final CodeHost prClient;
     private final String auth;
     private final String owner;
     private final String repo;
     private final String ref;
 
     /** Changed files by exact path, plus the lowercase and rename-source indexes. */
-    private final Map<String, GitHubPullRequestClient.FileDiff> byPath;
+    private final Map<String, CodeHost.FileDiff> byPath;
 
     private final Map<String, List<String>> pathsByLowerCase;
     private final Map<String, String> pathByRenameSource;
@@ -183,12 +177,12 @@ public class CitedLocationResolver {
         ReviewContextLoader.memoize(this::listRepository);
 
     private Round(
-        GitHubPullRequestClient prClient,
+        CodeHost prClient,
         String auth,
         String owner,
         String repo,
         String ref,
-        List<GitHubPullRequestClient.FileDiff> files,
+        List<CodeHost.FileDiff> files,
         EvidenceBudget budget) {
       this.prClient = prClient;
       this.auth = auth;
@@ -202,7 +196,7 @@ public class CitedLocationResolver {
       index(files);
     }
 
-    private void index(List<GitHubPullRequestClient.FileDiff> files) {
+    private void index(List<CodeHost.FileDiff> files) {
       if (files == null) {
         return;
       }
@@ -251,13 +245,13 @@ public class CitedLocationResolver {
         return Optional.empty();
       }
       try {
-        var tree = prClient.getTree(auth, ACCEPT, owner, repo, ref, RECURSIVE);
+        var tree = prClient.getTree(auth, owner, repo, ref);
         if (tree == null) {
           return Optional.empty();
         }
         var paths = new HashSet<String>();
         tree.tree().stream()
-            .map(GitHubPullRequestClient.TreeEntry::path)
+            .map(CodeHost.TreeEntry::path)
             .filter(Objects::nonNull)
             .forEach(paths::add);
         return Optional.of(new RepositoryPaths(paths, tree.truncated()));
@@ -451,7 +445,7 @@ public class CitedLocationResolver {
     }
 
     /** What is said before the content when the cited path is not the path that was read. */
-    private String preambleFor(String cited, GitHubPullRequestClient.FileDiff match) {
+    private String preambleFor(String cited, CodeHost.FileDiff match) {
       if (cited.equals(match.filename())) {
         return "";
       }
@@ -477,7 +471,7 @@ public class CitedLocationResolver {
      * shape of a citation that lost or gained a leading directory. Ambiguity resolves to nothing:
      * pointing the verifier at the wrong file is worse than pointing it at none.
      */
-    private GitHubPullRequestClient.FileDiff match(String cited) {
+    private CodeHost.FileDiff match(String cited) {
       var exact = byPath.get(cited);
       if (exact != null) {
         return exact;
@@ -494,8 +488,8 @@ public class CitedLocationResolver {
     }
 
     /** The one changed file whose path shares a trailing path segment run with {@code cited}. */
-    private GitHubPullRequestClient.FileDiff uniqueSuffixMatch(String cited) {
-      GitHubPullRequestClient.FileDiff found = null;
+    private CodeHost.FileDiff uniqueSuffixMatch(String cited) {
+      CodeHost.FileDiff found = null;
       for (var entry : byPath.entrySet()) {
         if (sharesPathSuffix(entry.getKey(), cited)) {
           if (found != null) {
@@ -515,7 +509,7 @@ public class CitedLocationResolver {
 
     private Optional<List<String>> fetch(String path) {
       try {
-        var file = prClient.getFileContent(auth, ACCEPT, owner, repo, path, ref);
+        var file = prClient.getFileContent(auth, owner, repo, path, ref);
         if (file == null || file.content() == null || file.size() > MAX_FILE_BYTES) {
           return Optional.empty();
         }

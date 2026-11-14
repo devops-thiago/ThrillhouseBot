@@ -89,6 +89,7 @@ class StartupConfigValidatorTest {
     private int[] learningsCaps = {100, 10, 3000};
     private boolean ticketContextEnabled = false;
     private String ticketContextProvider = "github";
+    private String platform = "github";
     private int ticketContextMaxIssues = 3;
     private int ticketContextMaxChars = 6000;
     private int maxConcurrentCalls = 0;
@@ -173,6 +174,11 @@ class StartupConfigValidatorTest {
 
     ConfigBuilder ciGating(String v) {
       this.ciGating = v;
+      return this;
+    }
+
+    ConfigBuilder platform(String platform) {
+      this.platform = platform;
       return this;
     }
 
@@ -263,6 +269,7 @@ class StartupConfigValidatorTest {
 
     StartupConfigValidator build() {
       var config = mock(ThrillhouseConfig.class);
+      lenient().when(config.platform()).thenReturn(platform);
       var github = mock(ThrillhouseConfig.GitHubConfig.class);
       var dashboard = mock(ThrillhouseConfig.DashboardConfig.class);
       var review = mock(ThrillhouseConfig.ReviewConfig.class);
@@ -1286,6 +1293,22 @@ class StartupConfigValidatorTest {
     new ConfigBuilder().learnings(true, true, 1, 1, 500).build().validate();
     new ConfigBuilder().learnings(true, true, 1000, 50, 20_000).build().validate();
     new ConfigBuilder().learnings(false, false, -1, -1, -1).build().validate();
+  }
+
+  @Test
+  void acceptsEitherPlatformInAnyCase() {
+    new ConfigBuilder().platform("github").build().validate();
+    new ConfigBuilder().platform(" GitLab ").build().validate();
+  }
+
+  @Test
+  void failsFastWhenThePlatformNamesNone() {
+    for (var platform : java.util.Arrays.asList("bitbucket", "", null)) {
+      var ex = assertFailsValidation(new ConfigBuilder().platform(platform).build());
+      assertTrue(
+          ex.getMessage().contains("GIT_PLATFORM must be one of [github, gitlab]"),
+          ex.getMessage());
+    }
   }
 
   @Test

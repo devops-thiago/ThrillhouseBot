@@ -1649,7 +1649,8 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Known limitations
 
-- **GitHub only.** No GitLab or Bitbucket.
+- **GitHub only.** No Bitbucket. GitLab support is in progress (#37): only the read path exists,
+  so a GitLab deployment does not work yet.
 - **Large diffs.** A review splits a big PR into up to `REVIEW_MAX_AI_CALLS - 1`
   batch calls, keeping one for the summary; files that still do not fit are named,
   not dropped. See [AI call budget](#ai-call-budget) and **Batching** under

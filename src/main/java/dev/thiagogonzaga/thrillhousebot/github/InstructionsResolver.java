@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.ProcessingException;
@@ -26,7 +27,6 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
 import java.util.stream.Stream;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,7 +34,6 @@ import org.slf4j.LoggerFactory;
 public class InstructionsResolver {
 
   private static final Logger log = LoggerFactory.getLogger(InstructionsResolver.class);
-  private static final String ACCEPT_HEADER = "application/vnd.github+json";
 
   /** Default fallback chain when the configured instructions file is not found. */
   private static final List<String> DEFAULT_FALLBACK_CHAIN =
@@ -47,7 +46,7 @@ public class InstructionsResolver {
 
   private final List<String> fallbackChain;
   private final GitHubAuthClient authClient;
-  private final GitHubPullRequestClient prClient;
+  private final CodeHost prClient;
 
   private record CachedInstructions(String content, String source, long expiresAt) {}
 
@@ -60,9 +59,7 @@ public class InstructionsResolver {
 
   @Inject
   public InstructionsResolver(
-      ThrillhouseConfig config,
-      GitHubAuthClient authClient,
-      @RestClient GitHubPullRequestClient prClient) {
+      ThrillhouseConfig config, GitHubAuthClient authClient, CodeHost prClient) {
     this(config, authClient, prClient, System::currentTimeMillis);
   }
 
@@ -70,7 +67,7 @@ public class InstructionsResolver {
   InstructionsResolver(
       ThrillhouseConfig config,
       GitHubAuthClient authClient,
-      GitHubPullRequestClient prClient,
+      CodeHost prClient,
       LongSupplier clock) {
     this.fallbackChain = buildFallbackChain(config);
     this.authClient = authClient;
@@ -116,7 +113,7 @@ public class InstructionsResolver {
 
     for (String path : fallbackChain) {
       try {
-        var file = prClient.getFileContent(auth, ACCEPT_HEADER, owner, repo, path, defaultBranch);
+        var file = prClient.getFileContent(auth, owner, repo, path, defaultBranch);
         // GitHub wraps base64 content in newlines; only the MIME decoder tolerates them.
         var content =
             new String(Base64.getMimeDecoder().decode(file.content()), StandardCharsets.UTF_8);

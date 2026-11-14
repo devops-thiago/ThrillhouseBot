@@ -17,7 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrReviewPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningStepDown;
@@ -88,8 +88,7 @@ public class DiffBudgetPlanner {
   }
 
   /** One in-budget batch: its rendered diff text, the files it covers, and the token estimate. */
-  public record DiffBatch(
-      String text, List<GitHubPullRequestClient.FileDiff> files, int estimatedTokens) {
+  public record DiffBatch(String text, List<CodeHost.FileDiff> files, int estimatedTokens) {
     public DiffBatch {
       files = List.copyOf(files);
     }
@@ -464,8 +463,7 @@ public class DiffBudgetPlanner {
    * {@code inputs.reviewSystemPrompt()} — the monolith with dimension routing off, the pull
    * request's routed prompt with it on (#665).
    */
-  public BudgetPlan plan(
-      List<GitHubPullRequestClient.FileDiff> reviewable, AiReviewService.PromptInputs inputs) {
+  public BudgetPlan plan(List<CodeHost.FileDiff> reviewable, AiReviewService.PromptInputs inputs) {
     var review = config.review();
     if (activeModel.maxInputTokens() <= 0) {
       return plan(reviewable, 0, 1);
@@ -750,7 +748,7 @@ public class DiffBudgetPlanner {
    * review is disclosed.
    */
   BudgetPlan plan(
-      List<GitHubPullRequestClient.FileDiff> reviewable,
+      List<CodeHost.FileDiff> reviewable,
       String sharedPromptOverhead,
       int inputBudgetTokens,
       int maxBatches) {
@@ -773,8 +771,7 @@ public class DiffBudgetPlanner {
    * never passes it. A patchless file is classified on that lane as well (#785): nothing about a
    * missing budget puts content into a diff GitHub returned none for.
    */
-  BudgetPlan plan(
-      List<GitHubPullRequestClient.FileDiff> reviewable, int diffBudgetTokens, int maxBatches) {
+  BudgetPlan plan(List<CodeHost.FileDiff> reviewable, int diffBudgetTokens, int maxBatches) {
     var budgeted = diffBudgetTokens > 0;
     if (reviewable.isEmpty()) {
       return new BudgetPlan(
@@ -803,7 +800,7 @@ public class DiffBudgetPlanner {
   }
 
   /** A file rendered to its diff section with a token estimate (oversized files pre-clipped). */
-  private record Sized(GitHubPullRequestClient.FileDiff file, String text, int tokens) {}
+  private record Sized(CodeHost.FileDiff file, String text, int tokens) {}
 
   /**
    * Rendered sections plus the files no clipping could fit (omitted by name, never packed) and the
@@ -812,8 +809,7 @@ public class DiffBudgetPlanner {
   private record Rendered(
       List<Sized> sized, List<String> unclippable, List<String> clipped, List<String> patchless) {}
 
-  private Rendered renderAndSize(
-      List<GitHubPullRequestClient.FileDiff> reviewable, int diffBudgetTokens) {
+  private Rendered renderAndSize(List<CodeHost.FileDiff> reviewable, int diffBudgetTokens) {
     var ordered = new ArrayList<>(reviewable);
     // The name tie-break only fires between files of equal size, and natural ordering on a null
     // key throws. Unnamed last: packing is impact-descending, so whatever sorts last is what the
@@ -826,12 +822,10 @@ public class DiffBudgetPlanner {
     ordered.sort(
         priority()
             .thenComparing(
-                Comparator.comparingInt(
-                        (GitHubPullRequestClient.FileDiff f) -> f.additions() + f.deletions())
+                Comparator.comparingInt((CodeHost.FileDiff f) -> f.additions() + f.deletions())
                     .reversed())
             .thenComparing(
-                GitHubPullRequestClient.FileDiff::filename,
-                Comparator.nullsLast(Comparator.naturalOrder())));
+                CodeHost.FileDiff::filename, Comparator.nullsLast(Comparator.naturalOrder())));
 
     var reviewableNames = ReviewDiffFormatter.namesOf(reviewable);
     var rendered =
@@ -864,12 +858,12 @@ public class DiffBudgetPlanner {
    * The first sort key of the packing order: {@link FileTriage}'s tiers with {@code
    * REVIEW_TRIAGE_ENABLED} on, else build manifests ahead of every other file.
    */
-  private Comparator<GitHubPullRequestClient.FileDiff> priority() {
+  private Comparator<CodeHost.FileDiff> priority() {
     if (config.review().triageEnabled()) {
       return FileTriage.of(config).byTier();
     }
     return Comparator.comparing(
-        (GitHubPullRequestClient.FileDiff f) -> !ReviewDiffFormatter.isBuildManifest(f.filename()));
+        (CodeHost.FileDiff f) -> !ReviewDiffFormatter.isBuildManifest(f.filename()));
   }
 
   /**
@@ -880,10 +874,7 @@ public class DiffBudgetPlanner {
    * files never reach here; {@link #renderAndSize} classifies them on both lanes.
    */
   private void sizeWithinBudget(
-      GitHubPullRequestClient.FileDiff file,
-      String section,
-      int diffBudgetTokens,
-      Rendered rendered) {
+      CodeHost.FileDiff file, String section, int diffBudgetTokens, Rendered rendered) {
     var tokens = tokenCounter.estimateTokens(section);
     if (tokens > diffBudgetTokens) {
       var clipped = clipToBudget(section, diffBudgetTokens);
@@ -923,14 +914,14 @@ public class DiffBudgetPlanner {
    * text diff too large to display). It survives {@link ReviewDiffFormatter#isPureRename} (which
    * needs a zero change count) yet has no diff to review, so it must be omitted, not packed.
    */
-  private static boolean isPatchlessWithChanges(GitHubPullRequestClient.FileDiff file) {
+  private static boolean isPatchlessWithChanges(CodeHost.FileDiff file) {
     var patch = file.patch();
     return (patch == null || patch.isBlank()) && file.additions() + file.deletions() > 0;
   }
 
   private static DiffBatch toBatch(List<Sized> sized) {
     var text = new StringBuilder();
-    var files = new ArrayList<GitHubPullRequestClient.FileDiff>(sized.size());
+    var files = new ArrayList<CodeHost.FileDiff>(sized.size());
     var tokens = 0;
     for (var s : sized) {
       text.append(s.text());

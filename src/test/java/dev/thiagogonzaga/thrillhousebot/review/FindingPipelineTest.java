@@ -40,10 +40,10 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.FileDiff;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewService;
@@ -3810,10 +3810,10 @@ class FindingPipelineTest {
         .thenAnswer(inv -> withoutSuggestions(inv.getArgument(0)));
 
     var source = "class A {\n  void go(String purpose) {\n    render(purpose);\n  }\n}\n";
-    var prClient = mock(GitHubPullRequestClient.class);
-    when(prClient.getFileContent(any(), any(), any(), any(), eq("a.java"), any()))
+    var prClient = mock(CodeHost.class);
+    when(prClient.getFileContent(any(), any(), any(), eq("a.java"), any()))
         .thenReturn(
-            new GitHubPullRequestClient.FileContent(
+            new CodeHost.FileContent(
                 "a.java",
                 "a.java",
                 Base64.getEncoder().encodeToString(source.getBytes(StandardCharsets.UTF_8)),
@@ -4369,14 +4369,14 @@ class FindingPipelineTest {
             listed.carried(),
             listed.coverageArtifactRefusal(),
             false);
-    var prClient = mock(GitHubPullRequestClient.class);
-    when(prClient.getTree(any(), any(), any(), any(), any(), any()))
+    var prClient = mock(CodeHost.class);
+    when(prClient.getTree(any(), any(), any(), any()))
         .thenReturn(
-            new GitHubPullRequestClient.TreeResponse(
+            new CodeHost.TreeResponse(
                 "sha",
                 List.of(
-                    new GitHubPullRequestClient.TreeEntry("docs/REACT-V17.md", "blob", 1),
-                    new GitHubPullRequestClient.TreeEntry("react/src/Dashboard.tsx", "blob", 1)),
+                    new CodeHost.TreeEntry("docs/REACT-V17.md", "blob", 1),
+                    new CodeHost.TreeEntry("react/src/Dashboard.tsx", "blob", 1)),
                 false));
     var evidence =
         new ReviewEvidence(

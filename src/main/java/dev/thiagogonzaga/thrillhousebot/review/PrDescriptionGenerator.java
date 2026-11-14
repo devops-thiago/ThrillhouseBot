@@ -17,9 +17,9 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrDescribeAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrDescribeAssistantPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrSuggestionPrompts;
@@ -30,7 +30,6 @@ import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.List;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
  * Builds the {@code /describe} suggestion: an improved PR title and description generated from the
@@ -83,7 +82,7 @@ public class PrDescriptionGenerator extends AbstractPrSuggestionGenerator {
 
   @Inject
   public PrDescriptionGenerator(
-      @RestClient GitHubPullRequestClient prClient,
+      CodeHost prClient,
       ReviewDiffFormatter diffFormatter,
       InstructionsResolver instructionsResolver,
       RepoSettingsResolver repoSettingsResolver,

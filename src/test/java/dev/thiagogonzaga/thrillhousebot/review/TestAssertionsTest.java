@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -29,8 +29,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 /** {@link TestAssertions}: the assertion lines of a failing test's body in the changed files. */
 class TestAssertionsTest {
 
-  private static GitHubPullRequestClient.FileDiff file(String path, String patch) {
-    return new GitHubPullRequestClient.FileDiff(path, "modified", 1, 0, 1, patch);
+  private static CodeHost.FileDiff file(String path, String patch) {
+    return new CodeHost.FileDiff(path, "modified", 1, 0, 1, patch);
   }
 
   @Test

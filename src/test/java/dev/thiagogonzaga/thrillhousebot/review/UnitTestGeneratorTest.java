@@ -24,9 +24,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSessionPersistence;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.PullRequestDetails;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver.ResolvedInstructions;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
@@ -34,6 +31,9 @@ import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.PullRequestDetails;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
 import dev.thiagogonzaga.thrillhousebot.review.ai.UnitTestAssistant;
@@ -75,7 +75,7 @@ class UnitTestGeneratorTest {
       +while (retries < 3) { call(); }
       +log.info("done");""";
 
-  @Mock private GitHubPullRequestClient prClient;
+  @Mock private CodeHost prClient;
   @Mock private InstructionsResolver instructionsResolver;
   @Mock private RepoSettingsResolver repoSettingsResolver;
   @Mock private ProjectStackResolver projectStackResolver;
@@ -136,7 +136,7 @@ class UnitTestGeneratorTest {
 
   /** A PR whose changed files are the given ones. */
   private void prWithFiles(FileDiff... files) {
-    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(files));
   }
 
@@ -160,7 +160,7 @@ class UnitTestGeneratorTest {
   }
 
   private void prDetails() {
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("title", "body", null, null));
   }
 
@@ -418,7 +418,7 @@ class UnitTestGeneratorTest {
   @Test
   void stillGeneratesWhenPrDetailsFetchFails() {
     diffReturns();
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenThrow(new RuntimeException("404"));
     when(testAssistant.generate(any(), any(), any(), any(), any())).thenReturn(aiOk(ONE_TEST));
 
@@ -790,7 +790,7 @@ class UnitTestGeneratorTest {
     priorRoundFound(finding("high", "src/Foo.java", 1, "Leaky sink", "detail ".repeat(400)));
     // Empty title/body/instructions, so the only sections in play are the diff and the findings
     // and the budget arithmetic has no unrelated slack to hide an overshoot in.
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("", "", null, null));
     prWithFiles(chunky(1), chunky(2), chunky(3), chunky(4));
     var counter = new TokenCounter();

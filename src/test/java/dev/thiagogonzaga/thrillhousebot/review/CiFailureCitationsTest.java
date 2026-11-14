@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.nio.charset.StandardCharsets;
@@ -752,14 +752,14 @@ class CiFailureCitationsTest {
           null);
 
   /** {@code content} as the patch of a file the pull request adds, its first line at {@code at}. */
-  private static GitHubPullRequestClient.FileDiff addedAt(String path, int at, String content) {
+  private static CodeHost.FileDiff addedAt(String path, int at, String content) {
     var lines = content.split("\n", -1);
     int count = content.endsWith("\n") ? lines.length - 1 : lines.length;
     var patch = new StringBuilder("@@ -0,0 +" + at + "," + count + " @@\n");
     for (int i = 0; i < count; i++) {
       patch.append('+').append(lines[i]).append('\n');
     }
-    return new GitHubPullRequestClient.FileDiff(path, "added", count, 0, count, patch.toString());
+    return new CodeHost.FileDiff(path, "added", count, 0, count, patch.toString());
   }
 
   @Test
@@ -795,7 +795,7 @@ class CiFailureCitationsTest {
     assertTrue(citations.cites(described("`expect(api.ready()).toBe(true);` fails.")));
   }
 
-  private static CiFailureCitations rust279(List<GitHubPullRequestClient.FileDiff> files) {
+  private static CiFailureCitations rust279(List<CodeHost.FileDiff> files) {
     return CiFailureCitations.parse(sectionFromJobLog(RUST_279_LOG), files);
   }
 

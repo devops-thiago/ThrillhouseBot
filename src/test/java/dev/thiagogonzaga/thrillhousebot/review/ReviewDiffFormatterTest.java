@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.when;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import io.smallrye.config.WithDefault;
 import java.nio.file.FileSystems;
 import java.nio.file.Path;
@@ -36,10 +36,9 @@ class ReviewDiffFormatterTest {
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
 
-  private static GitHubPullRequestClient.FileDiff file(
+  private static CodeHost.FileDiff file(
       String name, String status, int additions, int deletions, String patch) {
-    return new GitHubPullRequestClient.FileDiff(
-        name, status, additions, deletions, additions + deletions, patch);
+    return new CodeHost.FileDiff(name, status, additions, deletions, additions + deletions, patch);
   }
 
   @Test
@@ -112,7 +111,7 @@ class ReviewDiffFormatterTest {
     void shouldApplyIgnoredPatternsInBaseComparison() {
       var formatter = new ReviewDiffFormatter(List.of("**/*.generated.*"), 5000);
       var comparison =
-          new GitHubPullRequestClient.CompareResponse(
+          new CodeHost.CompareResponse(
               1,
               List.of(
                   file("src/out.generated.js", "modified", 500, 0, "@@ generated"),
@@ -151,11 +150,11 @@ class ReviewDiffFormatterTest {
     private final ReviewDiffFormatter formatter =
         new ReviewDiffFormatter(List.of("**/*.lock"), 5000);
 
-    private final GitHubPullRequestClient.FileDiff lockFile =
+    private final CodeHost.FileDiff lockFile =
         file("deps.lock", "modified", 3, 1, "@@ -1 +1 @@\n+lock");
-    private final GitHubPullRequestClient.FileDiff fixture =
+    private final CodeHost.FileDiff fixture =
         file("test/fixtures/big.json", "modified", 900, 0, "@@ -1 +1 @@\n+fixture");
-    private final GitHubPullRequestClient.FileDiff source =
+    private final CodeHost.FileDiff source =
         file("src/Main.java", "modified", 5, 1, "@@ -1 +1,2 @@\n+ok");
 
     @Test
@@ -240,7 +239,7 @@ class ReviewDiffFormatterTest {
     @Test
     void perRepoPatternsAlsoScopeTheBaseComparison() {
       var globs = formatter.ignoreGlobs(List.of("test/fixtures/**"));
-      var comparison = new GitHubPullRequestClient.CompareResponse(1, List.of(fixture, source));
+      var comparison = new CodeHost.CompareResponse(1, List.of(fixture, source));
 
       var result =
           formatter.buildBaseComparisonWithStats(comparison, "abcdefgh", "hijklmno", true, globs);
@@ -304,7 +303,7 @@ class ReviewDiffFormatterTest {
     void baseComparisonWithoutLineBudgetIncludesEveryPatchedFile() {
       var formatter = new ReviewDiffFormatter(List.of(), 6);
       var comparison =
-          new GitHubPullRequestClient.CompareResponse(
+          new CodeHost.CompareResponse(
               2,
               List.of(
                   file("a.java", "modified", 1, 0, "l1\nl2\nl3\nl4\nl5"),
@@ -660,7 +659,7 @@ class ReviewDiffFormatterTest {
     void shouldSkipNullPatchFilesInBaseComparison() {
       var formatter = new ReviewDiffFormatter(List.of(), 5000);
       var comparison =
-          new GitHubPullRequestClient.CompareResponse(
+          new CodeHost.CompareResponse(
               2,
               List.of(
                   file("binary.png", "modified", 0, 0, null),
@@ -687,7 +686,7 @@ class ReviewDiffFormatterTest {
     @Test
     void shouldReturnNoChangesForEmptyComparison() {
       var formatter = new ReviewDiffFormatter(List.of(), 5000);
-      var comparison = new GitHubPullRequestClient.CompareResponse(0, List.of());
+      var comparison = new CodeHost.CompareResponse(0, List.of());
 
       var result = formatter.buildBaseComparison(comparison, "abcdefgh", "hijklmno");
 
@@ -923,8 +922,7 @@ class ReviewDiffFormatterTest {
 
     @Test
     void theScopeNoteNamesEveryIgnoredFileButNotAPureRename() {
-      var renamed =
-          new GitHubPullRequestClient.FileDiff("new.md", "renamed", 0, 0, 0, null, "old.md");
+      var renamed = new CodeHost.FileDiff("new.md", "renamed", 0, 0, 0, null, "old.md");
       var lock = file("go.sum", "modified", 40, 2, "@@ x");
       var source = file("main.go", "modified", 4, 1, "@@ y");
       var files = List.of(renamed, lock, source);
@@ -939,7 +937,7 @@ class ReviewDiffFormatterTest {
 
     @Test
     void aLongIgnoredListIsNamedUpToItsCap() {
-      var files = new java.util.ArrayList<GitHubPullRequestClient.FileDiff>();
+      var files = new java.util.ArrayList<CodeHost.FileDiff>();
       for (var i = 0; i < ReviewDiffFormatter.IGNORED_NAMES_CAP + 2; i++) {
         files.add(file("vendor/f" + i + ".go", "added", 1, 0, "@@ z"));
       }
@@ -1177,12 +1175,11 @@ class ReviewDiffFormatterTest {
     var formatter = new ReviewDiffFormatter(java.util.List.of(), 5000);
     var files =
         java.util.List.of(
-            new GitHubPullRequestClient.FileDiff("src/main/java/App.java", "modified", 1, 1, 2, ""),
-            new GitHubPullRequestClient.FileDiff(
-                "src/test/java/AppTest.java", "added", 1, 0, 1, ""),
-            new GitHubPullRequestClient.FileDiff("pkg/server_test.go", "added", 1, 0, 1, ""),
-            new GitHubPullRequestClient.FileDiff("web/button.spec.ts", "added", 1, 0, 1, ""),
-            new GitHubPullRequestClient.FileDiff("scripts/test_utils.py", "added", 1, 0, 1, ""));
+            new CodeHost.FileDiff("src/main/java/App.java", "modified", 1, 1, 2, ""),
+            new CodeHost.FileDiff("src/test/java/AppTest.java", "added", 1, 0, 1, ""),
+            new CodeHost.FileDiff("pkg/server_test.go", "added", 1, 0, 1, ""),
+            new CodeHost.FileDiff("web/button.spec.ts", "added", 1, 0, 1, ""),
+            new CodeHost.FileDiff("scripts/test_utils.py", "added", 1, 0, 1, ""));
 
     var related = formatter.buildRelatedTests(files);
 
@@ -1201,8 +1198,7 @@ class ReviewDiffFormatterTest {
     assertEquals(
         "",
         formatter.buildRelatedTests(
-            java.util.List.of(
-                new GitHubPullRequestClient.FileDiff("src/App.java", "modified", 1, 1, 2, ""))));
+            java.util.List.of(new CodeHost.FileDiff("src/App.java", "modified", 1, 1, 2, ""))));
   }
 
   @Test
@@ -1229,28 +1225,25 @@ class ReviewDiffFormatterTest {
     void isPureRenameRequiresRenamedStatusZeroDiffAndBlankPatch() {
       assertTrue(
           ReviewDiffFormatter.isPureRename(
-              new GitHubPullRequestClient.FileDiff("b.java", "renamed", 0, 0, 0, null, "a.java")));
+              new CodeHost.FileDiff("b.java", "renamed", 0, 0, 0, null, "a.java")));
       assertTrue(
           ReviewDiffFormatter.isPureRename(
-              new GitHubPullRequestClient.FileDiff("b.java", "RENAMED", 0, 0, 0, "  ", "a.java")));
+              new CodeHost.FileDiff("b.java", "RENAMED", 0, 0, 0, "  ", "a.java")));
       // Rename + content edit must stay reviewable.
       assertFalse(
           ReviewDiffFormatter.isPureRename(
-              new GitHubPullRequestClient.FileDiff(
-                  "b.java", "renamed", 1, 0, 1, "@@ -1 +1,2 @@\n+x", "a.java")));
+              new CodeHost.FileDiff("b.java", "renamed", 1, 0, 1, "@@ -1 +1,2 @@\n+x", "a.java")));
       assertFalse(
           ReviewDiffFormatter.isPureRename(
-              new GitHubPullRequestClient.FileDiff("b.java", "modified", 0, 0, 0, null)));
+              new CodeHost.FileDiff("b.java", "modified", 0, 0, 0, null)));
     }
 
     @Test
     void reviewableFilesSkipsPureRenamesButKeepsRenamePlusEdit() {
       var formatter = new ReviewDiffFormatter(List.of(), 5000);
-      var pure =
-          new GitHubPullRequestClient.FileDiff(
-              "pkg/B.java", "renamed", 0, 0, 0, null, "pkg/A.java");
+      var pure = new CodeHost.FileDiff("pkg/B.java", "renamed", 0, 0, 0, null, "pkg/A.java");
       var edited =
-          new GitHubPullRequestClient.FileDiff(
+          new CodeHost.FileDiff(
               "pkg/D.java", "renamed", 2, 0, 2, "@@ -1 +1,3 @@\n+y\n+z", "pkg/C.java");
       var modified = file("src/App.java", "modified", 1, 0, "@@ -1 +1,2 @@\n+ok");
 
@@ -1266,8 +1259,7 @@ class ReviewDiffFormatterTest {
       var formatter = new ReviewDiffFormatter(List.of(), 5000);
       var files =
           List.of(
-              new GitHubPullRequestClient.FileDiff(
-                  "new/Name.java", "renamed", 0, 0, 0, null, "old/Name.java"),
+              new CodeHost.FileDiff("new/Name.java", "renamed", 0, 0, 0, null, "old/Name.java"),
               file("src/App.java", "modified", 1, 0, "@@ -1 +1,2 @@\n+ok"));
 
       var result = formatter.buildDiffStringWithStats(files);
@@ -1283,11 +1275,10 @@ class ReviewDiffFormatterTest {
 
     @Test
     void pureRenameRollupCapsSampleAndReportsRemainder() {
-      var renames = new java.util.ArrayList<GitHubPullRequestClient.FileDiff>();
+      var renames = new java.util.ArrayList<CodeHost.FileDiff>();
       for (var i = 0; i < 7; i++) {
         renames.add(
-            new GitHubPullRequestClient.FileDiff(
-                "n" + i + ".java", "renamed", 0, 0, 0, null, "o" + i + ".java"));
+            new CodeHost.FileDiff("n" + i + ".java", "renamed", 0, 0, 0, null, "o" + i + ".java"));
       }
 
       var rollup = ReviewDiffFormatter.formatPureRenameRollup(renames);
@@ -1303,7 +1294,7 @@ class ReviewDiffFormatterTest {
       assertFalse(ReviewDiffFormatter.isPureRename(null));
       assertFalse(
           ReviewDiffFormatter.isPureRename(
-              new GitHubPullRequestClient.FileDiff("b.java", null, 0, 0, 0, null, "a.java")));
+              new CodeHost.FileDiff("b.java", null, 0, 0, 0, null, "a.java")));
     }
 
     @Test
@@ -1312,7 +1303,7 @@ class ReviewDiffFormatterTest {
       // reviewable rather than being silently dropped from the budget.
       assertFalse(
           ReviewDiffFormatter.isPureRename(
-              new GitHubPullRequestClient.FileDiff(
+              new CodeHost.FileDiff(
                   "b.java", "renamed", 0, 0, 0, "@@ -1 +1 @@\n-a\n+b", "a.java")));
     }
 
@@ -1326,10 +1317,8 @@ class ReviewDiffFormatterTest {
 
     @Test
     void rollupFallsBackToTheNewPathWhenGitHubOmitsThePreviousFilename() {
-      var noPrevious =
-          new GitHubPullRequestClient.FileDiff("new/Only.java", "renamed", 0, 0, 0, null, null);
-      var blankPrevious =
-          new GitHubPullRequestClient.FileDiff("new/Blank.java", "renamed", 0, 0, 0, null, "  ");
+      var noPrevious = new CodeHost.FileDiff("new/Only.java", "renamed", 0, 0, 0, null, null);
+      var blankPrevious = new CodeHost.FileDiff("new/Blank.java", "renamed", 0, 0, 0, null, "  ");
 
       var rollup = ReviewDiffFormatter.formatPureRenameRollup(List.of(noPrevious, blankPrevious));
 
@@ -1341,9 +1330,7 @@ class ReviewDiffFormatterTest {
     @Test
     void withPureRenamesAppendsRenamesAndReturnsTheInputWhenThereAreNone() {
       var reviewable = List.of(file("src/App.java", "modified", 1, 0, "@@ -1 +1,2 @@\n+ok"));
-      var rename =
-          new GitHubPullRequestClient.FileDiff(
-              "pkg/B.java", "renamed", 0, 0, 0, null, "pkg/A.java");
+      var rename = new CodeHost.FileDiff("pkg/B.java", "renamed", 0, 0, 0, null, "pkg/A.java");
 
       // Identity when nothing was renamed — the caller's list is handed straight back.
       assertSame(reviewable, ReviewDiffFormatter.withPureRenames(reviewable, reviewable));

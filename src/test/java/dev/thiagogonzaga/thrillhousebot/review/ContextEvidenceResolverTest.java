@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.List;
@@ -416,7 +416,7 @@ class ContextEvidenceResolverTest {
             - [ERROR]   WaitlistServiceTest.topCandidatesReturnsAtMostLimit:67 expected
             """,
             List.of(
-                new GitHubPullRequestClient.FileDiff(
+                new CodeHost.FileDiff(
                     "src/test/WaitlistServiceTest.java",
                     "added",
                     3,

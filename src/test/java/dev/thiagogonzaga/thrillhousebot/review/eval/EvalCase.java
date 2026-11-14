@@ -16,7 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review.eval;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewDimension;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
@@ -100,8 +100,8 @@ public record EvalCase(String name, String diff, Spec spec) {
    * The diff parsed back into the per-file patches the router reads: one entry per {@code ### path
    * (status, ...)} section, its fenced {@code diff} block as the patch.
    */
-  List<GitHubPullRequestClient.FileDiff> files() {
-    var files = new ArrayList<GitHubPullRequestClient.FileDiff>();
+  List<CodeHost.FileDiff> files() {
+    var files = new ArrayList<CodeHost.FileDiff>();
     var lines = diff.split("\n", -1);
     for (int i = 0; i + 1 < lines.length; i++) {
       var header = SECTION_HEADER.matcher(lines[i]);
@@ -114,7 +114,7 @@ public record EvalCase(String name, String diff, Spec spec) {
         patch.add(lines[j++]);
       }
       files.add(
-          new GitHubPullRequestClient.FileDiff(
+          new CodeHost.FileDiff(
               header.group(1), header.group(2), 0, 0, 0, String.join("\n", patch)));
       i = j;
     }

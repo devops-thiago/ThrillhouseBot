@@ -19,10 +19,10 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponseTruncatedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiResponses;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReasoningRepeat;
@@ -62,7 +62,7 @@ public class MaintainerReplyService {
   private final TriggerDetector triggerDetector;
   private final GitHubReviewClient reviewClient;
   private final GitHubCommentClient commentClient;
-  private final GitHubPullRequestClient prClient;
+  private final CodeHost prClient;
   private final ReviewDiffFormatter diffFormatter;
   private final ReplyAssistant replyAssistant;
   private final RepoSettingsResolver repoSettingsResolver;
@@ -79,7 +79,7 @@ public class MaintainerReplyService {
       TriggerDetector triggerDetector,
       @RestClient GitHubReviewClient reviewClient,
       @RestClient GitHubCommentClient commentClient,
-      @RestClient GitHubPullRequestClient prClient,
+      CodeHost prClient,
       ReviewDiffFormatter diffFormatter,
       ReplyAssistant replyAssistant,
       RepoSettingsResolver repoSettingsResolver,
@@ -588,8 +588,7 @@ public class MaintainerReplyService {
 
   private MentionDiff fetchDiff(String auth, ReplyTask task) {
     try {
-      var files =
-          prClient.getPullRequestFiles(auth, ACCEPT, task.owner(), task.repo(), task.prNumber());
+      var files = prClient.getPullRequestFiles(auth, task.owner(), task.repo(), task.prNumber());
       // Honor the repository's own ignore globs (#51) — the same trust boundary the review path and
       // every on-request command respect (#468/#469). A path a maintainer excluded in
       // .github/thrillhousebot.yml must not reach the model on a bot-mention reply. Resolved from
@@ -613,7 +612,7 @@ public class MaintainerReplyService {
           formatted.truncated() ? ReviewResult.truncationDisclosure(formatted.omittedFiles()) : "";
       var paths =
           files.stream()
-              .map(GitHubPullRequestClient.FileDiff::filename)
+              .map(CodeHost.FileDiff::filename)
               .filter(Objects::nonNull)
               .collect(Collectors.toUnmodifiableSet());
       return new MentionDiff(formatted.text(), disclosure, paths);

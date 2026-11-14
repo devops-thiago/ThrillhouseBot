@@ -26,13 +26,13 @@ import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.service.Result;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.PullRequestDetails;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver.ResolvedInstructions;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettings;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.FileDiff;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost.PullRequestDetails;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrDescribeAssistant;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrDescribeAssistantPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.PrSuggestionPrompts;
@@ -64,7 +64,7 @@ class PrDescriptionGeneratorTest {
       +while (retries < 3) { call(); }
       +log.info("done");""";
 
-  @Mock private GitHubPullRequestClient prClient;
+  @Mock private CodeHost prClient;
   @Mock private InstructionsResolver instructionsResolver;
   @Mock private RepoSettingsResolver repoSettingsResolver;
   @Mock private ActiveModelSettings activeModel;
@@ -125,17 +125,16 @@ class PrDescriptionGeneratorTest {
 
   /** A PR whose files are the given ones, with the usual title/body. */
   private void prWithFiles(FileDiff... files) {
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(new PullRequestDetails("Title", "Body", null, null));
-    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(files));
   }
 
   /** A PR with one file, whose details come from the given stub. */
   private void prWithFilesAndDetails(PullRequestDetails details) {
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
-        .thenReturn(details);
-    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(eq(AUTH), eq("owner"), eq("repo"), eq(7))).thenReturn(details);
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(foo()));
   }
 
@@ -205,7 +204,7 @@ class PrDescriptionGeneratorTest {
 
   @Test
   void returnsNullWhenThereIsNoDiff() {
-    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of());
 
     assertNull(generate());
@@ -218,14 +217,14 @@ class PrDescriptionGeneratorTest {
     // every changed file is out of scope has nothing to describe, so the command stops there — the
     // title, body and instructions it would load next are only inputs to a call it will not make.
     var ignoringEverything = new ReviewDiffFormatter(List.of("**/*.java"), 5000);
-    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(foo(), otherFile()));
 
     assertNull(
         generatorWith(ignoringEverything).generate("owner", "repo", 7, "main", 12345L, AUTH));
 
     verifyNoInteractions(describeAssistant);
-    verify(prClient, never()).getPullRequest(any(), any(), any(), any(), anyInt());
+    verify(prClient, never()).getPullRequest(any(), any(), any(), anyInt());
     verifyNoInteractions(instructionsResolver);
   }
 
@@ -264,9 +263,9 @@ class PrDescriptionGeneratorTest {
 
   @Test
   void stillDescribesWhenPrDetailsFetchFails() {
-    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenReturn(List.of(foo()));
-    when(prClient.getPullRequest(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequest(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenThrow(new RuntimeException("404"));
     describeReturns("### Suggested title\n`x`");
 
@@ -299,7 +298,7 @@ class PrDescriptionGeneratorTest {
 
   @Test
   void returnsNullWhenDiffFetchFails() {
-    when(prClient.getPullRequestFiles(eq(AUTH), any(), eq("owner"), eq("repo"), eq(7)))
+    when(prClient.getPullRequestFiles(eq(AUTH), eq("owner"), eq("repo"), eq(7)))
         .thenThrow(new RuntimeException("boom"));
 
     // A failed diff fetch degrades to no suggestion, not a crash.

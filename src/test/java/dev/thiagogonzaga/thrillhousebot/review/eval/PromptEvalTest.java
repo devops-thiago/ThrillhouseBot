@@ -23,8 +23,8 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ChangeSymbols;
 import dev.thiagogonzaga.thrillhousebot.review.Confidence;
 import dev.thiagogonzaga.thrillhousebot.review.EvalTrailingGuidance;
@@ -545,7 +545,7 @@ class PromptEvalTest {
     // The changed test files, newline-separated, as the assembler lists them for the review call.
     var relatedTests =
         EvalTrailingGuidance.relatedTests(
-            evalCase.files().stream().map(GitHubPullRequestClient.FileDiff::filename).toList());
+            evalCase.files().stream().map(CodeHost.FileDiff::filename).toList());
     // The trailing guidance a review of this diff carries (#979): mock fidelity when tests changed,
     // bug-fix efficacy when the body declares a fix, the heuristic failure-mode request when the
     // added lines introduce a parsing or matching rule, the patch-coverage list (#115), and the

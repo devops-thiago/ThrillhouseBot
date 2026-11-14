@@ -20,11 +20,11 @@ import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.github.ProjectStackResolver;
 import dev.thiagogonzaga.thrillhousebot.github.RepoSettingsResolver;
+import dev.thiagogonzaga.thrillhousebot.platform.CodeHost;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerationParser;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerationResponse;
 import dev.thiagogonzaga.thrillhousebot.review.ai.DocGenerator;
@@ -115,7 +115,7 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
   private static final int REDUCE_CALLS = 0;
 
   private final GitHubAuthClient authClient;
-  private final GitHubPullRequestClient prClient;
+  private final CodeHost prClient;
   private final GitHubReviewClient reviewClient;
   private final GitHubCommentClient commentClient;
   private final SuggestionFormatter suggestionFormatter;
@@ -127,7 +127,7 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
   @Inject
   public DocGenerationService(
       GitHubAuthClient authClient,
-      @RestClient GitHubPullRequestClient prClient,
+      CodeHost prClient,
       @RestClient GitHubReviewClient reviewClient,
       @RestClient GitHubCommentClient commentClient,
       ReviewDiffFormatter diffFormatter,
@@ -259,8 +259,8 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
   private PlannedRun planOrReportFailure(
       String auth,
       DocTask task,
-      GitHubPullRequestClient.PullRequestDetails pr,
-      List<GitHubPullRequestClient.FileDiff> reviewable) {
+      CodeHost.PullRequestDetails pr,
+      List<CodeHost.FileDiff> reviewable) {
     try {
       String stack =
           SoftLoaders.projectStack(
@@ -394,7 +394,7 @@ public class DocGenerationService extends AbstractPrSuggestionGenerator {
       String auth,
       DocTask task,
       String commitSha,
-      List<GitHubPullRequestClient.FileDiff> reviewable,
+      List<CodeHost.FileDiff> reviewable,
       List<DocGenerationResponse.DocSuggestion> docs) {
     var lineResolver = new DiffLineResolver(diffFormatter().patchesByReviewableFiles(reviewable));
     int cap = config().review().maxReviewComments();
