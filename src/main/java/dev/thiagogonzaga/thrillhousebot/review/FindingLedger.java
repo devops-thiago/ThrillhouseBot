@@ -47,6 +47,13 @@ final class FindingLedger {
   static final String JUSTIFIED = "justified";
   static final String SUPERSEDED = "superseded";
 
+  /**
+   * A "Things to double-check" item this round raised again as a finding of its own, which carries
+   * it from then on (#969, #1312). That finding usually comes back under another key, so this
+   * item's row would otherwise stay open beside the replacement's until the pull request closed.
+   */
+  static final String REPLACED = "replaced";
+
   private static final Set<String> CLOSED = Set.of(RESOLVED, JUSTIFIED, SUPERSEDED);
 
   private FindingLedger() {}
@@ -248,7 +255,7 @@ final class FindingLedger {
       List<ReviewResult.PreviousFindingStatus> statuses, List<ReviewResponse.Finding> previous) {
     var byKey = new LinkedHashMap<String, Reported>();
     for (var status : statuses) {
-      var value = rowStatus(status.status());
+      var value = rowStatus(status.status(), status.note());
       if (value.isEmpty()) {
         continue;
       }
@@ -269,6 +276,20 @@ final class FindingLedger {
     if (current == null || OPEN.equals(current.status())) {
       byKey.put(key, new Reported(subject, status));
     }
+  }
+
+  /**
+   * As {@link #rowStatus(String)}, except that an item held open as replaced by this round's own
+   * finding ({@link FollowUpAnalyzer#REPLACED_NOTE}) is {@link #REPLACED}: its replacement's row is
+   * the open one (#1312).
+   */
+  static Optional<String> rowStatus(String status, String note) {
+    var value = rowStatus(status);
+    return value.isPresent()
+            && OPEN.equals(value.get())
+            && FollowUpAnalyzer.REPLACED_NOTE.equals(note)
+        ? Optional.of(REPLACED)
+        : value;
   }
 
   /** The row status a round's status sets, or empty for one the ledger does not know. */

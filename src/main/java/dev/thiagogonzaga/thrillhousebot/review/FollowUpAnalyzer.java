@@ -3608,9 +3608,12 @@ public class FollowUpAnalyzer {
    * {@code unresolved} this round, so it takes the anchored identity alone.
    */
   static boolean replacesUnthreaded(ReviewResponse.Finding finding, ReviewResponse.Finding prior) {
-    return DefectIdentity.sameDefect(finding, prior)
-        && Finding.fromAiResponse(finding).risk().compareTo(Finding.fromAiResponse(prior).risk())
-            <= 0;
+    return replacesUnthreaded(Finding.fromAiResponse(finding), Finding.fromAiResponse(prior));
+  }
+
+  /** As {@link #replacesUnthreaded(ReviewResponse.Finding, ReviewResponse.Finding)}. */
+  static boolean replacesUnthreaded(Finding finding, Finding prior) {
+    return DefectIdentity.sameDefect(finding, prior) && finding.risk().compareTo(prior.risk()) <= 0;
   }
 
   /**
