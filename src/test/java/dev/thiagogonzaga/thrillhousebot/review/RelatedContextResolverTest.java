@@ -414,4 +414,31 @@ class RelatedContextResolverTest {
     verify(prClient, never())
         .getFileContent(any(), any(), any(), any(), eq("deep/er/go.mod"), any());
   }
+
+  @Test
+  void aFilesRenderedExcerptStaysWithinItsCharacterCapHeadingAndLineNumbersIncluded() {
+    // #55 review: the cap is on what the review call receives, not on the bare line text.
+    when(selection.select(anyLong(), any()))
+        .thenReturn(new Outcome(List.of(new Selected(SANITIZER, Reason.INTERFACE)), true));
+    var source = new StringBuilder();
+    for (var i = 0; i < 400; i++) {
+      source.append("  String clean").append(i).append("(String raw) { return raw.strip(); }\n");
+    }
+    fileHolds(SANITIZER, source.toString());
+
+    var related =
+        resolver(true, 6).resolve(session, context(List.of(handler)), round(), NOTHING_IGNORED);
+
+    var rendered = related.files().get(0).render();
+    assertTrue(
+        rendered.length() <= RelatedContextResolver.MAX_FILE_CHARS,
+        "rendered " + rendered.length());
+    assertTrue(rendered.length() > RelatedContextResolver.MAX_FILE_CHARS / 2, rendered);
+    var none =
+        new RelatedReferences.Candidate(
+            "p", RelatedReferences.Via.IMPORT, List.of(), List.of(), List.of());
+    assertEquals(List.of(), RelatedContextResolver.regions(List.of("one", "two"), none, 5));
+    assertEquals(
+        1, RelatedContextResolver.regions(List.of("one", "two"), none, 20).get(0).lines().size());
+  }
 }

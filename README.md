@@ -1100,8 +1100,8 @@ interface a changed class implements or the validator a value passes through.
 The selection call counts in `REVIEW_MAX_AI_CALLS`, which must be 3 or more
 with this on (the bot refuses to start otherwise), and its tokens count toward
 `REVIEW_MAX_TOKENS_PER_REVIEW`. The section, its request text included, takes
-at most 15% of the per-call input budget, and each file at most 4,000
-characters. It costs one repository listing and
+at most 15% of the per-call input budget, and each file's excerpt, with its
+heading and line numbers, at most 4,000 characters. It costs one repository listing and
 one read per picked file. No candidate, a failed or empty selection, or an
 unreadable file leaves the review as it is with the setting off. A file the
 review ignores, by `THRILLHOUSEBOT_REVIEW_IGNORED_FILES` or by the repository's

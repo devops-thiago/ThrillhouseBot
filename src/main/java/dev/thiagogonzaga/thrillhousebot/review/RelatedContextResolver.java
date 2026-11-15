@@ -85,6 +85,9 @@ public class RelatedContextResolver {
   /** Lines shown from the top of a file in which nothing the changed code names was found. */
   static final int HEAD_LINES = 40;
 
+  /** The {@code " | "} {@link RelatedContext.Region#render} writes after a line's number. */
+  private static final int LINE_SEPARATOR_CHARS = 3;
+
   private static final String GO_MOD = "go.mod";
 
   private static final Pattern GO_MODULE = Pattern.compile("^module\\s+(\\S+)");
@@ -189,13 +192,17 @@ public class RelatedContextResolver {
         var candidate = byPath.get(picked.path());
         var lines = candidate == null ? null : repository.relatedFileLines(picked.path());
         if (lines != null && lines.isPresent()) {
-          files.add(
+          var heading =
               new RelatedContext.RelatedFile(
                   candidate.path(),
                   picked.reason().label(),
                   candidate.referencedBy(),
                   lines.get().size(),
-                  regions(lines.get(), candidate)));
+                  List.of());
+          // The cap is on what the review call receives, so the heading comes out of it first.
+          files.add(
+              heading.withRegions(
+                  regions(lines.get(), candidate, MAX_FILE_CHARS - heading.heading().length())));
         }
       }
       return new RelatedContext(withinBudget(files), calls);
@@ -293,12 +300,23 @@ public class RelatedContextResolver {
   }
 
   /**
-   * The parts of a file the changed code uses, in file order, within {@link #MAX_FILE_CHARS}: a
-   * window around each place a called member is declared, then around the first use of each name
-   * the diff refers to the file by; the top of the file when neither is found.
+   * {@link #regions(List, RelatedReferences.Candidate, int)} with the whole per-file allowance, for
+   * a file whose heading is not counted.
    */
   static List<RelatedContext.Region> regions(
       List<String> lines, RelatedReferences.Candidate candidate) {
+    return regions(lines, candidate, MAX_FILE_CHARS);
+  }
+
+  /**
+   * The parts of a file the changed code uses, in file order: a window around the first use of each
+   * name the diff refers to the file by, then around each place a called member is declared; the
+   * top of the file when neither is found. Together they render to at most {@code maxChars}
+   * characters, counted as {@link RelatedContext.Region#render} writes them: each region's "Lines"
+   * line, and each line's number, separator and line break.
+   */
+  static List<RelatedContext.Region> regions(
+      List<String> lines, RelatedReferences.Candidate candidate, int maxChars) {
     if (lines.isEmpty()) {
       return List.of();
     }
@@ -322,18 +340,25 @@ public class RelatedContextResolver {
       }
     }
     var regions = new ArrayList<RelatedContext.Region>();
-    var room = MAX_FILE_CHARS;
+    var room = maxChars;
     for (var window : windows) {
+      room -= ("Lines " + (window[0] + 1) + "-" + (window[1] + 1) + ":\n").length();
       var shown = new ArrayList<String>();
-      for (var i = window[0]; i <= window[1] && room > 0; i++) {
+      for (var i = window[0]; i <= window[1]; i++) {
         var text = lines.get(i);
         var clipped =
             text.length() > MAX_LINE_CHARS ? text.substring(0, MAX_LINE_CHARS) + "…" : text;
-        room -= clipped.length() + 1;
+        var cost = String.valueOf(i + 1).length() + LINE_SEPARATOR_CHARS + clipped.length() + 1;
+        if (cost > room) {
+          break;
+        }
+        room -= cost;
         shown.add(clipped);
       }
-      regions.add(new RelatedContext.Region(window[0] + 1, shown));
-      if (room <= 0) {
+      if (!shown.isEmpty()) {
+        regions.add(new RelatedContext.Region(window[0] + 1, shown));
+      }
+      if (shown.size() <= window[1] - window[0]) {
         break;
       }
     }
