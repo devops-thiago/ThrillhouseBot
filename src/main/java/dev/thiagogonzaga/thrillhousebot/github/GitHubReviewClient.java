@@ -420,7 +420,22 @@ public interface GitHubReviewClient {
       ReviewResponse.User user,
       @JsonProperty("author_association") String authorAssociation,
       Integer line,
-      @JsonProperty("original_line") Integer originalLine) {
+      @JsonProperty("original_line") Integer originalLine,
+      // The commit the comment was posted on (#1319); null when GitHub gives none.
+      @JsonProperty("original_commit_id") String originalCommitId) {
+
+    /** A comment whose original commit is not known. */
+    public PullRequestComment(
+        long id,
+        Long inReplyToId,
+        String path,
+        String body,
+        ReviewResponse.User user,
+        String authorAssociation,
+        Integer line,
+        Integer originalLine) {
+      this(id, inReplyToId, path, body, user, authorAssociation, line, originalLine, null);
+    }
 
     /** A comment with no line information, as most callers and tests build one. */
     public PullRequestComment(

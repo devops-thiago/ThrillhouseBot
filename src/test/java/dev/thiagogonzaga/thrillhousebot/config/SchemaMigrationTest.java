@@ -43,7 +43,7 @@ class SchemaMigrationTest {
 
     var result = flyway.migrate();
 
-    assertEquals(2, result.migrationsExecuted);
+    assertEquals(3, result.migrationsExecuted);
     assertEquals(MigrationState.SUCCESS, flyway.info().current().getState());
   }
 
@@ -60,12 +60,12 @@ class SchemaMigrationTest {
 
     var result = flyway.migrate();
 
-    assertEquals(1, result.migrationsExecuted, "only V2 runs on a baselined database");
+    assertEquals(2, result.migrationsExecuted, "only V2 and V3 run on a baselined database");
     var baseline = flyway.info().applied()[0];
     assertEquals(MigrationVersion.fromVersion("1"), baseline.getVersion());
     assertEquals(MigrationState.BASELINE, baseline.getState());
     var current = flyway.info().current();
-    assertEquals(MigrationVersion.fromVersion("2"), current.getVersion());
+    assertEquals(MigrationVersion.fromVersion("3"), current.getVersion());
     assertEquals(MigrationState.SUCCESS, current.getState());
     try (var connection = DriverManager.getConnection(url, "sa", "");
         var rows =

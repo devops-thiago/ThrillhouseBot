@@ -24,9 +24,12 @@ import java.util.Optional;
  *
  * <p>The section is separate from the persistent PR summary and carries no summary marker: that
  * marker would make {@code ReviewContextLoader} mistake it for the editable PR summary (#868). Its
- * counts come from the round's reconciled statuses, with closed findings named by locator and title
- * through {@link ClosedFindingNames}. Declined and superseded statuses are not fixes; an
- * earlier-round close recorded on this round is counted and named once (#1066).
+ * counts come from the round's reconciled statuses, the same counts the summary's status table and
+ * the check run read ({@link ReviewResult#previousCount}), with closed findings named by locator
+ * and title through {@link ClosedFindingNames}. Declined and superseded statuses are not fixes; a
+ * superseded finding is counted and named on its own line (#1318), so resolved, superseded and
+ * still open add up to the findings carried in less the declined ones. An earlier-round close
+ * recorded on this round is counted and named once (#1066).
  *
  * <p>Only a new finding or a closure earns a delta. Findings that merely stay open never add a
  * section on their own. A superseded finding refreshing the PR summary does not suppress the
@@ -44,7 +47,10 @@ final class FollowUpDeltaSummary {
 
   private static final String NEW_COUNT = "- **New findings this round:** ";
   private static final String RESOLVED_COUNT = "- **Previous findings resolved:** ";
+  private static final String SUPERSEDED_COUNT =
+      "- **Previous findings superseded (targeted code left the diff):** ";
   private static final String OPEN_COUNT = "- **Previous findings still open:** ";
+  private static final String NAME_INDENT = "  ";
 
   private FollowUpDeltaSummary() {}
 
@@ -61,7 +67,8 @@ final class FollowUpDeltaSummary {
       ReviewResult result, List<ReviewResponse.Finding> previousFindings) {
     var newFindings = newFindingCount(result);
     var resolved = result.resolvedPreviousCount();
-    if (newFindings == 0 && resolved == 0) {
+    var superseded = result.supersededPreviousCount();
+    if (newFindings == 0 && resolved == 0 && superseded == 0) {
       return Optional.empty();
     }
     var body =
@@ -73,7 +80,15 @@ final class FollowUpDeltaSummary {
             + RESOLVED_COUNT
             + resolved
             + "\n"
-            + ClosedFindingNames.bulletList(result, previousFindings, "  ")
+            + ClosedFindingNames.bulletList(
+                result, previousFindings, NAME_INDENT, ClosedFindingNames.RESOLVED)
+            + (superseded == 0
+                ? ""
+                : SUPERSEDED_COUNT
+                    + superseded
+                    + "\n"
+                    + ClosedFindingNames.bulletList(
+                        result, previousFindings, NAME_INDENT, ClosedFindingNames.SUPERSEDED))
             + OPEN_COUNT
             + result.unresolvedPreviousCount()
             + "\n";
@@ -103,11 +118,20 @@ final class FollowUpDeltaSummary {
         || !hasCount(lines.get(at + 1), RESOLVED_COUNT)) {
       return start;
     }
-    at += 2;
-    while (at < lines.size() && lines.get(at).startsWith("  - ")) {
-      at++;
+    at = afterNames(lines, at + 2);
+    if (at < lines.size() && hasCount(lines.get(at), SUPERSEDED_COUNT)) {
+      at = afterNames(lines, at + 1);
     }
     return at < lines.size() && hasCount(lines.get(at), OPEN_COUNT) ? at + 1 : start;
+  }
+
+  /** The first line from {@code at} that is not a named closure under a count. */
+  private static int afterNames(List<String> lines, int at) {
+    var next = at;
+    while (next < lines.size() && lines.get(next).startsWith(NAME_INDENT + "- ")) {
+      next++;
+    }
+    return next;
   }
 
   private static boolean hasCount(String line, String prefix) {

@@ -183,8 +183,13 @@ class RedactedSecretAcrossRoundsTest {
     }
   }
 
+  /**
+   * The push replaces the secret with exactly the environment lookup the finding suggested, so once
+   * its line is gone the finding is resolved by its own replacement, not superseded (#1319).
+   */
   @Test
-  void aRedactedModelFindingIsSupersededOnceTheHeadMovesAndItsLineIsGone() throws Exception {
+  void aRedactedModelFindingIsResolvedOnceTheHeadMovesAndItsSuggestedReplacementLands()
+      throws Exception {
     var first = roundOne();
 
     var round =
@@ -199,9 +204,11 @@ class RedactedSecretAcrossRoundsTest {
     var result = builder.build(context(List.of(first), movedHead(), false), round, CI_CLEAR, plan);
     var body = summary(result);
 
-    assertTrue(result.hasSupersededPrevious());
-    assertTrue(body.contains("| 🗂️ Superseded (targeted code left the diff) | 1 |"), body);
-    assertTrue(body.contains("| ✅ Resolved | 1 |"), "the scan's own finding: no longer detected");
+    assertFalse(result.hasSupersededPrevious());
+    assertFalse(body.contains("Superseded"), body);
+    assertEquals(FollowUpAnalyzer.REPLACEMENT_LANDED_NOTE, result.previousStatuses().get(0).note());
+    // The model's finding, by its replacement, and the scan's own finding, no longer detected.
+    assertTrue(body.contains("| ✅ Resolved | 2 |"), body);
     assertTrue(body.contains("| 🔴 Critical | 0 |"), body);
     assertFalse(body.contains(TITLE), body);
   }

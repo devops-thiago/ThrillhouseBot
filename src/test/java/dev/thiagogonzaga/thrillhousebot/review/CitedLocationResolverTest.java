@@ -662,5 +662,14 @@ class CitedLocationResolverTest {
     assertTrue(round.relatedFileLines("src/one-too-many.java").isEmpty());
     verify(prClient, times(1)).getFileContent(any(), any(), any(), any(), eq("src/R0.java"), any());
     assertTrue(CitedLocationResolver.disabled().relatedFileLines("src/R0.java").isEmpty());
+    // Module manifests are counted apart again, so the related files cannot use their reads up.
+    for (var i = 0; i < CitedLocationResolver.MAX_MODULE_FILES_FETCHED; i++) {
+      assertEquals(List.of("a", "b"), round.moduleFileLines("m" + i + "/go.mod").orElseThrow());
+    }
+    assertTrue(round.moduleFileLines("one-too-many/go.mod").isEmpty());
+    assertEquals(
+        dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig.RelatedContextConfig
+            .MAX_MAX_FILES,
+        CitedLocationResolver.MAX_RELATED_FILES_FETCHED);
   }
 }

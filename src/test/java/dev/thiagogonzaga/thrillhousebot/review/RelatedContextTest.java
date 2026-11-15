@@ -88,14 +88,14 @@ class RelatedContextTest {
 
   @Test
   void aFileIsNamedByPathFileNameOrADistinctiveStemAsAWholeWord() {
-    assertTrue(RelatedContext.names("see " + PATH + " line 4", PATH));
-    assertTrue(RelatedContext.names("see InputSanitizer.java", PATH));
-    assertTrue(RelatedContext.names("InputSanitizer strips only", PATH));
-    assertFalse(RelatedContext.names("MyInputSanitizerImpl strips only", PATH));
-    assertTrue(RelatedContext.names("the rate_limiter module", "app/rate_limiter.py"));
-    assertFalse(RelatedContext.names("some utils are used", "app/utils.py"));
-    assertTrue(RelatedContext.names("in utils.py the helper", "app/utils.py"));
-    assertFalse(RelatedContext.names("Api is called", "src/Api.java"));
+    assertTrue(RelatedContext.names("see " + PATH + " line 4", PATH, true));
+    assertTrue(RelatedContext.names("see InputSanitizer.java", PATH, true));
+    assertTrue(RelatedContext.names("InputSanitizer strips only", PATH, true));
+    assertFalse(RelatedContext.names("MyInputSanitizerImpl strips only", PATH, true));
+    assertTrue(RelatedContext.names("the rate_limiter module", "app/rate_limiter.py", true));
+    assertFalse(RelatedContext.names("some utils are used", "app/utils.py", true));
+    assertTrue(RelatedContext.names("in utils.py the helper", "app/utils.py", true));
+    assertFalse(RelatedContext.names("Api is called", "src/Api.java", true));
   }
 
   @Test
@@ -128,11 +128,81 @@ class RelatedContextTest {
 
   @Test
   void aNameInsideALongerWordOrAnExtensionlessPathIsReadExactly() {
-    assertFalse(RelatedContext.names("InputSanitizerImpl strips only", PATH));
-    assertFalse(RelatedContext.names("MyInputSanitizer strips only", PATH));
-    assertFalse(RelatedContext.names("_InputSanitizer strips only", PATH));
-    assertTrue(RelatedContext.names("MyInputSanitizer wraps InputSanitizer", PATH));
-    assertTrue(RelatedContext.names("the JobRunner script", "bin/JobRunner"));
-    assertFalse(RelatedContext.names("some other script", "bin/JobRunner"));
+    assertFalse(RelatedContext.names("InputSanitizerImpl strips only", PATH, true));
+    assertFalse(RelatedContext.names("MyInputSanitizer strips only", PATH, true));
+    assertFalse(RelatedContext.names("_InputSanitizer strips only", PATH, true));
+    assertTrue(RelatedContext.names("MyInputSanitizer wraps InputSanitizer", PATH, true));
+    assertTrue(RelatedContext.names("the JobRunner script", "bin/JobRunner", true));
+    assertFalse(RelatedContext.names("some other script", "bin/JobRunner", true));
+  }
+
+  @Test
+  void aSharedFileNameNamesAFileOnlyByItsFullPath() {
+    // A finding on web/src/index.ts mentions index.ts; that is not lib/index.ts.
+    var lib =
+        new RelatedContext.RelatedFile(
+            "lib/index.ts",
+            "interface",
+            List.of(),
+            3,
+            List.of(new RelatedContext.Region(1, List.of("export const x = 1;"))));
+    var other =
+        new RelatedContext.RelatedFile(
+            "pkg/index.js",
+            "caller",
+            List.of(),
+            3,
+            List.of(new RelatedContext.Region(1, List.of("module.exports = {};"))));
+    var onIndex =
+        new ReviewResponse.Finding(
+            "high",
+            "medium",
+            "web/src/index.ts",
+            3,
+            "Wrong default",
+            "index.ts exports x",
+            null,
+            null);
+    var onCart =
+        new ReviewResponse.Finding(
+            "high",
+            "medium",
+            "web/src/cart.ts",
+            3,
+            "Wrong default",
+            "index.ts exports x",
+            null,
+            null);
+    var byPath =
+        new ReviewResponse.Finding(
+            "high",
+            "medium",
+            "web/src/index.ts",
+            3,
+            "Wrong default",
+            "see lib/index.ts",
+            null,
+            null);
+    var longerPath =
+        new ReviewResponse.Finding(
+            "high",
+            "medium",
+            "web/src/cart.ts",
+            3,
+            "Wrong default",
+            "see web/lib/index.ts",
+            null,
+            null);
+
+    assertNull(new RelatedContext(List.of(lib), 1).noteFor(onIndex), "the finding's own file name");
+    assertNotNull(new RelatedContext(List.of(lib), 1).noteFor(onCart));
+    assertNull(new RelatedContext(List.of(lib, other), 1).noteFor(onCart), "two files share it");
+    assertNotNull(new RelatedContext(List.of(lib, other), 1).noteFor(byPath));
+    assertNull(new RelatedContext(List.of(lib, other), 1).noteFor(longerPath), "another path");
+    assertFalse(RelatedContext.names("see InputSanitizer.java", PATH, false));
+    var noFile =
+        new ReviewResponse.Finding(
+            "high", "medium", null, 0, "t", "index.ts exports x", null, null);
+    assertNotNull(new RelatedContext(List.of(lib), 1).noteFor(noFile));
   }
 }

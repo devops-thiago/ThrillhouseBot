@@ -46,6 +46,29 @@ public final class EvidenceBudget {
    */
   static final String NOTE_TRUNCATED = "\n… (evidence truncated)";
 
+  /**
+   * Character cap on the related-context excerpts one review attaches (#55). A share of their own,
+   * so five findings naming a related file cannot use up the budget the cited-location, coverage,
+   * path-rule and CI notes are charged to.
+   */
+  static final int MAX_RELATED_TOTAL_CHARS = 3_000;
+
+  private final int maxTotalChars;
+
+  /** The review's budget for everything but the related-context excerpts. */
+  public EvidenceBudget() {
+    this(MAX_TOTAL_CHARS);
+  }
+
+  private EvidenceBudget(int maxTotalChars) {
+    this.maxTotalChars = maxTotalChars;
+  }
+
+  /** The separate budget one review's related-context excerpts are charged to. */
+  static EvidenceBudget forRelatedContext() {
+    return new EvidenceBudget(MAX_RELATED_TOTAL_CHARS);
+  }
+
   /** Characters attached so far, read and written only under {@link #monitor}. */
   private int charsAttached;
 
@@ -76,7 +99,7 @@ public final class EvidenceBudget {
    */
   private boolean reserve(int chars) {
     synchronized (monitor) {
-      if (charsAttached + chars > MAX_TOTAL_CHARS) {
+      if (charsAttached + chars > maxTotalChars) {
         return false;
       }
       charsAttached += chars;

@@ -80,8 +80,9 @@ import org.junit.jupiter.api.Test;
  *     ./mvnw test -Peval -Dtest=PromptEvalTest
  * }</pre>
  *
- * <p>The verifier, summary check and repair calls use the {@code concise} client, so its key is
- * required too. The suite fails at the first call the provider refuses for its key (#1329).
+ * <p>The summary, verifier, summary check and summary repair calls use the {@code concise} client,
+ * so its key is required too. The suite fails at the first call the provider refuses for its key
+ * (#1329).
  *
  * <p>Both prompts follow {@code REVIEW_DIMENSION_ROUTING_ENABLED} exactly as production does
  * (#665): off, every case runs against the monolithic prompts; on, each generator case gets the
@@ -117,13 +118,13 @@ class PromptEvalTest {
   private static final int PARSE_ATTEMPTS = 3;
   private static final String ONLY = System.getProperty("eval.only", "");
 
-  /** The key the review and summary calls use. */
+  /** The key the review call and the review repair use. */
   static final String KEY_VARIABLE = "QUARKUS_LANGCHAIN4J_OPENAI_API_KEY";
 
   /**
-   * The key the verifier, summary check and repair calls use: the {@code concise} client's. Under
-   * the test profile it is {@code AI_API_KEY}'s dummy value unless set, and every such call is
-   * rejected.
+   * The key the summary, verifier, summary check and summary repair calls use: the {@code concise}
+   * client's. Under the test profile it is {@code AI_API_KEY}'s dummy value unless set, and every
+   * such call is rejected.
    */
   static final String CONCISE_KEY_VARIABLE = "QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY";
 
@@ -249,7 +250,8 @@ class PromptEvalTest {
             + CONCISE_KEY_VARIABLE
             + " as well as "
             + KEY_VARIABLE
-            + ": the verifier, summary check and repair calls use the concise client's key");
+            + ": the summary, verifier, summary check and summary repair calls use the concise"
+            + " client's key");
   }
 
   private String outcomeOf(EvalCase evalCase) throws Exception {

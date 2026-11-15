@@ -116,6 +116,11 @@ final class RelatedReferences {
       return SNAKE_CASE_FILES.contains(name());
     }
 
+    /** Whether a line starting with {@code #} is a comment, not a directive or a private name. */
+    boolean hashComments() {
+      return HASH_COMMENTS.contains(name());
+    }
+
     static Language of(String path) {
       var extension = extensionOf(path);
       for (var language : values()) {
@@ -130,6 +135,9 @@ final class RelatedReferences {
   /** The languages whose files are named in snake case; by name, as an enum cannot hold itself. */
   private static final Set<String> SNAKE_CASE_FILES =
       Set.of("PYTHON", "RUBY", "RUST", "GO", "DART");
+
+  /** The languages in which {@code #} opens a comment; in C, Swift and JavaScript it is code. */
+  private static final Set<String> HASH_COMMENTS = Set.of("PYTHON", "RUBY", "PHP");
 
   private static final Pattern JVM_IMPORT =
       Pattern.compile("^\\s*import\\s+(static\\s+)?([\\w.]+?)(\\.\\*)?\\s*(?:;|as\\s|$)");
@@ -160,8 +168,8 @@ final class RelatedReferences {
   private static final Pattern MEMBER_CALL =
       Pattern.compile("(?:([A-Za-z_]\\w*)\\s*)?\\.\\s*([A-Za-z_]\\w{2,})\\s*\\(");
 
-  /** A receiver shorter than this ({@code db}, {@code it}) is not read as named after a file. */
-  static final int MIN_RECEIVER_CHARS = 3;
+  /** A name shorter than this is too common a word to credit a call with no receiver to. */
+  static final int MIN_BARE_SYMBOL_CHARS = 3;
 
   /** Before a capital that follows a lower-case letter or digit, or that ends an acronym. */
   private static final Pattern CAMEL_BOUNDARY =
@@ -177,16 +185,19 @@ final class RelatedReferences {
    * @param changedPaths every path the pull request changes, reviewable or not; none is a candidate
    * @param repositoryPaths the repository's paths at the head commit
    * @param excluded paths that must not be read, such as the review's ignore globs
+   * @param goModules the Go modules of the repository, module path by the directory of its {@code
+   *     go.mod} ({@code ""} for the root); without one, no Go import resolves
    */
   static List<Candidate> extract(
       List<GitHubPullRequestClient.FileDiff> files,
       Set<String> changedPaths,
       Set<String> repositoryPaths,
-      Predicate<String> excluded) {
+      Predicate<String> excluded,
+      Map<String, String> goModules) {
     if (files == null || files.isEmpty() || repositoryPaths == null || repositoryPaths.isEmpty()) {
       return List.of();
     }
-    var index = new Index(repositoryPaths);
+    var index = new Index(repositoryPaths, goModules);
     var found = new LinkedHashMap<String, Found>();
     for (var file : files) {
       var language = Language.of(file.filename());
@@ -228,7 +239,7 @@ final class RelatedReferences {
       var added = raw.charAt(0) == '+';
       var text = raw.substring(1);
       // A comment refers to nothing: a commented-out import would rank as a live one.
-      if (isComment(text)) {
+      if (isComment(text, language)) {
         continue;
       }
       var closes = false;
@@ -289,22 +300,36 @@ final class RelatedReferences {
     /**
      * Whether the call was made on a file known by {@code symbols}: its receiver is one of the
      * names or a variable named after one ({@code sanitizer} for {@code InputSanitizer}), or it has
-     * no receiver of its own and its line uses one of the names.
+     * no receiver of its own and its line uses one of the names as a whole identifier.
      */
     boolean madeOn(Set<String> symbols) {
       for (var symbol : symbols) {
-        if (receiver == null ? line.contains(symbol) : namedAfter(receiver, symbol)) {
+        if (receiver == null ? usesName(line, symbol) : namedAfter(receiver, symbol)) {
           return true;
         }
       }
       return false;
     }
 
+    private static boolean usesName(String line, String symbol) {
+      return symbol.length() >= MIN_BARE_SYMBOL_CHARS && RelatedContext.wholeWord(line, symbol);
+    }
+
+    /**
+     * Whether a variable is named after a type: it is the type's name, or its last words, in any
+     * case and with or without underscores. {@code userProfile} is not named after {@code User},
+     * nor {@code ratio} after {@code io}.
+     */
     private static boolean namedAfter(String receiver, String symbol) {
-      var variable = receiver.toLowerCase(Locale.ROOT);
-      var name = symbol.toLowerCase(Locale.ROOT);
-      return variable.length() >= MIN_RECEIVER_CHARS
-          && (name.contains(variable) || variable.contains(name));
+      var variable = receiver.replace("_", "").toLowerCase(Locale.ROOT);
+      var words = CAMEL_BOUNDARY.matcher(symbol).replaceAll("_").split("_+");
+      for (var from = 0; from < words.length; from++) {
+        var tail = String.join("", List.of(words).subList(from, words.length));
+        if (tail.toLowerCase(Locale.ROOT).equals(variable)) {
+          return true;
+        }
+      }
+      return false;
     }
   }
 
@@ -315,7 +340,7 @@ final class RelatedReferences {
     }
   }
 
-  private static boolean isComment(String line) {
+  private static boolean isComment(String line, Language language) {
     var text = line.stripLeading();
     return text.startsWith("//")
         || text.startsWith("/*")
@@ -323,7 +348,8 @@ final class RelatedReferences {
         || text.equals("*")
         || text.startsWith("* ")
         || text.startsWith("*/")
-        || (text.startsWith("#") && !text.startsWith("#include") && !text.startsWith("#["));
+        // "#" is a comment only where the language says so, and "#[" is a PHP attribute.
+        || (language.hashComments() && text.startsWith("#") && !text.startsWith("#["));
   }
 
   /** A resolved reference: the repository path and the name the diff used for it. */
@@ -582,9 +608,11 @@ final class RelatedReferences {
     private final Map<String, List<String>> byName = new HashMap<>();
     private final Map<String, List<String>> byStem = new HashMap<>();
     private final Map<String, List<String>> goFilesByDirectory = new HashMap<>();
+    private final Map<String, String> goModules;
 
-    Index(Set<String> repositoryPaths) {
+    Index(Set<String> repositoryPaths, Map<String, String> goModules) {
       this.paths = repositoryPaths;
+      this.goModules = goModules;
       for (var path : repositoryPaths) {
         if (Language.of(path) == null) {
           continue;
@@ -629,15 +657,26 @@ final class RelatedReferences {
       return List.of();
     }
 
-    /** The files of the Go package an import path names: the deepest directory it ends with. */
+    /**
+     * The files of the Go package an import path names: the directory the path gives under the
+     * module that declares its prefix, the deepest such module when they nest. An import of another
+     * module (the standard library, a dependency) names no file of this repository, even when a
+     * local directory has the same last segment.
+     */
     List<String> goPackage(String imported) {
-      return goFilesByDirectory.keySet().stream()
-          .filter(directory -> !directory.isEmpty())
-          .filter(directory -> imported.equals(directory) || imported.endsWith("/" + directory))
-          .max(Comparator.comparingInt(String::length))
-          .map(best -> goFilesByDirectory.get(best).stream().sorted().limit(MAX_PACKAGE_FILES))
-          .map(java.util.stream.Stream::toList)
+      return goModules.entrySet().stream()
+          .filter(m -> imported.equals(m.getValue()) || imported.startsWith(m.getValue() + "/"))
+          .max(Comparator.comparingInt(m -> m.getValue().length()))
+          .map(m -> packageDirectory(m.getKey(), imported.substring(m.getValue().length())))
+          .map(directory -> goFilesByDirectory.getOrDefault(directory, List.of()))
+          .map(files -> files.stream().sorted().limit(MAX_PACKAGE_FILES).toList())
           .orElse(List.of());
+    }
+
+    /** The directory of the package at {@code rest} ({@code ""} or {@code "/a/b"}) in a module. */
+    private static String packageDirectory(String moduleDirectory, String rest) {
+      var directory = moduleDirectory + rest;
+      return directory.startsWith("/") ? directory.substring(1) : directory;
     }
 
     /**

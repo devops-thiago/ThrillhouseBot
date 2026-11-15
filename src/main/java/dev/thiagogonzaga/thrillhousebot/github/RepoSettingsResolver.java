@@ -103,8 +103,11 @@ public class RepoSettingsResolver {
     try {
       repository =
           clientProvider.getInstallationClient(installationId).getRepository(owner + "/" + repo);
+    } catch (GHFileNotFoundException _) {
+      log.debug("Repository {}/{} not found", owner, repo);
+      return RepoSettings.EMPTY;
     } catch (RuntimeException | IOException e) {
-      log.debug("Could not resolve repository {}/{}", owner, repo);
+      log.warn("Could not resolve repository {}/{}: {}", owner, repo, e.toString());
       return RepoSettings.EMPTY;
     }
     var unreadable = false;

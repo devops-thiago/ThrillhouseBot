@@ -77,6 +77,16 @@ class ReviewContextLoaderTest {
 
   private ReviewContextLoader loader;
   private final ReviewDiffFormatter diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
+
+  /** No stored finding rows: file changes are the comparisons' alone. */
+  private final FindingStates findingStates = noStoredFindings();
+
+  private static FindingStates noStoredFindings() {
+    var states = mock(FindingStates.class);
+    when(states.roundChanges(any(), any(), any(), any())).thenAnswer(call -> call.getArgument(3));
+    return states;
+  }
+
   private final SupersededFindingsCarryover carryover =
       new SupersededFindingsCarryover(new ObjectMapper());
 
@@ -107,7 +117,8 @@ class ReviewContextLoaderTest {
             sessionPersistence,
             BotIdentity.from(List.of(BOT_LOGIN)),
             activeModel,
-            carryover);
+            carryover,
+            findingStates);
   }
 
   @Nested
@@ -426,6 +437,20 @@ class ReviewContextLoaderTest {
      * .github/thrillhousebot.yml} is unioned with the deployment-wide list before the
      * reviewable-file set is computed, so the extra paths never reach the model.
      */
+    @Test
+    void theIgnoredPathsTestCoversTheRepositorysOwnPatterns() {
+      // #55: a file the repository excludes from review is never read as related context either.
+      when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
+          .thenReturn(
+              new RepoSettings(
+                  List.of("docs/generated/**"), List.of(), ".github/thrillhousebot.yml"));
+
+      var ignored = loader.ignoredPaths(request());
+
+      assertTrue(ignored.test("docs/generated/api.md"));
+      assertFalse(ignored.test("src/App.java"));
+    }
+
     @Test
     void perRepoIgnorePatternsNarrowTheReviewableFileSet() {
       var files =
@@ -898,7 +923,8 @@ class ReviewContextLoaderTest {
           sessionPersistence,
           BotIdentity.from(List.of(BOT_LOGIN)),
           activeModel,
-          carryover);
+          carryover,
+          findingStates);
     }
 
     private ReviewOrchestrator.ReviewRequest request() {
@@ -1063,6 +1089,64 @@ class ReviewContextLoaderTest {
       assertFalse(ReviewContextLoader.headUnchanged("abc", null));
       assertFalse(ReviewContextLoader.headUnchanged("", ""));
       assertFalse(ReviewContextLoader.headUnchanged("abc", "abd"));
+    }
+
+    // --- #1319: an older round's open finding on a file changed since is numbered for a status ---
+
+    private static final String OLDER_ROUND_JSON =
+        """
+        {"findings":[{"risk":"high","file":"src/Main.java","line":10,\
+        "title":"Older finding","description":"d","suggestion_old":""},\
+        {"risk":"high","file":"b.java","line":3,\
+        "title":"Unchanged finding","description":"d","suggestion_old":""}],\
+        "previous_findings_status":[]}""";
+
+    /** The bot's thread for the older round's finding at {@code id}. */
+    private static GitHubReviewClient.PullRequestComment olderThread(
+        long commentId, int id, String file, int line, String title) {
+      return new GitHubReviewClient.PullRequestComment(
+          commentId,
+          null,
+          file,
+          "**" + title + "**\n\n" + SuggestionFormatter.findingMarker(id, file, line, title),
+          new GitHubReviewClient.ReviewResponse.User(BOT_LOGIN),
+          null);
+    }
+
+    @Test
+    void anOlderRoundsFindingOnAChangedFileIsNumberedAfterTheEffectiveRoundsOwn() {
+      stubLoad(List.of(POSTED_ROUND_JSON, OLDER_ROUND_JSON));
+      when(sessionPersistence.findAllPriorCommitShas(any(), eq(1), anyLong()))
+          .thenReturn(List.of("midsha1", "oldsha1"));
+      when(prClient.compareCommits(
+              any(), any(), eq("owner"), eq("repo"), eq("oldsha1"), eq("headsha1")))
+          .thenReturn(
+              new GitHubPullRequestClient.CompareResponse(
+                  1,
+                  List.of(
+                      new GitHubPullRequestClient.FileDiff(
+                          "src/Main.java", "modified", 1, 0, 1, "@@ -10 +10 @@\n+guard(x)")),
+                  "ahead"));
+      when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(
+              List.of(
+                  olderThread(1L, 1, "src/Main.java", 10, "Older finding"),
+                  olderThread(2L, 2, "b.java", 3, "Unchanged finding")));
+
+      var context = load().previousFindings();
+
+      assertTrue(context.contains(listed(1, "LOW", "a.java", 1, "Posted finding")), context);
+      assertTrue(context.contains("Raised in earlier rounds and still open"), context);
+      assertTrue(
+          context.contains(listed(2, "HIGH", "src/Main.java", 10, "Older finding")), context);
+      // Its file is unchanged since the round that raised it: still open without asking, so it
+      // stays in the unnumbered list, which no longer carries the numbered one.
+      var stillOpen =
+          context.substring(
+              context.indexOf("Still open from earlier rounds"),
+              context.indexOf("Raised in earlier rounds"));
+      assertTrue(stillOpen.contains("b.java:3 — Unchanged finding"), context);
+      assertFalse(stillOpen.contains("Older finding"), context);
     }
 
     @Test
@@ -1771,7 +1855,8 @@ class ReviewContextLoaderTest {
           sessionPersistence,
           BotIdentity.from(List.of(BOT_LOGIN)),
           activeModel,
-          carryover);
+          carryover,
+          findingStates);
     }
 
     /** Round 2 posted the bot's own "1 previous finding(s) remain unresolved" body, as on #449. */

@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
+import dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextPrompts;
 import dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextSelectionService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TokenCounter;
@@ -25,12 +26,16 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -80,53 +85,51 @@ public class RelatedContextResolver {
   /** Lines shown from the top of a file in which nothing the changed code names was found. */
   static final int HEAD_LINES = 40;
 
+  private static final String GO_MOD = "go.mod";
+
+  private static final Pattern GO_MODULE = Pattern.compile("^module\\s+(\\S+)");
+
   private final boolean enabled;
   private final int maxFiles;
   private final int maxAiCalls;
   private final RelatedContextSelectionService selection;
   private final DiffBudgetPlanner budgetPlanner;
   private final TokenCounter tokenCounter;
-  private final Predicate<String> ignored;
 
   @Inject
   public RelatedContextResolver(
       ThrillhouseConfig config,
       RelatedContextSelectionService selection,
       DiffBudgetPlanner budgetPlanner,
-      TokenCounter tokenCounter,
-      ReviewDiffFormatter diffFormatter) {
+      TokenCounter tokenCounter) {
     this(
         config.review().relatedContext().enabled(),
         config.review().relatedContext().maxFiles(),
         config.review().maxAiCalls(),
         selection,
         budgetPlanner,
-        tokenCounter,
-        diffFormatter.ignoreGlobs(List.of())::matches);
+        tokenCounter);
   }
 
   /** Visible for tests: the switches and caps are passed directly. */
-  @SuppressWarnings("java:S107")
   RelatedContextResolver(
       boolean enabled,
       int maxFiles,
       int maxAiCalls,
       RelatedContextSelectionService selection,
       DiffBudgetPlanner budgetPlanner,
-      TokenCounter tokenCounter,
-      Predicate<String> ignored) {
+      TokenCounter tokenCounter) {
     this.enabled = enabled;
     this.maxFiles = maxFiles;
     this.maxAiCalls = maxAiCalls;
     this.selection = selection;
     this.budgetPlanner = budgetPlanner;
     this.tokenCounter = tokenCounter;
-    this.ignored = ignored;
   }
 
   /** The feature switched off, for callers that construct the orchestrator without it. */
   static RelatedContextResolver disabled() {
-    return new RelatedContextResolver(false, 0, 0, null, null, null, path -> false);
+    return new RelatedContextResolver(false, 0, 0, null, null, null);
   }
 
   /** Whether the related context is switched on. */
@@ -139,11 +142,14 @@ public class RelatedContextResolver {
    * diff refers to no file outside it, or the context could not be built.
    *
    * @param repository the review's repository round, whose listing and file cache are shared
+   * @param ignored the review's effective ignore set (the deployment's globs and the repository's
+   *     own), asked for only when the feature runs; a file it matches is never read
    */
   RelatedContext resolve(
       ReviewSession session,
       ReviewContextLoader.ReviewContext ctx,
-      CitedLocationResolver.Round repository) {
+      CitedLocationResolver.Round repository,
+      Supplier<Predicate<String>> ignored) {
     // The selection call is counted in the cap beside one review call and the summary call; the
     // startup validator refuses a smaller allowance, so this only guards a caller that skipped it.
     if (!enabled
@@ -159,7 +165,11 @@ public class RelatedContextResolver {
       }
       var candidates =
           RelatedReferences.extract(
-              ctx.reviewableFiles(), changedPaths(ctx.files()), listing.get().paths(), ignored);
+              ctx.reviewableFiles(),
+              changedPaths(ctx.files()),
+              listing.get().paths(),
+              ignored.get(),
+              goModules(ctx.reviewableFiles(), listing.get().paths(), repository));
       if (candidates.isEmpty()) {
         return RelatedContext.NONE;
       }
@@ -203,6 +213,39 @@ public class RelatedContextResolver {
     if (selection != null) {
       selection.release(ReviewTokenLedger.keyFor(session));
     }
+  }
+
+  /**
+   * The repository's Go modules, module path by the directory of its {@code go.mod}, read only when
+   * the pull request changes Go code: the shallowest manifests, at most {@link
+   * CitedLocationResolver#MAX_MODULE_FILES_FETCHED}. A Go import resolves only under one of them.
+   */
+  static Map<String, String> goModules(
+      List<GitHubPullRequestClient.FileDiff> files,
+      Set<String> repositoryPaths,
+      CitedLocationResolver.Round repository) {
+    if (files.stream().noneMatch(file -> String.valueOf(file.filename()).endsWith(".go"))) {
+      return Map.of();
+    }
+    var modules = new LinkedHashMap<String, String>();
+    repositoryPaths.stream()
+        .filter(path -> path.equals(GO_MOD) || path.endsWith("/" + GO_MOD))
+        .sorted(Comparator.comparingInt(String::length).thenComparing(Comparator.naturalOrder()))
+        .limit(CitedLocationResolver.MAX_MODULE_FILES_FETCHED)
+        .forEach(
+            manifest ->
+                repository.moduleFileLines(manifest).stream()
+                    .flatMap(List::stream)
+                    .map(GO_MODULE::matcher)
+                    .filter(Matcher::find)
+                    .findFirst()
+                    .ifPresent(
+                        declared ->
+                            modules.put(
+                                manifest.substring(
+                                    0, Math.max(0, manifest.length() - GO_MOD.length() - 1)),
+                                declared.group(1))));
+    return modules;
   }
 
   private static Set<String> changedPaths(List<GitHubPullRequestClient.FileDiff> files) {
@@ -339,7 +382,12 @@ public class RelatedContextResolver {
    * and a smaller file after it may still be kept.
    */
   private List<RelatedContext.RelatedFile> withinBudget(List<RelatedContext.RelatedFile> files) {
-    long left = budgetPlanner.relatedContextTokenBudget();
+    // The share is the whole section's: the request and the fence lines the assembler wraps the
+    // excerpts in come out of it before any file does.
+    long left =
+        (long) budgetPlanner.relatedContextTokenBudget()
+            - tokenCounter.estimateTokens(RelatedContextPrompts.REVIEW_REQUEST)
+            - tokenCounter.estimateTokens(PromptTemplateEscaper.fenceForBudgeting());
     var kept = new ArrayList<RelatedContext.RelatedFile>();
     for (var file : files) {
       var fitted = file;

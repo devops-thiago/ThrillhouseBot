@@ -16,15 +16,23 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.doThrow;
 
+import dev.thiagogonzaga.thrillhousebot.CapturedLog;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.kohsuke.github.GHFileNotFoundException;
+import org.kohsuke.github.HttpException;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
@@ -678,6 +686,40 @@ class RepoSettingsResolverTest {
       stubMissing(YAML);
 
       assertEquals(RepoSettings.EMPTY, resolve());
+    }
+
+    @Test
+    void aFailedRepositoryLookupIsLoggedAtWarnWithItsError() throws Exception {
+      // #1355: a 5xx or rate limit on the lookup drops this context from the review, so it must
+      // show.
+      doThrow(
+              new HttpException(
+                  "unavailable", 503, "Service Unavailable", "https://api.github.com"))
+          .when(gitHub)
+          .getRepository(anyString());
+
+      try (var log = CapturedLog.of(RepoSettingsResolver.class)) {
+        assertEquals(RepoSettings.EMPTY, resolve());
+
+        var warnings = log.at(Level.WARNING);
+        assertEquals(1, warnings.size(), warnings.toString());
+        assertTrue(
+            warnings.getFirst().contains(OWNER)
+                && warnings.getFirst().contains(REPO)
+                && warnings.getFirst().contains("unavailable"),
+            warnings.getFirst());
+      }
+    }
+
+    @Test
+    void aRepositoryThatIsNotFoundIsLoggedAtDebugOnly() throws Exception {
+      doThrow(new GHFileNotFoundException("Not Found")).when(gitHub).getRepository(anyString());
+
+      try (var log = CapturedLog.of(RepoSettingsResolver.class)) {
+        assertEquals(RepoSettings.EMPTY, resolve());
+
+        assertEquals(List.of(), log.at(Level.WARNING));
+      }
     }
 
     @Test

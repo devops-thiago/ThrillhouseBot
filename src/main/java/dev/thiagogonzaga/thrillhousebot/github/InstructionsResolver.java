@@ -82,6 +82,21 @@ public class InstructionsResolver {
   }
 
   /**
+   * The repository, or {@code null} after logging why: at debug when it is not found, at warn for
+   * any other failure, since that drops the instructions from the review (#1355).
+   */
+  private GHRepository repository(String owner, String repo, long installationId) {
+    try {
+      return clientProvider.getInstallationClient(installationId).getRepository(owner + "/" + repo);
+    } catch (GHFileNotFoundException _) {
+      log.debug("Repository {}/{} not found", owner, repo);
+    } catch (RuntimeException | IOException e) {
+      log.warn("Could not resolve repository {}/{}: {}", owner, repo, e.toString());
+    }
+    return null;
+  }
+
+  /**
    * Resolves the instructions file for a repository using the priority fallback chain.
    *
    * <p>A path that could not be read (a 5xx, the 403 secondary rate limit, a transport error) is
@@ -106,12 +121,8 @@ public class InstructionsResolver {
       cache.remove(cacheKey, cached);
     }
 
-    GHRepository repository;
-    try {
-      repository =
-          clientProvider.getInstallationClient(installationId).getRepository(owner + "/" + repo);
-    } catch (RuntimeException | IOException e) {
-      log.debug("Could not resolve repository {}/{}", owner, repo);
+    var repository = repository(owner, repo, installationId);
+    if (repository == null) {
       return ResolvedInstructions.EMPTY;
     }
 

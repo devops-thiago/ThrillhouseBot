@@ -16,6 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.LogSafe;
+import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
@@ -95,7 +96,10 @@ public class CitedLocationResolver {
    * Repository files read per review as related context ({@link Round#relatedFileLines}), counted
    * apart from the other two caps; the largest {@code REVIEW_RELATED_CONTEXT_MAX_FILES} accepted.
    */
-  static final int MAX_RELATED_FILES_FETCHED = 10;
+  static final int MAX_RELATED_FILES_FETCHED = ThrillhouseConfig.RelatedContextConfig.MAX_MAX_FILES;
+
+  /** Module manifests read per review for the related context's import resolution. */
+  static final int MAX_MODULE_FILES_FETCHED = 2;
 
   /** A source file is never megabytes; anything larger is skipped rather than decoded. */
   static final long MAX_FILE_BYTES = 512L * 1024;
@@ -183,6 +187,8 @@ public class CitedLocationResolver {
 
     private final AtomicInteger relatedFetches = new AtomicInteger();
 
+    private final AtomicInteger moduleFetches = new AtomicInteger();
+
     /** The review's evidence budget, shared with the other resolvers that attach notes (#475). */
     private final EvidenceBudget budget;
 
@@ -242,16 +248,7 @@ public class CitedLocationResolver {
      * past that cap, unreadable, or there is no repository access.
      */
     public Optional<List<String>> citedFileLines(String path) {
-      if (prClient == null) {
-        return Optional.empty();
-      }
-      if (contents.containsKey(path)) {
-        return contents.get(path);
-      }
-      if (citedFetches.incrementAndGet() > MAX_CITED_FILES_FETCHED) {
-        return Optional.empty();
-      }
-      return contents.computeIfAbsent(path, this::fetch);
+      return readCapped(path, citedFetches, MAX_CITED_FILES_FETCHED);
     }
 
     /**
@@ -261,13 +258,26 @@ public class CitedLocationResolver {
      * The caller passes only paths of {@link #repositoryPaths()}.
      */
     public Optional<List<String>> relatedFileLines(String path) {
+      return readCapped(path, relatedFetches, MAX_RELATED_FILES_FETCHED);
+    }
+
+    /**
+     * The lines of a module manifest the related context resolves imports against (a {@code
+     * go.mod}), on the same terms and at most {@link #MAX_MODULE_FILES_FETCHED} files.
+     */
+    public Optional<List<String>> moduleFileLines(String path) {
+      return readCapped(path, moduleFetches, MAX_MODULE_FILES_FETCHED);
+    }
+
+    /** One cached read, charged to {@code counter} and refused once it is past {@code cap}. */
+    private Optional<List<String>> readCapped(String path, AtomicInteger counter, int cap) {
       if (prClient == null) {
         return Optional.empty();
       }
       if (contents.containsKey(path)) {
         return contents.get(path);
       }
-      if (relatedFetches.incrementAndGet() > MAX_RELATED_FILES_FETCHED) {
+      if (counter.incrementAndGet() > cap) {
         return Optional.empty();
       }
       return contents.computeIfAbsent(path, this::fetch);

@@ -811,6 +811,11 @@ class ReviewPromptAssemblerTest {
 
     static AiReviewService.PromptInputs assembleWith(
         String ciFailures, String linkedIssues, String learnings) {
+      return assembleWith(ciFailures, linkedIssues, learnings, "");
+    }
+
+    static AiReviewService.PromptInputs assembleWith(
+        String ciFailures, String linkedIssues, String learnings, String relatedContext) {
       var files =
           List.of(
               new GitHubPullRequestClient.FileDiff(
@@ -867,7 +872,8 @@ class ReviewPromptAssemblerTest {
       return assembler.assemble(
           ctx,
           req,
-          new ReviewPromptAssembler.TrailingContext(ciFailures, linkedIssues, learnings, ""));
+          new ReviewPromptAssembler.TrailingContext(
+              ciFailures, linkedIssues, learnings, relatedContext));
     }
   }
 
@@ -1125,19 +1131,26 @@ class ReviewPromptAssemblerTest {
       assertEquals("", ReviewPromptAssembler.relatedContextSection(" "));
       assertEquals("", ReviewPromptAssembler.relatedContextSection(null));
 
-      var order =
-          ReviewPromptAssembler.combineSections(
-              ReviewPromptAssembler.ciFailuresSection("### unit-tests"),
-              ReviewPromptAssembler.combineSections(
-                  section,
-                  ReviewPromptAssembler.linkedIssuesSection(
-                      TicketContextPrompts.REVIEW_REQUEST, "### Issue #7")));
-      assertTrue(
-          order.indexOf(PrReviewPrompts.CI_FAILURES_REQUEST)
-                  < order.indexOf(RelatedContextPrompts.REVIEW_REQUEST)
-              && order.indexOf(RelatedContextPrompts.REVIEW_REQUEST)
-                  < order.indexOf(TicketContextPrompts.REVIEW_REQUEST),
-          order);
+      // The order the assembler itself produces, with all four opt-in sections present.
+      var guidance =
+          CiFailuresInThePrompt.assembleWith(
+                  "### unit-tests (conclusion: failure)",
+                  "### Issue #7: Add retries",
+                  "- [L4] Convention on the whole repository — @m, PR #1:\n  Threads are flat.",
+                  excerpt)
+              .repoInstructions();
+      var ci = guidance.indexOf(PrReviewPrompts.CI_FAILURES_REQUEST);
+      var related = guidance.indexOf(RelatedContextPrompts.REVIEW_REQUEST);
+      var issues = guidance.indexOf(TicketContextPrompts.REVIEW_REQUEST);
+      var learned = guidance.indexOf(PrReviewPrompts.LEARNINGS_REQUEST);
+      assertTrue(ci >= 0 && ci < related && related < issues && issues < learned, guidance);
+      assertTrue(guidance.indexOf("File: src/Util.java") > related, guidance);
+      assertTrue(guidance.indexOf("File: src/Util.java") < issues, guidance);
+      assertFalse(
+          CiFailuresInThePrompt.assembleWith("### unit-tests", "### Issue #7", "", "")
+              .repoInstructions()
+              .contains(RelatedContextPrompts.REVIEW_REQUEST),
+          "no excerpt, no request");
     }
 
     @Test

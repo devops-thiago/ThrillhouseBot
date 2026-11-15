@@ -32,7 +32,9 @@ import java.util.regex.Pattern;
 public class SuggestionFormatter {
 
   private static final Pattern FINDING_MARKER_PATTERN =
-      Pattern.compile("<!--\\s*thrillhousebot:finding=(\\d+)(?:\\s+key=([0-9a-f]{8}))?\\s*-->");
+      Pattern.compile(
+          "<!--\\s*thrillhousebot:finding=(\\d+)(?:\\s+key=([0-9a-f]{8}))?(?:\\s+line=(\\d{1,9}))?"
+              + "\\s*-->");
 
   /** What a code-fence info string may look like — a language tag, nothing else. */
   private static final Pattern LANGUAGE_TAG_PATTERN = Pattern.compile("[a-z0-9+#._-]{1,20}");
@@ -112,6 +114,33 @@ public class SuggestionFormatter {
    */
   private static Optional<MatchResult> lastMarker(String body) {
     return FINDING_MARKER_PATTERN.matcher(body).results().reduce((first, second) -> second);
+  }
+
+  /**
+   * {@code body} with {@code line} added to its last finding marker ({@code line=N}), or {@code
+   * body} unchanged when it has none. Only a thread on removed lines carries it (#1360): GitHub
+   * shows that thread at base-side line numbers, while the finding, its key and the summary use its
+   * head-side line, and a reply on the thread sees only the comment.
+   */
+  public static String withMarkedLine(String body, int line) {
+    var marker = lastMarker(body);
+    if (marker.isEmpty() || marker.get().group(3) != null) {
+      return body;
+    }
+    var end = marker.get().end();
+    var close = body.lastIndexOf("-->", end);
+    return body.substring(0, close).stripTrailing() + " line=" + line + " " + body.substring(close);
+  }
+
+  /** The finding's own line a comment's marker carries ({@link #withMarkedLine}), or empty. */
+  public static OptionalInt parseMarkedLine(String body) {
+    if (body == null || body.isBlank()) {
+      return OptionalInt.empty();
+    }
+    return lastMarker(body)
+        .map(marker -> marker.group(3))
+        .map(line -> OptionalInt.of(Integer.parseInt(line)))
+        .orElse(OptionalInt.empty());
   }
 
   /**

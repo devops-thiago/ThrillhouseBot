@@ -142,6 +142,19 @@ class ReviewOrchestratorTest {
 
   private final SupersededFindingsCarryover carryover = new SupersededFindingsCarryover(mapper);
 
+  /** The stored finding rows; a mock that has none, so every round moves as before #1319. */
+  private final FindingStates findingStates = noStoredFindings();
+
+  private static FindingStates noStoredFindings() {
+    var states = mock(FindingStates.class);
+    when(states.roundChanges(any(), any(), any(), any())).thenAnswer(call -> call.getArgument(3));
+    when(states.prepare(any(), any(), any()))
+        .thenReturn(
+            new FindingStates.Pending(
+                null, "o/r", 1, new FindingLedger.Update(Map.of(), false), false));
+    return states;
+  }
+
   private final CiHoldRegistry ciHoldRegistry = new CiHoldRegistry();
 
   /**
@@ -326,8 +339,10 @@ class ReviewOrchestratorTest {
         new CheckRunManager(checkRunClient),
         newContextLoader(),
         new ReviewPromptAssembler(config, labeler, diffFormatter, ReviewDimensionRouter.disabled()),
-        new DiffBudgetPlanner(
-            diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
+        budgetPlanner != null
+            ? budgetPlanner
+            : new DiffBudgetPlanner(
+                diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
         reviewPublisher,
         verdictBuilder,
         findingPipeline,
@@ -344,9 +359,16 @@ class ReviewOrchestratorTest {
         notifier,
         ciFailureContext,
         ticketContext,
-        RelatedContextResolver.disabled(),
-        learnings);
+        relatedContext,
+        learnings,
+        findingStates);
   }
+
+  /** The planner the orchestrator is built with; its own unless a test supplies one to watch. */
+  private DiffBudgetPlanner budgetPlanner;
+
+  /** The related context the orchestrator is built with; off unless a test switches it on. */
+  private RelatedContextResolver relatedContext = RelatedContextResolver.disabled();
 
   /** The learnings store the orchestrator is built with; a mock that reports off by default. */
   private ReviewLearnings learnings = mock(ReviewLearnings.class);
@@ -376,7 +398,8 @@ class ReviewOrchestratorTest {
         sessionPersistence,
         BOT_ID,
         new ActiveModelSettings(config, "m"),
-        carryover);
+        carryover,
+        findingStates);
   }
 
   /** The CI-completion path wired to the same GitHub mocks as the orchestrator (#825). */
@@ -774,6 +797,54 @@ class ReviewOrchestratorTest {
       var body = captor.getValue().body();
       assertTrue(body.contains("ThrillhouseBot closed 1 previous finding(s) this round:"), body);
       assertTrue(body.contains("- `src/Retry.java:42` — Unbounded retry"), body);
+    }
+
+    @Test
+    void aSummaryOnlyRerunThatSupersededAFindingStillPostsTheBodyThatNamesIt() {
+      // #1318: a superseded finding is its own count now. On a summary-only re-run of a head the
+      // bot already approved, the body is the surface that names the closure, so it is not skipped.
+      var gone = new ReviewResponse.Finding("high", "src/Gone.java", 7, "Gone", "d", null, null);
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.APPROVE,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "superseded", "left the diff")),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth",
+              "owner",
+              "repo",
+              5,
+              "sha",
+              result,
+              resolverFor(fileDiffWithLine("src/Main.java", 10)),
+              true,
+              List.of(gone),
+              "",
+              List.of(
+                  new GitHubReviewClient.ReviewResponse(
+                      1L,
+                      "",
+                      "APPROVED",
+                      "sha",
+                      new GitHubReviewClient.ReviewResponse.User(BOT_LOGIN)))));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertTrue(
+          captor.getValue().body().contains("- `src/Gone.java:7` — Gone"),
+          captor.getValue().body());
     }
 
     @Test
@@ -1876,6 +1947,100 @@ class ReviewOrchestratorTest {
       assertEquals("owner", seen.get(0).owner());
       assertEquals("repo", seen.get(0).repo());
       assertEquals(42, seen.get(0).prNumber());
+    }
+
+    /**
+     * #55: with the related context on, the review passes it through every seam: the ignore set of
+     * the repository, the prompt section, the call accounting, the verifier's evidence, and the
+     * release of the spend-ledger entry the selection call opened.
+     */
+    @Test
+    void theRelatedContextIsWiredThroughTheReviewWhenItIsOn() {
+      var handler = "src/app/web/Handler.java";
+      var sanitizer = "src/app/util/InputSanitizer.java";
+      var generated = "src/app/gen/Limits.java";
+      var selection =
+          mock(dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextSelectionService.class);
+      budgetPlanner =
+          org.mockito.Mockito.spy(
+              new DiffBudgetPlanner(
+                  diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")));
+      relatedContext =
+          new RelatedContextResolver(true, 4, 6, selection, budgetPlanner, new TokenCounter());
+      findingPipeline = org.mockito.Mockito.spy(findingPipeline);
+      orchestrator = newOrchestrator();
+      when(repoSettingsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+          .thenReturn(
+              new dev.thiagogonzaga.thrillhousebot.github.RepoSettings(
+                  List.of("src/app/gen/**"), List.of(), ".github/thrillhousebot.yml"));
+      when(prClient.getTree(any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), any()))
+          .thenReturn(
+              new GitHubPullRequestClient.TreeResponse(
+                  "t",
+                  List.of(
+                      new GitHubPullRequestClient.TreeEntry(handler, "blob", 1),
+                      new GitHubPullRequestClient.TreeEntry(sanitizer, "blob", 1),
+                      new GitHubPullRequestClient.TreeEntry(generated, "blob", 1)),
+                  false));
+      when(prClient.getFileContent(any(), any(), eq("owner"), eq("repo"), eq(sanitizer), any()))
+          .thenReturn(
+              new GitHubPullRequestClient.FileContent(
+                  "InputSanitizer.java",
+                  sanitizer,
+                  java.util.Base64.getEncoder()
+                      .encodeToString(
+                          "final class InputSanitizer {\n  String clean(String raw) { return raw; }\n}\n"
+                              .getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                  "base64",
+                  40));
+      when(selection.select(anyLong(), any()))
+          .thenReturn(
+              new dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextSelectionService.Outcome(
+                  List.of(
+                      new dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextSelectionService
+                          .Selected(
+                          sanitizer,
+                          dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextSelectionService
+                              .Reason.SANITIZER_OR_VALIDATOR)),
+                  true));
+
+      var inputs =
+          capturePromptInputs(
+              new GitHubPullRequestClient.FileDiff(
+                  handler,
+                  "modified",
+                  3,
+                  0,
+                  3,
+                  "@@ -1,2 +1,5 @@\n+import app.util.InputSanitizer;\n"
+                      + "+    var id = sanitizer.clean(raw);\n"
+                      + "+    if (id.length() > Limits.MAX_ID) return;"));
+
+      var review = inputs.repoInstructions();
+      assertTrue(
+          review.contains(
+              dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextPrompts.REVIEW_REQUEST),
+          review);
+      assertTrue(review.contains("File: " + sanitizer + " (sanitizer-or-validator"), review);
+      var asked =
+          ArgumentCaptor.forClass(
+              dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextSelectionService.Request
+                  .class);
+      verify(selection).select(eq(1L), asked.capture());
+      assertEquals(
+          List.of(sanitizer),
+          asked.getValue().candidates().stream().map(c -> c.path()).toList(),
+          "the repository's own ignore pattern keeps src/app/gen out");
+      verify(budgetPlanner).plan(any(), any(), eq(1));
+      var evidence = ArgumentCaptor.forClass(ReviewEvidence.class);
+      verify(findingPipeline).run(any(), any(), any(), any(), any(), evidence.capture());
+      var finding =
+          new ReviewResponse.Finding(
+              "high", "medium", handler, 2, "Unvalidated id", "InputSanitizer.clean", null, null);
+      var note =
+          evidence.getValue().forFindings(List.of(finding)).contextEvidence().forFinding(finding);
+      assertTrue(note != null && note.contains("Related context this review supplied"), note);
+      verify(selection).release(1L);
     }
 
     @Test
@@ -3256,6 +3421,83 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void aRoundThatRaisedNothingAndMovedNoStoredStatusRepostsNeitherSummaryNorDelta() {
+      // #1319: the stored rows already hold the fix and the supersede this round reports again.
+      var pending =
+          new FindingStates.Pending(
+              null, "owner/repo", 42, new FindingLedger.Update(Map.of(), false), true);
+      when(findingStates.prepare(any(), any(), any())).thenReturn(pending);
+      // The summary is on the pull request already, so it is edited in place, which notifies
+      // nobody.
+      when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(
+              List.of(
+                  new GitHubCommentClient.IssueComment(
+                      7L,
+                      PrSummaryGenerator.SUMMARY_MARKER + "\nolder",
+                      new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"),
+                      null)));
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = reviewAFollowUpWithASupersededPrevious(mockedStatic, false, false, List.of());
+
+        verify(commentClient)
+            .updateComment(anyString(), anyString(), anyString(), anyString(), eq(7L), any());
+        verify(commentClient, never())
+            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> !req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)));
+        verify(findingStates).save(pending);
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
+    @Test
+    void aSummaryCommandPostsItsSummaryEvenWhenNothingMoved() {
+      when(findingStates.prepare(any(), any(), any()))
+          .thenReturn(
+              new FindingStates.Pending(
+                  null, "owner/repo", 42, new FindingLedger.Update(Map.of(), false), true));
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        reviewAFollowUpWithASupersededPrevious(mockedStatic, true, false, List.of());
+
+        verify(commentClient)
+            .createComment(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().startsWith(PrSummaryGenerator.SUMMARY_MARKER)));
+      }
+    }
+
+    @Test
+    void theSameRoundWithAStatusTheRowsDidNotHoldPostsTheDelta() {
+      when(findingStates.prepare(any(), any(), any()))
+          .thenReturn(
+              new FindingStates.Pending(
+                  null, "owner/repo", 42, new FindingLedger.Update(Map.of(), true), true));
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        reviewAFollowUpWithASupersededPrevious(mockedStatic, false, false, List.of());
+
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)));
+      }
+    }
+
+    @Test
     void shouldSkipTheDeltaCommentOnASummaryCommandRoundThatPostedTheSummary() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = reviewAFollowUpWithASupersededPrevious(mockedStatic, true);
@@ -3350,6 +3592,20 @@ class ReviewOrchestratorTest {
         org.mockito.MockedStatic<ReviewSession> mockedStatic,
         boolean forceSummary,
         boolean failRendering) {
+      return reviewAFollowUpWithASupersededPrevious(
+          mockedStatic,
+          forceSummary,
+          failRendering,
+          List.of(
+              new ReviewResponse.Finding(
+                  "medium", "src/Main.java", 10, "Style", "Improve naming", null, null)));
+    }
+
+    private ReviewSession reviewAFollowUpWithASupersededPrevious(
+        org.mockito.MockedStatic<ReviewSession> mockedStatic,
+        boolean forceSummary,
+        boolean failRendering,
+        List<ReviewResponse.Finding> raised) {
       when(followUpSummaryConfig.enabled()).thenReturn(true);
       when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
           .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
@@ -3408,15 +3664,11 @@ class ReviewOrchestratorTest {
               List.of(
                   new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed"),
                   new ReviewResult.PreviousFindingStatus(2, "superseded", "code gone")));
-      when(suggestionFormatter.formatReviewComment(any())).thenReturn("**Medium** — fix this");
+      lenient()
+          .when(suggestionFormatter.formatReviewComment(any()))
+          .thenReturn("**Medium** — fix this");
       when(aiReviewService.review(any(ReviewSession.class), any()))
-          .thenReturn(
-              new ReviewResponse(
-                  List.of(
-                      new ReviewResponse.Finding(
-                          "medium", "src/Main.java", 10, "Style", "Improve naming", null, null)),
-                  List.of(),
-                  null));
+          .thenReturn(new ReviewResponse(raised, List.of(), null));
       if (failRendering) {
         when(followUpSummaryConfig.enabled()).thenThrow(new RuntimeException("config unavailable"));
       }
@@ -9635,7 +9887,7 @@ class ReviewOrchestratorTest {
 
     /** The verdict passes the carried statuses go through, on the real analyzer. */
     private void delegateVerdictPasses() {
-      when(followUpAnalyzer.supersedeVanished(any(), any(), any(), any(), any()))
+      when(followUpAnalyzer.supersedeVanished(any(), any(), any(), any(), any(), anyInt()))
           .thenAnswer(
               inv ->
                   realAnalyzer.supersedeVanished(
@@ -9643,8 +9895,9 @@ class ReviewOrchestratorTest {
                       inv.getArgument(1),
                       inv.getArgument(2),
                       inv.getArgument(3),
-                      inv.getArgument(4)));
-      when(followUpAnalyzer.addUnreportedVanished(any(), any(), any(), any(), any()))
+                      inv.getArgument(4),
+                      inv.<Integer>getArgument(5)));
+      when(followUpAnalyzer.addUnreportedVanished(any(), any(), any(), any(), any(), anyInt()))
           .thenAnswer(
               inv ->
                   realAnalyzer.addUnreportedVanished(
@@ -9652,7 +9905,8 @@ class ReviewOrchestratorTest {
                       inv.getArgument(1),
                       inv.getArgument(2),
                       inv.getArgument(3),
-                      inv.getArgument(4)));
+                      inv.getArgument(4),
+                      inv.<Integer>getArgument(5)));
       when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any(), any()))
           .thenAnswer(inv -> inv.getArgument(1));
       when(followUpAnalyzer.unresolvedFindings(

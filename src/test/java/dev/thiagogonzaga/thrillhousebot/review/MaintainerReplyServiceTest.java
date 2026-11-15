@@ -324,6 +324,41 @@ class MaintainerReplyServiceTest {
     assertEquals(MaintainerReplyService.threadClearedAck(BotIdentity.from(null)), threadAck());
   }
 
+  /**
+   * #1360: a thread on removed lines is shown at base-side line 50, and its marker carries the
+   * finding's own line 10, which the summary shows. A clear naming either resolves it.
+   */
+  @Test
+  void aClearDirectiveOnAThreadOnRemovedLinesMayNameItsFindingsLine() {
+    for (var naming : List.of("src/Foo.java:10", "src/Foo.java:50")) {
+      org.mockito.Mockito.clearInvocations(reviewClient, reviewThreadService);
+      authorize();
+      when(reviewClient.listPullRequestComments(
+              eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+          .thenReturn(
+              List.of(
+                  new GitHubReviewClient.PullRequestComment(
+                      99L,
+                      null,
+                      "src/Foo.java",
+                      "**HIGH — possible NPE**\n\n"
+                          + SuggestionFormatter.withMarkedLine(
+                              SuggestionFormatter.findingMarker(1, "src/Foo.java", 10, "NPE"), 10),
+                      new GitHubReviewClient.ReviewResponse.User(BOT),
+                      null,
+                      50,
+                      50)));
+      when(reviewThreadService.threadsByRootComment(AUTH, "owner", "repo", 42))
+          .thenReturn(Map.of(99L, new ReviewThreadService.ThreadRef("T99", false)));
+      when(reviewThreadService.resolve(AUTH, "T99")).thenReturn(true);
+
+      service.handle(threadReply("@thrillhousebot resolved " + naming, "OWNER"));
+
+      assertEquals(
+          MaintainerReplyService.threadClearedAck(BotIdentity.from(null)), threadAck(), naming);
+    }
+  }
+
   @Test
   void aClearDirectiveOnAThreadThatIsNotTheBotsClosesNothing() {
     authorize();

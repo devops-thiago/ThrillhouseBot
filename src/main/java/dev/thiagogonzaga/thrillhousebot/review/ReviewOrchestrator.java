@@ -125,6 +125,8 @@ public class ReviewOrchestrator {
 
   private final ReviewNotifier notifier;
 
+  private final FindingStates findingStates;
+
   /**
    * Parameter object for the {@link #review(ReviewRequest)} method.
    *
@@ -259,7 +261,8 @@ public class ReviewOrchestrator {
       CiFailureContextResolver ciFailureContext,
       TicketContextResolver ticketContext,
       RelatedContextResolver relatedContext,
-      ReviewLearnings learnings) {
+      ReviewLearnings learnings,
+      FindingStates findingStates) {
     this.config = config;
     this.authClient = authClient;
     this.broadcaster = broadcaster;
@@ -283,6 +286,28 @@ public class ReviewOrchestrator {
     this.ciHoldRegistry = ciHoldRegistry;
     this.reviewExecutor = reviewExecutor;
     this.notifier = notifier;
+    this.findingStates = findingStates;
+  }
+
+  /**
+   * Publishes the summary and reports whether it stands in for the review: only on a round that
+   * moved a finding, or when {@code /summary} asked for it (#1319).
+   */
+  private boolean summaryStandsIn(
+      String auth, ReviewRequest req, ReviewResult result, boolean moved) {
+    return publishSummaryBestEffort(auth, req, result) && (moved || req.forceSummary());
+  }
+
+  /** The follow-up delta, or {@code ""} on a round that moved no finding (#1319). */
+  private String movedDelta(
+      boolean moved,
+      ReviewResult result,
+      boolean summaryPosted,
+      ReviewRequest req,
+      List<ReviewResponse.Finding> previousFindings) {
+    return moved
+        ? followUpDeltaBestEffort(result, summaryPosted && req.forceSummary(), previousFindings)
+        : "";
   }
 
   /**
@@ -382,7 +407,12 @@ public class ReviewOrchestrator {
       // #55: repository code the diff refers to but does not change, picked by one small call and
       // read through the same round; empty when the feature is off or nothing could be read. A
       // finding naming one of those files carries its excerpt to the verifier.
-      var related = relatedContext.resolve(session, ctx, repositoryEvidence.citedLocations());
+      var related =
+          relatedContext.resolve(
+              session,
+              ctx,
+              repositoryEvidence.citedLocations(),
+              () -> contextLoader.ignoredPaths(ciReq));
       var evidence = repositoryEvidence.withRelatedContext(related);
       // Bound the one prompt section that grows every round before anything is sized or sent, so
       // the plan's overhead estimate and the text the calls actually carry are the same (#583).
@@ -444,10 +474,13 @@ public class ReviewOrchestrator {
       }
 
       broadcastPhase(session, SessionEventBroadcaster.SessionEvent.Phase.PUBLISH);
-      boolean summaryPosted = publishSummaryBestEffort(auth, req, result);
+      // #1319: a round that raised nothing new and moved no stored status re-posts neither the
+      // summary nor the delta; the summary may still be edited in place, which notifies nobody.
+      var findingRound = findingStates.prepare(req, ctx, result);
+      var moved = findingRound.moved(result);
+      boolean summaryPosted = summaryStandsIn(auth, req, result, moved);
       // The optional delta enriches the review, never a second notification beside it.
-      var followUpDelta =
-          followUpDeltaBestEffort(result, summaryPosted && req.forceSummary(), previousFindings);
+      var followUpDelta = movedDelta(moved, result, summaryPosted, req, previousFindings);
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       // summaryPosted gates the redundant-review skips: a failed summary post leaves review
@@ -524,6 +557,8 @@ public class ReviewOrchestrator {
           doneReq,
           "apply labels",
           () -> reviewPublisher.applyLabels(auth, doneReq, result, aiResponse, ctx));
+      runPostResultStep(
+          doneReq, "record the findings' states", () -> findingStates.save(findingRound));
       runPostResultStep(
           doneReq,
           "complete the session",

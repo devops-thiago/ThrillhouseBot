@@ -53,6 +53,8 @@ class WebhookEventsObserversTest {
           List.of("pull_request", "reopened"),
           List.of("pull_request", "synchronize"),
           List.of("pull_request", "ready_for_review"),
+          // #1319: a closed pull request starts its stored findings' retention period.
+          List.of("pull_request", "closed"),
           List.of("issue_comment", "created"),
           List.of("pull_request_review_comment", "created"),
           List.of("check_suite", "completed"),

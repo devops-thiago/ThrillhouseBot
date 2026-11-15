@@ -330,12 +330,7 @@ public class FindingPipeline {
     }
     // #1322: every status names its finding by key and a "resolved" is held to the code, before
     // anything stores or reads the statuses.
-    aiResponse =
-        FollowUpAnalyzer.screenModelStatuses(
-            aiResponse,
-            ctx.previousFindingsList(),
-            lineResolver,
-            VerdictBuilder.renameTargets(ctx.files()));
+    aiResponse = FollowUpAnalyzer.screenModelStatuses(aiResponse, ctx, lineResolver, botIdentity);
     if (budgetedBatch != null && !aiResponse.previousFindingsStatus().isEmpty()) {
       // Same scoping as the multi-call path: the single budgeted batch may carry clipped files
       // (and, at maxBatches=1, omit others entirely), so a "resolved" claim is only trusted for a
@@ -345,7 +340,8 @@ public class FindingPipeline {
               aiResponse.previousFindingsStatus(),
               budgetedBatch,
               plan,
-              followUpAnalyzer.previousFindingFilesById(ctx.previousFindingsList()));
+              followUpAnalyzer.previousFindingFilesById(
+                  FollowUpAnalyzer.listedPreviousFindings(ctx, lineResolver, botIdentity)));
       aiResponse = new ReviewResponse(aiResponse.findings(), scoped, aiResponse.summary());
     }
     // #60: the deterministic scan's findings join after verification, so no model grades them.
@@ -489,7 +485,10 @@ public class FindingPipeline {
     var batches = plan.batches();
     // The id space of previous_findings_status entries maps 1-based onto the prior response's
     // findings; a batch may only close a prior finding whose file its own diff slice contained.
-    var previousFilesById = followUpAnalyzer.previousFindingFilesById(ctx.previousFindingsList());
+    // #1319: the ids run on past that round over the older rounds' findings the prompt numbered.
+    var previousFilesById =
+        followUpAnalyzer.previousFindingFilesById(
+            FollowUpAnalyzer.listedPreviousFindings(ctx, lineResolver, botIdentity));
 
     var run =
         new BatchRun(
@@ -1146,13 +1145,10 @@ public class FindingPipeline {
    * The screen a review call's statuses pass as soon as it returns (#1322): against the prior
    * findings the prompt listed by number and the current diff.
    */
-  private static List<ReviewResponse.PreviousFindingStatus> screenStatuses(
+  private List<ReviewResponse.PreviousFindingStatus> screenStatuses(
       List<ReviewResponse.PreviousFindingStatus> statuses, BatchRun run) {
     return FollowUpAnalyzer.screenModelStatuses(
-        statuses,
-        run.ctx().previousFindingsList(),
-        run.lineResolver(),
-        VerdictBuilder.renameTargets(run.ctx().files()));
+        statuses, run.ctx(), run.lineResolver(), botIdentity);
   }
 
   /**

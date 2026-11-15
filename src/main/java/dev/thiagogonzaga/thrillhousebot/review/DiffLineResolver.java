@@ -32,6 +32,7 @@ import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 import java.util.function.ToIntFunction;
+import java.util.stream.Stream;
 
 /**
  * Maps AI-reported file line numbers to lines that exist in the PR diff — required for GitHub
@@ -72,12 +73,53 @@ public final class DiffLineResolver {
     Optional<List<String>> lines(String path);
   }
 
+  /** Whether a file's content changed since the head an earlier round reviewed (#1319). */
+  public enum FileChange {
+    /** The file holds the same content as at that round's head. */
+    UNCHANGED,
+    /** The file's content differs from that round's head. */
+    CHANGED,
+    /** The comparison could not be made; the content checks decide as they did before. */
+    UNKNOWN
+  }
+
+  /**
+   * Tells whether a file changed since the head an earlier round reviewed (#1319), by the round's
+   * position among the review's prior rounds, newest first, the order the review context holds them
+   * in.
+   */
+  @FunctionalInterface
+  public interface RoundChanges {
+
+    /** Knows nothing: every answer is {@link FileChange#UNKNOWN}. */
+    RoundChanges NONE = (round, path) -> FileChange.UNKNOWN;
+
+    FileChange since(int round, String path);
+
+    /**
+     * How the finding with marker key {@code key} was anchored in the round that raised it, as
+     * stored with it (#1319); empty when that is not known.
+     */
+    default Optional<RaisedAnchor> raisedAnchor(String key) {
+      return Optional.empty();
+    }
+  }
+
+  /**
+   * How a finding was anchored in the round that raised it (#1318, #1319).
+   *
+   * @param side the side of the diff its quote was on
+   * @param matched whether its quote was present on that side in that round
+   */
+  public record RaisedAnchor(Side side, boolean matched) {}
+
   /** The review's one parse of every patch (#1321). */
   private final DiffIndex index;
 
   private final Map<String, FileSide> byFile;
   private final Set<String> changedFiles;
   private final HeadFiles headFiles;
+  private final RoundChanges roundChanges;
 
   public DiffLineResolver(Map<String, String> patchesByFile) {
     this(patchesByFile, List.of());
@@ -100,10 +142,24 @@ public final class DiffLineResolver {
    */
   public DiffLineResolver(
       Map<String, String> patchesByFile, Collection<String> changedFiles, HeadFiles headFiles) {
+    this(patchesByFile, changedFiles, headFiles, RoundChanges.NONE);
+  }
+
+  /**
+   * A resolver that also knows, through {@code roundChanges}, which files changed since the head
+   * each earlier round reviewed, so a finding whose file is unchanged since the round that raised
+   * it is held open whatever its anchor reads (#1319).
+   */
+  public DiffLineResolver(
+      Map<String, String> patchesByFile,
+      Collection<String> changedFiles,
+      HeadFiles headFiles,
+      RoundChanges roundChanges) {
     CONSTRUCTION_COUNT.incrementAndGet();
     this.changedFiles = new HashSet<>(changedFiles);
     this.changedFiles.addAll(patchesByFile.keySet());
     this.headFiles = headFiles;
+    this.roundChanges = roundChanges;
     this.index = DiffIndex.ofPatches(patchesByFile);
     this.byFile = new HashMap<>();
     index.files().forEach((file, patch) -> byFile.put(file, FileSide.of(patch)));
@@ -112,6 +168,40 @@ public final class DiffLineResolver {
   /** Every patch of the review, parsed once with both sides. */
   DiffIndex index() {
     return index;
+  }
+
+  /**
+   * Whether {@code file} changed since the head the prior round at {@code round} (newest first)
+   * reviewed (#1319); {@link FileChange#UNKNOWN} when that cannot be told.
+   */
+  public FileChange fileChangeSince(int round, String file) {
+    return file == null ? FileChange.UNKNOWN : roundChanges.since(round, file);
+  }
+
+  /**
+   * Whether a prior finding's flagged code is still present at {@code currentPath} (its file, or
+   * the file it was renamed to), on the side its quote was on in the round that raised it (#1319).
+   * A finding whose quote was not present even in that round is not read as gone now only because
+   * it still is not, while its file is still one the pull request changes: its absence says nothing
+   * about a fix (#1318). A file that left the pull request takes the finding with it. With nothing
+   * stored about the finding, this is {@link #isFindingPresent(String, String)}.
+   */
+  public boolean isFindingStillPresent(ReviewResponse.Finding finding, String currentPath) {
+    var raised =
+        roundChanges.raisedAnchor(
+            SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title()));
+    var side = raised.map(RaisedAnchor::side).orElse(Side.RIGHT);
+    if (isFindingPresent(currentPath, finding.suggestionOld(), side)) {
+      return true;
+    }
+    if (raised.isPresent() && !raised.get().matched() && isChangedFile(currentPath)) {
+      Log.infof(
+          "A finding on %s did not match the diff in the round that raised it either; holding it"
+              + " open",
+          LogSafe.oneLine(currentPath));
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -184,8 +274,7 @@ public final class DiffLineResolver {
         file, FileSide::hasRightText, patch -> !patch.rightRuns(anchorLines).isEmpty())) {
       return true;
     }
-    boolean inHeadFile =
-        headFileLines(file).filter(lines -> holdsRun(lines, anchorLines)).isPresent();
+    boolean inHeadFile = headFileLines(file).anyMatch(lines -> holdsRun(lines, anchorLines));
     if (inHeadFile) {
       Log.infof(
           "A finding's anchor on %s is outside the patch's context but in the head file; it is"
@@ -198,22 +287,29 @@ public final class DiffLineResolver {
   private boolean isRemovalPresent(String file, List<Predicate<String>> anchorLines) {
     return presentInFileOrVariant(
             file, FileSide::hasLeftText, patch -> !patch.removedRuns(anchorLines).isEmpty())
-        || headFileLines(file).filter(lines -> !holdsRun(lines, anchorLines)).isPresent();
+        || headFileLines(file).anyMatch(lines -> !holdsRun(lines, anchorLines));
   }
 
   /**
-   * {@code file}'s lines at the head commit, read only for a file the pull request changes and
-   * whose patch leaves it in place; empty for a removed file, a path no patch resolves, or a file
-   * that cannot be read.
+   * The lines at the head commit of each changed file {@code file} names, read lazily and only for
+   * a file whose patch leaves it in place; none for a removed file, a path no patch resolves, or a
+   * file that cannot be read. An exact path names that file. A shortened path names every changed
+   * file it is a variant of, in path order, as the patch check scans every variant (#1361): a
+   * deletion-only patch is not a candidate, and when two files match, the anchor may be in either.
    */
-  private Optional<List<String>> headFileLines(String file) {
-    // The same variant rule the presence check uses: a deletion-only patch that shares a suffix
-    // with the file is not a second candidate, so it never hides the one to read.
-    String key = byFile.containsKey(file) ? file : uniqueVariant(file, FileSide::hasRightText);
-    if (key == null || !byFile.get(key).hasLines()) {
-      return Optional.empty();
-    }
-    return headFiles.lines(key);
+  private Stream<List<String>> headFileLines(String file) {
+    var keys =
+        byFile.containsKey(file)
+            ? Stream.of(file)
+            : byFile.entrySet().stream()
+                .filter(
+                    entry ->
+                        entry.getValue().hasRightText() && FilePaths.same(file, entry.getKey()))
+                .map(Map.Entry::getKey)
+                .sorted();
+    return keys.filter(key -> byFile.get(key).hasLines())
+        .map(headFiles::lines)
+        .flatMap(Optional::stream);
   }
 
   /**
@@ -279,6 +375,19 @@ public final class DiffLineResolver {
                 added.entrySet().stream()
                     .anyMatch(
                         e -> e.getKey() >= from && e.getKey() <= to && e.getValue().equals(line)));
+  }
+
+  /**
+   * Whether every one of {@code lines} (each already stripped) is an added line of {@code file}
+   * anywhere in the current diff (#1319). {@code false} with no lines to look for, or the file in
+   * no single diff entry.
+   */
+  public boolean addsEveryLine(String file, Collection<String> lines) {
+    var key = resolveKey(file, FileSide::hasRightText);
+    if (key == null || lines.isEmpty()) {
+      return false;
+    }
+    return byFile.get(key).added().values().containsAll(lines);
   }
 
   /**

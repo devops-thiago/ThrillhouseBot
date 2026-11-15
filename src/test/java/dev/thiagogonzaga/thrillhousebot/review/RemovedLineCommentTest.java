@@ -34,6 +34,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalInt;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntFunction;
 import org.junit.jupiter.api.BeforeEach;
@@ -68,12 +69,13 @@ class RemovedLineCommentTest {
   private int prNumber;
   private FakeReviewClient reviewClient;
   private ReviewPublisher publisher;
+  private SuggestionFormatter suggestionFormatter;
 
   @BeforeEach
   void setUp() {
     prNumber = PR_NUMBERS.incrementAndGet();
     reviewClient = new FakeReviewClient();
-    var suggestionFormatter = mock(SuggestionFormatter.class);
+    suggestionFormatter = mock(SuggestionFormatter.class);
     when(suggestionFormatter.formatReviewComment(any(), eq(true), anyInt()))
         .thenReturn(WITH_SUGGESTION);
     when(suggestionFormatter.formatReviewComment(any(), eq(false), anyInt()))
@@ -105,6 +107,26 @@ class RemovedLineCommentTest {
     assertEquals(
         List.of(new Attempt(WITHOUT_SUGGESTION, 12, "LEFT", 11, "LEFT", false)),
         reviewClient.landed);
+  }
+
+  /**
+   * #1360: GitHub numbers the thread on the base side, so its marker also carries the finding's
+   * head-side line, which the summary shows and a reply on the thread may name.
+   */
+  @Test
+  void aThreadOnRemovedLinesCarriesItsFindingsLineInItsMarker() {
+    var marker = SuggestionFormatter.findingMarker(1, FILE, 12, "Bug");
+    when(suggestionFormatter.formatReviewComment(any(), eq(false), anyInt()))
+        .thenReturn("the finding\n" + marker + "\n");
+
+    post(finding("x();", null));
+    post(finding("y();", null));
+
+    assertEquals(
+        OptionalInt.of(12), SuggestionFormatter.parseMarkedLine(reviewClient.landed.get(0).body()));
+    assertEquals(
+        OptionalInt.empty(),
+        SuggestionFormatter.parseMarkedLine(reviewClient.landed.get(1).body()));
   }
 
   @Test

@@ -1710,6 +1710,21 @@ class FindingVerificationServiceTest {
   }
 
   @Test
+  void aKeyRejectedOnTheVerifierCallKeepsTheFindingsUnscreenedAfterOneCall() {
+    // #1329/#1359: a rejected key is not retried, and the verifier fails open as for any error.
+    ReviewResponse original = response(finding("critical", "high", "Bug"));
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenThrow(new dev.langchain4j.exception.HttpException(401, "Unauthorized"));
+
+    var result = service.verify(SESSION, original, "diff", "stack", "");
+
+    assertKeptUnscreened(original, result);
+    verify(verifier, times(1))
+        .verify(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+  }
+
+  @Test
   void shouldFailOpenWhenVerifierReturnsInvalidJson() {
     ReviewResponse original = response(finding("critical", "high", "Bug"));
     when(verifier.verify(

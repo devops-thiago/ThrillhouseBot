@@ -122,8 +122,10 @@ public record RelatedContext(List<RelatedFile> files, int selectionCalls) {
   /**
    * What the verifier is told for one finding: the excerpt of the first related file the finding
    * names, with the regions that share the most identifiers with the finding first; {@code null}
-   * when the finding names none. A file is named by its path, its file name, or, when it is
-   * distinctive enough, its file name without the extension as a whole word.
+   * when the finding names none. A file is named by its path, or by its file name alone (with the
+   * extension, or without it when it is distinctive enough) as a whole word. The file name alone
+   * counts only when it says which file is meant: no other related file and not the finding's own
+   * file shares it, so a finding on {@code web/src/index.ts} does not get {@code lib/index.ts}.
    */
   String noteFor(ReviewResponse.Finding finding) {
     if (files.isEmpty() || finding == null) {
@@ -136,7 +138,7 @@ public record RelatedContext(List<RelatedFile> files, int selectionCalls) {
             nullToEmpty(finding.description()),
             nullToEmpty(finding.suggestionNew()));
     for (var file : files) {
-      if (names(text, file.path())) {
+      if (names(text, file.path(), nameIsItsOwn(file, finding))) {
         return note(file, identifiersOf(text));
       }
     }
@@ -194,24 +196,48 @@ public record RelatedContext(List<RelatedFile> files, int selectionCalls) {
     return identifiers;
   }
 
-  /** Whether {@code text} names the file at {@code path}. */
-  static boolean names(String text, String path) {
-    if (text.contains(path)) {
+  /** Whether no other related file, and not the finding's own file, is named like {@code file}. */
+  private boolean nameIsItsOwn(RelatedFile file, ReviewResponse.Finding finding) {
+    var stem = stemOf(file.path());
+    return !stem.equals(stemOf(nullToEmpty(finding.file())))
+        && files.stream().filter(other -> stem.equals(stemOf(other.path()))).count() == 1;
+  }
+
+  private static String stemOf(String path) {
+    var name = path.substring(path.lastIndexOf('/') + 1);
+    var dot = name.lastIndexOf('.');
+    return dot <= 0 ? name : name.substring(0, dot);
+  }
+
+  /**
+   * Whether {@code text} names the file at {@code path}: by the whole path, or, when {@code byName}
+   * allows it, by the file name alone.
+   */
+  static boolean names(String text, String path, boolean byName) {
+    if (occurs(text, path, true)) {
       return true;
+    }
+    if (!byName) {
+      return false;
     }
     var name = path.substring(path.lastIndexOf('/') + 1);
     if (wholeWord(text, name)) {
       return true;
     }
-    var dot = name.lastIndexOf('.');
-    var stem = dot <= 0 ? name : name.substring(0, dot);
+    var stem = stemOf(path);
     var distinctive =
         stem.length() >= MIN_DISTINCT_STEM
             && (stem.indexOf('_') >= 0 || !stem.equals(stem.toLowerCase(java.util.Locale.ROOT)));
     return distinctive && wholeWord(text, stem);
   }
 
-  private static boolean wholeWord(String text, String word) {
+  /** Whether {@code word} occurs in {@code text} with no identifier character on either side. */
+  static boolean wholeWord(String text, String word) {
+    return occurs(text, word, false);
+  }
+
+  /** {@link #wholeWord}; {@code asPath} also refuses an occurrence that continues a longer path. */
+  private static boolean occurs(String text, String word, boolean asPath) {
     var from = 0;
     while (true) {
       var at = text.indexOf(word, from);
@@ -219,7 +245,8 @@ public record RelatedContext(List<RelatedFile> files, int selectionCalls) {
         return false;
       }
       var end = at + word.length();
-      var startsWord = at == 0 || !isWordChar(text.charAt(at - 1));
+      var startsWord =
+          at == 0 || !(isWordChar(text.charAt(at - 1)) || (asPath && text.charAt(at - 1) == '/'));
       var endsWord = end == text.length() || !isWordChar(text.charAt(end));
       if (startsWord && endsWord) {
         return true;

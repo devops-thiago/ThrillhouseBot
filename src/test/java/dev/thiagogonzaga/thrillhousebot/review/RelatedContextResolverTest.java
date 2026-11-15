@@ -86,9 +86,19 @@ class RelatedContextResolverTest {
                 false));
   }
 
+  /** What the section costs before any file: the review request and the fence lines. */
+  private static final int SECTION_OVERHEAD =
+      new TokenCounter()
+              .estimateTokens(
+                  dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextPrompts.REVIEW_REQUEST)
+          + new TokenCounter().estimateTokens(PromptTemplateEscaper.fenceForBudgeting());
+
+  private static final java.util.function.Supplier<java.util.function.Predicate<String>>
+      NOTHING_IGNORED = () -> path -> false;
+
   private RelatedContextResolver resolver(boolean enabled, int maxAiCalls) {
     return new RelatedContextResolver(
-        enabled, 4, maxAiCalls, selection, planner, new TokenCounter(), path -> false);
+        enabled, 4, maxAiCalls, selection, planner, new TokenCounter());
   }
 
   private CitedLocationResolver.Round round() {
@@ -157,7 +167,8 @@ class RelatedContextResolverTest {
             new Outcome(List.of(new Selected(SANITIZER, Reason.SANITIZER_OR_VALIDATOR)), true));
     fileHolds(SANITIZER, sanitizerSource());
 
-    var related = resolver(true, 6).resolve(session, context(List.of(handler)), round());
+    var related =
+        resolver(true, 6).resolve(session, context(List.of(handler)), round(), NOTHING_IGNORED);
 
     assertEquals(1, related.selectionCalls());
     assertEquals(1, related.files().size());
@@ -191,13 +202,17 @@ class RelatedContextResolverTest {
   void offOrBelowTheCallAllowanceOrWithNoFilesNothingIsReadOrCalled() {
     var ctx = context(List.of(handler));
 
-    assertSame(RelatedContext.NONE, resolver(false, 6).resolve(session, ctx, round()));
-    assertSame(RelatedContext.NONE, resolver(true, 2).resolve(session, ctx, round()));
     assertSame(
-        RelatedContext.NONE, resolver(true, 6).resolve(session, context(List.of()), round()));
+        RelatedContext.NONE, resolver(false, 6).resolve(session, ctx, round(), NOTHING_IGNORED));
+    assertSame(
+        RelatedContext.NONE, resolver(true, 2).resolve(session, ctx, round(), NOTHING_IGNORED));
     assertSame(
         RelatedContext.NONE,
-        RelatedContextResolver.disabled().resolve(session, ctx, CitedLocationResolver.disabled()));
+        resolver(true, 6).resolve(session, context(List.of()), round(), NOTHING_IGNORED));
+    assertSame(
+        RelatedContext.NONE,
+        RelatedContextResolver.disabled()
+            .resolve(session, ctx, CitedLocationResolver.disabled(), NOTHING_IGNORED));
     assertFalse(RelatedContextResolver.disabled().enabled());
     verifyNoInteractions(selection, prClient);
   }
@@ -207,10 +222,11 @@ class RelatedContextResolverTest {
     var ctx = context(List.of(handler));
     assertSame(
         RelatedContext.NONE,
-        resolver(true, 6).resolve(session, ctx, CitedLocationResolver.disabled()));
+        resolver(true, 6).resolve(session, ctx, CitedLocationResolver.disabled(), NOTHING_IGNORED));
     var plain = new FileDiff("src/app/web/Plain.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+int x;");
     assertSame(
-        RelatedContext.NONE, resolver(true, 6).resolve(session, context(List.of(plain)), round()));
+        RelatedContext.NONE,
+        resolver(true, 6).resolve(session, context(List.of(plain)), round(), NOTHING_IGNORED));
 
     when(selection.select(anyLong(), any()))
         .thenReturn(
@@ -219,7 +235,7 @@ class RelatedContextResolverTest {
                     new Selected(SANITIZER, Reason.INTERFACE),
                     new Selected("src/not/a/Candidate.java", Reason.CALLER)),
                 true));
-    var unreadable = resolver(true, 6).resolve(session, ctx, round());
+    var unreadable = resolver(true, 6).resolve(session, ctx, round(), NOTHING_IGNORED);
     assertTrue(unreadable.files().isEmpty());
     assertEquals(1, unreadable.selectionCalls());
     assertEquals("", unreadable.section());
@@ -228,7 +244,7 @@ class RelatedContextResolverTest {
     // counted.
     fileHolds(SANITIZER, sanitizerSource());
     when(planner.relatedContextTokenBudget()).thenThrow(new IllegalStateException("boom"));
-    var failed = resolver(true, 6).resolve(session, ctx, round());
+    var failed = resolver(true, 6).resolve(session, ctx, round(), NOTHING_IGNORED);
     assertTrue(failed.files().isEmpty());
     assertEquals(1, failed.selectionCalls());
   }
@@ -244,7 +260,8 @@ class RelatedContextResolverTest {
                 true));
     fileHolds(SANITIZER, sanitizerSource());
     fileHolds(LIMITS, "final class Limits {\n  static final int MAX_ID = 64;\n}\n");
-    var whole = resolver(true, 6).resolve(session, context(List.of(handler)), round());
+    var whole =
+        resolver(true, 6).resolve(session, context(List.of(handler)), round(), NOTHING_IGNORED);
     assertEquals(2, whole.files().size());
     assertEquals(2, whole.files().get(0).regions().size());
 
@@ -252,14 +269,21 @@ class RelatedContextResolverTest {
     var first = whole.files().get(0);
     var firstRegionOnly = first.withRegions(first.regions().subList(0, 1));
     when(planner.relatedContextTokenBudget())
-        .thenReturn(tokens.estimateTokens(firstRegionOnly.render()) + 3);
-    var cut = resolver(true, 6).resolve(session, context(List.of(handler)), round());
+        .thenReturn(tokens.estimateTokens(firstRegionOnly.render()) + 3 + SECTION_OVERHEAD);
+    var cut =
+        resolver(true, 6).resolve(session, context(List.of(handler)), round(), NOTHING_IGNORED);
     assertEquals(List.of(SANITIZER), cut.files().stream().map(f -> f.path()).toList());
     assertEquals(1, cut.files().get(0).regions().size());
 
-    when(planner.relatedContextTokenBudget()).thenReturn(1);
+    // #55 review: the request and the fences are part of the share, so a budget that would hold
+    // the excerpt alone holds nothing once they are counted.
+    when(planner.relatedContextTokenBudget())
+        .thenReturn(tokens.estimateTokens(firstRegionOnly.render()) + 3);
     assertTrue(
-        resolver(true, 6).resolve(session, context(List.of(handler)), round()).files().isEmpty());
+        resolver(true, 6)
+            .resolve(session, context(List.of(handler)), round(), NOTHING_IGNORED)
+            .files()
+            .isEmpty());
   }
 
   @Test
@@ -317,17 +341,13 @@ class RelatedContextResolverTest {
     when(config.review().relatedContext().enabled()).thenReturn(true);
     when(config.review().relatedContext().maxFiles()).thenReturn(4);
     when(config.review().maxAiCalls()).thenReturn(6);
-    var injected =
-        new RelatedContextResolver(
-            config,
-            selection,
-            planner,
-            new TokenCounter(),
-            new ReviewDiffFormatter(List.of("**/util/**"), 5000));
+    var injected = new RelatedContextResolver(config, selection, planner, new TokenCounter());
     when(selection.select(anyLong(), any())).thenReturn(new Outcome(List.of(), false));
 
     assertTrue(injected.enabled());
-    var related = injected.resolve(session, context(List.of(handler)), round());
+    var related =
+        injected.resolve(
+            session, context(List.of(handler)), round(), () -> path -> path.contains("/util/"));
 
     assertSame(RelatedContext.NONE, related, "every candidate is under an ignored path");
     verifyNoInteractions(selection);
@@ -338,7 +358,9 @@ class RelatedContextResolverTest {
     when(selection.select(anyLong(), any())).thenReturn(new Outcome(List.of(), false));
     var renamed = new FileDiff("src/app/util/Caps.java", "renamed", 0, 0, 0, null, LIMITS);
 
-    var related = resolver(true, 6).resolve(session, context(List.of(handler, renamed)), round());
+    var related =
+        resolver(true, 6)
+            .resolve(session, context(List.of(handler, renamed)), round(), NOTHING_IGNORED);
 
     assertEquals(0, related.selectionCalls());
     var request = ArgumentCaptor.forClass(RelatedContextSelectionService.Request.class);
@@ -376,5 +398,20 @@ class RelatedContextResolverTest {
     }
     twice.add("  Limits copy() { return this; }");
     assertEquals(1, RelatedContextResolver.regions(twice, byName).size(), "the first use only");
+  }
+
+  @Test
+  void goModulesAreReadOnlyForGoChangesFromTheShallowestManifests() {
+    var paths = java.util.Set.of("go.mod", "svc/go.mod", "deep/er/go.mod", "x/go.modx", "main.go");
+    fileHolds("go.mod", "// the app\nmodule example.com/app\n\ngo 1.24\n");
+    fileHolds("svc/go.mod", "go 1.24\n");
+    var goFile = new FileDiff("cmd/main.go", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x := 1");
+
+    assertEquals(
+        Map.of("", "example.com/app"),
+        RelatedContextResolver.goModules(List.of(goFile), paths, round()));
+    assertEquals(Map.of(), RelatedContextResolver.goModules(List.of(handler), paths, round()));
+    verify(prClient, never())
+        .getFileContent(any(), any(), any(), any(), eq("deep/er/go.mod"), any());
   }
 }

@@ -41,8 +41,13 @@ class RelatedReferencesTest {
     for (var file : files) {
       changedPaths.add(file.filename());
     }
-    return RelatedReferences.extract(List.of(files), changedPaths, repository, path -> false);
+    return RelatedReferences.extract(
+        List.of(files), changedPaths, repository, path -> false, GO_MODULES);
   }
+
+  /** The repository's one Go module, declared by a go.mod at its root. */
+  private static final java.util.Map<String, String> GO_MODULES =
+      java.util.Map.of("", "example.com/app");
 
   private static List<String> paths(List<RelatedReferences.Candidate> candidates) {
     return candidates.stream().map(RelatedReferences.Candidate::path).toList();
@@ -126,7 +131,8 @@ class RelatedReferencesTest {
             List.of(a, b, removed),
             Set.of("src/TAx.java", "src/TBx.java", "src/Gone.java"),
             repository,
-            "src/TCx.java"::equals);
+            "src/TCx.java"::equals,
+            GO_MODULES);
 
     assertEquals(List.of("src/TDx.java"), paths(candidates));
     assertEquals(List.of("src/TAx.java"), candidates.get(0).referencedBy());
@@ -231,7 +237,8 @@ class RelatedReferencesTest {
                 "+    var id = sanitizer.clean(raw).strip();",
                 "+    if (id.length() > Limits.MAX_ID || db.find(id) == null) return;",
                 "+    Limits.check(id).orElseThrow();",
-                "+    limitsHolder.reset();"));
+                "+    limitsHolder.reset();",
+                "+    userProfile.limits_value();"));
 
     assertEquals(
         List.of("clean"),
@@ -241,7 +248,7 @@ class RelatedReferencesTest {
             .orElseThrow()
             .members());
     assertEquals(
-        List.of("check", "orElseThrow", "reset"),
+        List.of("check", "orElseThrow"),
         candidates.stream()
             .filter(c -> c.path().endsWith("Limits.java"))
             .findFirst()
@@ -393,7 +400,8 @@ class RelatedReferencesTest {
 
     assertEquals(List.of(), extract(Set.of(), file));
     assertEquals(
-        List.of(), RelatedReferences.extract(null, Set.of(), Set.of("src/B.java"), p -> false));
+        List.of(),
+        RelatedReferences.extract(null, Set.of(), Set.of("src/B.java"), p -> false, GO_MODULES));
     assertEquals(
         List.of(),
         extract(Set.of("src/B.java"), new FileDiff("src/A.java", "modified", 1, 0, 1, null)));
@@ -457,11 +465,12 @@ class RelatedReferencesTest {
                     "+from missing import a, , b"),
                 new FileDiff(null, "modified", 1, 0, 1, "@@ -1 +1 @@\n+x"))));
     assertEquals(
-        List.of(), RelatedReferences.extract(List.of(), Set.of(), repository, path -> false));
+        List.of(),
+        RelatedReferences.extract(List.of(), Set.of(), repository, path -> false, GO_MODULES));
     assertEquals(
         List.of(),
         RelatedReferences.extract(
-            List.of(changed("a.py", "+import b")), Set.of(), null, path -> false));
+            List.of(changed("a.py", "+import b")), Set.of(), null, path -> false, GO_MODULES));
   }
 
   @Test
@@ -501,22 +510,98 @@ class RelatedReferencesTest {
   }
 
   @Test
-  void goImportsPickTheDeepestPackageDirectory() {
+  void goImportsResolveOnlyUnderAModuleTheRepositoryDeclares() {
     var repository =
         Set.of(
             "main.go",
-            "auth/a.go",
+            "http/server.go",
+            "config/load.go",
             "internal/auth/b.go",
             "internal/auth/c.go",
-            "pkg/auth/d.go",
+            "svc/internal/auth/d.go",
             "x/y/z.go");
+    var modules = java.util.Map.of("", "example.com/app", "svc", "example.com/app/svc");
+    java.util.function.Function<String, List<String>> resolved =
+        imported ->
+            paths(
+                RelatedReferences.extract(
+                    List.of(changed("x/y/z.go", "+\t\"" + imported + "\"")),
+                    Set.of("x/y/z.go"),
+                    repository,
+                    path -> false,
+                    modules));
 
     assertEquals(
         List.of("internal/auth/b.go", "internal/auth/c.go"),
-        paths(extract(repository, changed("x/y/z.go", "+\t\"example.com/internal/auth\""))));
+        resolved.apply("example.com/app/internal/auth"));
     assertEquals(
-        List.of("internal/auth/b.go", "internal/auth/c.go"),
-        paths(extract(repository, changed("x/y/z.go", "+import a \"internal/auth\""))));
+        List.of("svc/internal/auth/d.go"), resolved.apply("example.com/app/svc/internal/auth"));
+    assertEquals(List.of("main.go"), resolved.apply("example.com/app"));
+    assertEquals(List.of(), resolved.apply("net/http"), "the standard library is not ./http");
+    assertEquals(
+        List.of(),
+        resolved.apply("github.com/aws/aws-sdk-go-v2/config"),
+        "a dependency is not ./config");
+    assertEquals(List.of(), resolved.apply("example.com/app/missing/pkg"));
+    assertEquals(List.of(), resolved.apply("example.com/application/config"));
+    assertEquals(
+        List.of(),
+        paths(
+            RelatedReferences.extract(
+                List.of(changed("x/y/z.go", "+\t\"example.com/app/config\"")),
+                Set.of("x/y/z.go"),
+                repository,
+                path -> false,
+                java.util.Map.of())),
+        "without a go.mod no Go import resolves");
+  }
+
+  @Test
+  void aCallWithNoReceiverIsNotCreditedToAVeryShortName() {
+    var candidates =
+        extract(
+            Set.of("web/app.js", "web/db.js"),
+            changed("web/app.js", "+import db from './db';", "+  open(db).query(sql);"));
+
+    assertEquals(List.of("web/db.js"), paths(candidates));
+    assertEquals(List.of(), candidates.get(0).members());
+  }
+
+  @Test
+  void aHashLineIsACommentOnlyWhereTheLanguageSaysSo() {
+    assertEquals(
+        List.of("src/net/Handler.hpp"),
+        paths(
+            extract(
+                Set.of("src/net/socket.cpp", "src/net/Handler.hpp"),
+                changed("src/net/socket.cpp", "+#define DISPATCH() Handler::handle(buf);"))));
+    assertEquals(
+        List.of("src/net/buffer.h"),
+        paths(
+            extract(
+                Set.of("src/net/socket.c", "src/net/buffer.h"),
+                changed("src/net/socket.c", "+#  include \"buffer.h\""))));
+    assertEquals(
+        List.of("web/Store.js"),
+        paths(
+            extract(
+                Set.of("web/cart.js", "web/Store.js"),
+                changed("web/cart.js", "+  #store = new Store();"))));
+    assertEquals(
+        List.of("src/Billing/Tax.php"),
+        paths(
+            extract(
+                Set.of("src/Http/Checkout.php", "src/Billing/Tax.php"),
+                changed(
+                    "src/Http/Checkout.php",
+                    "+# Tax is mentioned in a comment",
+                    "+#[Tax(rate: 1)]"))));
+    assertEquals(
+        List.of(),
+        paths(
+            extract(
+                Set.of("lib/a.rb", "lib/rate_limiter.rb"),
+                changed("lib/a.rb", "+# RateLimiter.acquire"))));
   }
 
   @Test

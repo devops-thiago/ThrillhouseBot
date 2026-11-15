@@ -17,21 +17,65 @@ All notable changes to ThrillhouseBot.
   counts in `REVIEW_MAX_AI_CALLS` (3 or more is required) and in the spend ceiling, and any
   failure leaves the review as it is with the setting off.
 
+### Changed
+
+- The review call's diff now shows each added and context line's line number in the new file
+  (`842 +code`), so the model reads a finding's `line` instead of counting it from the hunk
+  header. Only the prompt carries the numbers; the stages that check quotes and place threads
+  still read the plain patch, and a number the model copies into `suggestion_old` or
+  `suggestion_new` is removed before either is used. The numbers add about 10% to the diff's
+  tokens on the test corpus, and the token budget counts them. (#1320)
+- **`THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` defaults to 3, down from 5** (#1329): with the 2 s
+  exponential backoff, five attempts spent about 30 s of waiting before a call that kept failing
+  gave up. Throttles, timeouts and provider errors keep their handling within the smaller budget.
+  Set the variable to keep the old value.
+- Linked-issue context now reads issues through the extension's installation-scoped GitHub client and GraphQL client (`GitHubClientProvider`) instead of the hand-rolled `GitHubCommentClient`/`GitHubGraphQLClient` REST clients. `GitHubIssuesProvider` no longer takes an installation token string; the installation id comes from the review request. (#1314)
+- Repository instructions (`.github/thrillhousebot.md` and fallback chain) now read through the extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of `GitHubPullRequestClient`/`GitHubAuthClient`. `InstructionsResolver` no longer takes an auth client or REST client. (#1314)
+- Repository settings (`.github/thrillhousebot.yml`) and project stack manifests now read through the extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of `GitHubPullRequestClient`/`GitHubAuthClient`. `RepoSettingsResolver` and `ProjectStackResolver` no longer take an auth client or REST client. (#1314)
+
+- **Each finding's state is stored across review rounds** (#1319): a new table, `finding_state`
+  (migration V3, created on the first start), keeps one row per finding of a pull request with
+  its status, the code it quotes and its file's blob SHA in the round that raised it. A later
+  round reads which files are unchanged from these rows instead of asking GitHub, and a round
+  that raised nothing new and changed no stored status reports no change: its review carries no
+  delta section, and the summary is only edited in place. Closing or merging a pull request starts a retention
+  period, `FINDINGS_RETENTION` (default `30d`), after which a daily sweep deletes its rows;
+  reopening it keeps them. Uninstalling the App deletes the installation's rows; suspending it
+  does not. The table starts empty and each open pull request's rows are written by its next
+  review. See `docs/OPERATIONS.md`.
+
 ### Fixed
 
+- **Two findings about different keys in one file are no longer counted as one** (#1383): the
+  follow-up count merged two findings whose descriptions overlapped, such as two rows of the same
+  configuration table, even when their titles named different settings. One of them then dropped
+  out of the totals. A pair whose titles name different identifiers or conflicting defect classes
+  is now kept as two findings.
 - A follow-up round's status for a previous finding, and a verifier verdict, named its finding
   only by its position in the list, so a swapped number could close, reject or downgrade the wrong
   finding unnoticed. Each previous finding and each verifier candidate is now listed with its key
   (the one its thread marker carries), and each status and verdict must repeat that key beside the
   number. One that does not is dropped and logged: the finding of a dropped status stays held as
   open, and the candidate of a dropped verdict is kept as one the verifier did not judge. A
-  "resolved" status now stands only when the finding's flagged code has left the diff or its
-  suggested fix is in it; otherwise the finding is kept open and the contradiction is logged. A
-  finding with no flagged code to look for, whose file is still in the diff, can no longer be
-  closed by the model; a maintainer can still clear it. A repaired answer can no
+  "resolved" status on a finding whose file is unchanged since the round that raised it is now
+  kept open and the contradiction is logged; on a changed file it stands, wherever in the file
+  the fix sits. When the two commits cannot be compared, it stands only when the finding's flagged
+  code has left the diff or its suggested fix is in it. A repaired answer can no
   longer move a finding to another file or line or renumber a status: the failed answer's values
   are put back, and an answer whose structure cannot be read is not repaired at all, so the full
   retry runs. (#1322)
+- **Follow-up rounds count each previous finding once and decide its status from its file**
+  (#1316, #1317, #1318): a finding raised two or more rounds back was never checked again, so a
+  fixed one stayed open; the same defect raised again from an older round, or from another file it
+  names, was counted twice; and a finding could be superseded while its file was unchanged, with
+  the delta comment leaving superseded findings out of its counts. A finding whose file is
+  unchanged since the round that raised it now stays open and is never superseded; an older
+  round's open finding on a changed file is listed to the model for a status like the previous
+  round's; a finding whose flagged code is gone while the change it suggested is in the file is
+  resolved; and a new finding is matched against every open finding of every round, by the code it
+  quotes and by the sites it names, before it counts as new. The summary, the delta comment and
+  the check run take their numbers from the same statuses, and the delta comment counts and names
+  superseded findings.
 - The summary no longer posts counts or sizes the summary call wrote. That call sees only the
   round's findings, so on #1315 its "What this PR does" paragraph said "One medium finding
   remains" while 17 findings were open. A sentence of the purpose paragraph or the overall
@@ -51,52 +95,19 @@ All notable changes to ThrillhouseBot.
   that the line holds the quoted declaration, so accepting it could rewrite another line. It is
   now placed on the line that holds the quoted declaration, indentation included, and skipped
   when there is no such line. (#1320)
-### Changed
-
-- The review call's diff now shows each added and context line's line number in the new file
-  (`842 +code`), so the model reads a finding's `line` instead of counting it from the hunk
-  header. Only the prompt carries the numbers; the stages that check quotes and place threads
-  still read the plain patch, and a number the model copies into `suggestion_old` or
-  `suggestion_new` is removed before either is used. The numbers add about 10% to the diff's
-  tokens on the test corpus, and the token budget counts them. (#1320)
-- **`THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` defaults to 3, down from 5** (#1329): with the 2 s
-  exponential backoff, five attempts spent about 30 s of waiting before a call that kept failing
-  gave up. Throttles, timeouts and provider errors keep their handling within the smaller budget.
-  Set the variable to keep the old value.
-- Linked-issue context now reads issues through the extension's installation-scoped GitHub client and GraphQL client (`GitHubClientProvider`) instead of the hand-rolled `GitHubCommentClient`/`GitHubGraphQLClient` REST clients. `GitHubIssuesProvider` no longer takes an installation token string; the installation id comes from the review request. (#1314)
-- Repository instructions (`.github/thrillhousebot.md` and fallback chain) now read through the extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of `GitHubPullRequestClient`/`GitHubAuthClient`. `InstructionsResolver` no longer takes an auth client or REST client. (#1314)
-- Repository settings (`.github/thrillhousebot.yml`) and project stack manifests now read through the extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of `GitHubPullRequestClient`/`GitHubAuthClient`. `RepoSettingsResolver` and `ProjectStackResolver` no longer take an auth client or REST client. (#1314)
-
-### Fixed
-
 - **A rejected API key fails the call on its first attempt** (#1329): an HTTP 401 or 403, or
   LangChain4j's `AuthenticationException`, was retried like any transient failure, so a wrong or
   revoked key cost every review all its attempts and the backoff waits, and the failure read as a
-  generic retry exhaustion. The review, batch and summary calls and the repair step now stop at
-  once, with no wait and no move to `AI_FALLBACK_MODEL`, and the log line and the session's
-  failure reason say the provider rejected the API key and name `AI_API_KEY`. A multi-call review
-  fails instead of retrying each batch. `PromptEvalTest` stops the whole suite at the first
-  rejected call, including a verifier, summary check or repair call that fails open, and fails at
-  once when `QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY` is not set beside
-  `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY`, since those calls use the concise client's key
-- The review call's diff now shows each added and context line's line number in the new file
-  (`842 +code`), so the model reads a finding's `line` instead of counting it from the hunk
-  header. Only the prompt carries the numbers; the stages that check quotes and place threads
-  still read the plain patch, and a number the model copies into `suggestion_old` or
-  `suggestion_new` is removed before either is used. The numbers add about 10% to the diff's
-  tokens on the test corpus, and the token budget counts them. (#1320)
-### Fixed
-
-- A finding whose line the diff cannot take a comment on was moved to the nearest line that
-  could, however far away, so its thread could land in a different hunk on code it never
-  described. It now moves only when that line is at most three lines away; otherwise the finding
-  is filed on the file. The line it moves to is now stored on the finding before any later step
-  reads it, so the summary, the stored round and the thread agree, and a `file:line` mention of
-  the finding's own location in its description follows the move. (#1320)
-- `/add-docs` placed a single-line doc suggestion on the line the model cited without checking
-  that the line holds the quoted declaration, so accepting it could rewrite another line. It is
-  now placed on the line that holds the quoted declaration, indentation included, and skipped
-  when there is no such line. (#1320)
+  generic retry exhaustion. Every call now stops at its first rejection, with no wait and no move
+  to `AI_FALLBACK_MODEL`, and the log line says the provider rejected the API key. On the review
+  and batch calls and the review repair, the review fails and the session's failure reason names
+  `AI_API_KEY`; a multi-call review fails instead of retrying each batch. On the summary call the
+  review keeps its findings under the counts-only summary, and on the verifier call it keeps them
+  unscreened, as for any other failure of those calls. `PromptEvalTest` stops the whole suite at
+  the first rejected call, including one that fails open, and fails at once when
+  `QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY` is not set beside
+  `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY`, since the summary, verifier, summary check and summary
+  repair calls use the concise client's key.
 - **A finding is no longer superseded because its quote starts just outside the patch** (#1321,
   #1318): presence was checked against the patch's added and context lines only, so a quote that
   began one line before its hunk read as gone, and the next round superseded the finding even
@@ -133,10 +144,10 @@ delivery still gets `200`.
 
 ### Errata
 
-- v0.9.0's changelog briefly carried a **Changed** entry about the webhook entry and the
-  Quarkiverse GitHub App extension. It was added after v0.9.0 was tagged and described this
-  release, not v0.9.0 (which still uses `WebhookController` and `WebhookVerifier`), so it has been
-  removed from the `[0.9.0]` section. The change is described under **Changed** above.
+- The `[0.9.0]` section's **Changed** entry about the webhook entry and the Quarkiverse GitHub
+  App extension describes this release, not v0.9.0. It was added to the changelog after v0.9.0
+  was tagged, and v0.9.0 still uses `WebhookController` and `WebhookVerifier`. The change is
+  described under **Changed** above.
 
 ## [0.9.0] - 2026-11-04
 
@@ -344,6 +355,10 @@ and rollback details. New review features below are off by default unless stated
 - OpenTelemetry API 1.62.0 remains affected by GHSA-ccrj-gw8r-854m. A compatible dependency
   upgrade is tracked in [#1289](https://github.com/devops-thiago/ThrillhouseBot/issues/1289); the
   Guava update above does not resolve it.
+
+### Changed
+
+- The webhook entry now rides the Quarkiverse GitHub App extension (`io.quarkiverse.githubapp:quarkus-github-app`): it owns the `POST /api/webhook` route, the `X-Hub-Signature-256` check and delivery parsing, and `webhook/WebhookEvents` keeps the existing routing (dedupe, pause, trigger filters, commands, CI rechecks). `WebhookController` and `WebhookVerifier` are gone. Malformed-request answers change to the extension's (`400` for missing/mismatched signature, `500` for a signed non-JSON body, `200` with an empty body on success).
 
 ## [0.8.0] - 2026-10-21
 

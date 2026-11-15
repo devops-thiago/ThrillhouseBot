@@ -5974,6 +5974,76 @@ class FollowUpAnalyzerTest {
             "@thrillhousebot resolved src/B.java:10", null, lines));
   }
 
+  /**
+   * #1360: a thread on removed lines is shown at base-side line 50 while its finding sits at line
+   * 10. A clear naming either line closes it, as the reply on the thread does; another line does
+   * not.
+   */
+  @Test
+  void aClearOnAThreadOnRemovedLinesNamesEitherItsShownLineOrItsFindingsLine() {
+    var removedLineRoot =
+        new GitHubReviewClient.PullRequestComment(
+            300L,
+            null,
+            "src/A.java",
+            "**🔴 CRITICAL — SQL injection**\n\nraw query\n\n"
+                + SuggestionFormatter.withMarkedLine(SuggestionFormatter.findingMarker(1), 10),
+            new GitHubReviewClient.ReviewResponse.User(BOT),
+            null,
+            50,
+            50);
+    for (var naming : List.of("src/A.java:50", "src/A.java:10")) {
+      var rewritten =
+          analyzer.clearNamedInConversation(
+              previousFindings(),
+              bothUnresolved(),
+              List.of(),
+              List.of(
+                  removedLineRoot,
+                  comment(400L, 300L, "src/A.java", "@thrillhousebot resolved " + naming, "m")),
+              BOT_ID);
+      assertEquals("resolved", rewritten.get(0).status(), naming);
+    }
+
+    var other =
+        analyzer.clearNamedInConversation(
+            previousFindings(),
+            bothUnresolved(),
+            List.of(),
+            List.of(
+                removedLineRoot,
+                comment(400L, 300L, "src/A.java", "@thrillhousebot resolved src/A.java:77", "m")),
+            BOT_ID);
+    assertEquals("unresolved", other.get(0).status());
+  }
+
+  /** A thread on the new file keeps the finding's own line only, as before #1360. */
+  @Test
+  void aClearOnAThreadOnTheNewFileStillNamesOnlyItsFindingsLine() {
+    var newFileRoot =
+        new GitHubReviewClient.PullRequestComment(
+            300L,
+            null,
+            "src/A.java",
+            SQL_THREAD.body(),
+            new GitHubReviewClient.ReviewResponse.User(BOT),
+            null,
+            12,
+            12);
+
+    var rewritten =
+        analyzer.clearNamedInConversation(
+            previousFindings(),
+            bothUnresolved(),
+            List.of(),
+            List.of(
+                newFileRoot,
+                comment(400L, 300L, "src/A.java", "@thrillhousebot resolved src/A.java:12", "m")),
+            BOT_ID);
+
+    assertEquals("unresolved", rewritten.get(0).status());
+  }
+
   /** The effective round: a clear replied on the finding's own thread rewrites its unresolved. */
   @Test
   void clearNamedInConversationAppliesAClearRepliedOnTheFindingsOwnThread() {

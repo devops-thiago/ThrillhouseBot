@@ -31,6 +31,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import org.kohsuke.github.GHFileNotFoundException;
 import org.kohsuke.github.GHRepository;
 
 /**
@@ -133,8 +134,11 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
           clientProvider
               .getInstallationClient(lookup.installationId())
               .getRepository(lookup.owner() + "/" + lookup.repo());
+    } catch (GHFileNotFoundException _) {
+      Log.debugf("Repository %s/%s not found", lookup.owner(), lookup.repo());
     } catch (RuntimeException | IOException e) {
-      Log.debugf("Could not resolve repository %s/%s", lookup.owner(), lookup.repo());
+      Log.warnf(
+          "Could not resolve repository %s/%s: %s", lookup.owner(), lookup.repo(), e.toString());
     }
     var tickets = new ArrayList<LinkedTicket>();
     for (var candidate : candidates(lookup, limit).entrySet()) {

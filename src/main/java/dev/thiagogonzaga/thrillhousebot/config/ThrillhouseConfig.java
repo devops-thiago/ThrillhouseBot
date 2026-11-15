@@ -68,6 +68,18 @@ public interface ThrillhouseConfig {
 
   MetricsConfig metrics();
 
+  FindingsConfig findings();
+
+  /** The stored state of each pull request's findings across review rounds (#1319). */
+  interface FindingsConfig {
+    /**
+     * How long a closed or merged pull request's stored findings are kept. A daily sweep deletes
+     * them after this; a pull request reopened before then carries on from them.
+     */
+    @WithDefault("30d")
+    Duration retention();
+  }
+
   interface MetricsConfig {
     /**
      * Serves the OpenTelemetry metrics in Prometheus text format at {@code GET /metrics} on the
