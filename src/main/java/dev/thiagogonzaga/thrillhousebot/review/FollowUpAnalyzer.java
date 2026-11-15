@@ -831,12 +831,13 @@ public class FollowUpAnalyzer {
   /**
    * Whether {@code finding} reports what the fix of {@code prior} left in place (#1388): this round
    * marks {@code prior} resolved, and {@code finding} quotes code other than the code {@code prior}
-   * quoted. The fix replaced the flagged code, and the replacement can carry the same defect class
-   * through another mechanism, as the {@code madeOn} rewrite on #1342 matched names by substring
-   * where the code it replaced attributed every call to every file. That finding names the same
-   * defect and so reads as a re-raise, yet it is about other code, and the prior's thread is about
-   * to close. A finding with no quote cannot show it is about other code, so it is still read as a
-   * re-raise.
+   * quoted: neither quote holds the other, so a larger snippet around the prior code, or a part of
+   * it, is still the prior code. The fix replaced the flagged code, and the replacement can carry
+   * the same defect class through another mechanism, as the {@code madeOn} rewrite on #1342 matched
+   * names by substring where the code it replaced attributed every call to every file. That finding
+   * names the same defect and so reads as a re-raise, yet it is about other code, and the prior's
+   * thread is about to close. A finding with no quote cannot show it is about other code, so it is
+   * still read as a re-raise.
    */
   static boolean leftByFix(
       ReviewResponse.Finding finding, ReviewResponse.Finding prior, Set<String> resolvedNow) {
@@ -844,8 +845,12 @@ public class FollowUpAnalyzer {
       return false;
     }
     var priorKey = SuggestionFormatter.findingKey(prior.file(), prior.line(), prior.title());
-    return resolvedNow.contains(priorKey)
-        && !quotedCode(finding.suggestionOld()).equals(quotedCode(prior.suggestionOld()));
+    if (!resolvedNow.contains(priorKey)) {
+      return false;
+    }
+    var quoted = quotedCode(finding.suggestionOld());
+    var priorQuoted = quotedCode(prior.suggestionOld());
+    return priorQuoted.isEmpty() || !(quoted.contains(priorQuoted) || priorQuoted.contains(quoted));
   }
 
   /** {@code quote} with its whitespace runs collapsed, so a re-indented quote is the same code. */

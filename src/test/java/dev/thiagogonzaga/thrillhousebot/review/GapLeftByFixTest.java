@@ -165,6 +165,16 @@ class GapLeftByFixTest {
   }
 
   @Test
+  void aQuoteHoldingOrHeldByThePriorCodeIsStillThePriorCode() {
+    var resolvedNow = Set.of(priorKey);
+    var larger = finding(272, gap.title(), "    for (var entry : referred) {\n" + PRIOR_QUOTE);
+    var part = finding(272, gap.title(), "entry.members.addAll(members)");
+
+    assertFalse(FollowUpAnalyzer.leftByFix(larger, prior, resolvedNow));
+    assertFalse(FollowUpAnalyzer.leftByFix(part, prior, resolvedNow));
+  }
+
+  @Test
   void aFindingWithNoQuoteCannotShowItIsAboutOtherCode() {
     var resolvedNow = Set.of(priorKey);
 
