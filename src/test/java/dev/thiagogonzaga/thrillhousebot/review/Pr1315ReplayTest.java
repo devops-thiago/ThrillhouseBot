@@ -206,7 +206,7 @@ class Pr1315ReplayTest {
   }
 
   /** Writes a round's rows as the orchestrator does once the round is posted. */
-  private void record(
+  private void recordRound(
       String head,
       List<Finding> raised,
       List<ReviewResult.PreviousFindingStatus> statuses,
@@ -314,7 +314,7 @@ class Pr1315ReplayTest {
     var stored = guarded.withClosedEarlierRound(result.earlierRoundClosedMembers());
     var previous = ctx.previousFindingsList();
     if (rows != null) {
-      record(head, result.findings(), result.previousStatuses(), ctx, patches);
+      recordRound(head, result.findings(), result.previousStatuses(), ctx, patches);
     }
     return new Round(
         result,

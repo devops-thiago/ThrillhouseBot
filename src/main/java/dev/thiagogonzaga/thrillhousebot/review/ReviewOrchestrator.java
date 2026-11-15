@@ -287,6 +287,27 @@ public class ReviewOrchestrator {
   }
 
   /**
+   * Publishes the summary and reports whether it stands in for the review: only on a round that
+   * moved a finding, or when {@code /summary} asked for it (#1319).
+   */
+  private boolean summaryStandsIn(
+      String auth, ReviewRequest req, ReviewResult result, boolean moved) {
+    return publishSummaryBestEffort(auth, req, result) && (moved || req.forceSummary());
+  }
+
+  /** The follow-up delta, or {@code ""} on a round that moved no finding (#1319). */
+  private String movedDelta(
+      boolean moved,
+      ReviewResult result,
+      boolean summaryPosted,
+      ReviewRequest req,
+      List<ReviewResponse.Finding> previousFindings) {
+    return moved
+        ? followUpDeltaBestEffort(result, summaryPosted && req.forceSummary(), previousFindings)
+        : "";
+  }
+
+  /**
    * Main entry point for reviewing a PR. Called from WebhookEvents for pull_request (opened,
    * synchronize) and /review triggers.
    *
@@ -443,14 +464,9 @@ public class ReviewOrchestrator {
       // summary nor the delta; the summary may still be edited in place, which notifies nobody.
       var findingRound = findingStates.prepare(req, ctx, result);
       var moved = findingRound.moved(result);
-      boolean summaryPosted =
-          publishSummaryBestEffort(auth, req, result) && (moved || req.forceSummary());
+      boolean summaryPosted = summaryStandsIn(auth, req, result, moved);
       // The optional delta enriches the review, never a second notification beside it.
-      var followUpDelta =
-          moved
-              ? followUpDeltaBestEffort(
-                  result, summaryPosted && req.forceSummary(), previousFindings)
-              : "";
+      var followUpDelta = movedDelta(moved, result, summaryPosted, req, previousFindings);
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       // summaryPosted gates the redundant-review skips: a failed summary post leaves review

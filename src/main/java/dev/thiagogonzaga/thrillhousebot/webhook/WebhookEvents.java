@@ -65,10 +65,11 @@ public class WebhookEvents {
 
   private static final String ACTION_READY_FOR_REVIEW = "ready_for_review";
   private static final String ACTION_SYNCHRONIZE = "synchronize";
+  private static final String ACTION_REOPENED = "reopened";
 
   /** pull_request actions that trigger an automatic review. */
   private static final Set<String> AUTO_REVIEW_ACTIONS =
-      Set.of("opened", "reopened", ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW);
+      Set.of("opened", ACTION_REOPENED, ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW);
 
   private static final String EVENT_PULL_REQUEST = "pull_request";
   private static final String ACTION_CLOSED = "closed";
@@ -292,12 +293,12 @@ public class WebhookEvents {
     if (action == null) return true;
     // #1319: before any pause or trigger filter can end the handling, so a reopened pull request
     // the bot will not review still keeps its stored findings.
-    if (ACTION_CLOSED.equals(action) || "reopened".equals(action)) {
+    if (ACTION_CLOSED.equals(action) || ACTION_REOPENED.equals(action)) {
       fireClosure(payload, ACTION_CLOSED.equals(action));
     }
 
     return switch (action) {
-      case "opened", "reopened", ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW -> {
+      case "opened", ACTION_REOPENED, ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW -> {
         var pr = payload.pullRequest();
         var repo = payload.repository();
         if (pr == null || unscoped(payload)) {
