@@ -403,7 +403,11 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
 - **A "Things to double-check" item is counted once and replaced only by the same defect** (#951,
   #961). A listed-only repeat at no higher severity is dropped by the open-thread guard
   (`restatesListed`); a finding at the same or higher severity replaces the item
-  (`replacedPriors`, `withoutReplaced`). An item this round's own finding replaces
+  (`replacedPriors`, `withoutReplaced`), and an item a later earlier round replaced leaves the
+  backstop's open set before clustering (`withoutReplacedByLaterRounds`, #1319): left in, it read as
+  present on an unchanged file, became its replacement's held member as the earlier of two equals,
+  and took the defect out of the counts (ThrillhouseBot-test #303, 21 to 19). Every count-time
+  merge is logged with both findings (`logCountedOnce`). An item this round's own finding replaces
   (`replacedThisRound`) keeps an `unresolved` status under `REPLACED_NOTE` and is listed as its
   replacement in the still-open set, so "Still present" adds up to the findings carried in and the
   summary folds it into the round's entry as open since an earlier review; the delta section does

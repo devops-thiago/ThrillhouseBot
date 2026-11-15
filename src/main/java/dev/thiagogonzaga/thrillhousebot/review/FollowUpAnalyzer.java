@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
@@ -3058,6 +3059,7 @@ public class FollowUpAnalyzer {
         reportedKeys(replay.reportedRound(), currentStatuses, STATUS_SUPERSEDED);
     var accountedThisRound = accountedFindings(replay.reportedRound(), currentStatuses);
     closeReported(replay.open(), replay.reportedRound(), currentStatuses);
+    withoutReplacedByLaterRounds(replay.open(), chrono);
     var clusters = clusterByIdentity(replay.open());
     return heldFromClusters(
         clusters,
@@ -3743,6 +3745,52 @@ public class FollowUpAnalyzer {
   }
 
   /**
+   * Removes from the backstop's open set every double-check item a later earlier round's finding
+   * replaced (#951), logging both. The later copy is the one the pull request shows and the one
+   * counted; the replaced copy leaves the open set (#1319). Left in, it joined the later copy's
+   * cluster, and once an unchanged file read both copies as still there it became the held member
+   * as the earlier of two equals. A replaced copy is not counted, so the defect left the counts
+   * with it: ThrillhouseBot-test #303's total fell from 21 to 19 with nothing resolved. An item
+   * this round's own finding replaces stays: it is held and carried by that finding ({@link
+   * #carriedByReplacement}).
+   */
+  private static void withoutReplacedByLaterRounds(
+      Map<String, OpenFinding> open, List<ReviewResponse> chrono) {
+    open.values()
+        .removeIf(
+            member -> {
+              var prior = member.finding();
+              var replacement =
+                  isListedOnly(prior)
+                      ? laterFindings(chrono, member.round(), List.of()).stream()
+                          .filter(finding -> replacesUnthreaded(finding, prior))
+                          .findFirst()
+                      : Optional.<ReviewResponse.Finding>empty();
+              replacement.ifPresent(finding -> logCountedOnce(prior, finding));
+              return replacement.isPresent();
+            });
+  }
+
+  /** Logs that {@code merged} is counted once, as {@code kept}, the finding it was matched to. */
+  private static void logCountedOnce(ReviewResponse.Finding merged, ReviewResponse.Finding kept) {
+    Log.infof(
+        "Counting '%s' (%s:%d) once, as '%s' (%s:%d): the same defect raised in another round",
+        LogSafe.oneLine(merged.title()),
+        LogSafe.oneLine(merged.file()),
+        merged.line(),
+        LogSafe.oneLine(kept.title()),
+        LogSafe.oneLine(kept.file()),
+        kept.line());
+  }
+
+  /** Logs each member of a cluster of more than one finding as counted once, with the first. */
+  private static void logMerged(List<OpenFinding> cluster) {
+    for (var member : cluster.subList(1, cluster.size())) {
+      logCountedOnce(member.finding(), cluster.get(0).finding());
+    }
+  }
+
+  /**
    * Groups the open findings into clusters of tolerant ({@link #isSameFinding}) identity: one
    * defect the model raised again in a later round, reworded or drifted.
    *
@@ -3783,6 +3831,7 @@ public class FollowUpAnalyzer {
     var directives = maintainerDeclines(in.conversationComments(), in.botIdentity());
     var code = in.reviewedCode() == null ? null : ReviewContextLoader.memoize(in.reviewedCode());
     for (var cluster : clusters) {
+      logMerged(cluster);
       var entry = backstopEntry(cluster, directives, in, code);
       if (entry != null) {
         held.add(entry);

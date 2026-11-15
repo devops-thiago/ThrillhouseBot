@@ -424,4 +424,82 @@ class ContentStatusTest {
         Set.of("reposettingsresolver", "getrepository", "fetchandparse", "getfilecontent"),
         DefectIdentity.sites(finding));
   }
+
+  // --- ThrillhouseBot-test #303: a promoted double-check item and its thread are one defect ---
+
+  private static final String READING = "zig/src/reading.zig";
+
+  /**
+   * ThrillhouseBot-test #303, every round on one head (699be405): round 2 lists a CRLF item under
+   * "Things to double-check", and round 5 raises it again confidently enough to post a thread,
+   * which replaces the listed copy (#951). On the rc5 corpus run (#1319) the total fell from 21 to
+   * 19 with nothing resolved. With every file unchanged, the listed copy read as still there too,
+   * so it became the held member of the defect (the earlier of two equals), and a replaced copy is
+   * not counted, so the thread's defect left the counts with it. The titles, files and lines are
+   * the posted ones; the listed item's description is not posted and is written here.
+   */
+  @Test
+  void aThreadThatReplacedAnEarlierDoubleCheckItemStaysCountedOnAnUnchangedFile() {
+    var crlfItem =
+        new ReviewResponse.Finding(
+            "low",
+            "low",
+            READING,
+            19,
+            "CRLF-terminated lines are counted as skipped: grams field keeps a trailing \\r",
+            "The grams field is trimmed of spaces only, so a CRLF line keeps its \\r and parseFloat"
+                + " rejects it as BadWeight.",
+            "",
+            "");
+    var crlfThread =
+        new ReviewResponse.Finding(
+            "low",
+            "medium",
+            READING,
+            19,
+            "CRLF-terminated input is rejected as BadWeight and silently counted as skipped",
+            "The grams field's trim set is spaces only: std.mem.trim(u8, grams_text, \" \") leaves"
+                + " \"10.0\\r\", which std.fmt.parseFloat does not accept, so a CRLF sample returns"
+                + " error.BadWeight and is counted in skipped.",
+            "",
+            "    const grams = std.fmt.parseFloat(f64, std.mem.trim(u8, grams_text, \" \\r\\t\"))"
+                + " catch return error.BadWeight;");
+    var dockerfile =
+        new ReviewResponse.Finding(
+            "high",
+            "medium",
+            "zig/Dockerfile",
+            13,
+            "BEEHIVE_DB_PATH points at /data, which no build or runtime step creates",
+            "d",
+            "",
+            "");
+    // Newest first: round 6 (the effective round), round 5, round 2.
+    var priors =
+        List.of(
+            new ReviewResponse(List.of(dockerfile), List.of(), null),
+            new ReviewResponse(List.of(crlfThread), List.of(), null),
+            new ReviewResponse(List.of(crlfItem), List.of(), null));
+    var diff =
+        new DiffLineResolver(
+            Map.of(),
+            List.of(READING, "zig/Dockerfile"),
+            DiffLineResolver.HeadFiles.NONE,
+            (round, path) -> FileChange.UNCHANGED);
+    assertTrue(FollowUpAnalyzer.isSameFinding(crlfThread, crlfItem), "one defect, two rounds");
+    var replaced = FollowUpAnalyzer.replacedPriors(priors, List.of());
+    assertEquals(Set.of(crlfItem), Set.copyOf(replaced));
+
+    var held =
+        analyzer
+            .heldPreviousFindings(
+                priors, List.of(unresolved(1)), List.of(), List.of(), diff, BOT, Map.of())
+            .stream()
+            .map(hold -> FollowUpAnalyzer.carriedByReplacement(hold, replaced, Map.of()))
+            .filter(java.util.Objects::nonNull)
+            .toList();
+
+    assertEquals(List.of(crlfThread), held.stream().map(h -> h.finding()).toList());
+    assertTrue(held.get(0).holdsOpen());
+  }
 }
