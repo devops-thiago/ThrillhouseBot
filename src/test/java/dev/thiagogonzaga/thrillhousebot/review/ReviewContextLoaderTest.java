@@ -452,6 +452,44 @@ class ReviewContextLoaderTest {
     }
 
     @Test
+    void theIgnoredPathsTestKeepsTheDeploymentsGlobsBesideTheRepositorysOwn() {
+      // The repository's list only ever adds to the deployment's: a path the operator ignores
+      // stays ignored whatever .github/thrillhousebot.yml says, and with no file at all.
+      var withDeploymentGlobs =
+          new ReviewContextLoader(
+              prClient,
+              reviewClient,
+              commentClient,
+              instructionsResolver,
+              repoSettingsResolver,
+              projectStackResolver,
+              new ReviewDiffFormatter(List.of("**/secrets/**"), 5000),
+              labeler,
+              followUpAnalyzer,
+              new BugFixContextResolver(commentClient),
+              configKeyContextResolver,
+              patchCoverageResolver,
+              sessionPersistence,
+              BotIdentity.from(List.of(BOT_LOGIN)),
+              activeModel,
+              carryover,
+              findingStates);
+      when(repoSettingsResolver.resolve("owner", "repo", "main", 99L))
+          .thenReturn(
+              new RepoSettings(
+                  List.of("docs/generated/**"), List.of(), ".github/thrillhousebot.yml"))
+          .thenReturn(null);
+
+      var both = withDeploymentGlobs.ignoredPaths(request());
+      assertTrue(both.test("config/secrets/keys.py"), "the deployment's glob");
+      assertTrue(both.test("docs/generated/api.md"), "the repository's own");
+      assertFalse(both.test("src/App.java"));
+      var deploymentOnly = withDeploymentGlobs.ignoredPaths(request());
+      assertTrue(deploymentOnly.test("config/secrets/keys.py"));
+      assertFalse(deploymentOnly.test("docs/generated/api.md"));
+    }
+
+    @Test
     void perRepoIgnorePatternsNarrowTheReviewableFileSet() {
       var files =
           List.of(
