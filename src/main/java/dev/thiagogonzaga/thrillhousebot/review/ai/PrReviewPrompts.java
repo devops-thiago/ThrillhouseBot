@@ -1539,8 +1539,14 @@ public final class PrReviewPrompts {
               ("from . import helpers.net") is a syntax error, not an input to handle.
               (b) Trace it through every earlier regex, capture group, split or filter on its
               way to the rule, and quote the character class that admits it at each step. If an
-              earlier stage cannot capture the input (a name list captured with "[\\w\\s,()*]+"
-              has no "."), the later stage never sees it, and the input is not a finding.
+              earlier stage cannot capture the input, the later rule never sees it, so do not
+              report the later rule for it. Whether anything is reported then depends on (a):
+              an illegal input is not a finding at any stage, but a legal input that an earlier
+              stage drops or cuts short is a defect in that stage, so report the stage and quote
+              the class that stops it. The dotted name above is never reported: the grammar
+              rejects it and a name list captured with "[\\w\\s,()*]+" has no "." either. A
+              from-import continued with a backslash is legal, and the same class stops at the
+              "\\", so the names after it are lost: that is reported against the capture.
               A legal input that does reach the rule and is mishandled is still reported.
             - Use confidence "low" or "medium" and phrase the consequence as a verification
               request naming the input to try. A limitation you cannot execute here is still worth

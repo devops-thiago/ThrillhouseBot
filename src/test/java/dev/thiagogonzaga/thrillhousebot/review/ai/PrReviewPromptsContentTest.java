@@ -417,6 +417,14 @@ class PrReviewPromptsContentTest {
         "the trace must quote the class that lets the input through (#1386)");
     assertContains(
         req,
+        "stage drops or cuts short is a defect in that stage",
+        "an upstream capture that drops a legal input is reported, not excused (#1386)");
+    assertContains(
+        req,
+        "an illegal input is not a finding at any stage",
+        "only an input the grammar rejects is out of the domain (#1386)");
+    assertContains(
+        req,
         "A legal input that does reach the rule and is mishandled is still reported.",
         "the check must not suppress real false negatives (#1386)");
   }
