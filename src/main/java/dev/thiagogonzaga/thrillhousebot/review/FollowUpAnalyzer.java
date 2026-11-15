@@ -733,6 +733,9 @@ public class FollowUpAnalyzer {
    * disagrees with the reply — the human answered once and should not have to answer again. A prior
    * finding counts as the same when the titles describe the same defect (not severity alone), so
    * escalating the rating cannot bypass the drop.
+   *
+   * <p>A finding {@link #leftByFix left by the fix} of a prior finding this round resolves is kept
+   * (#1388): it reports the defect the replacement code still has, which no open thread covers.
    */
   public ReviewResponse dropRepliedDuplicates(
       ReviewResponse response,
@@ -747,11 +750,12 @@ public class FollowUpAnalyzer {
       return response;
     }
 
+    var resolvedNow = resolvedKeys(response.previousFindingsStatus());
     var kept = new ArrayList<ReviewResponse.Finding>();
     var dropped = false;
     for (ReviewResponse.Finding finding : response.findings()) {
       ReviewResponse.Finding duplicateOf =
-          findRepliedDuplicate(finding, priorRounds, inlineComments, botIdentity);
+          findRepliedDuplicate(finding, priorRounds, inlineComments, botIdentity, resolvedNow);
       if (duplicateOf == null) {
         kept.add(finding);
         continue;
@@ -792,10 +796,11 @@ public class FollowUpAnalyzer {
       ReviewResponse.Finding finding,
       List<List<ReviewResponse.Finding>> priorRounds,
       List<GitHubReviewClient.PullRequestComment> inlineComments,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      Set<String> resolvedNow) {
     for (List<ReviewResponse.Finding> previous : priorRounds) {
       for (var prior : previous) {
-        if (!isSameFinding(finding, prior)) {
+        if (!isSameFinding(finding, prior) || leftByFix(finding, prior, resolvedNow)) {
           continue;
         }
         // Marker indices are only meaningful within their own round; across rounds the same index
@@ -807,6 +812,48 @@ public class FollowUpAnalyzer {
     }
     return null;
   }
+
+  /**
+   * The keys of the prior findings {@code statuses} mark resolved. The statuses reaching here were
+   * screened ({@link ModelStatusScreen}): each echoes the key of the finding it names, so the key
+   * names the finding whatever round raised it.
+   */
+  private static Set<String> resolvedKeys(List<ReviewResponse.PreviousFindingStatus> statuses) {
+    var keys = new HashSet<String>();
+    for (var status : statuses) {
+      if (STATUS_RESOLVED.equalsIgnoreCase(status.status()) && status.key() != null) {
+        keys.add(status.key().strip().toLowerCase(Locale.ROOT));
+      }
+    }
+    return keys;
+  }
+
+  /**
+   * Whether {@code finding} reports what the fix of {@code prior} left in place (#1388): this round
+   * marks {@code prior} resolved, and {@code finding} quotes code other than the code {@code prior}
+   * quoted. The fix replaced the flagged code, and the replacement can carry the same defect class
+   * through another mechanism, as the {@code madeOn} rewrite on #1342 matched names by substring
+   * where the code it replaced attributed every call to every file. That finding names the same
+   * defect and so reads as a re-raise, yet it is about other code, and the prior's thread is about
+   * to close. A finding with no quote cannot show it is about other code, so it is still read as a
+   * re-raise.
+   */
+  static boolean leftByFix(
+      ReviewResponse.Finding finding, ReviewResponse.Finding prior, Set<String> resolvedNow) {
+    if (finding.suggestionOld() == null || finding.suggestionOld().isBlank()) {
+      return false;
+    }
+    var priorKey = SuggestionFormatter.findingKey(prior.file(), prior.line(), prior.title());
+    return resolvedNow.contains(priorKey)
+        && !quotedCode(finding.suggestionOld()).equals(quotedCode(prior.suggestionOld()));
+  }
+
+  /** {@code quote} with its whitespace runs collapsed, so a re-indented quote is the same code. */
+  private static String quotedCode(String quote) {
+    return quote == null ? "" : WHITESPACE_RUN.matcher(quote.strip()).replaceAll(" ");
+  }
+
+  private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s++");
 
   /**
    * How many distinct findings on one anchor a maintainer must have dispositioned before a further

@@ -31,7 +31,8 @@ import java.util.regex.Pattern;
  * keep)} for summary verification cases, or {@code (a failed answer, the titles or paths it must
  * keep)} for repair cases. Loaded from {@code src/test/resources/evalcorpus/<name>/} by {@link
  * EvalCorpus}: {@code case.json} carries the spec, {@code diff.txt} the diff exactly as the review
- * pipeline formats it ("### path (status, +A -D)" sections with fenced patches).
+ * pipeline formats it ("### path (status, +A -D)" sections with fenced patches). A generator case
+ * may carry {@code previousFindings}, the numbered prior findings a follow-up round lists (#1388).
  */
 public record EvalCase(String name, String diff, Spec spec) {
 
@@ -72,7 +73,8 @@ public record EvalCase(String name, String diff, Spec spec) {
       List<CandidateFinding> findings,
       ReviewResponse.Summary summary,
       List<String> keptKeywords,
-      String answer) {}
+      String answer,
+      String previousFindings) {}
 
   /** The candidate finding a verifier case feeds to the second-pass audit. */
   public record CandidateFinding(

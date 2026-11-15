@@ -33,6 +33,13 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **A follow-up round reports a fix that leaves the same defect in place** (#1388): a round
+  could only mark the earlier finding resolved and was told never to repeat it, so a fix that
+  replaced the flagged code but kept the defect through another mechanism was reported as fixed
+  and nothing else. Before marking a finding resolved, the review now tries the replacement code
+  with inputs the finding did not use. When the defect is still there, it marks the earlier
+  finding resolved and posts a new finding on the replacement lines, quoting the new code. The
+  check that drops a repeat of an answered finding keeps such a finding.
 - **A parsing or matching rule is no longer reported for an input that cannot reach it** (#1386):
   the review could describe a failure on an input the language itself rejects, or one an earlier
   capture group can never produce, such as a dotted name in a Python from-import list. Before

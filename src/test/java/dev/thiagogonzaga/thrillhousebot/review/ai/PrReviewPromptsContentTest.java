@@ -401,6 +401,31 @@ class PrReviewPromptsContentTest {
    * grammar rejects and the upstream capture group cannot produce.
    */
   @Test
+  void followUpRulesProbeAFixAndReportTheGapItLeaves() {
+    String rules = PrReviewPrompts.CORE_SELF_CHECK;
+    assertContains(
+        rules,
+        "for the same defect class with inputs the finding did not use",
+        "a resolved verdict must first probe the replacement code (#1388)");
+    assertContains(
+        rules,
+        "One exception, a gap left by a fix",
+        "the no-duplicate rule must carve out a gap the fix left (#1388)");
+    assertContains(
+        rules,
+        "never the code the prior finding quoted",
+        "the gap finding must quote the new mechanism (#1388)");
+    assertContains(
+        rules,
+        "starts with \"Gap left by the fix for\"",
+        "the gap finding must be labelled as one (#1388)");
+    assertContains(
+        rules,
+        "prior round are never such a gap",
+        "a plain re-raise of unchanged code is still forbidden (#1388)");
+  }
+
+  @Test
   void heuristicRequestRequiresALegalInputThatReachesTheRule() {
     String req = PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST;
     assertContains(
