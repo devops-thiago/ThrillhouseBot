@@ -24,8 +24,8 @@ All notable changes to ThrillhouseBot.
   (migration V3, created on the first start), keeps one row per finding of a pull request with
   its status, the code it quotes and its file's blob SHA in the round that raised it. A later
   round reads which files are unchanged from these rows instead of asking GitHub, and a round
-  that raised nothing new and changed no stored status no longer lets the summary stand in for
-  the review or adds the delta section. Closing or merging a pull request starts a retention
+  that raised nothing new and changed no stored status reports no change: its review carries no
+  delta section, and the summary is only edited in place. Closing or merging a pull request starts a retention
   period, `FINDINGS_RETENTION` (default `30d`), after which a daily sweep deletes its rows;
   reopening it keeps them. Uninstalling the App deletes the installation's rows; suspending it
   does not. The table starts empty and each open pull request's rows are written by its next
