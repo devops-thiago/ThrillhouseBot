@@ -124,6 +124,8 @@ public class ReviewOrchestrator {
 
   private final ReviewNotifier notifier;
 
+  private final FindingStates findingStates;
+
   /**
    * Parameter object for the {@link #review(ReviewRequest)} method.
    *
@@ -257,7 +259,8 @@ public class ReviewOrchestrator {
       ReviewNotifier notifier,
       CiFailureContextResolver ciFailureContext,
       TicketContextResolver ticketContext,
-      ReviewLearnings learnings) {
+      ReviewLearnings learnings,
+      FindingStates findingStates) {
     this.config = config;
     this.authClient = authClient;
     this.broadcaster = broadcaster;
@@ -280,6 +283,7 @@ public class ReviewOrchestrator {
     this.ciHoldRegistry = ciHoldRegistry;
     this.reviewExecutor = reviewExecutor;
     this.notifier = notifier;
+    this.findingStates = findingStates;
   }
 
   /**
@@ -435,10 +439,19 @@ public class ReviewOrchestrator {
       }
 
       broadcastPhase(session, SessionEventBroadcaster.SessionEvent.Phase.PUBLISH);
-      boolean summaryPosted = publishSummaryBestEffort(auth, req, result);
+      // #1319: a round that raised nothing new and moved no stored status re-posts neither the
+      // summary nor the delta; the summary may still be edited in place, which notifies nobody.
+      var findingRound = findingStates.prepare(req, ctx, result);
+      var moved = findingRound.moved(result);
+      boolean summaryPosted =
+          publishSummaryBestEffort(auth, req, result)
+              && (moved || result.isFirstReview() || req.forceSummary());
       // The optional delta enriches the review, never a second notification beside it.
       var followUpDelta =
-          followUpDeltaBestEffort(result, summaryPosted && req.forceSummary(), previousFindings);
+          moved
+              ? followUpDeltaBestEffort(
+                  result, summaryPosted && req.forceSummary(), previousFindings)
+              : "";
       reviewPublisher.dismissPendingBotReviews(
           auth, req.owner(), req.repo(), req.prNumber(), priorReviews);
       // summaryPosted gates the redundant-review skips: a failed summary post leaves review
@@ -515,6 +528,8 @@ public class ReviewOrchestrator {
           doneReq,
           "apply labels",
           () -> reviewPublisher.applyLabels(auth, doneReq, result, aiResponse, ctx));
+      runPostResultStep(
+          doneReq, "record the findings' states", () -> findingStates.save(findingRound));
       runPostResultStep(
           doneReq,
           "complete the session",

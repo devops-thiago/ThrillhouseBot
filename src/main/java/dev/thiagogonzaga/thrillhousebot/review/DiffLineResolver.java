@@ -95,7 +95,23 @@ public final class DiffLineResolver {
     RoundChanges NONE = (round, path) -> FileChange.UNKNOWN;
 
     FileChange since(int round, String path);
+
+    /**
+     * How the finding with marker key {@code key} was anchored in the round that raised it, as
+     * stored with it (#1319); empty when that is not known.
+     */
+    default Optional<RaisedAnchor> raisedAnchor(String key) {
+      return Optional.empty();
+    }
   }
+
+  /**
+   * How a finding was anchored in the round that raised it (#1318, #1319).
+   *
+   * @param side the side of the diff its quote was on
+   * @param matched whether its quote was present on that side in that round
+   */
+  public record RaisedAnchor(Side side, boolean matched) {}
 
   /** The review's one parse of every patch (#1321). */
   private final DiffIndex index;
@@ -160,6 +176,31 @@ public final class DiffLineResolver {
    */
   public FileChange fileChangeSince(int round, String file) {
     return file == null ? FileChange.UNKNOWN : roundChanges.since(round, file);
+  }
+
+  /**
+   * Whether a prior finding's flagged code is still present at {@code currentPath} (its file, or
+   * the file it was renamed to), on the side its quote was on in the round that raised it (#1319).
+   * A finding whose quote was not present even in that round is not read as gone now only because
+   * it still is not: its absence says nothing about a fix (#1318). With nothing stored about the
+   * finding, this is {@link #isFindingPresent(String, String)}.
+   */
+  public boolean isFindingStillPresent(ReviewResponse.Finding finding, String currentPath) {
+    var raised =
+        roundChanges.raisedAnchor(
+            SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title()));
+    var side = raised.map(RaisedAnchor::side).orElse(Side.RIGHT);
+    if (isFindingPresent(currentPath, finding.suggestionOld(), side)) {
+      return true;
+    }
+    if (raised.isPresent() && !raised.get().matched()) {
+      Log.infof(
+          "A finding on %s did not match the diff in the round that raised it either; holding it"
+              + " open",
+          LogSafe.oneLine(currentPath));
+      return true;
+    }
+    return false;
   }
 
   /**

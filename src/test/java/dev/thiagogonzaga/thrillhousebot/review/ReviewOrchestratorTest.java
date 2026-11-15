@@ -142,6 +142,18 @@ class ReviewOrchestratorTest {
 
   private final SupersededFindingsCarryover carryover = new SupersededFindingsCarryover(mapper);
 
+  /** The stored finding rows; a mock that has none, so every round moves as before #1319. */
+  private final FindingStates findingStates = noStoredFindings();
+
+  private static FindingStates noStoredFindings() {
+    var states = mock(FindingStates.class);
+    when(states.prepare(any(), any(), any()))
+        .thenReturn(
+            new FindingStates.Pending(
+                null, "o/r", 1, new FindingLedger.Update(Map.of(), false), false));
+    return states;
+  }
+
   private final CiHoldRegistry ciHoldRegistry = new CiHoldRegistry();
 
   /**
@@ -344,7 +356,8 @@ class ReviewOrchestratorTest {
         notifier,
         ciFailureContext,
         ticketContext,
-        learnings);
+        learnings,
+        findingStates);
   }
 
   /** The learnings store the orchestrator is built with; a mock that reports off by default. */
@@ -375,7 +388,8 @@ class ReviewOrchestratorTest {
         sessionPersistence,
         BOT_ID,
         new ActiveModelSettings(config, "m"),
-        carryover);
+        carryover,
+        findingStates);
   }
 
   /** The CI-completion path wired to the same GitHub mocks as the orchestrator (#825). */

@@ -77,6 +77,8 @@ class ReviewContextLoaderTest {
 
   private ReviewContextLoader loader;
   private final ReviewDiffFormatter diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
+  private final FindingStates findingStates = mock(FindingStates.class);
+
   private final SupersededFindingsCarryover carryover =
       new SupersededFindingsCarryover(new ObjectMapper());
 
@@ -107,7 +109,8 @@ class ReviewContextLoaderTest {
             sessionPersistence,
             BotIdentity.from(List.of(BOT_LOGIN)),
             activeModel,
-            carryover);
+            carryover,
+            findingStates);
   }
 
   @Nested
@@ -898,7 +901,8 @@ class ReviewContextLoaderTest {
           sessionPersistence,
           BotIdentity.from(List.of(BOT_LOGIN)),
           activeModel,
-          carryover);
+          carryover,
+          findingStates);
     }
 
     private ReviewOrchestrator.ReviewRequest request() {
@@ -1829,7 +1833,8 @@ class ReviewContextLoaderTest {
           sessionPersistence,
           BotIdentity.from(List.of(BOT_LOGIN)),
           activeModel,
-          carryover);
+          carryover,
+          findingStates);
     }
 
     /** Round 2 posted the bot's own "1 previous finding(s) remain unresolved" body, as on #449. */
