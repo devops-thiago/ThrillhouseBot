@@ -611,7 +611,9 @@ If the summary was deleted, the round posts a new one; if an edit fails, it
 posts a new one and logs a WARN. GitHub keeps the edit history. Inline
 findings and review bodies stay per round. With `REVIEW_FOLLOW_UP_SUMMARY_ENABLED`,
 the review body also carries new, resolved and still-open counts, naming each closed
-finding once instead of posting a second delta comment. The review keeps its verdict;
+finding once instead of posting a second delta comment. It also names the threads a
+round posted for earlier "Things to double-check" items, and says how many new findings
+went only under "Things to double-check". The review keeps its verdict;
 a definite review refusal preserves the same outcome as a regular comment.
 
 The risk counts, Key Findings and "Things to double-check" cover the round's

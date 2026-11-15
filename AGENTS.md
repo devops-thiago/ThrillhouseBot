@@ -411,7 +411,10 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   (`replacedThisRound`) keeps an `unresolved` status under `REPLACED_NOTE` and is listed as its
   replacement in the still-open set, so "Still present" adds up to the findings carried in and the
   summary folds it into the round's entry as open since an earlier review; the delta section does
-  not count it as new (`FollowUpDeltaSummary.newFindingCount`, #969). The check run's counts line
+  not count it as new (`FollowUpDeltaSummary.newFindingCount`, #969). It names the thread on its
+  own line instead (`FollowUpDeltaSummary.promotedThreads`, from the statuses under `REPLACED_NOTE`),
+  and the new-findings count says how many new findings have no thread (#1312); the item's
+  `finding_state` row becomes `replaced` (`FindingLedger.REPLACED`). The check run's counts line
   takes its new findings from the same place (`PrSummaryGenerator.CurrentState.newFindings`), so its
   open total and new count match the summary and the delta (#1199). The guard also drops a new
   listed item restating an open threaded finding. The summary's "Same issue as" note

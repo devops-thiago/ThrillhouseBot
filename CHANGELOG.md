@@ -39,6 +39,13 @@ All notable changes to ThrillhouseBot.
   reporting such an input, the review now checks that it is legal in the language the rule reads
   and traces it through every earlier capture, quoting the character class that admits it. A legal
   input the rule mishandles is still reported.
+- **The follow-up delta names threads posted for earlier double-check items** (#1312): a round
+  that raised a "Things to double-check" item again inline counted it as still open, correctly,
+  but the "changes since the last review" section never said so. It could show no new finding
+  while the round posted a thread, and a round with only that change showed no section at all.
+  The section now names each such thread under "Earlier double-check items now posted as
+  threads", and the new-findings count says how many new findings went only under "Things to
+  double-check". The counts are unchanged.
 - **Two findings about different keys in one file are no longer counted as one** (#1383): the
   follow-up count merged two findings whose descriptions overlapped, such as two rows of the same
   configuration table, even when their titles named different settings. One of them then dropped

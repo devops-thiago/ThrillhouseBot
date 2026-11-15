@@ -115,6 +115,21 @@ final class ClosedFindingNames {
     }
     // An earlier round's finding carries itself, not an id into the previous round (#1066).
     result.earlierRoundCloses(closedAs).forEach(finding -> named.add(describe(finding)));
+    return bullets(named, indent);
+  }
+
+  /**
+   * The bullet list naming each of {@code findings}, one {@code path:line} — title line each at
+   * {@code indent}, bounded the way the closed-findings list is; an empty string when there are
+   * none. The delta section names this round's threads that carry earlier double-check items with
+   * it (#1312).
+   */
+  static String bulletList(List<Finding> findings, String indent) {
+    return bullets(
+        findings.stream().map(f -> describe(f.file(), f.line(), f.title())).toList(), indent);
+  }
+
+  private static String bullets(List<String> named, String indent) {
     if (named.isEmpty()) {
       return "";
     }
@@ -135,8 +150,12 @@ final class ClosedFindingNames {
    * dangling dash — the locator alone still identifies it.
    */
   private static String describe(ReviewResponse.Finding finding) {
-    var locator = MarkdownSafe.inlineCode(finding.file() + ":" + finding.line());
-    var title = MarkdownSafe.inline(finding.title());
+    return describe(finding.file(), finding.line(), finding.title());
+  }
+
+  private static String describe(String file, int line, String rawTitle) {
+    var locator = MarkdownSafe.inlineCode(file + ":" + line);
+    var title = MarkdownSafe.inline(rawTitle);
     return title.isBlank() ? "`" + locator + "`" : "`" + locator + "` — " + title;
   }
 }
