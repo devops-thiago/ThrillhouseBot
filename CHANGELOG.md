@@ -22,6 +22,11 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **Two findings about different keys in one file are no longer counted as one** (#1383): the
+  follow-up count merged two findings whose descriptions overlapped, such as two rows of the same
+  configuration table, even when their titles named different settings. One of them then dropped
+  out of the totals. A pair whose titles name different identifiers or conflicting defect classes
+  is now kept as two findings.
 - A follow-up round's status for a previous finding, and a verifier verdict, named its finding
   only by its position in the list, so a swapped number could close, reject or downgrade the wrong
   finding unnoticed. Each previous finding and each verifier candidate is now listed with its key

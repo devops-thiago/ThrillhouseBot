@@ -45,6 +45,7 @@ class ContentStatusTest {
   private static final BotIdentity BOT = BotIdentity.from(List.of("thrillhousebot[bot]"));
   private static final String FILE = "src/A.java";
   private static final String OTHER = "src/B.java";
+  private static final String CONFIG_DOC = "docs/CONFIG-ANGULAR.md";
 
   /** The flagged call is still there as context, and the guard the finding suggests is not. */
   private static final String ANCHOR_KEPT = "@@ -5,1 +5,2 @@\n doThing(input);\n+unrelated(input);";
@@ -501,5 +502,69 @@ class ContentStatusTest {
 
     assertEquals(List.of(crlfThread), held.stream().map(h -> h.finding()).toList());
     assertTrue(held.get(0).holdsOpen());
+  }
+
+  @Test
+  void twoRowsOfOneConfigTableAreTwoFindingsThoughTheirTextOverlaps() {
+    // rc7 corpus, ThrillhouseBot-test#301: two adjacent docs rows quote the same columns and
+    // loader, so their content overlap passed the threshold and the later round's CLINIC_IDS
+    // finding was counted once as the REFRESH_INTERVAL one.
+    var clinicIds =
+        new ReviewResponse.Finding(
+            "low",
+            "high",
+            CONFIG_DOC,
+            8,
+            "VET_BOARD_CLINIC_IDS docs omit that the value is comma-separated",
+            """
+            The table row `| `VET_BOARD_CLINIC_IDS` | Clinics whose reminders are shown on the \
+            board. | none |` never states how multiple clinics are separated. The loader's \
+            definition in angular/src/app/config.ts is `const clinicIds = \
+            (env['VET_BOARD_CLINIC_IDS'] ?? '')` followed by `.split(',')`: the raw value is \
+            comma-split and trimmed. An operator setting several clinics has to guess the \
+            separator, and a space-separated list silently yields wrong or single-clinic \
+            behavior after trimming because each wrong entry is kept only if non-empty. State \
+            the separator in the description column.""",
+            "| `VET_BOARD_CLINIC_IDS` | Clinics whose reminders are shown on the board. | none |",
+            "| `VET_BOARD_CLINIC_IDS` | Comma-separated clinic ids whose reminders are shown on"
+                + " the board. | none |");
+    var refreshInterval =
+        new ReviewResponse.Finding(
+            "low",
+            "high",
+            CONFIG_DOC,
+            10,
+            "VET_BOARD_REFRESH_INTERVAL documented with an empty default, but the code defaults"
+                + " to 60000",
+            """
+            The documented row is `| VET_BOARD_REFRESH_INTERVAL | How often the board reloads \
+            the feed. | |`: the Default column is blank. The definition in \
+            angular/src/app/config.ts establishes both the default and the unit: `const \
+            DEFAULT_REFRESH_MS = 60000;` applied via `refreshIntervalMs: \
+            toPositiveInt(env['VET_BOARD_REFRESH_INTERVAL'], DEFAULT_REFRESH_MS),` (and \
+            non-positive or non-numeric values silently fall back to it). The documentation \
+            also never states the value is a duration in milliseconds.""",
+            "| `VET_BOARD_REFRESH_INTERVAL` | How often the board reloads the feed. | |",
+            "| `VET_BOARD_REFRESH_INTERVAL` | How often the board reloads the feed, in"
+                + " milliseconds. | 60000 |");
+
+    assertTrue(
+        FindingDeduplicator.contentOverlap(clinicIds, refreshInterval)
+            >= FindingDeduplicator.CONTENT_OVERLAP_THRESHOLD,
+        "the rows' text overlaps enough to pass the content arm on its own");
+    assertFalse(FollowUpAnalyzer.isSameFinding(clinicIds, refreshInterval));
+    assertFalse(FollowUpAnalyzer.isSameFinding(refreshInterval, clinicIds));
+  }
+
+  @Test
+  void titlesWhoseDefectClassesConflictAreTwoFindings() {
+    var race =
+        new ReviewResponse.Finding(
+            "high", FILE, 10, "Race condition on the shared counter", "d", "", "");
+    var leak =
+        new ReviewResponse.Finding(
+            "high", FILE, 10, "Memory leak in the shared counter", "d", "", "");
+    assertTrue(DefectIdentity.classesConflict(race.title(), leak.title()));
+    assertFalse(FollowUpAnalyzer.isSameFinding(race, leak));
   }
 }

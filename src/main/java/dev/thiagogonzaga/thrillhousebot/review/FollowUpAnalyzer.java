@@ -973,9 +973,17 @@ public class FollowUpAnalyzer {
    * follow-up passes already recognize a re-raise by (#711). A claim that comes back only because
    * the model worded it differently is the same claim, and a second recognizer would let the two
    * passes disagree about that.
+   *
+   * <p>Two titles that name different identifiers, or defect classes that conflict, are two defects
+   * whatever their text shares (#1319): two rows of one configuration table quote the same columns
+   * and loader, so their content overlaps although each row is its own key.
    */
   static boolean isSameFinding(ReviewResponse.Finding finding, ReviewResponse.Finding prior) {
     if (finding.file() == null || !FilePaths.same(finding.file(), prior.file())) {
+      return false;
+    }
+    if (DefectIdentity.namesDifferentIdentifiers(finding.title(), prior.title())
+        || DefectIdentity.classesConflict(finding.title(), prior.title())) {
       return false;
     }
     if (Math.abs(finding.line() - prior.line()) <= DUPLICATE_LINE_TOLERANCE

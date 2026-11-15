@@ -144,8 +144,9 @@ class DefectIdentityTest {
 
   @Test
   void aFindingAboutAnotherKeyOnTheNextRowIsADifferentDefect() {
-    // What #955 replaced it by: the two descriptions share enough config-table vocabulary.
-    assertTrue(FollowUpAnalyzer.isSameFinding(TRACKED_PORTS, POLL_INTERVAL), "precondition");
+    // #955 replaced it because the descriptions share config-table vocabulary; the identifier
+    // veto now keeps the tolerant predicate from pairing them too (#1319).
+    assertFalse(FollowUpAnalyzer.isSameFinding(TRACKED_PORTS, POLL_INTERVAL));
     assertFalse(DefectIdentity.sameDefect(TRACKED_PORTS, POLL_INTERVAL));
     assertFalse(FollowUpAnalyzer.replacesUnthreaded(TRACKED_PORTS, POLL_INTERVAL));
   }
@@ -369,7 +370,7 @@ class DefectIdentityTest {
             9,
             "FREE_DAYS documented without its unit (days)",
             POLL_INTERVAL.description());
-    assertTrue(FollowUpAnalyzer.isSameFinding(freeDays, pollThread), "precondition");
+    assertFalse(FollowUpAnalyzer.isSameFinding(freeDays, pollThread), "another key (#1319)");
     assertFalse(FollowUpAnalyzer.duplicatesOpenThread(freeDays, pollThread));
   }
 
