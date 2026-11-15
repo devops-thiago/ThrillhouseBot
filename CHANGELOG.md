@@ -33,6 +33,12 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **A parsing or matching rule is no longer reported for an input that cannot reach it** (#1386):
+  the review could describe a failure on an input the language itself rejects, or one an earlier
+  capture group can never produce, such as a dotted name in a Python from-import list. Before
+  reporting such an input, the review now checks that it is legal in the language the rule reads
+  and traces it through every earlier capture, quoting the character class that admits it. A legal
+  input the rule mishandles is still reported.
 - **Two findings about different keys in one file are no longer counted as one** (#1383): the
   follow-up count merged two findings whose descriptions overlapped, such as two rows of the same
   configuration table, even when their titles named different settings. One of them then dropped

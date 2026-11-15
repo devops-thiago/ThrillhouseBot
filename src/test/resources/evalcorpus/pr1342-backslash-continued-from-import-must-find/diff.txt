@@ -1,0 +1,112 @@
+### src/main/java/dev/thiagogonzaga/thrillhousebot/review/RelatedReferences.java (added, +769 -0)
+```diff
+@@ -0,0 +32,15 @@
++/**
++ * The deterministic first step of the related context (#55): the repository files a pull request's
++ * diff refers to but does not change, found without a model call.
++ *
++ * <p>Two things in a diff name another file. An import line, added or shown as context around a
++ * hunk, names a module, and the module is resolved to a path the way its language lays files out.
++ * And an added line that uses a type name ({@code InputSanitizer.clean(x)}) names the file that
++ * type is declared in, where the repository has exactly one such file for that language. Nothing is
++ * parsed deeper than that: no syntax tree, no build file, no index.
++ *
++ * <p>Every candidate is a path of the repository listing the review already holds, so a path the
++ * diff's text invents resolves to nothing, and the candidates stay in the changed file's own
++ * language, so a source line can never point this at a credentials or data file.
++ */
++final class RelatedReferences {
+@@ -0,0 +134,9 @@
++  private static final Pattern JVM_IMPORT =
++      Pattern.compile("^\\s*import\\s+(static\\s+)?([\\w.]+?)(\\.\\*)?\\s*(?:;|as\\s|$)");
++  private static final Pattern PYTHON_FROM =
++      Pattern.compile("^\\s*from\\s+(\\.*)([\\w.]*)\\s+import\\s+([\\w\\s,()*]+)");
++  private static final Pattern PYTHON_IMPORT = Pattern.compile("^\\s*import\\s+([\\w.,\\s]+)");
++
++  /** A from-import whose name list opens a parenthesis it does not close on the same line. */
++  private static final Pattern PYTHON_FROM_OPEN =
++      Pattern.compile("^(\\s*from\\s+\\.*[\\w.]*\\s+import)\\s*\\(([^)]*)$");
+@@ -0,0 +207,56 @@
++  private static void scan(
++      GitHubPullRequestClient.FileDiff file,
++      Language language,
++      Index index,
++      Map<String, Found> found) {
++    var referrer = file.filename();
++    var calls = new ArrayList<Call>();
++    var referred = new LinkedHashSet<Found>();
++    var inHunk = false;
++    // The "from x import" a parenthesized Python import opened, until its closing parenthesis:
++    // the names on the lines between are read as if each stood on that line.
++    String openFrom = null;
++    for (var raw : file.patch().split("\n", -1)) {
++      if (raw.startsWith("@@")) {
++        inHunk = true;
++        openFrom = null;
++        continue;
++      }
++      if (!inHunk || raw.isEmpty() || raw.length() > MAX_LINE_CHARS || raw.charAt(0) == '-') {
++        continue;
++      }
++      var added = raw.charAt(0) == '+';
++      var text = raw.substring(1);
++      // A comment refers to nothing: a commented-out import would rank as a live one.
++      if (isComment(text)) {
++        continue;
++      }
++      var closes = false;
++      if (language == Language.PYTHON) {
++        // A trailing comment may hold a parenthesis of its own; it is no part of the name list.
++        var opening = PYTHON_FROM_OPEN.matcher(text.replaceFirst("#.*$", "").stripTrailing());
++        if (opening.find()) {
++          openFrom = opening.group(1);
++          text = opening.group(2);
++        } else if (openFrom != null) {
++          // A trailing comment may hold a parenthesis of its own; only one that ends the code
++          // closes the import.
++          var code = text.replaceFirst("#.*$", "").stripTrailing();
++          closes = code.endsWith(")");
++          text = closes ? code.substring(0, code.length() - 1) : code;
++        }
++      }
++      var line = openFrom == null ? text : openFrom + " " + text.strip();
++      if (closes) {
++        openFrom = null;
++      }
++      for (var imported : imports(line, language, referrer, index)) {
++        // The one place the language rule is enforced: an import may name any path of the
++        // listing (a relative "./settings.json", an included "secrets.env"), and only a source
++        // file of the changed file's own language is ever a candidate.
++        if (Language.of(imported.path()) != language) {
++          continue;
++        }
++        var entry = found.computeIfAbsent(imported.path(), Found::new);
++        entry.imported(added, imported.symbol());
++        entry.referrers.add(referrer);
+@@ -0,0 +367,25 @@
++  private static List<Reference> pythonImport(String line, String referrer, Index index) {
++    var from = PYTHON_FROM.matcher(line);
++    if (from.find()) {
++      var dots = from.group(1).length();
++      var module =
++          from.group(2).isEmpty() ? List.<String>of() : List.of(from.group(2).split("\\."));
++      var base = dots == 0 ? null : ancestor(directoryOf(referrer), dots - 1);
++      if (dots > 0 && base == null) {
++        return List.of();
++      }
++      var references = new ArrayList<Reference>();
++      for (var name : from.group(3).replaceAll("[()]", " ").split(",")) {
++        var imported = name.strip().split("\\s+")[0];
++        if (!imported.isEmpty() && !"*".equals(imported)) {
++          var submodule = new ArrayList<>(module);
++          submodule.add(imported);
++          pythonModule(submodule, base, index)
++              .forEach(path -> references.add(new Reference(path, imported)));
++        }
++      }
++      if (references.isEmpty() && !module.isEmpty()) {
++        var symbol = module.get(module.size() - 1);
++        pythonModule(module, base, index)
++            .forEach(path -> references.add(new Reference(path, symbol)));
++      }
+```
