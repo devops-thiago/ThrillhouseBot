@@ -77,7 +77,15 @@ class ReviewContextLoaderTest {
 
   private ReviewContextLoader loader;
   private final ReviewDiffFormatter diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
-  private final FindingStates findingStates = mock(FindingStates.class);
+
+  /** No stored finding rows: file changes are the comparisons' alone. */
+  private final FindingStates findingStates = noStoredFindings();
+
+  private static FindingStates noStoredFindings() {
+    var states = mock(FindingStates.class);
+    when(states.roundChanges(any(), any(), any(), any())).thenAnswer(call -> call.getArgument(3));
+    return states;
+  }
 
   private final SupersededFindingsCarryover carryover =
       new SupersededFindingsCarryover(new ObjectMapper());

@@ -205,6 +205,7 @@ class FindingLedgerTest {
             new ReviewResult.PreviousFindingStatus(1, "unresolved", "n"),
             new ReviewResult.PreviousFindingStatus(2, "resolved", "n"),
             new ReviewResult.PreviousFindingStatus(3, "resolved", "n"),
+            new ReviewResult.PreviousFindingStatus(0, "resolved", "n"),
             new ReviewResult.PreviousFindingStatus(1, "mystery", "n"),
             new ReviewResult.PreviousFindingStatus(
                 FollowUpAnalyzer.EARLIER_ROUND_ID,
@@ -219,7 +220,7 @@ class FindingLedgerTest {
     assertEquals(FindingLedger.RESOLVED, byKey.get(keyOf(2, "Second")).status());
     assertEquals(FindingLedger.SUPERSEDED, byKey.get(keyOf(9, "Older copy")).status());
     assertEquals(FindingLedger.SUPERSEDED, byKey.get(keyOf(8, "Newer copy")).status());
-    assertEquals(4, byKey.size(), "an id past the round and an unknown status name nothing");
+    assertEquals(4, byKey.size(), "an id outside the round and an unknown status name nothing");
   }
 
   @Test
@@ -269,6 +270,7 @@ class FindingLedgerTest {
         List.of(
             comment(30, null, "thrillhousebot[bot]", "later " + marker, "c3"),
             comment(20, null, "thrillhousebot[bot]", "first " + marker, null),
+            comment(40, null, "thrillhousebot[bot]", "last " + marker, "c8"),
             comment(21, 20L, "thrillhousebot[bot]", "reply " + marker, "c4"),
             comment(
                 22,

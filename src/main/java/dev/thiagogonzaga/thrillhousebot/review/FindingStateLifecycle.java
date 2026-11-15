@@ -68,6 +68,7 @@ public class FindingStateLifecycle {
   static final int SWEEP_CHECKS = 50;
 
   private static final String ACCEPT = "application/vnd.github+json";
+  private static final String CLOSED = "closed";
 
   private final FindingStates states;
   private final GitHubAuthClient authClient;
@@ -129,7 +130,7 @@ public class FindingStateLifecycle {
         Log.infof(
             "Pull request #%d %s: %d stored finding(s) %s",
             closure.prNumber(),
-            closure.closed() ? "closed" : "reopened",
+            closure.closed() ? CLOSED : "reopened",
             rows,
             closure.closed() ? "start their retention period" : "carry on");
       }
@@ -137,7 +138,7 @@ public class FindingStateLifecycle {
       Log.warnf(
           "Could not record pull request #%d %s on its stored findings: %s",
           closure.prNumber(),
-          closure.closed() ? "closed" : "reopened",
+          closure.closed() ? CLOSED : "reopened",
           LogSafe.oneLine(e.toString()));
     }
   }
@@ -235,9 +236,9 @@ public class FindingStateLifecycle {
               pr.repository().substring(0, slash),
               pr.repository().substring(slash + 1),
               pr.prNumber());
-      return "closed".equals(details.state());
+      return CLOSED.equals(details.state());
     } catch (WebApplicationException e) {
-      var status = e.getResponse() == null ? 0 : e.getResponse().getStatus();
+      var status = e.getResponse().getStatus();
       return status == 404 || status == 410;
     } catch (RuntimeException e) {
       Log.debugf(

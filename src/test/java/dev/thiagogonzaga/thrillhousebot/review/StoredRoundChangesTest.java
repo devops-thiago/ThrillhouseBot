@@ -98,6 +98,33 @@ class StoredRoundChangesTest {
     assertEquals(Optional.empty(), DiffLineResolver.RoundChanges.NONE.raisedAnchor("k1"));
   }
 
+  @Test
+  void onlyFilesWithABlobShaAreListedAtTheHead() {
+    var files =
+        List.of(
+            new dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff(
+                FILE, "modified", 1, 1, 2, "", null, "sha-a"),
+            new dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff(
+                OTHER, "modified", 1, 1, 2, ""),
+            new dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient.FileDiff(
+                null, "modified", 1, 1, 2, "", null, "sha-c"));
+
+    assertEquals(Map.of(FILE, "sha-a"), FindingStates.headBlobs(files));
+  }
+
+  @Test
+  void rowsThatCannotBeReadLeaveTheFallbackToAnswer() {
+    // Outside the application there is no database, so reading the rows fails.
+    var states =
+        new FindingStates(
+            dev.thiagogonzaga.thrillhousebot.config.BotIdentity.from(List.of("bot[bot]")));
+    var request =
+        new ReviewOrchestrator.ReviewRequest(
+            "owner", "repo", 1, "head", "t", "b", "base", "main", 1L, 2L, false, "main", false);
+
+    assertSame(FALLBACK, states.roundChanges(request, List.of(), List.of(), FALLBACK));
+  }
+
   /** The #1318 shape: a quote that runs past the patch, in a file the next round left alone. */
   private static final String PATCH = "@@ -5,2 +5,2 @@\n context();\n-old();\n+new();\n";
 

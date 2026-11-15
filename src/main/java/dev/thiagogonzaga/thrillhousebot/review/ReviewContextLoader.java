@@ -15,7 +15,6 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
-import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.ActiveModelSettings;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.dashboard.ReviewSession;
@@ -33,10 +32,8 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.function.Supplier;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -495,32 +492,6 @@ public class ReviewContextLoader {
    * ({@code diff} and {@code baseComparison} are empty; line-path {@code omittedFiles} is 0);
    * {@link DiffBudgetPlanner} is authoritative for what the model sees.
    */
-  /**
-   * The pull request's stored finding rows (#1319); none when they cannot be read, so the review
-   * runs on the comparisons and content checks alone, as before the rows existed.
-   */
-  private Map<String, FindingLedger.Row> storedRows(ReviewOrchestrator.ReviewRequest req) {
-    try {
-      return findingStates.load(req.scope(), req.prNumber());
-    } catch (RuntimeException e) {
-      Log.warnf(
-          "Could not read the stored findings of %s/%s #%d; deciding without them: %s",
-          req.owner(), req.repo(), req.prNumber(), LogSafe.oneLine(e.toString()));
-      return Map.of();
-    }
-  }
-
-  /** Each changed file's blob SHA at the head, where GitHub gives one. */
-  static Map<String, String> headBlobs(List<GitHubPullRequestClient.FileDiff> files) {
-    var blobs = new HashMap<String, String>();
-    for (var file : files) {
-      if (file.filename() != null && file.sha() != null) {
-        blobs.put(file.filename(), file.sha());
-      }
-    }
-    return blobs;
-  }
-
   ReviewContext load(String auth, ReviewOrchestrator.ReviewRequest req, ReviewSession session) {
     var files = fetchPrFiles(auth, req.owner(), req.repo(), req.prNumber());
     var prTotals = fetchPrTotalsForReview(auth, req);
@@ -599,12 +570,12 @@ public class ReviewContextLoader {
         new RoundFileChanges.Rounds(
             priorCommitShas, priorAiResponseJsons.size(), !carried.isEmpty());
     var roundChanges =
-        new StoredRoundChanges(
-            storedRows(req).values(),
+        findingStates.roundChanges(
+            req,
             rounds.carried() || rounds.heads().size() != rounds.count()
                 ? List.of()
                 : priorCommitShas,
-            headBlobs(files),
+            files,
             RoundFileChanges.of(prClient, auth, req.owner(), req.repo(), req.commitSha(), rounds));
     Supplier<DiffLineResolver> lineResolverSupplier =
         memoize(() -> new DiffLineResolver(patchesByFile, changedPaths, headFiles, roundChanges));

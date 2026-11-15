@@ -116,4 +116,9 @@ public class FindingState extends PanacheEntity {
 
   @Column(nullable = false)
   Instant updatedAt;
+
+  /** When the pull request was closed or merged; {@code null} while it is open. */
+  Instant closedAt() {
+    return prClosedAt;
+  }
 }

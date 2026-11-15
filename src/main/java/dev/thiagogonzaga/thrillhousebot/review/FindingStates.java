@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import io.quarkus.hibernate.orm.panache.PanacheRepository;
 import io.quarkus.logging.Log;
@@ -24,6 +25,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -99,7 +101,7 @@ public class FindingStates implements PanacheRepository<FindingState> {
                   req.commitSha(),
                   result.findings(),
                   FindingLedger.statuses(result.previousStatuses(), ctx.previousFindingsList()),
-                  ReviewContextLoader.headBlobs(ctx.files()),
+                  headBlobs(ctx.files()),
                   ctx.lineResolver(),
                   FindingLedger.threads(ctx.inlineComments(), botIdentity, req.commitSha())));
       return new Pending(req.scope(), repository, req.prNumber(), update, !stored.isEmpty());
@@ -116,7 +118,46 @@ public class FindingStates implements PanacheRepository<FindingState> {
     }
   }
 
+  /**
+   * Which files changed since each earlier round, read from {@code req}'s pull request's stored
+   * rows first and from {@code fallback} where they do not know ({@link StoredRoundChanges}). Rows
+   * that cannot be read leave {@code fallback} alone to answer.
+   *
+   * @param roundHeads each prior round's head, newest first; empty when the heads cannot be told
+   * @param files the pull request's files at this head, with their blob SHAs
+   */
+  public DiffLineResolver.RoundChanges roundChanges(
+      ReviewOrchestrator.ReviewRequest req,
+      List<String> roundHeads,
+      List<GitHubPullRequestClient.FileDiff> files,
+      DiffLineResolver.RoundChanges fallback) {
+    try {
+      return new StoredRoundChanges(
+          load(req.scope(), req.prNumber()).values(), roundHeads, headBlobs(files), fallback);
+    } catch (RuntimeException e) {
+      Log.warnf(
+          "Could not read the stored findings of %s/%s #%d; deciding without them: %s",
+          LogSafe.oneLine(req.owner()),
+          LogSafe.oneLine(req.repo()),
+          req.prNumber(),
+          LogSafe.oneLine(e.toString()));
+      return fallback;
+    }
+  }
+
+  /** Each changed file's blob SHA at the head, where GitHub gives one. */
+  static Map<String, String> headBlobs(List<GitHubPullRequestClient.FileDiff> files) {
+    var blobs = new HashMap<String, String>();
+    for (var file : files) {
+      if (file.filename() != null && file.sha() != null) {
+        blobs.put(file.filename(), file.sha());
+      }
+    }
+    return blobs;
+  }
+
   /** Writes what {@link #prepare} worked out. */
+  @Transactional
   public void save(Pending pending) {
     save(pending.scope(), pending.repository(), pending.prNumber(), pending.update().rows());
   }
@@ -212,10 +253,11 @@ public class FindingStates implements PanacheRepository<FindingState> {
   public List<PullRequestRef> idleOpenPullRequests(Instant idleSince, int limit) {
     return getEntityManager()
         .createQuery(
-            "select s.installationId, s.repositoryId, s.repository, s.prNumber from FindingState s"
-                + " where s.prClosedAt is null"
-                + " group by s.installationId, s.repositoryId, s.repository, s.prNumber"
-                + " having max(s.updatedAt) < :idleSince order by max(s.updatedAt)",
+            """
+            select s.installationId, s.repositoryId, s.repository, s.prNumber from FindingState s
+            where s.prClosedAt is null
+            group by s.installationId, s.repositoryId, s.repository, s.prNumber
+            having max(s.updatedAt) < :idleSince order by max(s.updatedAt)""",
             Object[].class)
         .setParameter("idleSince", idleSince)
         .setMaxResults(limit)
@@ -236,10 +278,11 @@ public class FindingStates implements PanacheRepository<FindingState> {
         state.findingKey,
         new FindingLedger.Subject(
             state.file, state.line, state.risk, state.confidence, state.title, state.anchor),
-        state.anchorSide == null || state.anchorMatched == null
+        state.anchorSide == null
             ? null
             : new DiffLineResolver.RaisedAnchor(
-                DiffLineResolver.Side.valueOf(state.anchorSide), state.anchorMatched),
+                DiffLineResolver.Side.valueOf(state.anchorSide),
+                Boolean.TRUE.equals(state.anchorMatched)),
         state.blobSha,
         new FindingLedger.Status(state.status, state.raisedHead, state.statusHead),
         new FindingLedger.Thread(state.threadId, state.threadHead));

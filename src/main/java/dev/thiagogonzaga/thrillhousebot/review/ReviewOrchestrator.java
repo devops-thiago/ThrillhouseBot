@@ -444,8 +444,7 @@ public class ReviewOrchestrator {
       var findingRound = findingStates.prepare(req, ctx, result);
       var moved = findingRound.moved(result);
       boolean summaryPosted =
-          publishSummaryBestEffort(auth, req, result)
-              && (moved || result.isFirstReview() || req.forceSummary());
+          publishSummaryBestEffort(auth, req, result) && (moved || req.forceSummary());
       // The optional delta enriches the review, never a second notification beside it.
       var followUpDelta =
           moved

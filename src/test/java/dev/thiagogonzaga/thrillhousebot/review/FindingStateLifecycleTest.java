@@ -119,6 +119,24 @@ class FindingStateLifecycleTest {
   }
 
   @Test
+  void theStoredRowsTellWhichFilesAreUnchangedSinceTheRoundThatRaisedThem() {
+    store(SCOPE, PR, "aaaa0002");
+    var unchanged =
+        List.of(
+            new GitHubPullRequestClient.FileDiff(
+                "src/A.java", "modified", 1, 1, 2, "", null, "blob"));
+
+    var changes =
+        states.roundChanges(
+            request("head2"), List.of("head1"), unchanged, DiffLineResolver.RoundChanges.NONE);
+
+    assertEquals(DiffLineResolver.FileChange.UNCHANGED, changes.since(0, "src/A.java"));
+    assertEquals(
+        java.util.Optional.of(new RaisedAnchor(Side.LEFT, false)),
+        changes.raisedAnchor("aaaa0002"));
+  }
+
+  @Test
   void aRowStoredWithoutAnAnchorReadsBackWithout() {
     var bare =
         new FindingLedger.Row(
@@ -141,7 +159,11 @@ class FindingStateLifecycleTest {
     var lifecycle = lifecycle(now);
 
     lifecycle.onClosure(new PullRequestClosure(SCOPE, PR, true));
+    FindingState closed = FindingState.find("prNumber", PR).firstResult();
+    var closedAt = closed.closedAt();
     lifecycle.onClosure(new PullRequestClosure(SCOPE, PR, true));
+    FindingState closedAgain = FindingState.find("prNumber", PR).firstResult();
+    assertEquals(closedAt, closedAgain.closedAt(), "a second close keeps the first close time");
 
     assertEquals(0, lifecycle(now.plus(RETENTION).minus(Duration.ofHours(1))).sweep());
     assertEquals(2, states.load(SCOPE, PR).size(), "kept within the retention period");

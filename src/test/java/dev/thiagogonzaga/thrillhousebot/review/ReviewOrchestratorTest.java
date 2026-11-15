@@ -147,6 +147,7 @@ class ReviewOrchestratorTest {
 
   private static FindingStates noStoredFindings() {
     var states = mock(FindingStates.class);
+    when(states.roundChanges(any(), any(), any(), any())).thenAnswer(call -> call.getArgument(3));
     when(states.prepare(any(), any(), any()))
         .thenReturn(
             new FindingStates.Pending(
@@ -3350,6 +3351,26 @@ class ReviewOrchestratorTest {
                 argThat(req -> !req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)));
         verify(findingStates).save(pending);
         verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
+    @Test
+    void aSummaryCommandPostsItsSummaryEvenWhenNothingMoved() {
+      when(findingStates.prepare(any(), any(), any()))
+          .thenReturn(
+              new FindingStates.Pending(
+                  null, "owner/repo", 42, new FindingLedger.Update(Map.of(), false), true));
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        reviewAFollowUpWithASupersededPrevious(mockedStatic, true, false, List.of());
+
+        verify(commentClient)
+            .createComment(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().startsWith(PrSummaryGenerator.SUMMARY_MARKER)));
       }
     }
 

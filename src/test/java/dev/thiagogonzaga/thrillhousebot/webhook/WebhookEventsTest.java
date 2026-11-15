@@ -1236,6 +1236,17 @@ class WebhookEventsTest {
   }
 
   @Test
+  void aClosedEventWithoutAPullRequestIsIgnored() {
+    deliver(
+        "pull_request",
+        "{\"action\":\"closed\",\"number\":24,"
+            + "\"repository\":{\"id\":7,\"name\":\"b\",\"full_name\":\"a/b\","
+            + "\"owner\":{\"login\":\"a\"}},\"installation\":{\"id\":12345}}");
+
+    verifyNoInteractions(installationEvents);
+  }
+
+  @Test
   void aClosedEventWithoutAnInstallationIsIgnored() {
     deliver(
         "pull_request", "{\"action\":\"closed\",\"number\":23,\"pull_request\":{\"number\":23}}");
