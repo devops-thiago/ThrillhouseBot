@@ -51,6 +51,20 @@ class EvalTrailingGuidanceTest {
     assertFalse(guidance.contains(PrReviewPrompts.MOCK_FIDELITY_REQUEST), guidance);
   }
 
+  /** Both #1386 cases add regexes, so the eval sends them the heuristic request production does. */
+  @Test
+  void theFromImportCasesCarryTheHeuristicFailureModeRequest() throws IOException {
+    for (var name :
+        List.of(
+            "pr1342-dotted-from-import-name-must-not-find",
+            "pr1342-backslash-continued-from-import-must-find")) {
+      var guidance =
+          EvalTrailingGuidance.forCase(corpusDiff(name), "", "Reads related code.", "", "");
+
+      assertTrue(guidance.contains(PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST), name);
+    }
+  }
+
   /** pr102 changes a test and declares a bug fix: mock fidelity and bug-fix efficacy, in order. */
   @Test
   void theMockCaseCarriesMockFidelityThenBugFixEfficacy() throws IOException {
