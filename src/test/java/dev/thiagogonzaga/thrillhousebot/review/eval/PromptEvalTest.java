@@ -638,7 +638,8 @@ class PromptEvalTest {
             "",
             "",
             PromptTemplateEscaper.fence(relatedTests),
-            "",
+            // A follow-up case lists the prior round's findings, as the context assembler does.
+            PromptTemplateEscaper.fence(orEmpty(evalCase.spec().previousFindings())),
             repoInstructions,
             "",
             dimensionRouter.systemPromptFor(evalCase.files()));

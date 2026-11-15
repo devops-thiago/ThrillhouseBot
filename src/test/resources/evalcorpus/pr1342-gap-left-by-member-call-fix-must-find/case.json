@@ -1,0 +1,15 @@
+{
+  "kind": "generator",
+  "sourcePr": 1342,
+  "why": "Gap left by a fix (#1388): the round on 457c2df8 reported that member calls were attributed to every candidate a changed file referred to. Commit 0e6f2e78 replaced that with Call.madeOn, which still attributes a call by substring: with no receiver it checks line.contains(symbol), so db matches dbg(...), and namedAfter compares lower-cased names by contains both ways, so the receiver ratio matches a module io and userProfile matches User. The follow-up round marked the finding resolved and reported nothing. The prompt should resolve the prior finding and report the gap on the replacement lines.",
+  "expectation": "must-find",
+  "targetFile": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/RelatedReferences.java",
+  "keywords": [
+    "substring",
+    "contains(",
+    "contains both"
+  ],
+  "prTitle": "feat(review): read related code outside the diff (#55)",
+  "prDescription": "Opt-in related context: candidate files come from the diff's import lines and type names, matched against the repository listing with no model call. Each picked file is clipped to what the changed code uses: the declarations of the names and the members the changed lines call on it.",
+  "previousFindings": "1. (key 3402fd27) [MEDIUM] src/main/java/dev/thiagogonzaga/thrillhousebot/review/RelatedReferences.java:270 — Member calls are attributed to every candidate a changed file referred to, so excerpts can clip to unrelated declarations\n   The scan collects member calls per changed file, not per candidate: the members set is built once per file and then applied wholesale to all candidates that file referred to: 'referred.forEach(entry -> entry.members.addAll(members));'. A candidate therefore inherits calls made on other types, so RelatedContextResolver.regions anchors windows on unrelated declarations of the same member name and can spend its hit budget before the name the diff refers to the file by is matched.\n"
+}
