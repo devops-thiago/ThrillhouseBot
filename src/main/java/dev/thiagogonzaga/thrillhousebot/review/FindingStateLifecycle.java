@@ -182,6 +182,11 @@ public class FindingStateLifecycle {
     }
   }
 
+  /** Whether a sweep is running. Visible for tests. */
+  boolean sweepRunning() {
+    return sweeping.get();
+  }
+
   /**
    * Deletes expired rows, then closes the rows of idle pull requests GitHub reports closed or no
    * longer serves.
