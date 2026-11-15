@@ -1,0 +1,13 @@
+{
+  "kind": "generator",
+  "sourcePr": 1342,
+  "why": "Refuted false positive from the PR #1342 review (#1386): the bot claimed a dotted name in a Python from-import list (from . import helpers.net) is joined as one path segment. That input is a Python SyntaxError, and PYTHON_FROM captures the name list with [\\w\\s,()*]+, which has no '.', so a dotted name never reaches the join. The review prompt should not raise it.",
+  "expectation": "must-not-find",
+  "targetFile": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/RelatedReferences.java",
+  "keywords": [
+    "helpers.net",
+    "dotted name"
+  ],
+  "prTitle": "feat(review): read related code outside the diff (#55)",
+  "prDescription": "Opt-in related context: candidate files come from the diff's import lines and type names, matched against the repository listing with no model call. RelatedReferences reads each language's import lines (Java and Kotlin imports, Python from-imports and imports, JS/TS relative imports, Go, Rust, Ruby, C includes, PHP) and resolves each imported module to a repository path."
+}

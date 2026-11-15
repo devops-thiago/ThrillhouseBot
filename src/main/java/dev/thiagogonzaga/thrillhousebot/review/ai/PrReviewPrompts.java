@@ -1532,6 +1532,22 @@ public final class PrReviewPrompts {
               alone cannot prove what it should accept or reject. Without that expected-domain
               evidence, report only a confidence "low" verification request naming the input and
               the missing contract to check; do not call the behavior a confirmed defect.
+            - Before reporting a synthesized input, check that it can reach the rule at all:
+              (a) It must be legal in the grammar of the language or format the rule reads. An
+              input that grammar rejects never occurs in a file the rule is given, so it is
+              outside the domain and not a finding: a dotted name in a Python from-import list
+              ("from . import helpers.net") is a syntax error, not an input to handle.
+              (b) Trace it through every earlier regex, capture group, split or filter on its
+              way to the rule, and quote the character class that admits it at each step. If an
+              earlier stage cannot capture the input, the later rule never sees it, so do not
+              report the later rule for it. Whether anything is reported then depends on (a):
+              an illegal input is not a finding at any stage, but a legal input that an earlier
+              stage drops or cuts short is a defect in that stage, so report the stage and quote
+              the class that stops it. The dotted name above is never reported: the grammar
+              rejects it and a name list captured with "[\\w\\s,()*]+" has no "." either. A
+              from-import continued with a backslash is legal, and the same class stops at the
+              "\\", so the names after it are lost: that is reported against the capture.
+              A legal input that does reach the rule and is mishandled is still reported.
             - Use confidence "low" or "medium" and phrase the consequence as a verification
               request naming the input to try. A limitation you cannot execute here is still worth
               reporting at that confidence; it is not a nitpick and the uncertainty is inherent to

@@ -396,6 +396,39 @@ class PrReviewPromptsContentTest {
         "contract-free probes must remain low-confidence verification requests");
   }
 
+  /**
+   * #1386: on #1342 the review reported a dotted name in a Python from-import list, an input the
+   * grammar rejects and the upstream capture group cannot produce.
+   */
+  @Test
+  void heuristicRequestRequiresALegalInputThatReachesTheRule() {
+    String req = PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST;
+    assertContains(
+        req,
+        "legal in the grammar of the language or format the rule reads",
+        "a synthesized input must be valid in the language the rule reads (#1386)");
+    assertContains(
+        req,
+        "Trace it through every earlier regex, capture group, split or filter",
+        "a synthesized input must be traced through the upstream captures (#1386)");
+    assertContains(
+        req,
+        "quote the character class that admits it",
+        "the trace must quote the class that lets the input through (#1386)");
+    assertContains(
+        req,
+        "stage drops or cuts short is a defect in that stage",
+        "an upstream capture that drops a legal input is reported, not excused (#1386)");
+    assertContains(
+        req,
+        "an illegal input is not a finding at any stage",
+        "only an input the grammar rejects is out of the domain (#1386)");
+    assertContains(
+        req,
+        "A legal input that does reach the rule and is mishandled is still reported.",
+        "the check must not suppress real false negatives (#1386)");
+  }
+
   @Test
   void verifierRequiresVisibleContractForHeuristicLimitations() {
     String sys = FindingVerifierPrompts.CORE_HEURISTIC_LIMITATION;

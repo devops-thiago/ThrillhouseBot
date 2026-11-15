@@ -33,6 +33,12 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **A parsing or matching rule is no longer reported for an input that cannot reach it** (#1386):
+  the review could describe a failure on an input the language itself rejects, or one an earlier
+  capture group can never produce, such as a dotted name in a Python from-import list. Before
+  reporting such an input, the review now checks that it is legal in the language the rule reads
+  and traces it through every earlier capture, quoting the character class that admits it. A legal
+  input the rule mishandles is still reported.
 - **The follow-up delta names threads posted for earlier double-check items** (#1312): a round
   that raised a "Things to double-check" item again inline counted it as still open, correctly,
   but the "changes since the last review" section never said so. It could show no new finding
