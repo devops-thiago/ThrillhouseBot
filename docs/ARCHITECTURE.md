@@ -461,7 +461,7 @@ The next round reads the rows before the earlier rounds' statuses are reconciled
 that raised it is unchanged, and stays open without a call to GitHub; where no row knows the file,
 the comparison of the two heads decides (`RoundFileChanges`). Presence is checked on the side the
 quote was on, and a finding whose quote did not match even in the round that raised it is not read
-as gone only because it still does not match (#1318).
+as gone only because it still does not match, while its file is still in the pull request (#1318).
 
 The rows also decide whether a round moved anything. A follow-up round that raised no new finding
 and changed no stored status neither lets the summary stand in for the round nor adds the delta
@@ -474,7 +474,7 @@ The rows' lifecycle (`FindingStateLifecycle`):
   it before any pause or trigger filter ends the handling, and the findings carry on.
 - A daily sweep, also run at startup, deletes the rows of pull requests closed longer than
   `FINDINGS_RETENTION` ago (30 days by default). It then asks GitHub about up to 50 pull requests
-  whose rows no round wrote for a day, and closes the rows of those GitHub reports closed or no
+  whose rows no round wrote or sweep checked for a day, least recently first, and closes the rows of those GitHub reports closed or no
   longer serves (404, 410), so a missed `closed` delivery does not keep rows forever. Any other
   failure leaves the rows open.
 - Uninstalling the App deletes the installation's rows; suspending it does not.
