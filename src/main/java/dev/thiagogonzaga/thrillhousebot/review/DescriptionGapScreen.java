@@ -921,12 +921,12 @@ final class DescriptionGapScreen {
    *
    * <p>It is answered when, in its own words (quoted passages are the PR text's): it says the
    * material does not show or cannot confirm something ({@link #UNSHOWN}); no clause before that
-   * states a mismatch ({@link #ownMismatch}); it names code ({@link #CODE_NAME}); and every name it
-   * gives is a whole name on an added line ({@code added}). A {@code Linked issue #N:} gap is
-   * judged the same way. One name the diff does not add keeps the gap: the bullet may be about that
-   * one. Every added line counts, comments and documentation included: the gap claims the material
-   * does not show the name, and an added line that names it shows it to the reader the same way. A
-   * name only on a removed line does not count.
+   * states a mismatch ({@link #ownMismatch}); it names code ({@link #CODE_SPAN} or {@link
+   * #BARE_CODE_NAMES}); and every name it gives is a whole name on an added line ({@code added}). A
+   * {@code Linked issue #N:} gap is judged the same way. One name the diff does not add keeps the
+   * gap: the bullet may be about that one. Every added line counts, comments and documentation
+   * included: the gap claims the material does not show the name, and an added line that names it
+   * shows it to the reader the same way. A name only on a removed line does not count.
    */
   static boolean answeredByDiff(String gap, Set<String> added) {
     var own = QUOTED.matcher(foldQuotes(gap)).replaceAll(" ");
@@ -953,39 +953,44 @@ final class DescriptionGapScreen {
   }
 
   /**
-   * The code names in {@code text}: each {@link #CODE_NAME}, and each identifier inside a code
-   * span, split at the dots of a qualified name.
+   * The code names in {@code text}: each {@link #CODE_SPAN} or {@link #BARE_CODE_NAMES}, and each
+   * identifier inside a code span, split at the dots of a qualified name.
    */
   static Set<String> codeNames(String text) {
     var names = new LinkedHashSet<String>();
-    var found = CODE_NAME.matcher(text);
-    while (found.find()) {
-      if (found.group(1) == null) {
-        names.add(found.group());
-        continue;
-      }
-      var inSpan = IDENTIFIER.matcher(found.group(1));
+    var span = CODE_SPAN.matcher(text);
+    while (span.find()) {
+      var inSpan = IDENTIFIER.matcher(span.group(1));
       while (inSpan.find()) {
         names.add(inSpan.group());
+      }
+    }
+    var outsideSpans = CODE_SPAN.matcher(text).replaceAll(" ");
+    for (var shape : BARE_CODE_NAMES) {
+      var found = shape.matcher(outsideSpans);
+      while (found.find()) {
+        names.add(found.group());
       }
     }
     return names;
   }
 
+  /** A code span: every identifier inside it is a name of code. */
+  private static final Pattern CODE_SPAN = Pattern.compile("`([^`\n]++)`");
+
   /**
-   * A name of code: a code span, an upper camel-case name of two humps or more ({@code
+   * A name of code outside a code span: an upper camel-case name of two humps or more ({@code
    * PromptTemplateEscaper}), a lower camel-case one ({@code noteFor}) or a snake-case one ({@code
    * context_evidence}). Plain words are not names: "the escaper" names nothing.
    */
-  private static final Pattern CODE_NAME =
-      Pattern.compile(
-          "`([^`\n]++)`"
-              + "|\\b[A-Z][a-z0-9]++(?:[A-Z][a-z0-9]*+)++\\b"
-              + "|\\b[a-z][a-z0-9]*+[A-Z]\\w*+\\b"
-              + "|\\b[a-z][a-z0-9]*+(?:_[a-z0-9]++)++\\b");
+  private static final List<Pattern> BARE_CODE_NAMES =
+      List.of(
+          Pattern.compile("\\b[A-Z][a-z0-9]++(?:[A-Z][a-z0-9]*+)++\\b"),
+          Pattern.compile("\\b[a-z][a-z0-9]*+[A-Z]\\w*+\\b"),
+          Pattern.compile("\\b[a-z][a-z0-9]*+(?:_[a-z0-9]++)++\\b"));
 
   /** An identifier inside a code span. */
-  private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*+");
+  private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_]\\w*+");
 
   /**
    * {@code clause} up to its first non-assertion: what the material cannot confirm is not stated,
