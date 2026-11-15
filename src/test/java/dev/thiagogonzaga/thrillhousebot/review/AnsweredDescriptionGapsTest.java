@@ -182,6 +182,15 @@ class AnsweredDescriptionGapsTest {
   }
 
   @Test
+  void aBulletStatingItsOwnMismatchLaterInTheUnconfirmedClauseStays() {
+    var gap =
+        "Nothing in the material confirms it (unconfirmed) and the change omits the"
+            + " PromptTemplateEscaper wrapping the linked issue asks for.";
+
+    assertFalse(DescriptionGapScreen.answeredByDiff(gap, Set.of("PromptTemplateEscaper")));
+  }
+
+  @Test
   void aBulletThatSaysNothingIsUnconfirmedOrNamesNoCodeStays() {
     var names = DescriptionGapScreen.codeNames(ADDED_CODE);
 

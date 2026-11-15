@@ -922,7 +922,7 @@ final class DescriptionGapScreen {
    *
    * <p>It is answered when, in its own words (quoted passages are the PR text's): it says the
    * material does not show or cannot confirm something ({@link #UNSHOWN}); no clause states a
-   * mismatch ({@link #ownMismatch}), before or after that, outside the words saying it is unshown;
+   * mismatch ({@link #ownMismatch}) outside the words saying it is unshown, before or after them;
    * it names code ({@link #CODE_SPAN} or {@link #BARE_CODE_NAMES}); and every name it gives is a
    * whole identifier on an added line ({@code added}). A {@code Linked issue #N:} gap is judged the
    * same way. One name the diff does not add keeps the gap: the bullet may be about that one. Every
@@ -934,7 +934,7 @@ final class DescriptionGapScreen {
     var own = QUOTED.matcher(foldQuotes(gap)).replaceAll(" ");
     if (firstMatch(UNSHOWN, own) < 0
         || Arrays.stream(CLAUSE_BREAK.split(own))
-            .map(DescriptionGapScreen::beforeUnshown)
+            .flatMap(DescriptionGapScreen::outsideUnshown)
             .anyMatch(DescriptionGapScreen::ownMismatch)) {
       return false;
     }
@@ -957,13 +957,17 @@ final class DescriptionGapScreen {
   }
 
   /**
-   * {@code clause} up to where it says the material does not show something ({@link #UNSHOWN}), or
-   * all of it when it does not: the words that say nothing shows the code are not a mismatch, and
-   * the words before them, or a clause that has none, may state one.
+   * The parts of {@code clause} around the words saying the material does not show something
+   * ({@link #UNSHOWN}): those words are not a mismatch, and the words before or after them, in the
+   * same clause or not ("nothing confirms it (unconfirmed) and the change omits the wrapping"), may
+   * state one.
    */
-  private static String beforeUnshown(String clause) {
-    var unshown = firstMatch(UNSHOWN, clause);
-    return unshown < 0 ? clause : clause.substring(0, unshown);
+  private static Stream<String> outsideUnshown(String clause) {
+    var cut = clause;
+    for (var shape : UNSHOWN) {
+      cut = shape.matcher(cut).replaceAll("\n");
+    }
+    return Arrays.stream(cut.split("\n"));
   }
 
   /** Where the first of {@code shapes} first matches in {@code text}; -1 when none does. */
