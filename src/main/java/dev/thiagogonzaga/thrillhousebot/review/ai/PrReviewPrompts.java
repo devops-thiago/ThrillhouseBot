@@ -791,6 +791,10 @@ public final class PrReviewPrompts {
               not the key of the finding listed under its id is discarded
             - "resolved" requires the code change to actually address the issue — verify it in
               the diff; a reply that merely promises or claims a fix is not enough
+            - Before marking a finding "resolved", probe the code that replaced the flagged code
+              for the same defect class with inputs the finding did not use: a name that is a
+              prefix, suffix or substring of another name, a short or empty value, another
+              receiver or caller. A fix can remove the quoted mechanism and keep the defect
             - "justified" means the issue is intentionally not fixed and a thread reply gives a
               concrete reason (intentional behavior, disputed with evidence, explicitly
               deferred); a reply that only acknowledges the finding leaves it "unresolved"
@@ -814,6 +818,13 @@ public final class PrReviewPrompts {
               prior findings are tracked exclusively through previous_findings_status, and
               re-stating one as a new finding double-posts it. If you disagree with a thread
               reply, say so in the status note; do not re-raise
+            - One exception, a gap left by a fix: when the code that replaced a prior finding's
+              flagged code still has the same defect class through a different mechanism, mark
+              the prior finding "resolved" and emit a new finding on the replacement lines. Its
+              suggestion_old quotes the new mechanism, never the code the prior finding quoted,
+              and its description starts with "Gap left by the fix for" and the prior finding's
+              title, then names an input that still fails. Lines the PR did not change since the
+              prior round are never such a gap
             - Re-raising an answered finding at a different severity is still a re-raise; a
               maintainer-justified finding never returns, at any severity, while the lines it
               concerns are unchanged

@@ -140,6 +140,23 @@ class EvalCorpusTest {
   }
 
   @Test
+  void priorFindingsBelongToGeneratorCasesAndListNumberedKeyedFindings() {
+    var followUps = 0;
+    for (EvalCase c : corpus) {
+      var previous = c.spec().previousFindings();
+      if (previous == null) {
+        continue;
+      }
+      followUps++;
+      assertTrue(c.isGeneratorCase(), c.name() + ": only a generator case lists prior findings");
+      assertTrue(
+          previous.matches("(?s)1\\. \\(key \\p{XDigit}{8}\\) \\[[A-Z]+] \\S+:\\d+ — .+"),
+          c.name() + ": prior findings are listed as the follow-up context numbers them");
+    }
+    assertTrue(followUps > 0, "the corpus needs a follow-up case (#1388)");
+  }
+
+  @Test
   void summaryCasesCarryTheClaimTheChangedFilesAndTheFindings() {
     for (EvalCase c : corpus) {
       if (!c.isSummaryCase()) {
