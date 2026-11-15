@@ -242,6 +242,40 @@ class FindingLedgerTest {
   }
 
   @Test
+  void aDoubleCheckItemThisRoundsThreadReplacedIsClosedAsReplaced() {
+    // #1312, ThrillhouseBot-test#293: the thread for an earlier double-check item came back under
+    // another key, and the item's row stayed open beside the thread's, 21 rows to 20 counted.
+    var item = openRow(10, "Offline-sensor stub returns a sentinel");
+    var thread = finding(11, "Test stub returns a sentinel value, leaving offline untested", null);
+    var statuses =
+        FindingLedger.statuses(
+            List.of(
+                new ReviewResult.PreviousFindingStatus(
+                    1, "unresolved", FollowUpAnalyzer.REPLACED_NOTE)),
+            List.of(stored(10, "Offline-sensor stub returns a sentinel")));
+
+    var update =
+        FindingLedger.afterRound(
+            Map.of(item.key(), item), round(HEAD_2, List.of(thread), statuses));
+
+    assertTrue(update.statusMoved());
+    assertEquals(
+        new FindingLedger.Status(FindingLedger.REPLACED, HEAD_1, HEAD_2),
+        update.rows().get(item.key()).status());
+    var threadKey = FindingLedger.Subject.of(thread).key();
+    assertEquals(FindingLedger.OPEN, update.rows().get(threadKey).status().value());
+  }
+
+  @Test
+  void onlyAHoldUnderTheReplacedNoteMarksARowReplaced() {
+    var note = FollowUpAnalyzer.REPLACED_NOTE;
+    assertEquals(Optional.of(FindingLedger.REPLACED), FindingLedger.rowStatus("unresolved", note));
+    assertEquals(Optional.of(FindingLedger.RESOLVED), FindingLedger.rowStatus("resolved", note));
+    assertEquals(Optional.of(FindingLedger.OPEN), FindingLedger.rowStatus("unresolved", "n"));
+    assertEquals(Optional.empty(), FindingLedger.rowStatus("mystery", note));
+  }
+
+  @Test
   void rowStatusesAreTheFourTheLedgerKnows() {
     assertEquals(Optional.of(FindingLedger.OPEN), FindingLedger.rowStatus("Unresolved"));
     assertEquals(Optional.of(FindingLedger.SUPERSEDED), FindingLedger.rowStatus("SUPERSEDED"));

@@ -435,6 +435,9 @@ previous round's overview is reused (`PriorOverviewCarryover`).
 The comment keeps no history of its own. Each round's review and inline comments record that
 round. The optional delta section (`REVIEW_FOLLOW_UP_SUMMARY_ENABLED`, off by default) lists
 what changed since the last round inside that review, replacing its default closed-names section.
+A thread the round posted for a finding that was only a "Things to double-check" item before is
+counted under still open, as that item, and named on a line of its own; the new-findings count says
+how many new findings went only under "Things to double-check" (#1312). Neither changes a count.
 One review notification therefore carries the verdict, counts and closed identities. A definite
 review refusal keeps the same body in the existing comment fallback; an ambiguous failure does
 not risk posting it twice. An explicit `/summary` that posts its summary adds no delta section.
@@ -450,7 +453,9 @@ it:
   quote was on (`RIGHT`, or `LEFT` for a finding about removed code), whether the quote was there
   in that round, the file's blob SHA at the round's head, and the head itself.
 - A previous finding's status (`open`, `resolved`, `justified` or `superseded`) is written only
-  when it differs from the stored one, with the head of the round that changed it.
+  when it differs from the stored one, with the head of the round that changed it. A "Things to
+  double-check" item that this round's own finding raised again is `replaced`: that finding usually
+  comes back under another key, and its row is the open one from then on (#1312).
 - A finding's thread is recorded once it has one, with the commit it was posted on. A
   "Things to double-check" item has no thread until a later round posts it inline.
 - A pull request reviewed before the table existed gets rows from its next round: each previous
@@ -466,7 +471,8 @@ as gone only because it still does not match, while its file is still in the pul
 The rows also decide whether a round moved anything. A follow-up round that raised no new finding
 and changed no stored status neither lets the summary stand in for the round nor adds the delta
 section; the summary may still be edited in place, which notifies nobody. A pull request with no
-rows always counts as moved, as before.
+rows always counts as moved, as before. A round that posts a thread for an earlier double-check
+item moves that item's row to `replaced`, so it counts as moved and its delta names the thread.
 
 The rows' lifecycle (`FindingStateLifecycle`):
 
