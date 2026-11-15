@@ -8,7 +8,7 @@ backup if you need to return to an older version.
 
 ## What is stored, and what is not
 
-The bot keeps four tables in PostgreSQL:
+The bot keeps five tables in PostgreSQL:
 
 | Table | Contents |
 |---|---|
@@ -16,6 +16,7 @@ The bot keeps four tables in PostgreSQL:
 | `pausedpr` | Pull requests silenced with `/pause` |
 | `finding_feedback` | 👍, 👎 and "not useful" replies on findings ([Finding feedback](https://github.com/devops-thiago/ThrillhouseBot/blob/main/docs/FEEDBACK.md)) |
 | `review_learning` | Review learnings, when `REVIEW_LEARNINGS_ENABLED` is on |
+| `finding_state` | Each finding of a pull request and its status across review rounds, kept until `FINDINGS_RETENTION` after the pull request is closed or merged |
 
 Everything else lives in the process and is lost on a restart:
 
@@ -47,17 +48,36 @@ another installation and starts fresh there. Renames need the App's
 **Repository** event; an App registered before it was in the manifest must
 tick it under **Permissions & events → Subscribe to events**.
 
-The bot never deletes stored rows. To purge an installation's data, for example
-after it was uninstalled for good, delete its rows by installation id (the
-`installation.id` of its webhook deliveries, or `installationid` in the tables),
-after taking a backup:
+The bot deletes only `finding_state` rows on its own: an installation's when the
+App is uninstalled (not when it is suspended), and a pull request's once it has
+been closed or merged for longer than `FINDINGS_RETENTION` (see below). To purge
+the rest of an installation's data, for example after it was uninstalled for
+good, delete its rows by installation id (the `installation.id` of its webhook
+deliveries, or `installationid` in the tables), after taking a backup:
 
 ```sql
 DELETE FROM reviewsession    WHERE installationid = 123456;
 DELETE FROM pausedpr         WHERE installationid = 123456;
 DELETE FROM finding_feedback WHERE installationid = 123456;
 DELETE FROM review_learning  WHERE installationid = 123456;
+DELETE FROM finding_state    WHERE installationid = 123456;
 ```
+
+## Stored finding state and its retention
+
+Each finding of a pull request has a row in `finding_state` with its status
+across review rounds. Closing or merging the pull request starts a retention
+period, `FINDINGS_RETENTION` (default `30d`); reopening it before then keeps the
+rows, and the next review carries on from them. A sweep runs at startup and once
+a day: it deletes the rows of pull requests closed for longer than the retention
+period, and asks GitHub about up to 50 pull requests whose rows no review
+touched for a day, so a pull request whose `closed` delivery was lost is closed
+too. A failed call to GitHub leaves the rows open. The log names what each sweep
+deleted or closed.
+
+Without its rows, a review works as it did before the table existed: it reads
+which files changed from GitHub, and writes the rows again from the statuses it
+gives the earlier findings.
 
 ## Scaling
 
@@ -261,6 +281,10 @@ first start Flyway records it as version 1, the v0.8.0 schema
 (`Baselining schema "public" to version 1`), and applies only the later
 migrations. Upgrade such a database from v0.8.x; an older one should first be
 started once on v0.8.x so that its schema reaches the v0.8.0 shape.
+
+From v0.9.2 the `finding_state` table (migration V3) is created on the first
+start. It starts empty; each open pull request's rows are written by its next
+review, from the earlier rounds' stored sessions.
 
 From v0.9.0 every stored row carries the GitHub App installation id and the
 repository's numeric id. On the first start after the upgrade the bot fills them

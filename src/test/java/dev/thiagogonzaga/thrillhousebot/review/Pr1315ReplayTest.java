@@ -31,6 +31,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -164,7 +165,67 @@ class Pr1315ReplayTest {
     return comments;
   }
 
-  private static ReviewContextLoader.ReviewContext context(
+  /**
+   * Each file's blob SHA at {@code head}, as the pull request's file listing gives it: a version
+   * per file that moves where {@link #CHANGED} says the file changed between two heads.
+   */
+  private Map<String, String> blobs(String head, Map<String, String> patches) {
+    // The listing names every file the pull request changes; the stored patches only some, so the
+    // files the stored rows sit in are listed too.
+    var paths = new java.util.TreeSet<>(patches.keySet());
+    rows.values().stream()
+        .map(row -> row.subject().file())
+        .filter(java.util.Objects::nonNull)
+        .forEach(paths::add);
+    var blobs = new HashMap<String, String>();
+    for (var path : paths) {
+      var version =
+          switch (path) {
+            case RESOLVER -> Map.of(HEAD_1, 1, HEAD_2, 2, HEAD_3, 2, HEAD_4, 3).get(head);
+            case RESOLVER_TEST -> Map.of(HEAD_1, 1, HEAD_2, 1, HEAD_3, 2, HEAD_4, 2).get(head);
+            default -> 1;
+          };
+      blobs.put(path, path + "@" + version);
+    }
+    return blobs;
+  }
+
+  /**
+   * The stored finding rows when the replay reads file changes from them (#1319), {@code null} when
+   * it reads them from GitHub's comparisons ({@link #CHANGED}).
+   */
+  private Map<String, FindingLedger.Row> rows;
+
+  /** What changed since each prior round: from the rows alone, or from the comparisons. */
+  private DiffLineResolver.RoundChanges roundChanges(
+      List<String> heads, String head, Map<String, String> patches) {
+    return rows == null
+        ? changes(heads, head)
+        : new StoredRoundChanges(
+            rows.values(), heads, blobs(head, patches), DiffLineResolver.RoundChanges.NONE);
+  }
+
+  /** Writes a round's rows as the orchestrator does once the round is posted. */
+  private void recordRound(
+      String head,
+      List<Finding> raised,
+      List<ReviewResult.PreviousFindingStatus> statuses,
+      ReviewContextLoader.ReviewContext ctx,
+      Map<String, String> patches) {
+    var update =
+        FindingLedger.afterRound(
+            rows,
+            new FindingLedger.Round(
+                head,
+                raised,
+                FindingLedger.statuses(statuses, ctx.previousFindingsList()),
+                blobs(head, patches),
+                ctx.lineResolver(),
+                FindingLedger.threads(ctx.inlineComments(), BOT, head)));
+    rows.putAll(update.rows());
+  }
+
+  private ReviewContextLoader.ReviewContext context(
       List<ReviewResponse> priorRounds,
       List<String> heads,
       String head,
@@ -172,7 +233,7 @@ class Pr1315ReplayTest {
     var jsons = priorRounds.stream().map(round -> MAPPER.valueToTree(round).toString()).toList();
     var files = new ArrayList<FileDiff>();
     patches.forEach((path, patch) -> files.add(new FileDiff(path, "modified", 1, 1, 2, patch)));
-    var roundChanges = changes(heads, head);
+    var roundChanges = roundChanges(heads, head, patches);
     return new ReviewContextLoader.ReviewContext(
         files,
         "",
@@ -252,6 +313,9 @@ class Pr1315ReplayTest {
     var result = builder.build(ctx, guarded, CI_CLEAR, PLAN);
     var stored = guarded.withClosedEarlierRound(result.earlierRoundClosedMembers());
     var previous = ctx.previousFindingsList();
+    if (rows != null) {
+      recordRound(head, result.findings(), result.previousStatuses(), ctx, patches);
+    }
     return new Round(
         result,
         stored,
@@ -309,6 +373,39 @@ class Pr1315ReplayTest {
   @Test
   void theFourRoundsResolveWhatWasFixedSupersedeNothingAndCountEachFindingOnce()
       throws IOException {
+    replayTheFourRounds();
+  }
+
+  /**
+   * The same four rounds with every file change read from the stored rows' blob SHAs, none from a
+   * comparison, and each finding's raised anchor from its row: the counts are the same (#1319).
+   * Round 1 ran before this replay, so its rows are written as it would have written them.
+   */
+  @Test
+  void theFourRoundsGiveTheSameCountsFromTheStoredRows() throws IOException {
+    rows = new HashMap<>();
+    // Round 1's own patches are not stored; round 2's are the closest, for its findings' files.
+    var round1Patches = patches("round2-patches.json");
+    rows.putAll(
+        FindingLedger.afterRound(
+                rows,
+                new FindingLedger.Round(
+                    HEAD_1,
+                    read("round1-findings.json").findings().stream()
+                        .map(Finding::fromAiResponse)
+                        .toList(),
+                    Map.of(),
+                    blobs(HEAD_1, round1Patches),
+                    new DiffLineResolver(round1Patches),
+                    Map.of()))
+            .rows());
+
+    replayTheFourRounds();
+
+    assertTrue(rows.values().stream().allMatch(row -> row.blobSha() != null));
+  }
+
+  private void replayTheFourRounds() throws IOException {
     var round1 = read("round1-findings.json");
     var round1Fix404 = round1.findings().get(0);
     var round1StubsJaxRs = round1.findings().get(2);

@@ -71,6 +71,7 @@ public class ReviewContextLoader {
   private final BotIdentity botIdentity;
   private final ActiveModelSettings activeModel;
   private final SupersededFindingsCarryover carryover;
+  private final FindingStates findingStates;
 
   @Inject
   public ReviewContextLoader(
@@ -89,7 +90,8 @@ public class ReviewContextLoader {
       ReviewSessionPersistence sessionPersistence,
       BotIdentity botIdentity,
       ActiveModelSettings activeModel,
-      SupersededFindingsCarryover carryover) {
+      SupersededFindingsCarryover carryover,
+      FindingStates findingStates) {
     this.prClient = prClient;
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
@@ -104,6 +106,7 @@ public class ReviewContextLoader {
     this.patchCoverageResolver = patchCoverageResolver;
     this.sessionPersistence = sessionPersistence;
     this.botIdentity = botIdentity;
+    this.findingStates = findingStates;
     this.activeModel = activeModel;
     this.carryover = carryover;
   }
@@ -561,16 +564,19 @@ public class ReviewContextLoader {
       priorAiResponseJsons = rounds.jsons();
       priorAiResponses = rounds.parsed();
     }
-    // #1319: which files changed since the head each earlier round reviewed, compared on first use.
+    // #1319: which files changed since the head each earlier round reviewed: from the stored
+    // finding rows' blob SHAs first, else compared on first use.
+    var rounds =
+        new RoundFileChanges.Rounds(
+            priorCommitShas, priorAiResponseJsons.size(), !carried.isEmpty());
     var roundChanges =
-        RoundFileChanges.of(
-            prClient,
-            auth,
-            req.owner(),
-            req.repo(),
-            req.commitSha(),
-            new RoundFileChanges.Rounds(
-                priorCommitShas, priorAiResponseJsons.size(), !carried.isEmpty()));
+        findingStates.roundChanges(
+            req,
+            rounds.carried() || rounds.heads().size() != rounds.count()
+                ? List.of()
+                : priorCommitShas,
+            files,
+            RoundFileChanges.of(prClient, auth, req.owner(), req.repo(), req.commitSha(), rounds));
     Supplier<DiffLineResolver> lineResolverSupplier =
         memoize(() -> new DiffLineResolver(patchesByFile, changedPaths, headFiles, roundChanges));
     var hasContext = !priorAiResponseJsons.isEmpty();

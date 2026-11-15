@@ -106,6 +106,12 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 | `DASHBOARD_REASONING_STREAM_ENABLED`<br>`thrillhousebot.dashboard.reasoning-stream-enabled` | Streams the review call's reasoning to the dashboard's live activity page (#66), apart from its output. Only a provider that returns its reasoning as `reasoning_content` on the OpenAI-compatible stream sends any. Off by default: the reasoning can quote the reviewed code, and it is shown to every dashboard user who may read the repository. | boolean | `false` |
 | `DASHBOARD_URL`<br>`thrillhousebot.dashboard.url` | Public dashboard URL, used for the OAuth callback and the session links posted to GitHub. | string | `http://localhost:8080` |
 
+## `thrillhousebot.findings`
+
+| Variable | Description | Type | Default |
+|---|---|---|---|
+| `FINDINGS_RETENTION`<br>`thrillhousebot.findings.retention` | How long a closed or merged pull request's stored findings are kept. A daily sweep deletes them after this; a pull request reopened before then carries on from them. | duration | `30d` |
+
 ## `thrillhousebot.github`
 
 | Variable | Description | Type | Default |
