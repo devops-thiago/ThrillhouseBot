@@ -921,20 +921,20 @@ final class DescriptionGapScreen {
    * code, could not see.
    *
    * <p>It is answered when, in its own words (quoted passages are the PR text's): it says the
-   * material does not show or cannot confirm something ({@link #UNSHOWN}); no clause before that
-   * states a mismatch ({@link #ownMismatch}); it names code ({@link #CODE_SPAN} or {@link
-   * #BARE_CODE_NAMES}); and every name it gives is a whole identifier on an added line ({@code
-   * added}). A {@code Linked issue #N:} gap is judged the same way. One name the diff does not add
-   * keeps the gap: the bullet may be about that one. Every added line counts, comments and
-   * documentation included: the gap claims the material does not show the name, and an added line
-   * that names it shows it to the reader the same way. A name only on a removed line does not
-   * count.
+   * material does not show or cannot confirm something ({@link #UNSHOWN}); no clause states a
+   * mismatch ({@link #ownMismatch}), before or after that, outside the words saying it is unshown;
+   * it names code ({@link #CODE_SPAN} or {@link #BARE_CODE_NAMES}); and every name it gives is a
+   * whole identifier on an added line ({@code added}). A {@code Linked issue #N:} gap is judged the
+   * same way. One name the diff does not add keeps the gap: the bullet may be about that one. Every
+   * added line counts, comments and documentation included: the gap claims the material does not
+   * show the name, and an added line that names it shows it to the reader the same way. A name only
+   * on a removed line does not count.
    */
   static boolean answeredByDiff(String gap, Set<String> added) {
     var own = QUOTED.matcher(foldQuotes(gap)).replaceAll(" ");
-    var unshown = firstMatch(UNSHOWN, own);
-    if (unshown < 0
-        || Arrays.stream(CLAUSE_BREAK.split(own.substring(0, unshown)))
+    if (firstMatch(UNSHOWN, own) < 0
+        || Arrays.stream(CLAUSE_BREAK.split(own))
+            .map(DescriptionGapScreen::beforeUnshown)
             .anyMatch(DescriptionGapScreen::ownMismatch)) {
       return false;
     }
@@ -954,6 +954,16 @@ final class DescriptionGapScreen {
       names.add(found.group());
     }
     return names;
+  }
+
+  /**
+   * {@code clause} up to where it says the material does not show something ({@link #UNSHOWN}), or
+   * all of it when it does not: the words that say nothing shows the code are not a mismatch, and
+   * the words before them, or a clause that has none, may state one.
+   */
+  private static String beforeUnshown(String clause) {
+    var unshown = firstMatch(UNSHOWN, clause);
+    return unshown < 0 ? clause : clause.substring(0, unshown);
   }
 
   /** Where the first of {@code shapes} first matches in {@code text}; -1 when none does. */
