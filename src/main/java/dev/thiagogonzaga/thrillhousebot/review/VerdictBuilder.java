@@ -417,18 +417,40 @@ public class VerdictBuilder {
             PriorOverviewCarryover.carried(effectiveResponse.summary(), ctx),
             ciCitations,
             new PrSummaryGenerator.DescriptionSources(
-                claimText,
-                // On the head the previous round reviewed, the findings it named stay named while
-                // open (#1074): nothing the section is about has changed there.
-                ctx.previousRoundHeadUnchanged()
-                    ? DescriptionGapCarryover.previousFindingBullets(
-                        ctx.conversationComments(), botIdentity)
-                    : Set.of(),
-                linked.section(),
-                linked.baseCode(),
-                linked.verdicts())),
+                    claimText,
+                    // On the head the previous round reviewed, the findings it named stay named
+                    // while
+                    // open (#1074): nothing the section is about has changed there.
+                    ctx.previousRoundHeadUnchanged()
+                        ? DescriptionGapCarryover.previousFindingBullets(
+                            ctx.conversationComments(), botIdentity)
+                        : Set.of(),
+                    linked.section(),
+                    linked.baseCode(),
+                    linked.verdicts())
+                .withRound(ctx.previousFindingsList(), addedCode(ctx.files()))),
         ciEvaluation,
         backstopStatuses);
+  }
+
+  /**
+   * The pull request's added lines, every file's {@code +} lines without the {@code +++} header:
+   * what the Description vs. Implementation screen checks a gap's "nothing shows it" against
+   * (#1387). A file with no patch adds nothing here.
+   */
+  static String addedCode(List<GitHubPullRequestClient.FileDiff> files) {
+    var added = new StringBuilder();
+    for (var file : files) {
+      if (file.patch() == null) {
+        continue;
+      }
+      for (var line : file.patch().split("\n", -1)) {
+        if (line.startsWith("+") && !line.startsWith("+++")) {
+          added.append(line, 1, line.length()).append('\n');
+        }
+      }
+    }
+    return added.toString();
   }
 
   /**

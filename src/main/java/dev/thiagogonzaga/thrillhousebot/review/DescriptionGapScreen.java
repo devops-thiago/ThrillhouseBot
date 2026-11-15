@@ -899,6 +899,95 @@ final class DescriptionGapScreen {
   }
 
   /**
+   * {@code gaps} less every gap {@link #answeredByDiff answered by the diff} (#1387); {@code gaps}
+   * itself when none is, or when no added code is known.
+   */
+  static List<String> withoutAnsweredByDiff(List<String> gaps, String addedCode) {
+    if (gaps.isEmpty() || addedCode == null || addedCode.isBlank()) {
+      return gaps;
+    }
+    var added = codeNames(addedCode);
+    var kept = gaps.stream().filter(gap -> !answeredByDiff(gap, added)).toList();
+    return kept.size() == gaps.size() ? gaps : kept;
+  }
+
+  /**
+   * Whether {@code gap} only says the material does not show a piece of code that the diff adds by
+   * name (#1387). On #1342 a bullet said "no changed file or declared name shows" the related
+   * context wrapped by {@code PromptTemplateEscaper}, and another that nothing shows the excerpts
+   * reaching the verifier as {@code context_evidence}, while the diff added both names. Such a gap
+   * asserts no mismatch of its own; it reports what the summary call, which reads names and not
+   * code, could not see.
+   *
+   * <p>It is answered when, in its own words (quoted passages are the PR text's): it says the
+   * material does not show or cannot confirm something ({@link #UNSHOWN}); no clause before that
+   * states a mismatch ({@link #ownMismatch}); it names code ({@link #CODE_NAME}); and every name it
+   * gives is a whole name on an added line ({@code added}). A {@code Linked issue #N:} gap is
+   * judged the same way. One name the diff does not add keeps the gap: the bullet may be about that
+   * one. Every added line counts, comments and documentation included: the gap claims the material
+   * does not show the name, and an added line that names it shows it to the reader the same way. A
+   * name only on a removed line does not count.
+   */
+  static boolean answeredByDiff(String gap, Set<String> added) {
+    var own = QUOTED.matcher(foldQuotes(gap)).replaceAll(" ");
+    var unshown = firstMatch(UNSHOWN, own);
+    if (unshown < 0
+        || Arrays.stream(CLAUSE_BREAK.split(own.substring(0, unshown)))
+            .anyMatch(DescriptionGapScreen::ownMismatch)) {
+      return false;
+    }
+    var names = codeNames(own);
+    return !names.isEmpty() && added.containsAll(names);
+  }
+
+  /** Where the first of {@code shapes} first matches in {@code text}; -1 when none does. */
+  private static int firstMatch(List<Pattern> shapes, String text) {
+    var first = -1;
+    for (var shape : shapes) {
+      var found = shape.matcher(text);
+      if (found.find() && (first < 0 || found.start() < first)) {
+        first = found.start();
+      }
+    }
+    return first;
+  }
+
+  /**
+   * The code names in {@code text}: each {@link #CODE_NAME}, and each identifier inside a code
+   * span, split at the dots of a qualified name.
+   */
+  static Set<String> codeNames(String text) {
+    var names = new LinkedHashSet<String>();
+    var found = CODE_NAME.matcher(text);
+    while (found.find()) {
+      if (found.group(1) == null) {
+        names.add(found.group());
+        continue;
+      }
+      var inSpan = IDENTIFIER.matcher(found.group(1));
+      while (inSpan.find()) {
+        names.add(inSpan.group());
+      }
+    }
+    return names;
+  }
+
+  /**
+   * A name of code: a code span, an upper camel-case name of two humps or more ({@code
+   * PromptTemplateEscaper}), a lower camel-case one ({@code noteFor}) or a snake-case one ({@code
+   * context_evidence}). Plain words are not names: "the escaper" names nothing.
+   */
+  private static final Pattern CODE_NAME =
+      Pattern.compile(
+          "`([^`\n]++)`"
+              + "|\\b[A-Z][a-z0-9]++(?:[A-Z][a-z0-9]*+)++\\b"
+              + "|\\b[a-z][a-z0-9]*+[A-Z]\\w*+\\b"
+              + "|\\b[a-z][a-z0-9]*+(?:_[a-z0-9]++)++\\b");
+
+  /** An identifier inside a code span. */
+  private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*+");
+
+  /**
    * {@code clause} up to its first non-assertion: what the material cannot confirm is not stated,
    * but what comes before it is ("the change omits the timeout key which the material cannot
    * confirm"). The whole clause when it holds none.
@@ -972,6 +1061,22 @@ final class DescriptionGapScreen {
               "\\bappears?\\s++(?:to\\s++be\\s++)?(?:addressed|met|satisfied)\\b",
               "\\bno\\s++firm\\s++(?:unmet|gap|mismatch)\\b")
           .map(shape -> Pattern.compile("(?i)" + shape))
+          .toList();
+
+  /**
+   * A clause saying the material does not show or cannot confirm something, one pattern per shape:
+   * "(unconfirmed)", "no changed file or declared name shows", "nothing in the material confirms",
+   * "does not show", and the {@link #NON_ASSERTIONS}.
+   */
+  private static final List<Pattern> UNSHOWN =
+      Stream.concat(
+              Stream.of(
+                      "\\bunconfirmed\\b",
+                      "\\b(?:no|nothing)\\b[^,;.!?\u2014\u2013]{0,80}?"
+                          + "\\b(?:shows?|confirms?|demonstrates?)\\b",
+                      "\\b(?:does|do|did)\\s++not\\s++(?:show|confirm|demonstrate)\\b")
+                  .map(shape -> Pattern.compile("(?i)" + shape)),
+              NON_ASSERTIONS.stream())
           .toList();
 
   /**

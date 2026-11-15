@@ -72,7 +72,8 @@ import java.util.stream.IntStream;
  *   <li>it is a {@code Linked issue #N} gap and the pull request's linked issues, read this round,
  *       no longer include {@code #N}. With no linked issues read at all (the feature off, or the
  *       read failed) nothing is dropped on that ground, since nothing can be judged;
- *   <li>the round reports the same gap again: the fresh wording replaces the carried one.
+ *   <li>the round reports the same gap again: the fresh wording replaces the carried one;
+ *   <li>it restates a finding the round resolved ({@link #withoutResolved}, #1387).
  * </ul>
  *
  * <p>The merge itself is deterministic and runs after the summary call, like the finding merge of
@@ -516,6 +517,49 @@ final class DescriptionGapCarryover {
               return issues.isEmpty() || issues.stream().anyMatch(keys::contains);
             })
         .toList();
+  }
+
+  /**
+   * {@code gaps} less every gap that restates a finding this round resolved (#1387). On #1342 a gap
+   * carried the claim of a finding the author had fixed, and the summary refreshed on the fixing
+   * round still listed it beside the resolved thread. A gap restates a finding on the arms the
+   * summary collapses a gap onto an open finding with ({@link SummarySurfaceDeduplicator}), unless
+   * the two name different identifiers ({@link DefectIdentity#namesDifferentIdentifiers}), the veto
+   * the counts apply to two findings about different keys (#1383). The next round carries only what
+   * is rendered, so a gap dropped here is not carried either.
+   */
+  static List<String> withoutResolved(List<String> gaps, List<ReviewResponse.Finding> resolved) {
+    if (gaps.isEmpty() || resolved.isEmpty()) {
+      return gaps;
+    }
+    var claims =
+        resolved.stream()
+            .map(
+                finding ->
+                    new ResolvedClaim(
+                        finding.title(),
+                        SummarySurfaceDeduplicator.claimsOf(
+                            List.of(Finding.fromAiResponse(finding)))))
+            .toList();
+    var kept =
+        gaps.stream()
+            .filter(gap -> claims.stream().noneMatch(claim -> claim.restatedBy(gap)))
+            .toList();
+    if (kept.size() == gaps.size()) {
+      return gaps;
+    }
+    Log.infof(
+        "Left out %d Description vs. Implementation gap(s) restating a finding this round resolved",
+        gaps.size() - kept.size());
+    return kept;
+  }
+
+  /** One resolved finding's title and claims, built once for every gap weighed against it. */
+  private record ResolvedClaim(String title, List<SummarySurfaceDeduplicator.Claim> claims) {
+    boolean restatedBy(String gap) {
+      return SummarySurfaceDeduplicator.restatesAny(gap, claims)
+          && !DefectIdentity.namesDifferentIdentifiers(gap, title);
+    }
   }
 
   /**

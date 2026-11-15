@@ -33,6 +33,11 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **The Description vs. Implementation section drops bullets the code already answers** (#1387):
+  a bullet that restated a finding the round resolved stayed listed beside the resolved thread,
+  and a bullet saying nothing shows a piece of code stayed even when the pull request added that
+  code by name. Both now leave the section, and so are not carried to the next round. A bullet
+  stating a mismatch of its own, or naming any code the pull request does not add, stays.
 - **The follow-up delta names threads posted for earlier double-check items** (#1312): a round
   that raised a "Things to double-check" item again inline counted it as still open, correctly,
   but the "changes since the last review" section never said so. It could show no new finding
