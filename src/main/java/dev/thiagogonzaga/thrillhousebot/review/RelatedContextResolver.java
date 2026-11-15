@@ -166,13 +166,14 @@ public class RelatedContextResolver {
       if (listing.isEmpty()) {
         return RelatedContext.NONE;
       }
+      var ignoredPaths = ignored.get();
       var candidates =
           RelatedReferences.extract(
               ctx.reviewableFiles(),
               changedPaths(ctx.files()),
               listing.get().paths(),
-              ignored.get(),
-              goModules(ctx.reviewableFiles(), listing.get().paths(), repository));
+              ignoredPaths,
+              goModules(ctx.reviewableFiles(), listing.get().paths(), repository, ignoredPaths));
       if (candidates.isEmpty()) {
         return RelatedContext.NONE;
       }
@@ -225,18 +226,21 @@ public class RelatedContextResolver {
   /**
    * The repository's Go modules, module path by the directory of its {@code go.mod}, read only when
    * the pull request changes Go code: the shallowest manifests, at most {@link
-   * CitedLocationResolver#MAX_MODULE_FILES_FETCHED}. A Go import resolves only under one of them.
+   * CitedLocationResolver#MAX_MODULE_FILES_FETCHED}, and none the review ignores. A Go import
+   * resolves only under one of them.
    */
   static Map<String, String> goModules(
       List<GitHubPullRequestClient.FileDiff> files,
       Set<String> repositoryPaths,
-      CitedLocationResolver.Round repository) {
+      CitedLocationResolver.Round repository,
+      Predicate<String> ignored) {
     if (files.stream().noneMatch(file -> String.valueOf(file.filename()).endsWith(".go"))) {
       return Map.of();
     }
     var modules = new LinkedHashMap<String, String>();
     repositoryPaths.stream()
         .filter(path -> path.equals(GO_MOD) || path.endsWith("/" + GO_MOD))
+        .filter(path -> !ignored.test(path))
         .sorted(Comparator.comparingInt(String::length).thenComparing(Comparator.naturalOrder()))
         .limit(CitedLocationResolver.MAX_MODULE_FILES_FETCHED)
         .forEach(

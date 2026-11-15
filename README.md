@@ -1106,8 +1106,9 @@ one read per picked file. No candidate, a failed or empty selection, or an
 unreadable file leaves the review as it is with the setting off. A file the
 review ignores, by `THRILLHOUSEBOT_REVIEW_IGNORED_FILES` or by the repository's
 own `ignored_files` in `.github/thrillhousebot.yml`, is never read for it. A Go
-import resolves only under a module the repository's `go.mod` declares (one
-more read for a pull request that changes Go code), so `net/http` is never
+import resolves only under a module the repository's `go.mod` declares (up to
+two more reads, of the shallowest `go.mod` files the review does not ignore,
+for a pull request that changes Go code), so `net/http` is never
 taken for a local `http/` directory.
 
 ### Review learnings

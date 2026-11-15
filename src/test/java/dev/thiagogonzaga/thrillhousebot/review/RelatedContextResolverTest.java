@@ -409,10 +409,19 @@ class RelatedContextResolverTest {
 
     assertEquals(
         Map.of("", "example.com/app"),
-        RelatedContextResolver.goModules(List.of(goFile), paths, round()));
-    assertEquals(Map.of(), RelatedContextResolver.goModules(List.of(handler), paths, round()));
+        RelatedContextResolver.goModules(List.of(goFile), paths, round(), path -> false));
+    assertEquals(
+        Map.of(),
+        RelatedContextResolver.goModules(List.of(handler), paths, round(), path -> false));
     verify(prClient, never())
         .getFileContent(any(), any(), any(), any(), eq("deep/er/go.mod"), any());
+    assertEquals(
+        Map.of(),
+        RelatedContextResolver.goModules(
+            List.of(goFile), java.util.Set.of("vendor/go.mod"), round(), path -> true),
+        "a manifest the review ignores is not read");
+    verify(prClient, never())
+        .getFileContent(any(), any(), any(), any(), eq("vendor/go.mod"), any());
   }
 
   @Test
