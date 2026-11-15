@@ -19,6 +19,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
 import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
+import dev.thiagogonzaga.thrillhousebot.github.PullRequestClosure;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
 import dev.thiagogonzaga.thrillhousebot.review.CiHoldRegistry;
@@ -64,12 +65,14 @@ public class WebhookEvents {
 
   private static final String ACTION_READY_FOR_REVIEW = "ready_for_review";
   private static final String ACTION_SYNCHRONIZE = "synchronize";
+  private static final String ACTION_REOPENED = "reopened";
 
   /** pull_request actions that trigger an automatic review. */
   private static final Set<String> AUTO_REVIEW_ACTIONS =
-      Set.of("opened", "reopened", ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW);
+      Set.of("opened", ACTION_REOPENED, ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW);
 
   private static final String EVENT_PULL_REQUEST = "pull_request";
+  private static final String ACTION_CLOSED = "closed";
 
   private final ThrillhouseConfig config;
   private final TriggerDetector triggerDetector;
@@ -133,7 +136,11 @@ public class WebhookEvents {
   }
 
   void onPullRequest(
-      @PullRequest.Opened @PullRequest.Reopened @PullRequest.Synchronize @PullRequest.ReadyForReview
+      @PullRequest.Opened
+          @PullRequest.Reopened
+          @PullRequest.Synchronize
+          @PullRequest.ReadyForReview
+          @PullRequest.Closed
           GitHubEvent event) {
     routeEvent(EVENT_PULL_REQUEST, event);
   }
@@ -284,9 +291,14 @@ public class WebhookEvents {
   private boolean handlePullRequest(WebhookPayload payload) {
     var action = payload.action();
     if (action == null) return true;
+    // #1319: before any pause or trigger filter can end the handling, so a reopened pull request
+    // the bot will not review still keeps its stored findings.
+    if (ACTION_CLOSED.equals(action) || ACTION_REOPENED.equals(action)) {
+      fireClosure(payload, ACTION_CLOSED.equals(action));
+    }
 
     return switch (action) {
-      case "opened", "reopened", ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW -> {
+      case "opened", ACTION_REOPENED, ACTION_SYNCHRONIZE, ACTION_READY_FOR_REVIEW -> {
         var pr = payload.pullRequest();
         var repo = payload.repository();
         if (pr == null || unscoped(payload)) {
@@ -688,7 +700,11 @@ public class WebhookEvents {
         payload.action(),
         installation.id());
     if (kind != null) {
-      beanManager.getEvent().fire(new InstallationChange(kind, installation.id(), List.of()));
+      beanManager
+          .getEvent()
+          .fire(
+              new InstallationChange(
+                  kind, installation.id(), List.of(), "deleted".equals(payload.action())));
     }
   }
 
@@ -756,6 +772,16 @@ public class WebhookEvents {
     return payload.installation() == null
         ? ReviewSkipEmitter.UNKNOWN_INSTALLATION
         : payload.installation().id();
+  }
+
+  /** Tells the stored finding rows a pull request was closed or reopened (#1319). */
+  private void fireClosure(WebhookPayload payload, boolean closed) {
+    var pr = payload.pullRequest();
+    if (pr == null || unscoped(payload)) {
+      log.debug("Ignoring pull_request {} with no pull request or scope", payload.action());
+      return;
+    }
+    beanManager.getEvent().fire(new PullRequestClosure(scope(payload), pr.number(), closed));
   }
 
   private static boolean unscoped(WebhookPayload payload) {

@@ -182,9 +182,23 @@ public interface GitHubPullRequestClient {
       Ref base,
       @JsonProperty("changed_files") int changedFiles,
       int additions,
-      int deletions) {
+      int deletions,
+      // open or closed (a merged pull request is closed); null when GitHub gives none.
+      String state) {
     public PullRequestDetails(String title, String body, Ref head, Ref base) {
       this(title, body, head, base, 0, 0, 0);
+    }
+
+    /** Details whose state is not known. */
+    public PullRequestDetails(
+        String title,
+        String body,
+        Ref head,
+        Ref base,
+        int changedFiles,
+        int additions,
+        int deletions) {
+      this(title, body, head, base, changedFiles, additions, deletions, null);
     }
   }
 
@@ -201,12 +215,26 @@ public interface GitHubPullRequestClient {
       int deletions,
       int changes,
       String patch,
-      @JsonProperty("previous_filename") String previousFilename) {
+      @JsonProperty("previous_filename") String previousFilename,
+      // The file's blob SHA at the pull request's head (#1319); null when GitHub gives none.
+      String sha) {
+
+    /** A file whose blob SHA is not known. */
+    public FileDiff(
+        String filename,
+        String status,
+        int additions,
+        int deletions,
+        int changes,
+        String patch,
+        String previousFilename) {
+      this(filename, status, additions, deletions, changes, patch, previousFilename, null);
+    }
 
     /** Convenience overload when the rename source path is unused. */
     public FileDiff(
         String filename, String status, int additions, int deletions, int changes, String patch) {
-      this(filename, status, additions, deletions, changes, patch, null);
+      this(filename, status, additions, deletions, changes, patch, null, null);
     }
   }
 

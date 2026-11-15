@@ -24,6 +24,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
 import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
+import dev.thiagogonzaga.thrillhousebot.github.PullRequestClosure;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
 import dev.thiagogonzaga.thrillhousebot.review.AutoReviewRateLimiter;
@@ -97,7 +98,7 @@ class WebhookEventsTest {
   @Mock private CiHoldRegistry ciHoldRegistry;
 
   @Mock private jakarta.enterprise.inject.spi.BeanManager beanManager;
-  @Mock private jakarta.enterprise.event.Event<InstallationChange> installationEvents;
+  @Mock private jakarta.enterprise.event.Event<Object> installationEvents;
 
   private final ObjectMapper mapper = new ObjectMapper();
 
@@ -232,19 +233,21 @@ class WebhookEventsTest {
 
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.CsvSource({
-    "deleted, GONE",
-    "suspend, GONE",
-    "unsuspend, BACK",
-    "new_permissions_accepted, PERMISSIONS"
+    "deleted, GONE, true",
+    "suspend, GONE, false",
+    "unsuspend, BACK, false",
+    "new_permissions_accepted, PERMISSIONS, false"
   })
-  void installationEventsAreAnnouncedToTheObservers(String action, InstallationChange.Kind kind) {
+  void installationEventsAreAnnouncedToTheObservers(
+      String action, InstallationChange.Kind kind, boolean uninstalled) {
     deliver(
         "installation",
         "{\"action\":\""
             + action
             + "\",\"installation\":{\"id\":5,\"account\":{\"login\":\"owner\"}}}");
 
-    assertEquals(new InstallationChange(kind, 5L, List.of()), firedChange());
+    // Only an uninstall deletes the stored findings (#1319); a suspended App comes back to them.
+    assertEquals(new InstallationChange(kind, 5L, List.of(), uninstalled), firedChange());
   }
 
   @Test
@@ -1209,6 +1212,46 @@ class WebhookEventsTest {
 
     // A user without write access must not be able to spend the operator's API budget.
     verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void aClosedPullRequestStartsItsStoredFindingsRetentionAndIsNotReviewed() {
+    deliver("pull_request", buildPullRequestPayload("closed", 21, "a/b", "sha21", "main"));
+
+    verify(installationEvents)
+        .fire(new PullRequestClosure(new RepoScope(12345L, TestScopes.REPOSITORY_ID), 21, true));
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void aReopenedPullRequestKeepsItsStoredFindingsEvenWhenPaused() {
+    when(prPauseService.isPaused(any(), eq("a"), eq("b"), eq(22))).thenReturn(true);
+
+    deliver("pull_request", buildPullRequestPayload("reopened", 22, "a/b", "sha22", "main"));
+
+    // #1319: the reopen is recorded before the pause ends the handling.
+    verify(installationEvents)
+        .fire(new PullRequestClosure(new RepoScope(12345L, TestScopes.REPOSITORY_ID), 22, false));
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+  }
+
+  @Test
+  void aClosedEventWithoutAPullRequestIsIgnored() {
+    deliver(
+        "pull_request",
+        "{\"action\":\"closed\",\"number\":24,"
+            + "\"repository\":{\"id\":7,\"name\":\"b\",\"full_name\":\"a/b\","
+            + "\"owner\":{\"login\":\"a\"}},\"installation\":{\"id\":12345}}");
+
+    verifyNoInteractions(installationEvents);
+  }
+
+  @Test
+  void aClosedEventWithoutAnInstallationIsIgnored() {
+    deliver(
+        "pull_request", "{\"action\":\"closed\",\"number\":23,\"pull_request\":{\"number\":23}}");
+
+    verifyNoInteractions(installationEvents);
   }
 
   @Test

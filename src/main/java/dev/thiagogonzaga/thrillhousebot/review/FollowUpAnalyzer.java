@@ -2229,7 +2229,7 @@ public class FollowUpAnalyzer {
             new ReviewResponse.PreviousFindingStatus(
                 id, STATUS_UNRESOLVED, PURE_RENAME_UNRESOLVED_NOTE));
       } else if (!unchangedSince(previousRound, finding, lineResolver)
-          && !lineResolver.isFindingPresent(currentPath, finding.suggestionOld())) {
+          && !lineResolver.isFindingStillPresent(finding, currentPath)) {
         result.add(vanishedStatus(id, finding, lineResolver, renameTargets));
       }
     }
@@ -2285,7 +2285,7 @@ public class FollowUpAnalyzer {
     if (currentPath.isBlank()) {
       return false;
     }
-    return !lineResolver.isFindingPresent(currentPath, finding.suggestionOld());
+    return !lineResolver.isFindingStillPresent(finding, currentPath);
   }
 
   /**
@@ -4451,7 +4451,7 @@ public class FollowUpAnalyzer {
     if (currentPath.isBlank()) {
       return true;
     }
-    return lineResolver.isFindingPresent(currentPath, finding.suggestionOld());
+    return lineResolver.isFindingStillPresent(finding, currentPath);
   }
 
   /**

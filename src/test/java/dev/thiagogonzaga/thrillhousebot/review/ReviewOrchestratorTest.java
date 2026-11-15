@@ -142,6 +142,19 @@ class ReviewOrchestratorTest {
 
   private final SupersededFindingsCarryover carryover = new SupersededFindingsCarryover(mapper);
 
+  /** The stored finding rows; a mock that has none, so every round moves as before #1319. */
+  private final FindingStates findingStates = noStoredFindings();
+
+  private static FindingStates noStoredFindings() {
+    var states = mock(FindingStates.class);
+    when(states.roundChanges(any(), any(), any(), any())).thenAnswer(call -> call.getArgument(3));
+    when(states.prepare(any(), any(), any()))
+        .thenReturn(
+            new FindingStates.Pending(
+                null, "o/r", 1, new FindingLedger.Update(Map.of(), false), false));
+    return states;
+  }
+
   private final CiHoldRegistry ciHoldRegistry = new CiHoldRegistry();
 
   /**
@@ -344,7 +357,8 @@ class ReviewOrchestratorTest {
         notifier,
         ciFailureContext,
         ticketContext,
-        learnings);
+        learnings,
+        findingStates);
   }
 
   /** The learnings store the orchestrator is built with; a mock that reports off by default. */
@@ -375,7 +389,8 @@ class ReviewOrchestratorTest {
         sessionPersistence,
         BOT_ID,
         new ActiveModelSettings(config, "m"),
-        carryover);
+        carryover,
+        findingStates);
   }
 
   /** The CI-completion path wired to the same GitHub mocks as the orchestrator (#825). */
@@ -3303,6 +3318,83 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void aRoundThatRaisedNothingAndMovedNoStoredStatusRepostsNeitherSummaryNorDelta() {
+      // #1319: the stored rows already hold the fix and the supersede this round reports again.
+      var pending =
+          new FindingStates.Pending(
+              null, "owner/repo", 42, new FindingLedger.Update(Map.of(), false), true);
+      when(findingStates.prepare(any(), any(), any())).thenReturn(pending);
+      // The summary is on the pull request already, so it is edited in place, which notifies
+      // nobody.
+      when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(
+              List.of(
+                  new GitHubCommentClient.IssueComment(
+                      7L,
+                      PrSummaryGenerator.SUMMARY_MARKER + "\nolder",
+                      new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"),
+                      null)));
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = reviewAFollowUpWithASupersededPrevious(mockedStatic, false, false, List.of());
+
+        verify(commentClient)
+            .updateComment(anyString(), anyString(), anyString(), anyString(), eq(7L), any());
+        verify(commentClient, never())
+            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> !req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)));
+        verify(findingStates).save(pending);
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
+    @Test
+    void aSummaryCommandPostsItsSummaryEvenWhenNothingMoved() {
+      when(findingStates.prepare(any(), any(), any()))
+          .thenReturn(
+              new FindingStates.Pending(
+                  null, "owner/repo", 42, new FindingLedger.Update(Map.of(), false), true));
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        reviewAFollowUpWithASupersededPrevious(mockedStatic, true, false, List.of());
+
+        verify(commentClient)
+            .createComment(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().startsWith(PrSummaryGenerator.SUMMARY_MARKER)));
+      }
+    }
+
+    @Test
+    void theSameRoundWithAStatusTheRowsDidNotHoldPostsTheDelta() {
+      when(findingStates.prepare(any(), any(), any()))
+          .thenReturn(
+              new FindingStates.Pending(
+                  null, "owner/repo", 42, new FindingLedger.Update(Map.of(), true), true));
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        reviewAFollowUpWithASupersededPrevious(mockedStatic, false, false, List.of());
+
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)));
+      }
+    }
+
+    @Test
     void shouldSkipTheDeltaCommentOnASummaryCommandRoundThatPostedTheSummary() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = reviewAFollowUpWithASupersededPrevious(mockedStatic, true);
@@ -3397,6 +3489,20 @@ class ReviewOrchestratorTest {
         org.mockito.MockedStatic<ReviewSession> mockedStatic,
         boolean forceSummary,
         boolean failRendering) {
+      return reviewAFollowUpWithASupersededPrevious(
+          mockedStatic,
+          forceSummary,
+          failRendering,
+          List.of(
+              new ReviewResponse.Finding(
+                  "medium", "src/Main.java", 10, "Style", "Improve naming", null, null)));
+    }
+
+    private ReviewSession reviewAFollowUpWithASupersededPrevious(
+        org.mockito.MockedStatic<ReviewSession> mockedStatic,
+        boolean forceSummary,
+        boolean failRendering,
+        List<ReviewResponse.Finding> raised) {
       when(followUpSummaryConfig.enabled()).thenReturn(true);
       when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
           .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
@@ -3455,15 +3561,11 @@ class ReviewOrchestratorTest {
               List.of(
                   new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed"),
                   new ReviewResult.PreviousFindingStatus(2, "superseded", "code gone")));
-      when(suggestionFormatter.formatReviewComment(any())).thenReturn("**Medium** — fix this");
+      lenient()
+          .when(suggestionFormatter.formatReviewComment(any()))
+          .thenReturn("**Medium** — fix this");
       when(aiReviewService.review(any(ReviewSession.class), any()))
-          .thenReturn(
-              new ReviewResponse(
-                  List.of(
-                      new ReviewResponse.Finding(
-                          "medium", "src/Main.java", 10, "Style", "Improve naming", null, null)),
-                  List.of(),
-                  null));
+          .thenReturn(new ReviewResponse(raised, List.of(), null));
       if (failRendering) {
         when(followUpSummaryConfig.enabled()).thenThrow(new RuntimeException("config unavailable"));
       }

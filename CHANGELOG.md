@@ -20,6 +20,17 @@ All notable changes to ThrillhouseBot.
 - Repository instructions (`.github/thrillhousebot.md` and fallback chain) now read through the extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of `GitHubPullRequestClient`/`GitHubAuthClient`. `InstructionsResolver` no longer takes an auth client or REST client. (#1314)
 - Repository settings (`.github/thrillhousebot.yml`) and project stack manifests now read through the extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of `GitHubPullRequestClient`/`GitHubAuthClient`. `RepoSettingsResolver` and `ProjectStackResolver` no longer take an auth client or REST client. (#1314)
 
+- **Each finding's state is stored across review rounds** (#1319): a new table, `finding_state`
+  (migration V3, created on the first start), keeps one row per finding of a pull request with
+  its status, the code it quotes and its file's blob SHA in the round that raised it. A later
+  round reads which files are unchanged from these rows instead of asking GitHub, and a round
+  that raised nothing new and changed no stored status reports no change: its review carries no
+  delta section, and the summary is only edited in place. Closing or merging a pull request starts a retention
+  period, `FINDINGS_RETENTION` (default `30d`), after which a daily sweep deletes its rows;
+  reopening it keeps them. Uninstalling the App deletes the installation's rows; suspending it
+  does not. The table starts empty and each open pull request's rows are written by its next
+  review. See `docs/OPERATIONS.md`.
+
 ### Fixed
 
 - **Two findings about different keys in one file are no longer counted as one** (#1383): the
