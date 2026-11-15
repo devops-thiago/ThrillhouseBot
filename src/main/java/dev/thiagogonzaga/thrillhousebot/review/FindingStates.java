@@ -39,6 +39,12 @@ import java.util.function.Supplier;
 @ApplicationScoped
 public class FindingStates implements PanacheRepository<FindingState> {
 
+  /** The columns' widths; a longer model-written value is cut, never a reason to lose the row. */
+  static final int FILE_LENGTH = 1000;
+
+  static final int TITLE_LENGTH = 500;
+  static final int LABEL_LENGTH = 16;
+
   private static final String SCOPE_PR =
       "installationId = ?1 and repositoryId = ?2 and prNumber = ?3";
 
@@ -219,6 +225,17 @@ public class FindingStates implements PanacheRepository<FindingState> {
     return open.size();
   }
 
+  /** Marks a pull request's rows checked {@code at}, so the sweep asks about others first. */
+  @Transactional
+  public long touch(RepoScope scope, int prNumber, Instant at) {
+    return update(
+        "updatedAt = ?4 where " + SCOPE_PR,
+        scope.installationId(),
+        scope.repositoryId(),
+        prNumber,
+        at);
+  }
+
   /** A reopened pull request's rows carry on from where they were. */
   @Transactional
   public long reopen(RepoScope scope, int prNumber) {
@@ -279,6 +296,11 @@ public class FindingStates implements PanacheRepository<FindingState> {
         .toList();
   }
 
+  /** {@code value} cut to {@code length} characters. */
+  static String clip(String value, int length) {
+    return value == null || value.length() <= length ? value : value.substring(0, length);
+  }
+
   /** The row {@code state} holds. */
   static FindingLedger.Row row(FindingState state) {
     return new FindingLedger.Row(
@@ -297,11 +319,11 @@ public class FindingStates implements PanacheRepository<FindingState> {
 
   private static void write(FindingState state, FindingLedger.Row row) {
     var subject = row.subject();
-    state.file = subject.file();
+    state.file = clip(subject.file(), FILE_LENGTH);
     state.line = subject.line();
-    state.risk = subject.risk();
-    state.confidence = subject.confidence();
-    state.title = subject.title();
+    state.risk = clip(subject.risk(), LABEL_LENGTH);
+    state.confidence = clip(subject.confidence(), LABEL_LENGTH);
+    state.title = clip(subject.title(), TITLE_LENGTH);
     state.anchor = subject.quote();
     state.anchorSide = row.anchor() == null ? null : row.anchor().side().name();
     state.anchorMatched = row.anchor() == null ? null : row.anchor().matched();

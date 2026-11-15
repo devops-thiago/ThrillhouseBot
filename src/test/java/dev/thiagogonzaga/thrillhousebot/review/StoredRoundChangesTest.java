@@ -160,6 +160,10 @@ class StoredRoundChangesTest {
             .isFindingStillPresent(finding, FILE),
         "a quote that matched then and is gone now is gone");
     assertFalse(resolver(keyOf(finding), null).isFindingStillPresent(finding, FILE));
+    assertFalse(
+        resolver(keyOf(finding), new RaisedAnchor(Side.RIGHT, false))
+            .isFindingStillPresent(finding, "src/Gone.java"),
+        "a file that left the pull request takes the finding with it");
   }
 
   @Test

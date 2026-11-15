@@ -766,12 +766,24 @@ startup maintenance passes (`InterruptedSessionReconciler`, `SessionCostBackfill
 session by design. The repository configuration caches are keyed by installation too.
 
 Entities: `ReviewSession` (dashboard), `PausedPr` (webhook), `FindingFeedback` (review, table
-`finding_feedback`, 👍/👎 signals) and `ReviewLearning` (review, table `review_learning`, #38).
+`finding_feedback`, 👍/👎 signals), `ReviewLearning` (review, table `review_learning`, #38) and
+`FindingState` (review, table `finding_state`, #1319).
 `ReviewSession.aiResponseJson` is more than a dashboard field: it is the record every follow-up
 round reads its earlier findings and statuses from, so a change to the stored `ReviewResponse`
 shape must still parse the rows already stored. A learning is never deleted
 by the bot: `ReviewLearningService.retract` clears `active` and records who and when, and
 `dedupKey` makes a re-reported decline or a redelivered `/remember` idempotent.
+
+`finding_state` holds one row per finding of a pull request, keyed by the marker key
+(`SuggestionFormatter.findingKey`). `FindingLedger` decides what a round writes, without the
+database; `FindingStates` reads and writes the rows; `FindingStateLifecycle` closes, reopens,
+sweeps and deletes them. The rows are inputs, not the status source: statuses are still
+reconciled from the stored responses, and the rows add the blob SHA a file had when a finding was
+raised (`StoredRoundChanges`, ahead of `RoundFileChanges`), the side and own-round match of its
+quote (`DiffLineResolver.isFindingStillPresent`), and whether a round moved anything
+(`FindingStates.Pending.moved`). Nothing may reference a row: the sweep deletes them. A thread id
+is recorded the round after it is posted, from the review comments, with the commit it was posted
+on.
 
 ## Why-nots
 

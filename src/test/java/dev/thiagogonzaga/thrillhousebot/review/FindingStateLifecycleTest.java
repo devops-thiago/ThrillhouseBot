@@ -137,6 +137,32 @@ class FindingStateLifecycleTest {
   }
 
   @Test
+  void anOverlongModelWrittenValueIsCutToItsColumn() {
+    var longTitle = "t".repeat(FindingStates.TITLE_LENGTH + 20);
+    var row =
+        new FindingLedger.Row(
+            "kkkk0001",
+            new FindingLedger.Subject(
+                "f".repeat(FindingStates.FILE_LENGTH + 1),
+                3,
+                "critical!!!!!!!!!!",
+                "high",
+                longTitle,
+                "x"),
+            null,
+            null,
+            new FindingLedger.Status(FindingLedger.OPEN, null, "h"),
+            FindingLedger.Thread.NONE);
+
+    states.save(SCOPE, "owner/repo", PR, Map.of(row.key(), row));
+
+    var subject = states.load(SCOPE, PR).get("kkkk0001").subject();
+    assertEquals(FindingStates.TITLE_LENGTH, subject.title().length());
+    assertEquals(FindingStates.FILE_LENGTH, subject.file().length());
+    assertEquals(FindingStates.LABEL_LENGTH, subject.risk().length());
+  }
+
+  @Test
   void aRowStoredWithoutAnAnchorReadsBackWithout() {
     var bare =
         new FindingLedger.Row(
@@ -212,6 +238,9 @@ class FindingStateLifecycleTest {
 
     assertEquals(3, FindingState.count("prClosedAt is not null"));
     assertEquals(0, FindingState.count("prNumber = 4 and prClosedAt is not null"));
+    // The open one is marked checked, so the next sweep the same day asks about others first.
+    assertEquals(0, lifecycle(now.plus(Duration.ofDays(2))).sweep());
+    verify(prClient, times(1)).getPullRequest(any(), any(), any(), any(), eq(4));
   }
 
   @Test
@@ -302,7 +331,7 @@ class FindingStateLifecycleTest {
   }
 
   @Test
-  void theSweepRunsAtStartupAndDailyOffTheEventLoopAndStopsWithTheApplication() throws Exception {
+  void theSweepRunsAtStartupAndDailyOffTheEventLoopAndStopsWithTheApplication() {
     var timer = new AtomicReference<Handler<Long>>();
     when(vertx.setPeriodic(eq(FindingStateLifecycle.SWEEP_INTERVAL.toMillis()), any()))
         .thenAnswer(
@@ -311,46 +340,68 @@ class FindingStateLifecycleTest {
               return 9L;
             });
     var broken = mock(FindingStates.class);
-    var ran = new java.util.concurrent.CountDownLatch(2);
-    when(broken.deleteClosedBefore(any()))
-        .thenAnswer(
-            call -> {
-              ran.countDown();
-              return 0L;
-            });
+    var queued = new java.util.ArrayList<Runnable>();
     var lifecycle =
-        new FindingStateLifecycle(broken, auth, prClient, vertx, RETENTION, Instant::now);
+        new FindingStateLifecycle(
+            broken, auth, prClient, vertx, RETENTION, Instant::now, queued::add);
 
     lifecycle.onStart(new StartupEvent());
-    awaitIdle(lifecycle);
+    assertEquals(1, queued.size(), "the startup sweep is handed off, not run on the caller");
+    queued.get(0).run();
     timer.get().handle(9L);
-    assertTrue(ran.await(5, java.util.concurrent.TimeUnit.SECONDS), "once at startup, once a day");
+    assertEquals(2, queued.size(), "the timer hands off another");
+    queued.get(1).run();
     lifecycle.onStop(new ShutdownEvent());
 
+    verify(broken, times(2)).deleteClosedBefore(any());
     verify(vertx).cancelTimer(9L);
-    assertDoesNotThrow(lifecycle::scheduleSweep, "a stopped sweeper only logs");
   }
 
   @Test
-  void aSweepIsNotStartedWhileOneIsRunning() throws Exception {
-    var release = new java.util.concurrent.CountDownLatch(1);
+  void aSweepIsNotStartedWhileOneIsRunning() {
     var broken = mock(FindingStates.class);
-    when(broken.deleteClosedBefore(any()))
-        .thenAnswer(
-            call -> {
-              release.await(5, java.util.concurrent.TimeUnit.SECONDS);
-              return 0L;
-            });
+    var queued = new java.util.ArrayList<Runnable>();
     var lifecycle =
-        new FindingStateLifecycle(broken, auth, prClient, vertx, RETENTION, Instant::now);
+        new FindingStateLifecycle(
+            broken, auth, prClient, vertx, RETENTION, Instant::now, queued::add);
 
     lifecycle.scheduleSweep();
     lifecycle.scheduleSweep();
-    release.countDown();
-    awaitIdle(lifecycle);
+    assertEquals(1, queued.size());
+    assertTrue(lifecycle.sweepRunning());
+    queued.get(0).run();
+    assertFalse(lifecycle.sweepRunning());
+    lifecycle.scheduleSweep();
 
-    verify(broken, times(1)).deleteClosedBefore(any());
+    assertEquals(2, queued.size(), "a finished sweep lets the next one start");
+  }
+
+  @Test
+  void aSweepThatCannotBeHandedOffIsLoggedAndCanBeTriedAgain() {
+    var lifecycle =
+        new FindingStateLifecycle(
+            states,
+            auth,
+            prClient,
+            vertx,
+            RETENTION,
+            Instant::now,
+            task -> {
+              throw new java.util.concurrent.RejectedExecutionException("stopped");
+            });
+
+    assertDoesNotThrow(lifecycle::scheduleSweep);
+    assertFalse(lifecycle.sweepRunning());
+  }
+
+  @Test
+  void theApplicationsSweeperStopsWithIt() {
+    var lifecycle = lifecycle(Instant.now());
+
     lifecycle.onStop(new ShutdownEvent());
+
+    assertDoesNotThrow(lifecycle::scheduleSweep, "a stopped sweeper only logs");
+    assertFalse(lifecycle.sweepRunning());
   }
 
   @Test
@@ -453,12 +504,5 @@ class FindingStateLifecycleTest {
     assertTrue(pending.moved(holds));
     states.save(pending);
     assertEquals(0, FindingState.count());
-  }
-
-  /** Waits for the sweep the lifecycle is running, if any, to end. */
-  private static void awaitIdle(FindingStateLifecycle lifecycle) throws InterruptedException {
-    for (var i = 0; i < 100 && lifecycle.sweepRunning(); i++) {
-      Thread.sleep(20);
-    }
   }
 }

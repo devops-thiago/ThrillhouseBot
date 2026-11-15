@@ -32,6 +32,7 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.WebApplicationException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -76,8 +77,7 @@ public class FindingStateLifecycle {
   private final Vertx vertx;
   private final Duration retention;
   private final Supplier<Instant> clock;
-  private final ExecutorService sweeper =
-      Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("finding-sweep-", 0).factory());
+  private final Executor sweeper;
   private final AtomicBoolean sweeping = new AtomicBoolean();
   private volatile long timerId = -1;
 
@@ -99,6 +99,26 @@ public class FindingStateLifecycle {
       Vertx vertx,
       Duration retention,
       Supplier<Instant> clock) {
+    this(
+        states,
+        authClient,
+        prClient,
+        vertx,
+        retention,
+        clock,
+        Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("finding-sweep-", 0).factory()));
+  }
+
+  /** Visible for tests: also where the sweep runs. */
+  FindingStateLifecycle(
+      FindingStates states,
+      GitHubAuthClient authClient,
+      GitHubPullRequestClient prClient,
+      Vertx vertx,
+      Duration retention,
+      Supplier<Instant> clock,
+      Executor sweeper) {
+    this.sweeper = sweeper;
     this.states = states;
     this.authClient = authClient;
     this.prClient = prClient;
@@ -116,7 +136,9 @@ public class FindingStateLifecycle {
     if (timerId >= 0) {
       vertx.cancelTimer(timerId);
     }
-    sweeper.shutdownNow();
+    if (sweeper instanceof ExecutorService service) {
+      service.shutdownNow();
+    }
   }
 
   /** Records a close or a reopen; never calls GitHub. */
@@ -204,9 +226,13 @@ public class FindingStateLifecycle {
       }
       var closed = 0;
       for (var pr : states.idleOpenPullRequests(now.minus(IDLE), SWEEP_CHECKS)) {
+        var scope = new RepoScope(pr.installationId(), pr.repositoryId());
         if (isClosed(pr)) {
-          states.markClosed(new RepoScope(pr.installationId(), pr.repositoryId()), pr.prNumber());
+          states.markClosed(scope, pr.prNumber());
           closed++;
+        } else {
+          // Checked now: the next sweeps ask about the pull requests not checked for longest.
+          states.touch(scope, pr.prNumber(), now);
         }
       }
       if (closed > 0) {

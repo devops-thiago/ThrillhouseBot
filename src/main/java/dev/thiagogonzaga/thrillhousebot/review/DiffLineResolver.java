@@ -182,8 +182,9 @@ public final class DiffLineResolver {
    * Whether a prior finding's flagged code is still present at {@code currentPath} (its file, or
    * the file it was renamed to), on the side its quote was on in the round that raised it (#1319).
    * A finding whose quote was not present even in that round is not read as gone now only because
-   * it still is not: its absence says nothing about a fix (#1318). With nothing stored about the
-   * finding, this is {@link #isFindingPresent(String, String)}.
+   * it still is not, while its file is still one the pull request changes: its absence says nothing
+   * about a fix (#1318). A file that left the pull request takes the finding with it. With nothing
+   * stored about the finding, this is {@link #isFindingPresent(String, String)}.
    */
   public boolean isFindingStillPresent(ReviewResponse.Finding finding, String currentPath) {
     var raised =
@@ -193,7 +194,7 @@ public final class DiffLineResolver {
     if (isFindingPresent(currentPath, finding.suggestionOld(), side)) {
       return true;
     }
-    if (raised.isPresent() && !raised.get().matched()) {
+    if (raised.isPresent() && !raised.get().matched() && isChangedFile(currentPath)) {
       Log.infof(
           "A finding on %s did not match the diff in the round that raised it either; holding it"
               + " open",
