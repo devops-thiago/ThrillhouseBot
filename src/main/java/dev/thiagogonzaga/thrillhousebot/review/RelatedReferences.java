@@ -171,6 +171,9 @@ final class RelatedReferences {
   /** A name shorter than this is too common a word to credit a call with no receiver to. */
   static final int MIN_BARE_SYMBOL_CHARS = 3;
 
+  /** An identifier of at least {@link #MIN_BARE_SYMBOL_CHARS} characters. */
+  private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_]\\w{2,}");
+
   /** Before a capital that follows a lower-case letter or digit, or that ends an acronym. */
   private static final Pattern CAMEL_BOUNDARY =
       Pattern.compile("(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])");
@@ -283,11 +286,42 @@ final class RelatedReferences {
         }
       }
     }
-    // A call belongs to the candidate it was made on, not to every file this one refers to.
+    attribute(calls, referred);
+  }
+
+  /**
+   * Credits each call to the candidates it was made on, not to every file the changed file refers
+   * to, in one pass over the calls: the candidates are looked up by name, never rescanned per call.
+   * A call with a receiver goes to the files that receiver is named after ({@code sanitizer} for
+   * {@code InputSanitizer}: the type's name or its last words, in any case and with or without
+   * underscores, so {@code userProfile} is not named after {@code User}); one with no receiver of
+   * its own goes to the files its line uses the name of as a whole identifier.
+   */
+  private static void attribute(List<Call> calls, Set<Found> referred) {
+    var byReceiver = new HashMap<String, Set<Found>>();
+    var byName = new HashMap<String, Set<Found>>();
     for (var entry : referred) {
-      calls.stream()
-          .filter(call -> call.madeOn(entry.symbols))
-          .forEach(call -> entry.members.add(call.member()));
+      for (var symbol : entry.symbols) {
+        byName.computeIfAbsent(symbol, k -> new LinkedHashSet<>()).add(entry);
+        var words = CAMEL_BOUNDARY.matcher(symbol).replaceAll("_").split("_+");
+        for (var from = 0; from < words.length; from++) {
+          var tail = String.join("", List.of(words).subList(from, words.length));
+          byReceiver
+              .computeIfAbsent(tail.toLowerCase(Locale.ROOT), k -> new LinkedHashSet<>())
+              .add(entry);
+        }
+      }
+    }
+    for (var call : calls) {
+      if (call.receiver() != null) {
+        var variable = call.receiver().replace("_", "").toLowerCase(Locale.ROOT);
+        byReceiver.getOrDefault(variable, Set.of()).forEach(e -> e.members.add(call.member()));
+        continue;
+      }
+      var names = IDENTIFIER.matcher(call.line());
+      while (names.find()) {
+        byName.getOrDefault(names.group(), Set.of()).forEach(e -> e.members.add(call.member()));
+      }
     }
   }
 
@@ -295,43 +329,7 @@ final class RelatedReferences {
    * One member call on an added line: the identifier it was made on, or {@code null} when it
    * follows a call or an expression, the member's name, and the line.
    */
-  private record Call(String receiver, String member, String line) {
-
-    /**
-     * Whether the call was made on a file known by {@code symbols}: its receiver is one of the
-     * names or a variable named after one ({@code sanitizer} for {@code InputSanitizer}), or it has
-     * no receiver of its own and its line uses one of the names as a whole identifier.
-     */
-    boolean madeOn(Set<String> symbols) {
-      for (var symbol : symbols) {
-        if (receiver == null ? usesName(line, symbol) : namedAfter(receiver, symbol)) {
-          return true;
-        }
-      }
-      return false;
-    }
-
-    private static boolean usesName(String line, String symbol) {
-      return symbol.length() >= MIN_BARE_SYMBOL_CHARS && RelatedContext.wholeWord(line, symbol);
-    }
-
-    /**
-     * Whether a variable is named after a type: it is the type's name, or its last words, in any
-     * case and with or without underscores. {@code userProfile} is not named after {@code User},
-     * nor {@code ratio} after {@code io}.
-     */
-    private static boolean namedAfter(String receiver, String symbol) {
-      var variable = receiver.replace("_", "").toLowerCase(Locale.ROOT);
-      var words = CAMEL_BOUNDARY.matcher(symbol).replaceAll("_").split("_+");
-      for (var from = 0; from < words.length; from++) {
-        var tail = String.join("", List.of(words).subList(from, words.length));
-        if (tail.toLowerCase(Locale.ROOT).equals(variable)) {
-          return true;
-        }
-      }
-      return false;
-    }
-  }
+  private record Call(String receiver, String member, String line) {}
 
   private static void collectCalls(String line, List<Call> calls) {
     var matcher = MEMBER_CALL.matcher(line);
