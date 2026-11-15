@@ -434,9 +434,11 @@ public class VerdictBuilder {
   }
 
   /**
-   * The pull request's added lines, every file's {@code +} lines without the {@code +++} header:
-   * what the Description vs. Implementation screen checks a gap's "nothing shows it" against
-   * (#1387). A file with no patch adds nothing here.
+   * The pull request's added lines, every file's {@code +} lines inside its hunks: what the
+   * Description vs. Implementation screen checks a gap's "nothing shows it" against (#1387). A
+   * {@code +++} file header can only come before the first {@code @@} hunk header, so a line inside
+   * a hunk is an added line whatever it starts with ({@code +++index;} adds {@code ++index;}). A
+   * file with no patch adds nothing here.
    */
   static String addedCode(List<GitHubPullRequestClient.FileDiff> files) {
     var added = new StringBuilder();
@@ -444,8 +446,10 @@ public class VerdictBuilder {
       if (file.patch() == null) {
         continue;
       }
+      var inHunk = false;
       for (var line : file.patch().split("\n", -1)) {
-        if (line.startsWith("+") && !line.startsWith("+++")) {
+        inHunk = inHunk || line.startsWith("@@");
+        if (inHunk && line.startsWith("+")) {
           added.append(line, 1, line.length()).append('\n');
         }
       }

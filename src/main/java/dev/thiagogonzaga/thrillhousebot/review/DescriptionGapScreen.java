@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -906,7 +907,7 @@ final class DescriptionGapScreen {
     if (gaps.isEmpty() || addedCode == null || addedCode.isBlank()) {
       return gaps;
     }
-    var added = codeNames(addedCode);
+    var added = identifiers(addedCode);
     var kept = gaps.stream().filter(gap -> !answeredByDiff(gap, added)).toList();
     return kept.size() == gaps.size() ? gaps : kept;
   }
@@ -922,11 +923,12 @@ final class DescriptionGapScreen {
    * <p>It is answered when, in its own words (quoted passages are the PR text's): it says the
    * material does not show or cannot confirm something ({@link #UNSHOWN}); no clause before that
    * states a mismatch ({@link #ownMismatch}); it names code ({@link #CODE_SPAN} or {@link
-   * #BARE_CODE_NAMES}); and every name it gives is a whole name on an added line ({@code added}). A
-   * {@code Linked issue #N:} gap is judged the same way. One name the diff does not add keeps the
-   * gap: the bullet may be about that one. Every added line counts, comments and documentation
-   * included: the gap claims the material does not show the name, and an added line that names it
-   * shows it to the reader the same way. A name only on a removed line does not count.
+   * #BARE_CODE_NAMES}); and every name it gives is a whole identifier on an added line ({@code
+   * added}). A {@code Linked issue #N:} gap is judged the same way. One name the diff does not add
+   * keeps the gap: the bullet may be about that one. Every added line counts, comments and
+   * documentation included: the gap claims the material does not show the name, and an added line
+   * that names it shows it to the reader the same way. A name only on a removed line does not
+   * count.
    */
   static boolean answeredByDiff(String gap, Set<String> added) {
     var own = QUOTED.matcher(foldQuotes(gap)).replaceAll(" ");
@@ -938,6 +940,20 @@ final class DescriptionGapScreen {
     }
     var names = codeNames(own);
     return !names.isEmpty() && added.containsAll(names);
+  }
+
+  /**
+   * Every identifier in {@code code}. Added code is code, so a plain lower-case name in it ({@code
+   * fence} in {@code PromptTemplateEscaper.fence(relatedContext)}) is a name a gap may give in a
+   * code span, which {@link #codeNames} would only read in its camel and snake shapes.
+   */
+  static Set<String> identifiers(String code) {
+    var names = new HashSet<String>();
+    var found = IDENTIFIER.matcher(code);
+    while (found.find()) {
+      names.add(found.group());
+    }
+    return names;
   }
 
   /** Where the first of {@code shapes} first matches in {@code text}; -1 when none does. */

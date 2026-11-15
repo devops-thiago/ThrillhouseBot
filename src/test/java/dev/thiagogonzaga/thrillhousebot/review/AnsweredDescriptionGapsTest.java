@@ -143,7 +143,8 @@ class AnsweredDescriptionGapsTest {
     var gaps = List.of(ESCAPER_GAP, CONTEXT_EVIDENCE_GAP);
     // The added code has neither name; a removed line is not part of it.
     var added =
-        VerdictBuilder.addedCode(List.of(file("-  PromptTemplateEscaper.fence(x);\n+  y();")));
+        VerdictBuilder.addedCode(
+            List.of(file("@@ -1 +1 @@\n-  PromptTemplateEscaper.fence(x);\n+  y();")));
 
     assertSame(gaps, DescriptionGapScreen.withoutAnsweredByDiff(gaps, added));
     assertSame(gaps, DescriptionGapScreen.withoutAnsweredByDiff(gaps, ""));
@@ -199,9 +200,30 @@ class AnsweredDescriptionGapsTest {
   @Test
   void addedCodeTakesEveryFilesAddedLinesAndSkipsAFileWithoutAPatch() {
     var files =
-        List.of(file(" context\n-removed\n+added one\n+++ header"), file(null), file("+added two"));
+        List.of(
+            file("@@ -1,2 +1,2 @@\n context\n-removed\n+added one"),
+            file(null),
+            file("@@ -0,0 +1 @@\n+added two"));
 
     assertEquals("added one\nadded two\n", VerdictBuilder.addedCode(files));
+  }
+
+  @Test
+  void addedCodeSkipsOnlyTheFileHeadersBeforeTheFirstHunk() {
+    var files = List.of(file("--- a/A.java\n+++ b/A.java\n@@ -1 +1,2 @@\n i = 0;\n+++index;"));
+
+    assertEquals("++index;\n", VerdictBuilder.addedCode(files));
+  }
+
+  @Test
+  void aGapNamingAPlainLowerCaseMethodTheDiffAddsIsAnswered() {
+    var gap =
+        "Linked issue #55: the injected related-context section is to be wrapped by"
+            + " `PromptTemplateEscaper.fence` like every untrusted slot — no changed file or"
+            + " declared name shows that wrapping (unconfirmed)";
+
+    assertEquals(List.of(), DescriptionGapScreen.withoutAnsweredByDiff(List.of(gap), ADDED_CODE));
+    assertTrue(DescriptionGapScreen.identifiers(ADDED_CODE).contains("fence"));
   }
 
   @Test
