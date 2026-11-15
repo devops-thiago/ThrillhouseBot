@@ -204,12 +204,19 @@ public class FindingStates implements PanacheRepository<FindingState> {
   /** Starts the retention period of a closed or merged pull request's rows. */
   @Transactional
   public long markClosed(RepoScope scope, int prNumber) {
-    return update(
-        "prClosedAt = ?4, updatedAt = ?4 where " + SCOPE_PR + " and prClosedAt is null",
-        scope.installationId(),
-        scope.repositoryId(),
-        prNumber,
-        clock.get());
+    var now = clock.get();
+    var open =
+        find(
+                SCOPE_PR + " and prClosedAt is null",
+                scope.installationId(),
+                scope.repositoryId(),
+                prNumber)
+            .list();
+    for (var state : open) {
+      state.prClosedAt = now;
+      state.updatedAt = now;
+    }
+    return open.size();
   }
 
   /** A reopened pull request's rows carry on from where they were. */
