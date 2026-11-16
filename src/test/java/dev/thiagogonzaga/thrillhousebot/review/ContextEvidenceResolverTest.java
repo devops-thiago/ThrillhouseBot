@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import dev.thiagogonzaga.thrillhousebot.review.ai.FindingVerificationService;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeSet;
 import org.junit.jupiter.api.Test;
@@ -658,5 +659,79 @@ class ContextEvidenceResolverTest {
   void ignoresARolledUpRangeCountThatIsNotALineNumber() {
     assertTrue(ContextEvidenceResolver.rangesContain("12-18, and 3 more range(s)", 15));
     assertFalse(ContextEvidenceResolver.rangesContain("12-18, and 3 more range(s)", 99));
+  }
+
+  @Test
+  void aFindingNamingARelatedFileCarriesItsExcerptBesideItsOtherEvidence() {
+    // #55: the verifier is not given the related-context section, only this note.
+    var related =
+        new RelatedContext(
+            List.of(
+                new RelatedContext.RelatedFile(
+                    "src/main/java/app/Escaper.java",
+                    "sanitizer-or-validator",
+                    List.of(PATH),
+                    30,
+                    List.of(
+                        new RelatedContext.Region(
+                            7, List.of("  static String escape(String raw) { return raw; }"))))),
+            1);
+    var round = round(COVERAGE_SECTION, PathScopedInstructions.NONE).withRelatedContext(related);
+    var naming = finding(PATH, 42, "`Escaper.escape` returns its input unchanged.");
+    var other = finding(PATH, 42, "The branch here is never executed.");
+
+    var note = evidence(round, naming);
+    assertTrue(note.contains("lists line 42"), note);
+    assertTrue(note.contains("Related context this review supplied"), note);
+    assertTrue(note.contains("7 |   static String escape"), note);
+    assertFalse(evidence(round, other).contains("Related context"), "names no related file");
+  }
+
+  @Test
+  void aRoundWithoutRelatedContextOrASilentOneIsReturnedAsItIs() {
+    var round = round(COVERAGE_SECTION, PathScopedInstructions.NONE);
+    var silent = ContextEvidenceResolver.disabled();
+    var related =
+        new RelatedContext(
+            List.of(
+                new RelatedContext.RelatedFile(
+                    "a/Escaper.java", "interface", List.of(), 1, List.of())),
+            1);
+
+    assertSame(round, round.withRelatedContext(RelatedContext.NONE));
+    assertSame(round, round.withRelatedContext(null));
+    assertSame(silent, silent.withRelatedContext(related));
+  }
+
+  @Test
+  void relatedExcerptsAreChargedApartSoTheyNeverCrowdOutTheOtherNotes() {
+    // #55 review: findings naming a related file must not spend the budget the coverage,
+    // path-rule and CI notes are charged to.
+    var region =
+        new RelatedContext.Region(
+            1, List.of("x".repeat(RelatedContext.MAX_NOTE_EXCERPT_CHARS - 40)));
+    var related =
+        new RelatedContext(
+            List.of(
+                new RelatedContext.RelatedFile(
+                    "src/main/java/app/Escaper.java", "interface", List.of(), 9, List.of(region))),
+            1);
+    var round = round(COVERAGE_SECTION, PathScopedInstructions.NONE).withRelatedContext(related);
+    var naming = new ArrayList<ReviewResponse.Finding>();
+    for (var i = 0; i < 6; i++) {
+      naming.add(
+          new ReviewResponse.Finding(
+              "medium", "high", "src/Other" + i + ".java", 3, "t" + i, "Escaper.java", "x", "y"));
+    }
+    var covered = finding(PATH, 42, "The branch here is never executed.");
+    naming.add(covered);
+
+    var located = round.locate(naming);
+
+    var attached =
+        naming.stream().filter(f -> f != covered && located.forFinding(f) != null).count();
+    assertTrue(attached >= 1 && attached < 6, "the excerpts stop at their own share: " + attached);
+    assertNotNull(located.forFinding(covered), "the coverage note still fits its own budget");
+    assertTrue(located.forFinding(covered).contains("lists line 42"));
   }
 }

@@ -54,6 +54,7 @@ class AiServiceUserMessagePlacementTest {
   @Test
   void summaryVerifierPutsUserMessageOnTheMethod() {
     assertUserMessageOnMethodNotParameter(SummaryVerifier.class);
+    assertUserMessageOnMethodNotParameter(RelatedContextSelector.class);
   }
 
   @Test

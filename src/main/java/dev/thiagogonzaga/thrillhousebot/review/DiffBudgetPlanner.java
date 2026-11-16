@@ -59,6 +59,14 @@ public class DiffBudgetPlanner {
   private static final double PREVIOUS_FINDINGS_BUDGET_SHARE = 0.25;
 
   /**
+   * Share of the per-call input budget the opt-in related context (#55) may occupy. Like the
+   * previous-findings block it is shared overhead, repeated by every batch call, so it is charged
+   * against the whole per-call budget. Smaller than that block's share: the excerpts are context
+   * for the diff and must never rival it.
+   */
+  static final double RELATED_CONTEXT_BUDGET_SHARE = 0.15;
+
+  /**
    * Opening shape of a numbered previous finding: {@code "12. [HIGH] path/File.java:7 — Title"}.
    */
   private static final Pattern NUMBERED_ENTRY = Pattern.compile("^\\d+\\. \\[");
@@ -466,6 +474,19 @@ public class DiffBudgetPlanner {
    */
   public BudgetPlan plan(
       List<GitHubPullRequestClient.FileDiff> reviewable, AiReviewService.PromptInputs inputs) {
+    return plan(reviewable, inputs, 0);
+  }
+
+  /**
+   * {@link #plan(List, AiReviewService.PromptInputs)} for a review that already made {@code
+   * callsMade} planned calls before its review calls (the related-context selection, #55): they
+   * come out of the {@code max-ai-calls} cap with the summary call, and one review call is always
+   * left.
+   */
+  public BudgetPlan plan(
+      List<GitHubPullRequestClient.FileDiff> reviewable,
+      AiReviewService.PromptInputs inputs,
+      int callsMade) {
     var review = config.review();
     if (activeModel.maxInputTokens() <= 0) {
       return plan(reviewable, 0, 1);
@@ -496,7 +517,21 @@ public class DiffBudgetPlanner {
             + bounded.previousFindings()
             + bounded.repoInstructions();
     return plan(
-        reviewable, sharedOverhead, perCallInputBudget(), Math.max(1, review.maxAiCalls() - 1));
+        reviewable,
+        sharedOverhead,
+        perCallInputBudget(),
+        Math.max(1, review.maxAiCalls() - 1 - Math.max(0, callsMade)));
+  }
+
+  /**
+   * The tokens the related-context section (#55) may take: {@link #RELATED_CONTEXT_BUDGET_SHARE} of
+   * the per-call input budget, or no bound of its own when budgeting is disabled.
+   */
+  public int relatedContextTokenBudget() {
+    var budget = perCallInputBudget();
+    return budget == Integer.MAX_VALUE
+        ? budget
+        : Math.max(1, (int) (budget * RELATED_CONTEXT_BUDGET_SHARE));
   }
 
   /**

@@ -202,12 +202,19 @@ public final class ContextEvidenceResolver {
     /** Whether this round speaks at all; see {@link ContextEvidenceResolver#disabled()}. */
     private final boolean silent;
 
+    /** The repository code outside the diff the review call was shown (#55). */
+    private final RelatedContext relatedContext;
+
+    /** The budget the related-context excerpts are charged to, apart from {@link #budget}. */
+    private final EvidenceBudget relatedBudget = EvidenceBudget.forRelatedContext();
+
     private Round(
         String patchCoverage,
         PathScopedInstructions pathInstructions,
         CiFailureCitations ciFailures,
         EvidenceBudget budget,
         boolean silent) {
+      this.relatedContext = RelatedContext.NONE;
       this.ciFailures = ciFailures;
       this.coverageSupplied = patchCoverage != null && !patchCoverage.isBlank();
       this.coverage = coverageSupplied ? parseSection(patchCoverage) : Coverage.NONE;
@@ -216,6 +223,30 @@ public final class ContextEvidenceResolver {
       index(pathInstructions);
       this.budget = budget;
       this.silent = silent;
+    }
+
+    /**
+     * This round with the review's related context (#55): a finding naming a related file then
+     * carries its excerpt, charged to a budget of its own so it cannot crowd out the other notes. A
+     * silent round stays silent.
+     */
+    public Round withRelatedContext(RelatedContext related) {
+      if (silent || related == null || related.isEmpty()) {
+        return this;
+      }
+      return new Round(this, related);
+    }
+
+    /** {@code from} with a related context: its parsed sections and its budget, not a re-parse. */
+    private Round(Round from, RelatedContext relatedContext) {
+      this.relatedContext = relatedContext;
+      this.ciFailures = from.ciFailures;
+      this.coverageSupplied = from.coverageSupplied;
+      this.coverage = from.coverage;
+      this.scopesByFile = from.scopesByFile;
+      this.governedByName = from.governedByName;
+      this.budget = from.budget;
+      this.silent = from.silent;
     }
 
     /** The scope and name indexes one review's governed files are looked up through. */
@@ -272,10 +303,20 @@ public final class ContextEvidenceResolver {
     private String noteFor(ReviewResponse.Finding finding) {
       var note =
           join(join(coverageNote(finding), pathRuleNote(finding)), ciFailures.noteFor(finding));
+      // The related-context excerpt is charged apart (#55), after the notes that were here first.
+      return join(
+          attached(finding, note, budget),
+          attached(finding, relatedContext.noteFor(finding), relatedBudget));
+    }
+
+    /**
+     * {@code note} charged to {@code to}, or {@code null} when there is none or it does not fit.
+     */
+    private static String attached(ReviewResponse.Finding finding, String note, EvidenceBudget to) {
       if (note == null) {
         return null;
       }
-      var attached = budget.attach(note);
+      var attached = to.attach(note);
       if (attached == null) {
         Log.debugf(
             "Context evidence for %s:%d dropped at the review's character budget",

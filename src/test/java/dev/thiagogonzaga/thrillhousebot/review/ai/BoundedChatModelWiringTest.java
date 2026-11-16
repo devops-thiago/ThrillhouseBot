@@ -57,6 +57,7 @@ class BoundedChatModelWiringTest {
 
   @Inject FindingVerifier findingVerifier;
   @Inject SummaryVerifier summaryVerifier;
+  @Inject RelatedContextSelector relatedContextSelector;
   @Inject ResponseRepairer responseRepairer;
   @Inject SummaryResponseRepairer summaryResponseRepairer;
   @Inject ReplyAssistant replyAssistant;
@@ -79,6 +80,7 @@ class BoundedChatModelWiringTest {
     calls.put(
         "FindingVerifier#verify", () -> findingVerifier.verify("f", "c", "d", "s", "p", "sys"));
     calls.put("SummaryVerifier#verify", () -> summaryVerifier.verify("st", "[]", "c", "d", "s"));
+    calls.put("RelatedContextSelector#select", () -> relatedContextSelector.select("f", "c", 4));
     calls.put("ResponseRepairer#repair", () -> responseRepairer.repair("c", "e", "a"));
     calls.put(
         "SummaryResponseRepairer#repair", () -> summaryResponseRepairer.repair("c", "e", "a"));
@@ -120,6 +122,7 @@ class BoundedChatModelWiringTest {
         services.containsAll(STREAMED_THROUGH_REVIEW_SERVICE)
             && services.contains(FindingVerifier.class)
             && services.contains(SummaryVerifier.class)
+            && services.contains(RelatedContextSelector.class)
             && services.contains(ResponseRepairer.class)
             && services.contains(SummaryResponseRepairer.class),
         "the AI services must be discoverable: " + services);

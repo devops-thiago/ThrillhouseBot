@@ -35,6 +35,7 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
@@ -777,6 +778,15 @@ public class ReviewContextLoader {
         req.isManualTrigger(),
         pr.base() != null ? pr.base().ref() : "",
         req.forceSummary());
+  }
+
+  /**
+   * The review's effective ignore set as a path test: the deployment's globs and the repository's
+   * own. For a caller outside {@link #load} that must not read a file the review ignores (the
+   * related context, #55); the settings come from the resolver's cache.
+   */
+  Predicate<String> ignoredPaths(ReviewOrchestrator.ReviewRequest req) {
+    return diffFormatter.ignoreGlobs(resolveRepoSettings(req).ignoredFiles())::matches;
   }
 
   /**

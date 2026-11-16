@@ -91,6 +91,8 @@ class StartupConfigValidatorTest {
     private String ticketContextProvider = "github";
     private int ticketContextMaxIssues = 3;
     private int ticketContextMaxChars = 6000;
+    private boolean relatedContextEnabled = false;
+    private int relatedContextMaxFiles = 4;
     private int maxConcurrentCalls = 0;
     private boolean reasoningEnabled = false;
     private String reasoningEffort = "low";
@@ -187,6 +189,12 @@ class StartupConfigValidatorTest {
     ConfigBuilder ciContext(boolean enabled, int maxChars) {
       this.ciContextEnabled = enabled;
       this.ciContextMaxChars = maxChars;
+      return this;
+    }
+
+    ConfigBuilder relatedContext(boolean enabled, int maxFiles) {
+      this.relatedContextEnabled = enabled;
+      this.relatedContextMaxFiles = maxFiles;
       return this;
     }
 
@@ -310,6 +318,10 @@ class StartupConfigValidatorTest {
       lenient().when(ticketContext.provider()).thenReturn(ticketContextProvider);
       lenient().when(ticketContext.maxIssues()).thenReturn(ticketContextMaxIssues);
       lenient().when(ticketContext.maxChars()).thenReturn(ticketContextMaxChars);
+      var relatedContext = mock(ThrillhouseConfig.RelatedContextConfig.class);
+      lenient().when(review.relatedContext()).thenReturn(relatedContext);
+      lenient().when(relatedContext.enabled()).thenReturn(relatedContextEnabled);
+      lenient().when(relatedContext.maxFiles()).thenReturn(relatedContextMaxFiles);
       lenient().when(review.blockingStrictness()).thenReturn(blockingStrictness);
       var securityScan = mock(ThrillhouseConfig.SecurityScanConfig.class);
       lenient().when(review.securityScan()).thenReturn(securityScan);
@@ -1286,6 +1298,30 @@ class StartupConfigValidatorTest {
     new ConfigBuilder().learnings(true, true, 1, 1, 500).build().validate();
     new ConfigBuilder().learnings(true, true, 1000, 50, 20_000).build().validate();
     new ConfigBuilder().learnings(false, false, -1, -1, -1).build().validate();
+  }
+
+  @Test
+  void failsFastWhenAnEnabledRelatedContextHasNoCallForItsSelectionOrABadFileCount() {
+    var calls =
+        assertFailsValidation(new ConfigBuilder().relatedContext(true, 4).maxAiCalls(2).build());
+    assertTrue(
+        calls
+            .getMessage()
+            .contains("REVIEW_RELATED_CONTEXT_ENABLED=true requires REVIEW_MAX_AI_CALLS >= 3"),
+        calls.getMessage());
+    for (var maxFiles : List.of(0, 11)) {
+      var ex = assertFailsValidation(new ConfigBuilder().relatedContext(true, maxFiles).build());
+      assertTrue(
+          ex.getMessage().contains("REVIEW_RELATED_CONTEXT_MAX_FILES must be between 1 and 10"),
+          ex.getMessage());
+    }
+  }
+
+  @Test
+  void acceptsRelatedContextAtItsBoundsAndIgnoresItWhileDisabled() {
+    new ConfigBuilder().relatedContext(true, 1).maxAiCalls(3).build().validate();
+    new ConfigBuilder().relatedContext(true, 10).build().validate();
+    new ConfigBuilder().relatedContext(false, 0).maxAiCalls(1).build().validate();
   }
 
   @Test

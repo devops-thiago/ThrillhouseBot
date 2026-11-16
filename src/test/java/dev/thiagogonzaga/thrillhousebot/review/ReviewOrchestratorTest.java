@@ -339,8 +339,10 @@ class ReviewOrchestratorTest {
         new CheckRunManager(checkRunClient),
         newContextLoader(),
         new ReviewPromptAssembler(config, labeler, diffFormatter, ReviewDimensionRouter.disabled()),
-        new DiffBudgetPlanner(
-            diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
+        budgetPlanner != null
+            ? budgetPlanner
+            : new DiffBudgetPlanner(
+                diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")),
         reviewPublisher,
         verdictBuilder,
         findingPipeline,
@@ -357,9 +359,16 @@ class ReviewOrchestratorTest {
         notifier,
         ciFailureContext,
         ticketContext,
+        relatedContext,
         learnings,
         findingStates);
   }
+
+  /** The planner the orchestrator is built with; its own unless a test supplies one to watch. */
+  private DiffBudgetPlanner budgetPlanner;
+
+  /** The related context the orchestrator is built with; off unless a test switches it on. */
+  private RelatedContextResolver relatedContext = RelatedContextResolver.disabled();
 
   /** The learnings store the orchestrator is built with; a mock that reports off by default. */
   private ReviewLearnings learnings = mock(ReviewLearnings.class);
@@ -1938,6 +1947,100 @@ class ReviewOrchestratorTest {
       assertEquals("owner", seen.get(0).owner());
       assertEquals("repo", seen.get(0).repo());
       assertEquals(42, seen.get(0).prNumber());
+    }
+
+    /**
+     * #55: with the related context on, the review passes it through every seam: the ignore set of
+     * the repository, the prompt section, the call accounting, the verifier's evidence, and the
+     * release of the spend-ledger entry the selection call opened.
+     */
+    @Test
+    void theRelatedContextIsWiredThroughTheReviewWhenItIsOn() {
+      var handler = "src/app/web/Handler.java";
+      var sanitizer = "src/app/util/InputSanitizer.java";
+      var generated = "src/app/gen/Limits.java";
+      var selection =
+          mock(dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextSelectionService.class);
+      budgetPlanner =
+          org.mockito.Mockito.spy(
+              new DiffBudgetPlanner(
+                  diffFormatter, new TokenCounter(), config, new ActiveModelSettings(config, "m")));
+      relatedContext =
+          new RelatedContextResolver(true, 4, 6, selection, budgetPlanner, new TokenCounter());
+      findingPipeline = org.mockito.Mockito.spy(findingPipeline);
+      orchestrator = newOrchestrator();
+      when(repoSettingsResolver.resolve(anyString(), anyString(), anyString(), anyLong()))
+          .thenReturn(
+              new dev.thiagogonzaga.thrillhousebot.github.RepoSettings(
+                  List.of("src/app/gen/**"), List.of(), ".github/thrillhousebot.yml"));
+      when(prClient.getTree(any(), any(), eq("owner"), eq("repo"), eq("abcdefgh"), any()))
+          .thenReturn(
+              new GitHubPullRequestClient.TreeResponse(
+                  "t",
+                  List.of(
+                      new GitHubPullRequestClient.TreeEntry(handler, "blob", 1),
+                      new GitHubPullRequestClient.TreeEntry(sanitizer, "blob", 1),
+                      new GitHubPullRequestClient.TreeEntry(generated, "blob", 1)),
+                  false));
+      when(prClient.getFileContent(any(), any(), eq("owner"), eq("repo"), eq(sanitizer), any()))
+          .thenReturn(
+              new GitHubPullRequestClient.FileContent(
+                  "InputSanitizer.java",
+                  sanitizer,
+                  java.util.Base64.getEncoder()
+                      .encodeToString(
+                          "final class InputSanitizer {\n  String clean(String raw) { return raw; }\n}\n"
+                              .getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                  "base64",
+                  40));
+      when(selection.select(anyLong(), any()))
+          .thenReturn(
+              new dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextSelectionService.Outcome(
+                  List.of(
+                      new dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextSelectionService
+                          .Selected(
+                          sanitizer,
+                          dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextSelectionService
+                              .Reason.SANITIZER_OR_VALIDATOR)),
+                  true));
+
+      var inputs =
+          capturePromptInputs(
+              new GitHubPullRequestClient.FileDiff(
+                  handler,
+                  "modified",
+                  3,
+                  0,
+                  3,
+                  "@@ -1,2 +1,5 @@\n+import app.util.InputSanitizer;\n"
+                      + "+    var id = sanitizer.clean(raw);\n"
+                      + "+    if (id.length() > Limits.MAX_ID) return;"));
+
+      var review = inputs.repoInstructions();
+      assertTrue(
+          review.contains(
+              dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextPrompts.REVIEW_REQUEST),
+          review);
+      assertTrue(review.contains("File: " + sanitizer + " (sanitizer-or-validator"), review);
+      var asked =
+          ArgumentCaptor.forClass(
+              dev.thiagogonzaga.thrillhousebot.review.ai.RelatedContextSelectionService.Request
+                  .class);
+      verify(selection).select(eq(1L), asked.capture());
+      assertEquals(
+          List.of(sanitizer),
+          asked.getValue().candidates().stream().map(c -> c.path()).toList(),
+          "the repository's own ignore pattern keeps src/app/gen out");
+      verify(budgetPlanner).plan(any(), any(), eq(1));
+      var evidence = ArgumentCaptor.forClass(ReviewEvidence.class);
+      verify(findingPipeline).run(any(), any(), any(), any(), any(), evidence.capture());
+      var finding =
+          new ReviewResponse.Finding(
+              "high", "medium", handler, 2, "Unvalidated id", "InputSanitizer.clean", null, null);
+      var note =
+          evidence.getValue().forFindings(List.of(finding)).contextEvidence().forFinding(finding);
+      assertTrue(note != null && note.contains("Related context this review supplied"), note);
+      verify(selection).release(1L);
     }
 
     @Test
