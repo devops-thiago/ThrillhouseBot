@@ -102,20 +102,34 @@ final class ClosedFindingNames {
       List<ReviewResponse.Finding> previousFindings,
       String indent,
       String closedAs) {
+    return bullets(
+        closed(result, previousFindings, closedAs).stream()
+            .map(ClosedFindingNames::describe)
+            .toList(),
+        indent);
+  }
+
+  /**
+   * The findings the round gave {@code closedAs} ({@link #RESOLVED} or {@link #SUPERSEDED}): the
+   * effective previous round's, by their id into {@code previousFindings}, then the earlier
+   * rounds', in status order. The summary leaves out a Description vs. Implementation bullet that
+   * restates a resolved one (#1387).
+   */
+  static List<ReviewResponse.Finding> closed(
+      ReviewResult result, List<ReviewResponse.Finding> previousFindings, String closedAs) {
     var previous = previousFindings == null ? List.<ReviewResponse.Finding>of() : previousFindings;
-    var named = new ArrayList<String>();
+    var closed = new ArrayList<ReviewResponse.Finding>();
     for (var status : result.previousStatuses()) {
       // An earlier round's status carries id 0, which names no finding here.
-      if (!closedAs.equalsIgnoreCase(status.status())
-          || status.id() < 1
-          || status.id() > previous.size()) {
-        continue;
+      if (closedAs.equalsIgnoreCase(status.status())
+          && status.id() >= 1
+          && status.id() <= previous.size()) {
+        closed.add(previous.get(status.id() - 1));
       }
-      named.add(describe(previous.get(status.id() - 1)));
     }
     // An earlier round's finding carries itself, not an id into the previous round (#1066).
-    result.earlierRoundCloses(closedAs).forEach(finding -> named.add(describe(finding)));
-    return bullets(named, indent);
+    closed.addAll(result.earlierRoundCloses(closedAs));
+    return closed;
   }
 
   /**

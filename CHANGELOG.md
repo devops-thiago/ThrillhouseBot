@@ -33,6 +33,11 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **The Description vs. Implementation section drops bullets the code already answers** (#1387):
+  a bullet that restated a finding the round resolved stayed listed beside the resolved thread,
+  and a bullet saying nothing shows a piece of code stayed even when the pull request added that
+  code by name. Both now leave the section, and so are not carried to the next round. A bullet
+  stating a mismatch of its own, or naming any code the pull request does not add, stays.
 - **A follow-up round reports a fix that leaves the same defect in place** (#1388): a round
   could only mark the earlier finding resolved and was told never to repeat it, so a fix that
   replaced the flagged code but kept the defect through another mechanism was reported as fixed
