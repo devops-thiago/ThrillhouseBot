@@ -24,19 +24,27 @@ each open pull request is reviewed again. `FINDINGS_RETENTION` (default `30d`) i
   exponential backoff, five attempts spent about 30 s of waiting before a call that kept failing
   gave up. Throttles, timeouts and provider errors keep their handling within the smaller budget.
   Set the variable to keep the old value.
-- Linked-issue context now reads issues through the extension's installation-scoped GitHub client and GraphQL client (`GitHubClientProvider`) instead of the hand-rolled `GitHubCommentClient`/`GitHubGraphQLClient` REST clients. `GitHubIssuesProvider` no longer takes an installation token string; the installation id comes from the review request. (#1314)
-- Repository instructions (`.github/thrillhousebot.md` and fallback chain) now read through the extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of `GitHubPullRequestClient`/`GitHubAuthClient`. `InstructionsResolver` no longer takes an auth client or REST client. (#1314)
-- Repository settings (`.github/thrillhousebot.yml`) and project stack manifests now read through the extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of `GitHubPullRequestClient`/`GitHubAuthClient`. `RepoSettingsResolver` and `ProjectStackResolver` no longer take an auth client or REST client. (#1314)
-
+- Linked-issue context now reads issues through the extension's installation-scoped GitHub client
+  and GraphQL client (`GitHubClientProvider`) instead of the hand-rolled
+  `GitHubCommentClient`/`GitHubGraphQLClient` REST clients. `GitHubIssuesProvider` no longer takes
+  an installation token string; the installation id comes from the review request. (#1314)
+- Repository instructions (`.github/thrillhousebot.md` and fallback chain) now read through the
+  extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of
+  `GitHubPullRequestClient`/`GitHubAuthClient`. `InstructionsResolver` no longer takes an auth
+  client or REST client. (#1314)
+- Repository settings (`.github/thrillhousebot.yml`) and project stack manifests now read through
+  the extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of
+  `GitHubPullRequestClient`/`GitHubAuthClient`. `RepoSettingsResolver` and `ProjectStackResolver`
+  no longer take an auth client or REST client. (#1314)
 - **Each finding's state is stored across review rounds** (#1319): a new table, `finding_state`
-  (migration V3, created on the first start), keeps one row per finding of a pull request with
-  its status, the code it quotes and its file's blob SHA in the round that raised it. A later
-  round reads which files are unchanged from these rows instead of asking GitHub, and a round
-  that raised nothing new and changed no stored status reports no change: its review carries no
-  delta section, and the summary is only edited in place. Closing or merging a pull request starts a retention
-  period, `FINDINGS_RETENTION` (default `30d`), after which a daily sweep deletes its rows;
-  reopening it keeps them. Uninstalling the App deletes the installation's rows; suspending it
-  does not. The table starts empty and each open pull request's rows are written by its next
+  (migration V3, created on the first start), keeps one row per finding of a pull request with its
+  status, the code it quotes and its file's blob SHA in the round that raised it. A later round
+  reads which files are unchanged from these rows instead of asking GitHub, and a round that
+  raised nothing new and changed no stored status reports no change: its review carries no delta
+  section, and the summary is only edited in place. Closing or merging a pull request starts a
+  retention period, `FINDINGS_RETENTION` (default `30d`), after which a daily sweep deletes its
+  rows; reopening it keeps them. Uninstalling the App deletes the installation's rows; suspending
+  it does not. The table starts empty and each open pull request's rows are written by its next
   review. See `docs/OPERATIONS.md`.
 
 ### Fixed
@@ -77,15 +85,14 @@ each open pull request is reviewed again. `FINDINGS_RETENTION` (default `30d`) i
   (the one its thread marker carries), and each status and verdict must repeat that key beside the
   number. One whose key names another listed finding applies to that finding, since the key is
   copied and the number counted; one whose key names no listed finding is dropped and logged: the
-  finding of a dropped status stays held as open, and the candidate of a dropped verdict is kept as
-  one the verifier did not judge. A
-  "resolved" status on a finding whose file is unchanged since the round that raised it is now
-  kept open and the contradiction is logged; on a changed file it stands, wherever in the file
-  the fix sits. When the two commits cannot be compared, it stands only when the finding's flagged
-  code has left the diff or its suggested fix is in it. A repaired answer can no
-  longer move a finding to another file or line or renumber a status: the failed answer's values
-  are put back, and an answer whose structure cannot be read is not repaired at all, so the full
-  retry runs. (#1322)
+  finding of a dropped status stays held as open, and the candidate of a dropped verdict is kept
+  as one the verifier did not judge. A "resolved" status on a finding whose file is unchanged
+  since the round that raised it is now kept open and the contradiction is logged; on a changed
+  file it stands, wherever in the file the fix sits. When the two commits cannot be compared, it
+  stands only when the finding's flagged code has left the diff or its suggested fix is in it. A
+  repaired answer can no longer move a finding to another file or line or renumber a status: the
+  failed answer's values are put back, and an answer whose structure cannot be read is not
+  repaired at all, so the full retry runs. (#1322)
 - **Follow-up rounds count each previous finding once and decide its status from its file**
   (#1316, #1317, #1318): a finding raised two or more rounds back was never checked again, so a
   fixed one stayed open; the same defect raised again from an older round, or from another file it
