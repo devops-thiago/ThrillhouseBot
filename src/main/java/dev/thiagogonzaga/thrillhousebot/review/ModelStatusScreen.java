@@ -31,10 +31,11 @@ import java.util.Map;
  *       SuggestionFormatter#findingKey}, the key the thread marker carries; {@link
  *       EchoedKeys#resolve}): the finding under its id when that finding has the key, otherwise the
  *       one listed finding that has it, the entry renumbered to it and the renumbering logged
- *       (#1402), unless an entry whose id and key agree already names that finding. An entry with
- *       no key, or a key no listed finding or two of them have, is dropped and logged. The finding
- *       is then unreported, so the approve backstop holds it as it holds any finding the model left
- *       out: a swapped id can neither close nor keep open the wrong finding.
+ *       (#1402), unless an entry whose id and key agree, or an earlier entry read by its key,
+ *       already names that finding. An entry with no key, or a key no listed finding or two of them
+ *       have, is dropped and logged. The finding is then unreported, so the approve backstop holds
+ *       it as it holds any finding the model left out: a swapped id can neither close nor keep open
+ *       the wrong finding.
  *   <li>A {@code resolved} entry is held to the finding's file as it stands since the round that
  *       raised the finding (#1319). It stands when the file changed since then: the fix may sit
  *       anywhere in the file, not only on the flagged line (#1364). It is rewritten to {@code
@@ -107,8 +108,9 @@ final class ModelStatusScreen {
    * The statuses that name a listed finding by key, each under that finding's number and each
    * {@code resolved} held to the code. A status counts for the finding its echoed key names (#1322,
    * #1402, {@link EchoedKeys#resolve}): its own number when that finding has the key, otherwise the
-   * one listed finding that has it, renumbered to it, unless a status whose number and key agree
-   * already names that finding. Any other status is dropped and its finding stays held.
+   * one listed finding that has it, renumbered to it, unless a status whose number and key agree,
+   * or an earlier status read by its key, already names that finding. Any other status is dropped
+   * and its finding stays held.
    */
   List<ReviewResponse.PreviousFindingStatus> screen(
       List<ReviewResponse.PreviousFindingStatus> statuses) {

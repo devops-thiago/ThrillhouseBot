@@ -1030,10 +1030,10 @@ public class FindingVerificationService {
    *
    * <p>A verdict counts for the candidate its echoed key names ({@link #candidateKey}, #1322,
    * #1402), read through {@link EchoedKeys#resolve}: its own id when that candidate has the key,
-   * otherwise the one candidate that has it, unless a verdict whose id and key agree already names
-   * that candidate. A verdict with no key, or a key no candidate or two candidates have, is left
-   * out, so its candidate posts unscreened as if the verifier had not ruled on it: a swapped id can
-   * neither reject nor downgrade the wrong finding.
+   * otherwise the one candidate that has it, unless a verdict whose id and key agree, or an earlier
+   * verdict read by its key, already names that candidate. A verdict with no key, or a key no
+   * candidate or two candidates have, is left out, so its candidate posts unscreened as if the
+   * verifier had not ruled on it: a swapped id can neither reject nor downgrade the wrong finding.
    */
   private static Map<Integer, VerificationResponse.Verdict> byCandidateId(
       List<VerificationResponse.Verdict> verdicts, List<ReviewResponse.Finding> candidates) {
@@ -2026,8 +2026,7 @@ public class FindingVerificationService {
         Log.infof(
             "Ignoring the verifier's '%s' verdict for candidate #%d: it echoes key '%s', which no"
                 + " candidate or two candidates have, or whose candidate another verdict already"
-                + " names by number and key; the candidate stays unscreened unless another verdict"
-                + " names it",
+                + " names; the candidate stays unscreened unless another verdict names it",
             LogSafe.oneLine(verdict.verdict()), verdict.id(), LogSafe.oneLine(verdict.key()));
       } else if (named[i] != verdict.id()) {
         Log.infof(
