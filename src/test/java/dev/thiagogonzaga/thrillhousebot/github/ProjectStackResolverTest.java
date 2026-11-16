@@ -49,8 +49,6 @@ class ProjectStackResolverTest {
   private static final String REPO = "test-repo";
   private static final String DEFAULT_BRANCH = "main";
   private static final long INSTALLATION_ID = 42L;
-  private static final String AUTH_HEADER = "Bearer test-jwt";
-  private static final String ACCEPT = "application/vnd.github+json";
 
   @BeforeEach
   void setUp() throws Exception {
@@ -62,10 +60,9 @@ class ProjectStackResolverTest {
     resolver = new ProjectStackResolver(clientProvider, new ObjectMapper(), currentTimeMs::get);
   }
 
-  private org.kohsuke.github.GHContent makeFileContent(String name, String content)
-      throws Exception {
-    var mock = org.mockito.Mockito.mock(org.kohsuke.github.GHContent.class);
-    org.mockito.Mockito.doReturn(content).when(mock).getContent();
+  private org.kohsuke.github.GHContent makeFileContent(String content) throws Exception {
+    var mock = mock(org.kohsuke.github.GHContent.class);
+    doReturn(content).when(mock).getContent();
     return mock;
   }
 
@@ -78,7 +75,6 @@ class ProjectStackResolverTest {
     stubManifest(
         "pom.xml",
         makeFileContent(
-            "pom.xml",
             """
             <project>
               <artifactId>my-app</artifactId>
@@ -107,7 +103,6 @@ class ProjectStackResolverTest {
     stubManifest(
         "package.json",
         makeFileContent(
-            "package.json",
             """
             {
               "name": "frontend",
@@ -127,7 +122,6 @@ class ProjectStackResolverTest {
     stubManifest(
         "build.gradle",
         makeFileContent(
-            "build.gradle",
             """
             plugins { id 'java' }
             dependencies {
@@ -149,7 +143,6 @@ class ProjectStackResolverTest {
     stubManifest(
         "pom.xml",
         makeFileContent(
-            "pom.xml",
             "<artifactId>  </artifactId><artifactId>real</artifactId><artifactId>cut-off"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -163,7 +156,6 @@ class ProjectStackResolverTest {
     stubManifest(
         "build.gradle",
         makeFileContent(
-            "build.gradle",
             """
             apiVersion = 5
             implementations.forEach { }
@@ -182,7 +174,6 @@ class ProjectStackResolverTest {
     stubManifest(
         "go.mod",
         makeFileContent(
-            "go.mod",
             """
             module example.com/app
 
@@ -198,7 +189,7 @@ class ProjectStackResolverTest {
 
   @Test
   void shouldFallBackToRawExcerptForUnparseablePackageJson() throws Exception {
-    stubManifest("package.json", makeFileContent("package.json", "not json {"));
+    stubManifest("package.json", makeFileContent("not json {"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -208,7 +199,7 @@ class ProjectStackResolverTest {
 
   @Test
   void shouldFallBackToRawExcerptForPomWithoutArtifactIds() throws Exception {
-    stubManifest("pom.xml", makeFileContent("pom.xml", "<project><groupId>g</groupId></project>"));
+    stubManifest("pom.xml", makeFileContent("<project><groupId>g</groupId></project>"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -218,7 +209,7 @@ class ProjectStackResolverTest {
 
   @Test
   void shouldFallBackToRawExcerptForPackageJsonWithoutDependencies() throws Exception {
-    stubManifest("package.json", makeFileContent("package.json", "{\"name\": \"frontend\"}"));
+    stubManifest("package.json", makeFileContent("{\"name\": \"frontend\"}"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -230,8 +221,7 @@ class ProjectStackResolverTest {
   void shouldTruncateOversizedSections() throws Exception {
     stubManifest(
         "go.mod",
-        makeFileContent(
-            "go.mod", "x".repeat(ProjectStackResolver.MAX_SECTION_CHARS + 100) + "\nend"));
+        makeFileContent("x".repeat(ProjectStackResolver.MAX_SECTION_CHARS + 100) + "\nend"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -241,10 +231,10 @@ class ProjectStackResolverTest {
 
   @Test
   void shouldCapManifestCount() throws Exception {
-    stubManifest("pom.xml", makeFileContent("pom.xml", "<artifactId>a</artifactId>"));
-    stubManifest("build.gradle", makeFileContent("build.gradle", "implementation 'x:y:1'"));
-    stubManifest("build.gradle.kts", makeFileContent("build.gradle.kts", "api(\"x:z:1\")"));
-    stubManifest("package.json", makeFileContent("package.json", "{\"dependencies\":{}}"));
+    stubManifest("pom.xml", makeFileContent("<artifactId>a</artifactId>"));
+    stubManifest("build.gradle", makeFileContent("implementation 'x:y:1'"));
+    stubManifest("build.gradle.kts", makeFileContent("api(\"x:z:1\")"));
+    stubManifest("package.json", makeFileContent("{\"dependencies\":{}}"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -255,14 +245,14 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void shouldReturnEmptyWhenNoManifestFound() throws Exception {
+  void shouldReturnEmptyWhenNoManifestFound() {
     assertEquals("", resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
   }
 
   @Test
   void shouldReturnHub4jDecodedContentAsIs() throws Exception {
     var content = "<artifactId>quarkus-arc</artifactId>\n".repeat(10);
-    stubManifest("pom.xml", makeFileContent("pom.xml", content));
+    stubManifest("pom.xml", makeFileContent(content));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -272,7 +262,7 @@ class ProjectStackResolverTest {
   @Test
   void shouldSkipManifestWithNullContentAndContinueProbing() throws Exception {
     doReturn(null).when(repository).getFileContent("pom.xml", DEFAULT_BRANCH);
-    stubManifest("build.gradle", makeFileContent("build.gradle", "implementation 'x:y:1'"));
+    stubManifest("build.gradle", makeFileContent("implementation 'x:y:1'"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -282,10 +272,10 @@ class ProjectStackResolverTest {
 
   @Test
   void shouldSkipManifestWithNullDecodedContent() throws Exception {
-    var nullContent = org.mockito.Mockito.mock(org.kohsuke.github.GHContent.class);
-    org.mockito.Mockito.doReturn(null).when(nullContent).getContent();
+    var nullContent = mock(org.kohsuke.github.GHContent.class);
+    doReturn(null).when(nullContent).getContent();
     doReturn(nullContent).when(repository).getFileContent("pom.xml", DEFAULT_BRANCH);
-    stubManifest("build.gradle", makeFileContent("build.gradle", "implementation 'x:y:1'"));
+    stubManifest("build.gradle", makeFileContent("implementation 'x:y:1'"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -295,8 +285,8 @@ class ProjectStackResolverTest {
 
   @Test
   void shouldSkipManifestWithBlankDecodedContent() throws Exception {
-    stubManifest("pom.xml", makeFileContent("pom.xml", "   "));
-    stubManifest("build.gradle", makeFileContent("build.gradle", "implementation 'x:y:1'"));
+    stubManifest("pom.xml", makeFileContent("   "));
+    stubManifest("build.gradle", makeFileContent("implementation 'x:y:1'"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -306,8 +296,8 @@ class ProjectStackResolverTest {
 
   @Test
   void aManifestWhoseContentCannotBeReadIsSkippedAndNotCached() throws Exception {
-    var bad = org.mockito.Mockito.mock(org.kohsuke.github.GHContent.class);
-    org.mockito.Mockito.doThrow(new java.io.IOException("bad")).when(bad).getContent();
+    var bad = mock(org.kohsuke.github.GHContent.class);
+    doThrow(new java.io.IOException("bad")).when(bad).getContent();
     doReturn(bad).when(repository).getFileContent("pom.xml", DEFAULT_BRANCH);
 
     assertEquals("", resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
@@ -323,7 +313,7 @@ class ProjectStackResolverTest {
                 "server error", 503, "Service Unavailable", "https://api.github.com"))
         .when(repository)
         .getFileContent("pom.xml", DEFAULT_BRANCH);
-    stubManifest("build.gradle", makeFileContent("build.gradle", "implementation 'x:y:1'"));
+    stubManifest("build.gradle", makeFileContent("implementation 'x:y:1'"));
 
     var first = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
     assertFalse(first.contains("### pom.xml"));
@@ -337,7 +327,7 @@ class ProjectStackResolverTest {
 
   @Test
   void shouldCacheStackAndNotHitApiOnSecondCall() throws Exception {
-    stubManifest("pom.xml", makeFileContent("pom.xml", "<artifactId>a</artifactId>"));
+    stubManifest("pom.xml", makeFileContent("<artifactId>a</artifactId>"));
 
     var first = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
     var second = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -349,11 +339,11 @@ class ProjectStackResolverTest {
 
   @Test
   void shouldRefetchAfterCacheExpiry() throws Exception {
-    stubManifest("pom.xml", makeFileContent("pom.xml", "<artifactId>a</artifactId>"));
+    stubManifest("pom.xml", makeFileContent("<artifactId>a</artifactId>"));
     resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
     currentTimeMs.addAndGet(ProjectStackResolver.CACHE_TTL_MS + 1);
-    stubManifest("pom.xml", makeFileContent("pom.xml", "<artifactId>b</artifactId>"));
+    stubManifest("pom.xml", makeFileContent("<artifactId>b</artifactId>"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -361,7 +351,7 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void sweepShouldEvictExpiredEntriesAboveThreshold() throws Exception {
+  void sweepShouldEvictExpiredEntriesAboveThreshold() {
     for (var i = 0; i < ProjectStackResolver.CACHE_SWEEP_THRESHOLD; i++) {
       resolver.resolve(OWNER, "repo-" + i, DEFAULT_BRANCH, INSTALLATION_ID);
     }
@@ -376,7 +366,7 @@ class ProjectStackResolverTest {
   @Test
   void productionConstructorShouldResolveWithSystemClock() throws Exception {
     var productionResolver = new ProjectStackResolver(clientProvider, new ObjectMapper());
-    stubManifest("pom.xml", makeFileContent("pom.xml", "<artifactId>a</artifactId>"));
+    stubManifest("pom.xml", makeFileContent("<artifactId>a</artifactId>"));
 
     var stack = productionResolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -388,7 +378,7 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void sweepShouldNotRunBelowThreshold() throws Exception {
+  void sweepShouldNotRunBelowThreshold() {
     resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
     currentTimeMs.addAndGet(ProjectStackResolver.CACHE_TTL_MS + 1);
 
@@ -430,7 +420,7 @@ class ProjectStackResolverTest {
 
   @Test
   void repositoryResolutionFailureReturnsEmpty() throws Exception {
-    org.mockito.Mockito.doThrow(new java.io.IOException("boom"))
+    doThrow(new java.io.IOException("boom"))
         .when(gitHub)
         .getRepository(org.mockito.ArgumentMatchers.anyString());
 
@@ -440,7 +430,7 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void installationClientFailureReturnsEmptyWithoutThrowing() throws Exception {
+  void installationClientFailureReturnsEmptyWithoutThrowing() {
     doThrow(new IllegalStateException("installation client unavailable"))
         .when(clientProvider)
         .getInstallationClient(INSTALLATION_ID);

@@ -21,7 +21,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -501,7 +500,7 @@ class GitHubIssuesProviderTest {
       graphQl(links("main", "someone/else", "3", "O/R", "4"));
 
       assertEquals(List.of("#4"), keys(provider.linkedTickets(lookup("", false), 3)));
-      verify(repository, never()).getIssue(eq(3));
+      verify(repository, never()).getIssue(3);
     }
 
     @Test
@@ -568,7 +567,7 @@ class GitHubIssuesProviderTest {
 
       assertEquals(
           List.of("#7"), keys(provider.linkedTickets(lookup("Closes #42 Fixes #7", true), 3)));
-      verify(repository, never()).getIssue(eq(42));
+      verify(repository, never()).getIssue(42);
     }
 
     @Test
@@ -607,13 +606,13 @@ class GitHubIssuesProviderTest {
           provider.linkedTickets(lookup("Closes #1 Closes #2 Closes #3 Closes #4", false), 3);
 
       assertEquals(List.of("#1", "#2", "#3"), keys(tickets));
-      verify(repository, never()).getIssue(eq(4));
+      verify(repository, never()).getIssue(4);
     }
 
     @Test
     void anUnreadableCandidateLetsTheNextOneIn() throws Exception {
       graphQl(links("main"));
-      when(repository.getIssue(eq(2))).thenThrow(new GHFileNotFoundException("not found"));
+      when(repository.getIssue(2)).thenThrow(new GHFileNotFoundException("not found"));
 
       var tickets = provider.linkedTickets(lookup("Closes #1 Closes #2 Closes #3", false), 2);
 
@@ -640,10 +639,10 @@ class GitHubIssuesProviderTest {
     @Test
     void aMissingDeletedOrPrivateIssueIsSkipped() throws Exception {
       graphQl(links("main"));
-      when(repository.getIssue(eq(1))).thenThrow(new GHFileNotFoundException("not found"));
-      when(repository.getIssue(eq(2)))
+      when(repository.getIssue(1)).thenThrow(new GHFileNotFoundException("not found"));
+      when(repository.getIssue(2))
           .thenThrow(new HttpException("gone", 410, "Gone", "https://api.github.com"));
-      when(repository.getIssue(eq(3)))
+      when(repository.getIssue(3))
           .thenThrow(new HttpException("forbidden", 403, "Forbidden", "https://api.github.com"));
 
       assertEquals(
@@ -657,8 +656,8 @@ class GitHubIssuesProviderTest {
       when(prIssue.getTitle()).thenReturn("a PR");
       when(prIssue.getBody()).thenReturn("");
       when(prIssue.isPullRequest()).thenReturn(true);
-      when(repository.getIssue(eq(5))).thenReturn(prIssue);
-      when(repository.getIssue(eq(6))).thenReturn(null);
+      when(repository.getIssue(5)).thenReturn(prIssue);
+      when(repository.getIssue(6)).thenReturn(null);
 
       assertEquals(List.of(), provider.linkedTickets(lookup("Closes #5 Closes #6", false), 3));
     }
@@ -680,7 +679,7 @@ class GitHubIssuesProviderTest {
           .executeSync(anyString(), any(java.util.Map.class));
       assertEquals(List.of("#1"), keys(provider.linkedTickets(lookup("Closes #1", true), 3)));
 
-      // data present but unparseable -> catch (Exception)
+      // Data that is not JSON falls back to the body's links.
       var badResp = mock(Response.class);
       var badData = mock(jakarta.json.JsonObject.class);
       when(badResp.hasData()).thenReturn(true);
@@ -704,6 +703,19 @@ class GitHubIssuesProviderTest {
       when(noDataResp.hasError()).thenReturn(false);
       doReturn(noDataResp).when(graphQLClient).executeSync(anyString(), any(java.util.Map.class));
       assertEquals(List.of("#1"), keys(provider.linkedTickets(lookup("Closes #1", true), 3)));
+    }
+
+    @Test
+    void anInterruptedClosingReferenceReadKeepsTheBodyLinksAndTheInterrupt() throws Exception {
+      doThrow(new InterruptedException("stop"))
+          .when(graphQLClient)
+          .executeSync(anyString(), any(java.util.Map.class));
+      try {
+        assertEquals(List.of("#1"), keys(provider.linkedTickets(lookup("Closes #1", true), 3)));
+        assertTrue(Thread.currentThread().isInterrupted());
+      } finally {
+        Thread.interrupted();
+      }
     }
 
     @Test
@@ -757,7 +769,7 @@ class GitHubIssuesProviderTest {
 
   @Test
   void repositoryResolutionFailureReturnsEmpty() throws Exception {
-    org.mockito.Mockito.doThrow(new java.io.IOException("boom"))
+    doThrow(new java.io.IOException("boom"))
         .when(gitHub)
         .getRepository(org.mockito.ArgumentMatchers.anyString());
 
