@@ -4,6 +4,14 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-16
+
+Follow-up rounds now count each finding once and decide whether it is fixed from the file's
+content instead of the model's judgement, and findings are placed on the code they quote. The
+first start runs migration V3, which adds the `finding_state` table; it starts empty and fills as
+each open pull request is reviewed again. `FINDINGS_RETENTION` (default `30d`) is new, and
+`THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` now defaults to 3. There are no new GitHub App permissions.
+
 ### Changed
 
 - The review call's diff now shows each added and context line's line number in the new file
@@ -131,6 +139,12 @@ All notable changes to ThrillhouseBot.
   the pull request removes is now posted on those lines, on the diff's base side, without a
   suggestion block, when its line points at them; before, it was posted on a nearby line of the
   new file.
+
+### Dependencies
+
+- Bumped the Quarkus group (#1333), the Maven minor and patch group (#1337), guava-bom and
+  spotless-maven-plugin (#1332), the actions group (#1338), the frontend npm dependencies (#1334,
+  #1336) and the website docs dependencies (#1335, #1344)
 
 ## [0.9.1] - 2026-11-09
 
