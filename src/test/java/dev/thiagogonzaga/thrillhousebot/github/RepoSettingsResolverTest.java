@@ -87,7 +87,7 @@ class RepoSettingsResolverTest {
         .getFileContent(path, DEFAULT_BRANCH);
   }
 
-  private RepoSettings resolve() throws Exception {
+  private RepoSettings resolve() {
     return resolver().resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
   }
 
@@ -807,7 +807,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void doesNotFetchAnythingWhenTheFeatureIsDisabled() throws Exception {
+    void doesNotFetchAnythingWhenTheFeatureIsDisabled() {
       when(reviewConfig.repoConfigEnabled()).thenReturn(false);
 
       assertEquals(RepoSettings.EMPTY, resolve());
