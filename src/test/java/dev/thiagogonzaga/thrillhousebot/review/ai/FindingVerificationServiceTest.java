@@ -3294,12 +3294,12 @@ class FindingVerificationServiceTest {
   }
 
   @Test
-  void swappedVerdictIdsRejectAndDowngradeNeitherFinding() {
+  void swappedVerdictIdsJudgeTheCandidatesTheirKeysName() {
     var real = finding("critical", "high", "Real defect");
     var noise = finding("high", "high", "Speculative");
     ReviewResponse original = response(real, noise);
     // The rejection written for #2 and the downgrade for #1, each under the other's id but each
-    // still echoing the key of the finding it judged.
+    // still echoing the key of the finding it judged (#1402): the key decides.
     when(verifier.verify(
             anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenReturn(
@@ -3315,8 +3315,97 @@ class FindingVerificationServiceTest {
 
     var result = service.verify(SESSION, original, "diff", "stack", "", reported::add);
 
+    assertEquals(1, result.findings().size());
+    var kept = result.findings().get(0);
+    assertEquals("Real defect", kept.title());
+    assertEquals("low", kept.risk());
+    assertEquals("low", kept.confidence());
+    assertEquals(List.of(new VerificationCoverage(2, 2)), reported);
+  }
+
+  @Test
+  void pr1401RotatedVerdictIdsRejectTheCandidatesTheirKeysName() {
+    // #1401, session 10137: candidates 5, 6 and 7 were rejected under ids 5, 6 and 7, but each
+    // verdict echoed the key of the next candidate in a rotation; every reason judged the
+    // candidate its key names. All seven verdicts are rejections, so nothing is posted.
+    var candidates = new ArrayList<ReviewResponse.Finding>();
+    for (var i = 1; i <= 7; i++) {
+      candidates.add(finding("medium", "high", "Candidate " + i));
+    }
+    ReviewResponse original = response(candidates.toArray(ReviewResponse.Finding[]::new));
+    int[] echoedOf = {1, 2, 3, 4, 6, 7, 5};
+    var verdicts = new StringBuilder("{\"verdicts\": [");
+    for (var id = 1; id <= 7; id++) {
+      verdicts
+          .append(id == 1 ? "" : ", ")
+          .append("{\"id\": ")
+          .append(id)
+          .append(", \"key\": \"")
+          .append(keyOf(candidates.get(echoedOf[id - 1] - 1)))
+          .append("\", \"verdict\": \"rejected\", \"reason\": \"self-discards\"}");
+    }
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(aiOk(verdicts.append("]}").toString()));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result =
+        serviceReadingVerdictsAsWritten()
+            .verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertEquals(List.of(), result.findings());
+    assertEquals(List.of(new VerificationCoverage(7, 7)), reported);
+  }
+
+  @Test
+  void aKeyedVerdictNeverDisplacesOneWhoseIdAndKeyAgree() {
+    var first = finding("critical", "high", "Missing null check");
+    var second = finding("high", "high", "Unbounded retry");
+    ReviewResponse original = response(first, second);
+    // #2 confirms the first candidate by key; #1 rejects it by id and key. The agreeing verdict
+    // stands, and the second candidate, which no verdict names, posts unscreened.
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                "{\"verdicts\": [{\"id\": 2, \"key\": \""
+                    + keyOf(first)
+                    + "\", \"verdict\": \"confirmed\", \"reason\": \"real\"},"
+                    + " {\"id\": 1, \"key\": \""
+                    + keyOf(first)
+                    + "\", \"verdict\": \"rejected\", \"reason\": \"fp\"}]}"));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result =
+        serviceReadingVerdictsAsWritten()
+            .verify(SESSION, original, "diff", "stack", "", reported::add);
+
+    assertKeptUnscreened(response(second), result);
+    assertEquals(List.of(new VerificationCoverage(2, 1)), reported);
+  }
+
+  @Test
+  void aKeyTwoCandidatesShareNamesNeitherUnderAnotherId() {
+    var twin = finding("critical", "high", "Missing null check");
+    var other = finding("high", "high", "Unbounded retry");
+    ReviewResponse original = response(twin, twin, other);
+    // #3 echoes the key both twins carry: it cannot say which, so it judges neither, and
+    // candidate #3 stays unscreened too.
+    when(verifier.verify(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(
+            aiOk(
+                "{\"verdicts\": [{\"id\": 3, \"key\": \""
+                    + keyOf(twin)
+                    + "\", \"verdict\": \"rejected\", \"reason\": \"fp\"}]}"));
+    var reported = new ArrayList<VerificationCoverage>();
+
+    var result =
+        serviceReadingVerdictsAsWritten()
+            .verify(SESSION, original, "diff", "stack", "", reported::add);
+
     assertKeptUnscreened(original, result);
-    assertEquals(List.of(new VerificationCoverage(2, 0)), reported);
+    assertEquals(List.of(new VerificationCoverage(3, 0)), reported);
   }
 
   @Test
