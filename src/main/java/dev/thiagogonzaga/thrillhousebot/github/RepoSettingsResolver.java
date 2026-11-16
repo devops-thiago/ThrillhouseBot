@@ -196,15 +196,11 @@ public class RepoSettingsResolver {
         return Fetched.ABSENT;
       }
       return Fetched.found(RepoSettingsParser.parse(content, path));
-    } catch (GHFileNotFoundException e) {
+    } catch (GHFileNotFoundException _) {
       // hub4j signals a missing file with GHFileNotFoundException (an IOException).
       log.debug("Repository config file not found: {}", path);
       return Fetched.ABSENT;
-    } catch (RuntimeException e) {
-      log.warn(
-          "Could not read repository config {} for {}/{}: {}", path, owner, repo, e.toString());
-      return Fetched.READ_FAILED;
-    } catch (IOException e) {
+    } catch (RuntimeException | IOException e) {
       log.warn(
           "Could not read repository config {} for {}/{}: {}", path, owner, repo, e.toString());
       return Fetched.READ_FAILED;

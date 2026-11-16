@@ -55,7 +55,6 @@ class InstructionsResolverTest {
   private static final String REPO = "test-repo";
   private static final String DEFAULT_BRANCH = "main";
   private static final long INSTALLATION_ID = 42L;
-  private static final String AUTH_HEADER = "Bearer test-jwt";
 
   @BeforeEach
   void setUp() throws Exception {
@@ -68,9 +67,9 @@ class InstructionsResolverTest {
   }
 
   private org.kohsuke.github.GHContent makeFileContent(String content) throws Exception {
-    var mock = org.mockito.Mockito.mock(org.kohsuke.github.GHContent.class);
-    org.mockito.Mockito.doReturn(content).when(mock).getContent();
-    org.mockito.Mockito.doReturn(true).when(mock).isFile();
+    var mock = mock(org.kohsuke.github.GHContent.class);
+    doReturn(content).when(mock).getContent();
+    doReturn(true).when(mock).isFile();
     return mock;
   }
 
@@ -107,8 +106,8 @@ class InstructionsResolverTest {
 
   @Test
   void shouldSkipNonFileContent() throws Exception {
-    var nonFile = org.mockito.Mockito.mock(org.kohsuke.github.GHContent.class);
-    org.mockito.Mockito.doReturn(false).when(nonFile).isFile();
+    var nonFile = mock(org.kohsuke.github.GHContent.class);
+    doReturn(false).when(nonFile).isFile();
     doReturn(nonFile).when(repository).getFileContent(".github/thrillhousebot.md", DEFAULT_BRANCH);
     doReturn(makeFileContent("# Copilot Instructions"))
         .when(repository)
@@ -313,12 +312,12 @@ class InstructionsResolverTest {
   }
 
   @Test
-  void shouldExposeFallbackChainWithConfiguredFileFirst() throws Exception {
+  void shouldExposeFallbackChainWithConfiguredFileFirst() {
     assertEquals(".github/thrillhousebot.md", resolver.fallbackChain().get(0));
   }
 
   @Test
-  void shouldUseDefaultFallbackChainWhenInstructionsFileIsNull() throws Exception {
+  void shouldUseDefaultFallbackChainWhenInstructionsFileIsNull() {
     when(reviewConfig.instructionsFile()).thenReturn(null);
     resolver = new InstructionsResolver(config, clientProvider, currentTimeMs::get);
 
@@ -327,7 +326,7 @@ class InstructionsResolverTest {
   }
 
   @Test
-  void shouldOmitBlankConfiguredInstructionsFileFromFallbackChain() throws Exception {
+  void shouldOmitBlankConfiguredInstructionsFileFromFallbackChain() {
     when(reviewConfig.instructionsFile()).thenReturn("   ");
     resolver = new InstructionsResolver(config, clientProvider, currentTimeMs::get);
 
@@ -438,7 +437,7 @@ class InstructionsResolverTest {
 
   @Test
   void repositoryResolutionFailureReturnsEmpty() throws Exception {
-    org.mockito.Mockito.doThrow(new java.io.IOException("boom"))
+    doThrow(new java.io.IOException("boom"))
         .when(gitHub)
         .getRepository(org.mockito.ArgumentMatchers.anyString());
 
@@ -448,7 +447,7 @@ class InstructionsResolverTest {
   }
 
   @Test
-  void installationClientFailureReturnsEmptyWithoutThrowing() throws Exception {
+  void installationClientFailureReturnsEmptyWithoutThrowing() {
     doThrow(new IllegalStateException("installation client unavailable"))
         .when(clientProvider)
         .getInstallationClient(INSTALLATION_ID);
@@ -461,10 +460,10 @@ class InstructionsResolverTest {
 
   @Test
   void nullContentIsSkipped() throws Exception {
-    var file = org.mockito.Mockito.mock(org.kohsuke.github.GHContent.class);
-    org.mockito.Mockito.doReturn(null).when(file).getContent();
-    org.mockito.Mockito.doReturn(true).when(file).isFile();
-    org.mockito.Mockito.doReturn(file).when(repository).getFileContent(anyString(), anyString());
+    var file = mock(org.kohsuke.github.GHContent.class);
+    doReturn(null).when(file).getContent();
+    doReturn(true).when(file).isFile();
+    doReturn(file).when(repository).getFileContent(anyString(), anyString());
 
     var result = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 

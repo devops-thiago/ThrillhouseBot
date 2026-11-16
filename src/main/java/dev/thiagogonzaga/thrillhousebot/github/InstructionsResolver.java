@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
 import java.util.stream.Stream;
+import org.kohsuke.github.GHContent;
 import org.kohsuke.github.GHFileNotFoundException;
 import org.kohsuke.github.GHRepository;
 import org.slf4j.Logger;
@@ -129,22 +130,15 @@ public class InstructionsResolver {
     var readFailed = false;
     for (String path : fallbackChain) {
       try {
-        var file = repository.getFileContent(path, defaultBranch);
-        if (file == null || !file.isFile()) {
-          continue;
-        }
-        // hub4j's getContent() already decodes the base64 payload.
-        var content = file.getContent();
-        if (content == null) {
-          continue;
-        }
+        var content = contentOf(repository.getFileContent(path, defaultBranch));
+        if (content != null) {
+          cache.put(
+              cacheKey, new CachedInstructions(content, path, clock.getAsLong() + CACHE_TTL_MS));
+          sweepExpiredEntries();
 
-        cache.put(
-            cacheKey, new CachedInstructions(content, path, clock.getAsLong() + CACHE_TTL_MS));
-        sweepExpiredEntries();
-
-        log.info("Using instructions file: {} ({} bytes)", path, content.length());
-        return new ResolvedInstructions(content, path);
+          log.info("Using instructions file: {} ({} bytes)", path, content.length());
+          return new ResolvedInstructions(content, path);
+        }
       } catch (GHFileNotFoundException _) {
         log.debug("Instructions file not found: {}", path);
       } catch (RuntimeException | IOException e) {
@@ -163,6 +157,12 @@ public class InstructionsResolver {
     sweepExpiredEntries();
     log.debug("No instructions file found for {}/{}", owner, repo);
     return ResolvedInstructions.EMPTY;
+  }
+
+  /** The text of {@code file}, or null when it is missing, not a file, or has no content. */
+  private static String contentOf(GHContent file) throws IOException {
+    // hub4j's getContent() already decodes the base64 payload.
+    return file == null || !file.isFile() ? null : file.getContent();
   }
 
   /**

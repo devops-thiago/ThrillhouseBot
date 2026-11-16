@@ -55,8 +55,6 @@ class RepoSettingsResolverTest {
   private static final String REPO = "test-repo";
   private static final String DEFAULT_BRANCH = "main";
   private static final long INSTALLATION_ID = 42L;
-  private static final String AUTH_HEADER = "Bearer test-jwt";
-  private static final String ACCEPT = "application/vnd.github+json";
   private static final String YML = ".github/thrillhousebot.yml";
   private static final String YAML = ".github/thrillhousebot.yaml";
 
@@ -69,13 +67,13 @@ class RepoSettingsResolverTest {
     lenient().when(gitHub.getRepository(anyString())).thenReturn(repository);
   }
 
-  private RepoSettingsResolver resolver() throws Exception {
+  private RepoSettingsResolver resolver() {
     return new RepoSettingsResolver(config, clientProvider, currentTimeMs::get);
   }
 
   private static org.kohsuke.github.GHContent content(String text) throws Exception {
-    var mock = org.mockito.Mockito.mock(org.kohsuke.github.GHContent.class);
-    org.mockito.Mockito.doReturn(text).when(mock).getContent();
+    var mock = mock(org.kohsuke.github.GHContent.class);
+    doReturn(text).when(mock).getContent();
     return mock;
   }
 
@@ -602,7 +600,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void aNullArtifactNameNormalizesToNoArtifact() throws Exception {
+    void aNullArtifactNameNormalizesToNoArtifact() {
       var settings = new RepoSettings(java.util.List.of(), java.util.List.of(), null, YML);
 
       assertEquals(
@@ -612,7 +610,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void leavesCoverageOffForEveryUnusableShape() throws Exception {
+    void leavesCoverageOffForEveryUnusableShape() {
       assertEquals("", RepoSettings.EMPTY.coverageArtifact(), "no config file at all");
       assertEquals(
           "",
@@ -724,15 +722,13 @@ class RepoSettingsResolverTest {
 
     @Test
     void repositoryResolutionFailureReturnsEmpty() throws Exception {
-      org.mockito.Mockito.doThrow(new java.io.IOException("boom"))
-          .when(gitHub)
-          .getRepository(anyString());
+      doThrow(new java.io.IOException("boom")).when(gitHub).getRepository(anyString());
 
       assertEquals(RepoSettings.EMPTY, resolve());
     }
 
     @Test
-    void installationClientFailureReturnsEmptyWithoutThrowing() throws Exception {
+    void installationClientFailureReturnsEmptyWithoutThrowing() {
       doThrow(new IllegalStateException("installation client unavailable"))
           .when(clientProvider)
           .getInstallationClient(INSTALLATION_ID);
@@ -743,8 +739,8 @@ class RepoSettingsResolverTest {
 
     @Test
     void ioExceptionOnReadIsTreatedAsReadFailed() throws Exception {
-      var bad = org.mockito.Mockito.mock(org.kohsuke.github.GHContent.class);
-      org.mockito.Mockito.doThrow(new java.io.IOException("io")).when(bad).getContent();
+      var bad = mock(org.kohsuke.github.GHContent.class);
+      doThrow(new java.io.IOException("io")).when(bad).getContent();
       doReturn(bad).when(repository).getFileContent(YML, DEFAULT_BRANCH);
       stubMissing(YAML);
 
@@ -764,8 +760,8 @@ class RepoSettingsResolverTest {
 
     @Test
     void nullContentIsTreatedAsAbsent() throws Exception {
-      var nullContent = org.mockito.Mockito.mock(org.kohsuke.github.GHContent.class);
-      org.mockito.Mockito.doReturn(null).when(nullContent).getContent();
+      var nullContent = mock(org.kohsuke.github.GHContent.class);
+      doReturn(null).when(nullContent).getContent();
       doReturn(nullContent).when(repository).getFileContent(YML, DEFAULT_BRANCH);
       stubFile(YAML, "review:\n  ignored-files:\n    - \"from-yaml/**\"\n");
 
@@ -827,13 +823,13 @@ class RepoSettingsResolverTest {
   class ParserContract {
 
     @Test
-    void nullInputYieldsEmptyRatherThanThrowing() throws Exception {
+    void nullInputYieldsEmptyRatherThanThrowing() {
       assertEquals(
           RepoSettings.EMPTY, assertDoesNotThrow(() -> RepoSettingsParser.parse(null, YML)));
     }
 
     @Test
-    void aReadableFileWithNoUsableSettingsIsAttributedToNoSource() throws Exception {
+    void aReadableFileWithNoUsableSettingsIsAttributedToNoSource() {
       // EMPTY carries source "none": only a config that actually yielded settings names its file.
       assertEquals("none", RepoSettingsParser.parse("review: {}\n", YML).source());
     }
@@ -856,7 +852,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void readsTheEnabledFlagFromConfig() throws Exception {
+    void readsTheEnabledFlagFromConfig() {
       when(reviewConfig.repoConfigEnabled()).thenReturn(false);
 
       var settings =
@@ -893,7 +889,7 @@ class RepoSettingsResolverTest {
 
     @Test
     void cachesAreKeyedPerRepository() throws Exception {
-      var otherRepository = org.mockito.Mockito.mock(org.kohsuke.github.GHRepository.class);
+      var otherRepository = mock(org.kohsuke.github.GHRepository.class);
       doReturn(repository).when(gitHub).getRepository(OWNER + "/" + REPO);
       doReturn(otherRepository).when(gitHub).getRepository(OWNER + "/other");
       stubFile(YML, "review:\n  ignored-files:\n    - \"gen/**\"\n");
@@ -1102,7 +1098,7 @@ class RepoSettingsResolverTest {
    * itself, and convertValue then built it for real; the document has to be refused, and quickly.
    */
   @Test
-  void refusesADiamondAliasLadderThatStaysUnderTheAliasCeiling() throws Exception {
+  void refusesADiamondAliasLadderThatStaysUnderTheAliasCeiling() {
     var yaml = new StringBuilder("l0: &l0 [x, x]\n");
     for (var i = 1; i <= 24; i++) {
       yaml.append("l" + i + ": &l" + i + " [*l" + (i - 1) + ", *l" + (i - 1) + "]\n");
@@ -1116,7 +1112,7 @@ class RepoSettingsResolverTest {
 
   /** A node shared by several parents is sized once; a small document with shared rungs is kept. */
   @Test
-  void keepsADocumentWhoseSharedAliasesStaySmall() throws Exception {
+  void keepsADocumentWhoseSharedAliasesStaySmall() {
     var yaml = "review: &r\n  ignored-files: [kept/**]\nagain: [*r, *r, [*r, *r]]\n";
 
     assertEquals(

@@ -503,10 +503,11 @@ public class GitHubIssuesProvider implements IssueTrackerProvider {
       var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
       var tree = mapper.readTree(data.toString());
       return tree.path("repository").path("pullRequest");
-    } catch (RuntimeException e) {
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
       Log.debugf(
           e,
-          "Could not read the closing references of %s/%s#%d; using the PR body's links only",
+          "Interrupted reading the closing references of %s/%s#%d; using the PR body's links only",
           lookup.owner(),
           lookup.repo(),
           lookup.prNumber());
