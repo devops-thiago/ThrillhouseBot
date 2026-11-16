@@ -22,6 +22,7 @@ import dev.langchain4j.service.Result;
 import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.review.Confidence;
+import dev.thiagogonzaga.thrillhousebot.review.EchoedKeys;
 import dev.thiagogonzaga.thrillhousebot.review.PromptTemplateEscaper;
 import dev.thiagogonzaga.thrillhousebot.review.ReviewDimensionRouter;
 import dev.thiagogonzaga.thrillhousebot.review.RiskLevel;
@@ -998,7 +999,7 @@ public class FindingVerificationService {
    * fully screened set was not screened. The cut is logged either way, so an operator chasing the
    * response-length cap keeps the signal the reader does not need.
    *
-   * <p>A verdict whose echoed key is not its candidate's (#1322) is not coverage either: {@link
+   * <p>A verdict whose echoed key names no candidate (#1322, #1402) is not coverage either: {@link
    * #byCandidateId} leaves it out for both readers.
    */
   private static long candidatesCovered(
@@ -1027,31 +1028,32 @@ public class FindingVerificationService {
    * is the behaviour the audit already applies, and the count now inherits it rather than inventing
    * a second resolution.
    *
-   * <p>Only a verdict that names its candidate both ways counts (#1322): an id in range, and the
-   * candidate's key ({@link #candidateKey}) echoed beside it. A verdict with no key, or the key of
-   * another candidate or round, is left out, so its candidate posts unscreened as if the verifier
-   * had not ruled on it: a swapped id can neither reject nor downgrade the wrong finding.
+   * <p>A verdict counts for the candidate its echoed key names ({@link #candidateKey}, #1322,
+   * #1402), read through {@link EchoedKeys#resolve}: its own id when that candidate has the key,
+   * otherwise the one candidate that has it, unless a verdict whose id and key agree already names
+   * that candidate. A verdict with no key, or a key no candidate or two candidates have, is left
+   * out, so its candidate posts unscreened as if the verifier had not ruled on it: a swapped id can
+   * neither reject nor downgrade the wrong finding.
    */
   private static Map<Integer, VerificationResponse.Verdict> byCandidateId(
       List<VerificationResponse.Verdict> verdicts, List<ReviewResponse.Finding> candidates) {
+    var named = namedCandidates(verdicts, candidates);
     var byId = new HashMap<Integer, VerificationResponse.Verdict>();
-    for (VerificationResponse.Verdict verdict : verdicts) {
-      if (namesItsCandidate(verdict, candidates)) {
-        byId.putIfAbsent(verdict.id(), verdict);
+    for (var i = 0; i < verdicts.size(); i++) {
+      if (named[i] > 0) {
+        byId.putIfAbsent(named[i], verdicts.get(i));
       }
     }
     return byId;
   }
 
-  /** Whether {@code verdict}'s id is a candidate's and its echoed key is that candidate's. */
-  private static boolean namesItsCandidate(
-      VerificationResponse.Verdict verdict, List<ReviewResponse.Finding> candidates) {
-    var id = verdict.id();
-    if (id < 1 || id > candidates.size()) {
-      return false;
-    }
-    var echoed = verdict.key() == null ? "" : verdict.key().strip().toLowerCase(Locale.ROOT);
-    return candidateKey(candidates.get(id - 1)).equals(echoed);
+  /** For each verdict, the number of the candidate its echoed key names, or 0 (#1402). */
+  private static int[] namedCandidates(
+      List<VerificationResponse.Verdict> verdicts, List<ReviewResponse.Finding> candidates) {
+    return EchoedKeys.resolve(
+        candidates.stream().map(FindingVerificationService::candidateKey).toList(),
+        verdicts.stream().map(VerificationResponse.Verdict::id).toList(),
+        verdicts.stream().map(VerificationResponse.Verdict::key).toList());
   }
 
   /**
@@ -2012,18 +2014,28 @@ public class FindingVerificationService {
   }
 
   /**
-   * Logs each verdict {@link #byCandidateId} left out because it does not name its candidate by id
-   * and key (#1322), so a dropped verdict is visible.
+   * Logs each verdict {@link #byCandidateId} read under another candidate's number, or left out
+   * because its echoed key names no candidate (#1322, #1402), so neither happens unseen.
    */
   private static void logUnmatched(
       List<VerificationResponse.Verdict> verdicts, List<ReviewResponse.Finding> candidates) {
-    for (var verdict : verdicts) {
-      if (!namesItsCandidate(verdict, candidates)) {
+    var named = namedCandidates(verdicts, candidates);
+    for (var i = 0; i < verdicts.size(); i++) {
+      var verdict = verdicts.get(i);
+      if (named[i] == 0) {
         Log.infof(
-            "Ignoring the verifier's '%s' verdict for candidate #%d: it echoes key '%s', which is"
-                + " not that candidate's; the candidate stays unscreened unless another verdict"
-                + " names it",
+            "Ignoring the verifier's '%s' verdict for candidate #%d: it echoes key '%s', which"
+                + " names no other candidate either; the candidate stays unscreened unless another"
+                + " verdict names it",
             LogSafe.oneLine(verdict.verdict()), verdict.id(), LogSafe.oneLine(verdict.key()));
+      } else if (named[i] != verdict.id()) {
+        Log.infof(
+            "Reading the verifier's '%s' verdict numbered #%d as candidate #%d's: it echoes that"
+                + " candidate's key '%s'",
+            LogSafe.oneLine(verdict.verdict()),
+            verdict.id(),
+            named[i],
+            LogSafe.oneLine(verdict.key()));
       }
     }
   }

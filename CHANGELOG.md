@@ -67,8 +67,10 @@ All notable changes to ThrillhouseBot.
   only by its position in the list, so a swapped number could close, reject or downgrade the wrong
   finding unnoticed. Each previous finding and each verifier candidate is now listed with its key
   (the one its thread marker carries), and each status and verdict must repeat that key beside the
-  number. One that does not is dropped and logged: the finding of a dropped status stays held as
-  open, and the candidate of a dropped verdict is kept as one the verifier did not judge. A
+  number. One whose key names another listed finding applies to that finding, since the key is
+  copied and the number counted; one whose key names no listed finding is dropped and logged: the
+  finding of a dropped status stays held as open, and the candidate of a dropped verdict is kept as
+  one the verifier did not judge. A
   "resolved" status on a finding whose file is unchanged since the round that raised it is now
   kept open and the contradiction is logged; on a changed file it stands, wherever in the file
   the fix sits. When the two commits cannot be compared, it stands only when the finding's flagged

@@ -133,8 +133,12 @@ class ContentStatusTest {
     // Id 2 lists GUARD, raised two rounds back on a file unchanged since: its "resolved" is held.
     var screened = screen.screen(List.of(resolved(2, GUARD), resolved(2, ELSEWHERE)));
 
-    assertEquals(1, screened.size(), "a key of another finding is dropped");
+    assertEquals(2, screened.size());
+    assertEquals(2, screened.get(0).id());
     assertEquals("unresolved", screened.get(0).status());
+    // The second status echoes ELSEWHERE's key under GUARD's id: it is read as ELSEWHERE's (#1402).
+    assertEquals(1, screened.get(1).id(), "a key of another listed finding renumbers its status");
+    assertEquals(keyOf(ELSEWHERE), screened.get(1).key());
   }
 
   // --- The listing and how its statuses split ---
