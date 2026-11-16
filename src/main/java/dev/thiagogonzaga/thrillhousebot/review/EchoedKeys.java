@@ -15,9 +15,11 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Which listed entry each of a model's answers names, read from the key it echoes (#1322, #1402).
@@ -47,6 +49,7 @@ public final class EchoedKeys {
    * @param echoed each answer's echoed key, {@code null} when it gave none
    */
   public static int[] resolve(List<String> listed, List<Integer> ids, List<String> echoed) {
+    var soleEntry = soleEntries(listed);
     var named = new int[ids.size()];
     var taken = new HashSet<Integer>();
     for (var i = 0; i < ids.size(); i++) {
@@ -58,7 +61,7 @@ public final class EchoedKeys {
     }
     for (var i = 0; i < ids.size(); i++) {
       if (named[i] == 0) {
-        var target = onlyEntryWith(listed, normalized(echoed.get(i)));
+        var target = soleEntry.getOrDefault(normalized(echoed.get(i)), 0);
         if (target > 0 && taken.add(target)) {
           named[i] = target;
         }
@@ -72,20 +75,16 @@ public final class EchoedKeys {
     return key == null ? "" : key.strip().toLowerCase(Locale.ROOT);
   }
 
-  /** The number of the one entry whose key is {@code key}; 0 for none, two, or a blank key. */
-  private static int onlyEntryWith(List<String> listed, String key) {
-    if (key.isEmpty()) {
-      return 0;
-    }
-    var found = 0;
+  /**
+   * Each listed key mapped to the number of its entry, or to 0 when two entries share it, built in
+   * one pass so each answer is a lookup. Listed keys are digests, never blank, so a blank echoed
+   * key finds nothing.
+   */
+  private static Map<String, Integer> soleEntries(List<String> listed) {
+    var soleEntry = new HashMap<String, Integer>();
     for (var i = 0; i < listed.size(); i++) {
-      if (listed.get(i).equals(key)) {
-        if (found > 0) {
-          return 0;
-        }
-        found = i + 1;
-      }
+      soleEntry.merge(listed.get(i), i + 1, (first, again) -> 0);
     }
-    return found;
+    return soleEntry;
   }
 }

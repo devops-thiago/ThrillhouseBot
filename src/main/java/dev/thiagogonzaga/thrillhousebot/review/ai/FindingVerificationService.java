@@ -1004,7 +1004,7 @@ public class FindingVerificationService {
    */
   private static long candidatesCovered(
       List<VerificationResponse.Verdict> salvaged, List<ReviewResponse.Finding> candidates) {
-    return byCandidateId(salvaged, candidates).values().stream()
+    return byCandidateId(salvaged, namedCandidates(salvaged, candidates)).values().stream()
         .filter(verdict -> ACTED_ON_DECISIONS.contains(decisionOf(verdict)))
         .count();
   }
@@ -1036,8 +1036,7 @@ public class FindingVerificationService {
    * verifier had not ruled on it: a swapped id can neither reject nor downgrade the wrong finding.
    */
   private static Map<Integer, VerificationResponse.Verdict> byCandidateId(
-      List<VerificationResponse.Verdict> verdicts, List<ReviewResponse.Finding> candidates) {
-    var named = namedCandidates(verdicts, candidates);
+      List<VerificationResponse.Verdict> verdicts, int[] named) {
     var byId = new HashMap<Integer, VerificationResponse.Verdict>();
     for (var i = 0; i < verdicts.size(); i++) {
       if (named[i] > 0) {
@@ -1961,8 +1960,9 @@ public class FindingVerificationService {
   }
 
   ReviewResponse apply(ReviewResponse response, VerificationResponse verification) {
-    var byId = byCandidateId(verification.verdicts(), response.findings());
-    logUnmatched(verification.verdicts(), response.findings());
+    var named = namedCandidates(verification.verdicts(), response.findings());
+    var byId = byCandidateId(verification.verdicts(), named);
+    logUnmatched(verification.verdicts(), named);
     var kept = new ArrayList<ReviewResponse.Finding>();
     var rejected = 0;
     var downgraded = 0;
@@ -2017,9 +2017,7 @@ public class FindingVerificationService {
    * Logs each verdict {@link #byCandidateId} read under another candidate's number, or left out
    * because its echoed key names no candidate (#1322, #1402), so neither happens unseen.
    */
-  private static void logUnmatched(
-      List<VerificationResponse.Verdict> verdicts, List<ReviewResponse.Finding> candidates) {
-    var named = namedCandidates(verdicts, candidates);
+  private static void logUnmatched(List<VerificationResponse.Verdict> verdicts, int[] named) {
     for (var i = 0; i < verdicts.size(); i++) {
       var verdict = verdicts.get(i);
       if (named[i] == 0) {
