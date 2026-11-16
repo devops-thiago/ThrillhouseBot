@@ -22,7 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -115,10 +114,11 @@ class ModelStatusScreenTest {
   }
 
   @Test
-  void swappedStatusIdsChangeNeitherFinding() throws IOException {
+  void swappedStatusIdsApplyToTheFindingsTheirKeysName() throws IOException {
     var previous = round3();
     // The round-4 answer with #1 and #6 swapped: #6's "resolved" lands on #1 and #1's
-    // "unresolved" on #6, each still echoing the key of the finding it was written for.
+    // "unresolved" on #6, each still echoing the key of the finding it was written for. The key
+    // decides (#1402), so each status is read as its finding's, as the answer meant.
     var answer = round4Statuses();
     var swapped =
         List.of(
@@ -127,39 +127,23 @@ class ModelStatusScreenTest {
             new ReviewResponse.PreviousFindingStatus(
                 6, "unresolved", answer.get(0).note(), keyOf(previous.get(0))));
 
-    var diff = round4Diff();
-    var screened = new ModelStatusScreen(previous, diff, Map.of()).screen(swapped);
-    assertEquals(List.of(), screened);
+    var screened = new ModelStatusScreen(previous, round4Diff(), Map.of()).screen(swapped);
 
-    // Downstream, both are left to the code: #1, still in the diff, is held open by the
-    // backstop, and #6, whose code left the diff, is superseded. Neither is resolved.
-    var held =
-        new FollowUpAnalyzer(MAPPER)
-            .heldPreviousFindings(
-                List.of(new ReviewResponse(previous, List.of(), null)),
-                screened,
-                List.of(),
-                List.of(),
-                diff,
-                BotIdentity.of("thrillhousebot[bot]"),
-                Map.of(),
-                null);
-    var statusOf =
-        held.stream()
-            .collect(
-                java.util.stream.Collectors.toMap(
-                    h -> h.finding().title(), h -> h.status().status()));
-    assertEquals("unresolved", statusOf.get(previous.get(0).title()));
-    assertEquals("superseded", statusOf.get(previous.get(5).title()));
-    assertFalse(statusOf.containsValue("resolved"), statusOf.toString());
-    assertTrue(
-        FollowUpAnalyzer.stillOpenFindings(previous, screened, held).stream()
-            .anyMatch(open -> previous.get(0).title().equals(open.title())),
-        "the finding the swapped resolved named stays in the still-open set");
+    assertEquals(
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(
+                6, "resolved", answer.get(5).note(), keyOf(previous.get(5))),
+            new ReviewResponse.PreviousFindingStatus(
+                1, "unresolved", answer.get(0).note(), keyOf(previous.get(0)))),
+        screened);
+    assertFalse(
+        screened.stream().anyMatch(s -> s.id() == 1 && "resolved".equals(s.status())),
+        "the finding still in the diff is never closed by the swapped resolved");
   }
 
   @Test
-  void aMissingKeyAKeyFromAnotherRoundAndAnIdThatListsNothingAreDropped() throws IOException {
+  void aMissingKeyAndAKeyFromAnotherRoundAreDroppedAndAKeyedIdOutOfRangeIsRenumbered()
+      throws IOException {
     var previous = round3();
     // Round 2's #1 (session 9635), which round 3 listed under the same number.
     var round2First =
@@ -181,7 +165,15 @@ class ModelStatusScreenTest {
 
     var screened = new ModelStatusScreen(previous, round4Diff(), Map.of()).screen(statuses);
 
-    assertEquals(List.of(statuses.get(4)), screened, "only the echoed key, case and spaces aside");
+    // The #0 status echoes #1's key, so it is read as #1's and its "resolved" held to the code;
+    // the #7 one echoing the same key finds #1 taken and is dropped.
+    assertEquals(
+        List.of(
+            new ReviewResponse.PreviousFindingStatus(
+                1, "unresolved", ModelStatusScreen.CONTRADICTED_NOTE, keyOf(previous.get(0))),
+            statuses.get(4)),
+        screened,
+        "only the echoed key, case and spaces aside");
   }
 
   @Test

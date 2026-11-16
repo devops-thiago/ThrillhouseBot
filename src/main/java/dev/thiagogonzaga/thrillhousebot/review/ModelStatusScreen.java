@@ -20,7 +20,6 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -28,11 +27,15 @@ import java.util.Map;
  * code (#1322), as soon as a review call returns and before anything stores or reads them.
  *
  * <ol>
- *   <li>Each entry must echo the key of the finding listed under its id ({@link
- *       SuggestionFormatter#findingKey}, the key the thread marker carries). An entry with no key,
- *       a key of another finding or round, or an id that lists nothing is dropped and logged. The
- *       finding is then unreported, so the approve backstop holds it as it holds any finding the
- *       model left out: a swapped id can neither close nor keep open the wrong finding.
+ *   <li>Each entry counts for the finding its echoed key names ({@link
+ *       SuggestionFormatter#findingKey}, the key the thread marker carries; {@link
+ *       EchoedKeys#resolve}): the finding under its id when that finding has the key, otherwise the
+ *       one listed finding that has it, the entry renumbered to it and the renumbering logged
+ *       (#1402), unless an entry whose id and key agree, or an earlier entry read by its key,
+ *       already names that finding. An entry with no key, or a key no listed finding or two of them
+ *       have, is dropped and logged. The finding is then unreported, so the approve backstop holds
+ *       it as it holds any finding the model left out: a swapped id can neither close nor keep open
+ *       the wrong finding.
  *   <li>A {@code resolved} entry is held to the finding's file as it stands since the round that
  *       raised the finding (#1319). It stands when the file changed since then: the fix may sit
  *       anywhere in the file, not only on the flagged line (#1364). It is rewritten to {@code
@@ -101,47 +104,68 @@ final class ModelStatusScreen {
         response.linkedIssueCriteria());
   }
 
-  /** The statuses that name their finding by key, each {@code resolved} held to the code. */
+  /**
+   * The statuses that name a listed finding by key, each under that finding's number and each
+   * {@code resolved} held to the code. A status counts for the finding its echoed key names (#1322,
+   * #1402, {@link EchoedKeys#resolve}): its own number when that finding has the key, otherwise the
+   * one listed finding that has it, renumbered to it, unless a status whose number and key agree,
+   * or an earlier status read by its key, already names that finding. Any other status is dropped
+   * and its finding stays held.
+   */
   List<ReviewResponse.PreviousFindingStatus> screen(
       List<ReviewResponse.PreviousFindingStatus> statuses) {
+    var previous = listing.findings();
+    var named =
+        EchoedKeys.resolve(
+            previous.stream()
+                .map(f -> SuggestionFormatter.findingKey(f.file(), f.line(), f.title()))
+                .toList(),
+            statuses.stream().map(ReviewResponse.PreviousFindingStatus::id).toList(),
+            statuses.stream().map(ReviewResponse.PreviousFindingStatus::key).toList());
     var screened = new ArrayList<ReviewResponse.PreviousFindingStatus>(statuses.size());
-    for (var status : statuses) {
-      var finding = listedFinding(status);
-      if (finding == null) {
+    for (var i = 0; i < statuses.size(); i++) {
+      var status = renumbered(statuses.get(i), named[i]);
+      if (status == null) {
         continue;
       }
+      var finding = previous.get(status.id() - 1);
       var round = listing.rounds().get(status.id() - 1);
       screened.add(contradicted(status, finding, round) ? held(status, finding) : status);
     }
     return List.copyOf(screened);
   }
 
-  /** The finding {@code status} names by id and echoed key, or {@code null} after logging why. */
-  private ReviewResponse.Finding listedFinding(ReviewResponse.PreviousFindingStatus status) {
-    var id = status.id();
-    var previous = listing.findings();
-    if (id < 1 || id > previous.size()) {
+  /**
+   * {@code status} under number {@code named}, the finding its key names; {@code null} after
+   * logging why when it names none, and logged when its own number was another finding's.
+   */
+  private ReviewResponse.PreviousFindingStatus renumbered(
+      ReviewResponse.PreviousFindingStatus status, int named) {
+    if (named == 0) {
       Log.infof(
-          "Dropping the status for previous finding #%d: no finding is listed under that id", id);
-      return null;
-    }
-    var finding = previous.get(id - 1);
-    var expected = SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title());
-    var echoed = status.key() == null ? "" : status.key().strip().toLowerCase(Locale.ROOT);
-    if (!expected.equals(echoed)) {
-      Log.infof(
-          "Dropping the '%s' status for previous finding #%d '%s' (%s:%d): it echoes key '%s', not"
-              + " the finding's %s; the finding stays held",
+          "Dropping the '%s' status for previous finding #%d: it echoes key '%s', which no listed"
+              + " finding or two of them have, or whose finding another status already names; the"
+              + " finding stays held",
           LogSafe.oneLine(status.status()),
-          id,
-          LogSafe.oneLine(finding.title()),
-          LogSafe.oneLine(finding.file()),
-          finding.line(),
-          LogSafe.oneLine(echoed),
-          LogSafe.oneLine(expected));
+          status.id(),
+          LogSafe.oneLine(EchoedKeys.normalized(status.key())));
       return null;
     }
-    return finding;
+    if (named == status.id()) {
+      return status;
+    }
+    var finding = listing.findings().get(named - 1);
+    Log.infof(
+        "Reading the '%s' status numbered #%d as previous finding #%d's '%s' (%s:%d): it echoes"
+            + " that finding's key",
+        LogSafe.oneLine(status.status()),
+        status.id(),
+        named,
+        LogSafe.oneLine(finding.title()),
+        LogSafe.oneLine(finding.file()),
+        finding.line());
+    return new ReviewResponse.PreviousFindingStatus(
+        named, status.status(), status.note(), status.key());
   }
 
   /**
