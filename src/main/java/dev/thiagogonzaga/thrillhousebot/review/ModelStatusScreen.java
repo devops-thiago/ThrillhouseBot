@@ -141,8 +141,9 @@ final class ModelStatusScreen {
       ReviewResponse.PreviousFindingStatus status, int named) {
     if (named == 0) {
       Log.infof(
-          "Dropping the '%s' status for previous finding #%d: it echoes key '%s', which names no"
-              + " listed finding the round has not already given a status; the finding stays held",
+          "Dropping the '%s' status for previous finding #%d: it echoes key '%s', which no listed"
+              + " finding or two of them have, or whose finding another status already names; the"
+              + " finding stays held",
           LogSafe.oneLine(status.status()),
           status.id(),
           LogSafe.oneLine(EchoedKeys.normalized(status.key())));

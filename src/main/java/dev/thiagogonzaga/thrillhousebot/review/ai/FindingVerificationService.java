@@ -2024,9 +2024,10 @@ public class FindingVerificationService {
       var verdict = verdicts.get(i);
       if (named[i] == 0) {
         Log.infof(
-            "Ignoring the verifier's '%s' verdict for candidate #%d: it echoes key '%s', which"
-                + " names no other candidate either; the candidate stays unscreened unless another"
-                + " verdict names it",
+            "Ignoring the verifier's '%s' verdict for candidate #%d: it echoes key '%s', which no"
+                + " candidate or two candidates have, or whose candidate another verdict already"
+                + " names by number and key; the candidate stays unscreened unless another verdict"
+                + " names it",
             LogSafe.oneLine(verdict.verdict()), verdict.id(), LogSafe.oneLine(verdict.key()));
       } else if (named[i] != verdict.id()) {
         Log.infof(
