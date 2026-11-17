@@ -47,6 +47,21 @@ class ReviewContextLoaderTest {
 
   private static final String BOT_LOGIN = "thrillhousebot[bot]";
 
+  /** How the previous-findings section lists a finding: its number, key, risk and place (#1322). */
+  static String listed(int id, String risk, String file, int line, String title) {
+    return id
+        + ". (key "
+        + SuggestionFormatter.findingKey(file, line, title)
+        + ") ["
+        + risk
+        + "] "
+        + file
+        + ":"
+        + line
+        + " — "
+        + title;
+  }
+
   @Mock private GitHubPullRequestClient prClient;
   @Mock private GitHubReviewClient reviewClient;
   @Mock private GitHubCommentClient commentClient;
@@ -62,6 +77,16 @@ class ReviewContextLoaderTest {
 
   private ReviewContextLoader loader;
   private final ReviewDiffFormatter diffFormatter = new ReviewDiffFormatter(List.of(), 5000);
+
+  /** No stored finding rows: file changes are the comparisons' alone. */
+  private final FindingStates findingStates = noStoredFindings();
+
+  private static FindingStates noStoredFindings() {
+    var states = mock(FindingStates.class);
+    when(states.roundChanges(any(), any(), any(), any())).thenAnswer(call -> call.getArgument(3));
+    return states;
+  }
+
   private final SupersededFindingsCarryover carryover =
       new SupersededFindingsCarryover(new ObjectMapper());
 
@@ -92,7 +117,8 @@ class ReviewContextLoaderTest {
             sessionPersistence,
             BotIdentity.from(List.of(BOT_LOGIN)),
             activeModel,
-            carryover);
+            carryover,
+            findingStates);
   }
 
   @Nested
@@ -883,7 +909,8 @@ class ReviewContextLoaderTest {
           sessionPersistence,
           BotIdentity.from(List.of(BOT_LOGIN)),
           activeModel,
-          carryover);
+          carryover,
+          findingStates);
     }
 
     private ReviewOrchestrator.ReviewRequest request() {
@@ -950,7 +977,8 @@ class ReviewContextLoaderTest {
       assertEquals(1, ctx.priorAiResponseJsons().size());
       assertTrue(ctx.previousAiResponseJson().contains("Carried finding"));
       assertTrue(
-          ctx.previousFindings().contains("1. [HIGH] src/Main.java:10 — Carried finding"),
+          ctx.previousFindings()
+              .contains(listed(1, "HIGH", "src/Main.java", 10, "Carried finding")),
           ctx.previousFindings());
       // Consumed: the next load of this pull request starts without it.
       assertTrue(carryover.take("owner", "repo", 1, "headsha1").isEmpty());
@@ -966,8 +994,10 @@ class ReviewContextLoaderTest {
       assertEquals(2, ctx.previousFindingsList().size());
       assertEquals("Posted finding", ctx.previousFindingsList().get(0).title());
       assertEquals(CARRIED, ctx.previousFindingsList().get(1));
-      assertTrue(ctx.previousFindings().contains("1. [LOW] a.java:1 — Posted finding"));
-      assertTrue(ctx.previousFindings().contains("2. [HIGH] src/Main.java:10 — Carried finding"));
+      assertTrue(ctx.previousFindings().contains(listed(1, "LOW", "a.java", 1, "Posted finding")));
+      assertTrue(
+          ctx.previousFindings()
+              .contains(listed(2, "HIGH", "src/Main.java", 10, "Carried finding")));
       assertTrue(ctx.previousAiResponseJson().contains("Carried finding"));
     }
 
@@ -1045,6 +1075,64 @@ class ReviewContextLoaderTest {
       assertFalse(ReviewContextLoader.headUnchanged("abc", null));
       assertFalse(ReviewContextLoader.headUnchanged("", ""));
       assertFalse(ReviewContextLoader.headUnchanged("abc", "abd"));
+    }
+
+    // --- #1319: an older round's open finding on a file changed since is numbered for a status ---
+
+    private static final String OLDER_ROUND_JSON =
+        """
+        {"findings":[{"risk":"high","file":"src/Main.java","line":10,\
+        "title":"Older finding","description":"d","suggestion_old":""},\
+        {"risk":"high","file":"b.java","line":3,\
+        "title":"Unchanged finding","description":"d","suggestion_old":""}],\
+        "previous_findings_status":[]}""";
+
+    /** The bot's thread for the older round's finding at {@code id}. */
+    private static GitHubReviewClient.PullRequestComment olderThread(
+        long commentId, int id, String file, int line, String title) {
+      return new GitHubReviewClient.PullRequestComment(
+          commentId,
+          null,
+          file,
+          "**" + title + "**\n\n" + SuggestionFormatter.findingMarker(id, file, line, title),
+          new GitHubReviewClient.ReviewResponse.User(BOT_LOGIN),
+          null);
+    }
+
+    @Test
+    void anOlderRoundsFindingOnAChangedFileIsNumberedAfterTheEffectiveRoundsOwn() {
+      stubLoad(List.of(POSTED_ROUND_JSON, OLDER_ROUND_JSON));
+      when(sessionPersistence.findAllPriorCommitShas(any(), eq(1), anyLong()))
+          .thenReturn(List.of("midsha1", "oldsha1"));
+      when(prClient.compareCommits(
+              any(), any(), eq("owner"), eq("repo"), eq("oldsha1"), eq("headsha1")))
+          .thenReturn(
+              new GitHubPullRequestClient.CompareResponse(
+                  1,
+                  List.of(
+                      new GitHubPullRequestClient.FileDiff(
+                          "src/Main.java", "modified", 1, 0, 1, "@@ -10 +10 @@\n+guard(x)")),
+                  "ahead"));
+      when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(1)))
+          .thenReturn(
+              List.of(
+                  olderThread(1L, 1, "src/Main.java", 10, "Older finding"),
+                  olderThread(2L, 2, "b.java", 3, "Unchanged finding")));
+
+      var context = load().previousFindings();
+
+      assertTrue(context.contains(listed(1, "LOW", "a.java", 1, "Posted finding")), context);
+      assertTrue(context.contains("Raised in earlier rounds and still open"), context);
+      assertTrue(
+          context.contains(listed(2, "HIGH", "src/Main.java", 10, "Older finding")), context);
+      // Its file is unchanged since the round that raised it: still open without asking, so it
+      // stays in the unnumbered list, which no longer carries the numbered one.
+      var stillOpen =
+          context.substring(
+              context.indexOf("Still open from earlier rounds"),
+              context.indexOf("Raised in earlier rounds"));
+      assertTrue(stillOpen.contains("b.java:3 — Unchanged finding"), context);
+      assertFalse(stillOpen.contains("Older finding"), context);
     }
 
     @Test
@@ -1565,6 +1653,33 @@ class ReviewContextLoaderTest {
       assertEquals(1, DiffLineResolver.CONSTRUCTION_COUNT.get());
     }
 
+    /** #1321: presence reads a changed file at the review's head when the patch lacks an anchor. */
+    @Test
+    void lineResolverReadsAChangedFileAtTheReviewedHead() {
+      stubLoad(
+          List.of(
+              new GitHubPullRequestClient.FileDiff(
+                  "a.java", "modified", 1, 0, 1, "@@ -1 +1 @@\n+x")),
+          List.of());
+      var encoded =
+          java.util.Base64.getEncoder()
+              .encodeToString("x\noutside();\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      when(prClient.getFileContent(any(), any(), eq("owner"), eq("repo"), eq("a.java"), any()))
+          .thenReturn(
+              new GitHubPullRequestClient.FileContent("a.java", "a.java", encoded, "base64", 20));
+      var session =
+          ReviewSession.create(
+              TestScopes.scope("owner/repo"), "owner/repo", 1, "Title", "headsha1");
+      session.id = 1L;
+
+      var ctx = loader.load("auth", request(), session);
+
+      assertTrue(ctx.lineResolver().isFindingPresent("a.java", "outside();"));
+      verify(prClient)
+          .getFileContent(
+              any(), any(), eq("owner"), eq("repo"), eq("a.java"), eq(request().commitSha()));
+    }
+
     @Test
     void lineResolverIsNotBuiltWhenNeverAccessed() {
       stubLoad(
@@ -1726,7 +1841,8 @@ class ReviewContextLoaderTest {
           sessionPersistence,
           BotIdentity.from(List.of(BOT_LOGIN)),
           activeModel,
-          carryover);
+          carryover,
+          findingStates);
     }
 
     /** Round 2 posted the bot's own "1 previous finding(s) remain unresolved" body, as on #449. */
@@ -1786,8 +1902,7 @@ class ReviewContextLoaderTest {
           "the zero-finding round evicted the still-open finding from the id space");
       assertEquals(CARRIED_TITLE, ctx.previousFindingsList().get(0).title());
       assertTrue(
-          ctx.previousFindings()
-              .contains("1. [MEDIUM] " + CARRIED_FILE + ":166 — " + CARRIED_TITLE),
+          ctx.previousFindings().contains(listed(1, "MEDIUM", CARRIED_FILE, 166, CARRIED_TITLE)),
           "previous-findings section was: " + ctx.previousFindings());
       assertFalse(
           ctx.previousFindings().contains("remain unresolved"),

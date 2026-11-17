@@ -62,6 +62,193 @@ class FollowUpDeltaSummaryTest {
     return new ReviewResponse.Finding("medium", file, line, title, "description", null, null);
   }
 
+  /** A follow-up round whose summary also lists the earlier findings still open. */
+  private static ReviewResult withOpen(
+      List<Finding> findings,
+      List<ReviewResult.PreviousFindingStatus> statuses,
+      List<Finding> openPrevious) {
+    return new ReviewResult(
+        findings,
+        0,
+        0,
+        findings.size(),
+        0,
+        RiskLevel.MEDIUM,
+        ReviewState.COMMENT,
+        false,
+        "summary",
+        statuses,
+        List.of(),
+        0,
+        false,
+        true,
+        ReviewResult.TruncationDetail.EMPTY,
+        0,
+        openPrevious);
+  }
+
+  private static ReviewResult.PreviousFindingStatus replaced(int id) {
+    return new ReviewResult.PreviousFindingStatus(id, "unresolved", FollowUpAnalyzer.REPLACED_NOTE);
+  }
+
+  private static ReviewResponse.Finding listed(String file, int line, String title) {
+    return new ReviewResponse.Finding(
+        "medium", "low", file, line, title, "description", null, null);
+  }
+
+  private static ReviewResponse.Finding inline(String file, int line, String title) {
+    return new ReviewResponse.Finding(
+        "medium", "medium", file, line, title, "description", null, null);
+  }
+
+  /** The section's lines, and where {@link FollowUpDeltaSummary#endOfSection} ends it. */
+  private static String lastLineOfSection(String body) {
+    var lines = List.of(body.split("\n", -1));
+    return lines.get(FollowUpDeltaSummary.endOfSection(lines, 0) - 1);
+  }
+
+  @Test
+  void aThreadThatCarriesAnEarlierDoubleCheckItemIsNamedWithoutChangingTheCounts() {
+    // #1312, ThrillhouseBot-test#293 on 2026-11-15: the round posted one thread, for the defect a
+    // November round had listed only under "Things to double-check", and counted it as still open.
+    // The section showed nothing, so the thread the round posted had no line in it.
+    var file = "java/src/test/java/bloodbank/ExpiryTrackerTest.java";
+    var item =
+        listed(file, 74, "Offline-sensor stub returns a sentinel that the sensor contract forbids");
+    var thread =
+        inline(
+            file,
+            74,
+            "Test stub returns a sentinel value the sensor contract forbids, leaving the offline"
+                + " path untested");
+    var prior = List.of(new ReviewResponse(List.of(item), List.of(), null));
+    var replacedNow = FollowUpAnalyzer.replacedThisRound(prior, List.of(thread));
+    var statuses =
+        FollowUpAnalyzer.withoutReplaced(
+            List.of(item),
+            List.of(new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still there")),
+            FollowUpAnalyzer.replacedPriors(prior, List.of(thread)),
+            replacedNow);
+    var result =
+        withOpen(
+            List.of(Finding.fromAiResponse(thread)),
+            statuses.stream()
+                .map(s -> new ReviewResult.PreviousFindingStatus(s.id(), s.status(), s.note()))
+                .toList(),
+            FollowUpAnalyzer.stillOpenFindings(List.of(item), statuses, List.of(), replacedNow));
+
+    var body = FollowUpDeltaSummary.render(result, List.of(item)).orElseThrow();
+
+    assertTrue(
+        body.contains(
+            """
+            - **New findings this round:** 0
+            - **Previous findings resolved:** 0
+            - **Previous findings still open:** 1
+            - **Earlier double-check items now posted as threads:** 1
+              - `java/src/test/java/bloodbank/ExpiryTrackerTest.java:74` — Test stub returns a \
+            sentinel value the sensor contract forbids, leaving the offline path untested
+            """),
+        body);
+    assertEquals(0, FollowUpDeltaSummary.newFindingCount(result));
+    assertEquals(1, result.unresolvedPreviousCount());
+    assertTrue(lastLineOfSection(body).contains("ExpiryTrackerTest.java:74"), body);
+  }
+
+  @Test
+  void theRound294ShapeCountsOneNewFindingAndNamesTwoPromotedThreads() {
+    // #1312, ThrillhouseBot-test#294: one new finding, and two threads for earlier double-check
+    // items, so three threads posted under "New findings this round: 1".
+    var discount = listed("src/InvoiceService.kt", 38, "Sibling discount is applied twice");
+    var scan = listed("src/InvoiceService.kt", 36, "Course scan reads every invoice row");
+    var discountThread = inline("src/InvoiceService.kt", 38, "Sibling discount is applied twice");
+    var scanThread = inline("src/InvoiceService.kt", 36, "Course scan reads every invoice row");
+    var fresh = inline("src/Pricing.kt", 9, "Rounding drops the last cent");
+    var result =
+        withOpen(
+            List.of(
+                Finding.fromAiResponse(discountThread),
+                Finding.fromAiResponse(scanThread),
+                Finding.fromAiResponse(fresh)),
+            List.of(replaced(1), replaced(2)),
+            List.of(Finding.fromAiResponse(discountThread), Finding.fromAiResponse(scanThread)));
+
+    var body = FollowUpDeltaSummary.render(result, List.of(discount, scan)).orElseThrow();
+
+    assertTrue(
+        body.contains(
+            """
+            - **New findings this round:** 1
+            - **Previous findings resolved:** 0
+            - **Previous findings still open:** 2
+            - **Earlier double-check items now posted as threads:** 2
+              - `src/InvoiceService.kt:38` — Sibling discount is applied twice
+              - `src/InvoiceService.kt:36` — Course scan reads every invoice row
+            """),
+        body);
+    assertTrue(lastLineOfSection(body).contains("InvoiceService.kt:36"), body);
+  }
+
+  @Test
+  void theRound297ShapeSaysHowManyNewFindingsHaveNoThread() {
+    // #1312, ThrillhouseBot-test#297: two new findings, one of them low confidence and so listed
+    // only under "Things to double-check", read as two findings with one thread.
+    var token = listed("docs/CONFIG-SCALA.md", 8, "COLDCHAIN_API_TOKEN default is undocumented");
+    var result =
+        withOpen(
+            List.of(
+                Finding.fromAiResponse(inline("src/Main.scala", 4, "Reader leaks the file handle")),
+                Finding.fromAiResponse(token)),
+            List.of(status(1, "unresolved")),
+            List.of(finding("a.java")));
+
+    var body = render(result).orElseThrow();
+
+    assertTrue(
+        body.contains(
+            """
+            - **New findings this round:** 2 (1 under Things to double-check)
+            - **Previous findings resolved:** 0
+            - **Previous findings still open:** 1
+            """),
+        body);
+    assertFalse(body.contains("now posted as threads"), body);
+    assertTrue(lastLineOfSection(body).startsWith("- **Previous findings still open:** 1"), body);
+  }
+
+  @Test
+  void anEarlierRoundsItemCarriedByAThreadIsNamedOnceAndAListedReplacementIsNot() {
+    // #1312: the backstop holds an older round's item under the same note, carrying the finding
+    // itself; one thread carrying two items is named once, and an item restated as another
+    // double-check item got no thread, so it is not named.
+    var older = listed("src/A.java", 10, "Retry loop never backs off");
+    var thread = inline("src/A.java", 10, "Retry loop never backs off");
+    var restated = listed("src/B.java", 5, "Cache key ignores the tenant");
+    var stillListed = listed("src/B.java", 5, "Cache key ignores the tenant");
+    var result =
+        withOpen(
+            List.of(Finding.fromAiResponse(thread), Finding.fromAiResponse(stillListed)),
+            List.of(
+                replaced(1),
+                replaced(2),
+                replaced(0),
+                replaced(9),
+                new ReviewResult.PreviousFindingStatus(
+                    0,
+                    "unresolved",
+                    FollowUpAnalyzer.REPLACED_NOTE,
+                    new ReviewResult.EarlierRound(older, null))),
+            List.of(Finding.fromAiResponse(thread), Finding.fromAiResponse(stillListed)));
+
+    var promoted = FollowUpDeltaSummary.promotedThreads(result, List.of(older, restated));
+
+    assertEquals(List.of(Finding.fromAiResponse(thread)), promoted);
+    // With no previous round to look ids up in, only the older round's item can be named.
+    assertEquals(
+        List.of(Finding.fromAiResponse(thread)),
+        FollowUpDeltaSummary.promotedThreads(result, null));
+  }
+
   @Test
   void noNewFindingsAndNothingResolvedRendersNothing() {
     // The anti-noise case: a follow-up pass where nothing moved. Previous findings that merely
@@ -77,12 +264,49 @@ class FollowUpDeltaSummaryTest {
   }
 
   @Test
-  void justifiedOrSupersededAloneIsNotADelta() {
-    // Neither is a fix this round: justified is a maintainer's decline, superseded re-posts the
-    // full summary instead (and the publisher then skips this comment anyway).
-    var result = followUp(List.of(), List.of(status(1, "justified"), status(2, "superseded")), 0);
+  void justifiedAloneIsNotADelta() {
+    // A maintainer's decline is not a fix and moves nothing the section counts.
+    var result = followUp(List.of(), List.of(status(1, "justified")), 0);
 
     assertEquals(Optional.empty(), render(result));
+  }
+
+  @Test
+  void supersededFindingsAreCountedAndNamedOnTheirOwnLine() {
+    // #1318: the section left superseded findings out, so its counts did not add up to the
+    // findings carried in and the superseded one was never named.
+    var gone = previous("src/Gone.java", 4, "Removed handler still logs the token");
+    var older = previous("src/Old.java", 9, "Older finding whose code left");
+    var result =
+        followUp(
+            List.of(),
+            List.of(
+                status(1, "superseded"),
+                status(2, "unresolved"),
+                new ReviewResult.PreviousFindingStatus(
+                    0, "superseded", "note", new ReviewResult.EarlierRound(older, null))),
+            0);
+
+    var body =
+        FollowUpDeltaSummary.render(result, List.of(gone, previous("a.java", 1, "open")))
+            .orElseThrow();
+
+    assertTrue(
+        body.contains(
+            """
+            - **Previous findings resolved:** 0
+            - **Previous findings superseded (targeted code left the diff):** 2
+              - `src/Gone.java:4` — Removed handler still logs the token
+              - `src/Old.java:9` — Older finding whose code left
+            - **Previous findings still open:** 1
+            """),
+        body);
+    var lines = List.of(body.split("\n", -1));
+    var end = FollowUpDeltaSummary.endOfSection(lines, 0);
+    assertTrue(lines.get(end - 1).startsWith("- **Previous findings still open:** 1"), body);
+    assertTrue(
+        ClosedFindingNames.reviewBodySection(result, List.of(gone))
+            .startsWith(ClosedFindingNames.REVIEW_BODY_LEAD_IN + "2 previous finding(s)"));
   }
 
   @Test

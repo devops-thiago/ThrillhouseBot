@@ -51,7 +51,13 @@ public interface IssueTrackerProvider {
    * @param fromBranch whether the head branch name may be used as a last-resort link
    */
   record TicketLookup(
-      String auth, String owner, String repo, int prNumber, String prBody, boolean fromBranch) {}
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      String prBody,
+      boolean fromBranch,
+      long installationId) {}
 
   /**
    * One linked ticket as read from the tracker. The title and body are exactly what the tracker

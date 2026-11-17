@@ -85,6 +85,7 @@ class FindingScreenTest {
   void eachLaneRunsItsStagesInThisOrder() {
     assertEquals(
         List.of(
+            CopiedNumberStage.class,
             EvidenceStage.class,
             QuoteValidationStage.class,
             FrameworkFilterStage.class,
@@ -96,6 +97,7 @@ class FindingScreenTest {
     // The batch lane is the single-call lane without dedupe, which runs once over every batch.
     assertEquals(
         List.of(
+            CopiedNumberStage.class,
             EvidenceStage.class,
             QuoteValidationStage.class,
             FrameworkFilterStage.class,

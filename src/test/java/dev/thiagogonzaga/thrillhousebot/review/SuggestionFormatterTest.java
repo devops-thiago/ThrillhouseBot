@@ -32,6 +32,32 @@ class SuggestionFormatterTest {
   }
 
   @Test
+  void aMarkedLineIsAddedToTheLastMarkerAndReadBack() {
+    var keyed = SuggestionFormatter.findingMarker(3, "src/A.java", 12, "Bug");
+    var body = "text " + SuggestionFormatter.findingMarker(9) + "\n" + keyed + "\n";
+
+    var marked = SuggestionFormatter.withMarkedLine(body, 12);
+
+    assertTrue(marked.contains(keyed.replace(" -->", " line=12 -->")), marked);
+    assertEquals(java.util.OptionalInt.of(12), SuggestionFormatter.parseMarkedLine(marked));
+    assertEquals(java.util.OptionalInt.of(3), SuggestionFormatter.parseFindingMarker(marked));
+    assertEquals(
+        java.util.Optional.of(SuggestionFormatter.findingKey("src/A.java", 12, "Bug")),
+        SuggestionFormatter.parseFindingKey(marked));
+    assertEquals(marked, SuggestionFormatter.withMarkedLine(marked, 40));
+  }
+
+  @Test
+  void aBodyWithoutAMarkerOrALineReadsNoMarkedLine() {
+    assertEquals("plain", SuggestionFormatter.withMarkedLine("plain", 5));
+    assertEquals(java.util.OptionalInt.empty(), SuggestionFormatter.parseMarkedLine(null));
+    assertEquals(java.util.OptionalInt.empty(), SuggestionFormatter.parseMarkedLine(" "));
+    assertEquals(
+        java.util.OptionalInt.empty(),
+        SuggestionFormatter.parseMarkedLine(SuggestionFormatter.findingMarker(1)));
+  }
+
+  @Test
   void shouldFormatReviewCommentWithSuggestionByDefault() {
     var finding =
         new Finding(RiskLevel.HIGH, "Main.java", 10, "Bug", "Fix it", "old code", "new code");

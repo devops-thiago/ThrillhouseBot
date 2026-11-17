@@ -68,6 +68,18 @@ public interface ThrillhouseConfig {
 
   MetricsConfig metrics();
 
+  FindingsConfig findings();
+
+  /** The stored state of each pull request's findings across review rounds (#1319). */
+  interface FindingsConfig {
+    /**
+     * How long a closed or merged pull request's stored findings are kept. A daily sweep deletes
+     * them after this; a pull request reopened before then carries on from them.
+     */
+    @WithDefault("30d")
+    Duration retention();
+  }
+
   interface MetricsConfig {
     /**
      * Serves the OpenTelemetry metrics in Prometheus text format at {@code GET /metrics} on the
@@ -228,8 +240,11 @@ public interface ThrillhouseConfig {
     @WithName("max-review-comments")
     int maxReviewComments();
 
-    /** Attempts per failed AI call. At most two may end in a timeout. */
-    @WithDefault("5")
+    /**
+     * Attempts per failed AI call. At most two may end in a timeout. A rejected API key is never
+     * retried.
+     */
+    @WithDefault("3")
     @WithName("max-ai-retries")
     int maxAiRetries();
 

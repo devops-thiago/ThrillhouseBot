@@ -76,7 +76,15 @@ class FindingRevisionsTest {
   private static VerificationResponse.Verdict verdict(
       String suggestion, String suggestionNew, List<String> cut) {
     return new VerificationResponse.Verdict(
-        1, "confirmed", "high", "high", "the loop never runs", suggestion, suggestionNew, cut);
+        1,
+        null,
+        "confirmed",
+        "high",
+        "high",
+        "the loop never runs",
+        suggestion,
+        suggestionNew,
+        cut);
   }
 
   @Test

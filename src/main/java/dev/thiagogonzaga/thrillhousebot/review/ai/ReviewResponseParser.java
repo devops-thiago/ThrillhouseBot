@@ -67,9 +67,10 @@ public class ReviewResponseParser {
   private static final String PATH = "path";
 
   /**
-   * The {@link ReviewResponse.Summary} count fields, mapped to {@code int}. The rendered risk table
-   * recomputes every one of them from the findings, so none carries anything the summary cannot
-   * lose — yet one that fails to map takes the whole summary node with it (#944).
+   * The {@link ReviewResponse.Summary} count fields, mapped to {@code int}. The summary call is no
+   * longer asked for them and the pipeline recounts them from the findings before the round is
+   * stored (#1323), so none carries anything the summary cannot lose — yet one an answer still
+   * writes and that fails to map takes the whole summary node with it (#944).
    */
   private static final List<String> SUMMARY_COUNT_FIELDS =
       List.of("total_findings", "critical", "high", "medium", "low");

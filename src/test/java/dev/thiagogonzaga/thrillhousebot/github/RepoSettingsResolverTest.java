@@ -16,20 +16,23 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.doThrow;
 
+import dev.thiagogonzaga.thrillhousebot.CapturedLog;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import jakarta.ws.rs.NotFoundException;
-import jakarta.ws.rs.ProcessingException;
-import jakarta.ws.rs.ServerErrorException;
-import jakarta.ws.rs.core.Response;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.kohsuke.github.GHFileNotFoundException;
+import org.kohsuke.github.HttpException;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
@@ -40,8 +43,9 @@ import org.mockito.MockitoAnnotations;
  */
 class RepoSettingsResolverTest {
 
-  @Mock private GitHubAuthClient authClient;
-  @Mock private GitHubPullRequestClient prClient;
+  @Mock private io.quarkiverse.githubapp.GitHubClientProvider clientProvider;
+  @Mock private org.kohsuke.github.GitHub gitHub;
+  @Mock private org.kohsuke.github.GHRepository repository;
   @Mock private ThrillhouseConfig config;
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
 
@@ -51,37 +55,36 @@ class RepoSettingsResolverTest {
   private static final String REPO = "test-repo";
   private static final String DEFAULT_BRANCH = "main";
   private static final long INSTALLATION_ID = 42L;
-  private static final String AUTH_HEADER = "Bearer test-jwt";
-  private static final String ACCEPT = "application/vnd.github+json";
   private static final String YML = ".github/thrillhousebot.yml";
   private static final String YAML = ".github/thrillhousebot.yaml";
 
   @BeforeEach
-  void setUp() {
+  void setUp() throws Exception {
     MockitoAnnotations.openMocks(this);
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.repoConfigEnabled()).thenReturn(true);
-    lenient().when(authClient.getAuthHeader(INSTALLATION_ID)).thenReturn(AUTH_HEADER);
+    lenient().when(clientProvider.getInstallationClient(INSTALLATION_ID)).thenReturn(gitHub);
+    lenient().when(gitHub.getRepository(anyString())).thenReturn(repository);
   }
 
   private RepoSettingsResolver resolver() {
-    return new RepoSettingsResolver(config, authClient, prClient, currentTimeMs::get);
+    return new RepoSettingsResolver(config, clientProvider, currentTimeMs::get);
   }
 
-  private static GitHubPullRequestClient.FileContent content(String text) {
-    var encoded = Base64.getEncoder().encodeToString(text.getBytes(StandardCharsets.UTF_8));
-    return new GitHubPullRequestClient.FileContent(
-        "thrillhousebot.yml", ".github/thrillhousebot.yml", encoded, "base64", text.length());
+  private static org.kohsuke.github.GHContent content(String text) throws Exception {
+    var mock = mock(org.kohsuke.github.GHContent.class);
+    doReturn(text).when(mock).getContent();
+    return mock;
   }
 
-  private void stubFile(String path, String text) {
-    when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, path, DEFAULT_BRANCH))
-        .thenReturn(content(text));
+  private void stubFile(String path, String text) throws Exception {
+    doReturn(content(text)).when(repository).getFileContent(path, DEFAULT_BRANCH);
   }
 
-  private void stubMissing(String path) {
-    when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, path, DEFAULT_BRANCH))
-        .thenThrow(new NotFoundException(Response.status(404).build()));
+  private void stubMissing(String path) throws Exception {
+    doThrow(new GHFileNotFoundException("not found"))
+        .when(repository)
+        .getFileContent(path, DEFAULT_BRANCH);
   }
 
   private RepoSettings resolve() {
@@ -92,7 +95,7 @@ class RepoSettingsResolverTest {
   class Parsing {
 
     @Test
-    void readsIgnoredFilesFromTheYmlFile() {
+    void readsIgnoredFilesFromTheYmlFile() throws Exception {
       stubFile(
           YML,
           """
@@ -109,7 +112,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void fallsBackToTheYamlExtension() {
+    void fallsBackToTheYamlExtension() throws Exception {
       stubMissing(YML);
       stubFile(
           YAML,
@@ -126,7 +129,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void acceptsACommaSeparatedScalarLikeTheEnvVarForm() {
+    void acceptsACommaSeparatedScalarLikeTheEnvVarForm() throws Exception {
       stubFile(YML, "review:\n  ignored-files: \"docs/generated/**, **/*.snap\"\n");
 
       var settings = resolve();
@@ -135,14 +138,14 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void ignoresAConfigWithoutTheReviewKey() {
+    void ignoresAConfigWithoutTheReviewKey() throws Exception {
       stubFile(YML, "something-else:\n  enabled: true\n");
 
       assertEquals(RepoSettings.EMPTY, resolve());
     }
 
     @Test
-    void capsHowManyPatternsARepositoryMayContribute() {
+    void capsHowManyPatternsARepositoryMayContribute() throws Exception {
       var sb = new StringBuilder("review:\n  ignored-files:\n");
       for (var i = 0; i < RepoSettingsParser.MAX_PATTERNS + 25; i++) {
         sb.append("    - \"dir").append(i).append("/**\"\n");
@@ -155,7 +158,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void dropsBlankAndOverLongPatterns() {
+    void dropsBlankAndOverLongPatterns() throws Exception {
       var overLong = "x".repeat(RepoSettingsParser.MAX_PATTERN_LENGTH + 1);
       stubFile(
           YML,
@@ -169,7 +172,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void ignoresAnExplicitlyEmptyIgnoredFilesKey() {
+    void ignoresAnExplicitlyEmptyIgnoredFilesKey() throws Exception {
       // `ignored-files:` with no value parses to a NullNode, not a missing node.
       stubFile(YML, "review:\n  ignored-files:\n");
       stubMissing(YAML);
@@ -178,7 +181,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void skipsNonScalarEntriesInsideTheList() {
+    void skipsNonScalarEntriesInsideTheList() throws Exception {
       stubFile(
           YML,
           """
@@ -200,7 +203,7 @@ class RepoSettingsResolverTest {
      * compile and were dropped, so a brace glob excluded nothing at all.
      */
     @Test
-    void keepsABraceGlobWholeWhenSplittingTheScalarForm() {
+    void keepsABraceGlobWholeWhenSplittingTheScalarForm() throws Exception {
       stubFile(YML, "review:\n  ignored-files: \"**/*.{js,ts}\"\n");
 
       var settings = resolve();
@@ -209,7 +212,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void splitsAScalarListOnCommasThatAreNotInsideABraceGroup() {
+    void splitsAScalarListOnCommasThatAreNotInsideABraceGroup() throws Exception {
       stubFile(YML, "review:\n  ignored-files: \"docs/**, **/*.{snap,golden} , build/\"\n");
 
       var settings = resolve();
@@ -219,7 +222,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void aStrayClosingBraceDoesNotSwallowTheRestOfTheScalarList() {
+    void aStrayClosingBraceDoesNotSwallowTheRestOfTheScalarList() throws Exception {
       stubFile(YML, "review:\n  ignored-files: \"weird}name, kept/**\"\n");
 
       var settings = resolve();
@@ -232,7 +235,7 @@ class RepoSettingsResolverTest {
      * split: a truncated {@code *.{js,ts}} costs its own entry, not every entry after it.
      */
     @Test
-    void anUnclosedOpeningBraceDoesNotSwallowTheRestOfTheScalarList() {
+    void anUnclosedOpeningBraceDoesNotSwallowTheRestOfTheScalarList() throws Exception {
       assertEquals(
           java.util.List.of("docs/**", " **/*.{js", " kept/**"),
           RepoSettingsParser.splitPatternList("docs/**, **/*.{js, kept/**"));
@@ -258,7 +261,7 @@ class RepoSettingsResolverTest {
   class DuplicateKeys {
 
     @Test
-    void aDuplicateKeyCostsOnlyItsOwnValueNotTheWholeFile() {
+    void aDuplicateKeyCostsOnlyItsOwnValueNotTheWholeFile() throws Exception {
       stubFile(
           YML,
           """
@@ -277,7 +280,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void aDuplicateKeyElsewhereInTheFileLeavesTheReviewSettingsIntact() {
+    void aDuplicateKeyElsewhereInTheFileLeavesTheReviewSettingsIntact() throws Exception {
       stubFile(
           YML,
           """
@@ -304,7 +307,7 @@ class RepoSettingsResolverTest {
   class AnchorsAndAliases {
 
     @Test
-    void resolvesAnAliasedIgnoreList() {
+    void resolvesAnAliasedIgnoreList() throws Exception {
       stubFile(
           YML,
           """
@@ -321,7 +324,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void resolvesAnAliasedScopePathRatherThanNamingTheAnchor() {
+    void resolvesAnAliasedScopePathRatherThanNamingTheAnchor() throws Exception {
       stubFile(
           YML,
           """
@@ -339,7 +342,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void resolvesAMergeKeyInsteadOfDroppingTheEntry() {
+    void resolvesAMergeKeyInsteadOfDroppingTheEntry() throws Exception {
       stubFile(
           YML,
           """
@@ -366,7 +369,7 @@ class RepoSettingsResolverTest {
      * expanded.
      */
     @Test
-    void refusesAnAliasExpansionBombInsteadOfExpandingIt() {
+    void refusesAnAliasExpansionBombInsteadOfExpandingIt() throws Exception {
       stubFile(
           YML,
           """
@@ -382,7 +385,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void refusesADocumentNestedDeeperThanTheLimit() {
+    void refusesADocumentNestedDeeperThanTheLimit() throws Exception {
       var yaml = new StringBuilder("review:\n  ignored-files:\n    - \"kept/**\"\nnest:\n");
       var indent = new StringBuilder("  ");
       for (var i = 0; i < RepoSettingsParser.MAX_NESTING_DEPTH + 5; i++) {
@@ -402,7 +405,7 @@ class RepoSettingsResolverTest {
   class PathInstructionsParsing {
 
     @Test
-    void readsScopedRuleBlocksInDeclarationOrder() {
+    void readsScopedRuleBlocksInDeclarationOrder() throws Exception {
       stubFile(
           YML,
           """
@@ -427,7 +430,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void readsScopedRulesAlongsideIgnoreGlobsFromTheSameFile() {
+    void readsScopedRulesAlongsideIgnoreGlobsFromTheSameFile() throws Exception {
       stubFile(
           YML,
           """
@@ -446,7 +449,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void skipsEntriesMissingAPathOrInstructions() {
+    void skipsEntriesMissingAPathOrInstructions() throws Exception {
       stubFile(
           YML,
           """
@@ -472,7 +475,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void skipsEntriesWhoseFieldsAreNotScalars() {
+    void skipsEntriesWhoseFieldsAreNotScalars() throws Exception {
       stubFile(
           YML,
           """
@@ -497,7 +500,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void capsHowManyScopesARepositoryMayDeclare() {
+    void capsHowManyScopesARepositoryMayDeclare() throws Exception {
       var sb = new StringBuilder("review:\n  path-instructions:\n");
       for (var i = 0; i < RepoSettingsParser.MAX_PATH_SCOPES + 10; i++) {
         sb.append("    - path: \"dir").append(i).append("/**\"\n");
@@ -511,7 +514,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void dropsAnOverLongGlobOrRuleBlock() {
+    void dropsAnOverLongGlobOrRuleBlock() throws Exception {
       var overLongGlob = "x".repeat(RepoSettingsParser.MAX_PATTERN_LENGTH + 1);
       var overLongRules = "y".repeat(RepoSettingsParser.MAX_SCOPE_INSTRUCTIONS_LENGTH + 1);
       stubFile(
@@ -532,7 +535,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void aWrongShapedPathInstructionsKeyLeavesTheRestOfTheConfigIntact() {
+    void aWrongShapedPathInstructionsKeyLeavesTheRestOfTheConfigIntact() throws Exception {
       stubFile(
           YML,
           """
@@ -549,7 +552,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void anExplicitlyEmptyPathInstructionsKeyIsNotAMalformedConfig() {
+    void anExplicitlyEmptyPathInstructionsKeyIsNotAMalformedConfig() throws Exception {
       stubFile(YML, "review:\n  path-instructions:\n");
       stubMissing(YAML);
 
@@ -570,7 +573,7 @@ class RepoSettingsResolverTest {
   class CoverageArtifactParsing {
 
     @Test
-    void readsTheArtifactNameAndTrimsIt() {
+    void readsTheArtifactNameAndTrimsIt() throws Exception {
       stubFile(YML, "review:\n  coverage-artifact: \"  coverage-report  \"\n");
 
       var settings = resolve();
@@ -580,7 +583,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void readsTheArtifactNameAlongsideTheOtherSettings() {
+    void readsTheArtifactNameAlongsideTheOtherSettings() throws Exception {
       stubFile(
           YML,
           """
@@ -643,7 +646,7 @@ class RepoSettingsResolverTest {
   class FailSoft {
 
     @Test
-    void returnsEmptyWhenNoConfigFileExists() {
+    void returnsEmptyWhenNoConfigFileExists() throws Exception {
       stubMissing(YML);
       stubMissing(YAML);
 
@@ -651,7 +654,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void malformedYamlDegradesToEmptyWithoutThrowing() {
+    void malformedYamlDegradesToEmptyWithoutThrowing() throws Exception {
       stubFile(YML, "review:\n  ignored-files: [unterminated\n   : : :\n");
 
       var settings = assertDoesNotThrow(RepoSettingsResolverTest.this::resolve);
@@ -660,14 +663,14 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void nonMappingYamlDegradesToEmpty() {
+    void nonMappingYamlDegradesToEmpty() throws Exception {
       stubFile(YML, "- just\n- a\n- list\n");
 
       assertEquals(RepoSettings.EMPTY, resolve());
     }
 
     @Test
-    void blankConfigFileDegradesToEmpty() {
+    void blankConfigFileDegradesToEmpty() throws Exception {
       stubFile(YML, "   \n\n");
       stubMissing(YAML);
 
@@ -675,7 +678,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void commentOnlyConfigFileDegradesToEmpty() {
+    void commentOnlyConfigFileDegradesToEmpty() throws Exception {
       // Parses to a missing root — no mapping, so nothing to read.
       stubFile(YML, "# nothing configured yet\n");
       stubMissing(YAML);
@@ -684,12 +687,69 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void nullFileContentIsTreatedAsAbsentAndFallsThroughTheChain() {
-      // The contents endpoint can answer without an inline payload (e.g. an over-size blob);
-      // decoding null would NPE, so it must be handled as "nothing readable here".
-      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH))
-          .thenReturn(
-              new GitHubPullRequestClient.FileContent("thrillhousebot.yml", YML, null, "none", 0));
+    void aFailedRepositoryLookupIsLoggedAtWarnWithItsError() throws Exception {
+      // #1355: a 5xx or rate limit on the lookup drops this context from the review, so it must
+      // show.
+      doThrow(
+              new HttpException(
+                  "unavailable", 503, "Service Unavailable", "https://api.github.com"))
+          .when(gitHub)
+          .getRepository(anyString());
+
+      try (var log = CapturedLog.of(RepoSettingsResolver.class)) {
+        assertEquals(RepoSettings.EMPTY, resolve());
+
+        var warnings = log.at(Level.WARNING);
+        assertEquals(1, warnings.size(), warnings.toString());
+        assertTrue(
+            warnings.getFirst().contains(OWNER)
+                && warnings.getFirst().contains(REPO)
+                && warnings.getFirst().contains("unavailable"),
+            warnings.getFirst());
+      }
+    }
+
+    @Test
+    void aRepositoryThatIsNotFoundIsLoggedAtDebugOnly() throws Exception {
+      doThrow(new GHFileNotFoundException("Not Found")).when(gitHub).getRepository(anyString());
+
+      try (var log = CapturedLog.of(RepoSettingsResolver.class)) {
+        assertEquals(RepoSettings.EMPTY, resolve());
+
+        assertEquals(List.of(), log.at(Level.WARNING));
+      }
+    }
+
+    @Test
+    void repositoryResolutionFailureReturnsEmpty() throws Exception {
+      doThrow(new java.io.IOException("boom")).when(gitHub).getRepository(anyString());
+
+      assertEquals(RepoSettings.EMPTY, resolve());
+    }
+
+    @Test
+    void installationClientFailureReturnsEmptyWithoutThrowing() {
+      doThrow(new IllegalStateException("installation client unavailable"))
+          .when(clientProvider)
+          .getInstallationClient(INSTALLATION_ID);
+
+      assertEquals(RepoSettings.EMPTY, assertDoesNotThrow(RepoSettingsResolverTest.this::resolve));
+      verifyNoInteractions(repository);
+    }
+
+    @Test
+    void ioExceptionOnReadIsTreatedAsReadFailed() throws Exception {
+      var bad = mock(org.kohsuke.github.GHContent.class);
+      doThrow(new java.io.IOException("io")).when(bad).getContent();
+      doReturn(bad).when(repository).getFileContent(YML, DEFAULT_BRANCH);
+      stubMissing(YAML);
+
+      assertEquals(RepoSettings.EMPTY, resolve());
+    }
+
+    @Test
+    void nullFileIsTreatedAsAbsentAndFallsThroughTheChain() throws Exception {
+      doReturn(null).when(repository).getFileContent(YML, DEFAULT_BRANCH);
       stubFile(YAML, "review:\n  ignored-files:\n    - \"from-yaml/**\"\n");
 
       var settings = assertDoesNotThrow(RepoSettingsResolverTest.this::resolve);
@@ -699,29 +759,39 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void wrongShapeForIgnoredFilesDegradesToEmpty() {
+    void nullContentIsTreatedAsAbsent() throws Exception {
+      var nullContent = mock(org.kohsuke.github.GHContent.class);
+      doReturn(null).when(nullContent).getContent();
+      doReturn(nullContent).when(repository).getFileContent(YML, DEFAULT_BRANCH);
+      stubFile(YAML, "review:\n  ignored-files:\n    - \"from-yaml/**\"\n");
+
+      var settings = resolve();
+
+      assertEquals(java.util.List.of("from-yaml/**"), settings.ignoredFiles());
+    }
+
+    @Test
+    void runtimeExceptionOnReadIsTreatedAsReadFailed() throws Exception {
+      doThrow(new RuntimeException("boom")).when(repository).getFileContent(YML, DEFAULT_BRANCH);
+      stubMissing(YAML);
+
+      assertEquals(RepoSettings.EMPTY, resolve());
+    }
+
+    @Test
+    void wrongShapeForIgnoredFilesDegradesToEmpty() throws Exception {
       stubFile(YML, "review:\n  ignored-files:\n    nested: mapping\n");
 
       assertEquals(RepoSettings.EMPTY, resolve());
     }
 
     @Test
-    void transportFailureDegradesToEmpty() {
-      when(prClient.getFileContent(any(), any(), any(), any(), any(), any()))
-          .thenThrow(new ProcessingException("connection reset"));
+    void transportFailureDegradesToEmpty() throws Exception {
+      doThrow(new RuntimeException("connection reset"))
+          .when(repository)
+          .getFileContent(anyString(), anyString());
 
       assertEquals(RepoSettings.EMPTY, resolve());
-    }
-
-    @Test
-    void undecodableContentDegradesToEmpty() {
-      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH))
-          .thenReturn(
-              new GitHubPullRequestClient.FileContent(
-                  "thrillhousebot.yml", YML, "!!! not base64 !!!", "base64", 3));
-      stubMissing(YAML);
-
-      assertEquals(RepoSettings.EMPTY, assertDoesNotThrow(RepoSettingsResolverTest.this::resolve));
     }
 
     /**
@@ -729,7 +799,7 @@ class RepoSettingsResolverTest {
      * off jackson-dataformat-yaml, so pin that it still refuses an oversized file.
      */
     @Test
-    void anOverSizedConfigFileIsRefusedRatherThanRead() {
+    void anOverSizedConfigFileIsRefusedRatherThanRead() throws Exception {
       stubFile(YML, "review:\n  coverage-artifact: \"" + "x".repeat(300_000) + "\"\n");
       stubMissing(YAML);
 
@@ -741,8 +811,7 @@ class RepoSettingsResolverTest {
       when(reviewConfig.repoConfigEnabled()).thenReturn(false);
 
       assertEquals(RepoSettings.EMPTY, resolve());
-      verifyNoInteractions(prClient);
-      verifyNoInteractions(authClient);
+      verifyNoInteractions(clientProvider, repository);
     }
   }
 
@@ -771,11 +840,11 @@ class RepoSettingsResolverTest {
   class InjectionConstructor {
 
     @Test
-    void wiresConfigAndClientsAndResolvesWithTheSystemClock() {
+    void wiresConfigAndClientsAndResolvesWithTheSystemClock() throws Exception {
       stubFile(YML, "review:\n  ignored-files:\n    - \"gen/**\"\n");
 
       var settings =
-          new RepoSettingsResolver(config, authClient, prClient)
+          new RepoSettingsResolver(config, clientProvider)
               .resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
       assertEquals(java.util.List.of("gen/**"), settings.ignoredFiles());
@@ -787,11 +856,11 @@ class RepoSettingsResolverTest {
       when(reviewConfig.repoConfigEnabled()).thenReturn(false);
 
       var settings =
-          new RepoSettingsResolver(config, authClient, prClient)
+          new RepoSettingsResolver(config, clientProvider)
               .resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
       assertEquals(RepoSettings.EMPTY, settings);
-      verifyNoInteractions(prClient);
+      verifyNoInteractions(repository);
     }
   }
 
@@ -799,32 +868,34 @@ class RepoSettingsResolverTest {
   class Caching {
 
     @Test
-    void cachesPerRepositoryAndRefetchesAfterTheTtl() {
+    void cachesPerRepositoryAndRefetchesAfterTheTtl() throws Exception {
       stubFile(YML, "review:\n  ignored-files:\n    - \"gen/**\"\n");
       var resolver = resolver();
 
       assertEquals(
           java.util.List.of("gen/**"),
           resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID).ignoredFiles());
+      verify(repository, times(1)).getFileContent(YML, DEFAULT_BRANCH);
+
       assertEquals(
           java.util.List.of("gen/**"),
           resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID).ignoredFiles());
-
-      verify(prClient, times(1))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(repository, times(1)).getFileContent(YML, DEFAULT_BRANCH);
 
       currentTimeMs.addAndGet(RepoSettingsResolver.CACHE_TTL_MS + 1);
       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
-
-      verify(prClient, times(2))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(repository, times(2)).getFileContent(YML, DEFAULT_BRANCH);
     }
 
     @Test
-    void cachesAreKeyedPerRepository() {
+    void cachesAreKeyedPerRepository() throws Exception {
+      var otherRepository = mock(org.kohsuke.github.GHRepository.class);
+      doReturn(repository).when(gitHub).getRepository(OWNER + "/" + REPO);
+      doReturn(otherRepository).when(gitHub).getRepository(OWNER + "/other");
       stubFile(YML, "review:\n  ignored-files:\n    - \"gen/**\"\n");
-      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, "other", YML, DEFAULT_BRANCH))
-          .thenReturn(content("review:\n  ignored-files:\n    - \"other/**\"\n"));
+      doReturn(content("review:\n  ignored-files:\n    - \"other/**\"\n"))
+          .when(otherRepository)
+          .getFileContent(YML, DEFAULT_BRANCH);
       var resolver = resolver();
 
       assertEquals(
@@ -836,51 +907,52 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void negativeResultIsCachedBrieflyThenRetried() {
+    void negativeResultIsCachedBrieflyThenRetried() throws Exception {
       stubMissing(YML);
       stubMissing(YAML);
       var resolver = resolver();
 
       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
-      resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+      verify(repository, times(1)).getFileContent(YML, DEFAULT_BRANCH);
+      verify(repository, times(1)).getFileContent(YAML, DEFAULT_BRANCH);
 
-      verify(prClient, times(1))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+      verify(repository, times(1)).getFileContent(YML, DEFAULT_BRANCH);
+      verify(repository, times(1)).getFileContent(YAML, DEFAULT_BRANCH);
 
       currentTimeMs.addAndGet(RepoSettingsResolver.NEGATIVE_CACHE_TTL_MS + 1);
       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
-
-      verify(prClient, times(2))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(repository, times(2)).getFileContent(YML, DEFAULT_BRANCH);
+      verify(repository, times(2)).getFileContent(YAML, DEFAULT_BRANCH);
     }
 
     /**
-     * #481 — {@code WebApplicationException} is the parent of {@code ServerErrorException}
-     * (500/502/ 503) and {@code ClientErrorException} (the 403 secondary rate limit), so a
-     * transient failure was indistinguishable from a real 404 and got "this repo has no config"
-     * cached for a minute. Every review in that window ran on the deployment ignore list alone.
+     * #481: a transient failure (5xx, the 403 secondary rate limit) was indistinguishable from a
+     * real 404 and got "this repo has no config" cached for a minute. Every review in that window
+     * ran on the deployment ignore list alone.
      */
     @Test
-    void aTransientFailureIsNotCachedAsNoConfig() {
-      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH))
-          .thenThrow(new ServerErrorException(Response.status(503).build()));
+    void aTransientFailureIsNotCachedAsNoConfig() throws Exception {
+      doThrow(new RuntimeException("server error"))
+          .when(repository)
+          .getFileContent(anyString(), anyString());
       stubMissing(YAML);
       var resolver = resolver();
 
       assertEquals(
           RepoSettings.EMPTY, resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
       assertTrue(resolver.cache.isEmpty(), "a failure we cannot read is not an answer to cache");
+      verify(repository, times(1)).getFileContent(YML, DEFAULT_BRANCH);
 
       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
-
-      verify(prClient, times(2))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(repository, times(2)).getFileContent(YML, DEFAULT_BRANCH);
     }
 
     @Test
-    void aFailureOnOneCandidateStillLetsTheNextOneInTheChainWin() {
-      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH))
-          .thenThrow(new ServerErrorException(Response.status(502).build()));
+    void aFailureOnOneCandidateStillLetsTheNextOneInTheChainWin() throws Exception {
+      doThrow(new RuntimeException("server error"))
+          .when(repository)
+          .getFileContent(anyString(), anyString());
       stubFile(YAML, "review:\n  ignored-files:\n    - \"from-yaml/**\"\n");
 
       var settings = resolve();
@@ -896,21 +968,19 @@ class RepoSettingsResolverTest {
      * {@code Fetched} javadoc's "cacheable" is a tested property rather than a claim.
      */
     @Test
-    void aReadableButUnusableConfigIsCachedLikeAnyOtherAnswer() {
+    void aReadableButUnusableConfigIsCachedLikeAnyOtherAnswer() throws Exception {
       stubFile(YML, "review:\n  ignored-files: 17\n");
       var resolver = resolver();
 
       assertEquals(
           RepoSettings.EMPTY, resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
       assertEquals(1, resolver.cache.size(), "a parsed-but-empty config is a real answer");
+      verify(repository, times(1)).getFileContent(YML, DEFAULT_BRANCH);
 
       assertEquals(
           RepoSettings.EMPTY, resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
-
-      verify(prClient, times(1))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
-      verify(prClient, never())
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YAML, DEFAULT_BRANCH);
+      verify(repository, times(1)).getFileContent(YML, DEFAULT_BRANCH);
+      verify(repository, never()).getFileContent(YAML, DEFAULT_BRANCH);
     }
 
     /**
@@ -919,25 +989,24 @@ class RepoSettingsResolverTest {
      * schedule as fixing YAML that already parsed.
      */
     @Test
-    void aReadableButUnusableConfigIsHeldForTheFullTtlNotTheNegativeOne() {
+    void aReadableButUnusableConfigIsHeldForTheFullTtlNotTheNegativeOne() throws Exception {
       stubFile(YML, "review:\n  ignored-files: 17\n");
       var resolver = resolver();
 
       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+      verify(repository, times(1)).getFileContent(YML, DEFAULT_BRANCH);
 
       currentTimeMs.addAndGet(RepoSettingsResolver.NEGATIVE_CACHE_TTL_MS + 1);
       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
-      verify(prClient, times(1))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(repository, times(1)).getFileContent(YML, DEFAULT_BRANCH);
 
       currentTimeMs.addAndGet(RepoSettingsResolver.CACHE_TTL_MS + 1);
       resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
-      verify(prClient, times(2))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      verify(repository, times(2)).getFileContent(YML, DEFAULT_BRANCH);
     }
 
     @Test
-    void aRealNotFoundIsStillCachedAsNoConfig() {
+    void aRealNotFoundIsStillCachedAsNoConfig() throws Exception {
       stubMissing(YML);
       stubMissing(YAML);
       var resolver = resolver();
@@ -949,37 +1018,37 @@ class RepoSettingsResolverTest {
     }
 
     /**
-     * #836. The RESTEasy Reactive client never throws {@code NotFoundException}: a 404 arrives as
-     * {@code ClientWebApplicationException} carrying the status on its response. #481's catch read
-     * that as a transient failure, so a repository with no config was fetched on every review and
-     * warned about three times, and the negative cache was never written.
+     * #836. hub4j reports a 404 on the contents endpoint as {@link GHFileNotFoundException}. Read
+     * as a transient failure, a repository with no config was fetched on every review and warned
+     * about three times, and the negative cache was never written.
      */
     @Test
-    void theClientsOwn404IsNoConfigAndIsCachedLikeOne() {
-      for (var path : java.util.List.of(YML, YAML)) {
-        when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, path, DEFAULT_BRANCH))
-            .thenThrow(
-                new org.jboss.resteasy.reactive.ClientWebApplicationException(
-                    Response.status(404).build()));
-      }
+    void aMissingFileIsNoConfigAndIsCachedLikeOne() throws Exception {
+      doThrow(new GHFileNotFoundException("not found"))
+          .when(repository)
+          .getFileContent(anyString(), anyString());
       var resolver = resolver();
 
       assertEquals(
           RepoSettings.EMPTY, resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
-      resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+      verify(repository, times(1)).getFileContent(YML, DEFAULT_BRANCH);
+      verify(repository, times(1)).getFileContent(YAML, DEFAULT_BRANCH);
 
-      assertEquals(1, resolver.cache.size(), "the client's 404 is a real answer and is cached");
-      verify(prClient, times(1))
-          .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH);
+      resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+      verify(repository, times(1)).getFileContent(YML, DEFAULT_BRANCH);
+      verify(repository, times(1)).getFileContent(YAML, DEFAULT_BRANCH);
+
+      assertEquals(1, resolver.cache.size(), "the 404 is a real answer and is cached");
     }
 
-    /** The status decides, not the subclass: the client's 503 is still a read that failed. */
+    /** The status decides: a 503 is a failed read whatever exception type carries it. */
     @Test
-    void theClientsOwn503IsStillAFailedReadAndIsNotCached() {
-      when(prClient.getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, YML, DEFAULT_BRANCH))
-          .thenThrow(
-              new org.jboss.resteasy.reactive.ClientWebApplicationException(
-                  Response.status(503).build()));
+    void aServerErrorIsAFailedReadAndIsNotCached() throws Exception {
+      doThrow(
+              new org.kohsuke.github.HttpException(
+                  "server error", 503, "Service Unavailable", "https://api.github.com"))
+          .when(repository)
+          .getFileContent(YML, DEFAULT_BRANCH);
       stubMissing(YAML);
       var resolver = resolver();
 
@@ -990,7 +1059,7 @@ class RepoSettingsResolverTest {
     }
 
     @Test
-    void sweepDropsExpiredEntriesOnceTheCacheIsLarge() {
+    void sweepDropsExpiredEntriesOnceTheCacheIsLarge() throws Exception {
       stubMissing(YML);
       stubMissing(YAML);
       var resolver = resolver();

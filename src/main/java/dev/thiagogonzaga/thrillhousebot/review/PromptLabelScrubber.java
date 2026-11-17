@@ -685,7 +685,10 @@ public final class PromptLabelScrubber {
             .toList();
     var statuses =
         response.previousFindingsStatus().stream()
-            .map(s -> new ReviewResponse.PreviousFindingStatus(s.id(), s.status(), scrub(s.note())))
+            .map(
+                s ->
+                    new ReviewResponse.PreviousFindingStatus(
+                        s.id(), s.status(), scrub(s.note()), s.key()))
             .toList();
     var scrubbed =
         new ReviewResponse(findings, statuses, summary == null ? null : scrub(summary, paths));

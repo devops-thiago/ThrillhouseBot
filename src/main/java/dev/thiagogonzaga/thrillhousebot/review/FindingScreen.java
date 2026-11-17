@@ -30,13 +30,14 @@ import java.util.List;
  * it.
  *
  * <p>Each check is a {@link FindingStage}, and each lane is an ordered list of stages built in the
- * constructor; the lanes differ only in which stages their list holds. The order is fixed. Evidence
- * is resolved from the findings as the model raised them, before the quote validator nulls {@code
- * suggestion_old} on exactly the finding whose quote is outside the call's window (#650/#475).
- * Quote validation runs before dedupe, so a merged finding cannot inherit a phantom quote while a
- * verbatim sibling is discarded. A claim the audit already rejected on this head is dropped before
- * the verification call rather than put to it again (#711), and the verdicts are remembered against
- * the candidates that were actually sent.
+ * constructor; the lanes differ only in which stages their list holds. The order is fixed. Line
+ * numbers a quote copied from the numbered diff are removed first, so every stage reads the quote
+ * as code (#1340). Evidence is resolved from the findings as the model raised them, before the
+ * quote validator nulls {@code suggestion_old} on exactly the finding whose quote is outside the
+ * call's window (#650/#475). Quote validation runs before dedupe, so a merged finding cannot
+ * inherit a phantom quote while a verbatim sibling is discarded. A claim the audit already rejected
+ * on this head is dropped before the verification call rather than put to it again (#711), and the
+ * verdicts are remembered against the candidates that were actually sent.
  */
 @ApplicationScoped
 public class FindingScreen {
@@ -46,6 +47,7 @@ public class FindingScreen {
 
   @Inject
   FindingScreen(
+      CopiedNumberStage copiedNumbers,
       EvidenceStage evidence,
       QuoteValidationStage quoteValidation,
       FrameworkFilterStage frameworkFilter,
@@ -57,6 +59,7 @@ public class FindingScreen {
     // quote validation and before the verifier sees them.
     this.singleCallStages =
         List.of(
+            copiedNumbers,
             evidence,
             quoteValidation,
             frameworkFilter,
@@ -68,6 +71,7 @@ public class FindingScreen {
     // a duplicate raised by two batches is merged too.
     this.batchStages =
         List.of(
+            copiedNumbers,
             evidence,
             quoteValidation,
             frameworkFilter,

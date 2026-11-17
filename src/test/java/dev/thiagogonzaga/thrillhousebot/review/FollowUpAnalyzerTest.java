@@ -1235,9 +1235,9 @@ class FollowUpAnalyzerTest {
         analyzer.buildPreviousFindingsContext(
             previous, true, List.of(), List.of(), List.of(), BOT_ID, Set.of(2));
 
-    assertTrue(context.contains("1. [CRITICAL] src/A.java:10 — First"), context);
+    assertTrue(context.contains(listed(1, "CRITICAL", "src/A.java", 10, "First")), context);
     assertFalse(context.contains("Second"), context);
-    assertTrue(context.contains("3. [HIGH] src/C.java:7 — Third"), context);
+    assertTrue(context.contains(listed(3, "HIGH", "src/C.java", 7, "Third")), context);
   }
 
   @Test
@@ -2013,7 +2013,10 @@ class FollowUpAnalyzerTest {
         """;
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch));
 
-    assertFalse(resolver.isLineInDiff("src/A.java", 10, 3)); // old line drifted out of range
+    assertFalse(
+        resolver
+            .resolveRightSideLine("src/A.java", 10)
+            .isPresent()); // old line drifted out of range
     var held =
         analyzer.unreportedUnresolvedStatuses(
             List.of(json), List.of(), List.of(), resolver, BOT_ID);
@@ -2045,7 +2048,10 @@ class FollowUpAnalyzerTest {
         """;
     var resolver = new DiffLineResolver(Map.of("src/A.java", patch));
 
-    assertTrue(resolver.isLineInDiff("src/A.java", 42, 3)); // raw proxy would over-block here
+    assertTrue(
+        resolver
+            .resolveRightSideLine("src/A.java", 42)
+            .isPresent()); // raw proxy would over-block here
     var held =
         analyzer.unreportedUnresolvedStatuses(
             List.of(json), List.of(), List.of(), resolver, BOT_ID);
@@ -2156,9 +2162,31 @@ class FollowUpAnalyzerTest {
 
     var context = analyzer.buildPreviousFindingsContext(json, List.of(), BOT_ID);
 
-    assertTrue(context.contains("1. [HIGH] src/A.java:10 — SQL injection"));
+    assertTrue(context.contains(listed(1, "HIGH", "src/A.java", 10, "SQL injection")));
     assertTrue(context.contains("Concatenated query"));
-    assertTrue(context.contains("2. [LOW] src/B.java:5 — Magic number"));
+    assertTrue(context.contains(listed(2, "LOW", "src/B.java", 5, "Magic number")));
+    // #1322: the key the model echoes is the one the finding's thread marker carries.
+    assertTrue(
+        context.contains(
+            "1. (key "
+                + SuggestionFormatter.findingKey("src/A.java", 10, "SQL injection")
+                + ") [HIGH]"),
+        context);
+  }
+
+  /** How the previous-findings section lists a finding: its number, key, risk and place (#1322). */
+  private static String listed(int id, String risk, String file, int line, String title) {
+    return id
+        + ". (key "
+        + SuggestionFormatter.findingKey(file, line, title)
+        + ") ["
+        + risk
+        + "] "
+        + file
+        + ":"
+        + line
+        + " — "
+        + title;
   }
 
   @Test
@@ -2172,7 +2200,7 @@ class FollowUpAnalyzerTest {
 
     var context = analyzer.buildPreviousFindingsContext(json, List.of(), BOT_ID);
 
-    assertTrue(context.contains("1. [UNKNOWN] src/C.java:3 — Mystery issue"));
+    assertTrue(context.contains(listed(1, "UNKNOWN", "src/C.java", 3, "Mystery issue")));
     assertEquals(1, context.lines().count());
   }
 
@@ -2328,6 +2356,29 @@ class FollowUpAnalyzerTest {
             analyzer.parseResponse(
                 "{\"findings\":[],\"previous_findings_status\":[],\"summary\":null}")),
         "a round that legitimately found nothing did persist a response");
+  }
+
+  /**
+   * #1323: the summary call is no longer asked for its totals, so a stored round may lack them,
+   * while a round stored before still carries the model's. Both read back with their overview.
+   */
+  @Test
+  void aStoredSummaryReadsBackWithOrWithoutItsCountFields() {
+    var old =
+        analyzer.parseResponse(
+            "{\"findings\":[],\"previous_findings_status\":[],\"summary\":{\"total_findings\":3,"
+                + "\"critical\":0,\"high\":1,\"medium\":2,\"low\":0,\"overall_assessment\":\"ok\","
+                + "\"pr_purpose\":\"Adds a cache.\"}}");
+    var current =
+        analyzer.parseResponse(
+            "{\"findings\":[],\"previous_findings_status\":[],\"summary\":{"
+                + "\"overall_assessment\":\"ok\",\"pr_purpose\":\"Adds a cache.\"}}");
+
+    assertEquals(3, old.summary().totalFindings());
+    assertEquals(2, old.summary().medium());
+    assertEquals("Adds a cache.", old.summary().prPurpose());
+    assertEquals(0, current.summary().totalFindings());
+    assertEquals("Adds a cache.", current.summary().prPurpose());
   }
 
   @Test
@@ -5921,6 +5972,76 @@ class FollowUpAnalyzerTest {
     assertFalse(
         FollowUpAnalyzer.threadDirectiveNamesItsFinding(
             "@thrillhousebot resolved src/B.java:10", null, lines));
+  }
+
+  /**
+   * #1360: a thread on removed lines is shown at base-side line 50 while its finding sits at line
+   * 10. A clear naming either line closes it, as the reply on the thread does; another line does
+   * not.
+   */
+  @Test
+  void aClearOnAThreadOnRemovedLinesNamesEitherItsShownLineOrItsFindingsLine() {
+    var removedLineRoot =
+        new GitHubReviewClient.PullRequestComment(
+            300L,
+            null,
+            "src/A.java",
+            "**🔴 CRITICAL — SQL injection**\n\nraw query\n\n"
+                + SuggestionFormatter.withMarkedLine(SuggestionFormatter.findingMarker(1), 10),
+            new GitHubReviewClient.ReviewResponse.User(BOT),
+            null,
+            50,
+            50);
+    for (var naming : List.of("src/A.java:50", "src/A.java:10")) {
+      var rewritten =
+          analyzer.clearNamedInConversation(
+              previousFindings(),
+              bothUnresolved(),
+              List.of(),
+              List.of(
+                  removedLineRoot,
+                  comment(400L, 300L, "src/A.java", "@thrillhousebot resolved " + naming, "m")),
+              BOT_ID);
+      assertEquals("resolved", rewritten.get(0).status(), naming);
+    }
+
+    var other =
+        analyzer.clearNamedInConversation(
+            previousFindings(),
+            bothUnresolved(),
+            List.of(),
+            List.of(
+                removedLineRoot,
+                comment(400L, 300L, "src/A.java", "@thrillhousebot resolved src/A.java:77", "m")),
+            BOT_ID);
+    assertEquals("unresolved", other.get(0).status());
+  }
+
+  /** A thread on the new file keeps the finding's own line only, as before #1360. */
+  @Test
+  void aClearOnAThreadOnTheNewFileStillNamesOnlyItsFindingsLine() {
+    var newFileRoot =
+        new GitHubReviewClient.PullRequestComment(
+            300L,
+            null,
+            "src/A.java",
+            SQL_THREAD.body(),
+            new GitHubReviewClient.ReviewResponse.User(BOT),
+            null,
+            12,
+            12);
+
+    var rewritten =
+        analyzer.clearNamedInConversation(
+            previousFindings(),
+            bothUnresolved(),
+            List.of(),
+            List.of(
+                newFileRoot,
+                comment(400L, 300L, "src/A.java", "@thrillhousebot resolved src/A.java:12", "m")),
+            BOT_ID);
+
+    assertEquals("unresolved", rewritten.get(0).status());
   }
 
   /** The effective round: a clear replied on the finding's own thread rewrites its unresolved. */

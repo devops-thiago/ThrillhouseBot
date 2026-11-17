@@ -142,6 +142,19 @@ class ReviewOrchestratorTest {
 
   private final SupersededFindingsCarryover carryover = new SupersededFindingsCarryover(mapper);
 
+  /** The stored finding rows; a mock that has none, so every round moves as before #1319. */
+  private final FindingStates findingStates = noStoredFindings();
+
+  private static FindingStates noStoredFindings() {
+    var states = mock(FindingStates.class);
+    when(states.roundChanges(any(), any(), any(), any())).thenAnswer(call -> call.getArgument(3));
+    when(states.prepare(any(), any(), any()))
+        .thenReturn(
+            new FindingStates.Pending(
+                null, "o/r", 1, new FindingLedger.Update(Map.of(), false), false));
+    return states;
+  }
+
   private final CiHoldRegistry ciHoldRegistry = new CiHoldRegistry();
 
   /**
@@ -344,7 +357,8 @@ class ReviewOrchestratorTest {
         notifier,
         ciFailureContext,
         ticketContext,
-        learnings);
+        learnings,
+        findingStates);
   }
 
   /** The learnings store the orchestrator is built with; a mock that reports off by default. */
@@ -375,7 +389,8 @@ class ReviewOrchestratorTest {
         sessionPersistence,
         BOT_ID,
         new ActiveModelSettings(config, "m"),
-        carryover);
+        carryover,
+        findingStates);
   }
 
   /** The CI-completion path wired to the same GitHub mocks as the orchestrator (#825). */
@@ -773,6 +788,54 @@ class ReviewOrchestratorTest {
       var body = captor.getValue().body();
       assertTrue(body.contains("ThrillhouseBot closed 1 previous finding(s) this round:"), body);
       assertTrue(body.contains("- `src/Retry.java:42` — Unbounded retry"), body);
+    }
+
+    @Test
+    void aSummaryOnlyRerunThatSupersededAFindingStillPostsTheBodyThatNamesIt() {
+      // #1318: a superseded finding is its own count now. On a summary-only re-run of a head the
+      // bot already approved, the body is the surface that names the closure, so it is not skipped.
+      var gone = new ReviewResponse.Finding("high", "src/Gone.java", 7, "Gone", "d", null, null);
+      var result =
+          new ReviewResult(
+              List.of(),
+              0,
+              0,
+              0,
+              0,
+              null,
+              ReviewState.APPROVE,
+              false,
+              "",
+              List.of(new ReviewResult.PreviousFindingStatus(1, "superseded", "left the diff")),
+              List.of(),
+              0);
+
+      reviewPublisher.postReview(
+          new ReviewPublisher.PostReviewRequest(
+              "auth",
+              "owner",
+              "repo",
+              5,
+              "sha",
+              result,
+              resolverFor(fileDiffWithLine("src/Main.java", 10)),
+              true,
+              List.of(gone),
+              "",
+              List.of(
+                  new GitHubReviewClient.ReviewResponse(
+                      1L,
+                      "",
+                      "APPROVED",
+                      "sha",
+                      new GitHubReviewClient.ReviewResponse.User(BOT_LOGIN)))));
+
+      var captor = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+      verify(reviewClient)
+          .createReview(eq("auth"), anyString(), eq("owner"), eq("repo"), eq(5), captor.capture());
+      assertTrue(
+          captor.getValue().body().contains("- `src/Gone.java:7` — Gone"),
+          captor.getValue().body());
     }
 
     @Test
@@ -3255,6 +3318,83 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void aRoundThatRaisedNothingAndMovedNoStoredStatusRepostsNeitherSummaryNorDelta() {
+      // #1319: the stored rows already hold the fix and the supersede this round reports again.
+      var pending =
+          new FindingStates.Pending(
+              null, "owner/repo", 42, new FindingLedger.Update(Map.of(), false), true);
+      when(findingStates.prepare(any(), any(), any())).thenReturn(pending);
+      // The summary is on the pull request already, so it is edited in place, which notifies
+      // nobody.
+      when(commentClient.listComments(anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(
+              List.of(
+                  new GitHubCommentClient.IssueComment(
+                      7L,
+                      PrSummaryGenerator.SUMMARY_MARKER + "\nolder",
+                      new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]"),
+                      null)));
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = reviewAFollowUpWithASupersededPrevious(mockedStatic, false, false, List.of());
+
+        verify(commentClient)
+            .updateComment(anyString(), anyString(), anyString(), anyString(), eq(7L), any());
+        verify(commentClient, never())
+            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> !req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)));
+        verify(findingStates).save(pending);
+        verify(session).setStatus(ReviewSession.STATUS_COMPLETED);
+      }
+    }
+
+    @Test
+    void aSummaryCommandPostsItsSummaryEvenWhenNothingMoved() {
+      when(findingStates.prepare(any(), any(), any()))
+          .thenReturn(
+              new FindingStates.Pending(
+                  null, "owner/repo", 42, new FindingLedger.Update(Map.of(), false), true));
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        reviewAFollowUpWithASupersededPrevious(mockedStatic, true, false, List.of());
+
+        verify(commentClient)
+            .createComment(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().startsWith(PrSummaryGenerator.SUMMARY_MARKER)));
+      }
+    }
+
+    @Test
+    void theSameRoundWithAStatusTheRowsDidNotHoldPostsTheDelta() {
+      when(findingStates.prepare(any(), any(), any()))
+          .thenReturn(
+              new FindingStates.Pending(
+                  null, "owner/repo", 42, new FindingLedger.Update(Map.of(), true), true));
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        reviewAFollowUpWithASupersededPrevious(mockedStatic, false, false, List.of());
+
+        verify(reviewClient)
+            .createReview(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().contains(FollowUpDeltaSummary.DELTA_HEADING)));
+      }
+    }
+
+    @Test
     void shouldSkipTheDeltaCommentOnASummaryCommandRoundThatPostedTheSummary() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = reviewAFollowUpWithASupersededPrevious(mockedStatic, true);
@@ -3349,6 +3489,20 @@ class ReviewOrchestratorTest {
         org.mockito.MockedStatic<ReviewSession> mockedStatic,
         boolean forceSummary,
         boolean failRendering) {
+      return reviewAFollowUpWithASupersededPrevious(
+          mockedStatic,
+          forceSummary,
+          failRendering,
+          List.of(
+              new ReviewResponse.Finding(
+                  "medium", "src/Main.java", 10, "Style", "Improve naming", null, null)));
+    }
+
+    private ReviewSession reviewAFollowUpWithASupersededPrevious(
+        org.mockito.MockedStatic<ReviewSession> mockedStatic,
+        boolean forceSummary,
+        boolean failRendering,
+        List<ReviewResponse.Finding> raised) {
       when(followUpSummaryConfig.enabled()).thenReturn(true);
       when(summaryGenerator.generate(anyInt(), anyInt(), anyInt(), any(), any(), any(), any()))
           .thenReturn(PrSummaryGenerator.SUMMARY_HEADING);
@@ -3407,15 +3561,11 @@ class ReviewOrchestratorTest {
               List.of(
                   new ReviewResult.PreviousFindingStatus(1, "resolved", "fixed"),
                   new ReviewResult.PreviousFindingStatus(2, "superseded", "code gone")));
-      when(suggestionFormatter.formatReviewComment(any())).thenReturn("**Medium** — fix this");
+      lenient()
+          .when(suggestionFormatter.formatReviewComment(any()))
+          .thenReturn("**Medium** — fix this");
       when(aiReviewService.review(any(ReviewSession.class), any()))
-          .thenReturn(
-              new ReviewResponse(
-                  List.of(
-                      new ReviewResponse.Finding(
-                          "medium", "src/Main.java", 10, "Style", "Improve naming", null, null)),
-                  List.of(),
-                  null));
+          .thenReturn(new ReviewResponse(raised, List.of(), null));
       if (failRendering) {
         when(followUpSummaryConfig.enabled()).thenThrow(new RuntimeException("config unavailable"));
       }
@@ -5300,7 +5450,7 @@ class ReviewOrchestratorTest {
 
     @Test
     void shouldPostToNearestLineWhenExactLineMissing() {
-      var finding = new Finding(RiskLevel.HIGH, "src/Main.java", 15, "Bug", "desc", null, null);
+      var finding = new Finding(RiskLevel.HIGH, "src/Main.java", 12, "Bug", "desc", null, null);
       var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
       var resolver =
           new DiffLineResolver(
@@ -5322,6 +5472,28 @@ class ReviewOrchestratorTest {
               anyString(),
               anyInt(),
               argThat(req -> req.line() == 10));
+    }
+
+    @Test
+    void filesAFindingFarFromEveryHunkOnTheFileInsteadOfMovingIt() {
+      var finding = new Finding(RiskLevel.HIGH, "src/Main.java", 15, "Bug", "desc", null, null);
+      var result = resultWithFinding(finding, ReviewState.REQUEST_CHANGES);
+      var resolver =
+          new DiffLineResolver(
+              Map.of("src/Main.java", fileDiffWithLine("src/Main.java", 10).patch()));
+      when(suggestionFormatter.formatReviewComment(finding, true)).thenReturn("comment body");
+      when(suggestionFormatter.formatReviewComment(finding, false)).thenReturn("comment body");
+
+      reviewPublisher.postInlineComments("Bearer tok", "owner", "repo", 7, "sha", result, resolver);
+
+      verify(reviewClient)
+          .createPullRequestComment(
+              anyString(),
+              anyString(),
+              anyString(),
+              anyString(),
+              anyInt(),
+              argThat(req -> GitHubReviewClient.SUBJECT_TYPE_FILE.equals(req.subjectType())));
     }
 
     @Test
@@ -6613,6 +6785,70 @@ class ReviewOrchestratorTest {
       assertEquals("def unchanged():", updated.findings().get(2).suggestionOld());
 
       assertNull(updated.findings().get(3).suggestionOld());
+    }
+
+    @Test
+    void movesAFindingNearAHunkOntoItsNearestLineAndKeepsItsMentionsInStep() {
+      var patch =
+          """
+          @@ -10,3 +10,4 @@
+           def unchanged():
+          -    old_line()
+          +    new_line()
+          +    added_line()
+          """;
+      var lineResolver = new DiffLineResolver(Map.of("main.py", patch));
+      var near =
+          new ReviewResponse.Finding(
+              "high", "high", "main.py", 15, "Near", "Called at `main.py:15`.", null, null);
+      var far =
+          new ReviewResponse.Finding(
+              "high", "high", "main.py", 30, "Far", "main.py:30", null, null);
+
+      var updated =
+          findingPipeline.populateMissingAnchors(
+              new ReviewResponse(List.of(near, far), List.of(), null), lineResolver);
+
+      var moved = updated.findings().get(0);
+      assertEquals(12, moved.line());
+      assertEquals("Called at `main.py:12`.", moved.description());
+      assertEquals("    added_line()", moved.suggestionOld());
+      // #1320: too far from every hunk to move; the publisher files it on the file.
+      assertSame(far, updated.findings().get(1));
+    }
+
+    @Test
+    void aFindingMovedOntoItsQuoteNamesTheLineItIsPostedOn() {
+      var patch =
+          """
+          @@ -10,3 +10,4 @@
+           def unchanged():
+          -    old_line()
+          +    new_line()
+          +    added_line()
+          """;
+      var lineResolver = new DiffLineResolver(Map.of("main.py", patch));
+      var finding =
+          new ReviewResponse.Finding(
+              "high",
+              "high",
+              "main.py",
+              10,
+              "Quoted",
+              "The call at main.py:10 drops the result; main.py:100 is fine.",
+              "added_line()",
+              null);
+
+      var placed =
+          findingPipeline
+              .populateMissingAnchors(
+                  new ReviewResponse(List.of(finding), List.of(), null), lineResolver)
+              .findings()
+              .getFirst();
+
+      assertEquals(12, placed.line());
+      assertEquals(
+          "The call at main.py:12 drops the result; main.py:100 is fine.", placed.description());
     }
 
     @Test
@@ -9548,7 +9784,7 @@ class ReviewOrchestratorTest {
 
     /** The verdict passes the carried statuses go through, on the real analyzer. */
     private void delegateVerdictPasses() {
-      when(followUpAnalyzer.supersedeVanished(any(), any(), any(), any(), any()))
+      when(followUpAnalyzer.supersedeVanished(any(), any(), any(), any(), any(), anyInt()))
           .thenAnswer(
               inv ->
                   realAnalyzer.supersedeVanished(
@@ -9556,8 +9792,9 @@ class ReviewOrchestratorTest {
                       inv.getArgument(1),
                       inv.getArgument(2),
                       inv.getArgument(3),
-                      inv.getArgument(4)));
-      when(followUpAnalyzer.addUnreportedVanished(any(), any(), any(), any(), any()))
+                      inv.getArgument(4),
+                      inv.<Integer>getArgument(5)));
+      when(followUpAnalyzer.addUnreportedVanished(any(), any(), any(), any(), any(), anyInt()))
           .thenAnswer(
               inv ->
                   realAnalyzer.addUnreportedVanished(
@@ -9565,7 +9802,8 @@ class ReviewOrchestratorTest {
                       inv.getArgument(1),
                       inv.getArgument(2),
                       inv.getArgument(3),
-                      inv.getArgument(4)));
+                      inv.getArgument(4),
+                      inv.<Integer>getArgument(5)));
       when(followUpAnalyzer.recheckDeclines(any(), any(), any(), any(), any(), any()))
           .thenAnswer(inv -> inv.getArgument(1));
       when(followUpAnalyzer.unresolvedFindings(
@@ -9611,7 +9849,13 @@ class ReviewOrchestratorTest {
                     List.of(),
                     List.of(
                         new ReviewResponse.PreviousFindingStatus(
-                            1, "unresolved", "the guard is still gone")),
+                            1,
+                            "unresolved",
+                            "the guard is still gone",
+                            SuggestionFormatter.findingKey(
+                                VERIFIED_BY_SUPERSEDED_RUN.file(),
+                                VERIFIED_BY_SUPERSEDED_RUN.line(),
+                                VERIFIED_BY_SUPERSEDED_RUN.title()))),
                     null));
 
         assertFalse(orchestrator.review(requestFor("abcdefgh")));

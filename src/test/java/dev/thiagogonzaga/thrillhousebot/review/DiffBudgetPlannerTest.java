@@ -94,7 +94,9 @@ class DiffBudgetPlannerTest {
   }
 
   private int sectionTokens(FileDiff f) {
-    return tokenCounter.estimateTokens(formatter.formatFileSection(f, Set.of(f.filename())));
+    // The review prompt carries the section with its line-number column (#1320).
+    return tokenCounter.estimateTokens(
+        DiffLineNumbers.annotate(formatter.formatFileSection(f, Set.of(f.filename()))));
   }
 
   private static List<String> coveredFilenames(DiffBudgetPlanner.BudgetPlan plan) {

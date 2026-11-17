@@ -31,6 +31,14 @@ class FindingVerifierPromptsContentTest {
   }
 
   @Test
+  void eachVerdictEchoesItsCandidatesKey() {
+    // #1322: a verdict names its candidate by id and by key.
+    var schema = FindingVerifierPrompts.RESPONSE_SCHEMA;
+    assertContains(schema, "\"key\": \"<finding key>\"", "the verdict shape must carry the key");
+    assertContains(schema, "candidate's \"key\" copied beside it", "the key must be copied");
+  }
+
+  @Test
   void verifierCarvesOutADemonstratedInjectionSink() {
     String sys = FindingVerifierPrompts.CORE_INJECTION_SINK;
     assertContains(

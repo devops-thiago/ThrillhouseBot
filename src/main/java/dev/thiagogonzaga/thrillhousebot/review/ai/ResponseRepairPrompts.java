@@ -75,8 +75,8 @@ public final class ResponseRepairPrompts {
             - description: detailed explanation
             - suggestion_old: the exact current code to replace, or absent
             - suggestion_new: the exact fixed code, or absent
-            Each previous_findings_status entry is {"id": <integer>, "status": "resolved" |
-            "unresolved" | "justified", "note": "..."}.
+            Each previous_findings_status entry is {"id": <integer>, "key": "...", "status":
+            "resolved" | "unresolved" | "justified", "note": "..."}.
             "findings" is [] when the answer holds no finding; never omit it.
             """;
 
@@ -85,7 +85,6 @@ public final class ResponseRepairPrompts {
       """
             {"findings": [], "previous_findings_status": [], "summary": { ... }}
             The "summary" object may hold these fields, each only when the answer has it:
-            - total_findings, critical, high, medium, low: integers
             - overall_assessment: a string
             - pr_purpose: a string
             - description_gaps: an array of strings

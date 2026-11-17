@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Stream;
 
 /**
  * Builds the {@link ReviewResult} verdict from the model response and the review's gating inputs,
@@ -287,7 +288,16 @@ public class VerdictBuilder {
     // "superseded" before the gates run, so a vanished finding never holds APPROVE (#336).
     // Skip the DiffLineResolver when there are no statuses — first reviews and empty-status
     // paths must not pay for a patch re-parse (#135).
-    var rawStatuses = aiResponse.previousFindingsStatus();
+    // #1319: a status on an older round's finding the prompt numbered after the effective round's
+    // is not the effective round's; its "resolved" goes to the backstop by the finding's key.
+    var rawStatuses =
+        FollowUpAnalyzer.effectiveRoundStatuses(
+            ctx, aiResponse.previousFindingsStatus(), botIdentity);
+    var earlierResolutions =
+        FollowUpAnalyzer.earlierRoundResolutions(
+            ctx, aiResponse.previousFindingsStatus(), botIdentity);
+    // #1318/#1319: nothing whose file is unchanged since the round that raised it is superseded.
+    var previousRound = FollowUpAnalyzer.effectivePreviousRoundIndex(ctx.priorAiResponses());
     var currentRenameTargets = renameTargets(ctx.files());
     // Ids a newer round already closed must not be re-superseded — that phantom supersede would
     // pin hasSupersededPrevious on and re-post the summary every push (#470).
@@ -298,7 +308,8 @@ public class VerdictBuilder {
             rawStatuses,
             rawStatuses.isEmpty() ? null : ctx.lineResolver(),
             currentRenameTargets,
-            settledIds);
+            settledIds,
+            previousRound);
     if (ctx.hasContext()) {
       effectiveStatuses =
           followUpAnalyzer.addUnreportedVanished(
@@ -306,7 +317,8 @@ public class VerdictBuilder {
               effectiveStatuses,
               ctx.lineResolver(),
               currentRenameTargets,
-              settledIds);
+              settledIds,
+              previousRound);
     }
     // Nothing can have left the diff when the head is the one the findings were raised on: an
     // anchor that did not match there (a redacted secret quote, a drifted quote) stays open (#932).
@@ -365,7 +377,7 @@ public class VerdictBuilder {
             ? followUpAnalyzer
                 .heldPreviousFindings(
                     ctx.priorAiResponses(),
-                    effectiveStatuses,
+                    Stream.concat(effectiveStatuses.stream(), earlierResolutions.stream()).toList(),
                     ctx.inlineComments(),
                     ctx.conversationComments(),
                     ctx.lineResolver(),
@@ -405,18 +417,44 @@ public class VerdictBuilder {
             PriorOverviewCarryover.carried(effectiveResponse.summary(), ctx),
             ciCitations,
             new PrSummaryGenerator.DescriptionSources(
-                claimText,
-                // On the head the previous round reviewed, the findings it named stay named while
-                // open (#1074): nothing the section is about has changed there.
-                ctx.previousRoundHeadUnchanged()
-                    ? DescriptionGapCarryover.previousFindingBullets(
-                        ctx.conversationComments(), botIdentity)
-                    : Set.of(),
-                linked.section(),
-                linked.baseCode(),
-                linked.verdicts())),
+                    claimText,
+                    // On the head the previous round reviewed, the findings it named stay named
+                    // while
+                    // open (#1074): nothing the section is about has changed there.
+                    ctx.previousRoundHeadUnchanged()
+                        ? DescriptionGapCarryover.previousFindingBullets(
+                            ctx.conversationComments(), botIdentity)
+                        : Set.of(),
+                    linked.section(),
+                    linked.baseCode(),
+                    linked.verdicts())
+                .withRound(ctx.previousFindingsList(), addedCode(ctx.files()))),
         ciEvaluation,
         backstopStatuses);
+  }
+
+  /**
+   * The pull request's added lines, every file's {@code +} lines inside its hunks: what the
+   * Description vs. Implementation screen checks a gap's "nothing shows it" against (#1387). A
+   * {@code +++} file header can only come before the first {@code @@} hunk header, so a line inside
+   * a hunk is an added line whatever it starts with ({@code +++index;} adds {@code ++index;}). A
+   * file with no patch adds nothing here.
+   */
+  static String addedCode(List<GitHubPullRequestClient.FileDiff> files) {
+    var added = new StringBuilder();
+    for (var file : files) {
+      if (file.patch() == null) {
+        continue;
+      }
+      var inHunk = false;
+      for (var line : file.patch().split("\n", -1)) {
+        inHunk = inHunk || line.startsWith("@@");
+        if (inHunk && line.startsWith("+")) {
+          added.append(line, 1, line.length()).append('\n');
+        }
+      }
+    }
+    return added.toString();
   }
 
   /**

@@ -72,7 +72,7 @@ class TicketContextResolverTest {
       var resolver = new TicketContextResolver(List.of(provider), false, "github", 3, 6000, true);
 
       assertFalse(resolver.enabled());
-      assertEquals("", resolver.resolve("a", "o", "r", 1, "Closes #1"));
+      assertEquals("", resolver.resolve("a", "o", "r", 1, "Closes #1", 1L));
       assertTrue(provider.lookups.isEmpty());
     }
 
@@ -82,7 +82,7 @@ class TicketContextResolverTest {
       var resolver = new TicketContextResolver(List.of(provider), true, "jira", 3, 6000, false);
 
       assertFalse(resolver.enabled());
-      assertEquals("", resolver.resolve("a", "o", "r", 1, "Closes #1"));
+      assertEquals("", resolver.resolve("a", "o", "r", 1, "Closes #1", 1L));
       assertFalse(
           new TicketContextResolver(List.of(provider), true, null, 3, 6000, false).enabled());
     }
@@ -95,13 +95,13 @@ class TicketContextResolverTest {
           new TicketContextResolver(List.of(other, github), true, " GitHub ", 2, 6000, true);
 
       assertTrue(resolver.enabled());
-      var section = resolver.resolve("auth", "o", "r", 42, "body");
+      var section = resolver.resolve("auth", "o", "r", 42, "body", 1L);
 
       assertTrue(section.contains("### Issue #1: right"), section);
       assertTrue(other.lookups.isEmpty());
       var lookup = github.lookups.get(0);
       assertEquals(
-          new IssueTrackerProvider.TicketLookup("auth", "o", "r", 42, "body", true), lookup);
+          new IssueTrackerProvider.TicketLookup("auth", "o", "r", 42, "body", true, 1L), lookup);
       assertEquals(List.of(2), github.limits);
     }
 
@@ -116,7 +116,7 @@ class TicketContextResolverTest {
       var provider = new FixedProvider("github", List.of(ticket(1, "a", ""), ticket(2, "b", "")));
 
       var section =
-          new TicketContextResolver(List.of(provider), config).resolve("x", "o", "r", 3, "");
+          new TicketContextResolver(List.of(provider), config).resolve("x", "o", "r", 3, "", 1L);
 
       assertTrue(provider.lookups.get(0).fromBranch());
       assertTrue(section.contains("### Issue #1: a"), section);
@@ -130,9 +130,10 @@ class TicketContextResolverTest {
     @Test
     void noLinkedIssueGivesNoSection() {
       assertEquals(
-          "", resolver(new FixedProvider("github", List.of()), 6000).resolve("a", "o", "r", 1, ""));
+          "",
+          resolver(new FixedProvider("github", List.of()), 6000).resolve("a", "o", "r", 1, "", 1L));
       assertEquals(
-          "", resolver(new FixedProvider("github", null), 6000).resolve("a", "o", "r", 1, ""));
+          "", resolver(new FixedProvider("github", null), 6000).resolve("a", "o", "r", 1, "", 1L));
     }
 
     @Test
@@ -150,7 +151,7 @@ class TicketContextResolverTest {
             }
           };
 
-      assertEquals("", resolver(failing, 6000).resolve("a", "o", "r", 1, "Closes #1"));
+      assertEquals("", resolver(failing, 6000).resolve("a", "o", "r", 1, "Closes #1", 1L));
     }
   }
 
@@ -197,7 +198,7 @@ class TicketContextResolverTest {
           resolver(
                   new FixedProvider("github", List.of(ticket(58, "Pull ticket context", body))),
                   6000)
-              .resolve("a", "o", "r", 1, "");
+              .resolve("a", "o", "r", 1, "", 1L);
 
       // #923: the keys, never a count — a bare "1" was echoed back as "Linked issue #1".
       assertTrue(section.startsWith("Issues this pull request is linked to: #58\n"), section);
@@ -225,7 +226,7 @@ class TicketContextResolverTest {
                   new FixedProvider(
                       "github", List.of(ticket(3, "", "just prose"), ticket(4, null, null))),
                   6000)
-              .resolve("a", "o", "r", 1, "");
+              .resolve("a", "o", "r", 1, "", 1L);
 
       assertTrue(section.contains("### Issue #3\n"), section);
       assertTrue(section.contains(TicketContextResolver.NO_CRITERIA), section);
@@ -239,7 +240,7 @@ class TicketContextResolverTest {
       var body = "- [ ] keep\u200B going\r\nline\u2066 two";
       var section =
           resolver(new FixedProvider("github", List.of(ticket(1, title, body))), 6000)
-              .resolve("a", "o", "r", 1, "");
+              .resolve("a", "o", "r", 1, "", 1L);
 
       assertTrue(section.contains("### Issue #1: Add retries now\n"), section);
       assertTrue(section.contains("- [ ] keep going\n"), section);
@@ -259,7 +260,7 @@ class TicketContextResolverTest {
           resolver(
                   new FixedProvider("github", List.of(ticket(1, "t".repeat(400), body.toString()))),
                   20_000)
-              .resolve("a", "o", "r", 1, "");
+              .resolve("a", "o", "r", 1, "", 1L);
 
       assertTrue(section.contains("### Issue #1: " + "t".repeat(299) + "…\n"), section);
       assertTrue(section.contains("- (3 more not shown)\n"), section);
@@ -277,7 +278,7 @@ class TicketContextResolverTest {
                   new FixedProvider(
                       "github", List.of(ticket(1, "first", huge), ticket(2, "second", "short"))),
                   4000)
-              .resolve("a", "o", "r", 1, "");
+              .resolve("a", "o", "r", 1, "", 1L);
 
       assertTrue(section.contains("### Issue #2: second"), section);
       assertTrue(section.contains("Issue body:\nshort"), section);
@@ -296,7 +297,7 @@ class TicketContextResolverTest {
                       "github",
                       List.of(ticket(1, "first", body.toString()), ticket(2, "second", "- [ ] b"))),
                   2000)
-              .resolve("a", "o", "r", 1, "");
+              .resolve("a", "o", "r", 1, "", 1L);
 
       assertTrue(section.contains("### Issue #2: second"), section);
       assertTrue(section.contains("- [ ] b\n"), section);
@@ -325,7 +326,7 @@ class TicketContextResolverTest {
       var section =
           new TicketContextResolver(
                   List.of(new FixedProvider("github", tickets)), true, "github", 5, 1000, false)
-              .resolve("a", "o", "r", 1, "");
+              .resolve("a", "o", "r", 1, "", 1L);
 
       assertTrue(section.length() <= 1000, "length " + section.length());
       assertTrue(section.endsWith("\n" + TicketContextResolver.TRUNCATION_NOTE), section);

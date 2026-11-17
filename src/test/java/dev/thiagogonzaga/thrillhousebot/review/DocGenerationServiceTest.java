@@ -195,6 +195,49 @@ class DocGenerationServiceTest {
   }
 
   @Test
+  void placesASingleLineDocOnTheLineItsDeclarationIsOnWhateverLineTheModelCited() {
+    prWithFiles(fooWithPatch());
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            aiOk(
+                """
+            {"docs":[{"file":"src/Foo.java","line":2,"symbol":"baz(int)",
+            "suggestion_old":"public int baz(int y) {",
+            "suggestion_new":"/** Adds one. */\npublic int baz(int y) {"}]}
+            """));
+
+    service.handle(task());
+
+    assertEquals(4, capturedInlineComment().line());
+  }
+
+  @Test
+  void skipsASingleLineDocWhoseQuoteDropsTheLinesIndentation() {
+    prWithFiles(
+        new FileDiff(
+            "src/Hop.java",
+            "added",
+            3,
+            0,
+            3,
+            "@@ -0,0 +1,3 @@\n+  public int hop(int n) {\n+    return n;\n+  }"));
+    when(docGenerator.generate(any(), any(), any(), any()))
+        .thenReturn(
+            aiOk(
+                """
+            {"docs":[{"file":"src/Hop.java","line":1,"symbol":"hop(int)",
+            "suggestion_old":"public int hop(int n) {",
+            "suggestion_new":"/** Returns n. */\npublic int hop(int n) {"}]}
+            """));
+
+    service.handle(task());
+
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    assertEquals(DocGenerationService.COULD_NOT_PLACE, postedSummary());
+  }
+
+  @Test
   void postsCommittableSuggestionForChangedSymbol() {
     prWithFiles(fooWithPatch());
     when(docGenerator.generate(any(), any(), any(), any()))
@@ -434,6 +477,14 @@ class DocGenerationServiceTest {
             """
             {"docs":[{"file":"src/Foo.java","line":99,"symbol":"ghost",
             "suggestion_old":"whatever","suggestion_new":"/** x */\\nwhatever"}]}
+            """,
+            DocGenerationService.COULD_NOT_PLACE),
+        arguments(
+            "multi-line declaration cited far from every hunk",
+            """
+            {"docs":[{"file":"src/Foo.java","line":99,"symbol":"bar",
+            "suggestion_old":"public int bar(int x) {\\n  return x * 2;",
+            "suggestion_new":"/** x */\\npublic int bar(int x) {\\n  return x * 2;"}]}
             """,
             DocGenerationService.COULD_NOT_PLACE),
         arguments(

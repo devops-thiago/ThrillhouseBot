@@ -1,0 +1,13 @@
+{
+  "kind": "generator",
+  "sourcePr": 1342,
+  "why": "Valid input the same rule mishandles (#1386): a from-import continued with a backslash (from . import helpers, \\ then net on the next line) is legal Python, but PYTHON_FROM stops at the backslash and only a parenthesized import opens a continuation, so the names on the continued line are never read. The review prompt should keep reporting a legal input the rule drops.",
+  "expectation": "must-find",
+  "targetFile": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/RelatedReferences.java",
+  "keywords": [
+    "backslash",
+    "explicit line join"
+  ],
+  "prTitle": "feat(review): read related code outside the diff (#55)",
+  "prDescription": "Opt-in related context: candidate files come from the diff's import lines and type names, matched against the repository listing with no model call. RelatedReferences reads each language's import lines (Java and Kotlin imports, Python from-imports and imports, JS/TS relative imports, Go, Rust, Ruby, C includes, PHP) and resolves each imported module to a repository path."
+}

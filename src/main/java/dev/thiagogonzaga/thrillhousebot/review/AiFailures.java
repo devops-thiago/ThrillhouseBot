@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiApiKeyRejectedException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiContextWindowExceededException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.AiReviewException;
 import dev.thiagogonzaga.thrillhousebot.review.ai.Throwables;
@@ -42,6 +43,18 @@ final class AiFailures {
   /** Whether a batch failure was the spend ceiling refusing the call before it was made. */
   static boolean isSpendCeilingBlocked(Throwable failure) {
     return Throwables.findCause(failure, TokenSpendCeilingExceededException.class).isPresent();
+  }
+
+  /**
+   * Throws the provider's rejection of the API key when {@code failure} is one (#1329): a batch's
+   * sequential retry would send the same key, so the review fails with that reason instead of
+   * disclosing the batch's files as not reviewed. Returns for every other failure.
+   */
+  static void throwIfApiKeyRejected(Throwable failure) {
+    var rejection = AiApiKeyRejectedException.classify(failure);
+    if (rejection.isPresent()) {
+      throw rejection.get();
+    }
   }
 
   /** Whether the provider rejected the request for exceeding the model's context window (#622). */

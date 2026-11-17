@@ -611,7 +611,9 @@ If the summary was deleted, the round posts a new one; if an edit fails, it
 posts a new one and logs a WARN. GitHub keeps the edit history. Inline
 findings and review bodies stay per round. With `REVIEW_FOLLOW_UP_SUMMARY_ENABLED`,
 the review body also carries new, resolved and still-open counts, naming each closed
-finding once instead of posting a second delta comment. The review keeps its verdict;
+finding once instead of posting a second delta comment. It also names the threads a
+round posted for earlier "Things to double-check" items, and says how many new findings
+went only under "Things to double-check". The review keeps its verdict;
 a definite review refusal preserves the same outcome as a regular comment.
 
 The risk counts, Key Findings and "Things to double-check" cover the round's
@@ -1193,7 +1195,7 @@ again. Commands such as `/describe` or `/improve` send nothing.
   "schema_version": 1,
   "event": "review.completed",
   "timestamp": "2026-09-29T12:00:00Z",
-  "bot": { "name": "thrillhousebot", "version": "0.9.1" },
+  "bot": { "name": "thrillhousebot", "version": "0.9.2" },
   "repository": "octo/repo",
   "pull_request": { "number": 42, "head_sha": "0123abc…", "url": "https://github.com/octo/repo/pull/42" },
   "session_url": "https://bot.example/session/…",
@@ -1703,14 +1705,14 @@ Sigstore) and carry build-provenance attestations. To check a release:
 cosign verify \
   --certificate-identity-regexp='https://github.com/devops-thiago/ThrillhouseBot.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/devops-thiago/thrillhousebot:v0.9.1
+  ghcr.io/devops-thiago/thrillhousebot:v0.9.2
 
 # Provenance (image)
-gh attestation verify oci://ghcr.io/devops-thiago/thrillhousebot:v0.9.1 \
+gh attestation verify oci://ghcr.io/devops-thiago/thrillhousebot:v0.9.2 \
   --repo devops-thiago/ThrillhouseBot
 
 # Provenance (a downloaded binary)
-gh attestation verify thrillhousebot-v0.9.1-linux-amd64.tar.gz \
+gh attestation verify thrillhousebot-v0.9.2-linux-amd64.tar.gz \
   --repo devops-thiago/ThrillhouseBot
 ```
 
@@ -1842,7 +1844,7 @@ Both images are built from the same native binary and published to GHCR:
 
 - `ghcr.io/devops-thiago/thrillhousebot:latest`: UBI9-micro (default).
 - `ghcr.io/devops-thiago/thrillhousebot:latest-distroless`: distroless base
-  (`:v0.9.1-distroless`, and so on).
+  (`:v0.9.2-distroless`, and so on).
 - Snapshot tags: `:snapshot`, `:v<version>-<short-sha>-snapshot` and
   `:<full-sha>`, each with a `-distroless` variant.
   A weekly job keeps the 10 newest snapshot builds of each variant and

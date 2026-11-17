@@ -27,7 +27,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-/** Verdicts returned by the finding verifier, keyed by the candidate finding's 1-based id. */
+/**
+ * Verdicts returned by the finding verifier, keyed by the candidate finding's 1-based id and the
+ * candidate's key echoed beside it (#1322).
+ */
 @RegisterForReflection
 public record VerificationResponse(List<Verdict> verdicts) {
   public VerificationResponse {
@@ -42,10 +45,14 @@ public record VerificationResponse(List<Verdict> verdicts) {
    * is read leniently: a value of a shape the schema does not name (lines as an array, one cut
    * sentence as a string, an object) is read as far as it holds text, or as absent, so a stray
    * shape there never costs the call the verdicts themselves.
+   *
+   * <p>{@code key} is the candidate's key, copied from the candidate (#1322). A verdict whose key
+   * is not its candidate's is not applied.
    */
   @RegisterForReflection
   public record Verdict(
       int id,
+      String key,
       String verdict, // confirmed, downgraded, rejected
       String risk, // corrected risk for downgrades
       String confidence, // corrected confidence for downgrades
@@ -62,8 +69,9 @@ public record VerificationResponse(List<Verdict> verdicts) {
     }
 
     /** A verdict with no judgment of the suggestion and nothing to cut. */
-    public Verdict(int id, String verdict, String risk, String confidence, String reason) {
-      this(id, verdict, risk, confidence, reason, null, null, List.of());
+    public Verdict(
+        int id, String key, String verdict, String risk, String confidence, String reason) {
+      this(id, key, verdict, risk, confidence, reason, null, null, List.of());
     }
   }
 

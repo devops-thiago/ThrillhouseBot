@@ -209,11 +209,14 @@ output cap (`REVIEW_CONCISE_MAX_OUTPUT_TOKENS`, default 8192) and reasoning sett
 
 Review and summary calls stream from the provider. Only the single-call review streams tokens to
 the dashboard; a batch emits `review.batch` progress events instead. Batches run on virtual
-threads. A batch that failed for a reason other than a cut response, a context-window rejection or
-the spend ceiling is retried once, one batch at a time, after the parallel pass.
+threads. A batch that failed for a reason other than a cut response, a context-window rejection,
+a rejected API key or the spend ceiling is retried once, one batch at a time, after the parallel
+pass.
 
 A failed call attempt is retried with backoff, up to `thrillhousebot.review.max-ai-retries`
-attempts (default 5). A response cut at its length cap is not retried, because the same call would
+attempts (default 3). A provider rejecting the API key (HTTP 401 or 403) is not retried and does
+not move to `AI_FALLBACK_MODEL`: the call fails at once, and the review fails with a reason that
+says the key was rejected. A response cut at its length cap is not retried, because the same call would
 be cut the same way: the findings completed before the cut are kept and the affected files are
 disclosed. A length stop with no content (reasoning used the whole cap) is repeated once at a
 lower effort: `low` when reasoning is enabled (no repeat on a lane already at `low` or `none`),
@@ -432,9 +435,59 @@ previous round's overview is reused (`PriorOverviewCarryover`).
 The comment keeps no history of its own. Each round's review and inline comments record that
 round. The optional delta section (`REVIEW_FOLLOW_UP_SUMMARY_ENABLED`, off by default) lists
 what changed since the last round inside that review, replacing its default closed-names section.
+A thread the round posted for a finding that was only a "Things to double-check" item before is
+counted under still open, as that item, and named on a line of its own; the new-findings count says
+how many new findings went only under "Things to double-check" (#1312). Neither changes a count.
 One review notification therefore carries the verdict, counts and closed identities. A definite
 review refusal keeps the same body in the existing comment fallback; an ambiguous failure does
 not risk posting it twice. An explicit `/summary` that posts its summary adds no delta section.
+
+### Stored finding state
+
+Each finding also has a row in `finding_state` (#1319), keyed by the key its thread marker carries
+(`SuggestionFormatter.findingKey`, over its file, line and title), so a re-raise of the same
+finding updates its row. `FindingLedger` works out what a round writes, and `FindingStates` stores
+it:
+
+- A round's own findings get an open row each, with the code they quote, the side of the diff the
+  quote was on (`RIGHT`, or `LEFT` for a finding about removed code), whether the quote was there
+  in that round, the file's blob SHA at the round's head, and the head itself.
+- A previous finding's status (`open`, `resolved`, `justified` or `superseded`) is written only
+  when it differs from the stored one, with the head of the round that changed it. A "Things to
+  double-check" item that this round's own finding raised again is `replaced`: that finding usually
+  comes back under another key, and its row is the open one from then on (#1312).
+- A finding's thread is recorded once it has one, with the commit it was posted on. A
+  "Things to double-check" item has no thread until a later round posts it inline.
+- A pull request reviewed before the table existed gets rows from its next round: each previous
+  finding that round gives a status, with nothing known about how it was anchored.
+
+The next round reads the rows before the earlier rounds' statuses are reconciled
+(`StoredRoundChanges`). A finding whose file has the same blob SHA at this head as at the round
+that raised it is unchanged, and stays open without a call to GitHub; where no row knows the file,
+the comparison of the two heads decides (`RoundFileChanges`). Presence is checked on the side the
+quote was on, and a finding whose quote did not match even in the round that raised it is not read
+as gone only because it still does not match, while its file is still in the pull request (#1318).
+
+The rows also decide whether a round moved anything. A follow-up round that raised no new finding
+and changed no stored status neither lets the summary stand in for the round nor adds the delta
+section; the summary may still be edited in place, which notifies nobody. A pull request with no
+rows always counts as moved, as before. A round that posts a thread for an earlier double-check
+item moves that item's row to `replaced`, so it counts as moved and its delta names the thread.
+
+The rows' lifecycle (`FindingStateLifecycle`):
+
+- `pull_request` `closed` (a merge included) starts the rows' retention period; `reopened` clears
+  it before any pause or trigger filter ends the handling, and the findings carry on.
+- A daily sweep, also run at startup, deletes the rows of pull requests closed longer than
+  `FINDINGS_RETENTION` ago (30 days by default). It then asks GitHub about up to 50 pull requests
+  whose rows no round wrote or sweep checked for a day, least recently first, and closes the rows of those GitHub reports closed or no
+  longer serves (404, 410), so a missed `closed` delivery does not keep rows forever. Any other
+  failure leaves the rows open.
+- Uninstalling the App deletes the installation's rows; suspending it does not.
+- A renamed or transferred repository keeps its rows under the new name.
+
+Nothing else references the rows: finding feedback, learnings and review sessions keep their own
+copy of what they need.
 
 ### Threads
 
@@ -554,6 +607,7 @@ does not lose it. On startup `InterruptedSessionReconciler` marks every session 
 | `PausedPr` | `PausedPr` | PRs paused with `/pause`. |
 | `FindingFeedback` | `finding_feedback` | 👍/👎 reactions and reply signals on findings. See [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/). |
 | `ReviewLearning` | `review_learning` | Review learnings, scoped to installation and repository. A retracted row stays, with `active` cleared. |
+| `FindingState` | `finding_state` | Each finding of a pull request and its status across rounds. See [Stored finding state](#stored-finding-state). |
 
 Production uses PostgreSQL (`DATABASE_URL`); dev mode and the tests use in-memory H2 in PostgreSQL
 mode. Flyway runs the scripts in `src/main/resources/db/migration` at boot, and Hibernate only

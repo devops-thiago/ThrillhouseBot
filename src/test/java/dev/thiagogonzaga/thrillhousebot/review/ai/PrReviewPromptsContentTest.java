@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.ai;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -47,6 +48,19 @@ class PrReviewPromptsContentTest {
 
   private static void assertContains(String haystack, String needle, String why) {
     assertTrue(haystack.contains(needle), why + " — missing marker: \"" + needle + "\"");
+  }
+
+  @Test
+  void eachStatusEchoesTheListedFindingsKey() {
+    // #1322: the key beside the id is what lets a swapped id be caught.
+    assertContains(
+        PrReviewPrompts.CORE_SELF_CHECK,
+        "\"key\": \"<the finding's key>\"",
+        "the status shape must carry the echoed key");
+    assertContains(
+        PrReviewPrompts.CORE_SELF_CHECK,
+        "the key shown in parentheses after that number",
+        "the prompt must say where the key is listed");
   }
 
   @Test
@@ -382,6 +396,64 @@ class PrReviewPromptsContentTest {
         "contract-free probes must remain low-confidence verification requests");
   }
 
+  /**
+   * #1386: on #1342 the review reported a dotted name in a Python from-import list, an input the
+   * grammar rejects and the upstream capture group cannot produce.
+   */
+  @Test
+  void followUpRulesProbeAFixAndReportTheGapItLeaves() {
+    String rules = PrReviewPrompts.CORE_SELF_CHECK;
+    assertContains(
+        rules,
+        "for the same defect class with inputs the finding did not use",
+        "a resolved verdict must first probe the replacement code (#1388)");
+    assertContains(
+        rules,
+        "One exception, a gap left by a fix",
+        "the no-duplicate rule must carve out a gap the fix left (#1388)");
+    assertContains(
+        rules,
+        "never the code the prior finding quoted",
+        "the gap finding must quote the new mechanism (#1388)");
+    assertContains(
+        rules,
+        "starts with \"Gap left by the fix for\"",
+        "the gap finding must be labelled as one (#1388)");
+    assertContains(
+        rules,
+        "prior round are never such a gap",
+        "a plain re-raise of unchanged code is still forbidden (#1388)");
+  }
+
+  @Test
+  void heuristicRequestRequiresALegalInputThatReachesTheRule() {
+    String req = PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST;
+    assertContains(
+        req,
+        "legal in the grammar of the language or format the rule reads",
+        "a synthesized input must be valid in the language the rule reads (#1386)");
+    assertContains(
+        req,
+        "Trace it through every earlier regex, capture group, split or filter",
+        "a synthesized input must be traced through the upstream captures (#1386)");
+    assertContains(
+        req,
+        "quote the character class that admits it",
+        "the trace must quote the class that lets the input through (#1386)");
+    assertContains(
+        req,
+        "stage drops or cuts short is a defect in that stage",
+        "an upstream capture that drops a legal input is reported, not excused (#1386)");
+    assertContains(
+        req,
+        "an illegal input is not a finding at any stage",
+        "only an input the grammar rejects is out of the domain (#1386)");
+    assertContains(
+        req,
+        "A legal input that does reach the rule and is mishandled is still reported.",
+        "the check must not suppress real false negatives (#1386)");
+  }
+
   @Test
   void verifierRequiresVisibleContractForHeuristicLimitations() {
     String sys = FindingVerifierPrompts.CORE_HEURISTIC_LIMITATION;
@@ -662,6 +734,35 @@ class PrReviewPromptsContentTest {
         sys,
         "extracted class, one file, or the one component that happens to carry findings",
         "the summary must not present one extracted class as the whole PR (#335)");
+  }
+
+  /**
+   * #1323: the summary call sees only this round's findings, so a count it writes can only disagree
+   * with the totals the summary computes ("One medium finding remains" over 17 open).
+   */
+  @Test
+  void summaryPromptAsksForNoCountsAndForbidsThemInProse() {
+    String sys = PrReviewPrompts.SUMMARY_SYSTEM;
+    assertContains(
+        sys,
+        "Write no counts or sizes in overall_assessment or pr_purpose",
+        "the purpose and assessment must state no finding count or change size (#1323)");
+    assertContains(
+        sys,
+        "may still quote the description's own figures",
+        "a description gap may still quote the description's figures (#1323)");
+    assertContains(
+        sys,
+        "\"one medium finding remains\"",
+        "the prompt must name the #1315 sentence as the kind of count it forbids");
+    for (String field : new String[] {"total_findings", "per-severity counts"}) {
+      assertFalse(
+          sys.contains(field),
+          "the summary call must no longer be asked for " + field + " (#1323)");
+    }
+    assertFalse(
+        ResponseRepairPrompts.SUMMARY_CONTRACT.contains("total_findings"),
+        "the repair contract must not ask for the counts either (#1323)");
   }
 
   @Test
@@ -1819,5 +1920,38 @@ class PrReviewPromptsContentTest {
         sys,
         "Do not describe how material reached you (\"supplied from\", \"as provided with this\nreview\"",
         "provenance notes about the prompt's input are prompt vocabulary too (#975)");
+  }
+
+  @Test
+  void reviewPromptRendersTheNumberedDiffAndAsksForTheShownLineNumber() {
+    assertContains(
+        PrReviewPrompts.USER, "{{inputs.numberedDiff}}", "the review call reads the numbered diff");
+    assertContains(
+        PrReviewPrompts.USER, "\"843  int x;\" (two spaces)", "a context line is shown too");
+    assertFalse(
+        PrReviewPrompts.USER.contains("{{inputs.diff}}"),
+        "the plain diff slot is for the deterministic stages, not the prompt");
+    assertContains(
+        PrReviewPrompts.CORE_FINDING_FIELDS_AND_SEVERITY,
+        "never count lines from a hunk header",
+        "the line is read from the column");
+    assertContains(
+        PrReviewPrompts.CORE_FINDING_FIELDS_AND_SEVERITY,
+        "the leading line number",
+        "quotes leave the column out");
+    assertContains(
+        PrReviewPrompts.CORE_FINDING_FIELDS_AND_SEVERITY,
+        "which have no number, use the number of the next",
+        "a finding on removed lines still has a line to read");
+  }
+
+  @Test
+  void promptInputsNumberTheDiffOnlyForThePrompt() {
+    var inputs =
+        new AiReviewService.PromptInputs(
+            "```diff\n@@ -1 +3 @@\n+x\n```", "", "", "", "", "", "", "", null);
+
+    assertEquals("```diff\n@@ -1 +3 @@\n3 +x\n```", inputs.numberedDiff());
+    assertEquals("```diff\n@@ -1 +3 @@\n+x\n```", inputs.diff());
   }
 }

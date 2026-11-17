@@ -237,6 +237,42 @@ class OverviewScreenTest {
   }
 
   @Test
+  void thePurposeLosesItsFindingCountSentenceFromPr1315() {
+    var answer =
+        summary(
+            "Adds a retry to the uploader. One medium finding remains.",
+            List.of(row("react/src/main.tsx", "renders")));
+
+    var screened = OverviewScreen.screen(answer, FILES, "");
+
+    assertEquals("Adds a retry to the uploader.", screened.prPurpose());
+    assertEquals("ok", screened.overallAssessment());
+  }
+
+  @Test
+  void onlyTheAssessmentChangingStillYieldsANewSummary() {
+    var answer =
+        new ReviewResponse.Summary(
+            1,
+            0,
+            1,
+            0,
+            0,
+            "Solid. It is +555 lines across 6 directories.",
+            "Adds a retry.",
+            List.of(),
+            List.of(),
+            List.of(row("react/src/main.tsx", "renders")),
+            null,
+            List.of());
+
+    var screened = OverviewScreen.screen(answer, FILES, "");
+
+    assertEquals("Solid.", screened.overallAssessment());
+    assertEquals("Adds a retry.", screened.prPurpose());
+  }
+
+  @Test
   void findingsTalkAfterASentenceEndIsCutLikeAfterASemicolon() {
     assertEquals(
         "Renders the table.",

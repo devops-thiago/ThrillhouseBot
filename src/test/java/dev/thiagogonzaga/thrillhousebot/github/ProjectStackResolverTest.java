@@ -16,25 +16,30 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.doThrow;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.ws.rs.NotFoundException;
-import jakarta.ws.rs.core.Response;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
+import dev.thiagogonzaga.thrillhousebot.CapturedLog;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.kohsuke.github.GHFileNotFoundException;
+import org.kohsuke.github.HttpException;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 class ProjectStackResolverTest {
 
-  @Mock private GitHubAuthClient authClient;
-
-  @Mock private GitHubPullRequestClient prClient;
+  @Mock private io.quarkiverse.githubapp.GitHubClientProvider clientProvider;
+  @Mock private org.kohsuke.github.GitHub gitHub;
+  @Mock private org.kohsuke.github.GHRepository repository;
 
   private final AtomicLong currentTimeMs = new AtomicLong(1_000_000L);
 
@@ -44,37 +49,32 @@ class ProjectStackResolverTest {
   private static final String REPO = "test-repo";
   private static final String DEFAULT_BRANCH = "main";
   private static final long INSTALLATION_ID = 42L;
-  private static final String AUTH_HEADER = "Bearer test-jwt";
-  private static final String ACCEPT = "application/vnd.github+json";
 
   @BeforeEach
-  void setUp() {
+  void setUp() throws Exception {
     MockitoAnnotations.openMocks(this);
-    when(authClient.getAuthHeader(INSTALLATION_ID)).thenReturn(AUTH_HEADER);
-    when(prClient.getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenThrow(new NotFoundException(Response.status(404).build()));
-    resolver =
-        new ProjectStackResolver(authClient, prClient, new ObjectMapper(), currentTimeMs::get);
+    when(clientProvider.getInstallationClient(INSTALLATION_ID)).thenReturn(gitHub);
+    when(gitHub.getRepository(anyString())).thenReturn(repository);
+    when(repository.getFileContent(anyString(), anyString()))
+        .thenThrow(new GHFileNotFoundException("not found"));
+    resolver = new ProjectStackResolver(clientProvider, new ObjectMapper(), currentTimeMs::get);
   }
 
-  private GitHubPullRequestClient.FileContent makeFileContent(String name, String content) {
-    var encoded = Base64.getEncoder().encodeToString(content.getBytes(StandardCharsets.UTF_8));
-    return new GitHubPullRequestClient.FileContent(name, name, encoded, "base64", content.length());
+  private org.kohsuke.github.GHContent makeFileContent(String content) throws Exception {
+    var mock = mock(org.kohsuke.github.GHContent.class);
+    doReturn(content).when(mock).getContent();
+    return mock;
   }
 
-  private void stubManifest(String path, GitHubPullRequestClient.FileContent content) {
-    doReturn(content)
-        .when(prClient)
-        .getFileContent(AUTH_HEADER, ACCEPT, OWNER, REPO, path, DEFAULT_BRANCH);
+  private void stubManifest(String path, org.kohsuke.github.GHContent content) throws Exception {
+    doReturn(content).when(repository).getFileContent(path, DEFAULT_BRANCH);
   }
 
   @Test
-  void shouldSummarizePomArtifacts() {
+  void shouldSummarizePomArtifacts() throws Exception {
     stubManifest(
         "pom.xml",
         makeFileContent(
-            "pom.xml",
             """
             <project>
               <artifactId>my-app</artifactId>
@@ -99,11 +99,10 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void shouldSummarizePackageJsonDependencies() {
+  void shouldSummarizePackageJsonDependencies() throws Exception {
     stubManifest(
         "package.json",
         makeFileContent(
-            "package.json",
             """
             {
               "name": "frontend",
@@ -119,11 +118,10 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void shouldSummarizeGradleDependencyLines() {
+  void shouldSummarizeGradleDependencyLines() throws Exception {
     stubManifest(
         "build.gradle",
         makeFileContent(
-            "build.gradle",
             """
             plugins { id 'java' }
             dependencies {
@@ -141,11 +139,10 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void shouldIgnoreUnterminatedAndEmptyMavenArtifactTags() {
+  void shouldIgnoreUnterminatedAndEmptyMavenArtifactTags() throws Exception {
     stubManifest(
         "pom.xml",
         makeFileContent(
-            "pom.xml",
             "<artifactId>  </artifactId><artifactId>real</artifactId><artifactId>cut-off"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
@@ -155,11 +152,10 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void shouldNotTreatGradlePrefixWordsAsDependencyLines() {
+  void shouldNotTreatGradlePrefixWordsAsDependencyLines() throws Exception {
     stubManifest(
         "build.gradle",
         makeFileContent(
-            "build.gradle",
             """
             apiVersion = 5
             implementations.forEach { }
@@ -174,11 +170,10 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void shouldFallBackToRawExcerptForOtherManifests() {
+  void shouldFallBackToRawExcerptForOtherManifests() throws Exception {
     stubManifest(
         "go.mod",
         makeFileContent(
-            "go.mod",
             """
             module example.com/app
 
@@ -193,8 +188,8 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void shouldFallBackToRawExcerptForUnparseablePackageJson() {
-    stubManifest("package.json", makeFileContent("package.json", "not json {"));
+  void shouldFallBackToRawExcerptForUnparseablePackageJson() throws Exception {
+    stubManifest("package.json", makeFileContent("not json {"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -203,8 +198,8 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void shouldFallBackToRawExcerptForPomWithoutArtifactIds() {
-    stubManifest("pom.xml", makeFileContent("pom.xml", "<project><groupId>g</groupId></project>"));
+  void shouldFallBackToRawExcerptForPomWithoutArtifactIds() throws Exception {
+    stubManifest("pom.xml", makeFileContent("<project><groupId>g</groupId></project>"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -213,8 +208,8 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void shouldFallBackToRawExcerptForPackageJsonWithoutDependencies() {
-    stubManifest("package.json", makeFileContent("package.json", "{\"name\": \"frontend\"}"));
+  void shouldFallBackToRawExcerptForPackageJsonWithoutDependencies() throws Exception {
+    stubManifest("package.json", makeFileContent("{\"name\": \"frontend\"}"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -223,11 +218,10 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void shouldTruncateOversizedSections() {
+  void shouldTruncateOversizedSections() throws Exception {
     stubManifest(
         "go.mod",
-        makeFileContent(
-            "go.mod", "x".repeat(ProjectStackResolver.MAX_SECTION_CHARS + 100) + "\nend"));
+        makeFileContent("x".repeat(ProjectStackResolver.MAX_SECTION_CHARS + 100) + "\nend"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -236,11 +230,11 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void shouldCapManifestCount() {
-    stubManifest("pom.xml", makeFileContent("pom.xml", "<artifactId>a</artifactId>"));
-    stubManifest("build.gradle", makeFileContent("build.gradle", "implementation 'x:y:1'"));
-    stubManifest("build.gradle.kts", makeFileContent("build.gradle.kts", "api(\"x:z:1\")"));
-    stubManifest("package.json", makeFileContent("package.json", "{\"dependencies\":{}}"));
+  void shouldCapManifestCount() throws Exception {
+    stubManifest("pom.xml", makeFileContent("<artifactId>a</artifactId>"));
+    stubManifest("build.gradle", makeFileContent("implementation 'x:y:1'"));
+    stubManifest("build.gradle.kts", makeFileContent("api(\"x:z:1\")"));
+    stubManifest("package.json", makeFileContent("{\"dependencies\":{}}"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -256,17 +250,9 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void shouldDecodeMimeWrappedBase64() {
+  void shouldReturnHub4jDecodedContentAsIs() throws Exception {
     var content = "<artifactId>quarkus-arc</artifactId>\n".repeat(10);
-    // GitHub's contents API returns base64 with embedded newlines
-    var wrapped =
-        Base64.getMimeEncoder(60, "\n".getBytes(StandardCharsets.UTF_8))
-            .encodeToString(content.getBytes(StandardCharsets.UTF_8));
-    assertTrue(wrapped.contains("\n"));
-    stubManifest(
-        "pom.xml",
-        new GitHubPullRequestClient.FileContent(
-            "pom.xml", "pom.xml", wrapped, "base64", content.length()));
+    stubManifest("pom.xml", makeFileContent(content));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -274,11 +260,9 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void shouldSkipManifestWithNullContentAndContinueProbing() {
-    // Submodules, directories, and oversized files come back without base64 content
-    stubManifest(
-        "pom.xml", new GitHubPullRequestClient.FileContent("pom.xml", "pom.xml", null, "none", 0));
-    stubManifest("build.gradle", makeFileContent("build.gradle", "implementation 'x:y:1'"));
+  void shouldSkipManifestWithNullContentAndContinueProbing() throws Exception {
+    doReturn(null).when(repository).getFileContent("pom.xml", DEFAULT_BRANCH);
+    stubManifest("build.gradle", makeFileContent("implementation 'x:y:1'"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -287,36 +271,79 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void shouldSkipManifestsThatDecodeToBlankContent() {
-    // The MIME decoder skips non-alphabet characters, so "!!!" decodes to empty content
-    stubManifest(
-        "pom.xml",
-        new GitHubPullRequestClient.FileContent("pom.xml", "pom.xml", "!!!", "base64", 3));
+  void shouldSkipManifestWithNullDecodedContent() throws Exception {
+    var nullContent = mock(org.kohsuke.github.GHContent.class);
+    doReturn(null).when(nullContent).getContent();
+    doReturn(nullContent).when(repository).getFileContent("pom.xml", DEFAULT_BRANCH);
+    stubManifest("build.gradle", makeFileContent("implementation 'x:y:1'"));
 
-    assertEquals("", resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
+    var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+
+    assertFalse(stack.contains("### pom.xml"));
+    assertTrue(stack.contains("### build.gradle"));
   }
 
   @Test
-  void shouldCacheStackAndNotHitApiOnSecondCall() {
-    stubManifest("pom.xml", makeFileContent("pom.xml", "<artifactId>a</artifactId>"));
+  void shouldSkipManifestWithBlankDecodedContent() throws Exception {
+    stubManifest("pom.xml", makeFileContent("   "));
+    stubManifest("build.gradle", makeFileContent("implementation 'x:y:1'"));
+
+    var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+
+    assertFalse(stack.contains("### pom.xml"));
+    assertTrue(stack.contains("### build.gradle"));
+  }
+
+  @Test
+  void aManifestWhoseContentCannotBeReadIsSkippedAndNotCached() throws Exception {
+    var bad = mock(org.kohsuke.github.GHContent.class);
+    doThrow(new java.io.IOException("bad")).when(bad).getContent();
+    doReturn(bad).when(repository).getFileContent("pom.xml", DEFAULT_BRANCH);
+
+    assertEquals("", resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
+    assertEquals("", resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
+
+    verify(repository, times(2)).getFileContent("pom.xml", DEFAULT_BRANCH);
+  }
+
+  @Test
+  void aTransientFailureOnOneManifestIsNotCachedAndSkipsOnlyThatManifest() throws Exception {
+    doThrow(
+            new org.kohsuke.github.HttpException(
+                "server error", 503, "Service Unavailable", "https://api.github.com"))
+        .when(repository)
+        .getFileContent("pom.xml", DEFAULT_BRANCH);
+    stubManifest("build.gradle", makeFileContent("implementation 'x:y:1'"));
+
+    var first = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+    assertFalse(first.contains("### pom.xml"));
+    assertTrue(first.contains("### build.gradle"));
+
+    var second = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+
+    assertEquals(first, second);
+    verify(repository, times(2)).getFileContent("pom.xml", DEFAULT_BRANCH);
+  }
+
+  @Test
+  void shouldCacheStackAndNotHitApiOnSecondCall() throws Exception {
+    stubManifest("pom.xml", makeFileContent("<artifactId>a</artifactId>"));
 
     var first = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
     var second = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
     assertEquals(first, second);
-    // One probe per manifest path on the first call only
-    verify(prClient, times(ProjectStackResolver.MANIFEST_PATHS.size()))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+    verify(repository, times(ProjectStackResolver.MANIFEST_PATHS.size()))
+        .getFileContent(anyString(), anyString());
   }
 
   @Test
-  void shouldRefetchAfterCacheExpiry() {
-    stubManifest("pom.xml", makeFileContent("pom.xml", "<artifactId>a</artifactId>"));
+  void shouldRefetchAfterCacheExpiry() throws Exception {
+    stubManifest("pom.xml", makeFileContent("<artifactId>a</artifactId>"));
     resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
     currentTimeMs.addAndGet(ProjectStackResolver.CACHE_TTL_MS + 1);
-    stubManifest("pom.xml", makeFileContent("pom.xml", "<artifactId>b</artifactId>"));
+    stubManifest("pom.xml", makeFileContent("<artifactId>b</artifactId>"));
 
     var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
@@ -337,18 +364,17 @@ class ProjectStackResolverTest {
   }
 
   @Test
-  void productionConstructorShouldResolveWithSystemClock() {
-    var productionResolver = new ProjectStackResolver(authClient, prClient, new ObjectMapper());
-    stubManifest("pom.xml", makeFileContent("pom.xml", "<artifactId>a</artifactId>"));
+  void productionConstructorShouldResolveWithSystemClock() throws Exception {
+    var productionResolver = new ProjectStackResolver(clientProvider, new ObjectMapper());
+    stubManifest("pom.xml", makeFileContent("<artifactId>a</artifactId>"));
 
     var stack = productionResolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
 
     assertTrue(stack.contains("Maven artifacts: a"));
     // The freshly cached entry is served on the next call (System clock is within TTL)
     productionResolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
-    verify(prClient, times(ProjectStackResolver.MANIFEST_PATHS.size()))
-        .getFileContent(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+    verify(repository, times(ProjectStackResolver.MANIFEST_PATHS.size()))
+        .getFileContent(anyString(), anyString());
   }
 
   @Test
@@ -359,5 +385,58 @@ class ProjectStackResolverTest {
     resolver.sweepExpiredEntries();
 
     assertEquals(1, resolver.cache.size());
+  }
+
+  @Test
+  void aFailedRepositoryLookupIsLoggedAtWarnWithItsError() throws Exception {
+    // #1355: a 5xx or rate limit on the lookup drops this context from the review, so it must show.
+    doThrow(new HttpException("unavailable", 503, "Service Unavailable", "https://api.github.com"))
+        .when(gitHub)
+        .getRepository(anyString());
+
+    try (var log = CapturedLog.of(ProjectStackResolver.class)) {
+      assertEquals("", resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
+
+      var warnings = log.at(Level.WARNING);
+      assertEquals(1, warnings.size(), warnings.toString());
+      assertTrue(
+          warnings.getFirst().contains(OWNER)
+              && warnings.getFirst().contains(REPO)
+              && warnings.getFirst().contains("unavailable"),
+          warnings.getFirst());
+    }
+  }
+
+  @Test
+  void aRepositoryThatIsNotFoundIsLoggedAtDebugOnly() throws Exception {
+    doThrow(new GHFileNotFoundException("Not Found")).when(gitHub).getRepository(anyString());
+
+    try (var log = CapturedLog.of(ProjectStackResolver.class)) {
+      assertEquals("", resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID));
+
+      assertEquals(List.of(), log.at(Level.WARNING));
+    }
+  }
+
+  @Test
+  void repositoryResolutionFailureReturnsEmpty() throws Exception {
+    doThrow(new java.io.IOException("boom"))
+        .when(gitHub)
+        .getRepository(org.mockito.ArgumentMatchers.anyString());
+
+    var stack = resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID);
+
+    assertEquals("", stack);
+  }
+
+  @Test
+  void installationClientFailureReturnsEmptyWithoutThrowing() {
+    doThrow(new IllegalStateException("installation client unavailable"))
+        .when(clientProvider)
+        .getInstallationClient(INSTALLATION_ID);
+
+    assertEquals(
+        "",
+        assertDoesNotThrow(() -> resolver.resolve(OWNER, REPO, DEFAULT_BRANCH, INSTALLATION_ID)));
   }
 }

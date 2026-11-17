@@ -206,13 +206,19 @@ public class PrSummaryGenerator {
    *     BaseCodeCitations}, #1148)
    * @param criterionVerdicts the review calls' verdicts on the linked issue's criteria; one they
    *     judge unmet gets its line ({@link LinkedIssueCriteria}, #1200)
+   * @param previousFindings the findings the previous round raised, which the round's statuses
+   *     number; a gap restating one the round resolved leaves the section (#1387)
+   * @param addedCode the pull request's added lines, {@code ""} when not known; a gap that only
+   *     says nothing shows code these lines add by name leaves the section (#1387)
    */
   record DescriptionSources(
       String claimText,
       Set<String> previouslyNamed,
       String linkedIssues,
       BaseCodeCitations baseCode,
-      List<ReviewResponse.CriterionVerdict> criterionVerdicts) {
+      List<ReviewResponse.CriterionVerdict> criterionVerdicts,
+      List<ReviewResponse.Finding> previousFindings,
+      String addedCode) {
 
     static final DescriptionSources NONE = new DescriptionSources("", Set.of());
 
@@ -222,6 +228,18 @@ public class PrSummaryGenerator {
       linkedIssues = Objects.requireNonNullElse(linkedIssues, "");
       baseCode = Objects.requireNonNullElse(baseCode, BaseCodeCitations.NONE);
       criterionVerdicts = List.copyOf(Objects.requireNonNullElse(criterionVerdicts, List.of()));
+      previousFindings = List.copyOf(Objects.requireNonNullElse(previousFindings, List.of()));
+      addedCode = Objects.requireNonNullElse(addedCode, "");
+    }
+
+    /** Sources with no previous findings and no added code known. */
+    DescriptionSources(
+        String claimText,
+        Set<String> previouslyNamed,
+        String linkedIssues,
+        BaseCodeCitations baseCode,
+        List<ReviewResponse.CriterionVerdict> criterionVerdicts) {
+      this(claimText, previouslyNamed, linkedIssues, baseCode, criterionVerdicts, List.of(), "");
     }
 
     /** Sources with no criterion verdicts. */
@@ -231,6 +249,12 @@ public class PrSummaryGenerator {
         String linkedIssues,
         BaseCodeCitations baseCode) {
       this(claimText, previouslyNamed, linkedIssues, baseCode, List.of());
+    }
+
+    /** These sources with the round's previous findings and the pull request's added lines. */
+    DescriptionSources withRound(List<ReviewResponse.Finding> previous, String added) {
+      return new DescriptionSources(
+          claimText, previouslyNamed, linkedIssues, baseCode, criterionVerdicts, previous, added);
     }
 
     /** Sources with no description citations read. */
@@ -336,7 +360,8 @@ public class PrSummaryGenerator {
     // #1200: a criterion the review of the diff judged met leaves the list, carried or not.
     var rendered =
         LinkedIssueCriteria.withoutMet(
-            backedByFindings(surfaces.descriptionGaps(), result.findings()),
+            backedByFindings(
+                unanswered(surfaces.descriptionGaps(), round, sources), result.findings()),
             sources.linkedIssues(),
             sources.criterionVerdicts());
     var criteria =
@@ -544,22 +569,11 @@ public class PrSummaryGenerator {
     if (result.previousStatuses().isEmpty()) {
       return;
     }
-    var resolved =
-        result.previousStatuses().stream()
-            .filter(s -> "resolved".equalsIgnoreCase(s.status()))
-            .count();
-    var unresolved =
-        result.previousStatuses().stream()
-            .filter(s -> "unresolved".equalsIgnoreCase(s.status()))
-            .count();
-    var justified =
-        result.previousStatuses().stream()
-            .filter(s -> "justified".equalsIgnoreCase(s.status()))
-            .count();
-    var superseded =
-        result.previousStatuses().stream()
-            .filter(s -> "superseded".equalsIgnoreCase(s.status()))
-            .count();
+    // #1319: the counts the delta section and the check run read, each defect once.
+    var resolved = result.resolvedPreviousCount();
+    var unresolved = result.unresolvedPreviousCount();
+    var justified = result.previousCount("justified");
+    var superseded = result.supersededPreviousCount();
     sb.append("### Previous Findings Status\n");
     sb.append("| Status | Count |\n");
     sb.append("|--------|-------|\n");
@@ -794,6 +808,21 @@ public class PrSummaryGenerator {
     }
     sb.append("### What this PR does\n");
     sb.append(MarkdownSafe.inline(aiSummary.prPurpose())).append("\n\n");
+  }
+
+  /**
+   * {@code gaps} less the ones the code already answers (#1387): a gap restating a finding the
+   * round resolved ({@link DescriptionGapCarryover#withoutResolved}), and one that only says
+   * nothing shows code the pull request adds by name ({@link
+   * DescriptionGapScreen#withoutAnsweredByDiff}). The next round carries only what is rendered, so
+   * neither is carried either.
+   */
+  private static List<String> unanswered(
+      List<String> gaps, ReviewResult round, DescriptionSources sources) {
+    var resolved =
+        ClosedFindingNames.closed(round, sources.previousFindings(), ClosedFindingNames.RESOLVED);
+    return DescriptionGapScreen.withoutAnsweredByDiff(
+        DescriptionGapCarryover.withoutResolved(gaps, resolved), sources.addedCode());
   }
 
   /** The model's non-blank description gaps; empty when there is no summary to read them from. */

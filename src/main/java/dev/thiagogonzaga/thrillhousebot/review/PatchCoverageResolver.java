@@ -341,28 +341,9 @@ public class PatchCoverageResolver {
    */
   static NavigableSet<Integer> addedLines(String patch) {
     var added = new TreeSet<Integer>();
-    if (patch == null || patch.isBlank()) {
-      return added;
-    }
-    var newLine = 0;
-    var inHunk = false;
-    for (var raw : patch.split("\n", -1)) {
-      var hunkStart = DiffLineResolver.HUNK_HEADER.matcher(raw);
-      if (raw.startsWith("@@") && hunkStart.find()) {
-        newLine = Integer.parseInt(hunkStart.group(1));
-        inHunk = true;
-      } else if (inHunk && !raw.isEmpty()) {
-        // '+' is an added line and advances the right side; ' ' is context and only advances it;
-        // '-' exists on the left side alone and does neither.
-        var marker = raw.charAt(0);
-        if (marker == '+') {
-          added.add(newLine);
-          newLine++;
-        } else if (marker == ' ') {
-          newLine++;
-        }
-      }
-    }
+    PatchIndex.parse(patch).lines().stream()
+        .filter(PatchIndex.Line::added)
+        .forEach(line -> added.add(line.rightLine()));
     return added;
   }
 

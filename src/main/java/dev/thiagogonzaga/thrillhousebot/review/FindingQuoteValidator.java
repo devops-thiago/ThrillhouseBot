@@ -21,12 +21,8 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * Deterministic guard against findings that quote code which is not in the diff. The model
@@ -66,14 +62,12 @@ public class FindingQuoteValidator {
   /** Shared tail of every log line that strips a suggestion and caps confidence. */
   private static final String DEMOTION_SUFFIX = " dropping its suggestion and capping confidence";
 
-  public record DiffLine(String normalizedText, int rightLineNum, char marker) {}
-
   /** Validates each finding's quoted code against the raw (unescaped) diff text. */
   public ReviewResponse validate(ReviewResponse response, String diff) {
     if (response.findings().isEmpty() || diff == null || diff.isBlank()) {
       return response;
     }
-    DiffIndex index = indexDiff(diff);
+    DiffIndex index = DiffIndex.ofFormattedDiff(diff);
     var kept = new ArrayList<ReviewResponse.Finding>(response.findings().size());
     var changed = false;
     for (ReviewResponse.Finding finding : response.findings()) {
@@ -131,14 +125,14 @@ public class FindingQuoteValidator {
    */
   private static QuoteMatch classifyQuote(ReviewResponse.Finding finding, DiffIndex index) {
     List<String> quoted = normalizedLines(finding.suggestionOld());
-    QuoteMatch match = matchQuote(quoted, index.linesFor(finding.file()));
+    QuoteMatch match = matchQuote(quoted, index.quotableText(finding.file()));
     if (match == QuoteMatch.FULL
         && quoted.size() >= 2
-        && !appearsContiguous(index.diffLinesFor(finding.file()), quoted)) {
+        && !appearsContiguous(index.quotableLines(finding.file()), quoted)) {
       return QuoteMatch.PARTIAL;
     }
     if (match == QuoteMatch.FULL) {
-      return checkAmbiguity(quoted, finding.line(), index.diffLinesFor(finding.file()));
+      return checkAmbiguity(quoted, finding.line(), index.quotableLines(finding.file()));
     }
     return match;
   }
@@ -183,7 +177,7 @@ public class FindingQuoteValidator {
     if (cited.isEmpty()) {
       return false;
     }
-    String compactedScope = compactScope(index.diffLinesFor(finding.file()));
+    String compactedScope = compactScope(index.quotableLines(finding.file()));
     String compactedSuggestion =
         finding.suggestionNew() == null ? "" : stripWhitespace(finding.suggestionNew());
     boolean fabricated = false;
@@ -365,9 +359,9 @@ public class FindingQuoteValidator {
    * — rather than testing each in isolation — lets a citation the source wraps across two physical
    * diff lines (e.g. {@code obj.method()} then {@code .chain(null)}) still be found.
    */
-  private static String compactScope(List<DiffLine> scope) {
+  private static String compactScope(List<PatchIndex.Line> scope) {
     var joined = new StringBuilder();
-    for (DiffLine line : scope) {
+    for (PatchIndex.Line line : scope) {
       joined.append(stripWhitespace(line.normalizedText()));
     }
     return joined.toString();
@@ -427,8 +421,8 @@ public class FindingQuoteValidator {
    * tolerance). Anything not matched contiguously here stays FULL — the conservative direction.
    */
   private static QuoteMatch checkAmbiguity(
-      List<String> quoted, int findingLine, List<DiffLine> diffLines) {
-    List<DiffLine> filtered = retainedLines(diffLines);
+      List<String> quoted, int findingLine, List<PatchIndex.Line> diffLines) {
+    List<PatchIndex.Line> filtered = retainedLines(diffLines);
     List<Integer> matchIndices = contiguousMatchStarts(filtered, quoted);
     if (matchIndices.size() <= 1) {
       return QuoteMatch.FULL;
@@ -437,8 +431,8 @@ public class FindingQuoteValidator {
     int k = quoted.size();
     int selectedCount = 0;
     for (int idx : matchIndices) {
-      int startLine = filtered.get(idx).rightLineNum();
-      int endLine = filtered.get(idx + k - 1).rightLineNum();
+      int startLine = filtered.get(idx).rightLine();
+      int endLine = filtered.get(idx + k - 1).rightLine();
       if (findingLine >= startLine - 3 && findingLine <= endLine + 3) {
         selectedCount++;
       }
@@ -449,12 +443,13 @@ public class FindingQuoteValidator {
   /**
    * The diff lines that {@code suggestion_old} can match: context and deletions, never additions.
    */
-  private static List<DiffLine> retainedLines(List<DiffLine> diffLines) {
+  private static List<PatchIndex.Line> retainedLines(List<PatchIndex.Line> diffLines) {
     return linesExcludingMarker(diffLines, '+');
   }
 
   /** Diff lines keeping every marker except {@code excluded}, preserving order. */
-  private static List<DiffLine> linesExcludingMarker(List<DiffLine> diffLines, char excluded) {
+  private static List<PatchIndex.Line> linesExcludingMarker(
+      List<PatchIndex.Line> diffLines, char excluded) {
     return diffLines.stream().filter(dl -> dl.marker() != excluded).toList();
   }
 
@@ -466,13 +461,14 @@ public class FindingQuoteValidator {
    * lines (or deletions between two added lines) do not break a genuine block because each side is
    * checked with the other's marker filtered out.
    */
-  private static boolean appearsContiguous(List<DiffLine> diffLines, List<String> quoted) {
+  private static boolean appearsContiguous(List<PatchIndex.Line> diffLines, List<String> quoted) {
     return !contiguousMatchStarts(linesExcludingMarker(diffLines, '+'), quoted).isEmpty()
         || !contiguousMatchStarts(linesExcludingMarker(diffLines, '-'), quoted).isEmpty();
   }
 
   /** Start indices where {@code quoted} appears as a contiguous run in {@code lines}. */
-  private static List<Integer> contiguousMatchStarts(List<DiffLine> lines, List<String> quoted) {
+  private static List<Integer> contiguousMatchStarts(
+      List<PatchIndex.Line> lines, List<String> quoted) {
     var starts = new ArrayList<Integer>();
     int k = quoted.size();
     for (int i = 0; i <= lines.size() - k; i++) {
@@ -483,159 +479,13 @@ public class FindingQuoteValidator {
     return starts;
   }
 
-  private static boolean matchesAt(List<DiffLine> lines, int offset, List<String> quoted) {
+  private static boolean matchesAt(List<PatchIndex.Line> lines, int offset, List<String> quoted) {
     for (int j = 0; j < quoted.size(); j++) {
       if (!lines.get(offset + j).normalizedText().equals(quoted.get(j))) {
         return false;
       }
     }
     return true;
-  }
-
-  /**
-   * The diff's normalized body lines, both as one union and scoped per file. A quote is checked
-   * against its finding's own file when that file is identifiable in the diff — the same text
-   * appearing in some other file's hunk must not validate a misattributed finding. The union is the
-   * conservative fallback for findings whose file cannot be matched to a diff section.
-   */
-  record DiffIndex(
-      Map<String, List<DiffLine>> fileLines,
-      List<DiffLine> allLines,
-      Map<String, Set<String>> byFile,
-      Set<String> all) {
-
-    Set<String> linesFor(String file) {
-      var sections = sectionKeysFor(file);
-      if (sections.isEmpty()) {
-        return all;
-      }
-      var scoped = new HashSet<String>();
-      for (String section : sections) {
-        scoped.addAll(byFile.get(section));
-      }
-      return scoped;
-    }
-
-    List<DiffLine> diffLinesFor(String file) {
-      var sections = sectionKeysFor(file);
-      if (sections.isEmpty()) {
-        return allLines;
-      }
-      var scoped = new ArrayList<DiffLine>();
-      for (String section : sections) {
-        scoped.addAll(fileLines.get(section));
-      }
-      return scoped;
-    }
-
-    /**
-     * The diff-section keys a finding's file resolves to, or an empty list when the file cannot be
-     * matched and the caller must fall back to the whole-diff union. An exact section match wins;
-     * otherwise the model sometimes shortens or expands paths, so suffix matches still scope. An
-     * ambiguous name (Handler.java in several modules) scopes to the union of its candidates, never
-     * to the whole diff — a quote from an unrelated file must not validate just because the
-     * finding's path was ambiguous.
-     */
-    private List<String> sectionKeysFor(String file) {
-      if (file == null || file.isBlank()) {
-        return List.of();
-      }
-      if (fileLines.containsKey(file)) {
-        return List.of(file);
-      }
-      return fileLines.keySet().stream()
-          .filter(k -> k.endsWith("/" + file) || file.endsWith("/" + k))
-          .toList();
-    }
-  }
-
-  /**
-   * Diff body lines normalized for comparison: the unified-diff marker column (+, -, space) is
-   * removed and surrounding whitespace trimmed, so quoted code matches regardless of indentation
-   * shifts or which side of the change it sits on. The model quotes from the byte-exact fenced diff
-   * (see {@link PromptTemplateEscaper#fence}), so the raw diff is indexed directly with no marker
-   * neutralization. File scoping follows the formatter's "### filename (status, +A -D)" headers.
-   */
-  static DiffIndex indexDiff(String diff) {
-    var fileLines = new HashMap<String, List<DiffLine>>();
-    var allLines = new ArrayList<DiffLine>();
-    List<DiffLine> current = null;
-    int rightLine = 0;
-
-    for (String raw : diff.split("\n", -1)) {
-      if (raw.startsWith("### ")) {
-        current = fileLines.computeIfAbsent(sectionFilename(raw), k -> new ArrayList<>());
-        // A new file section restarts right-side numbering in case its first hunk header is
-        // missing or unparseable.
-        rightLine = 0;
-      } else if (raw.startsWith("@@")) {
-        rightLine = hunkStartLine(raw, rightLine);
-      } else if (!isDiffStructureLine(raw)) {
-        rightLine = appendBodyLine(raw, rightLine, allLines, current);
-      }
-    }
-
-    var byFile = new HashMap<String, Set<String>>();
-    fileLines.forEach((file, lines) -> byFile.put(file, textSet(lines)));
-    return new DiffIndex(fileLines, allLines, byFile, textSet(allLines));
-  }
-
-  /** The right-side start line of a hunk header, or {@code fallback} when it can't be parsed. */
-  private static int hunkStartLine(String raw, int fallback) {
-    var matcher = DiffLineResolver.HUNK_HEADER.matcher(raw);
-    return matcher.find() ? Integer.parseInt(matcher.group(1)) : fallback;
-  }
-
-  /**
-   * Records a normalized body line into the union and (when scoped) its file, then returns the
-   * advanced right-side line counter — additions and context advance it; deletions do not.
-   */
-  private static int appendBodyLine(
-      String raw, int rightLine, List<DiffLine> allLines, List<DiffLine> current) {
-    String normalized = bodyOf(raw).strip();
-    if (normalized.isEmpty()) {
-      return rightLine;
-    }
-    // A non-empty normalized body implies a non-empty raw line, so charAt(0) is safe.
-    char marker = raw.charAt(0);
-    var diffLine = new DiffLine(normalized, rightLine, marker);
-    allLines.add(diffLine);
-    if (current != null) {
-      current.add(diffLine);
-    }
-    return marker == '+' || marker == ' ' ? rightLine + 1 : rightLine;
-  }
-
-  private static Set<String> textSet(List<DiffLine> lines) {
-    return lines.stream()
-        .map(DiffLine::normalizedText)
-        .collect(Collectors.toCollection(HashSet::new));
-  }
-
-  /**
-   * File headers, code fences, and the {@code "\ No newline at end of file"} indicator are diff
-   * plumbing, never quotable content. Hunk headers ({@code @@}) are intercepted earlier for line
-   * tracking, so they never reach this check.
-   */
-  private static boolean isDiffStructureLine(String raw) {
-    return raw.startsWith("+++")
-        || raw.startsWith("---")
-        || raw.startsWith("```")
-        || raw.startsWith("\\ ");
-  }
-
-  /** The line without its unified-diff marker column (+, -, space). */
-  private static String bodyOf(String raw) {
-    if (!raw.isEmpty() && (raw.charAt(0) == '+' || raw.charAt(0) == '-' || raw.charAt(0) == ' ')) {
-      return raw.substring(1);
-    }
-    return raw;
-  }
-
-  private static String sectionFilename(String headerLine) {
-    String name = headerLine.substring(4);
-    int suffix = name.lastIndexOf(" (");
-    return (suffix > 0 ? name.substring(0, suffix) : name).strip();
   }
 
   private static List<String> normalizedLines(String text) {

@@ -62,6 +62,49 @@ class FindingStageTest {
   }
 
   @Test
+  void theCopiedNumberStageStripsQuotesCheckedAgainstTheCallsDiff() {
+    var source = "### a.java (added, +1 -0)\n```diff\n@@ -0,0 +1,1 @@\n+x\n```\n";
+    var copiedQuote =
+        new ReviewResponse.Finding("low", "high", "a.java", 1, "t", "d", "1 +x", "1 +y");
+    var status = new ReviewResponse.PreviousFindingStatus(1, "resolved", "n");
+    var verdict = new ReviewResponse.CriterionVerdict("c", "met", "e");
+    var closed = finding("closed");
+    var response =
+        new ReviewResponse(
+            List.of(copiedQuote, finding("plain")),
+            List.of(status),
+            null,
+            List.of(closed),
+            List.of(verdict));
+
+    var next =
+        new CopiedNumberStage()
+            .apply(ScreeningContext.start(session, response, source, INPUTS, plan, evidence));
+
+    var findings = next.response().findings();
+    assertEquals("x", findings.get(0).suggestionOld());
+    assertEquals("y", findings.get(0).suggestionNew());
+    assertSame(response.findings().get(1), findings.get(1));
+    assertEquals(List.of(status), next.response().previousFindingsStatus());
+    assertEquals(List.of(closed), next.response().closedEarlierRound());
+    assertEquals(List.of(verdict), next.response().linkedIssueCriteria());
+  }
+
+  @Test
+  void theCopiedNumberStageLeavesTheContextAloneWhenNothingWasCopied() {
+    var stage = new CopiedNumberStage();
+    var context = start();
+    assertSame(context, stage.apply(context), "no quote carries a number");
+
+    var empty = ScreeningContext.start(session, response(), "### a.java\n", INPUTS, plan, evidence);
+    assertSame(empty, stage.apply(empty), "no findings");
+    for (var source : new String[] {null, " "}) {
+      var noSource = ScreeningContext.start(session, raw, source, INPUTS, plan, evidence);
+      assertSame(noSource, stage.apply(noSource), "no diff to check against");
+    }
+  }
+
+  @Test
   void theEvidenceStageResolvesEvidenceForTheFindingsAsTheyStand() {
     var attached = mock(FindingVerificationService.FindingEvidence.class);
     when(evidence.forFindings(raw.findings())).thenReturn(attached);

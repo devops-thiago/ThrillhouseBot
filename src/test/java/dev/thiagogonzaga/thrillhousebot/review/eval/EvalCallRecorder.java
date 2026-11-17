@@ -15,9 +15,11 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review.eval;
 
+import dev.langchain4j.model.chat.listener.ChatModelErrorContext;
 import dev.langchain4j.model.chat.listener.ChatModelListener;
 import dev.langchain4j.model.chat.listener.ChatModelResponseContext;
 import dev.langchain4j.model.output.FinishReason;
+import dev.thiagogonzaga.thrillhousebot.review.ai.AiApiKeyRejectedException;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.util.ArrayList;
 import java.util.List;
@@ -41,6 +43,25 @@ public class EvalCallRecorder implements ChatModelListener {
   }
 
   private final List<Call> calls = new ArrayList<>();
+
+  /**
+   * Whether any call since startup ended with the provider rejecting the API key (#1329). Never
+   * reset: the verifier, summary check and repair fail open, so a rejected key there would
+   * otherwise read as an ordinary sample, and the suite stops on the first one.
+   */
+  private volatile boolean keyRejected;
+
+  @Override
+  public void onError(ChatModelErrorContext ctx) {
+    if (AiApiKeyRejectedException.isRejectedKey(ctx.error())) {
+      keyRejected = true;
+    }
+  }
+
+  /** Whether a call was refused for its API key since startup. */
+  boolean keyRejected() {
+    return keyRejected;
+  }
 
   @Override
   public void onResponse(ChatModelResponseContext ctx) {

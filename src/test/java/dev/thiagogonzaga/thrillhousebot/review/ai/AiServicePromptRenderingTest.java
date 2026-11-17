@@ -441,6 +441,19 @@ class AiServicePromptRenderingTest {
   }
 
   @Test
+  void reviewPromptCarriesTheNumberedDiff() throws InterruptedException {
+    var inputs =
+        new AiReviewService.PromptInputs(
+            "```diff\n@@ -1 +5 @@\n+x\n```", "", "", "", "", "", "", "", null);
+
+    var user =
+        userText(
+            captureStreamingRequest(streamingChatModel, () -> prReviewer.reviewStream(inputs)));
+
+    assertTrue(user.contains("@@ -1 +5 @@\n5 +x"), "the diff slot is numbered");
+  }
+
+  @Test
   void reviewPromptsRenderByteForByteAsTheEightVariableSignatureDid() throws InterruptedException {
     // #993: the review call takes one record where it took eight @V strings. The model must
     // receive exactly what it received before: the system message is the record's system prompt
@@ -472,13 +485,16 @@ class AiServicePromptRenderingTest {
             new AiReviewService.PromptInputs(
                 "DIFF", "", "BASE", "", "", "", "", "", PrReviewPrompts.SYSTEM),
             new AiReviewService.PromptInputs(
-                "DIFF", null, "BASE", null, null, null, null, null, null));
+                "DIFF", null, "BASE", null, null, null, null, null, null),
+            new AiReviewService.PromptInputs(
+                "```diff\n@@ -1 +5 @@\n+x\n```", "", "", "", "", "", "", "", null));
     for (var inputs : cases) {
       var request =
           captureStreamingRequest(streamingChatModel, () -> prReviewer.reviewStream(inputs));
       var expected =
           eightVariableUser
               .data("diff", inputs.diff())
+              .data("numberedDiff", inputs.numberedDiff())
               .data("prContext", inputs.prContext())
               .data("baseComparison", inputs.baseComparison())
               .data("projectStack", inputs.projectStack())

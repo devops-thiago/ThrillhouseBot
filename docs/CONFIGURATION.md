@@ -106,6 +106,12 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 | `DASHBOARD_REASONING_STREAM_ENABLED`<br>`thrillhousebot.dashboard.reasoning-stream-enabled` | Streams the review call's reasoning to the dashboard's live activity page (#66), apart from its output. Only a provider that returns its reasoning as `reasoning_content` on the OpenAI-compatible stream sends any. Off by default: the reasoning can quote the reviewed code, and it is shown to every dashboard user who may read the repository. | boolean | `false` |
 | `DASHBOARD_URL`<br>`thrillhousebot.dashboard.url` | Public dashboard URL, used for the OAuth callback and the session links posted to GitHub. | string | `http://localhost:8080` |
 
+## `thrillhousebot.findings`
+
+| Variable | Description | Type | Default |
+|---|---|---|---|
+| `FINDINGS_RETENTION`<br>`thrillhousebot.findings.retention` | How long a closed or merged pull request's stored findings are kept. A daily sweep deletes them after this; a pull request reopened before then carries on from them. | duration | `30d` |
+
 ## `thrillhousebot.github`
 
 | Variable | Description | Type | Default |
@@ -159,7 +165,7 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 | `THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS`<br>`thrillhousebot.review.manual-trigger-allowed-logins` | Comma-separated logins allowed to run slash commands without write access. Does not apply to the `resolved` and `declined` directives. Unset means only users with write access. | list | _(none)_ |
 | `MANUAL_TRIGGER_AUTH_TIMEOUT`<br>`thrillhousebot.review.manual-trigger-auth-timeout` | Time limit on the write-access check for a command. Slower answers from GitHub deny the command. | duration | `5s` |
 | `REVIEW_MAX_AI_CALLS`<br>`thrillhousebot.review.max-ai-calls` | Most AI calls per review (batch calls plus the summary call) and per command run (batch calls plus, for `/describe` and `/changelog`, the merge call). At `1`, a review that makes its review call has none left for the summary and posts a counts-only summary that says so. Verifier calls are not counted. | integer | `6` |
-| `THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES`<br>`thrillhousebot.review.max-ai-retries` | Attempts per failed AI call. At most two may end in a timeout. | integer | `5` |
+| `THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES`<br>`thrillhousebot.review.max-ai-retries` | Attempts per failed AI call. At most two may end in a timeout. A rejected API key is never retried. | integer | `3` |
 | `REVIEW_MAX_DIFF_LINES`<br>`thrillhousebot.review.max-diff-lines` | Line cap for single-call diff renders (replies, base comparison, reviews with budgeting off). Token-budgeted reviews and the batched commands ignore it. `0` disables it. | integer | `5000` |
 | `REVIEW_MAX_INPUT_TOKENS`<br>`thrillhousebot.review.max-input-tokens` | Input-token budget per call for reviews and the batched commands; larger PRs are split into batches. Capped by the model's `max-input-tokens` (see the per-model settings). `0` disables budgeting. | integer | `48000` |
 | `THRILLHOUSEBOT_REVIEW_MAX_REVIEW_COMMENTS`<br>`thrillhousebot.review.max-review-comments` | Most inline comments per review; the rest are listed in the summary. | integer | `50` |

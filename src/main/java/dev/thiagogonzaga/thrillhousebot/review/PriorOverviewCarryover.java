@@ -177,7 +177,7 @@ final class PriorOverviewCarryover {
     if (!ctx.previousRoundHeadUnchanged()) {
       return current;
     }
-    var prior = previousRoundSummary(ctx.priorAiResponses());
+    var prior = previousOverview(ctx);
     if (!hasOverview(prior)) {
       return current;
     }
@@ -391,7 +391,7 @@ final class PriorOverviewCarryover {
     if (!ctx.previousRoundHeadUnchanged() || !hasOverview(summary)) {
       return false;
     }
-    var prior = previousRoundSummary(ctx.priorAiResponses());
+    var prior = previousOverview(ctx);
     return hasOverview(prior)
         && Objects.equals(summary.prPurpose(), prior.prPurpose())
         && summary.fileSummaries().equals(prior.fileSummaries());
@@ -399,6 +399,16 @@ final class PriorOverviewCarryover {
 
   private static boolean isBlank(String text) {
     return text == null || text.isBlank();
+  }
+
+  /**
+   * The previous round's summary ({@link #previousRoundSummary}) as this round may carry it: its
+   * purpose and assessment without the sentences that state a count or a size ({@link
+   * CountStatements}, #1323). A round stored before that screen ran wrote such sentences, and they
+   * would be posted again on the head that round reviewed.
+   */
+  private static ReviewResponse.Summary previousOverview(ReviewContextLoader.ReviewContext ctx) {
+    return CountStatements.screen(previousRoundSummary(ctx.priorAiResponses()));
   }
 
   /**

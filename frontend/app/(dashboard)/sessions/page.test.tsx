@@ -123,6 +123,64 @@ describe('SessionsPage', () => {
     expect(session).toHaveBeenCalledWith(1);
   });
 
+  async function openDetail(detail: typeof mockSessionDetail) {
+    window.history.replaceState(null, '', '/?id=1');
+    vi.mocked(api).mockReturnValue({
+      sessions: vi.fn().mockResolvedValue(listPage()),
+      session: vi.fn().mockResolvedValue(detail),
+    } as unknown as ReturnType<typeof api>);
+    render(<SessionsPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Session #1' })).toBeInTheDocument();
+    });
+  }
+
+  it('counts a completed session as its risk table does, not by the stored summary total', async () => {
+    // #1323: the stored round holds one finding and an old summary total of 1, while the posted
+    // risk table counted the 3 findings still open (1 high, 2 medium).
+    await openDetail({
+      ...mockSessionDetail,
+      aiResponseJson: JSON.stringify({
+        findings: [{ risk: 'high', file: 'a.ts', line: 1, title: 'One', description: 'd' }],
+        summary: { total_findings: 1 },
+      }),
+    });
+
+    expect(screen.getByText('3 findings')).toBeInTheDocument();
+  });
+
+  it('counts the stored findings of a session that did not complete', async () => {
+    await openDetail({
+      ...mockSessionDetail,
+      status: 'failed',
+      aiResponseJson: JSON.stringify({
+        findings: [{ risk: 'high', file: 'a.ts', line: 1, title: 'One', description: 'd' }],
+        summary: {},
+      }),
+    });
+
+    expect(screen.getByText('1 finding')).toBeInTheDocument();
+  });
+
+  it('counts no findings for a failed session that stored none', async () => {
+    await openDetail({
+      ...mockSessionDetail,
+      status: 'failed',
+      aiResponseJson: JSON.stringify({ summary: {} }),
+    });
+
+    expect(screen.getByText('0 findings')).toBeInTheDocument();
+  });
+
+  it('shows the overall assessment when the session has one', async () => {
+    await openDetail({
+      ...mockSessionDetail,
+      aiResponseJson: JSON.stringify({ findings: [], summary: { overall_assessment: 'Looks solid.' } }),
+    });
+
+    expect(screen.getByText('Looks solid.')).toBeInTheDocument();
+  });
+
   it('ignores a non-numeric ?id= rather than requesting it', async () => {
     window.history.replaceState(null, '', '/?id=not-a-number');
     const session = vi.fn().mockResolvedValue(mockSessionDetail);

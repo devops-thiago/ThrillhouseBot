@@ -4,6 +4,157 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-16
+
+Follow-up rounds now count each finding once and decide whether it is fixed from the file's
+content instead of the model's judgement, and findings are placed on the code they quote. The
+first start runs migration V3, which adds the `finding_state` table; it starts empty and fills as
+each open pull request is reviewed again. `FINDINGS_RETENTION` (default `30d`) is new, and
+`THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` now defaults to 3. There are no new GitHub App permissions.
+
+### Changed
+
+- The review call's diff now shows each added and context line's line number in the new file
+  (`842 +code`), so the model reads a finding's `line` instead of counting it from the hunk
+  header. Only the prompt carries the numbers; the stages that check quotes and place threads
+  still read the plain patch, and a number the model copies into `suggestion_old` or
+  `suggestion_new` is removed before either is used. The numbers add about 10% to the diff's
+  tokens on the test corpus, and the token budget counts them. (#1320)
+- **`THRILLHOUSEBOT_REVIEW_MAX_AI_RETRIES` defaults to 3, down from 5** (#1329): with the 2 s
+  exponential backoff, five attempts spent about 30 s of waiting before a call that kept failing
+  gave up. Throttles, timeouts and provider errors keep their handling within the smaller budget.
+  Set the variable to keep the old value.
+- Linked-issue context now reads issues through the extension's installation-scoped GitHub client
+  and GraphQL client (`GitHubClientProvider`) instead of the hand-rolled
+  `GitHubCommentClient`/`GitHubGraphQLClient` REST clients. `GitHubIssuesProvider` no longer takes
+  an installation token string; the installation id comes from the review request. (#1314)
+- Repository instructions (`.github/thrillhousebot.md` and fallback chain) now read through the
+  extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of
+  `GitHubPullRequestClient`/`GitHubAuthClient`. `InstructionsResolver` no longer takes an auth
+  client or REST client. (#1314)
+- Repository settings (`.github/thrillhousebot.yml`) and project stack manifests now read through
+  the extension's installation-scoped GitHub client (`GitHubClientProvider`) instead of
+  `GitHubPullRequestClient`/`GitHubAuthClient`. `RepoSettingsResolver` and `ProjectStackResolver`
+  no longer take an auth client or REST client. (#1314)
+- **Each finding's state is stored across review rounds** (#1319): a new table, `finding_state`
+  (migration V3, created on the first start), keeps one row per finding of a pull request with its
+  status, the code it quotes and its file's blob SHA in the round that raised it. A later round
+  reads which files are unchanged from these rows instead of asking GitHub, and a round that
+  raised nothing new and changed no stored status reports no change: its review carries no delta
+  section, and the summary is only edited in place. Closing or merging a pull request starts a
+  retention period, `FINDINGS_RETENTION` (default `30d`), after which a daily sweep deletes its
+  rows; reopening it keeps them. Uninstalling the App deletes the installation's rows; suspending
+  it does not. The table starts empty and each open pull request's rows are written by its next
+  review. See `docs/OPERATIONS.md`.
+
+### Fixed
+
+- **The Description vs. Implementation section drops bullets the code already answers** (#1387):
+  a bullet that restated a finding the round resolved stayed listed beside the resolved thread,
+  and a bullet saying nothing shows a piece of code stayed even when the pull request added that
+  code by name. Both now leave the section, and so are not carried to the next round. A bullet
+  stating a mismatch of its own, or naming any code the pull request does not add, stays.
+- **A follow-up round reports a fix that leaves the same defect in place** (#1388): a round
+  could only mark the earlier finding resolved and was told never to repeat it, so a fix that
+  replaced the flagged code but kept the defect through another mechanism was reported as fixed
+  and nothing else. Before marking a finding resolved, the review now tries the replacement code
+  with inputs the finding did not use. When the defect is still there, it marks the earlier
+  finding resolved and posts a new finding on the replacement lines, quoting the new code. The
+  check that drops a repeat of an answered finding keeps such a finding.
+- **A parsing or matching rule is no longer reported for an input that cannot reach it** (#1386):
+  the review could describe a failure on an input the language itself rejects, or one an earlier
+  capture group can never produce, such as a dotted name in a Python from-import list. Before
+  reporting such an input, the review now checks that it is legal in the language the rule reads
+  and traces it through every earlier capture, quoting the character class that admits it. A legal
+  input the rule mishandles is still reported.
+- **The follow-up delta names threads posted for earlier double-check items** (#1312): a round
+  that raised a "Things to double-check" item again inline counted it as still open, correctly,
+  but the "changes since the last review" section never said so. It could show no new finding
+  while the round posted a thread, and a round with only that change showed no section at all.
+  The section now names each such thread under "Earlier double-check items now posted as
+  threads", and the new-findings count says how many new findings went only under "Things to
+  double-check". The counts are unchanged.
+- **Two findings about different keys in one file are no longer counted as one** (#1383): the
+  follow-up count merged two findings whose descriptions overlapped, such as two rows of the same
+  configuration table, even when their titles named different settings. One of them then dropped
+  out of the totals. A pair whose titles name different identifiers or conflicting defect classes
+  is now kept as two findings.
+- A follow-up round's status for a previous finding, and a verifier verdict, named its finding
+  only by its position in the list, so a swapped number could close, reject or downgrade the wrong
+  finding unnoticed. Each previous finding and each verifier candidate is now listed with its key
+  (the one its thread marker carries), and each status and verdict must repeat that key beside the
+  number. One whose key names another listed finding applies to that finding, since the key is
+  copied and the number counted; one whose key names no listed finding is dropped and logged: the
+  finding of a dropped status stays held as open, and the candidate of a dropped verdict is kept
+  as one the verifier did not judge. A "resolved" status on a finding whose file is unchanged
+  since the round that raised it is now kept open and the contradiction is logged; on a changed
+  file it stands, wherever in the file the fix sits. When the two commits cannot be compared, it
+  stands only when the finding's flagged code has left the diff or its suggested fix is in it. A
+  repaired answer can no longer move a finding to another file or line or renumber a status: the
+  failed answer's values are put back, and an answer whose structure cannot be read is not
+  repaired at all, so the full retry runs. (#1322)
+- **Follow-up rounds count each previous finding once and decide its status from its file**
+  (#1316, #1317, #1318): a finding raised two or more rounds back was never checked again, so a
+  fixed one stayed open; the same defect raised again from an older round, or from another file it
+  names, was counted twice; and a finding could be superseded while its file was unchanged, with
+  the delta comment leaving superseded findings out of its counts. A finding whose file is
+  unchanged since the round that raised it now stays open and is never superseded; an older
+  round's open finding on a changed file is listed to the model for a status like the previous
+  round's; a finding whose flagged code is gone while the change it suggested is in the file is
+  resolved; and a new finding is matched against every open finding of every round, by the code it
+  quotes and by the sites it names, before it counts as new. The summary, the delta comment and
+  the check run take their numbers from the same statuses, and the delta comment counts and names
+  superseded findings.
+- The summary no longer posts counts or sizes the summary call wrote. That call sees only the
+  round's findings, so on #1315 its "What this PR does" paragraph said "One medium finding
+  remains" while 17 findings were open. A sentence of the purpose paragraph or the overall
+  assessment that states a number of findings ("17 findings", "One medium finding remains") or the
+  change's size ("+555 lines", "touches 6 files") is now cut, the rest kept, and the same goes for
+  a purpose carried from an earlier round of the same commit. The summary call is no longer asked
+  for its totals or told to state sizes; the stored totals are counted from the findings, and the
+  dashboard's session total is taken from the severity counts the posted risk table shows, so the
+  two agree. Older stored sessions still load and render. (#1323)
+- A finding whose line the diff cannot take a comment on was moved to the nearest line that
+  could, however far away, so its thread could land in a different hunk on code it never
+  described. It now moves only when that line is at most three lines away; otherwise the finding
+  is filed on the file. The line it moves to is now stored on the finding before any later step
+  reads it, so the summary, the stored round and the thread agree, and a `file:line` mention of
+  the finding's own location in its description follows the move. (#1320)
+- `/add-docs` placed a single-line doc suggestion on the line the model cited without checking
+  that the line holds the quoted declaration, so accepting it could rewrite another line. It is
+  now placed on the line that holds the quoted declaration, indentation included, and skipped
+  when there is no such line. (#1320)
+- **A rejected API key fails the call on its first attempt** (#1329): an HTTP 401 or 403, or
+  LangChain4j's `AuthenticationException`, was retried like any transient failure, so a wrong or
+  revoked key cost every review all its attempts and the backoff waits, and the failure read as a
+  generic retry exhaustion. Every call now stops at its first rejection, with no wait and no move
+  to `AI_FALLBACK_MODEL`, and the log line says the provider rejected the API key. On the review
+  and batch calls and the review repair, the review fails and the session's failure reason names
+  `AI_API_KEY`; a multi-call review fails instead of retrying each batch. On the summary call the
+  review keeps its findings under the counts-only summary, and on the verifier call it keeps them
+  unscreened, as for any other failure of those calls. `PromptEvalTest` stops the whole suite at
+  the first rejected call, including one that fails open, and fails at once when
+  `QUARKUS_LANGCHAIN4J_OPENAI_CONCISE_API_KEY` is not set beside
+  `QUARKUS_LANGCHAIN4J_OPENAI_API_KEY`, since the summary, verifier, summary check and summary
+  repair calls use the concise client's key.
+- **A finding is no longer superseded because its quote starts just outside the patch** (#1321,
+  #1318): presence was checked against the patch's added and context lines only, so a quote that
+  began one line before its hunk read as gone, and the next round superseded the finding even
+  though its file had not changed. A quote that is not in the patch is now looked for in the
+  whole file at the head commit, read the way cited locations are (at most 16 files per review).
+  The patch is parsed once with both sides, and the quote check, the thread placement, the
+  security scan, the patch-coverage reader and the prompt's line numbers all read it, so they
+  agree on every line number. A quote never matches across two hunks. A finding that quotes lines
+  the pull request removes is now posted on those lines, on the diff's base side, without a
+  suggestion block, when its line points at them; before, it was posted on a nearby line of the
+  new file.
+
+### Dependencies
+
+- Bumped the Quarkus group (#1333), the Maven minor and patch group (#1337), guava-bom and
+  spotless-maven-plugin (#1332), the actions group (#1338), the frontend npm dependencies (#1334,
+  #1336) and the website docs dependencies (#1335, #1344)
+
 ## [0.9.1] - 2026-11-09
 
 The webhook endpoint now runs on the Quarkiverse GitHub App extension. There are no new settings,

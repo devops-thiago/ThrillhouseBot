@@ -25,11 +25,19 @@ import java.util.List;
  * @param kind what changed
  * @param installationId the installation it happened to
  * @param repositories the repositories it concerns; empty for an installation-wide change
+ * @param uninstalled whether the App was uninstalled, as opposed to suspended: a {@link Kind#GONE}
+ *     change either way, but only an uninstall deletes the installation's stored findings (#1319)
  */
-public record InstallationChange(Kind kind, long installationId, List<Repository> repositories) {
+public record InstallationChange(
+    Kind kind, long installationId, List<Repository> repositories, boolean uninstalled) {
 
   public InstallationChange {
     repositories = List.copyOf(repositories);
+  }
+
+  /** A change that is not an uninstall. */
+  public InstallationChange(Kind kind, long installationId, List<Repository> repositories) {
+    this(kind, installationId, repositories, false);
   }
 
   /** What changed. */

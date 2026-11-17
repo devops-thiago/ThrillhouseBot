@@ -32,6 +32,7 @@ final class FindingScreens {
       DiffBudgetPlanner budgetPlanner,
       TokenCounter tokenCounter) {
     return new FindingScreen(
+        new CopiedNumberStage(),
         new EvidenceStage(),
         new QuoteValidationStage(quoteValidator),
         new FrameworkFilterStage(frameworkFilter),

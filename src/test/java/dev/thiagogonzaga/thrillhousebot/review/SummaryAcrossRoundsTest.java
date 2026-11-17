@@ -899,7 +899,9 @@ class SummaryAcrossRoundsTest {
     assertEquals(101L, superseded.get(0).earlierRound().threadRootId());
     verify(threadService).resolve("auth", "T101");
     assertEquals(List.of(CRITICAL), third.earlierRoundCloses());
-    assertEquals(1, third.resolvedPreviousCount());
+    // #1318: a close because its code left is counted as superseded, never as a fix.
+    assertEquals(0, third.resolvedPreviousCount());
+    assertEquals(1, third.supersededPreviousCount());
     var named = ClosedFindingNames.reviewBodySection(third, NEW_ROUND_TWO_ONLY);
     assertTrue(named.startsWith("ThrillhouseBot closed 1 previous finding(s)"), named);
     assertTrue(named.contains("`" + FILE + ":10` — " + CRITICAL.title()), named);
@@ -1905,5 +1907,108 @@ class SummaryAcrossRoundsTest {
     assertEquals(List.of(CRITICAL), result.earlierRoundClosedMembers());
     var named = ClosedFindingNames.reviewBodySection(result, List.of(drifted, HIGH));
     assertEquals(1, named.split(CRITICAL.title(), -1).length - 1, named);
+  }
+
+  /**
+   * ThrillhouseBot-test#295 and #296 (#1319): a round posts two new threads while the delta comment
+   * counts one new finding. One of the two is a double-check item the previous round listed, raised
+   * again confidently enough to post inline: it is the same defect, open since an earlier review,
+   * so it is counted under still open, not as new, and the open total grows by one. The summary,
+   * the delta comment and the check run state the same counts.
+   */
+  @Test
+  void aDoubleCheckItemPostedAsAThreadIsCountedAsStillOpenOnEverySurface() {
+    var doc = "docs/CONFIG-CSHARP.md";
+    var store = "csharp/src/LiftPassValidator/PassStore.cs";
+    patches =
+        Map.of(
+            doc,
+            """
+            @@ -0,0 +9,2 @@
+            +| `LIFTPASS_PASSBACK_WINDOW` | Passback window. | 120 |
+            +| `LIFTPASS_GATE_API_URL` | Base URL of the gate controller API. | |\
+            """,
+            store,
+            """
+            @@ -0,0 +38,2 @@
+            +var sql = "WHERE holder = '" + holder + "'";
+            +sql += " AND zones LIKE '%" + zone + "%'";\
+            """);
+    var injection =
+        new ReviewResponse.Finding(
+            "critical",
+            "high",
+            store,
+            38,
+            "SQL injection: HTTP-supplied holder is concatenated into the SQL string",
+            "d",
+            "var sql = \"WHERE holder = '\" + holder + \"'\";",
+            null);
+    var passback =
+        new ReviewResponse.Finding(
+            "medium",
+            "low",
+            doc,
+            9,
+            "LIFTPASS_PASSBACK_WINDOW table row states no unit",
+            "d",
+            "| `LIFTPASS_PASSBACK_WINDOW` | Passback window. | 120 |",
+            null);
+    var gateUrlItem =
+        new ReviewResponse.Finding(
+            "low",
+            "low",
+            doc,
+            10,
+            "LIFTPASS_GATE_API_URL table row shows no default although one exists",
+            "d",
+            "| `LIFTPASS_GATE_API_URL` | Base URL of the gate controller API. | |",
+            null);
+    var earlier = new ReviewResponse(List.of(injection, passback, gateUrlItem), List.of(), null);
+    var gateUrlThread =
+        new ReviewResponse.Finding(
+            "low",
+            "high",
+            doc,
+            10,
+            "LIFTPASS_GATE_API_URL documentation row shows no default",
+            "d",
+            "| `LIFTPASS_GATE_API_URL` | Base URL of the gate controller API. | |",
+            null);
+    var likeMatch =
+        new ReviewResponse.Finding(
+            "medium",
+            "medium",
+            store,
+            39,
+            "FindByHolder matches zones as a LIKE substring, returning passes for the wrong zone",
+            "d",
+            "sql += \" AND zones LIKE '%\" + zone + \"%'\";",
+            null);
+    var round =
+        new ReviewResponse(
+            List.of(likeMatch, gateUrlThread),
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "unresolved", "n"),
+                new ReviewResponse.PreviousFindingStatus(2, "unresolved", "n"),
+                new ReviewResponse.PreviousFindingStatus(3, "unresolved", "n")),
+            null);
+
+    var result = builder.build(followUp(List.of(earlier), List.of()), round, CI_CLEAR, plan);
+
+    // Both new findings post a thread...
+    assertTrue(result.findings().stream().allMatch(Finding::postsInline));
+    // ...but the delta counts one new: the other carries the double-check item it replaced.
+    var delta = FollowUpDeltaSummary.render(result, earlier.findings()).orElseThrow();
+    assertTrue(delta.contains("- **New findings this round:** 1\n"), delta);
+    assertTrue(delta.contains("- **Previous findings still open:** 3\n"), delta);
+    var summary = new PrSummaryGenerator(false).generate(1, 2, 0, List.of(), null, result);
+    assertRisk(summary, 1, 0, 2, 1);
+    assertTrue(summary.contains("| ⚠️ Still present | 3 |"), summary);
+    assertTrue(
+        VerdictBuilder.checkSummaryForResult(result)
+            .startsWith(
+                "4 open findings: 1 new (0 critical, 0 high, 1 medium, 0 low), 3 still open"),
+        VerdictBuilder.checkSummaryForResult(result));
   }
 }
