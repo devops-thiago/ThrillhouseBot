@@ -4,6 +4,19 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Config key definitions are found in ordinarily-named files** (#642): the "Config key
+  definitions from the repository" section only read `application*` resources and source files
+  whose name ended in `config`, `settings`, `properties` or `env`, so a key read in `main.go`,
+  `main.py`, `main.rs`, `Main.java`, `Program.cs` or `app-config.service.ts` produced no section.
+  The resolver now also reads C#, PHP, Swift, Scala, `.kts`, `.mjs` and `.cjs` sources, matches the
+  config word in any dotted, hyphenated or underscored part of the name, and after the named files
+  reads changed source files whose diff reads the environment (`os.Getenv`, `getenv(`,
+  `process.env`, `Environment.GetEnvironmentVariable`, `env::var`, …), then entry-point files
+  (`main`, `Program`, `app`, `index`, `server`, `startup`). The fetch budget is unchanged, and the
+  new tiers only use what the named files leave.
+
 ## [0.9.2] - 2026-11-16
 
 Follow-up rounds now count each finding once and decide whether it is fixed from the file's
