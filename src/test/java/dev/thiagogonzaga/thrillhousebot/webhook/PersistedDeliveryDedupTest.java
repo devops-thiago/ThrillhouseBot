@@ -252,4 +252,14 @@ class PersistedDeliveryDedupTest {
             new IllegalStateException("outer", new SQLException("down", "08006"))));
     assertFalse(SeenDeliveries.isUniqueViolation(new IllegalStateException("no cause")));
   }
+
+  @Test
+  void aCauseChainThatLoopsBackEndsTheSearch() {
+    var outer = new IllegalStateException("outer");
+    var inner = new IllegalStateException("inner");
+    outer.initCause(inner);
+    inner.initCause(outer);
+
+    assertFalse(SeenDeliveries.isUniqueViolation(outer));
+  }
 }
