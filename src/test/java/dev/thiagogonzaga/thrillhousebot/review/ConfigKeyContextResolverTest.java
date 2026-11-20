@@ -34,6 +34,8 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 /**
  * Unit tests for {@link ConfigKeyContextResolver} — extracting config-key tokens from the doc/.env
@@ -375,6 +377,59 @@ class ConfigKeyContextResolverTest {
       assertFalse(ConfigKeyContextResolver.isConfigSource(".config"), "leading dot is not a stem");
     }
 
+    /** #642: a config word in any part of the stem, and the extensions the corpus repos use. */
+    @Test
+    void shouldRecognizeAConfigWordInAnyPartOfTheStem() {
+      assertTrue(ConfigKeyContextResolver.isConfigSource("src/app/app-config.service.ts"));
+      assertTrue(ConfigKeyContextResolver.isConfigSource("src/app_settings.module.ts"));
+      assertTrue(ConfigKeyContextResolver.isConfigSource("Api/AppSettings.cs"));
+      assertTrue(ConfigKeyContextResolver.isConfigSource("build.config.kts"));
+      assertFalse(
+          ConfigKeyContextResolver.isConfigSource("src/app/configurator.service.ts"),
+          "a part must end in the word, not start with it");
+      assertFalse(ConfigKeyContextResolver.isConfigSource("src/app/app.service.ts"));
+    }
+
+    /** #642: the entry points of the corpus repos that read their keys there. */
+    @Test
+    void shouldRecognizeEntryPointFiles() {
+      for (var path :
+          List.of(
+              "main.go",
+              "cmd/api/main.go",
+              "app/main.py",
+              "src/main.rs",
+              "src/main/java/com/example/Main.java",
+              "Api/Program.cs",
+              "src/index.ts",
+              "server.js",
+              "app/__main__.py")) {
+        assertTrue(ConfigKeyContextResolver.isEntryPoint(path), path);
+      }
+      assertFalse(ConfigKeyContextResolver.isEntryPoint("src/domain.go"));
+      assertFalse(ConfigKeyContextResolver.isEntryPoint("docs/main.md"), "not a source file");
+      assertFalse(ConfigKeyContextResolver.isEntryPoint("main"), "no extension");
+    }
+
+    @Test
+    void shouldFindEnvironmentReadsOnAddedAndContextLinesOnly() {
+      var added =
+          new FileDiff(
+              "a.cs",
+              "modified",
+              1,
+              0,
+              1,
+              "@@ -1 +1 @@\n+var v =" + " Environment.GetEnvironmentVariable(\"X_Y\");");
+      var context = new FileDiff("b.py", "modified", 0, 0, 0, "@@ -1 +1 @@\n x = os.getenv('X')");
+      var removed = new FileDiff("c.rs", "modified", 0, 1, 1, "@@ -1 +1 @@\n-env::var(\"X\")");
+      var noPatch = new FileDiff("d.go", "renamed", 0, 0, 0, null, "old.go");
+
+      assertEquals(
+          java.util.Set.of("a.cs", "b.py"),
+          ConfigKeyContextResolver.environmentReaders(List.of(added, context, removed, noPatch)));
+    }
+
     @Test
     void shouldRecognizeTestPathsInEveryLayout() {
       assertTrue(ConfigKeyContextResolver.isTestPath("src/test/java/AppConfigTest.java"));
@@ -383,6 +438,8 @@ class ConfigKeyContextResolverTest {
       assertTrue(ConfigKeyContextResolver.isTestPath("tests/settings.py"));
       assertTrue(ConfigKeyContextResolver.isTestPath("src/config.test.ts"));
       assertTrue(ConfigKeyContextResolver.isTestPath("src/config.spec.ts"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("Api.Tests/Program.cs"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("src/AppSettingsTests.cs"));
       assertFalse(ConfigKeyContextResolver.isTestPath("src/main/resources/application.properties"));
       assertFalse(ConfigKeyContextResolver.isTestPath("src/latest/config.java"));
     }
@@ -610,6 +667,54 @@ class ConfigKeyContextResolverTest {
   @Nested
   class Resolution {
 
+    /**
+     * #642: every corpus PR that defined its keys in an ordinarily-named file got no section. Each
+     * row is one of them, with the file that defines the key and the line that reads it.
+     */
+    @ParameterizedTest
+    @CsvSource(
+        delimiter = '|',
+        value = {
+          "main.go|limit := os.Getenv(\"RATE_LIMIT_MAX\")",
+          "main.py|LIMIT = int(os.environ.get(\"RATE_LIMIT_MAX\", \"100\"))",
+          "src/main.rs|let limit = std::env::var(\"RATE_LIMIT_MAX\");",
+          "src/main/java/com/example/Main.java|var limit = System.getenv(\"RATE_LIMIT_MAX\");",
+          "src/app/app-config.service.ts|readonly rateLimitMax = environment.RATE_LIMIT_MAX;",
+          "Api/Program.cs|var limit = Environment.GetEnvironmentVariable(\"RATE_LIMIT_MAX\");"
+        })
+    void shouldResolveAKeyReadInAnOrdinarilyNamedFile(String path, String definition) {
+      givenRepository(path, "README.md", "src/other.go");
+      givenFile(path, "// setup\n" + definition + "\n// rest\n");
+
+      var context = resolve(List.of(docDiff("README.md", "| `RATE_LIMIT_MAX` | max requests |")));
+
+      assertTrue(context.contains(path), () -> "definition path missing from: " + context);
+      assertTrue(context.contains(definition), () -> "definition line missing from: " + context);
+    }
+
+    /** #642: a changed file that reads the key is read, whatever it is named. */
+    @Test
+    void shouldResolveAKeyReadInAChangedFileWhateverItsName() {
+      var path = "internal/limits/limits.go";
+      givenRepository(path, "README.md");
+      givenFile(path, "package limits\n\nvar max = os.Getenv(\"RATE_LIMIT_MAX\")\n");
+      var change =
+          new FileDiff(
+              path,
+              "modified",
+              1,
+              0,
+              1,
+              "@@ -1,2 +1,3 @@\n package limits\n+var max = os.Getenv(\"RATE_LIMIT_MAX\")");
+
+      var context =
+          resolve(List.of(docDiff("README.md", "| `RATE_LIMIT_MAX` | max requests |"), change));
+
+      assertTrue(
+          context.contains("var max = os.Getenv(\"RATE_LIMIT_MAX\")"),
+          () -> "definition line missing from: " + context);
+    }
+
     @Test
     void shouldResolveDerivedEnvVarToItsWithNameMapping() {
       givenRepository(PROPERTIES_PATH, CONFIG_PATH);
@@ -818,7 +923,8 @@ class ConfigKeyContextResolverTest {
 
     @Test
     void shouldReturnEmptyWhenTheRepositoryHasNoConfigFiles() {
-      givenRepository("src/main/java/App.java", "docs/guide.md");
+      // App.java would be an entry point (#642), which is a place config can be defined.
+      givenRepository("src/main/java/OrderService.java", "docs/guide.md");
 
       assertEquals("", resolve(List.of(docDiff(".env.example", "WEBHOOK_DEDUP_TTL=24h"))));
       verify(prClient, never()).getFileContent(any(), any(), any(), any(), any(), any());
@@ -911,13 +1017,68 @@ class ConfigKeyContextResolverTest {
 
       var candidates =
           resolver.candidatePaths(
-              "auth", "o", "r", "headsha", ReviewDiffFormatter.IgnoreGlobs.NONE);
+              "auth", "o", "r", "headsha", List.of(), ReviewDiffFormatter.IgnoreGlobs.NONE);
 
       assertEquals(
           List.of(
               "application.properties",
               "modules/api/src/main/resources/application.yaml",
               CONFIG_PATH),
+          candidates);
+    }
+
+    /**
+     * #642: a changed file that reads the environment, then entry points, come after every resource
+     * and config source, so they only spend what the named tiers leave of the budget.
+     */
+    @Test
+    void shouldRankEnvironmentReadersThenEntryPointsAfterTheNamedTiers() {
+      when(prClient.getTree(any(), any(), eq("o"), eq("r"), eq("headsha"), eq("1")))
+          .thenReturn(
+              new TreeResponse(
+                  "treesha",
+                  List.of(
+                      new TreeEntry("cmd/api/main.go", "blob", 10),
+                      new TreeEntry("internal/server/routes.go", "blob", 10),
+                      new TreeEntry("main.go", "blob", 10),
+                      new TreeEntry("internal/settings.go", "blob", 10),
+                      new TreeEntry("application.yml", "blob", 10),
+                      new TreeEntry("internal/handler.go", "blob", 10),
+                      new TreeEntry("docs/README.md", "blob", 10)),
+                  false));
+      var reader =
+          new FileDiff(
+              "internal/server/routes.go",
+              "modified",
+              1,
+              0,
+              1,
+              "@@ -1,2 +1,3 @@\n package server\n+var limit = os.Getenv(\"RATE_LIMIT_MAX\")");
+      var docMentioningEnvironment =
+          new FileDiff(
+              "docs/README.md",
+              "modified",
+              1,
+              0,
+              1,
+              "@@ -1 +1 @@\n+Read with `process.env.RATE_LIMIT_MAX`.");
+
+      var candidates =
+          resolver.candidatePaths(
+              "auth",
+              "o",
+              "r",
+              "headsha",
+              List.of(reader, docMentioningEnvironment),
+              ReviewDiffFormatter.IgnoreGlobs.NONE);
+
+      assertEquals(
+          List.of(
+              "application.yml",
+              "internal/settings.go",
+              "internal/server/routes.go",
+              "main.go",
+              "cmd/api/main.go"),
           candidates);
     }
 

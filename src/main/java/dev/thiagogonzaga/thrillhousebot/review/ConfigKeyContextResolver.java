@@ -161,11 +161,45 @@ public class ConfigKeyContextResolver {
 
   /** Extensions of source files that can hold a config mapping. */
   private static final Set<String> SOURCE_EXTENSIONS =
-      Set.of("java", "kt", "py", "ts", "js", "go", "rb", "rs");
+      Set.of(
+          "java", "kt", "kts", "scala", "py", "ts", "js", "mjs", "cjs", "go", "rb", "rs", "cs",
+          "php", "swift");
 
-  /** Stem suffixes marking a source file as a config definition site. */
+  /**
+   * Suffixes of a file-name part marking a source file as a config definition site. The parts are
+   * the stem split at dots, hyphens and underscores, so {@code app-config.service.ts} counts as
+   * well as {@code ThrillhouseConfig.java} (#642).
+   */
   private static final List<String> CONFIG_STEMS =
       List.of("config", "configuration", "settings", "properties", "env");
+
+  /** What divides a file stem into the parts {@link #CONFIG_STEMS} is matched against. */
+  private static final Pattern STEM_PARTS = Pattern.compile("[._-]");
+
+  /**
+   * Stems of entry-point files, where a service commonly reads its environment ({@code main.go},
+   * {@code Program.cs}, {@code index.ts}) although the name says nothing about config (#642).
+   */
+  private static final Set<String> ENTRY_POINT_STEMS =
+      Set.of("main", "__main__", "program", "app", "index", "server", "startup");
+
+  /**
+   * Calls that read the process environment, in the languages {@link #SOURCE_EXTENSIONS} covers. A
+   * changed source file whose patch shows one is a definition site whatever it is named (#642).
+   */
+  private static final List<String> ENVIRONMENT_READS =
+      List.of(
+          "os.Getenv",
+          "os.LookupEnv",
+          "os.environ",
+          "Environment.GetEnvironmentVariable",
+          "process.env",
+          "env::var",
+          "ENV[",
+          "ENV.fetch",
+          "import.meta.env",
+          // System.getenv, os.getenv, C and PHP getenv.
+          "getenv(");
 
   private final GitHubPullRequestClient prClient;
 
@@ -203,7 +237,7 @@ public class ConfigKeyContextResolver {
     if (tokens.isEmpty()) {
       return "";
     }
-    var candidates = candidatePaths(auth, owner, repo, ref, ignoreGlobs);
+    var candidates = candidatePaths(auth, owner, repo, ref, files, ignoreGlobs);
     if (candidates.isEmpty()) {
       return "";
     }
@@ -315,8 +349,11 @@ public class ConfigKeyContextResolver {
 
   /**
    * Repository paths that can define a config key, most likely first: {@code application*}
-   * properties/YAML resources, then config source files. One recursive tree listing replaces
-   * probing paths one by one; a failure yields no candidates and therefore no extra context.
+   * properties/YAML resources, then config source files, then source files the pull request changes
+   * whose patch reads the environment, then entry-point files ({@code main.go}, {@code
+   * Program.cs}). The last two tiers reach a key read in an ordinarily-named file (#642) and only
+   * spend what the first two leave of the fetch budget. One recursive tree listing replaces probing
+   * paths one by one; a failure yields no candidates and therefore no extra context.
    *
    * <p>The listing is the whole tree, so the review's ignore globs are applied here rather than
    * inherited: filtering only the diff files (the token side) left a definition file under an
@@ -330,6 +367,7 @@ public class ConfigKeyContextResolver {
       String owner,
       String repo,
       String ref,
+      List<GitHubPullRequestClient.FileDiff> files,
       ReviewDiffFormatter.IgnoreGlobs ignoreGlobs) {
     List<GitHubPullRequestClient.TreeEntry> entries;
     try {
@@ -349,25 +387,58 @@ public class ConfigKeyContextResolver {
       Log.debugf(e, "Could not list %s/%s at %s; skipping config-key context", owner, repo, ref);
       return List.of();
     }
+    var readers = environmentReaders(files);
     var resources = new ArrayList<String>();
     var sources = new ArrayList<String>();
+    var changedReaders = new ArrayList<String>();
+    var entryPoints = new ArrayList<String>();
     for (var entry : entries) {
       if (!isWorthReading(entry) || ignoreGlobs.matches(entry.path())) {
         continue;
       }
-      if (isConfigResource(entry.path())) {
-        resources.add(entry.path());
-      } else if (isConfigSource(entry.path())) {
-        sources.add(entry.path());
+      var listed = entry.path();
+      if (isConfigResource(listed)) {
+        resources.add(listed);
+      } else if (isConfigSource(listed)) {
+        sources.add(listed);
+      } else if (readers.contains(listed) && isSource(listed)) {
+        changedReaders.add(listed);
+      } else if (isEntryPoint(listed)) {
+        entryPoints.add(listed);
       }
     }
     // Shallower paths first within each tier: the root application.properties and the top-level
     // config mapping beat a nested per-module copy.
-    resources.sort(ConfigKeyContextResolver::byPathDepthThenName);
-    sources.sort(ConfigKeyContextResolver::byPathDepthThenName);
-    var ordered = new ArrayList<>(resources);
-    ordered.addAll(sources);
+    var ordered = new ArrayList<String>();
+    for (var tier : List.of(resources, sources, changedReaders, entryPoints)) {
+      tier.sort(ConfigKeyContextResolver::byPathDepthThenName);
+      ordered.addAll(tier);
+    }
     return List.copyOf(ordered);
+  }
+
+  /**
+   * The changed files whose patch, on an added or context line, reads the environment ({@link
+   * #ENVIRONMENT_READS}). The patch is the only content of a file the review holds without a fetch,
+   * so this is the one place a definition site can be chosen by what it does rather than by name.
+   */
+  static Set<String> environmentReaders(List<GitHubPullRequestClient.FileDiff> files) {
+    var readers = new LinkedHashSet<String>();
+    for (var file : files) {
+      if (file.patch() != null && readsEnvironment(file.patch())) {
+        readers.add(file.filename());
+      }
+    }
+    return readers;
+  }
+
+  private static boolean readsEnvironment(String patch) {
+    for (var line : patch.split("\n", -1)) {
+      if (!line.startsWith("-") && ENVIRONMENT_READS.stream().anyMatch(line::contains)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static int byPathDepthThenName(String left, String right) {
@@ -405,26 +476,53 @@ public class ConfigKeyContextResolver {
         && (name.endsWith(".properties") || name.endsWith(".yaml") || name.endsWith(".yml"));
   }
 
-  /** A source file whose name marks it as a config definition site ({@code ThrillhouseConfig}). */
+  /**
+   * A source file whose name marks it as a config definition site: a part of its stem ends in a
+   * {@link #CONFIG_STEMS} word ({@code ThrillhouseConfig.java}, {@code app-config.service.ts}).
+   */
   static boolean isConfigSource(String path) {
+    var stem = sourceStem(path);
+    return stem != null
+        && STEM_PARTS
+            .splitAsStream(stem)
+            .anyMatch(part -> CONFIG_STEMS.stream().anyMatch(part::endsWith));
+  }
+
+  /** A source file named like an entry point: {@code main.go}, {@code Program.cs}, … */
+  static boolean isEntryPoint(String path) {
+    var stem = sourceStem(path);
+    return stem != null && ENTRY_POINT_STEMS.contains(stem);
+  }
+
+  private static boolean isSource(String path) {
+    return sourceStem(path) != null;
+  }
+
+  /**
+   * The lowercase file name of {@code path} without its extension, or {@code null} when it is not a
+   * source file of one of the {@link #SOURCE_EXTENSIONS}.
+   */
+  private static String sourceStem(String path) {
     var name = basename(path).toLowerCase(Locale.ROOT);
     var dot = name.lastIndexOf('.');
     if (dot <= 0 || !SOURCE_EXTENSIONS.contains(name.substring(dot + 1))) {
-      return false;
+      return null;
     }
-    var stem = name.substring(0, dot);
-    return CONFIG_STEMS.stream().anyMatch(stem::endsWith);
+    return name.substring(0, dot);
   }
 
   /** Test sources define nothing an operator configures; keep them out of the fetch budget. */
   static boolean isTestPath(String path) {
     var lower = path.toLowerCase(Locale.ROOT);
+    var name = basename(lower);
     return lower.contains("/test/")
         || lower.contains("/tests/")
+        || lower.contains(".tests/")
         || lower.startsWith("test/")
         || lower.startsWith("tests/")
-        || basename(lower).contains("test.")
-        || basename(lower).contains("spec.");
+        || name.contains("test.")
+        || name.contains("tests.")
+        || name.contains("spec.");
   }
 
   private static String basename(String path) {

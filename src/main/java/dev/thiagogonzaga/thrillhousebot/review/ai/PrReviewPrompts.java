@@ -348,7 +348,7 @@ public final class PrReviewPrompts {
                one is undocumented; report that here.
                The definition can reach you two ways, and the SECOND is the ordinary one. A
                "Config key definitions from the repository" section is supplied only when the
-               repository's key is defined in a file that section's resolver can find; most
+               repository's key is defined in a file that section's resolver can find; many
                projects define theirs somewhere it does not look. So the definition is equally the
                CODE IN THIS SAME DIFF THAT READS, PARSES OR BINDS THE KEY: strings.Split(raw, ","),
                .split(","), raw.Split(',', …), a List<String> / string[] / Vec<String> / list-typed
