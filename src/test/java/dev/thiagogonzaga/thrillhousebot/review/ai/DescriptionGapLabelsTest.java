@@ -279,6 +279,18 @@ class DescriptionGapLabelsTest {
     assertEquals(List.of(expected), DescriptionGapLabels.stripIssued(List.of(gap), 2));
   }
 
+  /** A parenthetical before the verb may wrap onto a new line or hold parentheses of its own. */
+  @Test
+  void aWrappedOrNestedParentheticalBeforeTheVerbKeepsTheArticle() {
+    assertEquals(
+        List.of("The summary says that a previously listed gap (see the\nfailing CI job) is open."),
+        DescriptionGapLabels.stripIssued(
+            List.of("The summary says that G1 (see the\nfailing CI job) is open."), 1));
+    assertEquals(
+        List.of("The summary says that a previously listed gap (a (b)) is open."),
+        DescriptionGapLabels.stripIssued(List.of("The summary says that G1 (a (b)) is open."), 1));
+  }
+
   /** A word that only ends in a determiner, cut at the reach of the look-back, is no determiner. */
   @Test
   void aDeterminerCutFromALongerWordIsNoDeterminer() {

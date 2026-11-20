@@ -208,11 +208,14 @@ public final class DescriptionGapLabels {
   private static final int DETERMINER_REACH = 32;
 
   /**
-   * The word after a label, past one parenthetical that may stand between them ("G1 (x) is"); group
-   * 1 is the word.
+   * The word after a label, past one parenthetical that may stand between them ("G1 (x) is"), which
+   * may wrap onto another line and hold one level of parentheses of its own ("G1 (a (b)) is");
+   * group 1 is the word.
    */
   private static final Pattern WORD_AFTER =
-      Pattern.compile("\\s*+(?:\\([^()\\n]*+\\)\\s*+)?(\\p{L}++)", Pattern.UNICODE_CHARACTER_CLASS);
+      Pattern.compile(
+          "\\s*+(?:\\((?:[^()]++|\\([^()]*+\\))*+\\)\\s*+)?(\\p{L}++)",
+          Pattern.UNICODE_CHARACTER_CLASS);
 
   /** "gap" or "gaps" right after a label, which the referent already says: "the G1 gap". */
   private static final Pattern GAP_AFTER =
