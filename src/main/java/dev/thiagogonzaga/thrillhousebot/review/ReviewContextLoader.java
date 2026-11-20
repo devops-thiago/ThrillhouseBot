@@ -907,6 +907,9 @@ public class ReviewContextLoader {
   }
 
   static final class StaleReviewException extends RuntimeException {
+    private final String expectedHead;
+    private final String currentHead;
+
     StaleReviewException(String expectedHead, String currentHead) {
       super(
           "PR head changed while loading review context (expected "
@@ -914,6 +917,26 @@ public class ReviewContextLoader {
               + ", current "
               + currentHead
               + "); refusing to review mixed revisions");
+      this.expectedHead = expectedHead;
+      this.currentHead = currentHead;
+    }
+
+    /**
+     * Whether both heads are known and differ: a push superseded the request, and the dispatcher
+     * queues a review of the new head (#1412). A head that could not be read, or a request with no
+     * sha, is not a supersede.
+     */
+    boolean headMoved() {
+      return expectedHead != null
+          && !expectedHead.isBlank()
+          && currentHead != null
+          && !currentHead.isBlank()
+          && !currentHead.equalsIgnoreCase(expectedHead);
+    }
+
+    /** The pull request head read while loading, or {@code null} when it could not be read. */
+    String currentHead() {
+      return currentHead;
     }
   }
 

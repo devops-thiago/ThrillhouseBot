@@ -84,6 +84,28 @@ public class HeadMovedGuard implements PrePublishGuard {
   }
 
   /**
+   * The stand-down of a run whose head moved before its context finished loading (#1412). It is
+   * counted, concluded and recorded like a stand-down before the first write; the run reviewed
+   * nothing, so there is nothing to carry over.
+   */
+  static StandDown supersededWhileLoading(ReviewOrchestrator.ReviewRequest req, String freshHead) {
+    return new StandDown(
+        ReviewSkipReason.HEAD_MOVED,
+        "head moved from "
+            + req.commitSha()
+            + " to "
+            + freshHead
+            + " while the review context loaded; the queued run for the new head replaces it",
+        SUPERSEDED_CHECK_TITLE,
+        "The pull request head moved to "
+            + freshHead
+            + " before this review started, so it was not run. The review of the new head"
+            + " replaces it.",
+        "Superseded: the PR head moved to " + freshHead + " while loading the review context",
+        "superseded");
+  }
+
+  /**
    * Whether the freshly read head names a different commit than the one this run reviewed. False
    * when the run has no reviewed sha to compare against; a fresh read that failed never reaches
    * here (fail-open — a finished review is never lost to its own guard). Visible for tests.

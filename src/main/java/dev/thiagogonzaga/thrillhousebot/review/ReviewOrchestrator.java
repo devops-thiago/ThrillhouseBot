@@ -581,6 +581,8 @@ public class ReviewOrchestrator {
             req.owner(),
             req.repo(),
             req.prNumber());
+      } else if (e instanceof ReviewContextLoader.StaleReviewException stale && stale.headMoved()) {
+        closeSupersededWhileLoading(auth, req, session, checkRunId, stale.currentHead());
       } else {
         handleReviewFailure(auth, req, session, checkRunId, e);
       }
@@ -648,6 +650,30 @@ public class ReviewOrchestrator {
   void closeStoodDownSession(ReviewSession session, PrePublishGuard.StandDown stoodDown) {
     try {
       applyReviewFailure(session, stoodDown.sessionError());
+    } catch (RuntimeException persistenceError) {
+      Log.warnf(
+          persistenceError, "Failed to persist %s review session %d", stoodDown.kind(), session.id);
+    }
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.failed(session));
+  }
+
+  /**
+   * Closes out a run whose head moved while its context loaded (#1412). A push superseded it and
+   * the dispatcher already queued the review of the new head, so this is not a failure: nothing is
+   * posted, no failure is counted or notified, and the check run is concluded as skipped. The
+   * session row reads like any other superseded run's. Visible for tests.
+   */
+  void closeSupersededWhileLoading(
+      String auth, ReviewRequest req, ReviewSession session, long checkRunId, String freshHead) {
+    var stoodDown =
+        standDown.supersededWhileLoading(auth, req, checkRunId, sessionUrl(session), freshHead);
+    try {
+      applySessionState(
+          session,
+          s -> {
+            s.setStatus(ReviewSession.STATUS_FAILED);
+            s.setErrorMessage(stoodDown.sessionError());
+          });
     } catch (RuntimeException persistenceError) {
       Log.warnf(
           persistenceError, "Failed to persist %s review session %d", stoodDown.kind(), session.id);
