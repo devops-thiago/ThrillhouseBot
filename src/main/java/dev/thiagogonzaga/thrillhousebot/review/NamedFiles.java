@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * The other changed files a finding names in its title or description (#1316). A finding that says
@@ -48,24 +49,35 @@ final class NamedFiles {
   /**
    * The paths of {@code changedFiles} that {@code text} names: by the whole path, or by the file
    * name when no other changed file has the same name. A path with no directory counts only as a
-   * file name. A name two changed files share names neither, and a name with no extension is too
-   * common a word to read as a file.
+   * file name. Prose does not keep a file's case, so names are compared ignoring case, and a path
+   * or name two changed files share once case is ignored names neither. A name with no extension is
+   * too common a word to read as a file.
    */
   static List<String> named(String text, Collection<String> changedFiles) {
     var named = new ArrayList<String>();
     if (text.isBlank()) {
       return named;
     }
+    var lowered = lower(text);
+    var paths = new HashMap<String, Integer>();
     var names = new HashMap<String, Integer>();
-    changedFiles.forEach(path -> names.merge(fileName(path), 1, Integer::sum));
     for (var path : changedFiles) {
-      var name = fileName(path);
-      if ((path.contains("/") && mentions(text, path))
-          || (name.contains(".") && names.get(name) == 1 && mentions(text, name))) {
+      paths.merge(lower(path), 1, Integer::sum);
+      names.merge(lower(fileName(path)), 1, Integer::sum);
+    }
+    for (var path : changedFiles) {
+      var lowerPath = lower(path);
+      var name = lower(fileName(path));
+      if ((path.contains("/") && paths.get(lowerPath) == 1 && mentions(lowered, lowerPath))
+          || (name.contains(".") && names.get(name) == 1 && mentions(lowered, name))) {
         named.add(path);
       }
     }
     return named;
+  }
+
+  private static String lower(String s) {
+    return s.toLowerCase(Locale.ROOT);
   }
 
   private static String text(ReviewResponse.Finding finding) {

@@ -43,6 +43,18 @@ class NamedFilesTest {
     assertEquals(List.of("a/README.md"), NamedFiles.named("as a/README.md says", CHANGED));
   }
 
+  /** Prose does not keep a file's case; a name or path two files share ignoring case names none. */
+  @Test
+  void namesAreMatchedIgnoringCaseButStillOnlyWhenOneFileHasThem() {
+    assertEquals(
+        List.of("docs/DATABASE.md"), NamedFiles.named("Database.md omits a type", CHANGED));
+    assertEquals(List.of("docs/DATABASE.md"), NamedFiles.named("see Docs/database.MD", CHANGED));
+
+    var caseTwins = List.of("docs/Guide.md", "docs/guide.md", "src/App.java");
+    assertEquals(List.of(), NamedFiles.named("docs/guide.md and GUIDE.md", caseTwins));
+    assertEquals(List.of("src/App.java"), NamedFiles.named("app.java", caseTwins));
+  }
+
   @Test
   void aSharedOrBareNameOrANameRunIntoAnotherNamesNothing() {
     assertEquals(List.of(), NamedFiles.named("README.md is stale", CHANGED));
