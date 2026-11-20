@@ -4,6 +4,14 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Exported telemetry carries `service.instance.id`** (#1373): instances exporting to one
+  backend had identical resource attributes, so their metrics landed in one series and cumulative
+  counters such as `thrillhouse.reviews.total` overwrote each other. The id is `HOSTNAME`, or a
+  random id generated at startup when it is unset, and `OTEL_RESOURCE_ATTRIBUTES` (new) can set it
+  or add other resource attributes.
+
 ## [0.9.2] - 2026-11-16
 
 Follow-up rounds now count each finding once and decide whether it is fixed from the file's
