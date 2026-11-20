@@ -60,8 +60,8 @@ final class NamedFiles {
     changedFiles.forEach(path -> names.merge(fileName(path), 1, Integer::sum));
     for (var path : changedFiles) {
       var name = fileName(path);
-      if ((path.indexOf('/') > 0 && mentions(text, path))
-          || (name.indexOf('.') > 0 && names.get(name) == 1 && mentions(text, name))) {
+      if ((path.contains("/") && mentions(text, path))
+          || (name.contains(".") && names.get(name) == 1 && mentions(text, name))) {
         named.add(path);
       }
     }

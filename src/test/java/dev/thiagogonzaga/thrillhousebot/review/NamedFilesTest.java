@@ -48,11 +48,58 @@ class NamedFilesTest {
     assertEquals(List.of(), NamedFiles.named("README.md is stale", CHANGED));
     assertEquals(List.of(), NamedFiles.named("the Makefile target", CHANGED));
     assertEquals(List.of(), NamedFiles.named("OLD_DATABASE.md and DATABASE.md.bak", CHANGED));
+    assertEquals(
+        List.of(), NamedFiles.named("x-DATABASE.md, v.DATABASE.md, DATABASE.md_x", CHANGED));
+    assertEquals(List.of(), NamedFiles.named("DATABASE.md-old and 2DATABASE.md", CHANGED));
+    assertEquals(
+        List.of("docs/DATABASE.md"), NamedFiles.named("ends in DATABASE.md. Then more", CHANGED));
+    assertEquals(List.of("docs/DATABASE.md"), NamedFiles.named("DATABASE.md", CHANGED));
     assertEquals(List.of(), NamedFiles.named("  ", CHANGED));
   }
 
   private static ReviewResponse.Finding finding(String file, String title, String description) {
     return new ReviewResponse.Finding("medium", "high", file, 1, title, description, "", null);
+  }
+
+  /**
+   * With the finding's own file's change unknown and its anchor still in the diff, a {@code
+   * resolved} stands only when a file it names changed (#1316).
+   */
+  @Test
+  void aResolvedOnAPresentAnchorStandsWhenANamedFileChanged() {
+    var code = "src/app/CreditRepository.java";
+    var patches = Map.of(code, "@@ -1,0 +1,1 @@\n+writeReversal();");
+    var finding =
+        new ReviewResponse.Finding(
+            "medium",
+            "high",
+            code,
+            1,
+            "DATABASE.md omits the reversal type",
+            "",
+            "writeReversal();",
+            null);
+    var status =
+        new ReviewResponse.PreviousFindingStatus(
+            1, "resolved", "documented", SuggestionFormatter.findingKey(code, 1, finding.title()));
+
+    var docChanged =
+        new DiffLineResolver(
+            patches,
+            CHANGED,
+            DiffLineResolver.HeadFiles.NONE,
+            (round, path) -> path.equals(code) ? FileChange.UNKNOWN : FileChange.CHANGED);
+    assertEquals(
+        List.of(status),
+        new ModelStatusScreen(List.of(finding), docChanged, Map.of()).screen(List.of(status)));
+
+    var nothingKnown = new DiffLineResolver(patches, CHANGED);
+    assertEquals(
+        "unresolved",
+        new ModelStatusScreen(List.of(finding), nothingKnown, Map.of())
+            .screen(List.of(status))
+            .get(0)
+            .status());
   }
 
   @Test
