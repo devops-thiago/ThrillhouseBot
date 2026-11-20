@@ -769,8 +769,19 @@ startup maintenance passes (`InterruptedSessionReconciler`, `SessionCostBackfill
 session by design. The repository configuration caches are keyed by installation too.
 
 Entities: `ReviewSession` (dashboard), `PausedPr` (webhook), `FindingFeedback` (review, table
-`finding_feedback`, 👍/👎 signals), `ReviewLearning` (review, table `review_learning`, #38) and
-`FindingState` (review, table `finding_state`, #1319).
+`finding_feedback`, 👍/👎 signals), `ReviewLearning` (review, table `review_learning`, #38),
+`FindingState` (review, table `finding_state`, #1319) and `SeenDelivery` (webhook, table
+`webhook_delivery`, #1374).
+
+`webhook_delivery` is the one table not scoped by installation and repository: a row is only a
+GitHub-generated delivery id and two times, nothing reads it by repository, and it is deleted
+once it expires. `WebhookDeduplicator` keeps its atomic in-memory `put` as the fast path and the
+in-process arbiter; only the sighting that wins it claims the id in the table
+(`SeenDeliveries.claim`: delete the id's expired row, then `INSERT … ON CONFLICT DO NOTHING`, so
+of two instances exactly one inserts). An id another process claimed is not kept in memory, so
+`forget` after a failed dispatch (which deletes the row) is never shadowed by a stale memory
+entry. Every database failure falls back to the memory verdict, and neither `isDuplicate` nor
+`forget` throws. `DeliveryPurge` deletes expired rows at startup and hourly, in bounded batches.
 `ReviewSession.aiResponseJson` is more than a dashboard field: it is the record every follow-up
 round reads its earlier findings and statuses from, so a change to the stored `ReviewResponse`
 shape must still parse the rows already stored. A learning is never deleted
