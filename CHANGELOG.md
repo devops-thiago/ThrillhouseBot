@@ -4,6 +4,17 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A finding closed in one follow-up round is no longer closed and counted again in later
+  rounds** (#1409): a round stored the model's status for each previous finding, not the status
+  the round ended with, so a finding a maintainer's clear resolved or whose code left the diff
+  was still open to the next round, which closed it again under "Previous findings resolved" or
+  "superseded" and named it again. A round now stores its final statuses, and a stored
+  `superseded` closes the finding for later rounds. Findings carried from a run that stood down
+  no longer drop the earlier rounds' closes recorded with the round they join, which had made a
+  finding close a third time.
+
 ## [0.9.2] - 2026-11-16
 
 Follow-up rounds now count each finding once and decide whether it is fixed from the file's
