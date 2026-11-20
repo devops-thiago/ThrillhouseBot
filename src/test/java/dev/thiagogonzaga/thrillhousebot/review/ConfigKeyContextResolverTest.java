@@ -441,6 +441,8 @@ class ConfigKeyContextResolverTest {
       assertTrue(ConfigKeyContextResolver.isTestPath("Api.Tests/Program.cs"));
       assertTrue(ConfigKeyContextResolver.isTestPath("src/AppSettingsTests.cs"));
       assertTrue(ConfigKeyContextResolver.isTestPath("src/Api2Tests.cs"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("src/UITests.cs"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("src/APITests.cs"));
       assertTrue(ConfigKeyContextResolver.isTestPath("tests.py"));
       assertTrue(ConfigKeyContextResolver.isTestPath("src/app_tests.rs"));
       assertTrue(ConfigKeyContextResolver.isTestPath("src/Settings.Tests.cs"));

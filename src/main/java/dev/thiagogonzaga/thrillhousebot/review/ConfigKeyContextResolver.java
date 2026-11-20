@@ -522,18 +522,22 @@ public class ConfigKeyContextResolver {
         || lower.startsWith("test/")
         || lower.startsWith("tests/")
         || name.contains("test.")
-        || TESTS_NAME.matcher(basename(path)).find()
+        || SEPARATED_TESTS.matcher(name).find()
+        || CAPITALIZED_TESTS.matcher(basename(path)).find()
         || name.contains("spec.");
   }
 
   /**
-   * A file name whose last word before an extension is "Tests" ({@code AppSettingsTests.cs}, {@code
-   * tests.py}, {@code app_tests.rs}): set off by the name's start, a separator, or a lowercase
-   * letter or digit before a capital T. Read on the name as written, so {@code contests.go} is not
-   * one.
+   * "tests" before an extension as a word of its own in the lowercased name: at its start or after
+   * a separator ({@code tests.py}, {@code app_tests.rs}), so {@code contests.go} is not one.
    */
-  private static final Pattern TESTS_NAME =
-      Pattern.compile("(?:^|[._-])(?i:tests)\\.|(?<=[\\p{Ll}\\d])Tests\\.");
+  private static final Pattern SEPARATED_TESTS = Pattern.compile("(?:^|[._-])tests\\.");
+
+  /**
+   * "Tests" before an extension as a capitalized word in the name as written, after any letter or
+   * digit ({@code AppSettingsTests.cs}, {@code UITests.cs}, {@code Api2Tests.cs}).
+   */
+  private static final Pattern CAPITALIZED_TESTS = Pattern.compile("(?<=[\\p{L}\\d])Tests\\.");
 
   private static String basename(String path) {
     var slash = path.lastIndexOf('/');
