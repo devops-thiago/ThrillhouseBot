@@ -581,10 +581,8 @@ public class ReviewOrchestrator {
             req.owner(),
             req.repo(),
             req.prNumber());
-      } else if (e instanceof ReviewContextLoader.StaleReviewException stale && stale.headMoved()) {
-        closeSupersededWhileLoading(auth, req, session, checkRunId, stale.currentHead());
       } else {
-        handleReviewFailure(auth, req, session, checkRunId, e);
+        endUnpublishedRun(auth, req, session, checkRunId, e);
       }
     } finally {
       // Every outcome but a CI hold — a verdict with findings, a failure, a superseded run — is
@@ -655,6 +653,19 @@ public class ReviewOrchestrator {
           persistenceError, "Failed to persist %s review session %d", stoodDown.kind(), session.id);
     }
     broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.failed(session));
+  }
+
+  /**
+   * Ends a run that stopped before its result reached the pull request: a head that moved while the
+   * context loaded supersedes it quietly (#1412), anything else is a failure.
+   */
+  private void endUnpublishedRun(
+      String auth, ReviewRequest req, ReviewSession session, long checkRunId, RuntimeException e) {
+    if (e instanceof ReviewContextLoader.StaleReviewException stale && stale.headMoved()) {
+      closeSupersededWhileLoading(auth, req, session, checkRunId, stale.currentHead());
+    } else {
+      handleReviewFailure(auth, req, session, checkRunId, e);
+    }
   }
 
   /**
