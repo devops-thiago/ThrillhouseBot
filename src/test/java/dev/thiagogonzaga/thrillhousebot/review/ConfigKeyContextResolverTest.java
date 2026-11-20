@@ -440,6 +440,14 @@ class ConfigKeyContextResolverTest {
       assertTrue(ConfigKeyContextResolver.isTestPath("src/config.spec.ts"));
       assertTrue(ConfigKeyContextResolver.isTestPath("Api.Tests/Program.cs"));
       assertTrue(ConfigKeyContextResolver.isTestPath("src/AppSettingsTests.cs"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("src/Api2Tests.cs"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("tests.py"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("src/app_tests.rs"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("src/Settings.Tests.cs"));
+      assertFalse(
+          ConfigKeyContextResolver.isTestPath("challenges/contests.go"),
+          "a word that only ends in tests is no test name");
+      assertFalse(ConfigKeyContextResolver.isTestPath("src/LoadTestsConfig.go"));
       assertFalse(ConfigKeyContextResolver.isTestPath("src/main/resources/application.properties"));
       assertFalse(ConfigKeyContextResolver.isTestPath("src/latest/config.java"));
     }

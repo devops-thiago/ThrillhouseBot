@@ -522,9 +522,18 @@ public class ConfigKeyContextResolver {
         || lower.startsWith("test/")
         || lower.startsWith("tests/")
         || name.contains("test.")
-        || name.contains("tests.")
+        || TESTS_NAME.matcher(basename(path)).find()
         || name.contains("spec.");
   }
+
+  /**
+   * A file name whose last word before an extension is "Tests" ({@code AppSettingsTests.cs}, {@code
+   * tests.py}, {@code app_tests.rs}): set off by the name's start, a separator, or a lowercase
+   * letter or digit before a capital T. Read on the name as written, so {@code contests.go} is not
+   * one.
+   */
+  private static final Pattern TESTS_NAME =
+      Pattern.compile("(?:^|[._-])(?i:tests)\\.|(?<=[\\p{Ll}\\d])Tests\\.");
 
   private static String basename(String path) {
     var slash = path.lastIndexOf('/');
