@@ -34,6 +34,8 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -924,10 +926,15 @@ public class ReviewOrchestrator {
 
   /** Applies review completion fields to the in-memory session and persisted entity together. */
   void applyReviewResult(ReviewSession session, ReviewResult result) {
+    var elapsedMs = elapsedMs(session);
     applySessionState(
         session,
         s -> {
           s.setStatus(ReviewSession.STATUS_COMPLETED);
+          // #1417: a model call that failed and was retried is counted on the row, not left as its
+          // error on a review that completed.
+          s.setErrorMessage(null);
+          s.setDurationMs(elapsedMs);
           s.setCriticalFindings(result.criticalCount());
           s.setHighFindings(result.highCount());
           s.setMediumFindings(result.mediumCount());
@@ -952,16 +959,31 @@ public class ReviewOrchestrator {
    * cannot make the next one treat findings it never posted as already raised.
    */
   void applyReviewFailure(ReviewSession session, String errorMessage) {
+    var elapsedMs = elapsedMs(session);
     applySessionState(
         session,
         s -> {
           s.setStatus(ReviewSession.STATUS_FAILED);
           s.setErrorMessage(errorMessage);
+          s.setDurationMs(elapsedMs);
           if (session.getAiResponseJson() != null) {
             s.setAiResponseJson(session.getAiResponseJson());
           }
         });
     outcomeMetrics.recordFailed();
+  }
+
+  /**
+   * The review's elapsed time so far, from the session's start to now (#1417); 0 for a session with
+   * no start time. Read once per terminal write, so the row and the event broadcast from the
+   * in-memory session carry the same value. Visible for tests.
+   */
+  static long elapsedMs(ReviewSession session) {
+    var started = session.getTimestamp();
+    if (started == null) {
+      return 0L;
+    }
+    return Math.max(0L, Duration.between(started, Instant.now()).toMillis());
   }
 
   private void applySessionState(ReviewSession session, Consumer<ReviewSession> mutator) {

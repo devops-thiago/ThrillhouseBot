@@ -80,7 +80,20 @@ public class ReviewSession extends PanacheEntity {
   @Column(nullable = false, columnDefinition = "boolean not null default false")
   boolean pricingMissing;
 
+  /**
+   * The review's elapsed time, from {@link #timestamp} to its final status (#1417). Written once,
+   * by the review's terminal transition; a session still in progress, or one the bot never finished
+   * ({@link InterruptedSessionReconciler}), keeps 0.
+   */
   long durationMs;
+
+  /**
+   * How many of the review's model calls failed, retried or not (#1417). A failed call does not
+   * fail the session: only the review's final outcome sets {@link #status} and {@link
+   * #errorMessage}, so a review whose retry succeeded ends completed with this count above 0.
+   */
+  @Column(nullable = false, columnDefinition = "integer not null default 0")
+  int failedModelCalls;
 
   int criticalFindings;
   int highFindings;
@@ -88,7 +101,7 @@ public class ReviewSession extends PanacheEntity {
   int lowFindings;
 
   String status; // STATUS_IN_PROGRESS, STATUS_COMPLETED, STATUS_FAILED
-  String errorMessage; // sanitized, null if completed
+  String errorMessage; // sanitized; set by the final failure only, null once completed
 
   @Column(columnDefinition = "TEXT")
   String aiResponseJson; // serialized ReviewResponse from the model
@@ -231,6 +244,14 @@ public class ReviewSession extends PanacheEntity {
 
   public void setDurationMs(long durationMs) {
     this.durationMs = durationMs;
+  }
+
+  public int getFailedModelCalls() {
+    return failedModelCalls;
+  }
+
+  public void setFailedModelCalls(int failedModelCalls) {
+    this.failedModelCalls = failedModelCalls;
   }
 
   public void setCriticalFindings(int criticalFindings) {

@@ -187,7 +187,6 @@ public class OtelObservabilityListener implements ChatModelListener {
 
     if (shouldPersistSessionUsage(ctx.attributes())) {
       var sessionId = (Long) ctx.attributes().get(ATTR_SESSION_ID);
-      var durationMs = (long) (durationSeconds * 1000);
       var persistedInput = countOf(inputTokens);
       var persistedOutput = countOf(outputTokens);
       var recordedCost = cost;
@@ -202,8 +201,7 @@ public class OtelObservabilityListener implements ChatModelListener {
                     persistedInput,
                     persistedOutput,
                     recordedCost,
-                    recordedPricingMissing,
-                    durationMs);
+                    recordedPricingMissing);
             // #66: the review's running spend, read off the row once this call's usage is in it.
             if (updated != null) {
               broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.progress(updated));
@@ -298,16 +296,15 @@ public class OtelObservabilityListener implements ChatModelListener {
   @Override
   public void onError(ChatModelErrorContext ctx) {
     if (shouldPersistSessionUsage(ctx.attributes())) {
+      // #1417: a failed call is counted, not treated as the review's outcome. It may be retried
+      // and the review may still complete; the review's final status is written when it ends.
       var sessionId = (Long) ctx.attributes().get(ATTR_SESSION_ID);
-      var startNanos = (long) ctx.attributes().get(ATTR_START_NANOS);
-      var durationMs = (System.nanoTime() - startNanos) / 1_000_000;
-      var error = sanitizeError(ctx.error());
       runOnWorker(
           sessionId,
-          () -> sessionUpdater.recordFailure(sessionId, error, durationMs),
-          "persist failure");
-      if (log.isErrorEnabled()) {
-        log.error("Session failed: {}", error);
+          () -> sessionUpdater.recordFailedModelCall(sessionId),
+          "count the failed model call");
+      if (log.isWarnEnabled()) {
+        log.warn("Model call failed for session {}: {}", sessionId, sanitizeError(ctx.error()));
       }
     }
 

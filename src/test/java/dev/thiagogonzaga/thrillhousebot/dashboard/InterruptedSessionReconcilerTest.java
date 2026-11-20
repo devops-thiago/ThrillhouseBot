@@ -39,6 +39,8 @@ class InterruptedSessionReconcilerTest extends ReviewSessionTestSupport {
 
   @Inject InterruptedSessionReconciler reconciler;
 
+  @Inject ReviewSessionUpdater updater;
+
   @InjectMock DashboardSessionValidator sessionValidator;
 
   @BeforeEach
@@ -59,6 +61,22 @@ class InterruptedSessionReconcilerTest extends ReviewSessionTestSupport {
     ReviewSession loaded = ReviewSession.findById(id);
     assertEquals(ReviewSession.STATUS_FAILED, loaded.getStatus());
     assertEquals(InterruptedSessionReconciler.INTERRUPTED_ERROR_MESSAGE, loaded.getErrorMessage());
+  }
+
+  @Test
+  void aSessionWithAFailedModelCallIsStillInProgressAndReconciled() throws Exception {
+    // #1417: a failed model call no longer fails the session, so a review cut off after one is
+    // still in progress at the next start and gets the interrupted reason, not the call's error.
+    var id = persistInProgress();
+    updater.recordFailedModelCall(id);
+
+    // Still in progress after the failed call: the sweep finds it.
+    assertEquals(1, reconciler.reconcile());
+
+    ReviewSession loaded = ReviewSession.findById(id);
+    assertEquals(ReviewSession.STATUS_FAILED, loaded.getStatus());
+    assertEquals(InterruptedSessionReconciler.INTERRUPTED_ERROR_MESSAGE, loaded.getErrorMessage());
+    assertEquals(1, loaded.getFailedModelCalls());
   }
 
   @Test
