@@ -15,6 +15,7 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubPullRequestClient;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -39,9 +40,9 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
  * <p>A review payload is changed hunks only. When a PR touches a {@code *.md} or {@code .env*} file
  * that names a config key — {@code THRILLHOUSEBOT_REVIEW_MANUAL_TRIGGER_ALLOWED_LOGINS}, {@code
  * thrillhousebot.review.max-input-tokens} — the definition that fixes the key's type, default and
- * value format is in a file the model never sees. This resolver extracts those key tokens from the
- * changed doc lines, locates the repository's configuration files through one recursive tree
- * listing, and returns the matching definition lines as prompt-ready evidence.
+ * value format is usually in a file the model never sees. This resolver extracts those key tokens
+ * from the changed doc lines, locates the repository's configuration files through one recursive
+ * tree listing, and returns the matching definition lines as prompt-ready evidence.
  *
  * <p>Both definition forms resolve. The explicit-override style, {@code
  * thrillhousebot.webhook.dedup-ttl=${WEBHOOK_DEDUP_TTL:24h}}, matches the env name literally; the
@@ -621,7 +622,12 @@ public class ConfigKeyContextResolver {
       var text = new String(Base64.getMimeDecoder().decode(file.content()), StandardCharsets.UTF_8);
       return text.isBlank() ? null : text;
     } catch (RuntimeException e) {
-      Log.debugf(e, "Could not read %s from %s/%s for config-key context", path, owner, repo);
+      Log.debugf(
+          e,
+          "Could not read %s from %s/%s for config-key context",
+          LogSafe.oneLine(path),
+          owner,
+          repo);
       return null;
     }
   }
@@ -813,8 +819,9 @@ public class ConfigKeyContextResolver {
     out.append(
         """
         Definition sites in this repository for the configuration keys named by the \
-        documentation/config files this PR changes. The diff does not contain them, so use \
-        these to judge whether the changed documentation matches the implementation.
+        documentation/config files this PR changes, read from whole files at the PR head (most \
+        of them outside the diff), so use these to judge whether the changed documentation \
+        matches the implementation.
         """);
     for (var definition : definitions) {
       out.append("\n#### ").append(definition.token()).append('\n');
