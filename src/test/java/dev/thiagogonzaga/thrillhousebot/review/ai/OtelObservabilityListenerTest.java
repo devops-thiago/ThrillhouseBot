@@ -400,8 +400,7 @@ class OtelObservabilityListenerTest {
 
     listener.onResponse(ctx);
 
-    verify(sessionUpdater)
-        .recordModelUsage(eq(8L), eq("unknown-model"), eq(500), eq(300), eq(0.0), eq(true));
+    verify(sessionUpdater).recordModelUsage(8L, "unknown-model", 500, 300, 0.0, true);
     verify(costCounter).add(eq(0.0), any());
   }
 
@@ -517,8 +516,7 @@ class OtelObservabilityListenerTest {
 
     verify(ledger).recordUsage(42L, null, null);
     verify(ledger).recordUsage(43L, null, null);
-    verify(sessionUpdater)
-        .recordModelUsage(eq(42L), eq("deepseek-chat"), eq(0), eq(0), eq(0.0), eq(false));
+    verify(sessionUpdater).recordModelUsage(42L, "deepseek-chat", 0, 0, 0.0, false);
     verify(tokenHistogram, never()).record(anyLong(), any());
     verify(durationHistogram, times(2)).record(anyDouble(), any());
     verify(costCounter, times(2)).add(eq(0.0), any());
@@ -554,8 +552,7 @@ class OtelObservabilityListenerTest {
 
     listener.onResponse(ctx);
 
-    verify(sessionUpdater)
-        .recordModelUsage(eq(42L), eq("deepseek-chat"), eq(0), eq(70), eq(0.0), eq(true));
+    verify(sessionUpdater).recordModelUsage(42L, "deepseek-chat", 0, 70, 0.0, true);
     var typeCaptor = ArgumentCaptor.forClass(Attributes.class);
     verify(tokenHistogram).record(eq(70L), typeCaptor.capture());
     assertEquals("output", typeCaptor.getValue().get(AttributeKey.stringKey("gen_ai.token.type")));

@@ -303,9 +303,8 @@ public class OtelObservabilityListener implements ChatModelListener {
           sessionId,
           () -> sessionUpdater.recordFailedModelCall(sessionId),
           "count the failed model call");
-      if (log.isWarnEnabled()) {
-        log.warn("Model call failed for session {}: {}", sessionId, sanitizeError(ctx.error()));
-      }
+      var reason = sanitizeError(ctx.error());
+      log.warn("Model call failed for session {}: {}", sessionId, reason);
     }
 
     Span span = Span.current();
