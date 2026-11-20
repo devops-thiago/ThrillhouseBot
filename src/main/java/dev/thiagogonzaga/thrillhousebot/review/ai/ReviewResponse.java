@@ -67,6 +67,21 @@ public record ReviewResponse(
         findings, previousFindingsStatus, summary, closed, linkedIssueCriteria);
   }
 
+  /**
+   * This response with {@code statuses} as its {@code previous_findings_status} and {@code closed}
+   * as the earlier rounds' findings it closed: the round as stored once its verdict is final
+   * (#1409).
+   */
+  public ReviewResponse asRecorded(List<PreviousFindingStatus> statuses, List<Finding> closed) {
+    return new ReviewResponse(findings, statuses, summary, closed, linkedIssueCriteria);
+  }
+
+  /** This response with {@code replaced} as its findings; every other field is kept. */
+  public ReviewResponse withFindings(List<Finding> replaced) {
+    return new ReviewResponse(
+        replaced, previousFindingsStatus, summary, closedEarlierRound, linkedIssueCriteria);
+  }
+
   /** This response carrying {@code verdicts} as its criterion verdicts. */
   public ReviewResponse withLinkedIssueCriteria(List<CriterionVerdict> verdicts) {
     return new ReviewResponse(
