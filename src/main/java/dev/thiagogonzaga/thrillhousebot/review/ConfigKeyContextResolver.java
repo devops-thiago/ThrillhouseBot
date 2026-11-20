@@ -199,6 +199,10 @@ public class ConfigKeyContextResolver {
           "ENV[",
           "ENV.fetch",
           "import.meta.env",
+          // Swift's ProcessInfo.processInfo.environment, Scala's sys.env and PHP's $_ENV.
+          "processInfo.environment",
+          "sys.env",
+          "$_ENV[",
           // System.getenv, os.getenv, C and PHP getenv.
           "getenv(");
 
@@ -435,7 +439,9 @@ public class ConfigKeyContextResolver {
 
   private static boolean readsEnvironment(String patch) {
     for (var line : patch.split("\n", -1)) {
-      if (!line.startsWith("-") && ENVIRONMENT_READS.stream().anyMatch(line::contains)) {
+      // Added and context lines only: a hunk header's trailing section text is neither.
+      if ((line.startsWith("+") || line.startsWith(" "))
+          && ENVIRONMENT_READS.stream().anyMatch(line::contains)) {
         return true;
       }
     }

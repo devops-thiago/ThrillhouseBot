@@ -424,10 +424,40 @@ class ConfigKeyContextResolverTest {
       var context = new FileDiff("b.py", "modified", 0, 0, 0, "@@ -1 +1 @@\n x = os.getenv('X')");
       var removed = new FileDiff("c.rs", "modified", 0, 1, 1, "@@ -1 +1 @@\n-env::var(\"X\")");
       var noPatch = new FileDiff("d.go", "renamed", 0, 0, 0, null, "old.go");
+      // A hunk header's section text is neither an added nor a context line.
+      var header =
+          new FileDiff(
+              "e.ts",
+              "modified",
+              1,
+              0,
+              1,
+              "@@ -30,6 +31,7 @@ const cfg = process.env.APP;\n const x = 1;\n+const y = 2;");
 
       assertEquals(
           java.util.Set.of("a.cs", "b.py"),
-          ConfigKeyContextResolver.environmentReaders(List.of(added, context, removed, noPatch)));
+          ConfigKeyContextResolver.environmentReaders(
+              List.of(added, context, removed, noPatch, header)));
+    }
+
+    /** Swift, Scala and PHP read the environment in their own idioms. */
+    @Test
+    void shouldFindTheEnvironmentReadsOfSwiftScalaAndPhp() {
+      var swift =
+          new FileDiff(
+              "App.swift",
+              "modified",
+              1,
+              0,
+              1,
+              "@@ -1 +1 @@\n+let v = ProcessInfo.processInfo.environment[\"X_Y\"]");
+      var scala =
+          new FileDiff("Boot.scala", "modified", 1, 0, 1, "@@ -1 +1 @@\n+val v = sys.env(\"X_Y\")");
+      var php = new FileDiff("boot.php", "modified", 1, 0, 1, "@@ -1 +1 @@\n+$v = $_ENV['X_Y'];");
+
+      assertEquals(
+          java.util.Set.of("App.swift", "Boot.scala", "boot.php"),
+          ConfigKeyContextResolver.environmentReaders(List.of(swift, scala, php)));
     }
 
     @Test
