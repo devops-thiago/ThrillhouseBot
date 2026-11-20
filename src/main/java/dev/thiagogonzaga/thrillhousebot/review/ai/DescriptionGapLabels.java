@@ -194,14 +194,14 @@ public final class DescriptionGapLabels {
   private static final String REFERENT = ARTICLE + "previously listed gap";
 
   /**
-   * A possessive ("summary's", "summary’s", "its", "their") or a determiner ("the", "this", "that")
-   * right before a label, which already gives it the article the referent would add. Group 1 is the
-   * word when it is one of the listed ones. Word characters and blanks are Unicode ones, so
-   * "résumé’s G1" and a non-breaking space count too.
+   * A possessive ("summary's", "summary’s", the plural "reviewers'", "its", "their") or a
+   * determiner ("the", "this", "that") right before a label, which already gives it the article the
+   * referent would add. Group 1 is the word when it is one of the listed ones. Word characters and
+   * blanks are Unicode ones, so "résumé’s G1" and a non-breaking space count too.
    */
   private static final Pattern DETERMINER_BEFORE =
       Pattern.compile(
-          "(?:(?<![\\w'’])(the|this|that|its|their)|\\w['’]s)\\s++$",
+          "(?:(?<![\\w'’])(the|this|that|its|their)|\\w(?:['’]s|s['’]))\\s++$",
           Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.UNICODE_CHARACTER_CLASS);
 
   /** How far before a label {@link #DETERMINER_BEFORE} looks: the longest word and its blanks. */

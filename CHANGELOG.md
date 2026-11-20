@@ -9,9 +9,9 @@ All notable changes to ThrillhouseBot.
 - **A carried-gap label after a possessive or "the" no longer reads "the a previously listed
   gap"** (#1398): the summary rewrote an echoed label such as "G1" to "a previously listed gap"
   wherever it stood, so "the earlier summary's G1" became "the earlier summary's a previously
-  listed gap". After a possessive (`'s`, `’s`, "its", "their") or "the", "this" or "that" the
-  rewrite now leaves out the article, and "the G1 gap" reads "the previously listed gap". A "that"
-  that opens a clause ("says that G1 is open") keeps it.
+  listed gap". After a possessive (`'s`, `’s`, a plural `s'`, "its", "their") or "the", "this" or
+  "that" the rewrite now leaves out the article, and "the G1 gap" reads "the previously listed
+  gap". A "that" that opens a clause ("says that G1 is open") keeps it.
 
 ## [0.9.2] - 2026-11-16
 

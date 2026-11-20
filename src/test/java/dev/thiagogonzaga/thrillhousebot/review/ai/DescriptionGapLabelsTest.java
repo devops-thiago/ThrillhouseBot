@@ -266,6 +266,9 @@ class DescriptionGapLabelsTest {
         "Nothing closes that G2 yet.|Nothing closes that previously listed gap yet.",
         "The cap keeps its G1 shape yet.|The cap keeps its previously listed gap shape yet.",
         "The reviewers keep their G1 notes.|The reviewers keep their previously listed gap notes.",
+        "The reviewers' G1 notes stay.|The reviewers' previously listed gap notes stay.",
+        "The reviewers’ G1 notes stay.|The reviewers’ previously listed gap notes stay.",
+        "Nothing closes the' G1 yet.|Nothing closes the' a previously listed gap yet.",
         "THE G1 half stays.|THE previously listed gap half stays.",
         "Nothing closes the G1 and G3 halves.|Nothing closes the previously listed gap and G3"
             + " halves.",
