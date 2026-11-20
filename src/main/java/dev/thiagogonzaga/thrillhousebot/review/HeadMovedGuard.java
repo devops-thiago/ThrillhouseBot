@@ -99,8 +99,8 @@ public class HeadMovedGuard implements PrePublishGuard {
         SUPERSEDED_CHECK_TITLE,
         "The pull request head moved to "
             + freshHead
-            + " before this review started, so it was not run. The review of the new head"
-            + " replaces it.",
+            + " while this review loaded its context, so it reviewed nothing. The review of the"
+            + " new head replaces it.",
         "Superseded: the PR head moved to " + freshHead + " while loading the review context",
         "superseded");
   }

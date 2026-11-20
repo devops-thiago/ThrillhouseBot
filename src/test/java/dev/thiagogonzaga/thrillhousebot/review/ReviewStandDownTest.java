@@ -153,7 +153,11 @@ class ReviewStandDownTest {
     assertEquals(9L, update.getValue().checkRunId());
     assertEquals("skipped", update.getValue().conclusion());
     assertEquals(HeadMovedGuard.SUPERSEDED_CHECK_TITLE, update.getValue().title());
-    assertTrue(update.getValue().summary().contains("newhead1"));
+    // The check run was created before the context loaded, so the run started and was cut off.
+    assertEquals(
+        "The pull request head moved to newhead1 while this review loaded its context, so it"
+            + " reviewed nothing. The review of the new head replaces it.",
+        update.getValue().summary());
     assertEquals(DETAILS, update.getValue().detailsUrl());
   }
 
