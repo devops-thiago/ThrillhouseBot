@@ -8,7 +8,7 @@ backup if you need to return to an older version.
 
 ## What is stored, and what is not
 
-The bot keeps five tables in PostgreSQL:
+The bot keeps six tables in PostgreSQL:
 
 | Table | Contents |
 |---|---|
@@ -17,13 +17,13 @@ The bot keeps five tables in PostgreSQL:
 | `finding_feedback` | 👍, 👎 and "not useful" replies on findings ([Finding feedback](https://github.com/devops-thiago/ThrillhouseBot/blob/main/docs/FEEDBACK.md)) |
 | `review_learning` | Review learnings, when `REVIEW_LEARNINGS_ENABLED` is on |
 | `finding_state` | Each finding of a pull request and its status across review rounds, kept until `FINDINGS_RETENTION` after the pull request is closed or merged |
+| `webhook_delivery` | The webhook delivery ids seen within `WEBHOOK_DEDUP_TTL` (default `24h`), so a redelivery after a restart is still dropped as `DUPLICATE_DELIVERY`. Expired rows are deleted at startup and then hourly |
 
 Everything else lives in the process and is lost on a restart:
 
 - dashboard login sessions, so users sign in again;
 - the dashboard's WebSocket replay buffer;
-- the per-PR auto-review window and the webhook delivery ids used to drop
-  redeliveries;
+- the per-PR auto-review window;
 - the findings a superseded review hands to the review that replaces it;
 - verdicts held on pending CI, so a held pull request needs a manual `/review`;
 - the claims the verifier rejected on a head commit;

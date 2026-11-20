@@ -591,7 +591,7 @@ The following state lives in memory, per process, and is lost on restart:
 | Verdicts held on CI (`CiHoldRegistry`, up to 256 PRs) | The approval is not posted when CI turns green; `/review` posts it. |
 | Findings handed over by a superseded run (`SupersededFindingsCarryover`) | The next round finds them again from the diff. |
 | Verifier rejections per head (`VerifierRejectionMemory`) | A rejected finding can go through the verifier again. |
-| Webhook delivery ids (24 h) and the auto-review window | A redelivery or an early push can be reviewed. |
+| The auto-review window | An early push can be reviewed. (Webhook delivery ids are also kept in `webhook_delivery`, so a redelivery is still dropped after a restart.) |
 | Dashboard login sessions (8 h) | Users log in again. |
 | Caches: installation tokens, instructions file, repository settings, project stack, dashboard access | Read again from GitHub. |
 
@@ -608,6 +608,7 @@ does not lose it. On startup `InterruptedSessionReconciler` marks every session 
 | `FindingFeedback` | `finding_feedback` | 👍/👎 reactions and reply signals on findings. See [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/). |
 | `ReviewLearning` | `review_learning` | Review learnings, scoped to installation and repository. A retracted row stays, with `active` cleared. |
 | `FindingState` | `finding_state` | Each finding of a pull request and its status across rounds. See [Stored finding state](#stored-finding-state). |
+| `SeenDelivery` | `webhook_delivery` | Webhook delivery ids seen within `WEBHOOK_DEDUP_TTL`, so a redelivery after a restart or on another instance is dropped. Only the id and two times; expired rows are purged hourly. |
 
 Production uses PostgreSQL (`DATABASE_URL`); dev mode and the tests use in-memory H2 in PostgreSQL
 mode. Flyway runs the scripts in `src/main/resources/db/migration` at boot, and Hibernate only

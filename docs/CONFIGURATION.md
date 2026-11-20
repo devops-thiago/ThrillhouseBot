@@ -254,7 +254,7 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 
 | Variable | Description | Type | Default |
 |---|---|---|---|
-| `WEBHOOK_DEDUP_TTL`<br>`thrillhousebot.webhook.dedup-ttl` | How long a webhook delivery id (`X-GitHub-Delivery`) is remembered, to ignore GitHub redeliveries instead of reviewing twice. Kept in memory, per replica. | duration | `24h` |
+| `WEBHOOK_DEDUP_TTL`<br>`thrillhousebot.webhook.dedup-ttl` | How long a webhook delivery id (`X-GitHub-Delivery`) is remembered, to ignore GitHub redeliveries instead of reviewing twice. Kept in memory and in the database, so a redelivery after a restart is still dropped. | duration | `24h` |
 
 ## `thrillhousebot.webhook.triggers`
 
