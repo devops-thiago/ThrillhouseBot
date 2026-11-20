@@ -162,6 +162,22 @@ class PersistedDeliveryDedupTest {
   }
 
   @Test
+  void aRowClaimedAgainBetweenThePurgesSelectAndDeleteIsKept() {
+    var now = Instant.ofEpochMilli(START);
+    deliveries.claim("reclaimed", now.minusSeconds(120), now.minusSeconds(60));
+    deliveries.claim("stale", now.minusSeconds(120), now.minusSeconds(30));
+
+    var selected = deliveries.expiredIds(now, 10);
+    // Another instance handles a redelivery of the id in between: its expired row is replaced.
+    assertTrue(deliveries.claim("reclaimed", now, now.plusSeconds(60)));
+
+    assertEquals(1, deliveries.deleteExpired(selected, now));
+    assertNotNull(SeenDelivery.findById("reclaimed"));
+    assertNull(SeenDelivery.findById("stale"));
+    assertEquals(0, deliveries.deleteExpired(java.util.List.of(), now));
+  }
+
+  @Test
   void aRunPurgesAtMostItsBatches() {
     var store = mock(SeenDeliveries.class);
     when(store.purgeExpired(any(), anyInt())).thenReturn(DeliveryPurge.BATCH);

@@ -20,6 +20,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.transaction.Transactional;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * The stored webhook delivery ids (#1374), shared by every instance on the database. The first
@@ -73,19 +74,32 @@ public class SeenDeliveries implements PanacheRepositoryBase<SeenDelivery, Strin
    */
   @Transactional
   public int purgeExpired(Instant now, int limit) {
-    var ids =
-        getEntityManager()
-            .createQuery(
-                "select d.deliveryId from SeenDelivery d where d.expiresAt <= ?1"
-                    + " order by d.expiresAt",
-                String.class)
-            .setParameter(1, now)
-            .setMaxResults(limit)
-            .getResultList();
+    return deleteExpired(expiredIds(now, limit), now);
+  }
+
+  /** Up to {@code limit} ids expired at {@code now}, oldest first. */
+  List<String> expiredIds(Instant now, int limit) {
+    return getEntityManager()
+        .createQuery(
+            "select d.deliveryId from SeenDelivery d where d.expiresAt <= ?1"
+                + " order by d.expiresAt",
+            String.class)
+        .setParameter(1, now)
+        .setMaxResults(limit)
+        .getResultList();
+  }
+
+  /**
+   * Deletes the rows of {@code ids} that are still expired at {@code now}. The expiry is checked
+   * again in the delete itself: between the select and the delete, another instance can claim one
+   * of the ids again, replacing its expired row with a live one, and that row must stay.
+   */
+  @Transactional
+  int deleteExpired(List<String> ids, Instant now) {
     if (ids.isEmpty()) {
       return 0;
     }
-    return (int) delete("deliveryId in ?1", ids);
+    return (int) delete("deliveryId in ?1 and expiresAt <= ?2", ids, now);
   }
 
   /**
