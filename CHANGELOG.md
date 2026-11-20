@@ -4,6 +4,18 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Fixed
+
+- The review session row records the review's outcome instead of per-call values (#1417):
+  - `durationMs` is the review's elapsed time from start to its final status. It was the sum of
+    the model calls' durations, which counted parallel and retried calls each time and left out
+    the time spent outside model calls.
+  - A model call that fails no longer sets the session to `failed`. The review's final outcome
+    sets the status, so a call that is retried and succeeds leaves the review `completed`.
+  - A completed session has no error message. Failed calls are counted in a new
+    `failedmodelcalls` column (migration V5, default 0), shown as "Failed model calls" on the
+    dashboard's session page.
+
 ## [0.9.2] - 2026-11-16
 
 Follow-up rounds now count each finding once and decide whether it is fixed from the file's

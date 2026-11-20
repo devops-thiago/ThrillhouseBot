@@ -6636,10 +6636,80 @@ class ReviewOrchestratorTest {
       updater.getValue().accept(managed);
       assertNull(managed.getAiResponseJson());
     }
+
+    @Test
+    void aCompletedReviewRecordsItsElapsedTimeAndNoError() {
+      // #1417: a model call that failed and was retried used to leave its error on the row and
+      // its time summed with the other calls'. The completed row carries the review's elapsed
+      // time instead, and no error.
+      var session = new ReviewSession();
+      session.id = 11L;
+      session.setTimestamp(java.time.Instant.now().minusSeconds(90));
+      session.setDurationMs(500_000L);
+      session.setErrorMessage("OpenAI REST API returned a response that could not be converted");
+      var result =
+          new ReviewResult(
+              List.of(), 0, 0, 0, 0, null, ReviewState.APPROVE, true, "", List.of(), List.of(), 0);
+
+      orchestrator.applyReviewResult(session, result);
+
+      assertNull(session.getErrorMessage());
+      assertTrue(session.getDurationMs() >= 90_000L && session.getDurationMs() < 120_000L);
+      var updater = ArgumentCaptor.forClass(java.util.function.Consumer.class);
+      verify(sessionPersistence).update(eq(11L), updater.capture());
+      var managed = new ReviewSession();
+      managed.setErrorMessage("left by a failed call");
+      managed.setDurationMs(500_000L);
+      updater.getValue().accept(managed);
+      assertEquals(ReviewSession.STATUS_COMPLETED, managed.getStatus());
+      assertNull(managed.getErrorMessage());
+      assertEquals(session.getDurationMs(), managed.getDurationMs());
+    }
+  }
+
+  @Nested
+  class ElapsedMs {
+
+    @Test
+    void isTheTimeSinceTheSessionStarted() {
+      var session = new ReviewSession();
+      session.setTimestamp(java.time.Instant.now().minusSeconds(5));
+
+      var elapsed = ReviewOrchestrator.elapsedMs(session);
+
+      assertTrue(elapsed >= 5_000L && elapsed < 60_000L, "elapsed " + elapsed);
+    }
+
+    @Test
+    void isZeroWithoutAStartOrForAStartInTheFuture() {
+      assertEquals(0L, ReviewOrchestrator.elapsedMs(new ReviewSession()));
+      var skewed = new ReviewSession();
+      skewed.setTimestamp(java.time.Instant.now().plusSeconds(60));
+      assertEquals(0L, ReviewOrchestrator.elapsedMs(skewed));
+    }
   }
 
   @Nested
   class ApplyReviewFailure {
+
+    @Test
+    void aFailedReviewRecordsItsMessageAndElapsedTime() {
+      // #1417: the real failure is the one that sets the status and the message.
+      var session = new ReviewSession();
+      session.id = 12L;
+      session.setTimestamp(java.time.Instant.now().minusSeconds(30));
+
+      orchestrator.applyReviewFailure(session, "AI request timed out");
+
+      assertTrue(session.getDurationMs() >= 30_000L && session.getDurationMs() < 60_000L);
+      var updater = ArgumentCaptor.forClass(java.util.function.Consumer.class);
+      verify(sessionPersistence).update(eq(12L), updater.capture());
+      var managed = new ReviewSession();
+      updater.getValue().accept(managed);
+      assertEquals(ReviewSession.STATUS_FAILED, managed.getStatus());
+      assertEquals("AI request timed out", managed.getErrorMessage());
+      assertEquals(session.getDurationMs(), managed.getDurationMs());
+    }
 
     /**
      * #624: a review that dies while publishing has already paid for every model call it made. The

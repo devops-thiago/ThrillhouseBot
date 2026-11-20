@@ -172,6 +172,21 @@ describe('SessionsPage', () => {
     expect(screen.getByText('0 findings')).toBeInTheDocument();
   });
 
+  it('shows the failed model calls of a session that needed retries, and no error', async () => {
+    // #1417: a retried call is a count on a completed session, not an error message.
+    await openDetail({ ...mockSessionDetail, status: 'completed', failedModelCalls: 2, errorMessage: null });
+
+    expect(screen.getByText('Failed model calls')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.queryByText('Error')).not.toBeInTheDocument();
+  });
+
+  it('leaves the failed model calls out when every call succeeded', async () => {
+    await openDetail({ ...mockSessionDetail, failedModelCalls: 0 });
+
+    expect(screen.queryByText('Failed model calls')).not.toBeInTheDocument();
+  });
+
   it('shows the overall assessment when the session has one', async () => {
     await openDetail({
       ...mockSessionDetail,
