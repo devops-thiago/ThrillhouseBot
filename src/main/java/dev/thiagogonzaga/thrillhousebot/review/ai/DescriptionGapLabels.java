@@ -196,22 +196,27 @@ public final class DescriptionGapLabels {
   /**
    * A possessive ("summary's", "summary’s", "its", "their") or a determiner ("the", "this", "that")
    * right before a label, which already gives it the article the referent would add. Group 1 is the
-   * word when it is one of the listed ones.
+   * word when it is one of the listed ones. Word characters and blanks are Unicode ones, so
+   * "résumé’s G1" and a non-breaking space count too.
    */
   private static final Pattern DETERMINER_BEFORE =
       Pattern.compile(
           "(?:(?<![\\w'’])(the|this|that|its|their)|\\w['’]s)\\s++$",
-          Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+          Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.UNICODE_CHARACTER_CLASS);
 
   /** How far before a label {@link #DETERMINER_BEFORE} looks: the longest word and its blanks. */
   private static final int DETERMINER_REACH = 32;
 
-  /** The word after a label; group 1 is the word. */
-  private static final Pattern WORD_AFTER = Pattern.compile("\\s++(\\p{L}++)");
+  /**
+   * The word after a label, past one parenthetical that may stand between them ("G1 (x) is"); group
+   * 1 is the word.
+   */
+  private static final Pattern WORD_AFTER =
+      Pattern.compile("\\s*+(?:\\([^()\\n]*+\\)\\s*+)?(\\p{L}++)", Pattern.UNICODE_CHARACTER_CLASS);
 
   /** "gap" or "gaps" right after a label, which the referent already says: "the G1 gap". */
   private static final Pattern GAP_AFTER =
-      Pattern.compile("\\s++gaps?\\b", Pattern.CASE_INSENSITIVE);
+      Pattern.compile("\\s++gaps?\\b", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
 
   private static final String REFERENTS = "previously listed gaps";
 
@@ -372,8 +377,8 @@ public final class DescriptionGapLabels {
    * possessive or a determiner ("the earlier summary's G1", "the G1 gap", "this G2") the referent
    * goes in without its article, so the sentence never reads "the a previously listed gap", and a
    * "gap" after the label goes, since the referent says it ("the G1 gap" → "the previously listed
-   * gap"). A "that" followed by a verb joins a clause ("says that G1 is open") and keeps the
-   * article (#1398).
+   * gap"). A "that" followed by a verb, directly or past one parenthetical, opens a clause ("says
+   * that G1 is open", "says that G1 (x) is open") and keeps the article (#1398).
    */
   private static String withoutBareLabels(String text, int issued) {
     var out = new StringBuilder(text.length());

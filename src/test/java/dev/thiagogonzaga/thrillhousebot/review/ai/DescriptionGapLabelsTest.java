@@ -255,8 +255,12 @@ class DescriptionGapLabelsTest {
         "The summary says that G1 is still open.|The summary says that a previously listed gap"
             + " is still open.",
         "Nothing closes that G2.|Nothing closes that previously listed gap.",
-        "The summary says that G1 (x) is still open.|The summary says that previously listed gap"
-            + " (x) is still open.",
+        "The summary says that G1 (maxRecords unused) is still open.|The summary says that a"
+            + " previously listed gap (maxRecords unused) is still open.",
+        "Nothing closes that G2 (x) yet.|Nothing closes that previously listed gap (x) yet.",
+        "Nothing closes that G2 (x).|Nothing closes that previously listed gap (x).",
+        "The cover résumé’s G1 (x) stays.|The cover résumé’s previously listed gap (x) stays.",
+        "Nothing closes the G1 gap yet.|Nothing closes the previously listed gap" + " yet.",
         "Nothing closes per G1 gap yet.|Nothing closes per a previously listed gap gap yet.",
         "Nothing closes this G2 yet.|Nothing closes this previously listed gap yet.",
         "Nothing closes that G2 yet.|Nothing closes that previously listed gap yet.",
