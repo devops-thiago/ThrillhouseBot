@@ -248,6 +248,10 @@ class DescriptionGapLabelsTest {
             + " gap (x) still shows no limit.",
         "Nothing closes the G1 gap yet.|Nothing closes the previously listed gap yet.",
         "Nothing closes the G1 and G2 gaps yet.|Nothing closes the previously listed gaps yet.",
+        "Nothing closes the G3 and G1 gap yet.|Nothing closes the G3 and previously listed gap"
+            + " yet.",
+        "Nothing closes the G3, G1 and G2 yet.|Nothing closes the G3, previously listed gap and"
+            + " previously listed gap yet.",
         "Nothing closes the G1 and G3 gaps yet.|Nothing closes the previously listed gap and G3"
             + " gaps yet.",
         "Nothing closes the G1 gapless check.|Nothing closes the previously listed gap gapless"

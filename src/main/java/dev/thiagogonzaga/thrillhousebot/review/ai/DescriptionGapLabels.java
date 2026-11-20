@@ -381,7 +381,9 @@ public final class DescriptionGapLabels {
    * goes in without its article, so the sentence never reads "the a previously listed gap", and a
    * "gap" after the label goes, since the referent says it ("the G1 gap" → "the previously listed
    * gap"). A "that" followed by a verb, directly or past one parenthetical, opens a clause ("says
-   * that G1 is open", "says that G1 (x) is open") and keeps the article (#1398).
+   * that G1 is open", "says that G1 (x) is open") and keeps the article (#1398). The determiner
+   * covers every label of a cluster, so "the G3 and G1 gap" with only G1 issued reads "the G3 and
+   * previously listed gap", and the "gap" goes whenever the cluster's last label was issued.
    */
   private static String withoutBareLabels(String text, int issued) {
     var out = new StringBuilder(text.length());
@@ -389,12 +391,12 @@ public final class DescriptionGapLabels {
     var labels = BARE.matcher(text);
     while (labels.find()) {
       var cluster = labels.group(1);
-      var words = rewrittenInPlace(cluster, issued);
       var end = labels.end();
-      if (determined(text, labels.start(), end)) {
-        words = words.startsWith(ARTICLE) ? words.substring(ARTICLE.length()) : words;
+      var determined = determined(text, labels.start(), end);
+      var words = rewrittenInPlace(cluster, issued, determined);
+      if (determined && lastIssued(cluster, issued)) {
         var gap = GAP_AFTER.matcher(text).region(end, text.length()).useTransparentBounds(true);
-        if (allIssued(cluster, issued) && gap.lookingAt()) {
+        if (gap.lookingAt()) {
           end = gap.end();
         }
       }
@@ -402,6 +404,16 @@ public final class DescriptionGapLabels {
       at = end;
     }
     return out.append(text, at, text.length()).toString();
+  }
+
+  /** Whether the last label of {@code cluster} is one of G1…G{@code issued}. */
+  private static boolean lastIssued(String cluster, int issued) {
+    var numbers = LABEL_NUMBER.matcher(cluster);
+    var last = "";
+    while (numbers.find()) {
+      last = numbers.group();
+    }
+    return allIssued(last, issued);
   }
 
   /**
@@ -428,14 +440,17 @@ public final class DescriptionGapLabels {
    * A label cluster left after the other rewrites, said in words: the referent when every label in
    * it was issued, otherwise each issued label on its own ("G1 and G3" with only G1 issued becomes
    * "a previously listed gap and G3"), so an issued label never survives next to one that was not.
+   * When {@code determined}, no referent carries an article.
    */
-  private static String rewrittenInPlace(String cluster, int issued) {
+  private static String rewrittenInPlace(String cluster, int issued, boolean determined) {
+    var single = determined ? REFERENT.substring(ARTICLE.length()) : REFERENT;
     if (allIssued(cluster, issued)) {
-      return referent(cluster);
+      var words = referent(cluster);
+      return determined && words.equals(REFERENT) ? single : words;
     }
     return LABEL_NUMBER
         .matcher(cluster)
-        .replaceAll(m -> allIssued(m.group(), issued) ? REFERENT : m.group());
+        .replaceAll(m -> allIssued(m.group(), issued) ? single : m.group());
   }
 
   /** {@code text} with each match whose labels were all issued replaced as {@code with} says. */
