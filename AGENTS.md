@@ -667,7 +667,9 @@ live `fence(...)` (#604).
   possessive prose such as "server's URL" while still rejecting unsupported quotes (#1108).
   A carried-gap label joined to a word inside a parenthetical takes its part of the
   parenthetical with it (`DescriptionGapLabels.labelInAPhrase`, parts split at commas, semicolons
-  and spaced dashes); a part set off by a separator stays (#974, #1095). `PathMentions` never cuts a name out of a code span in a finding's description, only a
+  and spaced dashes); a part set off by a separator stays (#974, #1095). A label rewritten in place
+  after a possessive or "the"/"this"/"that" drops the referent's article
+  (`DescriptionGapLabels.withoutBareLabels`, #1398). `PathMentions` never cuts a name out of a code span in a finding's description, only a
   span that fills a parenthetical. `PriorOverviewCarryover` replaces a purpose paragraph led by a size
   statement (`sizeOnly`: the first sentence's leading clause, followed by nothing or a side note that
   opens with "with", "plus", "including" or "also", then any later sentence, the computed CI

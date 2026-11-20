@@ -189,7 +189,29 @@ public final class DescriptionGapLabels {
           "applies",
           "apply");
 
-  private static final String REFERENT = "a previously listed gap";
+  private static final String ARTICLE = "a ";
+
+  private static final String REFERENT = ARTICLE + "previously listed gap";
+
+  /**
+   * A possessive ("summary's", "summary’s", "its", "their") or a determiner ("the", "this", "that")
+   * right before a label, which already gives it the article the referent would add. Group 1 is the
+   * word when it is one of the listed ones.
+   */
+  private static final Pattern DETERMINER_BEFORE =
+      Pattern.compile(
+          "(?:(?<![\\w'’])(the|this|that|its|their)|\\w['’]s)\\s++$",
+          Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+  /** How far before a label {@link #DETERMINER_BEFORE} looks: the longest word and its blanks. */
+  private static final int DETERMINER_REACH = 32;
+
+  /** The word after a label; group 1 is the word. */
+  private static final Pattern WORD_AFTER = Pattern.compile("\\s++(\\p{L}++)");
+
+  /** "gap" or "gaps" right after a label, which the referent already says: "the G1 gap". */
+  private static final Pattern GAP_AFTER =
+      Pattern.compile("\\s++gaps?\\b", Pattern.CASE_INSENSITIVE);
 
   private static final String REFERENTS = "previously listed gaps";
 
@@ -214,7 +236,9 @@ public final class DescriptionGapLabels {
    * leaves only the gap itself, "X", since the clause describes the label's status, which the
    * carried gap listed next to it already shows; a leading label that is a sentence's subject ("G2
    * remains open because …") becomes "A previously listed gap"; any other label becomes "a
-   * previously listed gap" in place. A gap left with nothing but punctuation is dropped.
+   * previously listed gap" in place, or "previously listed gap" after a possessive or a determiner
+   * ("the earlier summary's previously listed gap"). A gap left with nothing but punctuation is
+   * dropped.
    */
   public static List<String> stripIssued(List<String> gaps, int issued) {
     if (issued <= 0) {
@@ -251,9 +275,7 @@ public final class DescriptionGapLabels {
       var lead = verb ? referent(subject.group(1)) + " " : "";
       text = lead + text.substring(subject.start(2));
     }
-    text =
-        BARE.matcher(text)
-            .replaceAll(m -> Matcher.quoteReplacement(rewrittenInPlace(m.group(1), issued)));
+    text = withoutBareLabels(text, issued);
     if (text.equals(gap)) {
       return null;
     }
@@ -343,6 +365,55 @@ public final class DescriptionGapLabels {
       }
     }
     return kept.append(text, from, text.length()).toString();
+  }
+
+  /**
+   * {@code text} with every label cluster left after the other rewrites said in words. After a
+   * possessive or a determiner ("the earlier summary's G1", "the G1 gap", "this G2") the referent
+   * goes in without its article, so the sentence never reads "the a previously listed gap", and a
+   * "gap" after the label goes, since the referent says it ("the G1 gap" → "the previously listed
+   * gap"). A "that" followed by a verb joins a clause ("says that G1 is open") and keeps the
+   * article (#1398).
+   */
+  private static String withoutBareLabels(String text, int issued) {
+    var out = new StringBuilder(text.length());
+    var at = 0;
+    var labels = BARE.matcher(text);
+    while (labels.find()) {
+      var cluster = labels.group(1);
+      var words = rewrittenInPlace(cluster, issued);
+      var end = labels.end();
+      if (determined(text, labels.start(), end)) {
+        words = words.startsWith(ARTICLE) ? words.substring(ARTICLE.length()) : words;
+        var gap = GAP_AFTER.matcher(text).region(end, text.length()).useTransparentBounds(true);
+        if (allIssued(cluster, issued) && gap.lookingAt()) {
+          end = gap.end();
+        }
+      }
+      out.append(text, at, labels.start()).append(words);
+      at = end;
+    }
+    return out.append(text, at, text.length()).toString();
+  }
+
+  /**
+   * Whether the label between {@code start} and {@code end} follows a possessive or a determiner,
+   * and is not the subject of a clause "that" opens.
+   */
+  private static boolean determined(String text, int start, int end) {
+    var before =
+        DETERMINER_BEFORE
+            .matcher(text)
+            .region(Math.max(0, start - DETERMINER_REACH), start)
+            .useTransparentBounds(true);
+    if (!before.find()) {
+      return false;
+    }
+    if (!"that".equalsIgnoreCase(before.group(1))) {
+      return true;
+    }
+    var after = WORD_AFTER.matcher(text).region(end, text.length());
+    return !(after.lookingAt() && SUBJECT_VERBS.contains(after.group(1).toLowerCase(Locale.ROOT)));
   }
 
   /**
