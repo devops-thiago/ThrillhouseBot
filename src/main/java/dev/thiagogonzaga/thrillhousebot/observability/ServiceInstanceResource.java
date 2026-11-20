@@ -45,6 +45,8 @@ public class ServiceInstanceResource {
   /** The environment variable read for the default id. */
   static final String HOSTNAME = "HOSTNAME";
 
+  // @Singleton, not @ApplicationScoped: Quarkus reads the bean once while it builds the SDK and
+  // merges its attributes; a client proxy around the SDK's Resource value class would add nothing.
   @Produces
   @Singleton
   Resource serviceInstance(Config config) {
