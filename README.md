@@ -1504,6 +1504,17 @@ Prometheus endpoint on, served on `/metrics` too. Turn them off with
 Log records stay on the console. Set `OTEL_LOGS_ENABLED=true` to export them
 over OTLP to the same endpoint as well.
 
+Every span, metric and log record carries `service.name` (`thrillhousebot`),
+`service.version` and `service.instance.id`. The instance id is the `HOSTNAME`
+environment variable (the pod name on Kubernetes, the container hostname under
+Docker), or a random id generated at startup when `HOSTNAME` is unset, so two
+instances exporting to one backend keep separate series and sums across them add
+up. To choose it, or to add other resource attributes, set
+`OTEL_RESOURCE_ATTRIBUTES`, for example
+`OTEL_RESOURCE_ATTRIBUTES=service.instance.id=bot-eu-1,deployment.environment.name=prod`.
+A random id changes on every restart, which starts new series; set `HOSTNAME` or
+`service.instance.id` to something stable where that matters.
+
 OTLP export is at-least-once: when an export fails after the collector has
 received it, Quarkus sends the batch again (up to three attempts, not logged),
 so a span or metric point can reach the backend twice. Quarkus also uses the
