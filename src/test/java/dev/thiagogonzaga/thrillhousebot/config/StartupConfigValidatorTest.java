@@ -89,6 +89,8 @@ class StartupConfigValidatorTest {
     private String ciGating = "strict";
     private boolean ciContextEnabled = false;
     private int ciContextMaxChars = 4000;
+    private boolean staticAnalysisEnabled = false;
+    private int staticAnalysisMaxChars = 3000;
     private boolean learningsEnabled = false;
     private boolean declineRecheckEnabled = true;
     private int[] learningsCaps = {100, 10, 3000};
@@ -198,6 +200,12 @@ class StartupConfigValidatorTest {
     ConfigBuilder ciContext(boolean enabled, int maxChars) {
       this.ciContextEnabled = enabled;
       this.ciContextMaxChars = maxChars;
+      return this;
+    }
+
+    ConfigBuilder staticAnalysis(boolean enabled, int maxChars) {
+      this.staticAnalysisEnabled = enabled;
+      this.staticAnalysisMaxChars = maxChars;
       return this;
     }
 
@@ -312,6 +320,10 @@ class StartupConfigValidatorTest {
       lenient().when(review.ciContext()).thenReturn(ciContext);
       lenient().when(ciContext.enabled()).thenReturn(ciContextEnabled);
       lenient().when(ciContext.maxChars()).thenReturn(ciContextMaxChars);
+      var staticAnalysis = mock(ThrillhouseConfig.StaticAnalysisConfig.class);
+      lenient().when(review.staticAnalysis()).thenReturn(staticAnalysis);
+      lenient().when(staticAnalysis.enabled()).thenReturn(staticAnalysisEnabled);
+      lenient().when(staticAnalysis.maxChars()).thenReturn(staticAnalysisMaxChars);
       var learnings = mock(ThrillhouseConfig.LearningsConfig.class);
       lenient().when(review.learnings()).thenReturn(learnings);
       lenient().when(review.declineRecheckEnabled()).thenReturn(declineRecheckEnabled);
@@ -1325,6 +1337,24 @@ class StartupConfigValidatorTest {
     new ConfigBuilder().ciContext(true, 500).build().validate();
     new ConfigBuilder().ciContext(true, 20_000).build().validate();
     new ConfigBuilder().ciContext(false, -1).build().validate();
+  }
+
+  @Test
+  void failsFastWhenAnEnabledStaticAnalysisCapIsOutOfBounds() {
+    for (var maxChars : List.of(499, 20_001, 0, -1)) {
+      var ex = assertFailsValidation(new ConfigBuilder().staticAnalysis(true, maxChars).build());
+      assertTrue(
+          ex.getMessage()
+              .contains("REVIEW_STATIC_ANALYSIS_MAX_CHARS must be between 500 and 20000"),
+          ex.getMessage());
+    }
+  }
+
+  @Test
+  void acceptsStaticAnalysisCapsAtTheBoundsAndIgnoresTheCapWhileDisabled() {
+    new ConfigBuilder().staticAnalysis(true, 500).build().validate();
+    new ConfigBuilder().staticAnalysis(true, 20_000).build().validate();
+    new ConfigBuilder().staticAnalysis(false, -1).build().validate();
   }
 
   @Test

@@ -1118,6 +1118,41 @@ and the open findings that cite it, and a finding that cites it is raised from
 low to medium confidence. A CI failure after the review is posted does not start
 a new one; comment `/review` to get a review whose findings see it.
 
+### Static-analysis context
+
+`REVIEW_STATIC_ANALYSIS_ENABLED=true` gives the review the annotations that
+completed checks attached to the files the PR changes. GitHub publishes Code
+Scanning alerts on a pull request as annotations of a check run named after the
+tool (such as "CodeQL"). That check passes unless an alert reaches its failure
+threshold, so the CI-failure context, which reads only failing checks, usually
+never sees them. Linters that annotate (ESLint, Checkstyle, reviewdog and the
+like) are covered the same way. With `REVIEW_CI_CONTEXT_ENABLED` on, a failing
+check run whose annotations the CI-failure section already reads (one of the
+five it describes in full) is not repeated here; every other failing run, and
+all of them with that context off, is kept.
+
+The checks come from the CI gate's own read (with `REVIEW_CI_GATING=off` that
+read is still made for this, and never holds approval). For up to five completed
+checks that report annotations, other apps before GitHub Actions jobs (a passing
+job often carries only the runner's notices), one page of annotations is read.
+Only those on a reviewable changed file are kept, up to ten per check, failures
+first, less an Actions job's runner notices on the workflow, so an alert on a
+file the PR does not touch never reaches the prompt.
+`REVIEW_STATIC_ANALYSIS_MAX_CHARS` caps the section (500 to 20000, default
+3000). The extra cost is one annotations request per annotated check (at most
+five), and the `Checks: Read` permission the app already has covers it: no new
+permission.
+
+Tool output can quote the PR's code, so it is handled like check output: control
+and bidi characters are stripped, each field is clipped, and the list sits
+inside the untrusted-data fence. The model is told to use an annotation only to
+find a defect the changed code itself shows, to argue the finding from that
+code (naming the tool as attribution at most, never one that is not in the
+list), and not to repeat a style remark the tool already reports. Only the review call gets the section, and the
+audit pass does not see it, so a finding raised from it stands on the diff. A
+review that starts before the analysis finishes sees nothing from it; comment
+`/review` once the checks are done.
+
 ### Linked-issue context
 
 `REVIEW_TICKET_CONTEXT_ENABLED=true` gives the review the issue the PR says it

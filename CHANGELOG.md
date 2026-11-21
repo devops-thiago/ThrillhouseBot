@@ -11,6 +11,15 @@ cannot resolve its review threads.
 
 ### Added
 
+- **Static-analysis context** (`REVIEW_STATIC_ANALYSIS_ENABLED`, off by default): the review prompt
+  gets the annotations that completed checks attached to the changed files, fenced as untrusted
+  data. That covers Code Scanning alerts, which GitHub publishes as annotations of a check run
+  named after the tool (such as "CodeQL") that passes unless an alert reaches its failure
+  threshold, and linters that annotate. With `REVIEW_CI_CONTEXT_ENABLED` on, a failing check run
+  whose annotations the CI-failure section already reads is not repeated. The checks come from the CI gate's own read and one
+  annotations page per annotated check (at most five, other apps before GitHub Actions jobs), so
+  there is no new GitHub App permission.
+  `REVIEW_STATIC_ANALYSIS_MAX_CHARS` (default 3000) caps the section. (#34)
 - **Opt-in Agent next steps in the PR summary** (#1442): when `REVIEW_AGENT_NEXT_STEPS_ENABLED` is on,
   the summary comment gains a deterministic subsection under its heading with the reviewed head,
   open-finding count, names of pending or failing required checks and maintainer command hints, so
@@ -63,6 +72,7 @@ cannot resolve its review threads.
   as before, to `GITHUB_API_URL`. The coverage lookup adds one request, to read the repository.
   These calls follow `HTTP_CONNECT_TIMEOUT` and `HTTP_REQUEST_TIMEOUT` (10s each by default)
   rather than the REST client's settings.
+
 
 ### Fixed
 
