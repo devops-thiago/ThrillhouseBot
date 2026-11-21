@@ -6,6 +6,11 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- A pull request head that moved while the review loaded its context no longer posts the "review
+  could not be completed" comment. The run ends as superseded, like a head that moves later in the
+  review: the skip is counted under `HEAD_MOVED`, the check run is concluded as skipped, and no
+  failed review is counted or notified. The review of the new head runs as before. A head that
+  cannot be read is still a failure. (#1412)
 - **Exported telemetry carries `service.instance.id`** (#1373): instances exporting to one
   backend had identical resource attributes, so their metrics landed in one series and cumulative
   counters such as `thrillhouse.reviews.total` overwrote each other. The id is `HOSTNAME`, or a

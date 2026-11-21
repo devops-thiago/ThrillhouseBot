@@ -582,7 +582,7 @@ public class ReviewOrchestrator {
             req.repo(),
             req.prNumber());
       } else {
-        handleReviewFailure(auth, req, session, checkRunId, e);
+        endUnpublishedRun(auth, req, session, checkRunId, e);
       }
     } finally {
       // Every outcome but a CI hold — a verdict with findings, a failure, a superseded run — is
@@ -648,6 +648,43 @@ public class ReviewOrchestrator {
   void closeStoodDownSession(ReviewSession session, PrePublishGuard.StandDown stoodDown) {
     try {
       applyReviewFailure(session, stoodDown.sessionError());
+    } catch (RuntimeException persistenceError) {
+      Log.warnf(
+          persistenceError, "Failed to persist %s review session %d", stoodDown.kind(), session.id);
+    }
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.failed(session));
+  }
+
+  /**
+   * Ends a run that stopped before its result reached the pull request: a head that moved while the
+   * context loaded supersedes it quietly (#1412), anything else is a failure.
+   */
+  private void endUnpublishedRun(
+      String auth, ReviewRequest req, ReviewSession session, long checkRunId, RuntimeException e) {
+    if (e instanceof ReviewContextLoader.StaleReviewException stale && stale.headMoved()) {
+      closeSupersededWhileLoading(auth, req, session, checkRunId, stale.currentHead());
+    } else {
+      handleReviewFailure(auth, req, session, checkRunId, e);
+    }
+  }
+
+  /**
+   * Closes out a run whose head moved while its context loaded (#1412). A push superseded it and
+   * the dispatcher already queued the review of the new head, so this is not a failure: nothing is
+   * posted, no failure is counted or notified, and the check run is concluded as skipped. The
+   * session row reads like any other superseded run's. Visible for tests.
+   */
+  void closeSupersededWhileLoading(
+      String auth, ReviewRequest req, ReviewSession session, long checkRunId, String freshHead) {
+    var stoodDown =
+        standDown.supersededWhileLoading(auth, req, checkRunId, sessionUrl(session), freshHead);
+    try {
+      applySessionState(
+          session,
+          s -> {
+            s.setStatus(ReviewSession.STATUS_FAILED);
+            s.setErrorMessage(stoodDown.sessionError());
+          });
     } catch (RuntimeException persistenceError) {
       Log.warnf(
           persistenceError, "Failed to persist %s review session %d", stoodDown.kind(), session.id);
