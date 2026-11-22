@@ -9989,7 +9989,7 @@ class ReviewOrchestratorTest {
               store,
               followUpAnalyzer,
               BOT_ID,
-              mock(GitHubInstallationClient.class),
+              mock(io.quarkiverse.githubapp.GitHubClientProvider.class),
               new ReviewLearnings.Settings(true, 100, 10, 3000));
       orchestrator = newOrchestrator();
       var raw =
@@ -10033,7 +10033,11 @@ class ReviewOrchestratorTest {
         ReviewLearningService store, ReviewLearnings.Settings settings) throws Exception {
       learnings =
           new ReviewLearnings(
-              store, followUpAnalyzer, BOT_ID, mock(GitHubInstallationClient.class), settings);
+              store,
+              followUpAnalyzer,
+              BOT_ID,
+              mock(io.quarkiverse.githubapp.GitHubClientProvider.class),
+              settings);
       return imageFindingWithCurrentLearnings();
     }
 
@@ -10183,7 +10187,7 @@ class ReviewOrchestratorTest {
               store,
               followUpAnalyzer,
               BOT_ID,
-              mock(GitHubInstallationClient.class),
+              mock(io.quarkiverse.githubapp.GitHubClientProvider.class),
               new ReviewLearnings.Settings(true, 100, 10, 3000));
       orchestrator = newOrchestrator();
 
@@ -10237,7 +10241,7 @@ class ReviewOrchestratorTest {
               store,
               followUpAnalyzer,
               BOT_ID,
-              mock(GitHubInstallationClient.class),
+              mock(io.quarkiverse.githubapp.GitHubClientProvider.class),
               new ReviewLearnings.Settings(true, 100, 10, 3000));
       orchestrator = newOrchestrator();
 

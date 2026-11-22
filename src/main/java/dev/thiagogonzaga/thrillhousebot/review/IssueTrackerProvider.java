@@ -49,6 +49,7 @@ public interface IssueTrackerProvider {
    * @param prNumber the pull request number
    * @param prBody the pull request description, possibly {@code null}
    * @param fromBranch whether the head branch name may be used as a last-resort link
+   * @param installationId the GitHub App installation id for the pull request's repository
    */
   record TicketLookup(
       String auth,

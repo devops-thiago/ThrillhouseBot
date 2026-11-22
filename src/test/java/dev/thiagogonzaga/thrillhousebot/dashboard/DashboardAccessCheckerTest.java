@@ -23,11 +23,11 @@ import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.DashboardAccessChecker.AccessDecision;
 import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.Installation;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.InstallationRepositoriesResponse;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubUserClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
+import io.quarkiverse.githubapp.GitHubClientProvider;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import java.time.Duration;
@@ -42,6 +42,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.kohsuke.github.GHOrganization;
+import org.kohsuke.github.GHUser;
+import org.kohsuke.github.GitHub;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
@@ -59,8 +62,11 @@ class DashboardAccessCheckerTest {
   @Mock ThrillhouseConfig config;
   @Mock ThrillhouseConfig.DashboardConfig dashboardConfig;
   @Mock GitHubAuthClient authClient;
-  @Mock GitHubInstallationClient installationClient;
+  @Mock GitHubClientProvider clientProvider;
   @Mock GitHubUserClient userClient;
+  @Mock GitHub gitHub;
+  @Mock GHUser ghUser;
+  @Mock GHOrganization organization;
 
   private final AtomicReference<Instant> now =
       new AtomicReference<>(Instant.parse("2026-06-10T12:00:00Z"));
@@ -68,8 +74,11 @@ class DashboardAccessCheckerTest {
   private DashboardAccessChecker checker;
 
   @BeforeEach
-  void setUp() {
+  void setUp() throws Exception {
     MockitoAnnotations.openMocks(this);
+    lenient().doReturn(gitHub).when(clientProvider).getInstallationClient(anyLong());
+    lenient().doReturn(ghUser).when(gitHub).getUser(anyString());
+    lenient().doReturn(organization).when(gitHub).getOrganization(anyString());
     when(config.dashboard()).thenReturn(dashboardConfig);
     when(dashboardConfig.accountOwner()).thenReturn(Optional.empty());
     when(authClient.getAuthHeader(10L)).thenReturn("Bearer acme-installation");
@@ -82,8 +91,8 @@ class DashboardAccessCheckerTest {
         new DashboardAccessChecker(
             config,
             authClient,
-            installationClient,
             userClient,
+            clientProvider,
             new AllowedAccounts(List.of()),
             now::get);
   }
@@ -123,7 +132,7 @@ class DashboardAccessCheckerTest {
   void theInjectedCheckerUsesTheWallClock() {
     var injected =
         new DashboardAccessChecker(
-            config, authClient, installationClient, userClient, new AllowedAccounts(List.of()));
+            config, authClient, userClient, clientProvider, new AllowedAccounts(List.of()));
 
     assertEquals(AccessDecision.ALLOWED, injected.checkAccess("alice", TOKEN));
   }
@@ -134,7 +143,7 @@ class DashboardAccessCheckerTest {
     assertEquals(AccessDecision.DENIED, checker.checkAccess(" ", TOKEN));
     assertEquals(AccessDecision.DENIED, checker.checkAccess("alice", null));
     assertEquals(AccessDecision.DENIED, checker.checkAccess("alice", " "));
-    verifyNoInteractions(userClient, installationClient);
+    verifyNoInteractions(userClient, clientProvider);
   }
 
   @Test
@@ -154,8 +163,8 @@ class DashboardAccessCheckerTest {
         new DashboardAccessChecker(
             config,
             authClient,
-            installationClient,
             userClient,
+            clientProvider,
             new AllowedAccounts(List.of("ACME")),
             now::get);
 
@@ -232,13 +241,11 @@ class DashboardAccessCheckerTest {
     // organization's membership check, which is when the removal arrives.
     stubInstallations(
         AUTH, installation(20L, "alice", "User"), installation(10L, "acme", "Organization"));
-    var member = mock(Response.class);
-    when(member.getStatus()).thenReturn(204);
-    when(installationClient.checkOrgMember(anyString(), anyString(), eq("acme"), eq("alice")))
+    when(organization.hasMember(any()))
         .thenAnswer(
             invocation -> {
               change(InstallationChange.Kind.REPOSITORIES_REMOVED, 20L, 200L);
-              return member;
+              return true;
             });
 
     var scope = checker.repositoryScope("alice", TOKEN);
@@ -345,8 +352,10 @@ class DashboardAccessCheckerTest {
 
   @Test
   void aRefusedOrFailedMembershipCheckHidesInstallationWideViews() {
-    when(installationClient.checkOrgMember(anyString(), anyString(), eq("acme"), eq("alice")))
-        .thenThrow(new WebApplicationException(Response.status(403).build()))
+    // hub4j's hasMember returns false on a 403 without throwing; only unexpected exceptions
+    // reach the catch block. The first lookup therefore returns false silently.
+    when(organization.hasMember(any()))
+        .thenReturn(false)
         .thenThrow(new IllegalStateException("timeout"));
 
     assertFalse(
@@ -357,11 +366,11 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
-  void aMembershipCheckThatThrowsAnyOtherStatusIsNoMembershipAndWarnsOnce() {
-    when(installationClient.checkOrgMember(anyString(), anyString(), eq("acme"), eq("alice")))
-        .thenThrow(new WebApplicationException(Response.status(404).build()))
-        .thenThrow(new WebApplicationException(Response.status(403).build()))
-        .thenThrow(new WebApplicationException(Response.status(403).build()));
+  void aFailedMembershipCheckHidesInstallationWideViews() {
+    when(organization.hasMember(any()))
+        .thenReturn(false)
+        .thenThrow(new IllegalStateException("timeout"))
+        .thenReturn(false);
 
     for (var i = 0; i < 3; i++) {
       now.set(now.get().plus(DashboardAccessChecker.SCOPE_CACHE_TTL).plusSeconds(1));
@@ -599,11 +608,14 @@ class DashboardAccessCheckerTest {
   }
 
   private void stubMembership(String login, int status) {
-    var response = mock(Response.class);
-    when(response.getStatus()).thenReturn(status);
-    when(installationClient.checkOrgMember(
-            eq("Bearer acme-installation"), anyString(), eq("acme"), eq(login)))
-        .thenReturn(response);
+    if (status == 204) {
+      when(organization.hasMember(any())).thenReturn(true);
+    } else if (status == 403) {
+      // hasMember swallows the 403 and returns false without throwing.
+      when(organization.hasMember(any())).thenReturn(false);
+    } else {
+      when(organization.hasMember(any())).thenReturn(false);
+    }
   }
 
   private static Installation installation(long id, String account, String type) {
