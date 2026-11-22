@@ -26,6 +26,7 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstructionsResolver;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -301,5 +302,32 @@ class RoundFinalStatusReplayTest {
             .map(ReviewResponse.PreviousFindingStatus::status)
             .toList());
     assertEquals(answer.findings(), stored.findings());
+  }
+
+  /**
+   * A status keeps the first key the model echoed under its id; an entry without a key, or a
+   * repeated id, does not replace it.
+   */
+  @Test
+  void theStoredStatusKeepsTheFirstKeyEchoedUnderItsId() {
+    var answer =
+        new ReviewResponse(
+            List.of(ROUND_TWO),
+            List.of(
+                new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still", null),
+                new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still", keyOf(SETTLED)),
+                new ReviewResponse.PreviousFindingStatus(1, "unresolved", "still", keyOf(KEPT)),
+                new ReviewResponse.PreviousFindingStatus(2, "unresolved", "still", null)),
+            null);
+    var ctx = context(List.of(ROUND_ONE), CLEARED);
+    var result = builder.build(ctx, answer, CI_CLEAR, PLAN);
+
+    var stored = result.recordedResponse(answer);
+
+    assertEquals(
+        Arrays.asList(keyOf(SETTLED), keyOf(SETTLED), keyOf(SETTLED), null),
+        stored.previousFindingsStatus().stream()
+            .map(ReviewResponse.PreviousFindingStatus::key)
+            .toList());
   }
 }

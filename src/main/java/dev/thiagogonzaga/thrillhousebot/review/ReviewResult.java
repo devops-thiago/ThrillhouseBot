@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 /** Aggregated result of a full review orchestration. */
 @RegisterForReflection
@@ -573,27 +574,23 @@ public record ReviewResult(
    * as {@code closed_earlier_round}. A status keeps the key the model echoed under the same id.
    */
   public ReviewResponse recordedResponse(ReviewResponse response) {
+    var echoedKeys =
+        response.previousFindingsStatus().stream()
+            .filter(status -> status.key() != null)
+            .collect(
+                Collectors.toMap(
+                    ReviewResponse.PreviousFindingStatus::id,
+                    ReviewResponse.PreviousFindingStatus::key,
+                    (first, ignored) -> first));
     var finalStatuses =
         previousStatuses.stream()
             .filter(status -> !status.fromEarlierRound())
             .map(
                 status ->
                     new ReviewResponse.PreviousFindingStatus(
-                        status.id(),
-                        status.status(),
-                        status.note(),
-                        echoedKey(response.previousFindingsStatus(), status.id())))
+                        status.id(), status.status(), status.note(), echoedKeys.get(status.id())))
             .toList();
     return response.asRecorded(finalStatuses, earlierRoundClosedMembers());
-  }
-
-  /** The key the first of {@code statuses} under {@code id} echoed, or {@code null}. */
-  private static String echoedKey(List<ReviewResponse.PreviousFindingStatus> statuses, int id) {
-    return statuses.stream()
-        .filter(status -> status.id() == id && status.key() != null)
-        .map(ReviewResponse.PreviousFindingStatus::key)
-        .findFirst()
-        .orElse(null);
   }
 
   /**
