@@ -129,7 +129,7 @@ manager and rotated with a restart, without rebuilding.
 | Weakness | Countermeasure | Where |
 |----------|----------------|-------|
 | Forged webhooks (CWE-345) and timing attacks on the signature (CWE-208) | HMAC-SHA256 over the raw body, compared with `MessageDigest.isEqual` | the Quarkiverse GitHub App extension's route (`quarkus.github-app.webhook-secret`) |
-| Replayed deliveries | A recently seen `X-GitHub-Delivery` ID is dropped | `webhook/WebhookDeduplicator` |
+| Replayed deliveries | An `X-GitHub-Delivery` ID seen within `WEBHOOK_DEDUP_TTL` is dropped, across restarts and instances: the ids are stored in the database, and the first instance to insert one handles the delivery. A database failure falls back to the in-memory check. The header is not covered by the signature, so this stops redeliveries, not a replay of a signed body under a new ID | `webhook/WebhookDeduplicator`, `webhook/SeenDeliveries` |
 | Prompt injection from PR content | All model-visible external text is wrapped in fences built from a per-call random value and labelled as untrusted data; findings go through a second verification call | `review/PromptTemplateEscaper`, AGENTS.md "Untrusted data" |
 | Log injection (CWE-117) and secrets in logs (CWE-532) | Model and GitHub text is flattened with `LogSafe.oneLine`, enforced by `LogSafeInvariantTest`; the security scan never repeats a matched secret, and a notification URL is logged as scheme, host and port only | `LogSafe`, `review/SecurityScan`, `notification/` |
 | CSRF on login (CWE-352) | Random OAuth `state` in an `HttpOnly`, `Secure`, `SameSite=Lax` cookie, checked on callback | `dashboard/AuthResource` |

@@ -6,6 +6,13 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **A webhook redelivered after a restart is no longer reviewed twice** (#1374): the delivery ids
+  used to drop GitHub redeliveries were kept only in memory, so after a restart, a redeploy or a
+  scale from zero, a retried or manually redelivered `pull_request` delivery ran a second full
+  review on the same commit. The ids are now also stored in a new table, `webhook_delivery`
+  (migration V4, created on the first start), for `WEBHOOK_DEDUP_TTL`; the first instance to store
+  an id handles the delivery, a delivery whose dispatch failed can still be redelivered, and
+  expired rows are deleted hourly. A database failure falls back to the in-memory check.
 - **The review probes path and name rules that match too much** (#1385): the request for parsing
   and matching code weighted silent misses over false matches, and its examples were all regex,
   whitespace and line-ending probes. A whole-word file-name match and a Go import resolved by
