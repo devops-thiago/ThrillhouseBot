@@ -78,7 +78,7 @@ same diff.
 |---|---|
 | Dispatch, per-PR serialization, coalescing | `review/ReviewDispatcher` |
 | Top-level run: check run, context, plan, pipeline, verdict, publish | `review/ReviewOrchestrator` |
-| Stand down before the first write: a chain of `review/PrePublishGuard`s run in order, first stand-down wins, shared consequences (skip counted, check run skipped) applied once. Order: head moved (#704, with the #806 carry-over), then a rejecting label gate (#1021). A new guard is added to the coordinator's list, not to the orchestrator | `review/ReviewStandDown.beforeFirstWrite` over `HeadMovedGuard` (with `SupersededFindingsCarryover`), `LabelGateGuard` (with `PullRequestLabelGate`) |
+| Stand down before the first write: a chain of `review/PrePublishGuard`s run in order, first stand-down wins, shared consequences (skip counted, check run skipped) applied once. Order: head moved (#704, with the #806 carry-over), then a rejecting label gate (#1021). A new guard is added to the coordinator's list, not to the orchestrator. A head that moved while the context loaded (`ReviewContextLoader.StaleReviewException.headMoved`) gets the same consequences without the carry-over and is not a failure: no failure notice, failed-outcome metric or failure notification (#1412); an unreadable head stays a failure | `review/ReviewStandDown.beforeFirstWrite` over `HeadMovedGuard` (with `SupersededFindingsCarryover`), `LabelGateGuard` (with `PullRequestLabelGate`); `ReviewStandDown.supersededWhileLoading` from `ReviewOrchestrator.closeSupersededWhileLoading` |
 | Load diff, every earlier round (from the stored `ReviewSession.aiResponseJson`), threads and conversation, instructions, labels, project stack, config-key and patch-coverage context | `review/ReviewContextLoader` (with `PatchCoverageResolver`, `ConfigKeyContextResolver`, `BugFixContextResolver`, `SupersededFindingsCarryover`) |
 | Previous-findings prompt section: the numbered effective round, then the unnumbered "still open from earlier rounds" and "answered in earlier rounds" sections, then the older rounds' open findings whose file changed since the round that raised them, numbered on after the effective round's (#1319) | `review/FollowUpAnalyzer.buildPreviousFindingsContext` (with `effectivePreviousRoundIndex`, `openEarlierRoundFindings`), `FollowUpAnalyzer.priorListing` / `formatEarlierListed` (`review/PriorListing`), joined in `ReviewContextLoader.load` |
 | Early CI reading and the opt-in CI-failure section | `review/CiStatusEvaluator`, `review/CiFailureContextResolver`; TAP `TODO` and `SKIP` directives are expected outcomes, excluded both when collecting failed tests and when reading them back via `CiFailureCitations` (#1110). When the early reading counted a pending check or saw no check besides the bot's own (`CiFailures.reported`), the summary's citations are read from a section refreshed after the model call (`ReviewOrchestrator.refreshCiFailures` → `CiStatusEvaluator.checkRunFailures`, or the gate's own re-read, then `CiFailureContextResolver.refresh`, #1092), and `FindingVerificationService.floorCiCitedConfidence` lifts a low-confidence finding citing it, the round persisted again (`floorOnRefreshedCi`); the review and verifier calls keep the review-start section |
@@ -355,7 +355,13 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   it from every answer, and every lane rebuilds the response with the three-argument constructor
   in `FindingPipeline.persistWithSummary`), and
   `replayRounds` drops them from every later replay, so no later round resolves, names or counts
-  them again (#470). `hasSupersededPrevious` still leaves earlier rounds out, so an older close
+  them again (#470). The same write stores the round's final status for each of the effective
+  round's findings in place of the model's (`ReviewResult.recordedResponse`, #1409): a clear,
+  a supersede, a re-checked decline or a replacement the verdict applied is what later rounds
+  replay, and a stored `superseded` closes like `resolved` and `justified`
+  (`closesStoredFinding`); before #1409 a finding the code closed was replayed open and closed
+  again the next round. Folding carried findings into a round (`SupersededFindingsCarryover.merge`)
+  keeps that round's `closedEarlierRound`. `hasSupersededPrevious` still leaves earlier rounds out, so an older close
   never re-posts the summary. Holds and standing declines are recomputed every round. The
   summary's status table counts every status.
 - **A previous finding's status comes from its file's content first** (#1319). The review knows,
