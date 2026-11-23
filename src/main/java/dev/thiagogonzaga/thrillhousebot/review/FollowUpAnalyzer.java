@@ -317,9 +317,9 @@ public class FollowUpAnalyzer {
 
   /**
    * Ids (1-based positions in the effective previous round) that a <em>newer</em> round already
-   * closed with a resolved/justified verdict, and that therefore must be treated as settled: not
-   * re-listed to the model as still open, and never re-emitted as {@code superseded} when their
-   * code later leaves the diff.
+   * closed with a resolved, justified or superseded status ({@link #closesStoredFinding}), and that
+   * therefore must be treated as settled: not re-listed to the model as still open, and never
+   * re-emitted as {@code superseded} when their code later leaves the diff.
    *
    * <p>The effective previous round is the newest round that raised findings, so every round newer
    * than it raised nothing and reports on it (ids reference that round). {@link
@@ -343,7 +343,7 @@ public class FollowUpAnalyzer {
         continue;
       }
       for (var status : round.previousFindingsStatus()) {
-        if (isAddressedVerdict(status.status())) {
+        if (closesStoredFinding(status.status())) {
           settled.add(status.id());
         }
       }
@@ -3412,11 +3412,10 @@ public class FollowUpAnalyzer {
    * pairs them. The deterministic security scan reads this list: its findings are not model output,
    * so without it a decline lasts one round and the scan raises the finding again on the next.
    *
-   * <p>The persisted status is the one read: the model's report after the scan's merge. A decline
-   * written on the PR conversation and an {@code @thrillhousebot resolved} clear are applied by the
-   * verdict and not persisted, so a finding closed either way stays {@code unresolved} in the
-   * stored round; the scan keeps tracking it and the verdict applies the clear or decline again
-   * each round.
+   * <p>The persisted status is the one read: the round's final status (#1409), after the verdict
+   * applied a decline written on the PR conversation, re-checked a decline, or applied an {@code
+   * @thrillhousebot resolved} clear. A round stored before #1409 holds the model's report instead,
+   * so there a finding the verdict closed stays {@code unresolved} and the scan keeps tracking it.
    *
    * @param priorAiResponses every completed prior round's parsed response, newest first
    */
@@ -4575,14 +4574,15 @@ public class FollowUpAnalyzer {
   }
 
   /**
-   * Removes the findings a following round marked resolved or justified (the verdicts that close
-   * one). An unresolved or unrecognized verdict from an intermediate round leaves the finding open.
+   * Removes the findings a following round closed: resolved, justified or superseded ({@link
+   * #closesStoredFinding}). An unresolved or unrecognized verdict from an intermediate round leaves
+   * the finding open.
    */
   private static void closeAddressed(
       Map<String, OpenFinding> open,
       List<ReviewResponse.Finding> reportedRound,
       List<ReviewResponse.PreviousFindingStatus> statuses) {
-    removeReferenced(open, reportedRound, statuses, FollowUpAnalyzer::isAddressedVerdict);
+    removeReferenced(open, reportedRound, statuses, FollowUpAnalyzer::closesStoredFinding);
   }
 
   /**
@@ -4628,6 +4628,17 @@ public class FollowUpAnalyzer {
    */
   private static boolean isAddressedVerdict(String status) {
     return STATUS_RESOLVED.equalsIgnoreCase(status) || STATUS_JUSTIFIED.equalsIgnoreCase(status);
+  }
+
+  /**
+   * The stored statuses that close a finding for every later round: the addressed verdicts and
+   * {@code superseded}. A round stores its final statuses (#1409), so a {@code superseded} there is
+   * the code's finding that the flagged code had left the diff at that round's head; replaying it
+   * as open made the next round supersede, name and count the finding again. A round stored before
+   * #1409 holds the model's answer, which is never {@code superseded}.
+   */
+  private static boolean closesStoredFinding(String status) {
+    return isAddressedVerdict(status) || STATUS_SUPERSEDED.equalsIgnoreCase(status);
   }
 
   /**

@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 /** Aggregated result of a full review orchestration. */
 @RegisterForReflection
@@ -560,6 +561,36 @@ public record ReviewResult(
         .filter(PreviousFindingStatus::closesEarlierRound)
         .flatMap(s -> s.earlierRound().members().stream())
         .toList();
+  }
+
+  /**
+   * {@code response} as the round stores it (#1409): its {@code previous_findings_status} is the
+   * round's final status for each of the effective previous round's findings, after the supersede,
+   * decline re-check, maintainer clear and replacement passes, not the model's answer, and its
+   * {@code closed_earlier_round} is {@link #earlierRoundClosedMembers}. Every later round replays
+   * these statuses, so a finding the code closed here stays closed and is not closed, named or
+   * counted again; one the code reopened stays open. The backstop's own statuses are left out:
+   * their ids are relative to the rounds that raised them, and the closes among them are recorded
+   * as {@code closed_earlier_round}. A status keeps the key the model echoed under the same id.
+   */
+  public ReviewResponse recordedResponse(ReviewResponse response) {
+    var echoedKeys =
+        response.previousFindingsStatus().stream()
+            .filter(status -> status.key() != null)
+            .collect(
+                Collectors.toMap(
+                    ReviewResponse.PreviousFindingStatus::id,
+                    ReviewResponse.PreviousFindingStatus::key,
+                    (first, ignored) -> first));
+    var finalStatuses =
+        previousStatuses.stream()
+            .filter(status -> !status.fromEarlierRound())
+            .map(
+                status ->
+                    new ReviewResponse.PreviousFindingStatus(
+                        status.id(), status.status(), status.note(), echoedKeys.get(status.id())))
+            .toList();
+    return response.asRecorded(finalStatuses, earlierRoundClosedMembers());
   }
 
   /**

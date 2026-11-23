@@ -1,0 +1,110 @@
+### src/main/java/dev/thiagogonzaga/thrillhousebot/review/RelatedReferences.java (added, +769 -0)
+```diff
+@@ -0,0 +32,33 @@
++/**
++ * The deterministic first step of the related context (#55): the repository files a pull request's
++ * diff refers to but does not change, found without a model call.
++ *
++ * <p>Two things in a diff name another file. An import line, added or shown as context around a
++ * hunk, names a module, and the module is resolved to a path the way its language lays files out.
++ * And an added line that uses a type name ({@code InputSanitizer.clean(x)}) names the file that
++ * type is declared in, where the repository has exactly one such file for that language. Nothing is
++ * parsed deeper than that: no syntax tree, no build file, no index.
++ *
++ * <p>Every candidate is a path of the repository listing the review already holds, so a path the
++ * diff's text invents resolves to nothing, and the candidates stay in the changed file's own
++ * language, so a source line can never point this at a credentials or data file.
++ */
++final class RelatedReferences {
++
++  /** Candidates handed to the selection call; the lowest-ranked beyond it are left out. */
++  static final int MAX_CANDIDATES = 30;
++
++  /** Changed files named per candidate as the ones that refer to it. */
++  static final int MAX_REFERRERS = 3;
++
++  /** Type and module names kept per candidate. */
++  static final int MAX_SYMBOLS = 6;
++
++  /** Called member names kept per candidate, for clipping the file to the parts in use. */
++  static final int MAX_MEMBERS = 40;
++
++  /** Files of one Go package offered for one import. */
++  static final int MAX_PACKAGE_FILES = 3;
++
++  /** A patch line longer than this is not scanned: generated or minified text, not a reference. */
++  static final int MAX_LINE_CHARS = 600;
+@@ -0,0 +140,11 @@
++  /** A from-import whose name list opens a parenthesis it does not close on the same line. */
++  private static final Pattern PYTHON_FROM_OPEN =
++      Pattern.compile("^(\\s*from\\s+\\.*[\\w.]*\\s+import)\\s*\\(([^)]*)$");
++
++  private static final Pattern SCRIPT_IMPORT =
++      Pattern.compile(
++          "(?:\\bfrom\\s+|\\bimport\\s+|\\brequire\\(\\s*|\\bimport\\(\\s*)['\"](\\.{1,2}/[^'\"]+)['\"]");
++  private static final Pattern GO_IMPORT =
++      Pattern.compile("^\\s*(?:import\\s+)?(?:[\\w.]+\\s+)?\"([\\w./-]+/[\\w./-]+)\"\\s*$");
++  private static final Pattern RUST_USE =
++      Pattern.compile("^\\s*(?:pub(?:\\([\\w:\\s]+\\))?\\s+)?use\\s+crate::([\\w:]+)");
+@@ -0,0 +330,14 @@
++  private record Reference(String path, String symbol) {}
++
++  /** The repository files an import on {@code line} names; empty for any other line. */
++  private static List<Reference> imports(
++      String line, Language language, String referrer, Index index) {
++    return switch (language) {
++      case JVM -> jvmImport(line, index);
++      case PYTHON -> pythonImport(line, referrer, index);
++      case SCRIPT -> scriptImport(line, referrer, index);
++      case GO -> goImport(line, index);
++      case RUST -> rustUse(line, index);
++      case RUBY -> rubyRequire(line, referrer, index);
++      case C -> cInclude(line, referrer, index);
++      case PHP -> phpUse(line, index);
+@@ -0,0 +446,9 @@
++  private static List<Reference> goImport(String line, Index index) {
++    var matcher = GO_IMPORT.matcher(line);
++    if (!matcher.find()) {
++      return List.of();
++    }
++    var imported = matcher.group(1);
++    var name = imported.substring(imported.lastIndexOf('/') + 1);
++    return index.goPackage(imported).stream().map(path -> new Reference(path, name)).toList();
++  }
+@@ -0,0 +576,23 @@
++    }
++  }
++
++  /** The repository listing, indexed by file name and by file name without its extension. */
++  private static final class Index {
++    private final Set<String> paths;
++    private final Map<String, List<String>> byName = new HashMap<>();
++    private final Map<String, List<String>> byStem = new HashMap<>();
++    private final Map<String, List<String>> goFilesByDirectory = new HashMap<>();
++
++    Index(Set<String> repositoryPaths) {
++      this.paths = repositoryPaths;
++      for (var path : repositoryPaths) {
++        if (Language.of(path) == null) {
++          continue;
++        }
++        byName.computeIfAbsent(nameOf(path), k -> new ArrayList<>()).add(path);
++        byStem.computeIfAbsent(stemOf(path), k -> new ArrayList<>()).add(path);
++        if (path.endsWith(".go") && !path.endsWith("_test.go")) {
++          goFilesByDirectory.computeIfAbsent(directoryOf(path), k -> new ArrayList<>()).add(path);
++        }
++      }
++    }
+@@ -0,0 +631,11 @@
++
++    /** The files of the Go package an import path names: the deepest directory it ends with. */
++    List<String> goPackage(String imported) {
++      return goFilesByDirectory.keySet().stream()
++          .filter(directory -> !directory.isEmpty())
++          .filter(directory -> imported.equals(directory) || imported.endsWith("/" + directory))
++          .max(Comparator.comparingInt(String::length))
++          .map(best -> goFilesByDirectory.get(best).stream().sorted().limit(MAX_PACKAGE_FILES))
++          .map(java.util.stream.Stream::toList)
++          .orElse(List.of());
++    }
+```

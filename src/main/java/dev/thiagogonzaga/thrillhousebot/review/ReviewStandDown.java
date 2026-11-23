@@ -74,11 +74,37 @@ public class ReviewStandDown {
   }
 
   /**
+   * Stands down a run whose head moved before its context finished loading (#1412): nothing was
+   * reviewed yet, so there are no findings to hand over, and the dispatcher already queued the
+   * review of the new head. The consequences are those of a pre-publish stand-down.
+   *
+   * @return the stand-down the caller closes the session with
+   */
+  public PrePublishGuard.StandDown supersededWhileLoading(
+      String auth,
+      ReviewOrchestrator.ReviewRequest req,
+      long checkRunId,
+      String detailsUrl,
+      String freshHead) {
+    var standDown = HeadMovedGuard.supersededWhileLoading(req, freshHead);
+    apply(auth, req, checkRunId, detailsUrl, standDown);
+    return standDown;
+  }
+
+  private void apply(PrePublishGuard.Review review, PrePublishGuard.StandDown standDown) {
+    apply(review.auth(), review.req(), review.checkRunId(), review.detailsUrl(), standDown);
+  }
+
+  /**
    * Counts the skip and concludes the check run as skipped. Concluding the check run is
    * best-effort: the stand-down is already decided and nothing was posted.
    */
-  private void apply(PrePublishGuard.Review review, PrePublishGuard.StandDown standDown) {
-    var req = review.req();
+  private void apply(
+      String auth,
+      ReviewOrchestrator.ReviewRequest req,
+      long checkRunId,
+      String detailsUrl,
+      PrePublishGuard.StandDown standDown) {
     skipEmitter.recordSkip(
         standDown.reason(),
         req.installationId(),
@@ -86,27 +112,27 @@ public class ReviewStandDown {
         req.repo(),
         req.prNumber(),
         standDown.skipDetail());
-    if (review.checkRunId() <= 0) {
+    if (checkRunId <= 0) {
       return;
     }
     try {
       checkRunManager.updateCheckRun(
           new CheckRunManager.CheckRunUpdate(
-              review.auth(),
+              auth,
               req.owner(),
               req.repo(),
-              review.checkRunId(),
+              checkRunId,
               "completed",
               "skipped",
               standDown.checkTitle(),
               standDown.checkSummary(),
-              review.detailsUrl()));
+              detailsUrl));
     } catch (RuntimeException checkRunError) {
       Log.warnf(
           checkRunError,
           "Failed to mark %s check run %d of %s/%s #%d as skipped",
           standDown.kind(),
-          review.checkRunId(),
+          checkRunId,
           req.owner(),
           req.repo(),
           req.prNumber());

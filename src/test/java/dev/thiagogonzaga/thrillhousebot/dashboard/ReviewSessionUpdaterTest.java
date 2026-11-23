@@ -31,7 +31,7 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
   void shouldRecordModelUsageOnExistingSession() throws Exception {
     var session = persistSession();
 
-    updater.recordModelUsage(session.id, "deepseek-chat", 120, 80, 0.42, false, 1500);
+    updater.recordModelUsage(session.id, "deepseek-chat", 120, 80, 0.42, false);
 
     ReviewSession loaded = ReviewSession.findById(session.id);
     assertEquals("deepseek-chat", loaded.getModel());
@@ -39,15 +39,15 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
     assertEquals(80, loaded.getOutputTokens());
     assertEquals(0.42, loaded.getCost(), 0.001);
     assertFalse(loaded.isPricingMissing());
-    assertEquals(1500, loaded.getDurationMs());
+    assertEquals(0, loaded.getDurationMs(), "a call's time is not the review's (#1417)");
   }
 
   @Test
   void recordingUsageReturnsTheSessionWithItsRunningTotals() throws Exception {
     var session = persistSession();
-    updater.recordModelUsage(session.id, "deepseek-chat", 100, 20, 0.01, false, 100);
+    updater.recordModelUsage(session.id, "deepseek-chat", 100, 20, 0.01, false);
 
-    var updated = updater.recordModelUsage(session.id, "deepseek-chat", 50, 10, 0.02, true, 100);
+    var updated = updater.recordModelUsage(session.id, "deepseek-chat", 50, 10, 0.02, true);
 
     assertEquals(150, updated.getInputTokens());
     assertEquals(30, updated.getOutputTokens());
@@ -57,16 +57,16 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
 
   @Test
   void recordingUsageForAMissingSessionReturnsNothing() {
-    assertNull(updater.recordModelUsage(-404L, "deepseek-chat", 1, 1, 0.0, false, 1));
+    assertNull(updater.recordModelUsage(-404L, "deepseek-chat", 1, 1, 0.0, false));
   }
 
   @Test
   void shouldAccumulateModelUsageAcrossMultipleCalls() throws Exception {
     var session = persistSession();
 
-    updater.recordModelUsage(session.id, "deepseek-chat", 1000, 200, 0.10, false, 2000);
-    updater.recordModelUsage(session.id, "deepseek-chat", 800, 150, 0.08, false, 1800);
-    updater.recordModelUsage(session.id, "deepseek-chat", 100, 50, 0.01, false, 400);
+    updater.recordModelUsage(session.id, "deepseek-chat", 1000, 200, 0.10, false);
+    updater.recordModelUsage(session.id, "deepseek-chat", 800, 150, 0.08, false);
+    updater.recordModelUsage(session.id, "deepseek-chat", 100, 50, 0.01, false);
 
     ReviewSession loaded = ReviewSession.findById(session.id);
     assertEquals("deepseek-chat", loaded.getModel());
@@ -74,16 +74,17 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
     assertEquals(400, loaded.getOutputTokens());
     assertEquals(0.19, loaded.getCost(), 0.001);
     assertFalse(loaded.isPricingMissing());
-    assertEquals(4200, loaded.getDurationMs());
+    // #1417: parallel and retried calls overlap, so their times are never summed into the row.
+    assertEquals(0, loaded.getDurationMs());
   }
 
   @Test
   void shouldKeepPricingMissingFlagWhenAnyCallLacksPricing() throws Exception {
     var session = persistSession();
 
-    updater.recordModelUsage(session.id, "deepseek-chat", 100, 50, 0.05, false, 500);
-    updater.recordModelUsage(session.id, "unknown-model", 120, 80, 0.0, true, 1500);
-    updater.recordModelUsage(session.id, "deepseek-chat", 50, 20, 0.02, false, 300);
+    updater.recordModelUsage(session.id, "deepseek-chat", 100, 50, 0.05, false);
+    updater.recordModelUsage(session.id, "unknown-model", 120, 80, 0.0, true);
+    updater.recordModelUsage(session.id, "deepseek-chat", 50, 20, 0.02, false);
 
     ReviewSession loaded = ReviewSession.findById(session.id);
     assertTrue(loaded.isPricingMissing());
@@ -96,7 +97,7 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
   void shouldFlagMissingPricingOnTheSession() throws Exception {
     var session = persistSession();
 
-    updater.recordModelUsage(session.id, "unknown-model", 120, 80, 0.0, true, 1500);
+    updater.recordModelUsage(session.id, "unknown-model", 120, 80, 0.0, true);
 
     ReviewSession loaded = ReviewSession.findById(session.id);
     assertTrue(loaded.isPricingMissing());
@@ -106,49 +107,60 @@ class ReviewSessionUpdaterTest extends ReviewSessionTestSupport {
   }
 
   @Test
-  void shouldRecordFailureOnExistingSession() throws Exception {
+  void aFailedCallIsCountedWithoutFailingTheSession() throws Exception {
+    // #1417: the call may be retried and the review may still complete, so a failed call leaves
+    // the status, the message and the duration to the review's final outcome.
     var session = persistSession();
 
-    updater.recordFailure(session.id, "rate limited", 900);
+    updater.recordFailedModelCall(session.id);
 
     ReviewSession loaded = ReviewSession.findById(session.id);
-    assertEquals(ReviewSession.STATUS_FAILED, loaded.getStatus());
-    assertEquals("rate limited", loaded.getErrorMessage());
-    assertEquals(900, loaded.getDurationMs());
+    assertEquals(ReviewSession.STATUS_IN_PROGRESS, loaded.getStatus());
+    assertNull(loaded.getErrorMessage());
+    assertEquals(0, loaded.getDurationMs());
+    assertEquals(1, loaded.getFailedModelCalls());
   }
 
   @Test
-  void shouldAccumulateDurationWhenFailureFollowsSuccessfulCalls() throws Exception {
+  void failedCallsAccumulateBetweenSuccessfulOnes() throws Exception {
     var session = persistSession();
 
-    updater.recordModelUsage(session.id, "deepseek-chat", 1000, 200, 0.10, false, 2000);
-    updater.recordModelUsage(session.id, "deepseek-chat", 800, 150, 0.08, false, 1800);
-    updater.recordFailure(session.id, "batch blew up", 900);
+    updater.recordModelUsage(session.id, "deepseek-chat", 500, 100, 0.05, false);
+    updater.recordFailedModelCall(session.id);
+    updater.recordModelUsage(session.id, "deepseek-chat", 300, 50, 0.03, false);
+    updater.recordFailedModelCall(session.id);
 
     ReviewSession loaded = ReviewSession.findById(session.id);
-    assertEquals(ReviewSession.STATUS_FAILED, loaded.getStatus());
-    assertEquals("batch blew up", loaded.getErrorMessage());
-    assertEquals(4700, loaded.getDurationMs());
-  }
-
-  @Test
-  void shouldAccumulateDurationWhenFailurePrecedesFurtherUsage() throws Exception {
-    var session = persistSession();
-
-    updater.recordModelUsage(session.id, "deepseek-chat", 500, 100, 0.05, false, 1000);
-    updater.recordFailure(session.id, "batch 2 failed", 600);
-    updater.recordModelUsage(session.id, "deepseek-chat", 300, 50, 0.03, false, 400);
-
-    ReviewSession loaded = ReviewSession.findById(session.id);
-    assertEquals(ReviewSession.STATUS_FAILED, loaded.getStatus());
-    assertEquals(2000, loaded.getDurationMs());
+    assertEquals(ReviewSession.STATUS_IN_PROGRESS, loaded.getStatus());
+    assertNull(loaded.getErrorMessage());
+    assertEquals(2, loaded.getFailedModelCalls());
     assertEquals(800, loaded.getInputTokens());
   }
 
   @Test
+  void aFailedCallCountedAfterTheReviewCompletedLeavesItCompleted() throws Exception {
+    // #1417: the listener writes on a worker thread, so a failed call's write can land after the
+    // review's final status. It must not turn the completed row into a failed one.
+    var session = persistSession();
+    tx.begin();
+    ReviewSession completed = ReviewSession.findById(session.id);
+    completed.setStatus(ReviewSession.STATUS_COMPLETED);
+    completed.setDurationMs(4_000L);
+    tx.commit();
+
+    updater.recordFailedModelCall(session.id);
+
+    ReviewSession loaded = ReviewSession.findById(session.id);
+    assertEquals(ReviewSession.STATUS_COMPLETED, loaded.getStatus());
+    assertNull(loaded.getErrorMessage());
+    assertEquals(4_000L, loaded.getDurationMs());
+    assertEquals(1, loaded.getFailedModelCalls());
+  }
+
+  @Test
   void shouldIgnoreMissingSessionId() {
-    assertDoesNotThrow(() -> updater.recordModelUsage(999_999L, "model", 1, 1, 0.0, false, 1));
-    assertDoesNotThrow(() -> updater.recordFailure(999_999L, "gone", 1));
+    assertDoesNotThrow(() -> updater.recordModelUsage(999_999L, "model", 1, 1, 0.0, false));
+    assertDoesNotThrow(() -> updater.recordFailedModelCall(999_999L));
 
     assertEquals(0, ReviewSession.count());
   }

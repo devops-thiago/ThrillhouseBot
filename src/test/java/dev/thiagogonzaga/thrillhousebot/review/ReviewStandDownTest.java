@@ -136,6 +136,32 @@ class ReviewStandDownTest {
   }
 
   @Test
+  void aHeadThatMovedWhileLoadingIsCountedAndConcludedLikeAPrePublishSupersede() {
+    // #1412: no guard is asked, the run reviewed nothing; the stand-down is the head-moved one.
+    var stoodDown =
+        standDown.supersededWhileLoading(
+            AUTH, PrePublishGuardFixtures.request(false), 9L, DETAILS, "newhead1");
+
+    verifyNoInteractions(first, second);
+    assertEquals(ReviewSkipReason.HEAD_MOVED, stoodDown.reason());
+    assertEquals("superseded", stoodDown.kind());
+    assertTrue(stoodDown.sessionError().startsWith("Superseded: the PR head moved to newhead1"));
+    assertTrue(stoodDown.skipDetail().contains("from abcdefgh to newhead1"));
+    assertEquals(1L, skipEmitter.countsByReason(java.util.List.of(1L)).get("HEAD_MOVED"));
+    var update = ArgumentCaptor.forClass(CheckRunManager.CheckRunUpdate.class);
+    verify(checkRunManager).updateCheckRun(update.capture());
+    assertEquals(9L, update.getValue().checkRunId());
+    assertEquals("skipped", update.getValue().conclusion());
+    assertEquals(HeadMovedGuard.SUPERSEDED_CHECK_TITLE, update.getValue().title());
+    // The check run was created before the context loaded, so the run started and was cut off.
+    assertEquals(
+        "The pull request head moved to newhead1 while this review loaded its context, so it"
+            + " reviewed nothing. The review of the new head replaces it.",
+        update.getValue().summary());
+    assertEquals(DETAILS, update.getValue().detailsUrl());
+  }
+
+  @Test
   void theHeadIsGuardedBeforeTheLabels() {
     var headMoved = mock(HeadMovedGuard.class);
     var labelGate = mock(LabelGateGuard.class);
