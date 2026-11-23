@@ -781,8 +781,9 @@ Entities: `ReviewSession` (dashboard), `PausedPr` (webhook), `FindingFeedback` (
 
 `webhook_delivery` is the one table not scoped by installation and repository: a row is only a
 GitHub-generated delivery id and two times, nothing reads it by repository, and it is deleted
-once it expires. `WebhookDeduplicator` keeps its atomic in-memory `put` as the fast path and the
-in-process arbiter; only the sighting that wins it claims the id in the table
+once it expires. `WebhookDeduplicator` keeps an atomic in-memory `compute` as the fast path and
+the in-process arbiter; a repeat sighting keeps the first claim's expiry, so the memory window and
+the row's `expiresat` run from the same moment. Only the sighting that wins it claims the id in the table
 (`SeenDeliveries.claim`: delete the id's expired row, then `INSERT … ON CONFLICT DO NOTHING`, so
 of two instances exactly one inserts). An id another process claimed is not kept in memory, so
 `forget` after a failed dispatch (which deletes the row) is never shadowed by a stale memory
