@@ -6,6 +6,14 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **The review probes path and name rules that match too much** (#1385): the request for parsing
+  and matching code weighted silent misses over false matches, and its examples were all regex,
+  whitespace and line-ending probes. A whole-word file-name match and a Go import resolved by
+  directory suffix both matched files they should not, and neither was ever probed. The request
+  now treats both directions alike, lists path and name matching (`endsWith`, basename, whole-word
+  matches over paths) as decision rules with same-name, suffix/prefix and module-path probes, asks
+  for one probe per branch of a per-language rule, and counts a guard that one branch has and its
+  parallel lacks as evidence.
 - **A finding closed in one follow-up round is no longer closed and counted again in later
   rounds** (#1409): a round stored the model's status for each previous finding, not the status
   the round ended with, so a finding a maintainer's clear resolved or whose code left the diff

@@ -1,0 +1,21 @@
+{
+  "kind": "generator",
+  "sourcePr": 1342,
+  "why": "Over-broad name match the heuristic section never probed (#1385): names() accepts a related file's bare file name as a whole word, and isWordChar treats '/' and '.' as boundaries, so a finding on web/src/index.ts also names lib/index.ts and the verifier is handed the wrong file's excerpt. The stem branch has a MIN_DISTINCT_STEM guard; the full-name branch beside it has none. The review prompt should report a path or name rule that matches too much, not only one that misses.",
+  "expectation": "must-find",
+  "targetFile": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/RelatedContext.java",
+  "keywords": [
+    "same file name",
+    "same name",
+    "index.ts",
+    "__init__.py",
+    "mod.rs",
+    "main.go",
+    "common file name",
+    "common name",
+    "collid",
+    "collision"
+  ],
+  "prTitle": "feat(review): read related code outside the diff (#55)",
+  "prDescription": "Opt-in related context: candidate files come from the diff's import lines and type names, matched against the repository listing with no model call. The verifier gets, per finding, the excerpt of the related file that finding names."
+}
