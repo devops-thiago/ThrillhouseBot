@@ -200,7 +200,9 @@ public class SupersededFindingsCarryover {
       var base = parsed.get(index);
       var findings = new ArrayList<>(base.findings());
       findings.addAll(carried);
-      var merged = new ReviewResponse(findings, base.previousFindingsStatus(), base.summary());
+      // #1409: the round keeps the earlier rounds' closes it recorded, or the replay would carry
+      // those findings again and this run would close and count them a second time.
+      var merged = base.withFindings(findings);
       jsons.set(index, toJson(merged));
       parsed.set(index, merged);
     }
