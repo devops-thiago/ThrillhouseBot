@@ -603,7 +603,7 @@ does not lose it. On startup `InterruptedSessionReconciler` marks every session 
 
 | Entity | Table | Holds |
 |---|---|---|
-| `ReviewSession` | `ReviewSession` | One row per review round: PR, head commit, model, tokens, cost, duration, finding counts, status, and the final response (`aiResponseJson`) that later rounds read their earlier findings from. |
+| `ReviewSession` | `ReviewSession` | One row per review round: PR, head commit, model, tokens, cost, elapsed time, failed model calls, finding counts, status, and the final response (`aiResponseJson`) that later rounds read their earlier findings from. |
 | `PausedPr` | `PausedPr` | PRs paused with `/pause`. |
 | `FindingFeedback` | `finding_feedback` | 👍/👎 reactions and reply signals on findings. See [Finding feedback](https://devops-thiago.github.io/ThrillhouseBot/feedback/). |
 | `ReviewLearning` | `review_learning` | Review learnings, scoped to installation and repository. A retracted row stays, with `active` cleared. |

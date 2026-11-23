@@ -789,6 +789,17 @@ of two instances exactly one inserts). An id another process claimed is not kept
 `forget` after a failed dispatch (which deletes the row) is never shadowed by a stale memory
 entry. Every database failure falls back to the memory verdict, and neither `isDuplicate` nor
 `forget` throws. `DeliveryPurge` deletes expired rows at startup and hourly, in bounded batches.
+
+A `ReviewSession` row's `status`, `errorMessage` and `durationMs` are the review's final outcome,
+written only by its terminal transition (`ReviewOrchestrator.applyReviewResult` /
+`applyReviewFailure`, or `closeSupersededWhileLoading` for a run whose head moved while its context
+loaded, #1417): `durationMs` is the elapsed time from the session's `timestamp`, and a completed
+row has no `errorMessage`. Per-call writes from `OtelObservabilityListener` through
+`ReviewSessionUpdater` add tokens and cost (`recordModelUsage`) and count a failed call
+(`recordFailedModelCall`, column `failedmodelcalls`, V5); they never set the status, the message
+or the duration, so a retried call cannot fail a review that completes, and a late write cannot
+reopen a finished row. A row left `in_progress` by a restart is closed by
+`InterruptedSessionReconciler` and keeps `durationMs` 0.
 `ReviewSession.aiResponseJson` is more than a dashboard field: it is the record every follow-up
 round reads its earlier findings and statuses from, so a change to the stored `ReviewResponse`
 shape must still parse the rows already stored. A learning is never deleted

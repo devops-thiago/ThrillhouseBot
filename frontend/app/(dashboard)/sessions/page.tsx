@@ -287,6 +287,9 @@ export default function SessionsPage() {
                     }
                   />
                   <Meta label="Duration" value={`${detail.durationMs} ms`} />
+                  {(detail.failedModelCalls ?? 0) > 0 && (
+                    <Meta label="Failed model calls" value={detail.failedModelCalls} />
+                  )}
                   <Meta
                     label="Findings"
                     value={`${detail.criticalFindings}C / ${detail.highFindings}H / ${detail.mediumFindings}M / ${detail.lowFindings}L`}

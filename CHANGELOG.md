@@ -6,6 +6,15 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- The review session row records the review's outcome instead of per-call values (#1417):
+  - `durationMs` is the review's elapsed time from start to its final status. It was the sum of
+    the model calls' durations, which counted parallel and retried calls each time and left out
+    the time spent outside model calls.
+  - A model call that fails no longer sets the session to `failed`. The review's final outcome
+    sets the status, so a call that is retried and succeeds leaves the review `completed`.
+  - A completed session has no error message. Failed calls are counted in a new
+    `failedmodelcalls` column (migration V5, default 0), shown as "Failed model calls" on the
+    dashboard's session page.
 - **A webhook redelivered after a restart is no longer reviewed twice** (#1374): the delivery ids
   used to drop GitHub redeliveries were kept only in memory, so after a restart, a redeploy or a
   scale from zero, a retried or manually redelivered `pull_request` delivery ran a second full

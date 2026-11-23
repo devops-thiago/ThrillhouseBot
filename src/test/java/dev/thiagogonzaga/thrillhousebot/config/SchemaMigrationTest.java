@@ -43,7 +43,7 @@ class SchemaMigrationTest {
 
     var result = flyway.migrate();
 
-    assertEquals(4, result.migrationsExecuted);
+    assertEquals(5, result.migrationsExecuted);
     assertEquals(MigrationState.SUCCESS, flyway.info().current().getState());
   }
 
@@ -55,17 +55,21 @@ class SchemaMigrationTest {
       statement.execute(v1Script());
       statement.execute(
           "INSERT INTO pausedpr (id, prnumber, repository) VALUES (1, 7, 'acme/app')");
+      statement.execute(
+          "INSERT INTO reviewsession (id, prnumber, repository, status, cost, criticalfindings,"
+              + " durationms, highfindings, inputtokens, lowfindings, mediumfindings,"
+              + " outputtokens) VALUES (1, 7, 'acme/app', 'completed', 0, 0, 0, 0, 0, 0, 0, 0)");
     }
     var flyway = flyway(url);
 
     var result = flyway.migrate();
 
-    assertEquals(3, result.migrationsExecuted, "only V2 to V4 run on a baselined database");
+    assertEquals(4, result.migrationsExecuted, "only V2 to V5 run on a baselined database");
     var baseline = flyway.info().applied()[0];
     assertEquals(MigrationVersion.fromVersion("1"), baseline.getVersion());
     assertEquals(MigrationState.BASELINE, baseline.getState());
     var current = flyway.info().current();
-    assertEquals(MigrationVersion.fromVersion("4"), current.getVersion());
+    assertEquals(MigrationVersion.fromVersion("5"), current.getVersion());
     assertEquals(MigrationState.SUCCESS, current.getState());
     try (var connection = DriverManager.getConnection(url, "sa", "");
         var rows =
@@ -77,6 +81,14 @@ class SchemaMigrationTest {
       assertEquals(1, rows.getInt(1), "baselining must keep the existing rows");
       assertEquals(0, rows.getInt(2), "an existing row is left for the backfill to scope");
       assertEquals(0, rows.getInt(3));
+    }
+    try (var connection = DriverManager.getConnection(url, "sa", "");
+        var rows =
+            connection
+                .createStatement()
+                .executeQuery("SELECT failedmodelcalls FROM reviewsession WHERE id = 1")) {
+      assertTrue(rows.next());
+      assertEquals(0, rows.getInt(1), "an existing session counts no failed model calls (#1417)");
     }
   }
 
