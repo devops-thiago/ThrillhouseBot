@@ -29,11 +29,12 @@ import java.util.function.LongSupplier;
  * redelivery from the GitHub App's Advanced settings, or GitHub's automatic retries — are dropped
  * instead of starting a second review.
  *
- * <p>Two layers. The in-memory map is the fast path and the in-process arbiter: each sighting
- * records an expiry {@code ttlMillis} into the future via a single atomic {@code put}, and a
- * sighting is a duplicate while an earlier, unexpired record already exists. A sighting the map
- * reads as new then claims the id in the database ({@link SeenDeliveries}, #1374), which is what
- * keeps the protection across a restart and across instances sharing the database: the first
+ * <p>Two layers. The in-memory map is the fast path and the in-process arbiter: a new sighting
+ * records an expiry {@code ttlMillis} into the future in one atomic {@code compute}, and a sighting
+ * is a duplicate while an earlier, unexpired record already exists. A duplicate keeps the first
+ * record's expiry, so the window runs from the first claim, as the table's row does. A sighting the
+ * map reads as new then claims the id in the database ({@link SeenDeliveries}, #1374), which is
+ * what keeps the protection across a restart and across instances sharing the database: the first
  * instance to insert the id handles the delivery, and every other sighting within the window is a
  * duplicate. The map keeps only the ids this process claimed, so the map and the table agree; a
  * {@link #forget} after a failed dispatch clears both.
@@ -73,8 +74,8 @@ public class WebhookDeduplicator {
   /**
    * Records {@code deliveryId} as processed and reports whether an unexpired record already
    * existed, in this process or in the database. The in-process record-and-read is a single atomic
-   * {@code put}, so concurrent sightings of the same id in one process yield at most one database
-   * claim, and the database's insert lets exactly one instance claim it.
+   * {@code compute}, so concurrent sightings of the same id in one process yield at most one
+   * database claim, and the database's insert lets exactly one instance claim it.
    *
    * @return {@code true} if this delivery was already processed within the TTL (a redelivery to
    *     drop); {@code false} if it is newly recorded or its prior record had expired. A null or
@@ -86,8 +87,17 @@ public class WebhookDeduplicator {
     }
     long now = clock.getAsLong();
     long deadline = now + ttlMillis;
-    Long previousDeadline = seen.put(deliveryId, deadline);
-    if (previousDeadline != null && previousDeadline > now) {
+    var fresh = new boolean[1];
+    seen.compute(
+        deliveryId,
+        (id, previous) -> {
+          if (previous != null && previous > now) {
+            return previous;
+          }
+          fresh[0] = true;
+          return deadline;
+        });
+    if (!fresh[0]) {
       return true;
     }
     sweepExpired(now);

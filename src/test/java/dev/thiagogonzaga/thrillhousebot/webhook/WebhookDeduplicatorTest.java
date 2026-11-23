@@ -91,6 +91,24 @@ class WebhookDeduplicatorTest {
     assertTrue(dedup.isDuplicate("delivery-1"));
   }
 
+  /**
+   * A repeat sighting does not renew the window: it runs from the first claim, as the database
+   * row's expiry does, so the map never outlives the row.
+   */
+  @Test
+  void repeatSightingsDoNotExtendTheWindow() {
+    var clock = new MutableClock(0);
+    var dedup = memoryOnly(TTL_MS, BIG_THRESHOLD, clock);
+
+    assertFalse(dedup.isDuplicate("delivery-1"));
+    clock.advance(TTL_MS - 1);
+    assertTrue(dedup.isDuplicate("delivery-1"));
+    assertEquals(TTL_MS, dedup.seen.get("delivery-1"));
+
+    clock.advance(2);
+    assertFalse(dedup.isDuplicate("delivery-1"));
+  }
+
   @Test
   void deliveryStillDeduplicatedJustBeforeTtl() {
     var clock = new MutableClock(0);
