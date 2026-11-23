@@ -6,6 +6,14 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **A finding closed in one follow-up round is no longer closed and counted again in later
+  rounds** (#1409): a round stored the model's status for each previous finding, not the status
+  the round ended with, so a finding a maintainer's clear resolved or whose code left the diff
+  was still open to the next round, which closed it again under "Previous findings resolved" or
+  "superseded" and named it again. A round now stores its final statuses, and a stored
+  `superseded` closes the finding for later rounds. Findings carried from a run that stood down
+  no longer drop the earlier rounds' closes recorded with the round they join, which had made a
+  finding close a third time.
 - A pull request head that moved while the review loaded its context no longer posts the "review
   could not be completed" comment. The run ends as superseded, like a head that moves later in the
   review: the skip is counted under `HEAD_MOVED`, the check run is concluded as skipped, and no

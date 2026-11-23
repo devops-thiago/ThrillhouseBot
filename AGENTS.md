@@ -355,7 +355,13 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   it from every answer, and every lane rebuilds the response with the three-argument constructor
   in `FindingPipeline.persistWithSummary`), and
   `replayRounds` drops them from every later replay, so no later round resolves, names or counts
-  them again (#470). `hasSupersededPrevious` still leaves earlier rounds out, so an older close
+  them again (#470). The same write stores the round's final status for each of the effective
+  round's findings in place of the model's (`ReviewResult.recordedResponse`, #1409): a clear,
+  a supersede, a re-checked decline or a replacement the verdict applied is what later rounds
+  replay, and a stored `superseded` closes like `resolved` and `justified`
+  (`closesStoredFinding`); before #1409 a finding the code closed was replayed open and closed
+  again the next round. Folding carried findings into a round (`SupersededFindingsCarryover.merge`)
+  keeps that round's `closedEarlierRound`. `hasSupersededPrevious` still leaves earlier rounds out, so an older close
   never re-posts the summary. Holds and standing declines are recomputed every round. The
   summary's status table counts every status.
 - **A previous finding's status comes from its file's content first** (#1319). The review knows,

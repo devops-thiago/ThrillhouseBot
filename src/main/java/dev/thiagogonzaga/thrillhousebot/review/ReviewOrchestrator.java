@@ -549,14 +549,10 @@ public class ReviewOrchestrator {
           doneReq,
           "complete the session",
           () -> {
-            // #1066: the earlier rounds' findings this round closed are recorded with the round,
-            // so the next round's replay no longer carries them and does not close or name them
-            // again.
-            var closedEarlier = result.earlierRoundClosedMembers();
-            if (!closedEarlier.isEmpty()) {
-              findingPipeline.persistAiResponse(
-                  session, aiResponse.withClosedEarlierRound(closedEarlier));
-            }
+            // #1066, #1409: the round is stored with its final statuses and the earlier rounds'
+            // findings it closed, so the next round's replay no longer carries a finding the code
+            // closed here and does not close or name it again.
+            findingPipeline.persistAiResponse(session, result.recordedResponse(aiResponse));
             // Persist first: a failed write must skip the broadcast so persisted and live
             // dashboard state stay consistent.
             applyReviewResult(session, result);
