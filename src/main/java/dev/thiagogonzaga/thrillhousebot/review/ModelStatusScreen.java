@@ -43,10 +43,11 @@ import java.util.Map;
  *       #1316): a finding that a document and the code disagree is fixed in whichever file was
  *       wrong. Otherwise it is rewritten to {@code unresolved} under {@link #CONTRADICTED_NOTE},
  *       and the contradiction logged, when the file is unchanged. When that cannot be told (no
- *       comparison of the two heads), it stands only when the flagged code is no longer in the diff
+ *       comparison of the two heads), it stands when the flagged code is no longer in the diff
  *       ({@link FollowUpAnalyzer#isStillPresent}) or its suggested fix landed beside it ({@link
- *       FollowUpAnalyzer#suggestedFixLanded}), the rule #1322 set. A finding with no file cannot be
- *       placed, so its {@code resolved} is held.
+ *       FollowUpAnalyzer#suggestedFixLanded}), the rule #1322 set, or when a file it names changed
+ *       ({@link NamedFiles}), as above. A finding with no file cannot be placed, so its {@code
+ *       resolved} is held.
  * </ol>
  *
  * <p>The ids are the listing's ({@link PriorListing}): the effective previous round's findings,
