@@ -913,8 +913,9 @@ lines a pull request adds, for leaked credentials and risky
 infrastructure-as-code settings. It is a fixed list of regular expressions: no
 model call, no extra dependency, and the same input always gives the same
 findings. Both halves are off by default, because each adds findings that can
-request changes. General linter integration is tracked separately in
-[#34](https://github.com/devops-thiago/ThrillhouseBot/issues/34).
+request changes. Linter and Code Scanning annotations are a separate opt-in,
+the [static-analysis context](#static-analysis-context)
+([#34](https://github.com/devops-thiago/ThrillhouseBot/issues/34)).
 
 Secret rules (high confidence):
 
