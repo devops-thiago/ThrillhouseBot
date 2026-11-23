@@ -82,8 +82,9 @@ public class ReviewSession extends PanacheEntity {
 
   /**
    * The review's elapsed time, from {@link #timestamp} to its final status (#1417). Written once,
-   * by the review's terminal transition; a session still in progress, or one the bot never finished
-   * ({@link InterruptedSessionReconciler}), keeps 0.
+   * by the review's terminal transition: a completed or failed review, or a run superseded while
+   * its context loaded. A session still in progress, or one a restart interrupted ({@link
+   * InterruptedSessionReconciler}), keeps 0.
    */
   long durationMs;
 

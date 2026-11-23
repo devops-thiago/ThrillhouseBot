@@ -792,8 +792,9 @@ entry. Every database failure falls back to the memory verdict, and neither `isD
 
 A `ReviewSession` row's `status`, `errorMessage` and `durationMs` are the review's final outcome,
 written only by its terminal transition (`ReviewOrchestrator.applyReviewResult` /
-`applyReviewFailure`, #1417): `durationMs` is the elapsed time from the session's `timestamp`, and
-a completed row has no `errorMessage`. Per-call writes from `OtelObservabilityListener` through
+`applyReviewFailure`, or `closeSupersededWhileLoading` for a run whose head moved while its context
+loaded, #1417): `durationMs` is the elapsed time from the session's `timestamp`, and a completed
+row has no `errorMessage`. Per-call writes from `OtelObservabilityListener` through
 `ReviewSessionUpdater` add tokens and cost (`recordModelUsage`) and count a failed call
 (`recordFailedModelCall`, column `failedmodelcalls`, V5); they never set the status, the message
 or the duration, so a retried call cannot fail a review that completes, and a late write cannot
