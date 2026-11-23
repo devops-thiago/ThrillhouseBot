@@ -4270,6 +4270,19 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void closeSupersededWhileLoadingRecordsTheElapsedTime() {
+      var session =
+          ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 42, "T", "abcdefgh");
+      session.id = 7L;
+      session.setTimestamp(java.time.Instant.now().minusSeconds(30));
+
+      orchestrator.closeSupersededWhileLoading("auth", headRequest(), session, -1L, "d4389d2aa");
+
+      assertEquals(ReviewSession.STATUS_FAILED, session.getStatus());
+      assertTrue(session.getDurationMs() >= 30_000L && session.getDurationMs() < 60_000L);
+    }
+
+    @Test
     void closeSupersededWhileLoadingSurvivesAPersistenceFailure() {
       var session =
           ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 42, "T", "abcdefgh");

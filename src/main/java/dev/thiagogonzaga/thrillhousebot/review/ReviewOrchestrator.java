@@ -670,18 +670,21 @@ public class ReviewOrchestrator {
    * Closes out a run whose head moved while its context loaded (#1412). A push superseded it and
    * the dispatcher already queued the review of the new head, so this is not a failure: nothing is
    * posted, no failure is counted or notified, and the check run is concluded as skipped. The
-   * session row reads like any other superseded run's. Visible for tests.
+   * session row reads like any other superseded run's, with its elapsed time as {@code durationMs}
+   * (#1417). Visible for tests.
    */
   void closeSupersededWhileLoading(
       String auth, ReviewRequest req, ReviewSession session, long checkRunId, String freshHead) {
     var stoodDown =
         standDown.supersededWhileLoading(auth, req, checkRunId, sessionUrl(session), freshHead);
+    var elapsedMs = elapsedMs(session);
     try {
       applySessionState(
           session,
           s -> {
             s.setStatus(ReviewSession.STATUS_FAILED);
             s.setErrorMessage(stoodDown.sessionError());
+            s.setDurationMs(elapsedMs);
           });
     } catch (RuntimeException persistenceError) {
       Log.warnf(
