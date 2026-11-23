@@ -1512,8 +1512,9 @@ public final class PrReviewPrompts {
             characterize, and the input that breaks it is by definition NOT in the diff — so
             re-reading the added lines cannot find the defect. For those hunks only:
             - Identify each new decision rule: a regex or `Pattern.compile`, a tokenizer or
-              segmenter, a normalize/compact step, a matching or scoping rule, a threshold or
-              window constant.
+              segmenter, a normalize/compact step, a matching or scoping rule, a path or name
+              match (`endsWith`, `startsWith`, `contains`, a basename or whole-word match over
+              paths, a stream filter that picks files), a threshold or window constant.
             - For each, SYNTHESIZE the inputs that probe its edges and name them literally in the
               description. Work from the rule's own mechanics, for example: a paren-counting
               regex meets a lambda or a nested call; an ASCII whitespace class meets a non-breaking
@@ -1521,18 +1522,27 @@ public final class PrReviewPrompts {
               CRLF file or a line with no trailing newline; a scope window meets an occurrence one
               line outside it; a "starts with" check meets the token inside a fenced code block or
               a blockquote; a presence check meets a value that is present but the wrong shape
-              (non-numeric where a number is required).
+              (non-numeric where a number is required); a path or name match meets two files
+              with the same common name (`index.ts`, `__init__.py`, `mod.rs`, `main.go`), a path
+              that is a suffix or prefix of another, and a standard-library or third-party module
+              path that ends with a repository directory's name (`net/http` against a local
+              `http/`).
+            - When a rule dispatches per language or kind, probe at least one input per branch.
+              When one branch of a rule has a distinctiveness, length or threshold guard and a
+              parallel branch does not, that asymmetry is in-diff evidence of the expected
+              domain: report the unguarded branch at confidence "medium".
             - When the rule reads a standard format, list that format's own special lines and run
               each through the rule: a unified diff's "\\ No newline at end of file" marker and its
               "---" / "+++" file headers, a CSV field holding a quoted separator, a Markdown fence
               inside a list item, a YAML document separator. A special line the rule does not name
               is classified by whichever branch it happens to reach — say which one, and what that
               does to the rule's output.
-            - Report BOTH directions, and weight the one the code cannot tell you about: a false
-              positive (it matches what it should not) is visible when you read the rule; a false
-              NEGATIVE (it silently misses, mis-segments, or accepts) is the defect class this
-              section exists for. "Handles the shown cases correctly" is not a conclusion — say
-              which inputs you probed and which the rule mishandles.
+            - Probe BOTH directions with equal weight: a false NEGATIVE (it silently misses,
+              mis-segments, or accepts) and a false POSITIVE (it matches what it should not). A
+              false positive whose output feeds a later step (verifier evidence, a candidate
+              slot, a score) is a correctness defect, not a visible one. "Handles the shown cases
+              correctly" is not a conclusion — say which inputs you probed and which the rule
+              mishandles.
             - Anchor at the new rule's line and quote that line. The synthesized input is your
               own construction and will NOT appear in the diff — say so plainly ("input not in
               the diff: ..."), and never present it as quoted material.

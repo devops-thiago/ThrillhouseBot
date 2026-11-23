@@ -1,0 +1,19 @@
+{
+  "kind": "generator",
+  "sourcePr": 1342,
+  "why": "Over-broad path match the heuristic section never probed (#1385): goPackage picks the deepest repository directory the import path ends with and never checks the module path, so the standard-library import net/http resolves to a local http/ directory and github.com/aws/aws-sdk-go-v2/config to the repository's own config/. GO_IMPORT admits both, since each has a slash. The review prompt should report a path rule that matches too much, not only one that misses.",
+  "expectation": "must-find",
+  "targetFile": "src/main/java/dev/thiagogonzaga/thrillhousebot/review/RelatedReferences.java",
+  "keywords": [
+    "standard library",
+    "standard-library",
+    "stdlib",
+    "net/http",
+    "module path",
+    "go.mod",
+    "third-party",
+    "third party"
+  ],
+  "prTitle": "feat(review): read related code outside the diff (#55)",
+  "prDescription": "Opt-in related context: candidate files come from the diff's import lines and type names, matched against the repository listing with no model call. RelatedReferences reads each language's import lines (Java and Kotlin imports, Python from-imports and imports, JS/TS relative imports, Go, Rust, Ruby, C includes, PHP) and resolves each imported module to a repository path."
+}

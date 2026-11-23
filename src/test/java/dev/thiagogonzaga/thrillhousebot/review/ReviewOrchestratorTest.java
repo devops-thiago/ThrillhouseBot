@@ -142,6 +142,10 @@ class ReviewOrchestratorTest {
 
   private final SupersededFindingsCarryover carryover = new SupersededFindingsCarryover(mapper);
 
+  /** Finished-review counter; a spy so a test can tell a failure from a quiet supersede. */
+  private final ReviewOutcomeMetrics outcomeMetrics =
+      spy(new ReviewOutcomeMetrics(OpenTelemetry.noop()));
+
   /** The stored finding rows; a mock that has none, so every round moves as before #1319. */
   private final FindingStates findingStates = noStoredFindings();
 
@@ -345,7 +349,7 @@ class ReviewOrchestratorTest {
         verdictBuilder,
         findingPipeline,
         new CitedLocationResolver(prClient),
-        new ReviewOutcomeMetrics(OpenTelemetry.noop()),
+        outcomeMetrics,
         mock(FindingFeedbackCaptureService.class),
         new ReviewStandDown(
             new HeadMovedGuard(newContextLoader(), carryover),
@@ -4266,6 +4270,22 @@ class ReviewOrchestratorTest {
     }
 
     @Test
+    void closeSupersededWhileLoadingSurvivesAPersistenceFailure() {
+      var session =
+          ReviewSession.create(TestScopes.scope("owner/repo"), "owner/repo", 42, "T", "abcdefgh");
+      session.id = 7L;
+      doThrow(new RuntimeException("db down")).when(sessionPersistence).update(anyLong(), any());
+
+      assertDoesNotThrow(
+          () ->
+              orchestrator.closeSupersededWhileLoading(
+                  "auth", headRequest(), session, -1L, "d4389d2aa"));
+
+      assertEquals(1, lifecycleBroadcasts().size());
+      verify(outcomeMetrics, never()).recordFailed();
+    }
+
+    @Test
     void shouldAbandonPostWhenHeadMovedDuringReview() {
       try (var mockedStatic = mockStatic(ReviewSession.class)) {
         var session = mock(ReviewSession.class);
@@ -4352,6 +4372,108 @@ class ReviewOrchestratorTest {
         // #73: the result was discarded, so no outcome is announced; the run for the new head
         // sends its own.
         verifyNoInteractions(notifier);
+      }
+    }
+
+    /**
+     * A review whose context load reads the given pull request head (#1412): the session is a mock
+     * returned from the static factory, and the check run is created with id 1.
+     */
+    private ReviewSession stubLoadReadingHead(
+        org.mockito.MockedStatic<ReviewSession> mockedStatic, GitHubPullRequestClient.Ref head) {
+      var session = mock(ReviewSession.class);
+      session.id = 1L;
+      when(session.getRepository()).thenReturn("owner/repo");
+      when(session.getPrNumber()).thenReturn(42);
+      when(session.getPrTitle()).thenReturn("Test PR");
+      when(session.getCommitSha()).thenReturn("abcdefgh");
+      when(session.getTimestamp()).thenReturn(java.time.Instant.parse("2025-06-01T12:00:00Z"));
+      mockedStatic
+          .when(() -> ReviewSession.create(any(), anyString(), anyInt(), anyString(), anyString()))
+          .thenReturn(session);
+      when(authClient.getAuthHeader(123L)).thenReturn("Bearer test");
+      when(checkRunClient.createCheckRun(anyString(), anyString(), anyString(), anyString(), any()))
+          .thenReturn(new GitHubCheckRunClient.CheckRunResponse(1L, "http://check"));
+      when(prClient.getPullRequestFiles(
+              anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(List.of(fileDiffWithLine("src/Main.java", 10)));
+      when(prClient.getPullRequest(anyString(), anyString(), anyString(), anyString(), anyInt()))
+          .thenReturn(
+              new GitHubPullRequestClient.PullRequestDetails(
+                  "Test PR", "", head, new GitHubPullRequestClient.Ref("base-sha"), 1, 1, 1));
+      return session;
+    }
+
+    private static ReviewOrchestrator.ReviewRequest headRequest() {
+      return new ReviewOrchestrator.ReviewRequest(
+          "owner",
+          "repo",
+          42,
+          "abcdefgh",
+          "Test PR",
+          "",
+          "base1234567",
+          "main",
+          123L,
+          TestScopes.REPOSITORY_ID,
+          false);
+    }
+
+    @Test
+    void aHeadThatMovesWhileTheContextLoadsEndsTheRunAsSupersededQuietly() {
+      // #1412: a push landing while the context loads (or a reopen delivery carrying the old head)
+      // is not an error. The dispatcher already queued the review of the new head, so this run
+      // posts nothing, counts no failure and announces none.
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session =
+            stubLoadReadingHead(mockedStatic, new GitHubPullRequestClient.Ref("d4389d2aa"));
+
+        assertFalse(orchestrator.review(headRequest()));
+
+        verify(aiReviewService, never()).review(any(ReviewSession.class), any());
+        verify(commentClient, never())
+            .createComment(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        verify(reviewClient, never())
+            .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+        assertEquals(1L, skipEmitter.countsByReason(java.util.List.of(123L)).get("HEAD_MOVED"));
+        var updateCaptor =
+            ArgumentCaptor.forClass(GitHubCheckRunClient.UpdateCheckRunRequest.class);
+        verify(checkRunClient)
+            .updateCheckRun(
+                anyString(), anyString(), anyString(), anyString(), eq(1L), updateCaptor.capture());
+        assertEquals("skipped", updateCaptor.getValue().conclusion());
+        verify(session).setStatus(ReviewSession.STATUS_FAILED);
+        verify(session)
+            .setErrorMessage(
+                argThat(
+                    message -> message.startsWith("Superseded: the PR head moved to d4389d2aa")));
+        verify(outcomeMetrics, never()).recordFailed();
+        assertEquals(2, lifecycleBroadcasts().size());
+        verifyNoInteractions(notifier);
+      }
+    }
+
+    @Test
+    void aHeadThatCannotBeReadWhileTheContextLoadsIsStillAFailure() {
+      // #1412: only a moved head is a supersede. A head the read could not name has no queued
+      // replacement, so the run fails and says so on the pull request.
+      try (var mockedStatic = mockStatic(ReviewSession.class)) {
+        var session = stubLoadReadingHead(mockedStatic, new GitHubPullRequestClient.Ref(null));
+
+        assertFalse(orchestrator.review(headRequest()));
+
+        verify(commentClient)
+            .createComment(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyInt(),
+                argThat(req -> req.body().contains("review could not be completed")));
+        assertNull(skipEmitter.countsByReason(java.util.List.of(123L)).get("HEAD_MOVED"));
+        verify(session).setStatus(ReviewSession.STATUS_FAILED);
+        verify(outcomeMetrics).recordFailed();
+        verify(notifier).reviewFailed(any(), anyString(), any());
       }
     }
 

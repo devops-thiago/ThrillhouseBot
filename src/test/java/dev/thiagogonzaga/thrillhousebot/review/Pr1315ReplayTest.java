@@ -311,7 +311,7 @@ class Pr1315ReplayTest {
             VerdictBuilder.renameTargets(ctx.files()),
             BOT);
     var result = builder.build(ctx, guarded, CI_CLEAR, PLAN);
-    var stored = guarded.withClosedEarlierRound(result.earlierRoundClosedMembers());
+    var stored = result.recordedResponse(guarded);
     var previous = ctx.previousFindingsList();
     if (rows != null) {
       recordRound(head, result.findings(), result.previousStatuses(), ctx, patches);

@@ -43,7 +43,7 @@ class SchemaMigrationTest {
 
     var result = flyway.migrate();
 
-    assertEquals(4, result.migrationsExecuted);
+    assertEquals(5, result.migrationsExecuted);
     assertEquals(MigrationState.SUCCESS, flyway.info().current().getState());
   }
 
@@ -64,8 +64,7 @@ class SchemaMigrationTest {
 
     var result = flyway.migrate();
 
-    assertEquals(
-        3, result.migrationsExecuted, "only the later migrations run on a baselined database");
+    assertEquals(4, result.migrationsExecuted, "only V2 to V5 run on a baselined database");
     var baseline = flyway.info().applied()[0];
     assertEquals(MigrationVersion.fromVersion("1"), baseline.getVersion());
     assertEquals(MigrationState.BASELINE, baseline.getState());
