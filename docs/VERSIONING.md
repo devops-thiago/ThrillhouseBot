@@ -49,7 +49,7 @@ working, or says at the start of its notes what changed and what to do.
 | Commands | The slash commands and `@thrillhousebot` mentions listed under [Commands](https://github.com/devops-thiago/ThrillhouseBot/blob/main/README.md#commands), and who may run them |
 | GitHub App | The webhook path `/api/webhook`, and the events and permissions in `manifest.json` |
 | Container images | `ghcr.io/devops-thiago/thrillhousebot` with the tags `vX.Y.Z`, `vX.Y.Z-distroless`, `latest` and `latest-distroless`, for `linux/amd64` and `linux/arm64`, listening on port 8080 |
-| Database | The PostgreSQL schema the bot keeps its review sessions, paused pull requests, finding feedback and review learnings in |
+| Database | The PostgreSQL schema the bot keeps its review sessions, paused pull requests, finding feedback, review learnings, finding state and webhook delivery ids in |
 | Operations | The health endpoints under `/q/health`, `GET /metrics` when `PROMETHEUS_METRICS_ENABLED` is on, and the metric names in [Observability](https://github.com/devops-thiago/ThrillhouseBot/blob/main/README.md#observability) |
 
 Three notes on that table:
@@ -83,6 +83,11 @@ raise again a finding that was declined or resolved on an open pull request.
 When it cannot, the notes say so. 0.7.1 changed how the secret-scan marker is
 keyed: it still matches declines recorded under the old marker, and its notes
 say which case raises a declined secret finding once more.
+
+The exception is the open-findings line in the summary comment,
+`<!-- thrillhousebot:findings v=1 [...] -->`, which other tools are meant to
+read: a release that changes its shape incompatibly raises `v`, and the notes
+say so.
 
 ## Deprecation and removal
 

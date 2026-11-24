@@ -22,10 +22,9 @@ import org.kohsuke.github.GHPermissionType;
  * is write, maintain or admin. Viewing on the dashboard needs only read access; acting (a paid
  * {@code /review}, a learning taught by a decline, feedback that counts) needs this.
  *
- * <p>GitHub's legacy {@code permission} field reports {@code maintain} as {@code write} and {@code
- * triage} as {@code read}, and a custom role as the base role it extends. {@code role_name} names
- * the role itself. Either one granting write is enough, so maintain and a custom role built on
- * write both count, while triage and read never do.
+ * <p>Only the collaborator-permission {@code permission} field is read. It reports {@code maintain}
+ * as {@code write} and {@code triage} as {@code read}, and a custom role as the base role it
+ * extends, so maintain and a custom role built on write both count, while triage and read never do.
  */
 public final class RepositoryPermissions {
 
