@@ -18,7 +18,6 @@ package dev.thiagogonzaga.thrillhousebot.dashboard;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubApiError;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubUserClient;
 import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
@@ -28,6 +27,8 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.WebApplicationException;
+import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -39,10 +40,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
+import org.kohsuke.github.GHFileNotFoundException;
+import org.kohsuke.github.GHMembership;
+import org.kohsuke.github.HttpException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -120,7 +125,6 @@ public class DashboardAccessChecker {
   static final Duration REMOVAL_LIMIT = Duration.ofMinutes(10);
 
   private final ThrillhouseConfig config;
-  private final GitHubAuthClient authClient;
   private final GitHubUserClient userClient;
   private final GitHubClientProvider clientProvider;
   private final AllowedAccounts allowedAccounts;
@@ -129,27 +133,25 @@ public class DashboardAccessChecker {
   private final Map<Long, Instant> goneInstallations = new ConcurrentHashMap<>();
   private final Map<RepoScope, Instant> removedRepositories = new ConcurrentHashMap<>();
   private final AtomicLong changeCount = new AtomicLong();
+  private final AtomicBoolean membersPermissionWarned = new AtomicBoolean();
 
   @Inject
   public DashboardAccessChecker(
       ThrillhouseConfig config,
-      GitHubAuthClient authClient,
       @RestClient GitHubUserClient userClient,
       GitHubClientProvider clientProvider,
       AllowedAccounts allowedAccounts) {
-    this(config, authClient, userClient, clientProvider, allowedAccounts, Instant::now);
+    this(config, userClient, clientProvider, allowedAccounts, Instant::now);
   }
 
   /** Visible for tests: allows controlling cache expiry. */
   DashboardAccessChecker(
       ThrillhouseConfig config,
-      GitHubAuthClient authClient,
       GitHubUserClient userClient,
       GitHubClientProvider clientProvider,
       AllowedAccounts allowedAccounts,
       Supplier<Instant> clock) {
     this.config = config;
-    this.authClient = authClient;
     this.userClient = userClient;
     this.clientProvider = clientProvider;
     this.allowedAccounts = allowedAccounts;
@@ -414,9 +416,9 @@ public class DashboardAccessChecker {
 
   /**
    * Whether the login may see views that span the installation: the account itself on a personal
-   * account, and a member of the organization on an organization. Membership is granted only on
-   * GitHub's 204; without the App's Organization → Members: read permission GitHub answers 403 and
-   * the views stay hidden.
+   * account, and a member of the organization on an organization. Membership is granted only on an
+   * active membership; without the App's Organization → Members: read permission GitHub answers
+   * 403, the views stay hidden and the missing permission is logged once.
    */
   private boolean installationWide(
       GitHubInstallationClient.Installation installation, String login) {
@@ -425,21 +427,56 @@ public class DashboardAccessChecker {
       return account.login().equalsIgnoreCase(login);
     }
     try {
-      var installationClient = clientProvider.getInstallationClient(installation.id());
-      var ghUser = installationClient.getUser(login);
-      // hub4j's GHOrganization.hasMember(GHUser) calls GET /orgs/{org}/members/{user} and
-      // returns false on any IOException, including a 403 from a missing Organization -> Members:
-      // read permission; it never propagates the status. There is therefore no refusal-specific
-      // diagnostic available through this API, and a false result here is indistinguishable from
-      // "not a member". Operators who see installation-wide views silently disappearing for org
-      // members should verify the App has Organization -> Members: read permission granted.
-      // The catch below covers both the checked IOException from the client calls and any
-      // unexpected RuntimeException; it logs a generic warning and denies in either case.
-      return installationClient.getOrganization(account.login()).hasMember(ghUser);
-    } catch (Exception e) {
+      // getMembership (GET /orgs/{org}/memberships/{user}) reports GitHub's status, unlike
+      // GHOrganization.hasMember, which answers false on any error, a refusal included.
+      var membership =
+          clientProvider
+              .getInstallationClient(installation.id())
+              .getOrganization(account.login())
+              .getMembership(login);
+      return membership != null && membership.getState() == GHMembership.State.ACTIVE;
+    } catch (InterruptedIOException e) {
+      Thread.currentThread().interrupt();
+      return false;
+    } catch (IOException e) {
+      switch (httpStatus(e)) {
+        case 404 -> {
+          // Not a member.
+        }
+        case 403 -> warnMembersPermission(account.login());
+        default ->
+            log.warn(
+                "Could not check membership of {} in {}: {}",
+                login,
+                account.login(),
+                e.getMessage());
+      }
+      return false;
+    } catch (RuntimeException e) {
       log.warn(
           "Could not check membership of {} in {}: {}", login, account.login(), e.getMessage());
       return false;
+    }
+  }
+
+  /** The HTTP status hub4j failed with: 404 for a missing resource, -1 when there was none. */
+  static int httpStatus(IOException e) {
+    if (e instanceof GHFileNotFoundException) {
+      return 404;
+    }
+    if (e instanceof HttpException http) {
+      return http.getResponseCode();
+    }
+    return e.getCause() instanceof HttpException http ? http.getResponseCode() : -1;
+  }
+
+  private void warnMembersPermission(String org) {
+    if (membersPermissionWarned.compareAndSet(false, true)) {
+      log.warn(
+          "GitHub refused the organization membership check for {}; approve the App's"
+              + " Organization -> Members: read permission to show installation-wide dashboard"
+              + " views to its members",
+          org);
     }
   }
 
