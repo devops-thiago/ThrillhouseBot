@@ -51,13 +51,18 @@ class EvalTrailingGuidanceTest {
     assertFalse(guidance.contains(PrReviewPrompts.MOCK_FIDELITY_REQUEST), guidance);
   }
 
-  /** Both #1386 cases add regexes, so the eval sends them the heuristic request production does. */
+  /**
+   * The #1386 and #1385 cases add regexes, so the eval sends them the heuristic request production
+   * does.
+   */
   @Test
-  void theFromImportCasesCarryTheHeuristicFailureModeRequest() throws IOException {
+  void theRelatedContextCasesCarryTheHeuristicFailureModeRequest() throws IOException {
     for (var name :
         List.of(
             "pr1342-dotted-from-import-name-must-not-find",
-            "pr1342-backslash-continued-from-import-must-find")) {
+            "pr1342-backslash-continued-from-import-must-find",
+            "pr1342-same-name-file-match-must-find",
+            "pr1342-go-module-path-suffix-must-find")) {
       var guidance =
           EvalTrailingGuidance.forCase(corpusDiff(name), "", "Reads related code.", "", "");
 

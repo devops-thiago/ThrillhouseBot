@@ -30,7 +30,7 @@ import java.util.function.LongSupplier;
  * <p>Only the automatic path consults this limiter; a manual {@code /review} (or {@code
  * @thrillhousebot review}) never checks it and never records into it, so explicit triggers always
  * run and do not shift the automatic window. State is in-memory per replica, like {@link
- * dev.thiagogonzaga.thrillhousebot.webhook.WebhookDeduplicator}.
+ * ReviewDispatcher}.
  */
 @ApplicationScoped
 public class AutoReviewRateLimiter {

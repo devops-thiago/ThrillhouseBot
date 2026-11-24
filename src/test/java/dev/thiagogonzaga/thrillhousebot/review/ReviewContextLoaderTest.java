@@ -819,6 +819,19 @@ class ReviewContextLoaderTest {
     }
 
     @Test
+    void onlyTwoKnownDifferentHeadsReadAsASupersede() {
+      // #1412: a moved head is superseded; an unreadable head or a request with no sha is not.
+      var moved = new ReviewContextLoader.StaleReviewException("old-sha", "new-sha");
+      assertTrue(moved.headMoved());
+      assertEquals("new-sha", moved.currentHead());
+      assertFalse(new ReviewContextLoader.StaleReviewException("old-sha", null).headMoved());
+      assertFalse(new ReviewContextLoader.StaleReviewException("old-sha", " ").headMoved());
+      assertFalse(new ReviewContextLoader.StaleReviewException(null, "new-sha").headMoved());
+      assertFalse(new ReviewContextLoader.StaleReviewException("", "new-sha").headMoved());
+      assertFalse(new ReviewContextLoader.StaleReviewException("ABC", "abc").headMoved());
+    }
+
+    @Test
     void shouldRejectNullPullRequestHeadAndCurrentSha() {
       when(prClient.getPullRequestFiles(any(), any(), eq("owner"), eq("repo"), eq(42)))
           .thenReturn(List.of());
