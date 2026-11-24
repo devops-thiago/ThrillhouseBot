@@ -4,6 +4,16 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-11-24
+
+Follow-up rounds re-check older findings whenever a fix could stand and stop closing the same
+finding twice, a webhook redelivered after a restart is no longer reviewed again, and `/review`
+on a closed or merged pull request is answered with a notice. The first start runs migrations V4,
+which adds the `webhook_delivery` table, and V5, which adds the `failedmodelcalls` column to
+`reviewsession`. `OTEL_RESOURCE_ATTRIBUTES` is new, and the two new review options,
+`REVIEW_AGENT_PROMPT_ENABLED` and `REVIEW_BATCHED_INLINE_REVIEW_ENABLED`, are off by default.
+There are no new GitHub App permissions.
+
 ### Added
 
 - **Opt-in collapsed agent prompt on inline findings** (#1432): when
@@ -15,6 +25,20 @@ All notable changes to ThrillhouseBot.
   is attempted on a changed file, is cleared when nothing lands inline, dismisses any stranded
   bot-owned pending review before a new one, and is dropped after a refused submit falls back to
   a body-only review.
+- **The summary comment carries a machine-readable list of the open findings** (#1433): a hidden
+  `<!-- thrillhousebot:findings v=1 [...] -->` line after the summary's markers lists each open
+  finding's key, file, line, risk, confidence, whether it has an inline thread or is listed under
+  "Things to double-check", whether it has a suggestion, and whether it was carried from an earlier
+  review. It holds no model-written text, lists at most 200 entries (`omitted=N` counts the rest),
+  and is `[]` when nothing is open.
+
+### Changed
+
+- Repository permission checks for manual reviews, feedback capture, learnings and dashboard
+  access now read collaborator permission and organization membership through the extension's
+  installation-scoped GitHub client (`GitHubClientProvider`) instead of
+  `GitHubInstallationClient` and `GitHubAuthClient`. `RepositoryPermissions.canAct` takes a
+  `GHPermissionType`. (#1428)
 
 ### Fixed
 
@@ -88,6 +112,11 @@ All notable changes to ThrillhouseBot.
   counters such as `thrillhouse.reviews.total` overwrote each other. The id is `HOSTNAME`, or a
   random id generated at startup when it is unset, and `OTEL_RESOURCE_ATTRIBUTES` (new) can set it
   or add other resource attributes.
+
+### Dependencies
+
+- Bumped the Maven minor and patch group, holding back OpenTelemetry (#1418), the actions group
+  (#1416), the frontend npm dependencies (#1414) and the website docs dependencies (#1413)
 
 ## [0.9.2] - 2026-11-16
 
