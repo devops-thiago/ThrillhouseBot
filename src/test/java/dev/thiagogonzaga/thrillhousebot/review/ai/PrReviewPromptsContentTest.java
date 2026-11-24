@@ -1341,6 +1341,23 @@ class PrReviewPromptsContentTest {
   }
 
   /**
+   * #642: the resolver now reads entry points and changed files that read the environment, so the
+   * prompts no longer say most projects are out of its reach, nor that it reads only files outside
+   * the diff.
+   */
+  @Test
+  void theConfigKeySectionIsDescribedAsTheResolverNowBuildsIt() {
+    assertContains(
+        PrReviewPrompts.DIMENSION_CONFIG_KEY_DOCUMENTATION,
+        "that section's resolver can find; many",
+        "the resolver reaches more than it did, but not every definition site (#642)");
+    assertContains(
+        FindingVerifierPrompts.CARVE_OUT_CONFIG_KEY_DOCUMENTATION,
+        "built from whole repository files,\nmost of them outside the diff",
+        "a changed file the resolver reads is in the diff (#642)");
+  }
+
+  /**
    * The config/IaC correctness dimension — 7 in this prompt, 6 in #638 and the corpus briefs.
    *
    * <p>java #43 planted a {@code COPY} of a jar Maven never produces and round 4's python PR
