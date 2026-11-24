@@ -15,11 +15,9 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.List;
 import java.util.Locale;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * The hidden, machine-readable view of the pull request's open findings, written into the summary
@@ -38,9 +36,10 @@ import java.util.stream.Collectors;
  * cleared through {@code @thrillhousebot resolved}), {@code hasSuggestion} and {@code carried}
  * (open since an earlier review). Entries run most severe first.
  *
- * <p>The array is bounded at {@value #MAX_ENTRIES} entries, so a pathological pull request cannot
- * push the comment over GitHub's size limit; when it is cut, the header says how many were left out
- * ({@code omitted=N}) before the array.
+ * <p>The array is bounded twice, so a pathological pull request cannot push the comment over
+ * GitHub's size limit: at {@value #MAX_ENTRIES} entries, and at {@value #MAX_ARRAY_CHARS} rendered
+ * characters, because the path in an entry has no length bound of its own. When it is cut, the
+ * header says how many entries were left out ({@code omitted=N}) before the array.
  */
 final class FindingsManifest {
 
@@ -49,8 +48,11 @@ final class FindingsManifest {
 
   private static final String MARKER_SUFFIX = " -->";
 
-  /** Entries kept: about 160 bytes each, far inside GitHub's 65,536-character comment limit. */
+  /** Entries kept: about 160 characters each for a typical path. */
   static final int MAX_ENTRIES = 200;
+
+  /** Rendered array budget, well inside GitHub's 65,536-character comment limit. */
+  static final int MAX_ARRAY_CHARS = 40_000;
 
   private static final Comparator<Finding> MOST_SEVERE_FIRST =
       Comparator.comparing((Finding f) -> riskOf(f)).thenComparing(Finding::confidence);
@@ -64,16 +66,20 @@ final class FindingsManifest {
   static String render(PrSummaryGenerator.CurrentState state) {
     var carried = state.carried();
     var ordered = state.result().findings().stream().sorted(MOST_SEVERE_FIRST).toList();
-    var kept = ordered.size() > MAX_ENTRIES ? ordered.subList(0, MAX_ENTRIES) : ordered;
+    var kept = new ArrayList<String>();
+    int chars = 2;
+    for (Finding finding : ordered) {
+      var rendered = entry(finding, carried.contains(finding));
+      int cost = rendered.length() + 1;
+      if (kept.size() == MAX_ENTRIES || chars + cost > MAX_ARRAY_CHARS) {
+        break;
+      }
+      kept.add(rendered);
+      chars += cost;
+    }
     var omitted = ordered.size() - kept.size();
     var header = omitted == 0 ? MARKER_PREFIX : MARKER_PREFIX + " omitted=" + omitted;
-    return header + " " + entries(kept, carried) + MARKER_SUFFIX;
-  }
-
-  private static String entries(List<Finding> findings, Set<Finding> carried) {
-    return findings.stream()
-        .map(f -> entry(f, carried.contains(f)))
-        .collect(Collectors.joining(",", "[", "]"));
+    return header + " " + "[" + String.join(",", kept) + "]" + MARKER_SUFFIX;
   }
 
   private static String entry(Finding finding, boolean carried) {

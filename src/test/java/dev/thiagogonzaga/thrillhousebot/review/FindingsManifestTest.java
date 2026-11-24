@@ -199,6 +199,24 @@ class FindingsManifestTest {
   }
 
   @Test
+  void longPathsCutTheArrayAtTheCharacterBudgetEvenBelowTheEntryCap() throws Exception {
+    var path = "d/".repeat(200) + "F.java";
+    var findings = new ArrayList<Finding>();
+    for (int i = 0; i < 100; i++) {
+      findings.add(finding(RiskLevel.HIGH, Confidence.HIGH, path + i, i, "t" + i, null));
+    }
+    var line =
+        FindingsManifest.render(PrSummaryGenerator.currentState(result(findings, List.of())));
+
+    assertTrue(line.length() < FindingsManifest.MAX_ARRAY_CHARS + 100, "" + line.length());
+    var header = line.substring(0, line.indexOf('['));
+    var omitted = Integer.parseInt(header.substring(header.indexOf("omitted=") + 8).trim());
+    var array = line.substring(line.indexOf('['), line.length() - " -->".length());
+    assertEquals(100, MAPPER.readTree(array).size() + omitted);
+    assertTrue(omitted > 0);
+  }
+
+  @Test
   void aPathologicalSetIsCutAtTheCapAndSaysHowManyWereLeftOut() throws Exception {
     var findings = new ArrayList<Finding>();
     for (int i = 0; i < FindingsManifest.MAX_ENTRIES + 5; i++) {

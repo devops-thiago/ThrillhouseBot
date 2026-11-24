@@ -487,7 +487,8 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   always `open`, `thread` from `Finding.postsInline`, `hasSuggestion`, `carried`), most severe first;
   no title, description or suggestion enters it. The path is the only free text and is escaped so it
   can never write `-->`; the line stays one line. An empty set renders `[]` (so "nothing open" differs
-  from a comment older than the manifest), and a set over `MAX_ENTRIES` is cut with `omitted=N` in
+  from a comment older than the manifest), and a set over `MAX_ENTRIES` entries or
+  `MAX_ARRAY_CHARS` rendered characters (the path has no length bound) is cut with `omitted=N` in
   the header. `v=1` is a contract version (#1379, #1378): a field removed or renamed bumps it. The
   line is written outside `PromptLabelScrubber.scrubMarkdown`, so the scrub cannot rewrite it.
 - **A run whose head moved stands down before its first write** (#704, #806) and hands its
