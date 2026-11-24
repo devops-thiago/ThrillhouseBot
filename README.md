@@ -347,6 +347,10 @@ posted, each with its confidence capped at medium and a line saying it was not
 verified. Under `balanced` strictness such a finding cannot request changes on
 its own. The summary states how many findings went unverified.
 
+`REVIEW_AGENT_PROMPT_ENABLED=true` adds a collapsed **Agent prompt** block to each
+**inline** finding comment, built from the title, description and suggestion
+already there — no extra model call. File-level threads do not get the block.
+
 `REVIEW_SUMMARY_VERIFICATION_ENABLED=true` adds one call after the summary call.
 The summary call does not see the diff, so it can describe something the change
 does not do. This call gets the summary's sentences, walkthrough rows and

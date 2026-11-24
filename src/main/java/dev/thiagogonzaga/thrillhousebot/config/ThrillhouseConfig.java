@@ -369,6 +369,17 @@ public interface ThrillhouseConfig {
     boolean summaryVerificationEnabled();
 
     /**
+     * Add a collapsed "Agent prompt" block to each inline finding, built from the title,
+     * description and suggestion already on the comment (#1432). Default off.
+     *
+     * <p>When the comment body would exceed GitHub's limit, the whole body is capped like any other
+     * comment — trimming the agent block first is not implemented yet.
+     */
+    @WithDefault("false")
+    @WithName("agent-prompt-enabled")
+    boolean agentPromptEnabled();
+
+    /**
      * When a review or summary answer is not valid review JSON, send only that answer and the
      * parser's error in one small call and ask for the same content in the required shape, before
      * resending the whole prompt. Also asks again for the walkthrough's file summaries when the

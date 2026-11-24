@@ -151,6 +151,7 @@ Prices used for cost tracking, keyed by model name (the `AI_MODEL` value) like t
 |---|---|---|---|
 | `ACK_REACTION_TIMEOUT`<br>`thrillhousebot.review.ack-reaction-timeout` | Time limit on posting the 👀 reaction to a command; the reaction may land late. | duration | `3s` |
 | `REVIEW_ADD_DOCS_ENABLED`<br>`thrillhousebot.review.add-docs-enabled` | Allow `/add-docs`, which posts generated docs for the changed symbols as committable suggestions. | boolean | `true` |
+| `REVIEW_AGENT_PROMPT_ENABLED`<br>`thrillhousebot.review.agent-prompt-enabled` | Add a collapsed "Agent prompt" block to each inline finding, built from the title, description and suggestion already on the comment (#1432). Default off. | boolean | `false` |
 | `THRILLHOUSEBOT_REVIEW_AI_RETRY_BASE_DELAY_MS`<br>`thrillhousebot.review.ai-retry-base-delay-ms` | Base delay of the exponential retry backoff, in milliseconds. | integer | `2000` |
 | `THRILLHOUSEBOT_REVIEW_AI_TIMEOUT_SECONDS`<br>`thrillhousebot.review.ai-timeout-seconds` | Client-side wait per streaming attempt, in seconds. Keep it at or above `AI_TIMEOUT` so a timed-out attempt does not leave a stream open at the provider. A second timeout fails the call. | integer | `300` |
 | `AUTO_REVIEW_MIN_INTERVAL`<br>`thrillhousebot.review.auto-review-min-interval` | Minimum time between automatic reviews of one PR. Pushes inside the window are skipped, even on a new head (in memory, per replica). `/review` always runs. `0` reviews every push. | duration | `0` |

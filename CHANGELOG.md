@@ -4,6 +4,12 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in collapsed agent prompt on inline findings** (#1432): when
+  `REVIEW_AGENT_PROMPT_ENABLED` is on, each inline comment gains a `<details>` block with scope,
+  problem summary and fix guidance derived from the finding already posted — no extra model call.
+
 ### Fixed
 
 - **`/review` no longer reviews a closed or merged pull request (#1458).** The comment path never
