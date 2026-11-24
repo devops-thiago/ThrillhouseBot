@@ -139,6 +139,16 @@ class RemovedLineCommentTest {
   }
 
   @Test
+  void aFindingWithNoQuoteDoesNotUseTheRemovedLinesPath() {
+    post(finding(null, "fix();"));
+
+    assertEquals(
+        List.of(new Attempt(WITHOUT_SUGGESTION, 12, "RIGHT", null, null, false)),
+        reviewClient.landed);
+    assertEquals(1, reviewClient.attempts.size());
+  }
+
+  @Test
   void aQuoteOfHeadCodeStaysOnTheRightSide() {
     post(finding("y();", null));
 
@@ -170,6 +180,18 @@ class RemovedLineCommentTest {
     assertEquals(1, inline.posted());
     assertEquals(2, reviewClient.attempts.size());
     assertTrue(reviewClient.landed.getFirst().fileLevel());
+  }
+
+  @Test
+  void aRejectedSuggestionBlockRetriesWithoutItOnTheRightSide() {
+    reviewClient.refuse =
+        attempt -> attempt == 1 ? new WebApplicationException(Response.status(422).build()) : null;
+
+    var inline = post(finding("y();", "fixed();"));
+
+    assertEquals(1, inline.posted());
+    assertEquals(2, reviewClient.attempts.size());
+    assertEquals(WITHOUT_SUGGESTION, reviewClient.landed.getLast().body());
   }
 
   @Test
@@ -311,7 +333,19 @@ class RemovedLineCommentTest {
     }
 
     @Override
-    public void deletePendingReview(
+    public ReviewResponse submitReviewOnce(
+        String auth,
+        String accept,
+        String owner,
+        String repo,
+        int pullNumber,
+        long reviewId,
+        SubmitReviewRequest request) {
+      throw new UnsupportedOperationException("not part of this seam");
+    }
+
+    @Override
+    public void deletePendingReviewOnce(
         String auth, String accept, String owner, String repo, int pullNumber, long reviewId) {
       throw new UnsupportedOperationException("not part of this seam");
     }

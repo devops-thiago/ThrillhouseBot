@@ -239,6 +239,47 @@ class ThrottledInlineCommentTest {
   }
 
   /**
+   * When the suggestion and suggestion-less attempts fail for the same cause, the reason filed on
+   * the file does not repeat both labels (#722).
+   */
+  @Test
+  void identicalLineRefusalsDoNotDoubleLabelTheFileLevelReason() {
+    reviewClient.refuse = attempt -> attempt <= 2 ? unresolvable() : null;
+
+    var messages =
+        publisherLogs(
+            () -> {
+              var inline = postFinding();
+              assertEquals(1, inline.posted());
+            });
+
+    assertTrue(
+        messages.stream()
+            .anyMatch(
+                m ->
+                    m.contains("filing it on the file instead") && !m.contains("with suggestion:")),
+        () -> "messages: " + messages);
+  }
+
+  @Test
+  void distinctLineRefusalsNameBothAttemptsWhenFilingOnTheFile() {
+    reviewClient.refuse =
+        attempt -> {
+          return switch (attempt) {
+            case 1 -> unresolvable();
+            case 2 -> unresolvablePath();
+            default -> null;
+          };
+        };
+
+    var messages = publisherLogs(() -> assertEquals(1, postFinding().posted()));
+
+    assertTrue(
+        messages.stream().anyMatch(m -> m.contains("with suggestion:") && m.contains("without:")),
+        () -> "messages: " + messages);
+  }
+
+  /**
    * The control: a 422 that refuses the anchor is not a throttle, is not retried, and still gets
    * the whole fallback chain — the suggestion-less comment, then the thread on the file.
    */
@@ -558,7 +599,19 @@ class ThrottledInlineCommentTest {
     }
 
     @Override
-    public void deletePendingReview(
+    public ReviewResponse submitReviewOnce(
+        String auth,
+        String accept,
+        String owner,
+        String repo,
+        int pullNumber,
+        long reviewId,
+        SubmitReviewRequest request) {
+      throw new UnsupportedOperationException("not part of this seam");
+    }
+
+    @Override
+    public void deletePendingReviewOnce(
         String auth, String accept, String owner, String repo, int pullNumber, long reviewId) {
       throw new UnsupportedOperationException("not part of this seam");
     }

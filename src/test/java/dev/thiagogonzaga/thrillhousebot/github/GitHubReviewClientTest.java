@@ -34,8 +34,10 @@ import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestCom
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.PullRequestCommentResponse;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReplyToReviewCommentRequest;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient.ReviewResponse;
+import jakarta.ws.rs.POST;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
@@ -317,5 +319,20 @@ class GitHubReviewClientTest {
 
     assertSame(posted, client.replyToReviewComment("auth", "json", "o", "r", 7, 3L, request));
     verify(client, times(2)).replyToReviewCommentOnce("auth", "json", "o", "r", 7, 3L, request);
+  }
+
+  @Test
+  void submitReviewOnceUsesPostPerGitHubRest() throws Exception {
+    Method method =
+        GitHubReviewClient.class.getMethod(
+            "submitReviewOnce",
+            String.class,
+            String.class,
+            String.class,
+            String.class,
+            int.class,
+            long.class,
+            GitHubReviewClient.SubmitReviewRequest.class);
+    assertTrue(method.isAnnotationPresent(POST.class));
   }
 }
