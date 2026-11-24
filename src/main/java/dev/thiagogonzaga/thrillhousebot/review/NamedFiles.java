@@ -89,13 +89,22 @@ final class NamedFiles {
   /**
    * Whether {@code text} holds {@code name} as a name of its own: not preceded by a name character
    * (a slash may precede it, as in a longer path), and not followed by one or by a dot that runs on
-   * into another name.
+   * into another name. A run of underscores right against the name is Markdown emphasis ({@code
+   * _DATABASE.md_}) when the character past the run is not a name character, so it is skipped
+   * before that check; {@code OLD_DATABASE.md} and {@code DATABASE.md_x} still name nothing.
    */
   private static boolean mentions(String text, String name) {
     for (var at = text.indexOf(name); at >= 0; at = text.indexOf(name, at + 1)) {
-      var end = at + name.length();
-      if ((at == 0 || !isNameChar(text.charAt(at - 1)))
-          && (end == text.length() || !continuesName(text, end))) {
+      var before = at;
+      while (before > 0 && text.charAt(before - 1) == '_') {
+        before--;
+      }
+      var after = at + name.length();
+      while (after < text.length() && text.charAt(after) == '_') {
+        after++;
+      }
+      if ((before == 0 || !isNameChar(text.charAt(before - 1)))
+          && (after == text.length() || !continuesName(text, after))) {
         return true;
       }
     }

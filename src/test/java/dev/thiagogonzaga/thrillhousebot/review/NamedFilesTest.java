@@ -69,6 +69,19 @@ class NamedFilesTest {
     assertEquals(List.of(), NamedFiles.named("  ", CHANGED));
   }
 
+  /**
+   * Underscore emphasis around a name still names the file; an underscore inside a name does not.
+   */
+  @Test
+  void aNameInUnderscoreEmphasisIsStillNamed() {
+    assertEquals(
+        List.of("docs/DATABASE.md"), NamedFiles.named("the fix belongs in _DATABASE.md_", CHANGED));
+    assertEquals(List.of("docs/DATABASE.md"), NamedFiles.named("__DATABASE.md__.", CHANGED));
+    assertEquals(
+        List.of("docs/DATABASE.md"), NamedFiles.named("see _docs/DATABASE.md_ now", CHANGED));
+    assertEquals(List.of(), NamedFiles.named("_OLD_DATABASE.md_ and _DATABASE.md_x", CHANGED));
+  }
+
   private static ReviewResponse.Finding finding(String file, String title, String description) {
     return new ReviewResponse.Finding("medium", "high", file, 1, title, description, "", null);
   }
