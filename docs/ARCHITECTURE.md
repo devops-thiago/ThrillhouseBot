@@ -680,8 +680,9 @@ served and an empty scope matches nothing; `?installation=` narrows to one insta
 `?repository=` naming a repository outside the scope answers 403, and a session id from one
 answers 404, the same as a missing id. Skip counters are kept per installation and summed only
 over installations whose installation-wide views the login may see: its own personal account, or
-an organization it is a member of (`GET /orgs/{org}/members/{user}` with the installation token,
-which needs Organization → Members: read and is granted only on 204). A WebSocket connection
+an organization it is a member of (`GET /orgs/{org}/memberships/{user}` with the installation token,
+which needs Organization → Members: read and is granted only on an active membership; a 403 logs
+the missing permission once). A WebSocket connection
 reads its scope from memory on every event; the keepalive tick re-resolves it on a virtual
 thread, never the event loop or a review thread, and closes the connection once nothing is
 readable or the session has ended.
