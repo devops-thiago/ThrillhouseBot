@@ -6,6 +6,9 @@ All notable changes to ThrillhouseBot.
 
 ### Added
 
+- **Opt-in collapsed agent prompt on inline findings** (#1432): when
+  `REVIEW_AGENT_PROMPT_ENABLED` is on, each inline comment gains a `<details>` block with scope,
+  problem summary and fix guidance derived from the finding already posted — no extra model call.
 - **Opt-in batched inline review** (#1434): when `REVIEW_BATCHED_INLINE_REVIEW_ENABLED` is on, a
   round opens one pending pull request review, attaches each inline thread to it, and submits it
   once instead of leaving one empty review per finding. The shell opens only when inline posting

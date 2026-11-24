@@ -1421,13 +1421,23 @@ public class ReviewPublisher {
   private record InlineAnchor(
       DiffLineResolver.Side side, int line, Optional<DiffLineResolver.LineRange> range) {}
 
+  /** Inline finding comments only; file-level threads skip the agent prompt (#1432). */
+  private String formatInlineFindingComment(
+      Finding finding, boolean includeSuggestion, int findingId) {
+    var body = suggestionFormatter.formatReviewComment(finding, includeSuggestion, findingId);
+    if (config.review().agentPromptEnabled()) {
+      body = AgentPromptBlock.withAgentPrompt(body, finding, includeSuggestion);
+    }
+    return body;
+  }
+
   /**
    * The inline comment's text. A thread on removed lines also carries the finding's head-side line
    * in its marker, since GitHub numbers that thread on the base side (#1360).
    */
   private String commentBody(
       Finding finding, int findingId, InlineAnchor anchor, boolean includeSuggestion) {
-    var body = suggestionFormatter.formatReviewComment(finding, includeSuggestion, findingId);
+    var body = formatInlineFindingComment(finding, includeSuggestion, findingId);
     return anchor.side() == DiffLineResolver.Side.LEFT
         ? SuggestionFormatter.withMarkedLine(body, finding.line())
         : body;
