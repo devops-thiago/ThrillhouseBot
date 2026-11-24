@@ -64,6 +64,11 @@ public class CommentCommandService {
   static final String PAUSED_NOTICE =
       "⏸️ ThrillhouseBot is paused on this PR. Comment `/resume` to re-enable reviews.";
 
+  /** Posted when {@code /review} lands on a closed or merged PR (#1458). */
+  static final String CLOSED_NOTICE =
+      "🔒 This pull request is closed or merged, so `/review` did nothing. "
+          + "Reopen it and comment `/review` again to get a review.";
+
   /**
    * Posted when {@code /summary} declines because the PR already carries a bot summary. The command
    * only regenerates a summary that is missing, so the way to get a fresh one is to delete the
@@ -208,13 +213,30 @@ public class CommentCommandService {
 
   /** Posts the paused notice asynchronously — used when a {@code /review} lands on a paused PR. */
   public void notifyPaused(CommandContext ctx) {
+    postNotice(ctx, PAUSED_NOTICE, "paused");
+  }
+
+  /**
+   * Posts the closed notice asynchronously — used when a {@code /review} lands on a closed or
+   * merged PR (#1458).
+   */
+  public void notifyClosed(CommandContext ctx) {
+    postNotice(ctx, CLOSED_NOTICE, "closed");
+  }
+
+  private void postNotice(CommandContext ctx, String notice, String kind) {
     executor.execute(
         () -> {
           try {
-            postComment(authClient.getAuthHeader(ctx.installationId()), ctx, PAUSED_NOTICE);
+            postComment(authClient.getAuthHeader(ctx.installationId()), ctx, notice);
           } catch (RuntimeException e) {
             log.warn(
-                "Failed to post paused notice on {}/{} #{}", ctx.owner(), ctx.repo(), num(ctx), e);
+                "Failed to post {} notice on {}/{} #{}",
+                kind,
+                ctx.owner(),
+                ctx.repo(),
+                num(ctx),
+                e);
           }
         });
   }
