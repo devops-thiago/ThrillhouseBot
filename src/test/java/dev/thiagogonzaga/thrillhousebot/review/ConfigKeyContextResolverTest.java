@@ -472,6 +472,15 @@ class ConfigKeyContextResolverTest {
       assertTrue(ConfigKeyContextResolver.isTestPath("src/AppSettingsTests.cs"));
       assertTrue(ConfigKeyContextResolver.isTestPath("src/Api2Tests.cs"));
       assertTrue(ConfigKeyContextResolver.isTestPath("src/UITests.cs"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("pkg/config_test.go"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("test.py"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("conftest.py"));
+      assertTrue(ConfigKeyContextResolver.isTestPath("src/ConfigSpec.scala"));
+      assertFalse(ConfigKeyContextResolver.isTestPath("cmd/latest.go"));
+      assertFalse(ConfigKeyContextResolver.isTestPath("src/contest.py"));
+      assertFalse(ConfigKeyContextResolver.isTestPath("pkg/attest.go"));
+      assertFalse(ConfigKeyContextResolver.isTestPath("src/Latest.java"));
+      assertFalse(ConfigKeyContextResolver.isTestPath("lib/respec.rb"));
       assertTrue(ConfigKeyContextResolver.isTestPath("src/APITests.cs"));
       assertTrue(ConfigKeyContextResolver.isTestPath("tests.py"));
       assertTrue(ConfigKeyContextResolver.isTestPath("src/app_tests.rs"));

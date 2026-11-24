@@ -16,15 +16,16 @@ There are no new GitHub App permissions.
 
 ### Added
 
-- **Opt-in collapsed agent prompt on inline findings** (#1432): when
-  `REVIEW_AGENT_PROMPT_ENABLED` is on, each inline comment gains a `<details>` block with scope,
-  problem summary and fix guidance derived from the finding already posted — no extra model call.
-- **Opt-in batched inline review** (#1434): when `REVIEW_BATCHED_INLINE_REVIEW_ENABLED` is on, a
-  round opens one pending pull request review, attaches each inline thread to it, and submits it
-  once instead of leaving one empty review per finding. The shell opens only when inline posting
-  is attempted on a changed file, is cleared when nothing lands inline, dismisses any stranded
-  bot-owned pending review before a new one, and is dropped after a refused submit falls back to
-  a body-only review.
+- **A collapsed agent prompt on inline findings** (#1432): with `REVIEW_AGENT_PROMPT_ENABLED`
+  (default off), each inline finding comment ends with a collapsed "Agent prompt" block giving the
+  file, line, problem and suggested fix, built from the finding already posted. It makes no model
+  call, and file-level comments do not get it.
+- **Inline findings in one pending review** (#1434): with `REVIEW_BATCHED_INLINE_REVIEW_ENABLED`
+  (default off), a round opens one pending pull request review, attaches each inline comment to
+  it and submits it once, instead of posting each comment on its own. A round with nothing to
+  post inline opens none. A pending review the bot left behind is deleted before a new one is
+  opened, and when GitHub refuses the submit, the round posts a review without the inline
+  comments and says so in its body.
 - **The summary comment carries a machine-readable list of the open findings** (#1433): a hidden
   `<!-- thrillhousebot:findings v=1 [...] -->` line after the summary's markers lists each open
   finding's key, file, line, risk, confidence, whether it has an inline thread or is listed under
@@ -56,6 +57,11 @@ There are no new GitHub App permissions.
   `process.env`, `Environment.GetEnvironmentVariable`, `env::var`, …), then entry-point files
   (`main`, `Program`, `app`, `index`, `server`, `startup`). The fetch budget is unchanged, and the
   new tiers only use what the named files leave.
+- **A source file whose name ends in "test" or "spec" is no longer taken for a test**: the config
+  key lookup skipped any file whose name contained `test.` or `spec.`, so `latest.go`,
+  `contest.py` or `attest.go` was never read for key definitions. A name now counts as a test only
+  when `test`, `tests` or `spec` is a word of its own before the extension (`foo_test.go`,
+  `config.spec.ts`, `AppConfigTest.java`), or when it is `conftest.py`.
 - **A carried-gap label after a possessive or "the" no longer reads "the a previously listed
   gap"** (#1398): the summary rewrote an echoed label such as "G1" to "a previously listed gap"
   wherever it stood, so "the earlier summary's G1" became "the earlier summary's a previously

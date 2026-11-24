@@ -119,8 +119,9 @@ final class NamedFiles {
     return isNameChar(c);
   }
 
+  /** Underscores are not checked here: {@link #mentions} steps over them as emphasis first. */
   private static boolean isNameChar(char c) {
-    return Character.isLetterOrDigit(c) || c == '_' || c == '-' || c == '.';
+    return Character.isLetterOrDigit(c) || c == '-' || c == '.';
   }
 
   private static String fileName(String path) {
