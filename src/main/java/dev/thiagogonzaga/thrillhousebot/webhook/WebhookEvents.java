@@ -460,7 +460,7 @@ public class WebhookEvents {
             payload.comment().body());
 
     if (command == CommentCommand.REVIEW) {
-      return handleReviewCommand(ctx);
+      return handleReviewCommand(ctx, payload.issue().closed());
     }
     commentCommandService.handle(ctx);
     return true;
@@ -646,7 +646,7 @@ public class WebhookEvents {
     return queued;
   }
 
-  private boolean handleReviewCommand(CommentCommandService.CommandContext ctx) {
+  private boolean handleReviewCommand(CommentCommandService.CommandContext ctx, boolean closed) {
     if (prPauseService.isPaused(ctx.scope(), ctx.owner(), ctx.repo(), ctx.prNumber())) {
       log.info(
           "Ignoring /review on paused PR #{} in {}/{}", ctx.prNumber(), ctx.owner(), ctx.repo());
@@ -659,6 +659,14 @@ public class WebhookEvents {
           "Ignoring unauthorized manual review trigger from @{} on PR #{}",
           ctx.login(),
           ctx.prNumber());
+      return true;
+    }
+    if (closed) {
+      // #1458: a closed or merged PR has nothing left to fix, so no review runs and no model is
+      // called. The notice comes after the authorization so a stranger cannot make the bot post.
+      log.info(
+          "Ignoring /review on closed PR #{} in {}/{}", ctx.prNumber(), ctx.owner(), ctx.repo());
+      commentCommandService.notifyClosed(ctx);
       return true;
     }
     log.info("Manual review triggered by @{} on PR #{}", ctx.login(), ctx.prNumber());

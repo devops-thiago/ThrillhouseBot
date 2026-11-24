@@ -6,6 +6,10 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **`/review` no longer reviews a closed or merged pull request (#1458).** The comment path never
+  looked at the pull request's state, so a `/review` after the merge ran a full review and asked
+  for fixes nobody could push. The bot now answers with a fixed notice and calls no model; reopen
+  the pull request to review it again.
 - **Config key definitions are found in ordinarily-named files** (#642): the "Config key
   definitions from the repository" section only read `application*` resources and source files
   whose name ended in `config`, `settings`, `properties` or `env`, so a key read in `main.go`,

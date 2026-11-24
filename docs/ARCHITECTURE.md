@@ -82,7 +82,7 @@ installation client is built on the ack path: the observers receive the raw even
 | Event | What it starts |
 |---|---|
 | `pull_request` `opened`, `reopened`, `synchronize`, `ready_for_review` | An automatic review, unless the PR is paused, filtered out by the `WEBHOOK_*` trigger settings (drafts, labels, base branches), or reviewed less than `AUTO_REVIEW_MIN_INTERVAL` ago (default `0`, window off). `ready_for_review` clears that window. |
-| `issue_comment` with `/review` or `@thrillhousebot review` | A manual review. It bypasses the trigger filters and the rate-limit window, and needs write access. |
+| `issue_comment` with `/review` or `@thrillhousebot review` | A manual review. It bypasses the trigger filters and the rate-limit window, and needs write access. On a closed or merged PR it posts a notice instead of reviewing. |
 | `issue_comment` with another command | The command: `/help`, `/summary`, `/describe`, `/changelog`, `/add-docs`, `/improve`, `/generate-tests`, `/resolve`, `/pause`, `/resume`, `/learnings`, `/remember`, `/forget`. `/summary` runs a review that posts a new summary comment. |
 | `issue_comment` mentioning the bot without a command | A conversational reply in the PR conversation. No 👀 reaction. |
 | `pull_request_review_comment` | A reply in the review thread when it mentions the bot, and finding-feedback capture when it answers a finding. |

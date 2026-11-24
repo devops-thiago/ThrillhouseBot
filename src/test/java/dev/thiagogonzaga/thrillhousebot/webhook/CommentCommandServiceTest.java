@@ -588,6 +588,13 @@ class CommentCommandServiceTest {
   }
 
   @Test
+  void notifyClosedPostsTheNotice() {
+    service.notifyClosed(ctx(CommentCommand.REVIEW));
+
+    assertEquals(CommentCommandService.CLOSED_NOTICE, postedBody());
+  }
+
+  @Test
   void resolveContinuesWhenOneThreadResolutionThrows() {
     authorize(true);
     when(reviewClient.listPullRequestComments(any(), any(), eq("owner"), eq("repo"), eq(7)))
@@ -668,6 +675,14 @@ class CommentCommandServiceTest {
     when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("boom"));
 
     assertDoesNotThrow(() -> service.notifyPaused(ctx(CommentCommand.REVIEW)));
+    verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void notifyClosedSwallowsRuntimeExceptions() {
+    when(authClient.getAuthHeader(anyLong())).thenThrow(new RuntimeException("boom"));
+
+    assertDoesNotThrow(() -> service.notifyClosed(ctx(CommentCommand.REVIEW)));
     verify(commentClient, never()).createComment(any(), any(), any(), any(), anyInt(), any());
   }
 

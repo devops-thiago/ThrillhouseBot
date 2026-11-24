@@ -1273,6 +1273,54 @@ class WebhookEventsTest {
   }
 
   @Test
+  void shouldSkipManualReviewOnClosedPr() {
+    when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
+
+    deliver("issue_comment", event("issue_comment", DELIVERY, closedReviewComment("closed")));
+
+    // #1458: a closed or merged PR is not reviewed; the commenter gets the fixed notice instead.
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(commentCommandService).notifyClosed(any(CommentCommandService.CommandContext.class));
+  }
+
+  @Test
+  void anUnauthorizedReviewOnClosedPrPostsNothing() {
+    when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized(
+            anyString(), anyString(), anyLong(), anyString(), any()))
+        .thenReturn(false);
+
+    deliver("issue_comment", event("issue_comment", DELIVERY, closedReviewComment("closed")));
+
+    verify(reviewDispatcher, never()).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(commentCommandService, never()).notifyClosed(any());
+  }
+
+  @Test
+  void aManualReviewStillRunsWhenThePayloadSaysThePrIsOpen() {
+    when(triggerDetector.detectCommand("/review")).thenReturn(CommentCommand.REVIEW);
+    when(triggerDetector.isBotComment("octocat")).thenReturn(false);
+    when(manualReviewAuthorizer.isAuthorized("owner", "repo", 12345L, "octocat", "OWNER"))
+        .thenReturn(true);
+
+    deliver("issue_comment", event("issue_comment", DELIVERY, closedReviewComment("open")));
+
+    verify(reviewDispatcher).dispatch(any(ReviewOrchestrator.ReviewRequest.class));
+    verify(commentCommandService, never()).notifyClosed(any());
+  }
+
+  /** A {@code /review} comment on PR #77 whose issue carries the given state. */
+  private byte[] closedReviewComment(String state) {
+    return buildIssueCommentPayload("created", 77, "owner/repo", "octocat", "/review")
+        .replace("\"issue\":{", "\"issue\":{\"state\":\"" + state + "\",")
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
+  @Test
   void shouldRouteNonReviewCommandsToCommandService() {
     when(triggerDetector.detectCommand("/help")).thenReturn(CommentCommand.HELP);
     when(triggerDetector.isBotComment("octocat")).thenReturn(false);

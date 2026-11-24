@@ -117,7 +117,22 @@ public record WebhookPayload(
       int number,
       String title,
       String body,
-      @JsonProperty("pull_request") PullRequestLink pullRequest) {}
+      String state,
+      @JsonProperty("pull_request") PullRequestLink pullRequest) {
+
+    /** An issue whose state is not known, which reads as open. */
+    public Issue(int number, String title, String body, PullRequestLink pullRequest) {
+      this(number, title, body, null, pullRequest);
+    }
+
+    /**
+     * Whether GitHub reported the issue as closed, which for a pull request covers a merged one too
+     * (#1458). An absent state reads as open, so a payload without it is handled as before.
+     */
+    public boolean closed() {
+      return "closed".equalsIgnoreCase(state);
+    }
+  }
 
   @RegisterForReflection
   public record PullRequestLink(
