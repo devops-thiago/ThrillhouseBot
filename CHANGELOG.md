@@ -6,6 +6,12 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **A carried-gap label after a possessive or "the" no longer reads "the a previously listed
+  gap"** (#1398): the summary rewrote an echoed label such as "G1" to "a previously listed gap"
+  wherever it stood, so "the earlier summary's G1" became "the earlier summary's a previously
+  listed gap". After a possessive (`'s`, `’s`, a plural `s'`, "its", "their") or "the", "this" or
+  "that" the rewrite now leaves out the article, and "the G1 gap" reads "the previously listed
+  gap". A "that" that opens a clause ("says that G1 is open") keeps it.
 - **Findings from rounds before the previous one are re-checked when they could be fixed**
   (#1316): an older round's open finding was put back to the model only when its file was known
   to have changed since the round that raised it. When that could not be told (more round heads
