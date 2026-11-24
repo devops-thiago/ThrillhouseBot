@@ -144,6 +144,14 @@ class FindingsManifestTest {
   }
 
   @Test
+  void aFindingWithNoConfidenceIsGradedHighAsTheRecordDefaultsIt() throws Exception {
+    var entries =
+        manifest(result(List.of(finding(RiskLevel.HIGH, null, "a", 1, "t", null)), List.of()));
+
+    assertEquals("high", entries.get(0).get("confidence").asText());
+  }
+
+  @Test
   void aPathCannotCloseTheCommentOrBreakTheLine() throws Exception {
     var path = "src/--> <script>\"x\"\\\n&.java";
     var line =
