@@ -32,10 +32,12 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.WebApplicationException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Predicate;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
@@ -159,12 +161,42 @@ public class ReviewPublisher {
       ReviewResult result,
       boolean forceSummary,
       String prText) {
+    return publishSummary(
+        new SummaryRequest(auth, owner, repo, prNumber, result, forceSummary, prText, null));
+  }
+
+  /**
+   * One summary publish. {@code lineResolver} is the round's diff, from which the manifest decides
+   * which findings {@link #postReview} will open a thread for (#1433); {@code null} falls back to
+   * {@link Finding#postsInline}.
+   */
+  record SummaryRequest(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      ReviewResult result,
+      boolean forceSummary,
+      String prText,
+      DiffLineResolver lineResolver) {}
+
+  /** See {@link #publishSummary(String, String, String, int, ReviewResult, boolean, String)}. */
+  boolean publishSummary(SummaryRequest summary) {
+    var auth = summary.auth();
+    var owner = summary.owner();
+    var repo = summary.repo();
+    var prNumber = summary.prNumber();
+    var result = summary.result();
+    var prText = summary.prText();
     if (result.summaryMarkdown().isBlank()) {
       return false;
     }
     var prTextLine = prText == null ? "" : DescriptionGapCarryover.prTextMarker(prText) + "\n";
+    var scrubbed = PromptLabelScrubber.scrub(result);
     var manifestLine =
-        FindingsManifest.render(PrSummaryGenerator.currentState(PromptLabelScrubber.scrub(result)))
+        FindingsManifest.render(
+                PrSummaryGenerator.currentState(scrubbed),
+                threadRule(scrubbed, summary.lineResolver()))
             + "\n";
     var request =
         new GitHubCommentClient.CreateCommentRequest(
@@ -173,12 +205,47 @@ public class ReviewPublisher {
                 + prTextLine
                 + manifestLine
                 + PromptLabelScrubber.scrubMarkdown(result.summaryMarkdown(), result.findings()));
-    if (result.isFirstReview() || forceSummary) {
+    if (result.isFirstReview() || summary.forceSummary()) {
       commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
       return true;
     }
     upsertSummaryComment(auth, owner, repo, prNumber, request);
     return result.hasSupersededPrevious();
+  }
+
+  /**
+   * Which manifest entries {@link #postReview} is set to open an inline thread for (#1433): of the
+   * round's own findings, in the order they are posted, those that post inline on a changed file
+   * ({@link DiffLineResolver#isChangedFile}), up to {@code maxReviewComments}, the same rules
+   * {@link #postInlineComments} applies. Entries are matched by {@link
+   * SuggestionFormatter#findingKey}, so a re-raised finding the summary lists at an earlier
+   * severity still matches. An entry carried from an earlier round, which this round does not post,
+   * keeps {@link Finding#postsInline}. The rule cannot know which posts GitHub will refuse, so
+   * {@code thread} says a thread is expected, not that it exists.
+   */
+  private Predicate<Finding> threadRule(ReviewResult round, DiffLineResolver lineResolver) {
+    if (lineResolver == null) {
+      return Finding::postsInline;
+    }
+    var roundKeys = new HashSet<String>();
+    var threadKeys = new HashSet<String>();
+    var slots = config.review().maxReviewComments();
+    for (var finding : round.findings()) {
+      var key = manifestKey(finding);
+      roundKeys.add(key);
+      if (slots > 0 && finding.postsInline() && lineResolver.isChangedFile(finding.file())) {
+        threadKeys.add(key);
+        slots--;
+      }
+    }
+    return finding -> {
+      var key = manifestKey(finding);
+      return roundKeys.contains(key) ? threadKeys.contains(key) : finding.postsInline();
+    };
+  }
+
+  private static String manifestKey(Finding finding) {
+    return SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title());
   }
 
   /**

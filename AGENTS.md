@@ -489,8 +489,12 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
   so it lists exactly the set the summary renders and its `key` equals the inline marker's, which is
   computed over the scrubbed title). It is a view, never a source of truth: nothing reads it back.
   Entries hold identifiers and enums only (`key`, `file`, `line`, `risk`, `confidence`, `status`
-  always `open`, `thread` from `Finding.postsInline`, `hasSuggestion`, `carried`), most severe first;
-  no title, description or suggestion enters it. The path is the only free text and is escaped so it
+  always `open`, `thread`, `hasSuggestion`, `carried`), most severe first; no title, description
+  or suggestion enters it. `thread` comes from `ReviewPublisher.threadRule`, which applies the
+  rules `postInlineComments` posts by: a round finding that posts inline, on a path
+  `DiffLineResolver.isChangedFile` accepts, within `maxReviewComments` in posting order, matched by
+  key; a carried finding keeps `Finding.postsInline`. The summary is written before the review, so
+  `thread` means a thread is expected, not that GitHub took it. The path is the only free text and is escaped so it
   can never write `-->`; the line stays one line. An empty set renders `[]` (so "nothing open" differs
   from a comment older than the manifest), and a set over `MAX_ENTRIES` entries or
   `MAX_ARRAY_CHARS` rendered characters (the path has no length bound) is cut with `omitted=N` in

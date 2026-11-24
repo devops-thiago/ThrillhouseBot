@@ -30,10 +30,11 @@ There are no new GitHub App permissions.
   a reply in a finding's thread waits for the pending review to close, for at most two minutes.
 - **The summary comment carries a machine-readable list of the open findings** (#1433): a hidden
   `<!-- thrillhousebot:findings v=1 [...] -->` line after the summary's markers lists each open
-  finding's key, file, line, risk, confidence, whether it has an inline thread or is listed under
-  "Things to double-check", whether it has a suggestion, and whether it was carried from an earlier
-  review. It holds no model-written text, lists at most 200 entries (`omitted=N` counts the rest),
-  and is `[]` when nothing is open.
+  finding's key, file, line, risk, confidence, whether the review opens an inline thread for it
+  (it posts inline, on a file the pull request changes, within the comment cap), whether it has a
+  suggestion, and whether it was carried from an earlier review. It holds no model-written text,
+  lists at most 100 entries or 16,000 characters (`omitted=N` counts the rest), and is `[]` when
+  nothing is open.
 
 ### Changed
 
