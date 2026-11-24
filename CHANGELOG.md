@@ -16,6 +16,62 @@ All notable changes to ThrillhouseBot.
   `process.env`, `Environment.GetEnvironmentVariable`, `env::var`, …), then entry-point files
   (`main`, `Program`, `app`, `index`, `server`, `startup`). The fetch budget is unchanged, and the
   new tiers only use what the named files leave.
+- **A carried-gap label after a possessive or "the" no longer reads "the a previously listed
+  gap"** (#1398): the summary rewrote an echoed label such as "G1" to "a previously listed gap"
+  wherever it stood, so "the earlier summary's G1" became "the earlier summary's a previously
+  listed gap". After a possessive (`'s`, `’s`, a plural `s'`, "its", "their") or "the", "this" or
+  "that" the rewrite now leaves out the article, and "the G1 gap" reads "the previously listed
+  gap". A "that" that opens a clause ("says that G1 is open") keeps it.
+- **Findings from rounds before the previous one are re-checked when they could be fixed**
+  (#1316): an older round's open finding was put back to the model only when its file was known
+  to have changed since the round that raised it. When that could not be told (more round heads
+  than the review compares, or a comparison at GitHub's file cap) it was never asked about again
+  and stayed open after its fix. It is now asked about every round. A finding whose own file is
+  unchanged is also asked about, and its `resolved` stands, when another file its title or
+  description names changed since: a finding that a document and the code disagree can be fixed
+  in the document while the code line it quotes stays the same.
+- The review session row records the review's outcome instead of per-call values (#1417):
+  - `durationMs` is the review's elapsed time from start to its final status. It was the sum of
+    the model calls' durations, which counted parallel and retried calls each time and left out
+    the time spent outside model calls.
+  - A model call that fails no longer sets the session to `failed`. The review's final outcome
+    sets the status, so a call that is retried and succeeds leaves the review `completed`.
+  - A completed session has no error message. Failed calls are counted in a new
+    `failedmodelcalls` column (migration V5, default 0), shown as "Failed model calls" on the
+    dashboard's session page.
+- **A webhook redelivered after a restart is no longer reviewed twice** (#1374): the delivery ids
+  used to drop GitHub redeliveries were kept only in memory, so after a restart, a redeploy or a
+  scale from zero, a retried or manually redelivered `pull_request` delivery ran a second full
+  review on the same commit. The ids are now also stored in a new table, `webhook_delivery`
+  (migration V4, created on the first start), for `WEBHOOK_DEDUP_TTL`; the first instance to store
+  an id handles the delivery, a delivery whose dispatch failed can still be redelivered, and
+  expired rows are deleted hourly. A database failure falls back to the in-memory check.
+- **The review probes path and name rules that match too much** (#1385): the request for parsing
+  and matching code weighted silent misses over false matches, and its examples were all regex,
+  whitespace and line-ending probes. A whole-word file-name match and a Go import resolved by
+  directory suffix both matched files they should not, and neither was ever probed. The request
+  now treats both directions alike, lists path and name matching (`endsWith`, basename, whole-word
+  matches over paths) as decision rules with same-name, suffix/prefix and module-path probes, asks
+  for one probe per branch of a per-language rule, and counts a guard that one branch has and its
+  parallel lacks as evidence.
+- **A finding closed in one follow-up round is no longer closed and counted again in later
+  rounds** (#1409): a round stored the model's status for each previous finding, not the status
+  the round ended with, so a finding a maintainer's clear resolved or whose code left the diff
+  was still open to the next round, which closed it again under "Previous findings resolved" or
+  "superseded" and named it again. A round now stores its final statuses, and a stored
+  `superseded` closes the finding for later rounds. Findings carried from a run that stood down
+  no longer drop the earlier rounds' closes recorded with the round they join, which had made a
+  finding close a third time.
+- A pull request head that moved while the review loaded its context no longer posts the "review
+  could not be completed" comment. The run ends as superseded, like a head that moves later in the
+  review: the skip is counted under `HEAD_MOVED`, the check run is concluded as skipped, and no
+  failed review is counted or notified. The review of the new head runs as before. A head that
+  cannot be read is still a failure. (#1412)
+- **Exported telemetry carries `service.instance.id`** (#1373): instances exporting to one
+  backend had identical resource attributes, so their metrics landed in one series and cumulative
+  counters such as `thrillhouse.reviews.total` overwrote each other. The id is `HOSTNAME`, or a
+  random id generated at startup when it is unset, and `OTEL_RESOURCE_ATTRIBUTES` (new) can set it
+  or add other resource attributes.
 
 ## [0.9.2] - 2026-11-16
 

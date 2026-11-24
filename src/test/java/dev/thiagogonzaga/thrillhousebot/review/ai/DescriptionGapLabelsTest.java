@@ -234,4 +234,76 @@ class DescriptionGapLabelsTest {
         DescriptionGapLabels.stripIssued(
             List.of("The TTL is never read (G1, still open; see the CI half)."), 1));
   }
+
+  /** ThrillhouseBot-test#292: the referent after a possessive or a determiner has no article. */
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      quoteCharacter = '"',
+      value = {
+        "Linked issue #281: the earlier summary's G1 (maxManifestRecords declared but unused) still"
+            + " shows no limit.|Linked issue #281: the earlier summary's previously listed gap"
+            + " (maxManifestRecords declared but unused) still shows no limit.",
+        "The earlier summary’s G1 (x) still shows no limit.|The earlier summary’s previously listed"
+            + " gap (x) still shows no limit.",
+        "Nothing closes the G1 gap yet.|Nothing closes the previously listed gap yet.",
+        "Nothing closes the G1 and G2 gaps yet.|Nothing closes the previously listed gaps yet.",
+        "Nothing closes the G3 and G1 gap yet.|Nothing closes the G3 and previously listed gap"
+            + " yet.",
+        "Nothing closes the G3, G1 and G2 yet.|Nothing closes the G3, previously listed gap and"
+            + " previously listed gap yet.",
+        "Nothing closes the G1 and G3 gaps yet.|Nothing closes the previously listed gap and G3"
+            + " gaps yet.",
+        "Nothing closes the G1 gapless check.|Nothing closes the previously listed gap gapless"
+            + " check.",
+        "The summary says that G1 is still open.|The summary says that a previously listed gap"
+            + " is still open.",
+        "Nothing closes that G2.|Nothing closes that previously listed gap.",
+        "The summary says that G1 (maxRecords unused) is still open.|The summary says that a"
+            + " previously listed gap (maxRecords unused) is still open.",
+        "Nothing closes that G2 (x) yet.|Nothing closes that previously listed gap (x) yet.",
+        "Nothing closes that G2 (x).|Nothing closes that previously listed gap (x).",
+        "The cover résumé’s G1 (x) stays.|The cover résumé’s previously listed gap (x) stays.",
+        "Nothing closes the G1 gap yet.|Nothing closes the previously listed gap" + " yet.",
+        "Nothing closes per G1 gap yet.|Nothing closes per a previously listed gap gap yet.",
+        "Nothing closes this G2 yet.|Nothing closes this previously listed gap yet.",
+        "Nothing closes that G2 yet.|Nothing closes that previously listed gap yet.",
+        "The cap keeps its G1 shape yet.|The cap keeps its previously listed gap shape yet.",
+        "The reviewers keep their G1 notes.|The reviewers keep their previously listed gap notes.",
+        "The reviewers' G1 notes stay.|The reviewers' previously listed gap notes stay.",
+        "The reviewers’ G1 notes stay.|The reviewers’ previously listed gap notes stay.",
+        "Nothing closes the' G1 yet.|Nothing closes the' a previously listed gap yet.",
+        "THE G1 half stays.|THE previously listed gap half stays.",
+        "Nothing closes the G1 and G3 halves.|Nothing closes the previously listed gap and G3"
+            + " halves.",
+        "Nothing closes the summary's G1 and G2 yet.|Nothing closes the summary's previously"
+            + " listed gaps yet.",
+        "The cap is missing per G1 still.|The cap is missing per a previously listed gap still.",
+        "Breathe G1 in.|Breathe a previously listed gap in.",
+        "Nothing closes the       G1 gap.|Nothing closes the previously listed gap."
+      })
+  void anIssuedLabelAfterAPossessiveOrADeterminerLosesTheArticle(String gap, String expected) {
+    assertEquals(List.of(expected), DescriptionGapLabels.stripIssued(List.of(gap), 2));
+  }
+
+  /** A parenthetical before the verb may wrap onto a new line or hold parentheses of its own. */
+  @Test
+  void aWrappedOrNestedParentheticalBeforeTheVerbKeepsTheArticle() {
+    assertEquals(
+        List.of("The summary says that a previously listed gap (see the\nfailing CI job) is open."),
+        DescriptionGapLabels.stripIssued(
+            List.of("The summary says that G1 (see the\nfailing CI job) is open."), 1));
+    assertEquals(
+        List.of("The summary says that a previously listed gap (a (b)) is open."),
+        DescriptionGapLabels.stripIssued(List.of("The summary says that G1 (a (b)) is open."), 1));
+  }
+
+  /** A word that only ends in a determiner, cut at the reach of the look-back, is no determiner. */
+  @Test
+  void aDeterminerCutFromALongerWordIsNoDeterminer() {
+    var word = "x".repeat(40) + "the";
+    assertEquals(
+        List.of("Keep " + word + " a previously listed gap now."),
+        DescriptionGapLabels.stripIssued(List.of("Keep " + word + " G1 now."), 1));
+  }
 }

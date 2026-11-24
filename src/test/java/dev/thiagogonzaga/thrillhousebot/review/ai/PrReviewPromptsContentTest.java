@@ -347,7 +347,7 @@ class PrReviewPromptsContentTest {
     assertContains(
         req,
         "NEGATIVE (it silently misses",
-        "the pass must weight silent misses, not only visible false positives");
+        "the pass must probe silent misses, which reading the rule does not show");
     assertContains(
         req,
         "never present it as quoted material",
@@ -356,6 +356,51 @@ class PrReviewPromptsContentTest {
         req,
         "not a nitpick",
         "an unexecutable heuristic limitation must not be omitted as uncertain");
+  }
+
+  /**
+   * #1385: on #1342 every heuristic finding was a regex miss, while a whole-word file-name match
+   * and a Go import resolved by directory suffix both matched too much and were never probed.
+   */
+  @Test
+  void heuristicRequestProbesOverBroadPathAndNameMatches() {
+    String req = PrReviewPrompts.HEURISTIC_FAILURE_MODES_REQUEST;
+    assertContains(
+        req,
+        "Probe BOTH directions with equal weight",
+        "neither direction may be weighted over the other (#1385)");
+    assertFalse(
+        req.contains("weight the one the code cannot tell you about"),
+        "the request must no longer weight false negatives over false positives (#1385)");
+    assertContains(
+        req,
+        "is a correctness defect, not a visible one",
+        "a false positive that feeds a later step is a defect (#1385)");
+    assertContains(
+        req,
+        "a path or name\n  match (`endsWith`, `startsWith`, `contains`, a basename or whole-word match",
+        "path and name matching must be listed as a decision rule (#1385)");
+    assertContains(
+        req,
+        "two files\n  with the same common name (`index.ts`, `__init__.py`, `mod.rs`, `main.go`)",
+        "the same-name collision probe must be named (#1385)");
+    assertContains(
+        req,
+        "a path\n  that is a suffix or prefix of another",
+        "the suffix/prefix path probe must be named (#1385)");
+    assertContains(
+        req,
+        "a standard-library or third-party module\n  path that ends with a repository directory's"
+            + " name",
+        "the module-path probe must be named (#1385)");
+    assertContains(
+        req,
+        "that asymmetry is in-diff evidence",
+        "a guard on one branch and not its parallel is evidence (#1385)");
+    assertContains(
+        req,
+        "probe at least one input per branch",
+        "a per-language resolver must be probed per branch (#1385)");
   }
 
   @Test

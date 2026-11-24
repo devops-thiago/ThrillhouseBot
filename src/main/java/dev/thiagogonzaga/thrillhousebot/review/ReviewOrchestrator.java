@@ -34,6 +34,8 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -549,14 +551,10 @@ public class ReviewOrchestrator {
           doneReq,
           "complete the session",
           () -> {
-            // #1066: the earlier rounds' findings this round closed are recorded with the round,
-            // so the next round's replay no longer carries them and does not close or name them
-            // again.
-            var closedEarlier = result.earlierRoundClosedMembers();
-            if (!closedEarlier.isEmpty()) {
-              findingPipeline.persistAiResponse(
-                  session, aiResponse.withClosedEarlierRound(closedEarlier));
-            }
+            // #1066, #1409: the round is stored with its final statuses and the earlier rounds'
+            // findings it closed, so the next round's replay no longer carries a finding the code
+            // closed here and does not close or name it again.
+            findingPipeline.persistAiResponse(session, result.recordedResponse(aiResponse));
             // Persist first: a failed write must skip the broadcast so persisted and live
             // dashboard state stay consistent.
             applyReviewResult(session, result);
@@ -582,7 +580,7 @@ public class ReviewOrchestrator {
             req.repo(),
             req.prNumber());
       } else {
-        handleReviewFailure(auth, req, session, checkRunId, e);
+        endUnpublishedRun(auth, req, session, checkRunId, e);
       }
     } finally {
       // Every outcome but a CI hold — a verdict with findings, a failure, a superseded run — is
@@ -648,6 +646,46 @@ public class ReviewOrchestrator {
   void closeStoodDownSession(ReviewSession session, PrePublishGuard.StandDown stoodDown) {
     try {
       applyReviewFailure(session, stoodDown.sessionError());
+    } catch (RuntimeException persistenceError) {
+      Log.warnf(
+          persistenceError, "Failed to persist %s review session %d", stoodDown.kind(), session.id);
+    }
+    broadcaster.broadcast(SessionEventBroadcaster.SessionEvent.failed(session));
+  }
+
+  /**
+   * Ends a run that stopped before its result reached the pull request: a head that moved while the
+   * context loaded supersedes it quietly (#1412), anything else is a failure.
+   */
+  private void endUnpublishedRun(
+      String auth, ReviewRequest req, ReviewSession session, long checkRunId, RuntimeException e) {
+    if (e instanceof ReviewContextLoader.StaleReviewException stale && stale.headMoved()) {
+      closeSupersededWhileLoading(auth, req, session, checkRunId, stale.currentHead());
+    } else {
+      handleReviewFailure(auth, req, session, checkRunId, e);
+    }
+  }
+
+  /**
+   * Closes out a run whose head moved while its context loaded (#1412). A push superseded it and
+   * the dispatcher already queued the review of the new head, so this is not a failure: nothing is
+   * posted, no failure is counted or notified, and the check run is concluded as skipped. The
+   * session row reads like any other superseded run's, with its elapsed time as {@code durationMs}
+   * (#1417). Visible for tests.
+   */
+  void closeSupersededWhileLoading(
+      String auth, ReviewRequest req, ReviewSession session, long checkRunId, String freshHead) {
+    var stoodDown =
+        standDown.supersededWhileLoading(auth, req, checkRunId, sessionUrl(session), freshHead);
+    var elapsedMs = elapsedMs(session);
+    try {
+      applySessionState(
+          session,
+          s -> {
+            s.setStatus(ReviewSession.STATUS_FAILED);
+            s.setErrorMessage(stoodDown.sessionError());
+            s.setDurationMs(elapsedMs);
+          });
     } catch (RuntimeException persistenceError) {
       Log.warnf(
           persistenceError, "Failed to persist %s review session %d", stoodDown.kind(), session.id);
@@ -924,10 +962,15 @@ public class ReviewOrchestrator {
 
   /** Applies review completion fields to the in-memory session and persisted entity together. */
   void applyReviewResult(ReviewSession session, ReviewResult result) {
+    var elapsedMs = elapsedMs(session);
     applySessionState(
         session,
         s -> {
           s.setStatus(ReviewSession.STATUS_COMPLETED);
+          // #1417: a model call that failed and was retried is counted on the row, not left as its
+          // error on a review that completed.
+          s.setErrorMessage(null);
+          s.setDurationMs(elapsedMs);
           s.setCriticalFindings(result.criticalCount());
           s.setHighFindings(result.highCount());
           s.setMediumFindings(result.mediumCount());
@@ -952,16 +995,31 @@ public class ReviewOrchestrator {
    * cannot make the next one treat findings it never posted as already raised.
    */
   void applyReviewFailure(ReviewSession session, String errorMessage) {
+    var elapsedMs = elapsedMs(session);
     applySessionState(
         session,
         s -> {
           s.setStatus(ReviewSession.STATUS_FAILED);
           s.setErrorMessage(errorMessage);
+          s.setDurationMs(elapsedMs);
           if (session.getAiResponseJson() != null) {
             s.setAiResponseJson(session.getAiResponseJson());
           }
         });
     outcomeMetrics.recordFailed();
+  }
+
+  /**
+   * The review's elapsed time so far, from the session's start to now (#1417); 0 for a session with
+   * no start time. Read once per terminal write, so the row and the event broadcast from the
+   * in-memory session carry the same value. Visible for tests.
+   */
+  static long elapsedMs(ReviewSession session) {
+    var started = session.getTimestamp();
+    if (started == null) {
+      return 0L;
+    }
+    return Math.max(0L, Duration.between(started, Instant.now()).toMillis());
   }
 
   private void applySessionState(ReviewSession session, Consumer<ReviewSession> mutator) {

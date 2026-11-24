@@ -21,17 +21,20 @@ import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReactionClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.TestScopes;
+import io.quarkiverse.githubapp.GitHubClientProvider;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.kohsuke.github.GHPermissionType;
+import org.kohsuke.github.GHRepository;
+import org.kohsuke.github.GitHub;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
@@ -41,18 +44,18 @@ class FindingFeedbackCaptureServiceTest {
   @Mock private GitHubAuthClient authClient;
   @Mock private GitHubReactionClient reactionClient;
   @Mock private GitHubReviewClient reviewClient;
-  @Mock private GitHubInstallationClient installationClient;
+  @Mock private GitHubClientProvider clientProvider;
+  @Mock private GitHub gitHub;
+  @Mock private GHRepository repository;
 
   private FindingFeedbackCaptureService capture;
 
   @BeforeEach
-  void setUp() {
+  void setUp() throws Exception {
     MockitoAnnotations.openMocks(this);
-    lenient()
-        .when(
-            installationClient.collaboratorPermission(
-                anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenReturn(new GitHubInstallationClient.CollaboratorPermission("write", "write"));
+    lenient().doReturn(gitHub).when(clientProvider).getInstallationClient(anyLong());
+    lenient().doReturn(repository).when(gitHub).getRepository(anyString());
+    lenient().doReturn(GHPermissionType.WRITE).when(repository).getPermission(anyString());
     capture =
         new FindingFeedbackCaptureService(
             feedbackService,
@@ -60,7 +63,7 @@ class FindingFeedbackCaptureServiceTest {
             authClient,
             reactionClient,
             reviewClient,
-            installationClient);
+            clientProvider);
   }
 
   @AfterEach
@@ -92,7 +95,7 @@ class FindingFeedbackCaptureServiceTest {
         99L,
         reply("   ", "false positive"));
 
-    verifyNoInteractions(installationClient, reviewClient, reactionClient, feedbackService);
+    verifyNoInteractions(clientProvider, reviewClient, reactionClient, feedbackService);
   }
 
   @Test
@@ -107,18 +110,14 @@ class FindingFeedbackCaptureServiceTest {
         99L,
         new FindingFeedbackCaptureService.ReviewReply("octocat", null, "false positive"));
 
-    verifyNoInteractions(installationClient, reviewClient, reactionClient, feedbackService);
+    verifyNoInteractions(clientProvider, reviewClient, reactionClient, feedbackService);
   }
 
   @Test
-  void captureOnReviewReplyRejectsMissingPermissionResponseOrLevel() {
+  void captureOnReviewReplyRejectsUnrecognizedPermission() throws Exception {
     when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
-    when(installationClient.collaboratorPermission(
-            anyString(), anyString(), eq("owner"), eq("repo"), eq("null-response")))
-        .thenReturn(null);
-    when(installationClient.collaboratorPermission(
-            anyString(), anyString(), eq("owner"), eq("repo"), eq("null-level")))
-        .thenReturn(new GitHubInstallationClient.CollaboratorPermission(null, null));
+    doReturn(GHPermissionType.UNKNOWN).when(repository).getPermission(eq("null-response"));
+    doReturn(GHPermissionType.UNKNOWN).when(repository).getPermission(eq("null-level"));
 
     capture.captureOnReviewReply(
         new RepoScope(9L, TestScopes.REPOSITORY_ID),
@@ -139,11 +138,27 @@ class FindingFeedbackCaptureServiceTest {
   }
 
   @Test
-  void captureOnReviewReplyIgnoresPermissionApiException() {
+  void captureOnReviewReplyIgnoresPermissionApiException() throws Exception {
     when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
-    when(installationClient.collaboratorPermission(
-            anyString(), anyString(), eq("owner"), eq("repo"), eq("octocat")))
-        .thenThrow(new RuntimeException("api down"));
+    doThrow(new RuntimeException("api down")).when(repository).getPermission(eq("octocat"));
+
+    assertDoesNotThrow(
+        () ->
+            capture.captureOnReviewReply(
+                new RepoScope(9L, TestScopes.REPOSITORY_ID),
+                "owner",
+                "repo",
+                7,
+                99L,
+                reply("octocat", "false positive")));
+
+    verifyNoInteractions(reviewClient, reactionClient, feedbackService);
+  }
+
+  @Test
+  void captureOnReviewReplyIgnoresUnresolvableRepository() throws Exception {
+    when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
+    doThrow(new java.io.IOException("not found")).when(gitHub).getRepository(eq("owner/repo"));
 
     assertDoesNotThrow(
         () ->
@@ -230,6 +245,25 @@ class FindingFeedbackCaptureServiceTest {
   }
 
   @Test
+  void captureReactionsIgnoresUnresolvableRepository() throws Exception {
+    doThrow(new java.io.IOException("not found")).when(gitHub).getRepository(eq("owner/repo"));
+    var body = "finding\n" + SuggestionFormatter.findingMarker(2);
+
+    assertDoesNotThrow(
+        () ->
+            capture.captureReactions(
+                "Bearer t",
+                new RepoScope(9L, TestScopes.REPOSITORY_ID),
+                "owner",
+                "repo",
+                7,
+                99L,
+                body));
+
+    verifyNoInteractions(reactionClient, feedbackService);
+  }
+
+  @Test
   void captureReactionsRecordsPlusAndMinusOneFromNonBotUsers() {
     when(reactionClient.listReviewCommentReactions(
             anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("+1"), eq(100), eq(1)))
@@ -282,10 +316,8 @@ class FindingFeedbackCaptureServiceTest {
   }
 
   @Test
-  void captureReactionsIgnoresReadOnlyCollaborators() {
-    when(installationClient.collaboratorPermission(
-            anyString(), anyString(), eq("owner"), eq("repo"), eq("octocat")))
-        .thenReturn(new GitHubInstallationClient.CollaboratorPermission("read", "read"));
+  void captureReactionsIgnoresReadOnlyCollaborators() throws Exception {
+    doReturn(GHPermissionType.READ).when(repository).getPermission(eq("octocat"));
     when(reactionClient.listReviewCommentReactions(
             anyString(), anyString(), eq("owner"), eq("repo"), eq(99L), eq("+1"), eq(100), eq(1)))
         .thenReturn(
@@ -318,15 +350,13 @@ class FindingFeedbackCaptureServiceTest {
         new FindingFeedbackCaptureService.ReviewReply(
             "external-contributor", "CONTRIBUTOR", "false positive"));
 
-    verifyNoInteractions(reviewClient, reactionClient, installationClient, feedbackService);
+    verifyNoInteractions(reviewClient, reactionClient, clientProvider, feedbackService);
   }
 
   @Test
-  void captureOnReviewReplyRejectsReadOnlyCollaboratorBeforeFetchingRoot() {
+  void captureOnReviewReplyRejectsReadOnlyCollaboratorBeforeFetchingRoot() throws Exception {
     when(authClient.getAuthHeader(9L)).thenReturn("Bearer t");
-    when(installationClient.collaboratorPermission(
-            anyString(), anyString(), eq("owner"), eq("repo"), eq("octocat")))
-        .thenReturn(new GitHubInstallationClient.CollaboratorPermission("read", "read"));
+    doReturn(GHPermissionType.READ).when(repository).getPermission(eq("octocat"));
 
     capture.captureOnReviewReply(
         new RepoScope(9L, TestScopes.REPOSITORY_ID),
@@ -416,6 +446,31 @@ class FindingFeedbackCaptureServiceTest {
 
     verifyNoInteractions(reactionClient);
     verifyNoInteractions(feedbackService);
+  }
+
+  @Test
+  void captureOnPriorFindingsIgnoresUnresolvableRepository() throws Exception {
+    doThrow(new java.io.IOException("not found")).when(gitHub).getRepository(eq("owner/repo"));
+    var comments =
+        java.util.List.of(
+            new GitHubReviewClient.PullRequestComment(
+                10L,
+                null,
+                "A.java",
+                "old\n" + SuggestionFormatter.findingMarker(1),
+                new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")));
+
+    assertDoesNotThrow(
+        () ->
+            capture.captureOnPriorFindings(
+                "Bearer t",
+                new RepoScope(9L, TestScopes.REPOSITORY_ID),
+                "owner",
+                "repo",
+                3,
+                comments));
+
+    verifyNoInteractions(reactionClient, feedbackService);
   }
 
   @Test
