@@ -506,7 +506,8 @@ public class ReviewPublisher {
     appendPreviousOutcome(bodyParts, result, post);
     bodyParts.addAll(reopenedDeclineNotes(result));
     appendReviewNotice(bodyParts, result, post);
-    if (pendingReviewId.isPresent() && inline.posted() > 0) {
+    if (pendingReviewId.isPresent()) {
+      // Inline threads landed ({@code inline.posted() > 0} — the branch above returned otherwise).
       // Ends publishReview; the orchestrator still runs check-run conclusion, thread resolution
       // and finding-state writes after postReview returns (#1434).
       submitPendingReviewWithFallback(

@@ -248,6 +248,51 @@ class BatchedInlineReviewTest {
   }
 
   @Test
+  void batchedRoundSubmitsPendingAfterAssemblingFollowUpBodySections() {
+    var declineNote =
+        RebuttalContradiction.NOTE_LEAD_IN
+            + " the reply's premise does not refute the finding. Reply again to keep the"
+            + " decline.";
+    var delta = "**Previous findings resolved:** 1\n\n- Closed: `src/Old.java:1`";
+    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
+    var result =
+        new ReviewResult(
+            List.of(finding),
+            0,
+            1,
+            0,
+            0,
+            RiskLevel.HIGH,
+            ReviewState.REQUEST_CHANGES,
+            true,
+            "",
+            List.of(new ReviewResult.PreviousFindingStatus(1, "unresolved", declineNote)),
+            List.of(),
+            0);
+    publisher.postReview(
+        new ReviewPublisher.PostReviewRequest(
+            "Bearer tok",
+            "owner",
+            "repo",
+            7,
+            "sha",
+            result,
+            new DiffLineResolver(Map.of(FILE, PATCH)),
+            false,
+            List.of(),
+            delta,
+            List.of()));
+
+    var submit = ArgumentCaptor.forClass(GitHubReviewClient.SubmitReviewRequest.class);
+    verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), submit.capture());
+    var body = submit.getValue().body();
+    assertTrue(body.contains(RebuttalContradiction.NOTE_LEAD_IN), body);
+    assertTrue(body.contains("Previous findings resolved"), body);
+    assertTrue(body.contains("ThrillhouseBot requested changes"), body);
+    verify(reviewClient, never()).createReview(any(), any(), any(), any(), eq(7), any());
+  }
+
+  @Test
   void batchedRoundSubmitsThePendingReviewOnceAfterInlineThreadsLand() {
     var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
     publisher.postReview(
