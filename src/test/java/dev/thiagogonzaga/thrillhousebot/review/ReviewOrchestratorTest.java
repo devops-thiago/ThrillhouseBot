@@ -3863,6 +3863,7 @@ class ReviewOrchestratorTest {
                         + DescriptionGapCarryover.prTextMarker(
                             PromptSections.prContext("(manual summary)", ""))
                         + "\n"
+                        + "<!-- thrillhousebot:findings v=1 [] -->\n"
                         + PrSummaryGenerator.SUMMARY_HEADING));
         verify(reviewClient, never())
             .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
@@ -4024,13 +4025,20 @@ class ReviewOrchestratorTest {
                 argThat(
                     req ->
                         req.body()
-                            .equals(
-                                PrSummaryGenerator.SUMMARY_MARKER
-                                    + "\n"
-                                    + DescriptionGapCarryover.prTextMarker(
-                                        PromptSections.prContext("Test PR", ""))
-                                    + "\n"
-                                    + PrSummaryGenerator.SUMMARY_HEADING)));
+                                .startsWith(
+                                    PrSummaryGenerator.SUMMARY_MARKER
+                                        + "\n"
+                                        + DescriptionGapCarryover.prTextMarker(
+                                            PromptSections.prContext("Test PR", ""))
+                                        + "\n"
+                                        + FindingsManifest.MARKER_PREFIX)
+                            && req.body()
+                                .contains(
+                                    "\"key\":\""
+                                        + SuggestionFormatter.findingKey(
+                                            "src/Main.java", 10, "Style")
+                                        + "\"")
+                            && req.body().endsWith("\n" + PrSummaryGenerator.SUMMARY_HEADING)));
         verify(reviewClient)
             .createPullRequestComment(
                 anyString(), anyString(), anyString(), anyString(), anyInt(), any());
