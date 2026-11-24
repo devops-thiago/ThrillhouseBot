@@ -19,11 +19,11 @@ import dev.thiagogonzaga.thrillhousebot.LogSafe;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.RepositoryPermissions;
 import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
+import io.quarkiverse.githubapp.GitHubClientProvider;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -36,7 +36,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
+import org.kohsuke.github.GHRepository;
 
 /**
  * Cross-review learnings (#38): what the review remembers of a repository's maintainers, and the
@@ -83,7 +83,7 @@ public class ReviewLearnings {
   private final ReviewLearningService store;
   private final FollowUpAnalyzer followUpAnalyzer;
   private final BotIdentity botIdentity;
-  private final GitHubInstallationClient installationClient;
+  private final GitHubClientProvider clientProvider;
   private final Settings settings;
 
   @Inject
@@ -91,13 +91,13 @@ public class ReviewLearnings {
       ReviewLearningService store,
       FollowUpAnalyzer followUpAnalyzer,
       BotIdentity botIdentity,
-      @RestClient GitHubInstallationClient installationClient,
+      GitHubClientProvider clientProvider,
       ThrillhouseConfig config) {
     this(
         store,
         followUpAnalyzer,
         botIdentity,
-        installationClient,
+        clientProvider,
         new Settings(
             config.review().learnings().enabled(),
             config.review().learnings().maxPerRepo(),
@@ -110,12 +110,12 @@ public class ReviewLearnings {
       ReviewLearningService store,
       FollowUpAnalyzer followUpAnalyzer,
       BotIdentity botIdentity,
-      GitHubInstallationClient installationClient,
+      GitHubClientProvider clientProvider,
       Settings settings) {
     this.store = store;
     this.followUpAnalyzer = followUpAnalyzer;
     this.botIdentity = botIdentity;
-    this.installationClient = installationClient;
+    this.clientProvider = clientProvider;
     this.settings = settings;
   }
 
@@ -386,12 +386,25 @@ public class ReviewLearnings {
     surviving.addAll(
         followUpAnalyzer.survivingEarlierRoundDeclines(
             justified, capture.inlineComments(), botIdentity, capture.reviewedCode()));
+    if (surviving.isEmpty()) {
+      return 0;
+    }
     var permissionCache = new HashMap<String, Boolean>();
+    GHRepository repository;
+    try {
+      repository =
+          clientProvider
+              .getInstallationClient(capture.scope().installationId())
+              .getRepository(capture.owner() + "/" + capture.repo());
+    } catch (Exception e) {
+      Log.debugf(e, "Could not resolve repository %s/%s", capture.owner(), capture.repo());
+      return 0;
+    }
     var stored = 0;
     for (var decline : surviving) {
       // Every login whose words are stored must hold write access, not only the first.
       if (!decline.contributors().stream()
-          .allMatch(login -> hasWriteAccess(capture, login, permissionCache))) {
+          .allMatch(login -> hasWriteAccess(repository, login, permissionCache))) {
         continue;
       }
       var finding = decline.finding();
@@ -428,21 +441,19 @@ public class ReviewLearnings {
   }
 
   private boolean hasWriteAccess(
-      DeclineCapture capture, String login, Map<String, Boolean> permissionCache) {
+      GHRepository repository, String login, Map<String, Boolean> permissionCache) {
     return permissionCache.computeIfAbsent(
         login.toLowerCase(Locale.ROOT),
         ignored -> {
           try {
-            return RepositoryPermissions.canAct(
-                installationClient.collaboratorPermission(
-                    capture.auth(), ACCEPT, capture.owner(), capture.repo(), login));
-          } catch (RuntimeException e) {
+            return RepositoryPermissions.canAct(repository.getPermission(login));
+          } catch (Exception e) {
             Log.debugf(
                 e,
                 "Could not confirm @%s's access on %s/%s; not learning from their decline",
                 login,
-                capture.owner(),
-                capture.repo());
+                repository.getOwnerName(),
+                repository.getName());
             return false;
           }
         });

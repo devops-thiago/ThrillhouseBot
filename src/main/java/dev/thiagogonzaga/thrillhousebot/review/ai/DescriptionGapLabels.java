@@ -189,7 +189,37 @@ public final class DescriptionGapLabels {
           "applies",
           "apply");
 
-  private static final String REFERENT = "a previously listed gap";
+  private static final String ARTICLE = "a ";
+
+  private static final String REFERENT = ARTICLE + "previously listed gap";
+
+  /**
+   * A possessive ("summary's", "summary’s", the plural "reviewers'", "its", "their") or a
+   * determiner ("the", "this", "that") right before a label, which already gives it the article the
+   * referent would add. Group 1 is the word when it is one of the listed ones. Word characters and
+   * blanks are Unicode ones, so "résumé’s G1" and a non-breaking space count too.
+   */
+  private static final Pattern DETERMINER_BEFORE =
+      Pattern.compile(
+          "(?:(?<![\\w'’])(the|this|that|its|their)|\\w(?:['’]s|s['’]))\\s++$",
+          Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.UNICODE_CHARACTER_CLASS);
+
+  /** How far before a label {@link #DETERMINER_BEFORE} looks: the longest word and its blanks. */
+  private static final int DETERMINER_REACH = 32;
+
+  /**
+   * The word after a label, past one parenthetical that may stand between them ("G1 (x) is"), which
+   * may wrap onto another line and hold one level of parentheses of its own ("G1 (a (b)) is");
+   * group 1 is the word.
+   */
+  private static final Pattern WORD_AFTER =
+      Pattern.compile(
+          "\\s*+(?:\\((?:[^()]++|\\([^()]*+\\))*+\\)\\s*+)?(\\p{L}++)",
+          Pattern.UNICODE_CHARACTER_CLASS);
+
+  /** "gap" or "gaps" right after a label, which the referent already says: "the G1 gap". */
+  private static final Pattern GAP_AFTER =
+      Pattern.compile("\\s++gaps?\\b", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
 
   private static final String REFERENTS = "previously listed gaps";
 
@@ -214,7 +244,9 @@ public final class DescriptionGapLabels {
    * leaves only the gap itself, "X", since the clause describes the label's status, which the
    * carried gap listed next to it already shows; a leading label that is a sentence's subject ("G2
    * remains open because …") becomes "A previously listed gap"; any other label becomes "a
-   * previously listed gap" in place. A gap left with nothing but punctuation is dropped.
+   * previously listed gap" in place, or "previously listed gap" after a possessive or a determiner
+   * ("the earlier summary's previously listed gap"). A gap left with nothing but punctuation is
+   * dropped.
    */
   public static List<String> stripIssued(List<String> gaps, int issued) {
     if (issued <= 0) {
@@ -251,9 +283,7 @@ public final class DescriptionGapLabels {
       var lead = verb ? referent(subject.group(1)) + " " : "";
       text = lead + text.substring(subject.start(2));
     }
-    text =
-        BARE.matcher(text)
-            .replaceAll(m -> Matcher.quoteReplacement(rewrittenInPlace(m.group(1), issued)));
+    text = withoutBareLabels(text, issued);
     if (text.equals(gap)) {
       return null;
     }
@@ -346,17 +376,81 @@ public final class DescriptionGapLabels {
   }
 
   /**
+   * {@code text} with every label cluster left after the other rewrites said in words. After a
+   * possessive or a determiner ("the earlier summary's G1", "the G1 gap", "this G2") the referent
+   * goes in without its article, so the sentence never reads "the a previously listed gap", and a
+   * "gap" after the label goes, since the referent says it ("the G1 gap" → "the previously listed
+   * gap"). A "that" followed by a verb, directly or past one parenthetical, opens a clause ("says
+   * that G1 is open", "says that G1 (x) is open") and keeps the article (#1398). The determiner
+   * covers every label of a cluster, so "the G3 and G1 gap" with only G1 issued reads "the G3 and
+   * previously listed gap", and the "gap" goes whenever the cluster's last label was issued.
+   */
+  private static String withoutBareLabels(String text, int issued) {
+    var out = new StringBuilder(text.length());
+    var at = 0;
+    var labels = BARE.matcher(text);
+    while (labels.find()) {
+      var cluster = labels.group(1);
+      var end = labels.end();
+      var determined = determined(text, labels.start(), end);
+      var words = rewrittenInPlace(cluster, issued, determined);
+      if (determined && lastIssued(cluster, issued)) {
+        var gap = GAP_AFTER.matcher(text).region(end, text.length()).useTransparentBounds(true);
+        if (gap.lookingAt()) {
+          end = gap.end();
+        }
+      }
+      out.append(text, at, labels.start()).append(words);
+      at = end;
+    }
+    return out.append(text, at, text.length()).toString();
+  }
+
+  /** Whether the last label of {@code cluster} is one of G1…G{@code issued}. */
+  private static boolean lastIssued(String cluster, int issued) {
+    var numbers = LABEL_NUMBER.matcher(cluster);
+    var last = "";
+    while (numbers.find()) {
+      last = numbers.group();
+    }
+    return allIssued(last, issued);
+  }
+
+  /**
+   * Whether the label between {@code start} and {@code end} follows a possessive or a determiner,
+   * and is not the subject of a clause "that" opens.
+   */
+  private static boolean determined(String text, int start, int end) {
+    var before =
+        DETERMINER_BEFORE
+            .matcher(text)
+            .region(Math.max(0, start - DETERMINER_REACH), start)
+            .useTransparentBounds(true);
+    if (!before.find()) {
+      return false;
+    }
+    if (!"that".equalsIgnoreCase(before.group(1))) {
+      return true;
+    }
+    var after = WORD_AFTER.matcher(text).region(end, text.length());
+    return !(after.lookingAt() && SUBJECT_VERBS.contains(after.group(1).toLowerCase(Locale.ROOT)));
+  }
+
+  /**
    * A label cluster left after the other rewrites, said in words: the referent when every label in
    * it was issued, otherwise each issued label on its own ("G1 and G3" with only G1 issued becomes
    * "a previously listed gap and G3"), so an issued label never survives next to one that was not.
+   * When {@code determined}, no referent carries an article.
    */
-  private static String rewrittenInPlace(String cluster, int issued) {
+  private static String rewrittenInPlace(String cluster, int issued, boolean determined) {
+    var single = determined ? REFERENT.substring(ARTICLE.length()) : REFERENT;
     if (allIssued(cluster, issued)) {
-      return referent(cluster);
+      var words = referent(cluster);
+      return determined && words.equals(REFERENT) ? single : words;
     }
     return LABEL_NUMBER
         .matcher(cluster)
-        .replaceAll(m -> allIssued(m.group(), issued) ? REFERENT : m.group());
+        .replaceAll(m -> allIssued(m.group(), issued) ? single : m.group());
   }
 
   /** {@code text} with each match whose labels were all issued replaced as {@code with} says. */

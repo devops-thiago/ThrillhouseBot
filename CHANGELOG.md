@@ -6,6 +6,30 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **Config key definitions are found in ordinarily-named files** (#642): the "Config key
+  definitions from the repository" section only read `application*` resources and source files
+  whose name ended in `config`, `settings`, `properties` or `env`, so a key read in `main.go`,
+  `main.py`, `main.rs`, `Main.java`, `Program.cs` or `app-config.service.ts` produced no section.
+  The resolver now also reads C#, PHP, Swift, Scala, `.kts`, `.mjs` and `.cjs` sources, matches the
+  config word in any dotted, hyphenated or underscored part of the name, and after the named files
+  reads changed source files whose diff reads the environment (`os.Getenv`, `getenv(`,
+  `process.env`, `Environment.GetEnvironmentVariable`, `env::var`, …), then entry-point files
+  (`main`, `Program`, `app`, `index`, `server`, `startup`). The fetch budget is unchanged, and the
+  new tiers only use what the named files leave.
+- **A carried-gap label after a possessive or "the" no longer reads "the a previously listed
+  gap"** (#1398): the summary rewrote an echoed label such as "G1" to "a previously listed gap"
+  wherever it stood, so "the earlier summary's G1" became "the earlier summary's a previously
+  listed gap". After a possessive (`'s`, `’s`, a plural `s'`, "its", "their") or "the", "this" or
+  "that" the rewrite now leaves out the article, and "the G1 gap" reads "the previously listed
+  gap". A "that" that opens a clause ("says that G1 is open") keeps it.
+- **Findings from rounds before the previous one are re-checked when they could be fixed**
+  (#1316): an older round's open finding was put back to the model only when its file was known
+  to have changed since the round that raised it. When that could not be told (more round heads
+  than the review compares, or a comparison at GitHub's file cap) it was never asked about again
+  and stayed open after its fix. It is now asked about every round. A finding whose own file is
+  unchanged is also asked about, and its `resolved` stands, when another file its title or
+  description names changed since: a finding that a document and the code disagree can be fixed
+  in the document while the code line it quotes stays the same.
 - The review session row records the review's outcome instead of per-call values (#1417):
   - `durationMs` is the review's elapsed time from start to its final status. It was the sum of
     the model calls' durations, which counted parallel and retried calls each time and left out

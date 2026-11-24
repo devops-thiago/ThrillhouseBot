@@ -231,8 +231,8 @@ public final class FindingVerifierPrompts {
             environment variable or property omits a format-critical fact (value type,
             list/separator semantics, units, allowed values, default) — is judged against that
             key's DEFINITION, which the review pass is handed in a section headed
-            "Config key definitions from the repository" and built from repository files outside
-            the diff. So do not reject it for quoting a definition line the diff does not contain,
+            "Config key definitions from the repository" and built from whole repository files,
+            most of them outside the diff. So do not reject it for quoting a definition line the diff does not contain,
             and do not demote it as remembered framework behavior when that quoted definition
             establishes the fact: an Optional<List<String>> @WithName mapping IS evidence the
             value is a comma-separated list, not a recollection about the framework. Confirm it
