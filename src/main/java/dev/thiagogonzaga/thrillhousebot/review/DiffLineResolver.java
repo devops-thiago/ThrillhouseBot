@@ -20,6 +20,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewResponse;
 import io.quarkus.logging.Log;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -409,6 +410,11 @@ public final class DiffLineResolver {
    */
   public boolean isChangedFile(String file) {
     return file != null && changedFiles.contains(file);
+  }
+
+  /** Every path this pull request changes, patched or not. */
+  public Set<String> changedFiles() {
+    return Collections.unmodifiableSet(changedFiles);
   }
 
   /**

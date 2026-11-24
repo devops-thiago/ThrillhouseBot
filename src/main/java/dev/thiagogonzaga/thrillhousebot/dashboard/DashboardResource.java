@@ -267,6 +267,7 @@ public class DashboardResource {
     detail.put(KEY_COST, session.getCost());
     detail.put("pricingMissing", session.isPricingMissing());
     detail.put("durationMs", session.getDurationMs());
+    detail.put("failedModelCalls", session.getFailedModelCalls());
     detail.put("criticalFindings", session.getCriticalFindings());
     detail.put("highFindings", session.getHighFindings());
     detail.put("mediumFindings", session.getMediumFindings());

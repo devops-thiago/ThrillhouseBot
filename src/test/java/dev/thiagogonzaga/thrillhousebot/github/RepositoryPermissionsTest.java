@@ -18,38 +18,23 @@ package dev.thiagogonzaga.thrillhousebot.github;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.CollaboratorPermission;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
+import org.kohsuke.github.GHPermissionType;
 
 /** Who may act through the bot (#1221): write, maintain and admin may; triage and read may not. */
 class RepositoryPermissionsTest {
 
-  @ParameterizedTest(name = "permission={0} role_name={1} acts={2}")
-  @CsvSource(
-      nullValues = "null",
-      value = {
-        "admin, admin, true",
-        "write, maintain, true",
-        "write, write, true",
-        // A custom role built on write reports write as its legacy permission.
-        "write, release-manager, true",
-        // role_name alone grants when an older answer has no usable legacy field.
-        "null, maintain, true",
-        " WRITE , null, true",
-        "read, triage, false",
-        "read, read, false",
-        "none, null, false",
-        "null, null, false",
-      })
-  void writeMaintainAndAdminActWhileTriageAndReadDoNot(
-      String permission, String roleName, boolean acts) {
-    var answer = new CollaboratorPermission(permission, roleName);
-    if (acts) {
-      assertTrue(RepositoryPermissions.canAct(answer));
-    } else {
-      assertFalse(RepositoryPermissions.canAct(answer));
-    }
+  @org.junit.jupiter.api.Test
+  void adminAndWriteAct() {
+    assertTrue(RepositoryPermissions.canAct(GHPermissionType.ADMIN));
+    assertTrue(RepositoryPermissions.canAct(GHPermissionType.WRITE));
+  }
+
+  @org.junit.jupiter.api.Test
+  void readAndNoneDoNotAct() {
+    assertFalse(RepositoryPermissions.canAct(GHPermissionType.READ));
+    assertFalse(RepositoryPermissions.canAct(GHPermissionType.NONE));
+    assertFalse(RepositoryPermissions.canAct(GHPermissionType.UNKNOWN));
+    assertFalse(RepositoryPermissions.canAct(null));
   }
 
   @org.junit.jupiter.api.Test

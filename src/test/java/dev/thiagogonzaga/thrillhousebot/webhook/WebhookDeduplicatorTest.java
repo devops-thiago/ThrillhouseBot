@@ -16,10 +16,13 @@
 package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
+import java.sql.SQLException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -39,7 +42,7 @@ class WebhookDeduplicatorTest {
     when(config.webhook()).thenReturn(webhookConfig);
     when(webhookConfig.dedupTtl()).thenReturn(Duration.ofHours(24));
 
-    var dedup = new WebhookDeduplicator(config);
+    var dedup = new WebhookDeduplicator(config, claimingStore());
 
     // The config-wired bean behaves like any other: a first sighting is new, an immediate repeat
     // (well within the 24h TTL) is a duplicate.
@@ -49,14 +52,14 @@ class WebhookDeduplicatorTest {
 
   @Test
   void firstDeliveryIsNotDuplicate() {
-    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
+    var dedup = memoryOnly(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
 
     assertFalse(dedup.isDuplicate("delivery-1"));
   }
 
   @Test
   void repeatDeliveryWithinTtlIsDuplicate() {
-    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
+    var dedup = memoryOnly(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
 
     assertFalse(dedup.isDuplicate("delivery-1"));
     assertTrue(dedup.isDuplicate("delivery-1"));
@@ -65,7 +68,7 @@ class WebhookDeduplicatorTest {
 
   @Test
   void distinctDeliveriesAreIndependent() {
-    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
+    var dedup = memoryOnly(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
 
     assertFalse(dedup.isDuplicate("a"));
     assertFalse(dedup.isDuplicate("b"));
@@ -76,7 +79,7 @@ class WebhookDeduplicatorTest {
   @Test
   void deliveryIsForgottenAfterTtlExpires() {
     var clock = new MutableClock(0);
-    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, clock);
+    var dedup = memoryOnly(TTL_MS, BIG_THRESHOLD, clock);
 
     assertFalse(dedup.isDuplicate("delivery-1"));
     assertTrue(dedup.isDuplicate("delivery-1"));
@@ -88,10 +91,28 @@ class WebhookDeduplicatorTest {
     assertTrue(dedup.isDuplicate("delivery-1"));
   }
 
+  /**
+   * A repeat sighting does not renew the window: it runs from the first claim, as the database
+   * row's expiry does, so the map never outlives the row.
+   */
+  @Test
+  void repeatSightingsDoNotExtendTheWindow() {
+    var clock = new MutableClock(0);
+    var dedup = memoryOnly(TTL_MS, BIG_THRESHOLD, clock);
+
+    assertFalse(dedup.isDuplicate("delivery-1"));
+    clock.advance(TTL_MS - 1);
+    assertTrue(dedup.isDuplicate("delivery-1"));
+    assertEquals(TTL_MS, dedup.seen.get("delivery-1"));
+
+    clock.advance(2);
+    assertFalse(dedup.isDuplicate("delivery-1"));
+  }
+
   @Test
   void deliveryStillDeduplicatedJustBeforeTtl() {
     var clock = new MutableClock(0);
-    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, clock);
+    var dedup = memoryOnly(TTL_MS, BIG_THRESHOLD, clock);
 
     assertFalse(dedup.isDuplicate("delivery-1"));
     // One tick before the deadline the record is still live.
@@ -102,7 +123,7 @@ class WebhookDeduplicatorTest {
   @Test
   void deliveryExpiresExactlyAtTtlBoundary() {
     var clock = new MutableClock(0);
-    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, clock);
+    var dedup = memoryOnly(TTL_MS, BIG_THRESHOLD, clock);
 
     assertFalse(dedup.isDuplicate("delivery-1"));
     // At exactly the deadline the record has expired (deadline is the first lapsed instant), so the
@@ -113,7 +134,7 @@ class WebhookDeduplicatorTest {
 
   @Test
   void nullOrBlankDeliveryIdFailsOpen() {
-    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
+    var dedup = memoryOnly(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
 
     // Missing/blank ids are never deduped (and never stored), so they always process.
     assertFalse(dedup.isDuplicate(null));
@@ -127,7 +148,7 @@ class WebhookDeduplicatorTest {
   void expiredEntriesAreReclaimedOnceThresholdReached() {
     var clock = new MutableClock(0);
     int threshold = 4;
-    var dedup = new WebhookDeduplicator(TTL_MS, threshold, clock);
+    var dedup = memoryOnly(TTL_MS, threshold, clock);
 
     // Fill exactly to the sweep threshold; nothing has expired yet so nothing is reclaimed.
     for (int i = 0; i < threshold; i++) {
@@ -148,7 +169,7 @@ class WebhookDeduplicatorTest {
   void liveEntriesAreNeverSweptAndStayDeduplicated() {
     var clock = new MutableClock(0);
     int threshold = 10;
-    var dedup = new WebhookDeduplicator(TTL_MS, threshold, clock);
+    var dedup = memoryOnly(TTL_MS, threshold, clock);
 
     // Record far more than the threshold of distinct, still-live ids within the TTL window.
     int count = threshold * 3;
@@ -166,7 +187,7 @@ class WebhookDeduplicatorTest {
 
   @Test
   void concurrentFirstSightingOfSameDeliveryHappensExactlyOnce() throws InterruptedException {
-    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
+    var dedup = memoryOnly(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
 
     // Exactly one of many threads may observe a brand-new id as new; the rest see a duplicate.
     assertEquals(1, raceFirstSightings(dedup, "racing-id", 32));
@@ -175,7 +196,7 @@ class WebhookDeduplicatorTest {
   @Test
   void concurrentRedeliveryOfExpiredIdReprocessesExactlyOnce() throws InterruptedException {
     var clock = new MutableClock(0);
-    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, clock);
+    var dedup = memoryOnly(TTL_MS, BIG_THRESHOLD, clock);
 
     dedup.isDuplicate("id"); // record it...
     clock.advance(TTL_MS + 1); // ...then let it expire.
@@ -225,7 +246,7 @@ class WebhookDeduplicatorTest {
 
   @Test
   void forgetAllowsReprocessing() {
-    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
+    var dedup = memoryOnly(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
 
     assertFalse(dedup.isDuplicate("delivery-1"));
     assertTrue(dedup.isDuplicate("delivery-1"));
@@ -239,7 +260,7 @@ class WebhookDeduplicatorTest {
 
   @Test
   void forgetWithNullIdIsNoOp() {
-    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
+    var dedup = memoryOnly(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
     assertFalse(dedup.isDuplicate("recorded"));
 
     // A null id must neither throw nor disturb existing records.
@@ -251,7 +272,7 @@ class WebhookDeduplicatorTest {
 
   @Test
   void forgetWithUnknownIdIsNoOp() {
-    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
+    var dedup = memoryOnly(TTL_MS, BIG_THRESHOLD, new MutableClock(0));
 
     // Record one id, then forget a different, never-seen id.
     assertFalse(dedup.isDuplicate("recorded"));
@@ -261,6 +282,91 @@ class WebhookDeduplicatorTest {
     // Forgetting an unknown id must not disturb the recorded one — it stays a duplicate.
     assertTrue(dedup.isDuplicate("recorded"));
     assertEquals(1, dedup.seen.size());
+  }
+
+  @Test
+  void aDeliveryAnotherProcessClaimedIsADuplicateAndIsNotCachedHere() {
+    var store = mock(SeenDeliveries.class);
+    when(store.claim(eq("elsewhere"), any(), any())).thenReturn(false);
+    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0), store);
+
+    assertTrue(dedup.isDuplicate("elsewhere"));
+    // Only this process's claims stay in memory, so the table alone decides the next sighting.
+    assertEquals(0, dedup.seen.size());
+  }
+
+  @Test
+  void theDatabaseIsAskedWithTheWindowOncePerProcessWindow() {
+    var store = claimingStore();
+    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(1_000), store);
+
+    assertFalse(dedup.isDuplicate("delivery-1"));
+    assertTrue(dedup.isDuplicate("delivery-1"));
+
+    verify(store, times(1))
+        .claim("delivery-1", Instant.ofEpochMilli(1_000), Instant.ofEpochMilli(1_000 + TTL_MS));
+  }
+
+  @Test
+  void aDatabaseFailureFailsOpenToTheMemoryVerdict() {
+    var store = mock(SeenDeliveries.class);
+    when(store.claim(any(), any(), any())).thenThrow(new IllegalStateException("db down"));
+    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0), store);
+
+    assertFalse(dedup.isDuplicate("delivery-1"));
+    assertTrue(dedup.isDuplicate("delivery-1"));
+  }
+
+  @Test
+  void aUniqueViolationFromARacingInsertIsADuplicate() {
+    var store = mock(SeenDeliveries.class);
+    when(store.claim(any(), any(), any()))
+        .thenThrow(
+            new IllegalStateException("insert failed", new SQLException("duplicate key", "23505")));
+    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0), store);
+
+    assertTrue(dedup.isDuplicate("delivery-1"));
+  }
+
+  @Test
+  void anIdLongerThanTheColumnIsDeduplicatedInMemoryOnly() {
+    var store = claimingStore();
+    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0), store);
+    var longId = "x".repeat(SeenDeliveries.ID_LENGTH + 1);
+
+    assertFalse(dedup.isDuplicate(longId));
+    assertTrue(dedup.isDuplicate(longId));
+    dedup.forget(longId);
+    assertFalse(dedup.isDuplicate(longId));
+
+    verifyNoInteractions(store);
+  }
+
+  @Test
+  void forgetReleasesTheStoredRowAndSurvivesADatabaseFailure() {
+    var store = claimingStore();
+    doThrow(new IllegalStateException("db down")).when(store).release("delivery-1");
+    var dedup = new WebhookDeduplicator(TTL_MS, BIG_THRESHOLD, new MutableClock(0), store);
+    assertFalse(dedup.isDuplicate("delivery-1"));
+
+    assertDoesNotThrow(() -> dedup.forget("delivery-1"));
+    dedup.forget(" ");
+
+    verify(store).release("delivery-1");
+    verify(store, never()).release(" ");
+    // Memory is cleared even though the delete failed.
+    assertEquals(0, dedup.seen.size());
+  }
+
+  private static SeenDeliveries claimingStore() {
+    var store = mock(SeenDeliveries.class);
+    when(store.claim(any(), any(), any())).thenReturn(true);
+    return store;
+  }
+
+  /** A deduplicator whose database lets every first sighting through, so memory decides. */
+  private static WebhookDeduplicator memoryOnly(long ttl, int threshold, LongSupplier clock) {
+    return new WebhookDeduplicator(ttl, threshold, clock, claimingStore());
   }
 
   /** A {@link LongSupplier} clock whose epoch-millis value can be advanced by tests. */

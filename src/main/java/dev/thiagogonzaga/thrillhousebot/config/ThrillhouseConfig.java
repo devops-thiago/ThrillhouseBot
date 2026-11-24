@@ -173,7 +173,8 @@ public interface ThrillhouseConfig {
   interface WebhookConfig {
     /**
      * How long a webhook delivery id ({@code X-GitHub-Delivery}) is remembered, to ignore GitHub
-     * redeliveries instead of reviewing twice. Kept in memory, per replica.
+     * redeliveries instead of reviewing twice. Kept in memory and in the database, so a redelivery
+     * after a restart is still dropped.
      */
     @WithDefault("24h")
     @WithName("dedup-ttl")
