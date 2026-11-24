@@ -20,9 +20,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.CollaboratorPermission;
+import io.quarkiverse.githubapp.GitHubClientProvider;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -30,6 +28,9 @@ import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.kohsuke.github.GHPermissionType;
+import org.kohsuke.github.GHRepository;
+import org.kohsuke.github.GitHub;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -41,162 +42,141 @@ class ManualReviewAuthorizerTest {
 
   @Mock private ThrillhouseConfig.ReviewConfig reviewConfig;
 
-  @Mock private GitHubAuthClient authClient;
-
-  @Mock private GitHubInstallationClient installationClient;
+  @Mock private GitHubClientProvider clientProvider;
+  @Mock private GitHub gitHub;
+  @Mock private GHRepository repository;
 
   @InjectMocks private ManualReviewAuthorizer authorizer;
 
   @BeforeEach
-  void setUp() {
+  void setUp() throws Exception {
     lenient().when(config.review()).thenReturn(reviewConfig);
     lenient().when(reviewConfig.manualTriggerAllowedLogins()).thenReturn(Optional.empty());
     lenient().when(reviewConfig.manualTriggerAuthTimeout()).thenReturn(Duration.ofSeconds(5));
+    lenient().doReturn(gitHub).when(clientProvider).getInstallationClient(anyLong());
+    lenient().doReturn(repository).when(gitHub).getRepository(anyString());
   }
 
-  private void stubPermission(String permission) {
-    when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
-    when(installationClient.collaboratorPermission(
-            anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenReturn(new CollaboratorPermission(permission, permission));
+  private void stubPermission(String permission) throws Exception {
+    lenient()
+        .doReturn(GHPermissionType.valueOf(permission.toUpperCase()))
+        .when(repository)
+        .getPermission(anyString());
   }
 
   @Test
-  void aMaintainerMayRequestAReviewAndATriagerMayNot() {
-    when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
-    when(installationClient.collaboratorPermission(
-            anyString(), anyString(), anyString(), anyString(), eq("keeper")))
-        .thenReturn(new CollaboratorPermission("write", "maintain"));
-    when(installationClient.collaboratorPermission(
-            anyString(), anyString(), anyString(), anyString(), eq("sorter")))
-        .thenReturn(new CollaboratorPermission("read", "triage"));
+  void aMaintainerMayRequestAReviewAndATriagerMayNot() throws Exception {
+    doReturn(GHPermissionType.WRITE).when(repository).getPermission(eq("keeper"));
+    doReturn(GHPermissionType.READ).when(repository).getPermission(eq("sorter"));
 
     assertTrue(authorizer.isAuthorized("o", "r", 1L, "keeper", "MEMBER"));
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "sorter", "MEMBER"));
   }
 
   @Test
-  void shouldRejectBlankOrNullLogin() {
+  void shouldRejectBlankOrNullLogin() throws Exception {
     assertFalse(authorizer.isAuthorized("o", "r", 1L, null, "OWNER"));
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "   ", "OWNER"));
-    verifyNoInteractions(installationClient);
+    verifyNoInteractions(clientProvider);
   }
 
   @Test
-  void shouldAllowAllowlistedLoginWithoutApiCall() {
+  void shouldAllowAllowlistedLoginWithoutApiCall() throws Exception {
     when(reviewConfig.manualTriggerAllowedLogins()).thenReturn(Optional.of(List.of("Trusted-Bot")));
 
     // Allowlist match is case-insensitive and short-circuits before any GitHub call.
     assertTrue(authorizer.isAuthorized("o", "r", 1L, "trusted-bot", "NONE"));
-    verifyNoInteractions(installationClient);
-    verifyNoInteractions(authClient);
+    verifyNoInteractions(clientProvider);
   }
 
   @Test
-  void shouldNotMatchDifferentAllowlistedLogin() {
+  void shouldNotMatchDifferentAllowlistedLogin() throws Exception {
     when(reviewConfig.manualTriggerAllowedLogins())
         .thenReturn(Optional.of(List.of("someone-else")));
 
     // A non-matching allowlist entry is skipped; with a non-write association the user is then
     // rejected without an API call.
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "stranger", "NONE"));
-    verifyNoInteractions(installationClient);
+    verifyNoInteractions(clientProvider);
   }
 
   @Test
-  void shouldRejectNonWriteCapableAssociationWithoutApiCall() {
+  void shouldRejectNonWriteCapableAssociationWithoutApiCall() throws Exception {
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "stranger", "NONE"));
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "drive-by", "CONTRIBUTOR"));
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "newcomer", "FIRST_TIME_CONTRIBUTOR"));
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "puppet", "MANNEQUIN"));
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "unknown", null));
-    verifyNoInteractions(installationClient);
+    verifyNoInteractions(clientProvider);
   }
 
   @Test
-  void shouldRejectReadOnlyOrgMember() {
+  void shouldRejectReadOnlyOrgMember() throws Exception {
     stubPermission("read");
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
   }
 
   @Test
-  void shouldAuthorizeMemberWithWritePermission() {
+  void shouldAuthorizeMemberWithWritePermission() throws Exception {
     stubPermission("write");
     assertTrue(authorizer.isAuthorized("o", "r", 1L, "maintainer", "MEMBER"));
   }
 
   @Test
-  void shouldAuthorizeCollaboratorWithAdminPermission() {
+  void shouldAuthorizeCollaboratorWithAdminPermission() throws Exception {
     stubPermission("admin");
     assertTrue(authorizer.isAuthorized("o", "r", 1L, "collab", "COLLABORATOR"));
   }
 
   @Test
-  void shouldVerifyPermissionEvenForOwnerAssociation() {
+  void shouldVerifyPermissionEvenForOwnerAssociation() throws Exception {
     stubPermission("admin");
 
     // A mixed-case association still passes the pre-filter, and OWNER is confirmed via the API
     // rather than trusted on the association alone.
     assertTrue(authorizer.isAuthorized("acme", "widgets", 7L, "boss", "owner"));
-    verify(installationClient)
-        .collaboratorPermission(anyString(), anyString(), eq("acme"), eq("widgets"), eq("boss"));
+    verify(clientProvider).getInstallationClient(eq(7L));
+    verify(gitHub).getRepository(eq("acme/widgets"));
+    verify(repository).getPermission(eq("boss"));
   }
 
   @Test
-  void shouldFailClosedWhenPermissionCheckThrows() {
-    when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
-    when(installationClient.collaboratorPermission(
-            anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenThrow(new RuntimeException("github unavailable"));
+  void shouldFailClosedWhenPermissionCheckThrows() throws Exception {
+    doThrow(new RuntimeException("github unavailable")).when(repository).getPermission(anyString());
 
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
   }
 
   @Test
-  void shouldFailClosedWhenPermissionResponseNull() {
-    when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
-    when(installationClient.collaboratorPermission(
-            anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenReturn(null);
+  void shouldFailClosedWhenPermissionUnrecognized() throws Exception {
+    doReturn(GHPermissionType.UNKNOWN).when(repository).getPermission(anyString());
 
     assertFalse(authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
   }
 
   @Test
-  void shouldFailClosedWhenPermissionMissing() {
-    when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
-    when(installationClient.collaboratorPermission(
-            anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenReturn(new CollaboratorPermission(null, null));
-
-    assertFalse(authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
-  }
-
-  @Test
-  void shouldTreatPermissionLevelCaseInsensitively() {
+  void shouldTreatPermissionLevelCaseInsensitively() throws Exception {
     stubPermission("WRITE");
     assertTrue(authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
   }
 
   @Test
-  void shouldFailClosedWhenPermissionCheckExceedsTimeout() {
+  void shouldFailClosedWhenPermissionCheckExceedsTimeout() throws Exception {
     // GitHub is degraded: the permission call would eventually answer "admin", but not within the
     // ACK-path budget. The check must abandon it and deny rather than block the webhook worker.
     when(reviewConfig.manualTriggerAuthTimeout()).thenReturn(Duration.ofMillis(100));
     // On a loaded machine the timeout can pass before the background check reaches GitHub at all,
     // so these stubs stay lenient: the test is about the denial, not about the calls being made.
-    lenient().when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
     // The latch keeps the call in flight (past the timeout) without a wall-clock sleep.
     var release = new CountDownLatch(1);
     lenient()
-        .when(
-            installationClient.collaboratorPermission(
-                anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenAnswer(
+        .doAnswer(
             inv -> {
               release.await();
-              return new CollaboratorPermission("admin", "admin");
-            });
+              return GHPermissionType.ADMIN;
+            })
+        .when(repository)
+        .getPermission(anyString());
 
     try {
       assertFalse(authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
@@ -206,20 +186,18 @@ class ManualReviewAuthorizerTest {
   }
 
   @Test
-  void shouldFailClosedWhenInterruptedWhileWaitingOnPermissionCheck() {
+  void shouldFailClosedWhenInterruptedWhileWaitingOnPermissionCheck() throws Exception {
     // Interrupt is observed before the permission check runs; stubs stay lenient so Mockito
     // does not fail the test when the early fail-closed path skips GitHub calls.
-    lenient().when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
     var release = new CountDownLatch(1);
     lenient()
-        .when(
-            installationClient.collaboratorPermission(
-                anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenAnswer(
+        .doAnswer(
             inv -> {
               release.await();
-              return new CollaboratorPermission("admin", "admin");
-            });
+              return GHPermissionType.ADMIN;
+            })
+        .when(repository)
+        .getPermission(anyString());
 
     Thread.currentThread().interrupt(); // observed when hasWriteAccess waits on the check
     try {
@@ -233,14 +211,11 @@ class ManualReviewAuthorizerTest {
   }
 
   @Test
-  void shouldPropagateErrorFromPermissionCheck() {
+  void shouldPropagateErrorFromPermissionCheck() throws Exception {
     // A fatal Error must not be masked as a denied review — it propagates as it would have before
     // the check moved onto a separate thread.
-    when(authClient.getAuthHeader(anyLong())).thenReturn("Bearer token");
     var fatal = new Error("simulated fatal");
-    when(installationClient.collaboratorPermission(
-            anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenThrow(fatal);
+    doThrow(fatal).when(repository).getPermission(anyString());
 
     var thrown =
         assertThrows(Error.class, () -> authorizer.isAuthorized("o", "r", 1L, "member", "MEMBER"));
@@ -248,7 +223,7 @@ class ManualReviewAuthorizerTest {
   }
 
   @Test
-  void shutdownStopsTheAuthCheckExecutor() {
+  void shutdownStopsTheAuthCheckExecutor() throws Exception {
     // @PreDestroy must release the background executor without throwing.
     assertDoesNotThrow(() -> authorizer.shutdown());
   }

@@ -17,11 +17,11 @@ package dev.thiagogonzaga.thrillhousebot.review;
 
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReactionClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
 import dev.thiagogonzaga.thrillhousebot.github.RepositoryPermissions;
+import io.quarkiverse.githubapp.GitHubClientProvider;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -39,6 +39,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
+import org.kohsuke.github.GHRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -84,7 +85,7 @@ public class FindingFeedbackCaptureService {
   private final GitHubAuthClient authClient;
   private final GitHubReactionClient reactionClient;
   private final GitHubReviewClient reviewClient;
-  private final GitHubInstallationClient installationClient;
+  private final GitHubClientProvider clientProvider;
 
   private final ExecutorService captureExecutor =
       new ThreadPoolExecutor(
@@ -103,13 +104,13 @@ public class FindingFeedbackCaptureService {
       GitHubAuthClient authClient,
       @RestClient GitHubReactionClient reactionClient,
       @RestClient GitHubReviewClient reviewClient,
-      @RestClient GitHubInstallationClient installationClient) {
+      GitHubClientProvider clientProvider) {
     this.feedbackService = feedbackService;
     this.botIdentity = botIdentity;
     this.authClient = authClient;
     this.reactionClient = reactionClient;
     this.reviewClient = reviewClient;
-    this.installationClient = installationClient;
+    this.clientProvider = clientProvider;
   }
 
   @PreDestroy
@@ -185,8 +186,18 @@ public class FindingFeedbackCaptureService {
               .toList();
       var permissionCache = new HashMap<String, Boolean>();
       var pr = new PullRequest(auth, scope, owner, repo, prNumber);
+      GHRepository repository;
+      try {
+        repository =
+            clientProvider
+                .getInstallationClient(scope.installationId())
+                .getRepository(owner + "/" + repo);
+      } catch (Exception e) {
+        log.debug("Could not resolve repository {}/{}; skipping reactions", owner, repo, e);
+        return;
+      }
       for (var comment : candidates) {
-        captureReactions(pr, comment.id(), comment.body(), permissionCache);
+        captureReactions(pr, repository, comment.id(), comment.body(), permissionCache);
       }
     } catch (RuntimeException e) {
       log.warn(
@@ -227,10 +238,25 @@ public class FindingFeedbackCaptureService {
       ReviewReply reply) {
     var replyAuthorLogin = reply.authorLogin();
     var replyBody = reply.body();
+    if (replyAuthorLogin == null || replyAuthorLogin.isBlank()) {
+      return;
+    }
     var auth = authClient.getAuthHeader(scope.installationId());
     var permissionCache = new HashMap<String, Boolean>();
-    if (!mayHoldWriteAccess(reply.authorAssociation())
-        || !hasWriteAccess(auth, owner, repo, replyAuthorLogin, permissionCache)) {
+    if (!mayHoldWriteAccess(reply.authorAssociation())) {
+      return;
+    }
+    GHRepository repository;
+    try {
+      repository =
+          clientProvider
+              .getInstallationClient(scope.installationId())
+              .getRepository(owner + "/" + repo);
+    } catch (Exception e) {
+      log.debug("Could not resolve repository {}/{}; ignoring feedback", owner, repo, e);
+      return;
+    }
+    if (!hasWriteAccess(repository, replyAuthorLogin, permissionCache)) {
       return;
     }
     var root = fetchRootComment(auth, owner, repo, rootCommentId);
@@ -243,6 +269,7 @@ public class FindingFeedbackCaptureService {
     }
     captureReactions(
         new PullRequest(auth, scope, owner, repo, prNumber),
+        repository,
         rootCommentId,
         root.body(),
         permissionCache);
@@ -275,8 +302,22 @@ public class FindingFeedbackCaptureService {
       int prNumber,
       long commentId,
       String commentBody) {
+    if (SuggestionFormatter.parseFindingMarker(commentBody).isEmpty()) {
+      return;
+    }
+    GHRepository repository;
+    try {
+      repository =
+          clientProvider
+              .getInstallationClient(scope.installationId())
+              .getRepository(owner + "/" + repo);
+    } catch (Exception e) {
+      log.debug("Could not resolve repository {}/{}; skipping reactions", owner, repo, e);
+      return;
+    }
     captureReactions(
         new PullRequest(auth, scope, owner, repo, prNumber),
+        repository,
         commentId,
         commentBody,
         new HashMap<>());
@@ -287,11 +328,12 @@ public class FindingFeedbackCaptureService {
       String auth, RepoScope scope, String owner, String repo, int prNumber) {}
 
   private void captureReactions(
-      PullRequest pr, long commentId, String commentBody, Map<String, Boolean> permissionCache) {
-    OptionalInt findingIndex = SuggestionFormatter.parseFindingMarker(commentBody);
-    if (findingIndex.isEmpty()) {
-      return;
-    }
+      PullRequest pr,
+      GHRepository repository,
+      long commentId,
+      String commentBody,
+      Map<String, Boolean> permissionCache) {
+    var findingIndex = SuggestionFormatter.parseFindingMarker(commentBody);
     var ctx =
         new ReactionPollContext(
             pr.auth(),
@@ -302,7 +344,8 @@ public class FindingFeedbackCaptureService {
             pr.prNumber(),
             commentId,
             findingIndex.getAsInt(),
-            permissionCache);
+            permissionCache,
+            repository);
     listAndRecord(ctx, CONTENT_PLUS_ONE);
     listAndRecord(ctx, CONTENT_MINUS_ONE);
   }
@@ -316,7 +359,8 @@ public class FindingFeedbackCaptureService {
       int prNumber,
       long commentId,
       Integer findingIndex,
-      Map<String, Boolean> permissionCache) {}
+      Map<String, Boolean> permissionCache,
+      GHRepository repository) {}
 
   private void listAndRecord(ReactionPollContext ctx, String content) {
     String signal =
@@ -366,8 +410,7 @@ public class FindingFeedbackCaptureService {
       ReactionPollContext ctx, String signal, List<GitHubReactionClient.Reaction> reactions) {
     for (var reaction : reactions) {
       String login = humanReactorLogin(reaction);
-      if (login == null
-          || !hasWriteAccess(ctx.auth(), ctx.owner(), ctx.repo(), login, ctx.permissionCache())) {
+      if (login == null || !hasWriteAccess(ctx.repository(), login, ctx.permissionCache())) {
         continue;
       }
       feedbackService.recordFeedback(
@@ -394,22 +437,17 @@ public class FindingFeedbackCaptureService {
   }
 
   private boolean hasWriteAccess(
-      String auth, String owner, String repo, String login, Map<String, Boolean> permissionCache) {
-    if (login == null || login.isBlank()) {
-      return false;
-    }
+      GHRepository repository, String login, Map<String, Boolean> permissionCache) {
     return permissionCache.computeIfAbsent(
         login.toLowerCase(Locale.ROOT),
         ignored -> {
           try {
-            return RepositoryPermissions.canAct(
-                installationClient.collaboratorPermission(auth, ACCEPT, owner, repo, login));
-          } catch (RuntimeException e) {
+            return RepositoryPermissions.canAct(repository.getPermission(login));
+          } catch (Exception e) {
             log.debug(
-                "Failed to verify feedback actor @{} on {}/{}; ignoring signal",
+                "Failed to verify feedback actor @{} on {}; ignoring signal",
                 login,
-                owner,
-                repo,
+                repository.getFullName(),
                 e);
             return false;
           }
