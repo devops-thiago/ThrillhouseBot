@@ -291,7 +291,19 @@ class ReviewWriteBudgetTest {
     }
 
     @Override
-    public void deletePendingReview(
+    public ReviewResponse submitReviewOnce(
+        String auth,
+        String accept,
+        String owner,
+        String repo,
+        int pullNumber,
+        long reviewId,
+        SubmitReviewRequest request) {
+      throw new UnsupportedOperationException("not part of this seam");
+    }
+
+    @Override
+    public void deletePendingReviewOnce(
         String auth, String accept, String owner, String repo, int pullNumber, long reviewId) {
       throw new UnsupportedOperationException("not part of this seam");
     }

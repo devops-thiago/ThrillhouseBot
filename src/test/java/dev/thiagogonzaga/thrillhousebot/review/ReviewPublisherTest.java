@@ -458,6 +458,75 @@ class ReviewPublisherTest {
   }
 
   @Test
+  void summaryOnlyRerunStillPostsWhenASupersededFindingClosedEarlier() {
+    when(config.review()).thenReturn(reviewConfig);
+    when(config.github()).thenReturn(githubConfig);
+    when(githubConfig.writeRetryBudget()).thenReturn(Duration.ofMinutes(5));
+    var bot = new GitHubReviewClient.ReviewResponse.User("thrillhousebot");
+    var prior = new GitHubReviewClient.ReviewResponse(1L, "", "APPROVED", "sha1", bot);
+    when(reviewClient.createReview(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), any()))
+        .thenReturn(new GitHubReviewClient.ReviewResponse(2L, "", "APPROVE", "sha1", bot));
+    publisher.postReview(
+        new ReviewPublisher.PostReviewRequest(
+            "auth",
+            "o",
+            "r",
+            1,
+            "sha1",
+            SUPERSEDED_RESULT,
+            new DiffLineResolver(Map.of()),
+            true,
+            List.of(),
+            "",
+            List.of(prior)));
+
+    verify(reviewClient)
+        .createReview(anyString(), anyString(), anyString(), anyString(), eq(1), any());
+  }
+
+  @Test
+  void summaryOnlyRerunSkipsReviewWhenBotAlreadyApprovedThisHead() {
+    when(config.review()).thenReturn(reviewConfig);
+    when(config.github()).thenReturn(githubConfig);
+    when(githubConfig.writeRetryBudget()).thenReturn(Duration.ofMinutes(5));
+    var bot = new GitHubReviewClient.ReviewResponse.User("thrillhousebot");
+    var prior = new GitHubReviewClient.ReviewResponse(1L, "", "APPROVED", "sha1", bot);
+    var clean =
+        new ReviewResult(
+            List.of(),
+            0,
+            0,
+            0,
+            0,
+            null,
+            ReviewState.APPROVE,
+            false,
+            "summary",
+            List.of(),
+            List.of(),
+            0);
+    publisher.postReview(
+        new ReviewPublisher.PostReviewRequest(
+            "auth",
+            "o",
+            "r",
+            1,
+            "sha1",
+            clean,
+            new DiffLineResolver(Map.of()),
+            true,
+            List.of(),
+            "",
+            List.of(prior)));
+
+    verify(reviewClient, never())
+        .createReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+    verify(reviewClient, never())
+        .createPendingReview(anyString(), anyString(), anyString(), anyString(), anyInt(), any());
+  }
+
+  @Test
   void reviewBodyNamingClosuresIsNotReadBackAsAPreviousFinding() {
     // The section names findings the round just closed, so a later round that falls back to the
     // last bot review body for its previous-findings context must not hand them to the model as

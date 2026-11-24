@@ -242,6 +242,14 @@ public interface ThrillhouseConfig {
     int maxReviewComments();
 
     /**
+     * Open one pending pull request review per round, attach each inline comment to it, then submit
+     * it once (#1434). Off, each inline comment is posted on its own, as before.
+     */
+    @WithDefault("false")
+    @WithName("batched-inline-review-enabled")
+    boolean batchedInlineReviewEnabled();
+
+    /**
      * Attempts per failed AI call. At most two may end in a timeout. A rejected API key is never
      * retried.
      */
