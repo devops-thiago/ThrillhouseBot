@@ -137,11 +137,15 @@ public class ReviewPublisher {
       return false;
     }
     var prTextLine = prText == null ? "" : DescriptionGapCarryover.prTextMarker(prText) + "\n";
+    var manifestLine =
+        FindingsManifest.render(PrSummaryGenerator.currentState(PromptLabelScrubber.scrub(result)))
+            + "\n";
     var request =
         new GitHubCommentClient.CreateCommentRequest(
             PrSummaryGenerator.SUMMARY_MARKER
                 + "\n"
                 + prTextLine
+                + manifestLine
                 + PromptLabelScrubber.scrubMarkdown(result.summaryMarkdown(), result.findings()));
     if (result.isFirstReview() || forceSummary) {
       commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);

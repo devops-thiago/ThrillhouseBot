@@ -482,6 +482,20 @@ comment never binds; it only keeps the title scan for pre-marker comments from b
 - **The summary comment is found by its marker every round** (`<!-- thrillhousebot:summary -->`,
   or the heading for summaries from before #868), never by an id held in memory, so a restart
   loses nothing. An unchanged body is not rewritten; a failed edit posts a new comment.
+- **The summary carries a machine-readable manifest of the open findings** (#1433).
+  `ReviewPublisher.publishSummary` writes one hidden line under the summary marker, after the
+  `pr-text` fingerprint: `<!-- thrillhousebot:findings v=1 [...] -->`
+  (`FindingsManifest.render`, over `PrSummaryGenerator.currentState(PromptLabelScrubber.scrub(result))`,
+  so it lists exactly the set the summary renders and its `key` equals the inline marker's, which is
+  computed over the scrubbed title). It is a view, never a source of truth: nothing reads it back.
+  Entries hold identifiers and enums only (`key`, `file`, `line`, `risk`, `confidence`, `status`
+  always `open`, `thread` from `Finding.postsInline`, `hasSuggestion`, `carried`), most severe first;
+  no title, description or suggestion enters it. The path is the only free text and is escaped so it
+  can never write `-->`; the line stays one line. An empty set renders `[]` (so "nothing open" differs
+  from a comment older than the manifest), and a set over `MAX_ENTRIES` entries or
+  `MAX_ARRAY_CHARS` rendered characters (the path has no length bound) is cut with `omitted=N` in
+  the header. `v=1` is a contract version (#1379, #1378): a field removed or renamed bumps it. The
+  line is written outside `PromptLabelScrubber.scrubMarkdown`, so the scrub cannot rewrite it.
 - **A run whose head moved stands down before its first write** (#704, #806) and hands its
   verified findings to the next run through `SupersededFindingsCarryover`, so two runs never edit
   the summary at once and nothing is posted against a diff that changed. This is `HeadMovedGuard`,

@@ -167,7 +167,46 @@ class ReviewPublisherTest {
 
   /** The body the publisher posts for {@code summary}: the marker line, then the summary. */
   private static String posted(String summary) {
-    return PrSummaryGenerator.SUMMARY_MARKER + "\n" + summary;
+    return PrSummaryGenerator.SUMMARY_MARKER + "\n" + EMPTY_MANIFEST + "\n" + summary;
+  }
+
+  private static final String EMPTY_MANIFEST = "<!-- thrillhousebot:findings v=1 [] -->";
+
+  @Test
+  void theSummaryCarriesTheOpenFindingsManifestBetweenTheMarkerAndTheProse() {
+    var open =
+        new Finding(RiskLevel.HIGH, Confidence.HIGH, "src/A.java", 12, "NPE", "d", null, null);
+    var result =
+        new ReviewResult(
+            List.of(open),
+            0,
+            1,
+            0,
+            0,
+            RiskLevel.HIGH,
+            ReviewState.COMMENT,
+            true,
+            "summary",
+            List.of(),
+            List.of(),
+            0);
+
+    assertTrue(publisher.publishSummary("auth", "o", "r", 1, result, false));
+
+    var body = ArgumentCaptor.forClass(GitHubCommentClient.CreateCommentRequest.class);
+    verify(commentClient)
+        .createComment(anyString(), anyString(), eq("o"), eq("r"), eq(1), body.capture());
+    var lines = body.getValue().body().lines().toList();
+    assertEquals(PrSummaryGenerator.SUMMARY_MARKER, lines.get(0));
+    assertEquals(
+        "<!-- thrillhousebot:findings v=1 [{\"key\":\""
+            + SuggestionFormatter.findingKey("src/A.java", 12, "NPE")
+            + "\",\"file\":\"src/A.java\",\"line\":12,\"risk\":\"high\",\"confidence\":\"high\","
+            + "\"status\":\"open\",\"thread\":true,\"hasSuggestion\":false,\"carried\":false}]"
+            + " -->",
+        lines.get(1));
+    assertEquals("summary", lines.get(2));
+    assertTrue(ReviewContextLoader.isBotSummaryComment(body.getValue().body()));
   }
 
   private void existingComments(GitHubCommentClient.IssueComment... comments) {
