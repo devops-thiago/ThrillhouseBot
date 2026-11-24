@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.thiagogonzaga.thrillhousebot.github.CommentBodyLimit;
 import org.junit.jupiter.api.Test;
 
 class AgentPromptBlockTest {
@@ -137,5 +138,64 @@ class AgentPromptBlockTest {
     var out = AgentPromptBlock.withAgentPrompt("body", finding, true);
     assertTrue(out.startsWith("body\n\n"));
     assertTrue(out.contains("apply the suggested change in the comment above"));
+  }
+
+  // A path is placed in a code span once and in prose once; each gets the escaping its place needs.
+  @Test
+  void aPathInTheCodeSpanIsNotEntityEscapedAndProseStillIs() {
+    var finding = new Finding(RiskLevel.HIGH, "src/a|b`c.java", 4, "T", "d", null, null);
+
+    var block = AgentPromptBlock.render(finding, false);
+
+    assertTrue(block.contains("Fix this review finding in `src/a|bc.java` (line 4)."), block);
+    assertTrue(block.contains("Scope: src/a\\|b&#96;c.java:4."), block);
+    assertFalse(block.contains("`src/a\\|b"), block);
+  }
+
+  @Test
+  void aLongProblemParagraphIsCutAtAWordWithAnEllipsis() {
+    var paragraph = "word ".repeat(400).strip();
+    var finding = new Finding(RiskLevel.HIGH, "src/A.java", 1, "T", paragraph, null, null);
+
+    var block = AgentPromptBlock.render(finding, false);
+
+    var problem = block.substring(block.indexOf("Problem: T. ") + 12, block.indexOf("\n\nScope:"));
+    assertTrue(problem.endsWith("word…"), problem);
+    assertTrue(problem.length() <= AgentPromptBlock.MAX_PROBLEM_CHARS + 1, problem);
+    assertTrue(block.endsWith("</details>"));
+  }
+
+  @Test
+  void aLongParagraphWithNoSpaceIsCutAtTheLimitWithoutSplittingASurrogatePair() {
+    var noSpace = "x".repeat(AgentPromptBlock.MAX_PROBLEM_CHARS - 1) + "\uD83D\uDE00tail";
+
+    var cut = AgentPromptBlock.capped(noSpace);
+
+    assertEquals("x".repeat(AgentPromptBlock.MAX_PROBLEM_CHARS - 1) + "…", cut);
+    assertEquals(
+        "y".repeat(AgentPromptBlock.MAX_PROBLEM_CHARS) + "…",
+        AgentPromptBlock.capped("y".repeat(AgentPromptBlock.MAX_PROBLEM_CHARS + 5)));
+  }
+
+  @Test
+  void aCommentNearGitHubsLimitKeepsItsBodyWithoutAnUnclosedBlock() {
+    var finding =
+        new Finding(RiskLevel.HIGH, "src/A.java", 1, "T", "word ".repeat(5_000), null, null);
+    var body = "b".repeat(CommentBodyLimit.MAX_LENGTH - 500);
+
+    var out = AgentPromptBlock.withAgentPrompt(body, finding, false);
+
+    assertEquals(body, out);
+  }
+
+  @Test
+  void aVeryLongDescriptionStillRendersAClosedBlockUnderTheLimit() {
+    var finding =
+        new Finding(RiskLevel.HIGH, "src/A.java", 1, "T", "word ".repeat(20_000), null, null);
+
+    var out = AgentPromptBlock.withAgentPrompt("review text", finding, false);
+
+    assertTrue(out.endsWith("</details>"), out);
+    assertTrue(out.length() < CommentBodyLimit.MAX_LENGTH);
   }
 }

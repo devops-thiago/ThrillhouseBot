@@ -350,6 +350,8 @@ its own. The summary states how many findings went unverified.
 `REVIEW_AGENT_PROMPT_ENABLED=true` adds a collapsed **Agent prompt** block to each
 **inline** finding comment, built from the title, description and suggestion
 already there. It makes no model call. File-level threads do not get the block.
+The description is repeated up to 1,000 characters, and a comment the block
+would push past GitHub's size limit is posted without it.
 
 `REVIEW_BATCHED_INLINE_REVIEW_ENABLED=true` opens one pending pull request review
 per round, attaches each inline finding to it and submits it once, instead of
