@@ -19,8 +19,8 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReactionClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
+import dev.thiagogonzaga.thrillhousebot.github.InstallationRepository;
 import dev.thiagogonzaga.thrillhousebot.github.RepoScope;
-import dev.thiagogonzaga.thrillhousebot.github.RepositoryPermissions;
 import io.quarkiverse.githubapp.GitHubClientProvider;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -30,6 +30,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
@@ -184,20 +185,20 @@ public class FindingFeedbackCaptureService {
                   Comparator.comparingLong(GitHubReviewClient.PullRequestComment::id).reversed())
               .limit(MAX_FINDINGS_PER_CAPTURE)
               .toList();
-      var permissionCache = new HashMap<String, Boolean>();
-      var pr = new PullRequest(auth, scope, owner, repo, prNumber);
-      GHRepository repository;
-      try {
-        repository =
-            clientProvider
-                .getInstallationClient(scope.installationId())
-                .getRepository(owner + "/" + repo);
-      } catch (Exception e) {
-        log.debug("Could not resolve repository {}/{}; skipping reactions", owner, repo, e);
+      if (candidates.isEmpty()) {
         return;
       }
+      var repository = repository(scope, owner, repo, "skipping reactions");
+      if (repository.isEmpty()) {
+        return;
+      }
+      var permissionCache = new HashMap<String, Boolean>();
+      var pr = new PullRequest(auth, scope, owner, repo, prNumber);
       for (var comment : candidates) {
-        captureReactions(pr, repository, comment.id(), comment.body(), permissionCache);
+        if (Thread.currentThread().isInterrupted()) {
+          return;
+        }
+        captureReactions(pr, repository.get(), comment.id(), comment.body(), permissionCache);
       }
     } catch (RuntimeException e) {
       log.warn(
@@ -246,16 +247,11 @@ public class FindingFeedbackCaptureService {
     if (!mayHoldWriteAccess(reply.authorAssociation())) {
       return;
     }
-    GHRepository repository;
-    try {
-      repository =
-          clientProvider
-              .getInstallationClient(scope.installationId())
-              .getRepository(owner + "/" + repo);
-    } catch (Exception e) {
-      log.debug("Could not resolve repository {}/{}; ignoring feedback", owner, repo, e);
+    var resolved = repository(scope, owner, repo, "ignoring feedback");
+    if (resolved.isEmpty()) {
       return;
     }
+    var repository = resolved.get();
     if (!hasWriteAccess(repository, replyAuthorLogin, permissionCache)) {
       return;
     }
@@ -305,22 +301,25 @@ public class FindingFeedbackCaptureService {
     if (SuggestionFormatter.parseFindingMarker(commentBody).isEmpty()) {
       return;
     }
-    GHRepository repository;
-    try {
-      repository =
-          clientProvider
-              .getInstallationClient(scope.installationId())
-              .getRepository(owner + "/" + repo);
-    } catch (Exception e) {
-      log.debug("Could not resolve repository {}/{}; skipping reactions", owner, repo, e);
-      return;
-    }
-    captureReactions(
-        new PullRequest(auth, scope, owner, repo, prNumber),
-        repository,
-        commentId,
-        commentBody,
-        new HashMap<>());
+    repository(scope, owner, repo, "skipping reactions")
+        .ifPresent(
+            repository ->
+                captureReactions(
+                    new PullRequest(auth, scope, owner, repo, prNumber),
+                    repository,
+                    commentId,
+                    commentBody,
+                    new HashMap<>()));
+  }
+
+  private Optional<GHRepository> repository(
+      RepoScope scope, String owner, String repo, String consequence) {
+    return InstallationRepository.resolve(
+        clientProvider,
+        scope.installationId(),
+        owner,
+        repo,
+        e -> log.debug("Could not resolve repository {}/{}; {}", owner, repo, consequence, e));
   }
 
   /** The pull request whose finding comments are polled, with the token to poll them. */
@@ -440,18 +439,16 @@ public class FindingFeedbackCaptureService {
       GHRepository repository, String login, Map<String, Boolean> permissionCache) {
     return permissionCache.computeIfAbsent(
         login.toLowerCase(Locale.ROOT),
-        ignored -> {
-          try {
-            return RepositoryPermissions.canAct(repository.getPermission(login));
-          } catch (Exception e) {
-            log.debug(
-                "Failed to verify feedback actor @{} on {}; ignoring signal",
+        ignored ->
+            InstallationRepository.mayAct(
+                repository,
                 login,
-                repository.getFullName(),
-                e);
-            return false;
-          }
-        });
+                e ->
+                    log.debug(
+                        "Failed to verify feedback actor @{} on {}; ignoring signal",
+                        login,
+                        repository.getFullName(),
+                        e)));
   }
 
   private static boolean mayHoldWriteAccess(String authorAssociation) {

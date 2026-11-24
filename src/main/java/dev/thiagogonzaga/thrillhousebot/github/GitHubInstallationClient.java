@@ -46,16 +46,6 @@ public interface GitHubInstallationClient {
       @QueryParam("per_page") @DefaultValue("100") int perPage,
       @QueryParam("page") @DefaultValue("1") int page);
 
-  @GET
-  @Path("/repos/{owner}/{repo}/collaborators/{username}/permission")
-  @Produces(MediaType.APPLICATION_JSON)
-  CollaboratorPermission collaboratorPermission(
-      @HeaderParam("Authorization") String authorization,
-      @HeaderParam("Accept") String accept,
-      @PathParam("owner") String owner,
-      @PathParam("repo") String repo,
-      @PathParam("username") String username);
-
   /**
    * The repository by name. A renamed repository answers its old name with a 301 whose {@code
    * Location} ends in {@code /repositories/{id}}; redirects are not followed, so the caller reads
@@ -70,26 +60,12 @@ public interface GitHubInstallationClient {
       @PathParam("repo") String repo);
 
   /**
-   * Whether {@code username} is a member of {@code org}: 204 when they are. Needs the App's
-   * Organization → Members: read permission; without it GitHub answers 403 (#1221).
-   */
-  @GET
-  @Path("/orgs/{org}/members/{username}")
-  Response checkOrgMember(
-      @HeaderParam("Authorization") String authorization,
-      @HeaderParam("Accept") String accept,
-      @PathParam("org") String org,
-      @PathParam("username") String username);
-
-  /**
    * An installation of the App; {@code suspendedAt} is set while its owner has it suspended, and
    * such an installation is not served (#1222).
    */
   record Installation(long id, Account account, @JsonProperty("suspended_at") String suspendedAt) {
     public record Account(String login, String type) {}
   }
-
-  record CollaboratorPermission(String permission, @JsonProperty("role_name") String roleName) {}
 
   record InstallationRepositoriesResponse(
       @JsonProperty("total_count") int totalCount, List<Repository> repositories) {
