@@ -4,6 +4,15 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in batched inline review** (#1434): when `REVIEW_BATCHED_INLINE_REVIEW_ENABLED` is on, a
+  round opens one pending pull request review, attaches each inline thread to it, and submits it
+  once instead of leaving one empty review per finding. The shell opens only when inline posting
+  is attempted on a changed file, is cleared when nothing lands inline, dismisses any stranded
+  bot-owned pending review before a new one, and is dropped after a refused submit falls back to
+  a body-only review.
+
 ### Fixed
 
 - **`/review` no longer reviews a closed or merged pull request (#1458).** The comment path never
