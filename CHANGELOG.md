@@ -6,6 +6,14 @@ All notable changes to ThrillhouseBot.
 
 ### Fixed
 
+- **Findings from rounds before the previous one are re-checked when they could be fixed**
+  (#1316): an older round's open finding was put back to the model only when its file was known
+  to have changed since the round that raised it. When that could not be told (more round heads
+  than the review compares, or a comparison at GitHub's file cap) it was never asked about again
+  and stayed open after its fix. It is now asked about every round. A finding whose own file is
+  unchanged is also asked about, and its `resolved` stands, when another file its title or
+  description names changed since: a finding that a document and the code disagree can be fixed
+  in the document while the code line it quotes stays the same.
 - The review session row records the review's outcome instead of per-call values (#1417):
   - `durationMs` is the review's elapsed time from start to its final status. It was the sum of
     the model calls' durations, which counted parallel and retried calls each time and left out

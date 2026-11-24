@@ -4387,11 +4387,16 @@ public class FollowUpAnalyzer {
 
   /**
    * The findings a follow-up round lists to the model by number (#1319): the effective previous
-   * round's, then every finding an older round left open whose file changed since the round that
-   * raised it, so it gets a status this round (#1316). An older finding whose file is unchanged is
-   * still open without asking, and one a maintainer answered on its thread is weighed by the
-   * backstop and listed among the answered ones, so neither is listed. Read only from the stored
-   * rounds and the diff, so the prompt, the screen and the verdict list the same findings.
+   * round's, then every finding an older round left open that could be fixed by now, so it gets a
+   * status this round (#1316): first those whose file changed since the round that raised it, then
+   * those for which that is not known ({@link DiffLineResolver.FileChange#UNKNOWN}, as past {@link
+   * RoundFileChanges#MAX_COMPARISONS} round heads), or whose file is unchanged but another file
+   * their title or description names changed ({@link NamedFiles}: a document fixed to match the
+   * code). An older finding whose file and named files are unchanged is still open without asking:
+   * no {@code resolved} could stand for it ({@link ModelStatusScreen}). One a maintainer answered
+   * on its thread is weighed by the backstop and listed among the answered ones (#947), so it is
+   * not listed either. Read only from the stored rounds and the diff, so the prompt, the screen and
+   * the verdict list the same findings.
    *
    * @param priorAiResponses every completed prior round's parsed response, newest first
    * @param lineResolver the review's diff, read only when an older round left something open
@@ -4410,16 +4415,29 @@ public class FollowUpAnalyzer {
       var replay = replayRounds(toChronological(priorAiResponses));
       var effectiveKeys = new HashSet<String>();
       replay.reportedRound().forEach(finding -> effectiveKeys.add(findingKey(finding)));
+      // #1316: the findings whose own file changed come first, then every other one a resolved
+      // could stand for: its file's change is not known, or a file it names changed.
+      var later = new ArrayList<OpenFinding>();
       for (var entry : replay.open().entrySet()) {
         var open = entry.getValue();
-        if (!effectiveKeys.contains(entry.getKey())
-            && lineResolver.get().fileChangeSince(open.priorRound(), open.finding().file())
-                == DiffLineResolver.FileChange.CHANGED
-            && answeredRootComment(open.finding(), open.id(), inlineComments, botIdentity)
-                == null) {
+        if (effectiveKeys.contains(entry.getKey())
+            || answeredRootComment(open.finding(), open.id(), inlineComments, botIdentity)
+                != null) {
+          continue;
+        }
+        var resolver = lineResolver.get();
+        var change = resolver.fileChangeSince(open.priorRound(), open.finding().file());
+        if (change == DiffLineResolver.FileChange.CHANGED) {
           findings.add(open.finding());
           rounds.add(open.priorRound());
+        } else if (change == DiffLineResolver.FileChange.UNKNOWN
+            || NamedFiles.changedSince(open.priorRound(), open.finding(), resolver)) {
+          later.add(open);
         }
+      }
+      for (var open : later) {
+        findings.add(open.finding());
+        rounds.add(open.priorRound());
       }
     }
     return new PriorListing(findings, rounds, effective.size());
@@ -4473,7 +4491,7 @@ public class FollowUpAnalyzer {
         new StringBuilder(
             """
 
-            Raised in earlier rounds and still open, in files changed since — report each in \
+            Raised in earlier rounds and still open, possibly fixed since — report each in \
             previous_findings_status under its number and key:
             """);
     for (var id = listing.effective() + 1; id <= findings.size(); id++) {
