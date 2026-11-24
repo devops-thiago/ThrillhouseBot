@@ -172,4 +172,104 @@ class ReviewThreadServiceTest {
 
     assertFalse(service.resolve("auth", "T1"));
   }
+
+  // #1434: a batched round attaches each thread to its pending review through GraphQL.
+  @Test
+  void addPendingReviewThreadSendsTheLineAnchoredCommentAsMutationInput() throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any()))
+        .thenReturn(
+            mapper.readTree(
+                "{\"data\":{\"addPullRequestReviewThread\":{\"thread\":{\"id\":\"PRRT_1\"}}}}"));
+
+    var threadId =
+        service.addPendingReviewThread(
+            "auth",
+            "owner",
+            "repo",
+            7,
+            "PRR_9",
+            new GitHubReviewClient.CreatePullRequestCommentRequest(
+                "sha", "body", "src/A.java", 12, "RIGHT", 10, "RIGHT"));
+
+    assertEquals("PRRT_1", threadId);
+    var request = ArgumentCaptor.forClass(GitHubGraphQLClient.GraphQLRequest.class);
+    verify(graphQLClient).executeOnce(eq("auth"), request.capture());
+    var variables = request.getValue().variables();
+    assertTrue(request.getValue().query().contains("addPullRequestReviewThread"));
+    assertEquals("PRR_9", variables.get("reviewId"));
+    assertEquals("body", variables.get("body"));
+    assertEquals("src/A.java", variables.get("path"));
+    assertEquals(12, variables.get("line"));
+    assertEquals("RIGHT", variables.get("side"));
+    assertEquals(10, variables.get("startLine"));
+    assertEquals("RIGHT", variables.get("startSide"));
+    assertFalse(variables.containsKey("subjectType"));
+  }
+
+  @Test
+  void addPendingReviewThreadSendsAFileLevelCommentWithNoLine() throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any()))
+        .thenReturn(
+            mapper.readTree(
+                "{\"data\":{\"addPullRequestReviewThread\":{\"thread\":{\"id\":\"PRRT_2\"}}}}"));
+
+    service.addPendingReviewThread(
+        "auth",
+        "owner",
+        "repo",
+        7,
+        "PRR_9",
+        GitHubReviewClient.CreatePullRequestCommentRequest.onFile("sha", "body", "src/A.java"));
+
+    var request = ArgumentCaptor.forClass(GitHubGraphQLClient.GraphQLRequest.class);
+    verify(graphQLClient).executeOnce(eq("auth"), request.capture());
+    var variables = request.getValue().variables();
+    assertEquals("FILE", variables.get("subjectType"));
+    assertFalse(variables.containsKey("line"));
+    assertFalse(variables.containsKey("side"));
+  }
+
+  @Test
+  void addPendingReviewThreadOmitsTheRangeOfASingleLineComment() throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any()))
+        .thenReturn(
+            mapper.readTree(
+                "{\"data\":{\"addPullRequestReviewThread\":{\"thread\":{\"id\":\"PRRT_3\"}}}}"));
+
+    service.addPendingReviewThread(
+        "auth",
+        "owner",
+        "repo",
+        7,
+        "PRR_9",
+        new GitHubReviewClient.CreatePullRequestCommentRequest(
+            "sha", "body", "src/A.java", 12, "LEFT", null, null));
+
+    var request = ArgumentCaptor.forClass(GitHubGraphQLClient.GraphQLRequest.class);
+    verify(graphQLClient).executeOnce(eq("auth"), request.capture());
+    assertEquals("LEFT", request.getValue().variables().get("side"));
+    assertFalse(request.getValue().variables().containsKey("startLine"));
+    assertFalse(request.getValue().variables().containsKey("startSide"));
+  }
+
+  @Test
+  void addPendingReviewThreadRaisesGitHubsErrorsWhenNoThreadCameBack() throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any()))
+        .thenReturn(
+            mapper.readTree(
+                "{\"data\":{\"addPullRequestReviewThread\":null},"
+                    + "\"errors\":[{\"type\":\"UNPROCESSABLE\","
+                    + "\"message\":\"Line could not be resolved\"}]}"));
+    var comment =
+        new GitHubReviewClient.CreatePullRequestCommentRequest(
+            "sha", "body", "src/A.java", 12, "RIGHT", null, null);
+
+    var failure =
+        assertThrows(
+            GitHubGraphQLException.class,
+            () -> service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", comment));
+
+    assertEquals("Line could not be resolved", failure.refusal());
+    assertFalse(failure.isThrottled());
+  }
 }

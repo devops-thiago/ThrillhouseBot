@@ -57,6 +57,22 @@ public class ReviewThreadService {
       }
       """;
 
+  /**
+   * Attaches one thread to a pending review (#1434). GitHub documents {@code pullRequestReviewId}
+   * as an input of this mutation; the REST create-comment route documents no such field, so the
+   * batched path uses this one. The thread takes its commit from the pending review.
+   */
+  private static final String ADD_THREAD_MUTATION =
+      """
+      mutation($reviewId: ID!, $body: String!, $path: String!, $line: Int, $side: DiffSide,
+          $startLine: Int, $startSide: DiffSide,
+          $subjectType: PullRequestReviewThreadSubjectType) {
+        addPullRequestReviewThread(input: {pullRequestReviewId: $reviewId, body: $body,
+            path: $path, line: $line, side: $side, startLine: $startLine, startSide: $startSide,
+            subjectType: $subjectType}) { thread { id } }
+      }
+      """;
+
   /** A review thread keyed by its root comment, with its GraphQL node id. */
   public record ThreadRef(String id, boolean resolved) {}
 
@@ -108,6 +124,57 @@ public class ReviewThreadService {
       page++;
     } while (after != null && page < MAX_THREAD_PAGES);
     return threads;
+  }
+
+  /**
+   * Opens a thread on the pending review {@code reviewNodeId}, from the same comment the REST route
+   * would post, and returns the new thread's node id. The write is paced, backed off on a throttle
+   * and counted as a dropped post exactly as {@link GitHubReviewClient#createPullRequestComment}
+   * is, so a finding's routes keep their one-delivery accounting ({@link
+   * GitHubReviewClient#asOneComment}).
+   *
+   * @throws GitHubGraphQLException when GitHub answers with {@code errors} and no thread
+   */
+  public String addPendingReviewThread(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      String reviewNodeId,
+      GitHubReviewClient.CreatePullRequestCommentRequest comment) {
+    var variables = new HashMap<String, Object>();
+    variables.put("reviewId", reviewNodeId);
+    variables.put("body", comment.body());
+    variables.put("path", comment.path());
+    if (comment.fileLevel()) {
+      variables.put("subjectType", "FILE");
+    } else {
+      putPresent(variables, "line", comment.line());
+      putPresent(variables, "side", comment.side());
+      putPresent(variables, "startLine", comment.startLine());
+      putPresent(variables, "startSide", comment.startSide());
+    }
+    var request = new GitHubGraphQLClient.GraphQLRequest(ADD_THREAD_MUTATION, variables);
+    var response =
+        GitHubLostWrites.SHARED.recording(
+            new GitHubLostWrites.Target(owner, repo, prNumber),
+            () ->
+                GitHubWriteRetry.DEFAULT.call(
+                    "a pending review thread on " + owner + "/" + repo + " #" + prNumber,
+                    auth,
+                    credential -> graphQLClient.executeOnce(credential, request)));
+    var threadId =
+        response.path("data").path("addPullRequestReviewThread").path("thread").path("id");
+    if (threadId.isTextual()) {
+      return threadId.asText();
+    }
+    throw GitHubGraphQLException.from(response.path("errors"));
+  }
+
+  private static void putPresent(Map<String, Object> variables, String name, Object value) {
+    if (value != null) {
+      variables.put(name, value);
+    }
   }
 
   /** Resolves a review thread; returns whether GitHub reports it resolved afterwards. */

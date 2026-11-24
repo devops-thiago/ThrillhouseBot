@@ -230,6 +230,12 @@ class RescuedReviewBodyLostWriteTest {
     }
 
     @Override
+    public ReviewResponse getReviewOnce(
+        String auth, String accept, String owner, String repo, int pullNumber, long reviewId) {
+      throw new UnsupportedOperationException("not part of this seam");
+    }
+
+    @Override
     public void deletePendingReviewOnce(
         String auth, String accept, String owner, String repo, int pullNumber, long reviewId) {
       throw new UnsupportedOperationException("not part of this seam");

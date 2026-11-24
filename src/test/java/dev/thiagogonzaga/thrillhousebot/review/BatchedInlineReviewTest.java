@@ -24,25 +24,31 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubGraphQLException;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -52,16 +58,22 @@ import org.mockito.ArgumentCaptor;
 class BatchedInlineReviewTest {
 
   private static final String FILE = "src/Main.java";
-  private static final String PATCH = "@@ -1,3 +1,3 @@\n-old\n+new\n";
+  private static final String PATCH = "@@ -1,3 +1,3 @@\n-old\n+new\n+next\n";
+  private static final String NODE_ID = "PRR_99";
 
   private GitHubReviewClient reviewClient;
+  private ReviewThreadService threadService;
   private ReviewPublisher publisher;
+  private ThrillhouseConfig config;
   private ThrillhouseConfig.ReviewConfig reviewConfig;
+  private SuggestionFormatter suggestionFormatter;
+  private PendingReviewGuard guard;
 
   @BeforeEach
   void setUp() {
     reviewClient = mock(GitHubReviewClient.class);
-    var config = mock(ThrillhouseConfig.class);
+    threadService = mock(ReviewThreadService.class);
+    config = mock(ThrillhouseConfig.class);
     reviewConfig = mock(ThrillhouseConfig.ReviewConfig.class);
     when(config.review()).thenReturn(reviewConfig);
     when(reviewConfig.maxReviewComments()).thenReturn(10);
@@ -69,182 +81,154 @@ class BatchedInlineReviewTest {
     var githubConfig = mock(ThrillhouseConfig.GitHubConfig.class);
     when(config.github()).thenReturn(githubConfig);
     when(githubConfig.writeRetryBudget()).thenReturn(Duration.ofHours(1));
-    when(reviewClient.listReviewsPage(any(), any(), any(), any(), anyInt(), anyInt(), anyInt()))
-        .thenReturn(List.of());
     when(reviewClient.createPendingReview(any(), any(), any(), any(), anyInt(), any()))
-        .thenReturn(new GitHubReviewClient.ReviewResponse(99L, "", "PENDING", "sha", null));
+        .thenReturn(
+            new GitHubReviewClient.ReviewResponse(99L, "", "PENDING", "sha", null, NODE_ID));
     when(reviewClient.createPullRequestComment(any(), any(), any(), any(), anyInt(), any()))
         .thenReturn(new GitHubReviewClient.PullRequestCommentResponse(1L, "c", FILE, 1));
     when(reviewClient.submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any()))
         .thenReturn(new GitHubReviewClient.ReviewResponse(99L, "body", "COMMENTED", "sha", null));
-    var suggestionFormatter = mock(SuggestionFormatter.class);
+    when(reviewClient.createReview(any(), any(), any(), any(), anyInt(), any()))
+        .thenReturn(new GitHubReviewClient.ReviewResponse(1L, "", "COMMENTED", "sha", null));
+    when(threadService.addPendingReviewThread(any(), any(), any(), anyInt(), any(), any()))
+        .thenReturn("PRRT_1");
+    suggestionFormatter = mock(SuggestionFormatter.class);
     when(suggestionFormatter.formatReviewComment(any(), anyBoolean(), anyInt()))
         .thenReturn("finding");
-    publisher =
-        new ReviewPublisher(
-            reviewClient,
-            mock(GitHubCommentClient.class),
-            mock(ReviewThreadService.class),
-            suggestionFormatter,
-            mock(FollowUpAnalyzer.class),
-            mock(PrLabeler.class),
-            config,
-            BotIdentity.of("thrillhousebot[bot]"));
+    guard = new PendingReviewGuard(Duration.ofMillis(10));
+    publisher = publisher(config);
+  }
+
+  private ReviewPublisher publisher(ThrillhouseConfig publisherConfig) {
+    return new ReviewPublisher(
+        reviewClient,
+        mock(GitHubCommentClient.class),
+        threadService,
+        suggestionFormatter,
+        mock(FollowUpAnalyzer.class),
+        mock(PrLabeler.class),
+        publisherConfig,
+        BotIdentity.of("thrillhousebot[bot]"),
+        guard);
+  }
+
+  private static Finding finding(int line, String title) {
+    return new Finding(RiskLevel.HIGH, FILE, line, title, "desc", null, null);
+  }
+
+  private static ReviewResult result(ReviewState state, Finding... findings) {
+    return new ReviewResult(
+        List.of(findings),
+        0,
+        findings.length,
+        0,
+        0,
+        RiskLevel.HIGH,
+        state,
+        true,
+        "",
+        List.of(),
+        List.of(),
+        0);
+  }
+
+  private void post(ReviewResult result) {
+    publisher.postReview(
+        "Bearer tok", "owner", "repo", 7, "sha", result, new DiffLineResolver(Map.of(FILE, PATCH)));
+  }
+
+  private String fallbackReviewBody() {
+    var review = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
+    verify(reviewClient).createReview(any(), any(), any(), any(), eq(7), review.capture());
+    return review.getValue().body();
+  }
+
+  private static GitHubGraphQLException graphQLRefusal(String json) throws Exception {
+    return GitHubGraphQLException.from(new ObjectMapper().readTree(json));
   }
 
   @Test
-  void batchedRoundDisabledSkipsPendingAndSubmit() {
+  void batchedRoundDisabledPostsEachCommentOnItsOwn() {
     when(reviewConfig.batchedInlineReviewEnabled()).thenReturn(false);
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
+
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
 
     verify(reviewClient, never()).createPendingReview(any(), any(), any(), any(), anyInt(), any());
     verify(reviewClient, never())
         .submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any());
     verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), eq(7), any());
+    verify(threadService, never())
+        .addPendingReviewThread(any(), any(), any(), anyInt(), any(), any());
   }
 
   @Test
-  void batchedRoundIgnoresStrandedPendingOwnedByAnotherUser() {
-    var other = new GitHubReviewClient.ReviewResponse.User("other-bot");
-    when(reviewClient.listReviewsPage(any(), any(), any(), any(), eq(7), eq(100), eq(1)))
-        .thenReturn(
-            List.of(new GitHubReviewClient.ReviewResponse(88L, "", "PENDING", "sha", other)));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
+  void batchedRoundAttachesEachThreadToThePendingReviewThroughGraphQL() {
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug"), finding(2, "Other")));
 
-    verify(reviewClient, never()).deletePendingReview(any(), any(), any(), any(), eq(7), eq(88L));
-    verify(reviewClient).createPendingReview(any(), any(), any(), any(), eq(7), eq("sha"));
+    var comment = ArgumentCaptor.forClass(GitHubReviewClient.CreatePullRequestCommentRequest.class);
+    verify(threadService, times(2))
+        .addPendingReviewThread(
+            eq("Bearer tok"), eq("owner"), eq("repo"), eq(7), eq(NODE_ID), comment.capture());
+    assertEquals(FILE, comment.getAllValues().get(0).path());
+    assertEquals(1, comment.getAllValues().get(0).line());
+    assertEquals("RIGHT", comment.getAllValues().get(0).side());
+    verify(reviewClient, never())
+        .createPullRequestComment(any(), any(), any(), any(), anyInt(), any());
+    verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), any());
   }
 
   @Test
-  void batchedRoundAttachesEachInlineCommentToThePendingReview() {
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
+  void withoutAPendingReviewInlineCommentsGoOverRest() {
     publisher.postInlineComments(
         "Bearer tok",
         "owner",
         "repo",
         7,
         "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
+        result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")),
         new DiffLineResolver(Map.of(FILE, PATCH)),
-        Optional.of(99L));
+        Optional.empty());
 
-    var comment = ArgumentCaptor.forClass(GitHubReviewClient.CreatePullRequestCommentRequest.class);
-    verify(reviewClient)
-        .createPullRequestComment(any(), any(), any(), any(), eq(7), comment.capture());
-    assertEquals(99L, comment.getValue().pullRequestReviewId());
+    verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), eq(7), any());
+    verify(threadService, never())
+        .addPendingReviewThread(any(), any(), any(), anyInt(), any(), any());
   }
 
   @Test
-  void batchedRoundSubmitsANonEmptyBodyWhenProseSectionsAreEmpty() {
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.APPROVE,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
+  void batchedRoundSubmitsTheCommentDefaultBodyOnACleanApprovalWithThreads() {
+    post(result(ReviewState.APPROVE, finding(1, "Bug")));
 
     var submit = ArgumentCaptor.forClass(GitHubReviewClient.SubmitReviewRequest.class);
     verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), submit.capture());
-    assertTrue(submit.getValue().body().contains("see inline comments"), submit.getValue().body());
+    assertEquals(
+        "ThrillhouseBot review" + ReviewPublisher.BATCHED_INLINE_BODY_SUFFIX,
+        submit.getValue().body());
+    assertEquals("COMMENT", submit.getValue().event());
   }
 
   @Test
-  void batchedRoundSubmitsRequestChangesDefaultBodyWhenProseSectionsAreEmpty() {
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
+  void batchedRoundSubmitsRequestChangesWithItsLeadIn() {
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
 
     var submit = ArgumentCaptor.forClass(GitHubReviewClient.SubmitReviewRequest.class);
     verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), submit.capture());
     assertEquals("REQUEST_CHANGES", submit.getValue().event());
     assertTrue(
-        submit.getValue().body().contains("ThrillhouseBot requested changes"),
+        submit.getValue().body().contains("ThrillhouseBot requested changes — see inline comments"),
         submit.getValue().body());
+    verify(reviewClient, never()).createReview(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void batchedSubmitBodyUsesTheDefaultsOnlyWhenProseIsEmpty() throws Exception {
+    var method =
+        ReviewPublisher.class.getDeclaredMethod(
+            "batchedReviewSubmitBody", List.class, String.class);
+    method.setAccessible(true);
+    assertEquals(
+        "ThrillhouseBot requested changes" + ReviewPublisher.BATCHED_INLINE_BODY_SUFFIX,
+        method.invoke(null, List.of(), "REQUEST_CHANGES"));
+    assertEquals("a\n\nb", method.invoke(null, List.of("a", "b"), "COMMENT"));
   }
 
   @Test
@@ -254,10 +238,9 @@ class BatchedInlineReviewTest {
             + " the reply's premise does not refute the finding. Reply again to keep the"
             + " decline.";
     var delta = "**Previous findings resolved:** 1\n\n- Closed: `src/Old.java:1`";
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
     var result =
         new ReviewResult(
-            List.of(finding),
+            List.of(finding(1, "Bug")),
             0,
             1,
             0,
@@ -288,1023 +271,323 @@ class BatchedInlineReviewTest {
     var body = submit.getValue().body();
     assertTrue(body.contains(RebuttalContradiction.NOTE_LEAD_IN), body);
     assertTrue(body.contains("Previous findings resolved"), body);
-    assertTrue(body.contains("ThrillhouseBot requested changes"), body);
-    verify(reviewClient, never()).createReview(any(), any(), any(), any(), eq(7), any());
-  }
-
-  @Test
-  void batchedRoundSubmitsThePendingReviewOnceAfterInlineThreadsLand() {
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
-
-    verify(reviewClient).createPendingReview(any(), any(), any(), any(), eq(7), eq("sha"));
-    verify(reviewClient)
-        .submitReview(
-            any(),
-            any(),
-            eq("owner"),
-            eq("repo"),
-            eq(7),
-            eq(99L),
-            any(GitHubReviewClient.SubmitReviewRequest.class));
-    var submit = ArgumentCaptor.forClass(GitHubReviewClient.SubmitReviewRequest.class);
-    verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), submit.capture());
-    assertEquals("REQUEST_CHANGES", submit.getValue().event());
-  }
-
-  @Test
-  void withoutAPendingReviewInlineCommentsCarryNoReviewId() {
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postInlineComments(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)),
-        Optional.empty());
-
-    var comment = ArgumentCaptor.forClass(GitHubReviewClient.CreatePullRequestCommentRequest.class);
-    verify(reviewClient)
-        .createPullRequestComment(any(), any(), any(), any(), eq(7), comment.capture());
-    assertNull(comment.getValue().pullRequestReviewId());
   }
 
   @Test
   void batchedRoundOpensPendingWhenALaterFindingPostsInline() {
     var listed =
         new Finding(RiskLevel.MEDIUM, Confidence.LOW, FILE, 1, "Listed", "desc", null, null);
-    var inline = new Finding(RiskLevel.HIGH, FILE, 2, "Inline", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(listed, inline),
-            0,
-            2,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
+
+    post(result(ReviewState.REQUEST_CHANGES, listed, finding(2, "Inline")));
 
     verify(reviewClient).createPendingReview(any(), any(), any(), any(), eq(7), eq("sha"));
   }
 
   @Test
   void batchedRoundDoesNotOpenPendingWhenEveryFindingIsListedOnly() {
-    var finding = new Finding(RiskLevel.MEDIUM, Confidence.LOW, FILE, 1, "Bug", "desc", null, null);
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.MEDIUM,
-            ReviewState.COMMENT,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of()));
+    var listed = new Finding(RiskLevel.MEDIUM, Confidence.LOW, FILE, 1, "Bug", "desc", null, null);
+
+    post(result(ReviewState.COMMENT, listed));
 
     verify(reviewClient, never()).createPendingReview(any(), any(), any(), any(), anyInt(), any());
-    verify(reviewClient, never())
-        .submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any());
   }
 
   @Test
-  void batchedRoundDismissesStrandedPendingBeforeOpeningANewOne() {
-    var user = new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]");
-    var other = new GitHubReviewClient.ReviewResponse(88L, "", "PENDING", "sha", user);
-    when(reviewClient.listReviewsPage(any(), any(), any(), any(), eq(7), eq(100), eq(1)))
-        .thenReturn(List.of(other));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
+  void batchedRoundSkipsPendingWhenNoFindingIsOnAChangedFile() {
+    var outside = new Finding(RiskLevel.HIGH, "src/Other.java", 1, "Bug", "desc", null, null);
 
-    verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(88L));
-    verify(reviewClient).createPendingReview(any(), any(), any(), any(), eq(7), eq("sha"));
+    post(result(ReviewState.REQUEST_CHANGES, outside));
+
+    verify(reviewClient, never()).createPendingReview(any(), any(), any(), any(), anyInt(), any());
+    verify(reviewClient).createReview(any(), any(), any(), any(), eq(7), any());
   }
 
   @Test
-  void batchedRoundLogsWhenPendingDeleteFailsAfterNoInlineLanded() {
-    when(reviewClient.createPullRequestComment(any(), any(), any(), any(), anyInt(), any()))
-        .thenThrow(new RuntimeException("422"));
-    doThrow(new RuntimeException("delete failed"))
-        .when(reviewClient)
-        .deletePendingReview(any(), any(), any(), any(), anyInt(), anyLong());
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
+  void batchedRoundOpensPendingWhenAtLeastOneFindingIsOnAChangedFile() {
+    var outside = new Finding(RiskLevel.HIGH, "src/Other.java", 1, "Outside", "desc", null, null);
 
-    verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(99L));
-    verify(reviewClient, never())
-        .submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any());
-  }
-
-  @Test
-  void batchedRoundWithNoInlinePostedDeletesPendingWithoutSubmit() {
-    when(reviewClient.createPullRequestComment(any(), any(), any(), any(), anyInt(), any()))
-        .thenThrow(new RuntimeException("422"));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.COMMENT,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
-
-    verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(99L));
-    verify(reviewClient, never())
-        .submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any());
-  }
-
-  @Test
-  void dismissStrandedPendingWalksReviewPagesUntilAShortPage() {
-    var user = new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]");
-    var stranded = new GitHubReviewClient.ReviewResponse(77L, "", "PENDING", "sha", user);
-    var filler = new ArrayList<GitHubReviewClient.ReviewResponse>();
-    for (int i = 0; i < 100; i++) {
-      filler.add(new GitHubReviewClient.ReviewResponse(i, "", "COMMENTED", "sha", null));
-    }
-    filler.add(stranded);
-    when(reviewClient.listReviewsPage(any(), any(), any(), any(), eq(7), eq(100), eq(1)))
-        .thenReturn(filler);
-    when(reviewClient.listReviewsPage(any(), any(), any(), any(), eq(7), eq(100), eq(2)))
-        .thenReturn(List.of());
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
-
-    verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(77L));
-    verify(reviewClient).listReviewsPage(any(), any(), any(), any(), eq(7), eq(100), eq(2));
-  }
-
-  @Test
-  void refusedBatchedSubmitPostsBodyWithoutPointingAtDroppedInlineThreads() {
-    when(reviewClient.submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any()))
-        .thenThrow(new WebApplicationException(Response.status(422).build()));
-    when(reviewClient.createReview(any(), any(), any(), any(), anyInt(), any()))
-        .thenReturn(new GitHubReviewClient.ReviewResponse(1L, "", "COMMENTED", "sha", null));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.APPROVE,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
-
-    var review = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
-    verify(reviewClient).createReview(any(), any(), any(), any(), eq(7), review.capture());
-    assertFalse(review.getValue().body().contains("see inline comments"), review.getValue().body());
-    assertTrue(
-        review.getValue().body().contains("inline comments from this round were not published"),
-        review.getValue().body());
-    verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(99L));
-  }
-
-  @Test
-  void refusalFallbackBodyReplacesTheInlineSuffixWhenPresent() {
-    var withSuffix = "ThrillhouseBot review" + ReviewPublisher.BATCHED_INLINE_BODY_SUFFIX;
-    assertTrue(
-        ReviewPublisher.batchedSubmitRefusalFallbackBody(withSuffix)
-            .contains(ReviewPublisher.BATCHED_SUBMIT_REFUSED_INLINE_NOTE));
-    assertFalse(
-        ReviewPublisher.batchedSubmitRefusalFallbackBody(withSuffix)
-            .contains(ReviewPublisher.BATCHED_INLINE_BODY_SUFFIX));
-  }
-
-  @Test
-  void refusalFallbackBodyAppendsTheRefusalNoteWhenTheBodyHasNoSuffix() {
-    var plain = "Review notes only";
-    var fallback = ReviewPublisher.batchedSubmitRefusalFallbackBody(plain);
-    assertTrue(fallback.startsWith(plain));
-    assertTrue(fallback.contains("GitHub refused the batched review submit"));
-  }
-
-  @Test
-  void batchedRoundStillOpensPendingWhenStrandedDismissListingFails() {
-    when(reviewClient.listReviewsPage(any(), any(), any(), any(), eq(7), eq(100), eq(1)))
-        .thenThrow(new RuntimeException("reviews unavailable"));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
+    post(result(ReviewState.REQUEST_CHANGES, outside, finding(2, "Bug")));
 
     verify(reviewClient).createPendingReview(any(), any(), any(), any(), eq(7), eq("sha"));
-  }
-
-  @Test
-  void batchedRoundPostsInlineWithoutPendingWhenGitHubRefusesTheShell() {
-    when(reviewClient.createPendingReview(any(), any(), any(), any(), anyInt(), any()))
-        .thenThrow(new RuntimeException("422"));
-    when(reviewClient.createReview(any(), any(), any(), any(), anyInt(), any()))
-        .thenReturn(new GitHubReviewClient.ReviewResponse(1L, "", "COMMENTED", "sha", null));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
-
-    var comment = ArgumentCaptor.forClass(GitHubReviewClient.CreatePullRequestCommentRequest.class);
-    verify(reviewClient)
-        .createPullRequestComment(any(), any(), any(), any(), eq(7), comment.capture());
-    assertNull(comment.getValue().pullRequestReviewId());
+    verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), any());
   }
 
   @Test
   void batchedRoundSkipsPendingWhenTheCommentCapIsZero() {
-    var cappedConfig = mock(ThrillhouseConfig.class);
-    var cappedReview = mock(ThrillhouseConfig.ReviewConfig.class);
-    when(cappedConfig.review()).thenReturn(cappedReview);
-    when(cappedReview.maxReviewComments()).thenReturn(0);
-    when(cappedReview.batchedInlineReviewEnabled()).thenReturn(true);
-    var cappedGithub = mock(ThrillhouseConfig.GitHubConfig.class);
-    when(cappedConfig.github()).thenReturn(cappedGithub);
-    when(cappedGithub.writeRetryBudget()).thenReturn(Duration.ofHours(1));
-    var cappedPublisher =
-        new ReviewPublisher(
-            reviewClient,
-            mock(GitHubCommentClient.class),
-            mock(ReviewThreadService.class),
-            mock(SuggestionFormatter.class),
-            mock(FollowUpAnalyzer.class),
-            mock(PrLabeler.class),
-            cappedConfig,
-            BotIdentity.of("thrillhousebot[bot]"));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    cappedPublisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
+    when(reviewConfig.maxReviewComments()).thenReturn(0);
+
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
 
     verify(reviewClient, never()).createPendingReview(any(), any(), any(), any(), anyInt(), any());
   }
 
   @Test
-  void batchedRoundFallsBackToBodyOnlyReviewWhenPendingWasNeverOpened() {
-    when(reviewClient.createPendingReview(any(), any(), any(), any(), anyInt(), any()))
-        .thenThrow(new RuntimeException("refused"));
-    when(reviewClient.createReview(any(), any(), any(), any(), anyInt(), any()))
-        .thenReturn(new GitHubReviewClient.ReviewResponse(1L, "body", "COMMENTED", "sha", null));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
-
-    verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), eq(7), any());
-    verify(reviewClient).createReview(any(), any(), any(), any(), eq(7), any());
-    verify(reviewClient, never())
-        .submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any());
-  }
-
-  @Test
-  void dismissStrandedPendingStopsWhenReviewPageIsNull() {
-    when(reviewClient.listReviewsPage(any(), any(), any(), any(), eq(7), eq(100), eq(1)))
-        .thenReturn(null);
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
-
-    verify(reviewClient).createPendingReview(any(), any(), any(), any(), eq(7), eq("sha"));
-    verify(reviewClient, never()).deletePendingReview(any(), any(), any(), any(), eq(7), anyLong());
-  }
-
-  @Test
-  void batchedRoundPostsReviewBodyWhenInlineLandsWithoutPendingShell() {
-    when(reviewClient.createPendingReview(any(), any(), any(), any(), anyInt(), any()))
-        .thenThrow(new RuntimeException("422"));
-    when(reviewClient.createReview(any(), any(), any(), any(), anyInt(), any()))
-        .thenReturn(new GitHubReviewClient.ReviewResponse(1L, "body", "COMMENTED", "sha", null));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
-
-    var review = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
-    verify(reviewClient).createReview(any(), any(), any(), any(), eq(7), review.capture());
-    assertTrue(review.getValue().body().contains("requested changes"), review.getValue().body());
-    verify(reviewClient, never())
-        .submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any());
-  }
-
-  @Test
-  void batchedRoundJoinsProseSectionsIntoSubmitBodyWhenTheyArePresent() {
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
-
-    var submit = ArgumentCaptor.forClass(GitHubReviewClient.SubmitReviewRequest.class);
-    verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), submit.capture());
-    assertTrue(
-        submit.getValue().body().contains("ThrillhouseBot requested changes — see inline comments"),
-        submit.getValue().body());
-  }
-
-  @Test
-  void batchedRoundSkipsPendingShellWhenNoInlineRouteExists() {
-    var finding = new Finding(RiskLevel.HIGH, "src/Other.java", 1, "Bug", "desc", "old", "new");
-    when(reviewClient.createReview(any(), any(), any(), any(), anyInt(), any()))
-        .thenReturn(new GitHubReviewClient.ReviewResponse(1L, "body", "COMMENTED", "sha", null));
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
-
-    verify(reviewClient, never()).createPendingReview(any(), any(), any(), any(), anyInt(), any());
-    verify(reviewClient, never())
-        .deletePendingReview(any(), any(), any(), any(), anyInt(), anyLong());
-    verify(reviewClient).createReview(any(), any(), any(), any(), eq(7), any());
-    verify(reviewClient, never())
-        .submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any());
-  }
-
-  @Test
-  void batchedRoundOpensPendingWhenAtLeastOneFindingAnchorsOnAChangedFile() {
-    var outside = new Finding(RiskLevel.HIGH, "src/Other.java", 1, "Outside", "desc", "old", "new");
-    var anchored = new Finding(RiskLevel.HIGH, FILE, 2, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(outside, anchored),
-            0,
-            2,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
-
-    verify(reviewClient).createPendingReview(any(), any(), any(), any(), eq(7), eq("sha"));
-    verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), any());
-  }
-
-  @Test
-  void refusedBatchedSubmitReplacesTheInlineSuffixOnARequestChangesBody() {
-    when(reviewClient.submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any()))
-        .thenThrow(new WebApplicationException(Response.status(422).build()));
-    when(reviewClient.createReview(any(), any(), any(), any(), anyInt(), any()))
-        .thenReturn(new GitHubReviewClient.ReviewResponse(1L, "", "COMMENTED", "sha", null));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
-
-    var review = ArgumentCaptor.forClass(GitHubReviewClient.CreateReviewRequest.class);
-    verify(reviewClient).createReview(any(), any(), any(), any(), eq(7), review.capture());
-    assertTrue(
-        review.getValue().body().contains(ReviewPublisher.BATCHED_SUBMIT_REFUSED_INLINE_NOTE),
-        review.getValue().body());
-    assertFalse(review.getValue().body().contains("see inline comments"), review.getValue().body());
-  }
-
-  @Test
-  void refusedBatchedSubmitStillCompletesWhenPendingDeleteFails() {
-    when(reviewClient.submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any()))
-        .thenThrow(new WebApplicationException(Response.status(422).build()));
-    when(reviewClient.createReview(any(), any(), any(), any(), anyInt(), any()))
-        .thenReturn(new GitHubReviewClient.ReviewResponse(1L, "", "COMMENTED", "sha", null));
+  void batchedRoundWithNoThreadLandedDiscardsPendingAndPostsTheListing() throws Exception {
+    when(threadService.addPendingReviewThread(any(), any(), any(), anyInt(), any(), any()))
+        .thenThrow(graphQLRefusal("[{\"message\":\"path could not be resolved\"}]"));
     doThrow(new RuntimeException("delete failed"))
         .when(reviewClient)
-        .deletePendingReview(any(), any(), any(), any(), eq(7), eq(99L));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
+        .deletePendingReview(any(), any(), any(), any(), anyInt(), anyLong());
 
-    verify(reviewClient).createReview(any(), any(), any(), any(), eq(7), any());
+    post(result(ReviewState.COMMENT, finding(1, "Bug")));
+
     verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(99L));
+    verify(reviewClient, never())
+        .submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any());
+    var body = fallbackReviewBody();
+    assertTrue(body.contains("`src/Main.java:1`"), body);
+    assertTrue(body.contains("path could not be resolved"), body);
   }
 
   @Test
-  void dismissStrandedPendingIgnoresPendingReviewsWithNoUser() {
-    var pending = new GitHubReviewClient.ReviewResponse(88L, "", "PENDING", "sha", null);
-    when(reviewClient.listReviewsPage(any(), any(), any(), any(), eq(7), eq(100), eq(1)))
-        .thenReturn(List.of(pending));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
-
-    verify(reviewClient, never()).deletePendingReview(any(), any(), any(), any(), eq(7), eq(88L));
-    verify(reviewClient).createPendingReview(any(), any(), any(), any(), eq(7), eq("sha"));
-  }
-
-  @Test
-  void dismissStrandedPendingWalksTwoFullPagesBeforeItFindsAStrandedShell() {
-    var user = new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]");
-    var stranded = new GitHubReviewClient.ReviewResponse(77L, "", "PENDING", "sha", user);
-    var filler = new ArrayList<GitHubReviewClient.ReviewResponse>();
-    for (int i = 0; i < GitHubReviewClient.REVIEWS_PER_PAGE; i++) {
-      filler.add(new GitHubReviewClient.ReviewResponse(i, "", "COMMENTED", "sha", null));
-    }
-    when(reviewClient.listReviewsPage(any(), any(), any(), any(), eq(7), eq(100), eq(1)))
-        .thenReturn(new ArrayList<>(filler));
-    when(reviewClient.listReviewsPage(any(), any(), any(), any(), eq(7), eq(100), eq(2)))
-        .thenReturn(new ArrayList<>(filler));
-    when(reviewClient.listReviewsPage(any(), any(), any(), any(), eq(7), eq(100), eq(3)))
-        .thenReturn(List.of(stranded));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
-
-    verify(reviewClient).listReviewsPage(any(), any(), any(), any(), eq(7), eq(100), eq(3));
-    verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(77L));
-  }
-
-  @Test
-  void dismissStrandedPendingFetchesTheNextPageWhenTheFirstIsFull() {
-    var user = new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]");
-    var stranded = new GitHubReviewClient.ReviewResponse(77L, "", "PENDING", "sha", user);
-    var filler = new ArrayList<GitHubReviewClient.ReviewResponse>();
-    for (int i = 0; i < GitHubReviewClient.REVIEWS_PER_PAGE; i++) {
-      filler.add(new GitHubReviewClient.ReviewResponse(i, "", "COMMENTED", "sha", null));
-    }
-    when(reviewClient.listReviewsPage(any(), any(), any(), any(), eq(7), eq(100), eq(1)))
-        .thenReturn(filler);
-    when(reviewClient.listReviewsPage(any(), any(), any(), any(), eq(7), eq(100), eq(2)))
-        .thenReturn(List.of(stranded));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
-
-    verify(reviewClient).listReviewsPage(any(), any(), any(), any(), eq(7), eq(100), eq(2));
-    verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(77L));
-  }
-
-  @Test
-  void batchedRoundRetriesInlineWithoutSuggestionAfterSuggestionIsRejected() {
+  void aGraphQLRefusalOfTheSuggestionRetriesTheThreadWithoutIt() throws Exception {
     var attempts = new AtomicInteger();
-    when(reviewClient.createPullRequestComment(any(), any(), any(), any(), anyInt(), any()))
+    when(threadService.addPendingReviewThread(any(), any(), any(), anyInt(), any(), any()))
         .thenAnswer(
             inv -> {
               if (attempts.incrementAndGet() == 1) {
-                throw new WebApplicationException(Response.status(422).build());
+                throw graphQLRefusal("[{\"message\":\"suggestion refused\"}]");
               }
-              return new GitHubReviewClient.PullRequestCommentResponse(1L, "c", FILE, 1);
+              return "PRRT_1";
             });
-    var suggestionFormatter = mock(SuggestionFormatter.class);
     when(suggestionFormatter.formatReviewComment(any(), eq(true), anyInt())).thenReturn("with");
-    when(suggestionFormatter.formatReviewComment(any(), eq(false), anyInt())).thenReturn("without");
-    var customConfig = mock(ThrillhouseConfig.class);
-    when(customConfig.review()).thenReturn(reviewConfig);
-    var githubConfig = mock(ThrillhouseConfig.GitHubConfig.class);
-    when(customConfig.github()).thenReturn(githubConfig);
-    when(githubConfig.writeRetryBudget()).thenReturn(Duration.ofHours(1));
-    var customPublisher =
-        new ReviewPublisher(
-            reviewClient,
-            mock(GitHubCommentClient.class),
-            mock(ReviewThreadService.class),
-            suggestionFormatter,
-            mock(FollowUpAnalyzer.class),
-            mock(PrLabeler.class),
-            customConfig,
-            BotIdentity.of("thrillhousebot[bot]"));
-    when(reviewConfig.batchedInlineReviewEnabled()).thenReturn(true);
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    customPublisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
+    var withSuggestion = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "new", "newer");
 
-    verify(reviewClient, org.mockito.Mockito.times(2))
-        .createPullRequestComment(any(), any(), any(), any(), eq(7), any());
+    post(result(ReviewState.REQUEST_CHANGES, withSuggestion));
+
+    var comment = ArgumentCaptor.forClass(GitHubReviewClient.CreatePullRequestCommentRequest.class);
+    verify(threadService, times(2))
+        .addPendingReviewThread(any(), any(), any(), eq(7), eq(NODE_ID), comment.capture());
+    assertEquals("with", comment.getAllValues().get(0).body());
+    assertEquals("finding", comment.getAllValues().get(1).body());
     verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), any());
   }
 
   @Test
-  void batchedSubmitBodyUsesRequestChangesDefaultWhenProseIsEmpty() throws Exception {
-    var method =
-        ReviewPublisher.class.getDeclaredMethod(
-            "batchedReviewSubmitBody", List.class, String.class);
-    method.setAccessible(true);
-    assertEquals(
-        "ThrillhouseBot requested changes" + ReviewPublisher.BATCHED_INLINE_BODY_SUFFIX,
-        method.invoke(null, List.of(), "REQUEST_CHANGES"));
-    assertEquals(
-        "ThrillhouseBot review" + ReviewPublisher.BATCHED_INLINE_BODY_SUFFIX,
-        method.invoke(null, List.of(), "COMMENT"));
-    assertEquals("a\n\nb", method.invoke(null, List.of("a", "b"), "COMMENT"));
+  void aGraphQLRefusalOfTheLineFilesTheThreadOnTheFile() throws Exception {
+    var refusal = graphQLRefusal("[{\"message\":\"line could not be resolved\"}]");
+    when(threadService.addPendingReviewThread(
+            any(), any(), any(), anyInt(), any(), argThat(c -> !c.fileLevel())))
+        .thenThrow(refusal);
+
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
+
+    verify(threadService)
+        .addPendingReviewThread(
+            any(),
+            any(),
+            any(),
+            eq(7),
+            eq(NODE_ID),
+            argThat(c -> c.fileLevel() && c.line() == null));
+    verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), any());
   }
 
   @Test
-  void batchedRoundUsesCommentDefaultSubmitBodyOnCleanApprovalWithInlineThreads() {
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.APPROVE,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
+  void aThrottledGraphQLThreadTakesNoOtherRoute() throws Exception {
+    when(threadService.addPendingReviewThread(any(), any(), any(), anyInt(), any(), any()))
+        .thenThrow(graphQLRefusal("[{\"type\":\"RATE_LIMITED\",\"message\":\"slow down\"}]"));
 
-    var submit = ArgumentCaptor.forClass(GitHubReviewClient.SubmitReviewRequest.class);
-    verify(reviewClient).submitReview(any(), any(), any(), any(), eq(7), eq(99L), submit.capture());
-    assertEquals(
-        "ThrillhouseBot review" + ReviewPublisher.BATCHED_INLINE_BODY_SUFFIX,
-        submit.getValue().body());
-    assertEquals("COMMENT", submit.getValue().event());
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
+
+    verify(threadService).addPendingReviewThread(any(), any(), any(), anyInt(), any(), any());
+    verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(99L));
+    assertTrue(fallbackReviewBody().contains("rate limit"));
   }
 
   @Test
-  void batchedSubmitFailureThatIsNotARefusalThrows() {
+  void refusedSubmitDiscardsThePendingReviewThenListsEveryInlineFinding() {
     when(reviewClient.submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any()))
-        .thenThrow(new RuntimeException("timeout"));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    assertThrows(
-        ReviewPostException.class,
-        () ->
-            publisher.postReview(
-                "Bearer tok",
-                "owner",
-                "repo",
-                7,
-                "sha",
-                new ReviewResult(
-                    List.of(finding),
-                    0,
-                    1,
-                    0,
-                    0,
-                    RiskLevel.HIGH,
-                    ReviewState.REQUEST_CHANGES,
-                    true,
-                    "",
-                    List.of(),
-                    List.of(),
-                    0),
-                new DiffLineResolver(Map.of(FILE, PATCH))));
+        .thenThrow(new WebApplicationException(Response.status(422).build()));
+
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug"), finding(2, "Other")));
+
+    var order = inOrder(reviewClient);
+    order.verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(99L));
+    order.verify(reviewClient).createReview(any(), any(), any(), any(), eq(7), any());
+    var body = fallbackReviewBody();
+    assertTrue(body.contains("2 issue(s) whose inline threads were not published"), body);
+    assertTrue(body.contains("**HIGH:** Bug (`src/Main.java:1`)"), body);
+    assertTrue(body.contains("**HIGH:** Other (`src/Main.java:2`)"), body);
+    assertFalse(body.contains("see inline comments"), body);
+    verify(reviewClient, never()).getReview(any(), any(), any(), any(), anyInt(), anyLong());
   }
 
   @Test
-  void batchedRoundToleratesPendingDeleteFailureOnCleanup() {
-    doThrow(new RuntimeException("delete refused"))
+  void refusedSubmitStillListsTheFindingsWhenThePendingDeleteFails() {
+    when(reviewClient.submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any()))
+        .thenThrow(new WebApplicationException(Response.status(422).build()));
+    doThrow(new RuntimeException("delete failed"))
         .when(reviewClient)
         .deletePendingReview(any(), any(), any(), any(), eq(7), eq(99L));
-    when(reviewClient.createPullRequestComment(any(), any(), any(), any(), anyInt(), any()))
-        .thenThrow(
-            new WebApplicationException(
-                Response.status(422)
-                    .header("Retry-After", "0")
-                    .entity(
-                        "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":\"PullRequestReviewComment\","
-                            + "\"code\":\"custom\",\"field\":\"pull_request_review_thread.base\","
-                            + "\"message\":\"was submitted too quickly\"}]}")
-                    .build()));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
 
-    verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(99L));
-    verify(reviewClient).createReview(any(), any(), any(), any(), eq(7), any());
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
+
+    assertTrue(fallbackReviewBody().contains("`src/Main.java:1`"));
   }
 
   @Test
-  void batchedRoundClearsPendingWithoutSubmitWhenEveryInlineAttemptIsThrottled() {
-    when(reviewClient.createPullRequestComment(any(), any(), any(), any(), anyInt(), any()))
-        .thenThrow(
-            new WebApplicationException(
-                Response.status(422)
-                    .header("Retry-After", "0")
-                    .entity(
-                        "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":\"PullRequestReviewComment\","
-                            + "\"code\":\"custom\",\"field\":\"pull_request_review_thread.base\","
-                            + "\"message\":\"was submitted too quickly\"}]}")
-                    .build()));
-    var finding = new Finding(RiskLevel.HIGH, FILE, 1, "Bug", "desc", "old", "new");
-    publisher.postReview(
-        "Bearer tok",
-        "owner",
-        "repo",
-        7,
-        "sha",
-        new ReviewResult(
-            List.of(finding),
-            0,
-            1,
-            0,
-            0,
-            RiskLevel.HIGH,
-            ReviewState.REQUEST_CHANGES,
-            true,
-            "",
-            List.of(),
-            List.of(),
-            0),
-        new DiffLineResolver(Map.of(FILE, PATCH)));
+  void anAmbiguousSubmitFailureOnAStillPendingReviewDiscardsItAndListsTheFindings() {
+    when(reviewClient.submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any()))
+        .thenThrow(new RuntimeException("timeout"));
+    when(reviewClient.getReview(any(), any(), any(), any(), eq(7), eq(99L)))
+        .thenReturn(
+            new GitHubReviewClient.ReviewResponse(99L, "", "PENDING", "sha", null, NODE_ID));
 
-    verify(reviewClient).createPendingReview(any(), any(), any(), any(), eq(7), eq("sha"));
-    verify(reviewClient, never()).submitReview(any(), any(), any(), any(), eq(7), eq(99L), any());
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
+
+    var order = inOrder(reviewClient);
+    order.verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(99L));
+    order.verify(reviewClient).createReview(any(), any(), any(), any(), eq(7), any());
+    assertTrue(fallbackReviewBody().contains("**HIGH:** Bug (`src/Main.java:1`)"));
+  }
+
+  @Test
+  void anAmbiguousSubmitFailureWithAnUnreadableReviewIsTreatedAsPending() {
+    when(reviewClient.submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any()))
+        .thenThrow(new RuntimeException("timeout"));
+
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
+
     verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(99L));
-    verify(reviewClient).createReview(any(), any(), any(), any(), eq(7), any());
+    assertTrue(fallbackReviewBody().contains("`src/Main.java:1`"));
+  }
+
+  @Test
+  void anAmbiguousSubmitFailureAfterWhichTheReviewLandedIsASuccess() {
+    when(reviewClient.submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any()))
+        .thenThrow(new WebApplicationException(Response.status(502).build()));
+    when(reviewClient.getReview(any(), any(), any(), any(), eq(7), eq(99L)))
+        .thenReturn(
+            new GitHubReviewClient.ReviewResponse(
+                99L, "", "CHANGES_REQUESTED", "sha", null, NODE_ID));
+
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
+
+    verify(reviewClient, never())
+        .deletePendingReview(any(), any(), any(), any(), anyInt(), anyLong());
+    verify(reviewClient, never()).createReview(any(), any(), any(), any(), anyInt(), any());
+  }
+
+  @Test
+  void anAmbiguousSubmitFailureWhoseReviewCannotBeReadThrows() {
+    when(reviewClient.submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any()))
+        .thenThrow(new RuntimeException("timeout"));
+    when(reviewClient.getReview(any(), any(), any(), any(), eq(7), eq(99L)))
+        .thenThrow(new RuntimeException("read timeout"));
+
+    var failure =
+        assertThrows(
+            ReviewPostException.class,
+            () -> post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug"))));
+
+    assertEquals("timeout", failure.getCause().getMessage());
+    assertEquals("read timeout", failure.getSuppressed()[0].getMessage());
+    verify(reviewClient, never()).createReview(any(), any(), any(), any(), anyInt(), any());
+    assertTrue(guard.awaitNoPendingReview("owner", "repo", 7), "the hold is released on a throw");
+  }
+
+  @Test
+  void aRefusedPendingShellPostsInlineCommentsSeparately() {
+    when(reviewClient.createPendingReview(any(), any(), any(), any(), anyInt(), any()))
+        .thenThrow(new RuntimeException("422"));
+
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
+
+    verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), eq(7), any());
+    assertTrue(fallbackReviewBody().contains("requested changes"));
+    verify(reviewClient, never())
+        .submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any());
+  }
+
+  @Test
+  void aPendingShellWithoutANodeIdIsDiscardedAndCommentsPostSeparately() {
+    when(reviewClient.createPendingReview(any(), any(), any(), any(), anyInt(), any()))
+        .thenReturn(new GitHubReviewClient.ReviewResponse(98L, "", "PENDING", "sha", null, " "));
+
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
+
+    verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(98L));
+    verify(reviewClient).createPullRequestComment(any(), any(), any(), any(), eq(7), any());
+    verify(reviewClient, never())
+        .submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any());
+  }
+
+  @Test
+  void aPendingShellWithANullNodeIdIsDiscarded() {
+    when(reviewClient.createPendingReview(any(), any(), any(), any(), anyInt(), any()))
+        .thenReturn(new GitHubReviewClient.ReviewResponse(98L, "", "PENDING", "sha", null));
+
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
+
+    verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(98L));
+  }
+
+  @Test
+  void thePendingWindowHoldsTheGuardUntilTheSubmit() {
+    var heldWhileAttaching = new AtomicBoolean();
+    when(threadService.addPendingReviewThread(any(), any(), any(), anyInt(), any(), any()))
+        .thenAnswer(
+            inv -> {
+              heldWhileAttaching.set(!guard.awaitNoPendingReview("owner", "repo", 7));
+              return "PRRT_1";
+            });
+
+    post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
+
+    assertTrue(heldWhileAttaching.get());
+    assertTrue(guard.awaitNoPendingReview("owner", "repo", 7));
+  }
+
+  // #1434 review: the orchestrator's dismissal over the reviews it already listed is the only one.
+  @Test
+  void aStrandedBotPendingReviewIsDeletedBeforeANewOneOpensWithoutListingAgain() {
+    var bot = new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]");
+    var other = new GitHubReviewClient.ReviewResponse.User("someone");
+    var priorReviews =
+        List.of(
+            new GitHubReviewClient.ReviewResponse(88L, "", "PENDING", "sha", bot),
+            new GitHubReviewClient.ReviewResponse(87L, "", "PENDING", "sha", other));
+
+    publisher.dismissPendingBotReviews("Bearer tok", "owner", "repo", 7, priorReviews);
+    publisher.postReview(
+        new ReviewPublisher.PostReviewRequest(
+            "Bearer tok",
+            "owner",
+            "repo",
+            7,
+            "sha",
+            result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")),
+            new DiffLineResolver(Map.of(FILE, PATCH)),
+            false,
+            List.of(),
+            "",
+            priorReviews));
+
+    var order = inOrder(reviewClient);
+    order.verify(reviewClient).deletePendingReview(any(), any(), any(), any(), eq(7), eq(88L));
+    order.verify(reviewClient).createPendingReview(any(), any(), any(), any(), eq(7), eq("sha"));
+    verify(reviewClient, never()).deletePendingReview(any(), any(), any(), any(), eq(7), eq(87L));
+    verify(reviewClient, never())
+        .listReviewsPage(anyString(), any(), any(), any(), anyInt(), anyInt(), anyInt());
+    verify(reviewClient, never()).listReviews(any(), any(), any(), any(), anyInt());
+  }
+
+  @Test
+  void theInlineResultCountsTheThreadedFindings() {
+    var inline =
+        publisher.postInlineComments(
+            "Bearer tok",
+            "owner",
+            "repo",
+            7,
+            "sha",
+            result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")),
+            new DiffLineResolver(Map.of(FILE, PATCH)),
+            Optional.of(new ReviewPublisher.PendingReview(99L, NODE_ID)));
+
+    assertEquals(1, inline.posted());
+    assertEquals("Bug", inline.threaded().get(0).title());
+    assertNull(inline.threaded().get(0).suggestionOld());
   }
 }

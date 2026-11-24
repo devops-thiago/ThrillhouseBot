@@ -353,7 +353,10 @@ already there. It makes no model call. File-level threads do not get the block.
 
 `REVIEW_BATCHED_INLINE_REVIEW_ENABLED=true` opens one pending pull request review
 per round, attaches each inline finding to it and submits it once, instead of
-posting each inline comment on its own.
+posting each inline comment on its own. If GitHub does not take the submit, the
+pending review is deleted and a separate review lists its findings by file and
+line. A reply in a finding's thread waits until the pending review is submitted
+or deleted, for at most two minutes.
 
 `REVIEW_SUMMARY_VERIFICATION_ENABLED=true` adds one call after the summary call.
 The summary call does not see the diff, so it can describe something the change
