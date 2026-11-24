@@ -176,6 +176,19 @@ class FindingsManifestTest {
   }
 
   @Test
+  void tabsCarriageReturnsAndOtherControlCharactersInAPathSurviveTheRoundTrip() throws Exception {
+    var path = "a\tb\rc\u0001d\u001fe";
+    var findings = List.of(finding(RiskLevel.HIGH, Confidence.HIGH, path, 1, "t", null));
+    var line =
+        FindingsManifest.render(PrSummaryGenerator.currentState(result(findings, List.of())));
+
+    assertFalse(line.contains("\t"));
+    assertFalse(line.contains("\r"));
+    assertFalse(line.contains("\u0001"));
+    assertEquals(path, manifest(result(findings, List.of())).get(0).get("file").asText());
+  }
+
+  @Test
   void aNullFileRendersAsAnEmptyString() throws Exception {
     var entries =
         manifest(
