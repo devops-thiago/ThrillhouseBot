@@ -393,6 +393,14 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
+  void noMembershipAnswerIsNotAMember() throws Exception {
+    when(organization.getMembership(anyString())).thenReturn(null);
+
+    assertFalse(
+        checker.repositoryScope("alice", TOKEN).installations().get(10L).installationWide());
+  }
+
+  @Test
   void aNotFoundIsAQuietNonMember() throws Exception {
     when(organization.getMembership(anyString())).thenThrow(new GHFileNotFoundException("nope"));
 
