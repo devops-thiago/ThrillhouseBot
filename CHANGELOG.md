@@ -57,6 +57,11 @@ There are no new GitHub App permissions.
   `process.env`, `Environment.GetEnvironmentVariable`, `env::var`, …), then entry-point files
   (`main`, `Program`, `app`, `index`, `server`, `startup`). The fetch budget is unchanged, and the
   new tiers only use what the named files leave.
+- **A GitHub rate limit no longer holds a review open until it resets**: reads made through the
+  GitHub App client (linked issues, repository instructions and settings, stack manifests, and
+  from this release permission and membership checks) used the client library's default, which
+  sleeps until the limit resets, up to an hour. They now fail at once, and each caller goes on
+  without what it could not read, as it does for any other failed read.
 - **A source file whose name ends in "test" or "spec" is no longer taken for a test**: the config
   key lookup skipped any file whose name contained `test.` or `spec.`, so `latest.go`,
   `contest.py` or `attest.go` was never read for key definitions. A name now counts as a test only
