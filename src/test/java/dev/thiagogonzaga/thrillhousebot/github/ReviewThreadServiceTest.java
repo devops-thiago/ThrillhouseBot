@@ -357,4 +357,15 @@ class ReviewThreadServiceTest {
 
     assertSame(refused, failure);
   }
+
+  @Test
+  void theInjectedServiceOpensAThreadThroughTheSharedWriteRetry() throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any())).thenReturn(mapper.readTree(OPENED));
+
+    var thread =
+        new ReviewThreadService(graphQLClient)
+            .addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", lineComment());
+
+    assertEquals("PRRT_1", thread);
+  }
 }
