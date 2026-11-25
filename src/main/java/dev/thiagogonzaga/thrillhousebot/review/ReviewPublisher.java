@@ -1720,7 +1720,7 @@ public class ReviewPublisher {
    * {@code REQUEST_CHANGES}; on a clean approval-with-findings round the prose sections can all be
    * empty even when inline threads landed (#1434).
    */
-  private static String batchedReviewSubmitBody(List<String> bodyParts, String event) {
+  static String batchedReviewSubmitBody(List<String> bodyParts, String event) {
     if (!bodyParts.isEmpty()) {
       return String.join("\n\n", bodyParts);
     }

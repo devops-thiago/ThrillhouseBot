@@ -220,15 +220,11 @@ class BatchedInlineReviewTest {
   }
 
   @Test
-  void batchedSubmitBodyUsesTheDefaultsOnlyWhenProseIsEmpty() throws Exception {
-    var method =
-        ReviewPublisher.class.getDeclaredMethod(
-            "batchedReviewSubmitBody", List.class, String.class);
-    method.setAccessible(true);
+  void batchedSubmitBodyUsesTheDefaultsOnlyWhenProseIsEmpty() {
     assertEquals(
         "ThrillhouseBot requested changes" + ReviewPublisher.BATCHED_INLINE_BODY_SUFFIX,
-        method.invoke(null, List.of(), "REQUEST_CHANGES"));
-    assertEquals("a\n\nb", method.invoke(null, List.of("a", "b"), "COMMENT"));
+        ReviewPublisher.batchedReviewSubmitBody(List.of(), "REQUEST_CHANGES"));
+    assertEquals("a\n\nb", ReviewPublisher.batchedReviewSubmitBody(List.of("a", "b"), "COMMENT"));
   }
 
   @Test
