@@ -451,17 +451,15 @@ public class ConfigKeyContextResolver {
   }
 
   /**
-   * Comment openers of the languages {@link #ENVIRONMENT_READS} covers, at a line's start. A bare
-   * {@code *} counts only as a block comment's continuation ({@code * text}, {@code *}), so a
-   * pointer write such as {@code *p = getenv("X")} is still code.
+   * Comment openers of the languages {@link #ENVIRONMENT_READS} covers, at a line's start. A {@code
+   * *} counts only as a block comment's continuation ({@code * text}), so a pointer write such as
+   * {@code *p = getenv("X")} is still code.
    */
   private static final List<String> COMMENT_OPENERS = List.of("//", "/*", "--", "<!--", "* ");
 
   private static boolean isCommentLine(String code) {
     var trimmed = code.strip();
-    return trimmed.equals("*")
-        || COMMENT_OPENERS.stream().anyMatch(trimmed::startsWith)
-        || isHashComment(trimmed);
+    return COMMENT_OPENERS.stream().anyMatch(trimmed::startsWith) || isHashComment(trimmed);
   }
 
   /**

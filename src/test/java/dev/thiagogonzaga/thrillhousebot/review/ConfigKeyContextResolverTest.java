@@ -446,7 +446,6 @@ class ConfigKeyContextResolverTest {
     @ValueSource(
         strings = {
           "+// reads RATE_LIMIT_MAX via os.Getenv in main()",
-          "+ *",
           "+  # falls back to os.environ when unset",
           "+ * process.env.APP is read by the loader",
           "+/* switch to process.env when we containerize */",
