@@ -185,7 +185,10 @@ DCO sign-offs on original commits do not require cryptographic signatures.
 Account names, PR descriptions and a green historical check alone do not
 establish certification. Unavailable evidence fails the check. A bot exemption carries forward only
 through its authenticated original bot PR; a bot-shaped email alone never
-exempts a commit in a human release PR.
+exempts a commit in a human release PR. When that PR was merged with a merge
+commit rather than squashed, the bot's own commit passes only if GitHub verifies
+it as the bot's and it sits in the head of exactly one merged PR in this
+repository that the same bot opened.
 
 Merge reconstruction runs in an isolated temporary repository, so local Git
 attributes and custom drivers cannot change the proof. It first tries Git's
