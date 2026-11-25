@@ -19,10 +19,10 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import dev.thiagogonzaga.thrillhousebot.CapturedLog;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.dashboard.DashboardAccessChecker.AccessDecision;
 import dev.thiagogonzaga.thrillhousebot.github.AllowedAccounts;
-import dev.thiagogonzaga.thrillhousebot.github.GitHubAuthClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.Installation;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubInstallationClient.InstallationRepositoriesResponse;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubUserClient;
@@ -30,6 +30,8 @@ import dev.thiagogonzaga.thrillhousebot.github.InstallationChange;
 import io.quarkiverse.githubapp.GitHubClientProvider;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
+import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -37,14 +39,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Level;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.kohsuke.github.GHFileNotFoundException;
+import org.kohsuke.github.GHMembership;
 import org.kohsuke.github.GHOrganization;
-import org.kohsuke.github.GHUser;
 import org.kohsuke.github.GitHub;
+import org.kohsuke.github.HttpException;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
@@ -61,11 +66,10 @@ class DashboardAccessCheckerTest {
 
   @Mock ThrillhouseConfig config;
   @Mock ThrillhouseConfig.DashboardConfig dashboardConfig;
-  @Mock GitHubAuthClient authClient;
   @Mock GitHubClientProvider clientProvider;
   @Mock GitHubUserClient userClient;
   @Mock GitHub gitHub;
-  @Mock GHUser ghUser;
+  @Mock GHMembership membership;
   @Mock GHOrganization organization;
 
   private final AtomicReference<Instant> now =
@@ -77,11 +81,9 @@ class DashboardAccessCheckerTest {
   void setUp() throws Exception {
     MockitoAnnotations.openMocks(this);
     lenient().doReturn(gitHub).when(clientProvider).getInstallationClient(anyLong());
-    lenient().doReturn(ghUser).when(gitHub).getUser(anyString());
     lenient().doReturn(organization).when(gitHub).getOrganization(anyString());
     when(config.dashboard()).thenReturn(dashboardConfig);
     when(dashboardConfig.accountOwner()).thenReturn(Optional.empty());
-    when(authClient.getAuthHeader(10L)).thenReturn("Bearer acme-installation");
     stubInstallations(
         AUTH, installation(10L, "acme", "Organization"), installation(20L, "alice", "User"));
     stubRepositories(AUTH, 10L, repo(100L, "acme", "app"), repo(101L, "acme", "lib"));
@@ -89,12 +91,7 @@ class DashboardAccessCheckerTest {
     stubMembership("alice", 204);
     checker =
         new DashboardAccessChecker(
-            config,
-            authClient,
-            userClient,
-            clientProvider,
-            new AllowedAccounts(List.of()),
-            now::get);
+            config, userClient, clientProvider, new AllowedAccounts(List.of()), now::get);
   }
 
   @Test
@@ -132,7 +129,7 @@ class DashboardAccessCheckerTest {
   void theInjectedCheckerUsesTheWallClock() {
     var injected =
         new DashboardAccessChecker(
-            config, authClient, userClient, clientProvider, new AllowedAccounts(List.of()));
+            config, userClient, clientProvider, new AllowedAccounts(List.of()));
 
     assertEquals(AccessDecision.ALLOWED, injected.checkAccess("alice", TOKEN));
   }
@@ -161,12 +158,7 @@ class DashboardAccessCheckerTest {
   void theDashboardListsOnlyAllowedAccountsInstallations() {
     var limited =
         new DashboardAccessChecker(
-            config,
-            authClient,
-            userClient,
-            clientProvider,
-            new AllowedAccounts(List.of("ACME")),
-            now::get);
+            config, userClient, clientProvider, new AllowedAccounts(List.of("ACME")), now::get);
 
     var scope = limited.repositoryScope("alice", TOKEN);
 
@@ -236,16 +228,17 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
-  void anInstallationWhoseLastRepositoryIsRemovedMidFetchIsLeftOut() {
+  void anInstallationWhoseLastRepositoryIsRemovedMidFetchIsLeftOut() throws Exception {
     // alice's own installation is listed first, so its repositories are read before the
     // organization's membership check, which is when the removal arrives.
     stubInstallations(
         AUTH, installation(20L, "alice", "User"), installation(10L, "acme", "Organization"));
-    when(organization.hasMember(any()))
+    when(membership.getState()).thenReturn(GHMembership.State.ACTIVE);
+    when(organization.getMembership(anyString()))
         .thenAnswer(
             invocation -> {
               change(InstallationChange.Kind.REPOSITORIES_REMOVED, 20L, 200L);
-              return true;
+              return membership;
             });
 
     var scope = checker.repositoryScope("alice", TOKEN);
@@ -351,32 +344,89 @@ class DashboardAccessCheckerTest {
   }
 
   @Test
-  void aRefusedOrFailedMembershipCheckHidesInstallationWideViews() {
-    // hub4j's hasMember returns false on a 403 without throwing; only unexpected exceptions
-    // reach the catch block. The first lookup therefore returns false silently.
-    when(organization.hasMember(any()))
-        .thenReturn(false)
+  void aRefusedMembershipCheckHidesTheViewsAndNamesThePermissionOnce() throws Exception {
+    when(organization.getMembership(anyString()))
+        .thenThrow(new HttpException(403, "Resource not accessible by integration", "", null));
+
+    try (var log = CapturedLog.of(DashboardAccessChecker.class)) {
+      for (var i = 0; i < 2; i++) {
+        now.set(now.get().plus(DashboardAccessChecker.SCOPE_CACHE_TTL).plusSeconds(1));
+        assertFalse(
+            checker.repositoryScope("alice", TOKEN).installations().get(10L).installationWide());
+      }
+      var warnings = log.at(Level.WARNING);
+      assertEquals(1, warnings.size(), warnings.toString());
+      assertTrue(warnings.get(0).contains("Organization -> Members: read"), warnings.get(0));
+    }
+  }
+
+  @Test
+  void aFailedMembershipCheckHidesTheViewsAndIsLoggedEachTime() throws Exception {
+    when(organization.getMembership(anyString()))
+        .thenThrow(new HttpException(502, "Bad Gateway", "", null))
+        .thenThrow(new IOException("connection reset"))
         .thenThrow(new IllegalStateException("timeout"));
 
-    assertFalse(
-        checker.repositoryScope("alice", TOKEN).installations().get(10L).installationWide());
-    now.set(now.get().plus(DashboardAccessChecker.SCOPE_CACHE_TTL).plusSeconds(1));
+    try (var log = CapturedLog.of(DashboardAccessChecker.class)) {
+      for (var i = 0; i < 3; i++) {
+        now.set(now.get().plus(DashboardAccessChecker.SCOPE_CACHE_TTL).plusSeconds(1));
+        assertFalse(
+            checker.repositoryScope("alice", TOKEN).installations().get(10L).installationWide());
+      }
+      var warnings = log.at(Level.WARNING);
+      assertEquals(3, warnings.size(), warnings.toString());
+      assertTrue(warnings.stream().allMatch(w -> w.startsWith("Could not check membership")));
+    }
+  }
+
+  @Test
+  void anInterruptedMembershipCheckKeepsTheInterrupt() throws Exception {
+    when(organization.getMembership(anyString())).thenThrow(new InterruptedIOException());
+
+    try {
+      assertFalse(
+          checker.repositoryScope("alice", TOKEN).installations().get(10L).installationWide());
+      assertTrue(Thread.currentThread().isInterrupted());
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  @Test
+  void noMembershipAnswerIsNotAMember() throws Exception {
+    when(organization.getMembership(anyString())).thenReturn(null);
+
     assertFalse(
         checker.repositoryScope("alice", TOKEN).installations().get(10L).installationWide());
   }
 
   @Test
-  void aFailedMembershipCheckHidesInstallationWideViews() {
-    when(organization.hasMember(any()))
-        .thenReturn(false)
-        .thenThrow(new IllegalStateException("timeout"))
-        .thenReturn(false);
+  void aNotFoundIsAQuietNonMember() throws Exception {
+    when(organization.getMembership(anyString())).thenThrow(new GHFileNotFoundException("nope"));
 
-    for (var i = 0; i < 3; i++) {
-      now.set(now.get().plus(DashboardAccessChecker.SCOPE_CACHE_TTL).plusSeconds(1));
+    try (var log = CapturedLog.of(DashboardAccessChecker.class)) {
       assertFalse(
           checker.repositoryScope("alice", TOKEN).installations().get(10L).installationWide());
+      assertTrue(log.at(Level.WARNING).isEmpty());
     }
+  }
+
+  @Test
+  void theStatusIsReadFromTheExceptionOrItsCause() {
+    assertEquals(404, DashboardAccessChecker.httpStatus(new GHFileNotFoundException("gone")));
+    assertEquals(403, DashboardAccessChecker.httpStatus(new HttpException(403, "no", "", null)));
+    assertEquals(
+        403,
+        DashboardAccessChecker.httpStatus(
+            new IOException("wrapped", new HttpException(403, "no", "", null))));
+    assertEquals(-1, DashboardAccessChecker.httpStatus(new IOException("reset")));
+  }
+
+  @Test
+  void theMembershipCheckMakesNoUserLookup() throws Exception {
+    checker.repositoryScope("alice", TOKEN);
+
+    verify(gitHub, never()).getUser(anyString());
   }
 
   @Test
@@ -608,13 +658,28 @@ class DashboardAccessCheckerTest {
   }
 
   private void stubMembership(String login, int status) {
-    if (status == 204) {
-      when(organization.hasMember(any())).thenReturn(true);
-    } else if (status == 403) {
-      // hasMember swallows the 403 and returns false without throwing.
-      when(organization.hasMember(any())).thenReturn(false);
-    } else {
-      when(organization.hasMember(any())).thenReturn(false);
+    try {
+      switch (status) {
+        case 204 -> {
+          lenient().when(membership.getState()).thenReturn(GHMembership.State.ACTIVE);
+          lenient().when(organization.getMembership(login)).thenReturn(membership);
+        }
+        case 302 -> {
+          // An invitation not yet accepted.
+          lenient().when(membership.getState()).thenReturn(GHMembership.State.PENDING);
+          lenient().when(organization.getMembership(login)).thenReturn(membership);
+        }
+        case 404 ->
+            lenient()
+                .when(organization.getMembership(login))
+                .thenThrow(new GHFileNotFoundException("not a member"));
+        default ->
+            lenient()
+                .when(organization.getMembership(login))
+                .thenThrow(new HttpException(status, "refused", "", null));
+      }
+    } catch (IOException e) {
+      throw new AssertionError(e);
     }
   }
 

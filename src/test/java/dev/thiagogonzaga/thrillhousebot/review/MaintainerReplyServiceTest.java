@@ -36,6 +36,7 @@ import dev.thiagogonzaga.thrillhousebot.review.ai.ReviewTokenLedger;
 import dev.thiagogonzaga.thrillhousebot.review.ai.TestResponseCaps;
 import dev.thiagogonzaga.thrillhousebot.webhook.ManualReviewAuthorizer;
 import dev.thiagogonzaga.thrillhousebot.webhook.TriggerDetector;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -68,6 +69,8 @@ class MaintainerReplyServiceTest {
 
   private MaintainerReplyService service;
   private ReviewTokenLedger tokenLedger;
+  private final PendingReviewGuard pendingReviewGuard =
+      new PendingReviewGuard(Duration.ofSeconds(5));
 
   @BeforeEach
   void setUp() {
@@ -107,7 +110,8 @@ class MaintainerReplyServiceTest {
         TestResponseCaps.defaults(),
         reviewThreadService,
         config,
-        tokenLedger);
+        tokenLedger,
+        pendingReviewGuard);
   }
 
   private static GitHubPullRequestClient.FileDiff fileDiff(
@@ -457,6 +461,63 @@ class MaintainerReplyServiceTest {
             eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), reply.capture());
     assertEquals("Because foo can be null.", reply.getValue().body());
     verifyNoInteractions(commentClient);
+  }
+
+  // #1434: a thread reply waits until a batched review's pending review is submitted or discarded.
+  @Test
+  void aThreadReplyWaitsForAnOpenPendingReviewOnThePullRequest() throws Exception {
+    authorize();
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(List.of(comment(99L, null, BOT, "**CRITICAL — possible NPE** on user lookup")));
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("Answer."));
+    var hold = pendingReviewGuard.hold("owner", "repo", 42);
+
+    var replying = Thread.ofVirtual().start(() -> service.handle(reviewThreadTask(false)));
+    replying.join(Duration.ofMillis(300));
+
+    assertTrue(replying.isAlive(), "the reply waits while the pending review is open");
+    verify(reviewClient, never())
+        .replyToReviewComment(any(), any(), any(), any(), anyInt(), anyLong(), any());
+    hold.close();
+    replying.join(Duration.ofSeconds(5));
+    verify(reviewClient)
+        .replyToReviewComment(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), any());
+  }
+
+  @Test
+  void aThreadReplyIsPostedAnywayOnceTheWaitForThePendingReviewRunsOut() {
+    var guard = new PendingReviewGuard(Duration.ofMillis(20));
+    service =
+        new MaintainerReplyService(
+            authClient,
+            authorizer,
+            triggerDetector,
+            reviewClient,
+            commentClient,
+            prClient,
+            diffFormatter,
+            replyAssistant,
+            repoSettingsResolver,
+            BotIdentity.from(null),
+            TestResponseCaps.defaults(),
+            reviewThreadService,
+            config,
+            tokenLedger,
+            guard);
+    authorize();
+    when(reviewClient.listPullRequestComments(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42)))
+        .thenReturn(List.of(comment(99L, null, BOT, "**CRITICAL — possible NPE** on user lookup")));
+    when(replyAssistant.reply(any(), any(), any(), any(), any())).thenReturn(aiOk("Answer."));
+    try (var _ = guard.hold("owner", "repo", 42)) {
+      service.handle(reviewThreadTask(false));
+    }
+
+    verify(reviewClient)
+        .replyToReviewComment(
+            eq(AUTH), anyString(), eq("owner"), eq("repo"), eq(42), eq(99L), any());
   }
 
   // #950: the reply model reads a finding posted before the guard and echoes its vocabulary.

@@ -15,11 +15,24 @@
  */
 package dev.thiagogonzaga.thrillhousebot.review;
 
+import dev.thiagogonzaga.thrillhousebot.github.CommentBodyLimit;
+
 /**
  * Optional collapsed "Agent prompt" block on inline findings (#1432). Built from fields the
  * pipeline already holds — no extra model call.
+ *
+ * <p>The block repeats the description's first paragraph, cut at {@value #MAX_PROBLEM_CHARS}
+ * characters, and is left off a comment it would push past GitHub's comment-body limit: the cap
+ * applied at the client would otherwise cut the comment inside the {@code <details>} element and
+ * leave it open.
  */
 final class AgentPromptBlock {
+
+  /** Longest problem paragraph repeated in the block, before escaping. */
+  static final int MAX_PROBLEM_CHARS = 1_000;
+
+  /** Room kept under the limit for the {@code line=} field a removed-line marker adds (#1360). */
+  static final int MARKER_RESERVE = 32;
 
   private AgentPromptBlock() {}
 
@@ -31,7 +44,8 @@ final class AgentPromptBlock {
     if (block.isEmpty()) {
       return body;
     }
-    return body + "\n\n" + block;
+    var withBlock = body + "\n\n" + block;
+    return withBlock.length() > CommentBodyLimit.MAX_LENGTH - MARKER_RESERVE ? body : withBlock;
   }
 
   static String render(Finding finding, boolean includeSuggestion) {
@@ -40,13 +54,14 @@ final class AgentPromptBlock {
       return "";
     }
     var safeFile = MarkdownSafe.inline(file);
+    var codeFile = MarkdownSafe.inlineCode(file);
     var line = finding.line();
     var title = MarkdownSafe.inline(finding.title());
     var problem = firstParagraph(finding.description());
     var recommended = recommendedFix(finding, includeSuggestion);
     return "<details><summary>Agent prompt</summary>\n\n"
         + "Fix this review finding in `"
-        + safeFile
+        + codeFile
         + "` (line "
         + line
         + ").\n\n"
@@ -73,7 +88,25 @@ final class AgentPromptBlock {
     var trimmed = description.strip();
     var breakAt = trimmed.indexOf("\n\n");
     var paragraph = breakAt < 0 ? trimmed : trimmed.substring(0, breakAt);
-    return MarkdownSafe.inline(paragraph.strip());
+    return MarkdownSafe.inline(capped(MarkdownSafe.oneLine(paragraph)));
+  }
+
+  /**
+   * {@code paragraph} cut to {@value #MAX_PROBLEM_CHARS} characters at the last space before the
+   * limit, or at the limit when there is none, with an ellipsis; never splitting a surrogate pair.
+   */
+  static String capped(String paragraph) {
+    if (paragraph.length() <= MAX_PROBLEM_CHARS) {
+      return paragraph;
+    }
+    var end = paragraph.lastIndexOf(' ', MAX_PROBLEM_CHARS);
+    if (end <= 0) {
+      end = MAX_PROBLEM_CHARS;
+      if (Character.isHighSurrogate(paragraph.charAt(end - 1))) {
+        end--;
+      }
+    }
+    return paragraph.substring(0, end).stripTrailing() + "…";
   }
 
   private static String recommendedFix(Finding finding, boolean includeSuggestion) {

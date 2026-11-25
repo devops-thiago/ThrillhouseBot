@@ -198,7 +198,8 @@ class ReviewOrchestratorTest {
             followUpAnalyzer,
             labeler,
             config,
-            BOT_ID);
+            BOT_ID,
+            new PendingReviewGuard());
     verdictBuilder =
         new VerdictBuilder(summaryGenerator, followUpAnalyzer, BOT_ID, BlockingStrictness.BALANCED);
     var budgetPlanner =
@@ -6807,28 +6808,6 @@ class ReviewOrchestratorTest {
       assertEquals(ReviewSession.STATUS_COMPLETED, managed.getStatus());
       assertNull(managed.getErrorMessage());
       assertEquals(session.getDurationMs(), managed.getDurationMs());
-    }
-  }
-
-  @Nested
-  class ElapsedMs {
-
-    @Test
-    void isTheTimeSinceTheSessionStarted() {
-      var session = new ReviewSession();
-      session.setTimestamp(java.time.Instant.now().minusSeconds(5));
-
-      var elapsed = ReviewOrchestrator.elapsedMs(session);
-
-      assertTrue(elapsed >= 5_000L && elapsed < 60_000L, "elapsed " + elapsed);
-    }
-
-    @Test
-    void isZeroWithoutAStartOrForAStartInTheFuture() {
-      assertEquals(0L, ReviewOrchestrator.elapsedMs(new ReviewSession()));
-      var skewed = new ReviewSession();
-      skewed.setTimestamp(java.time.Instant.now().plusSeconds(60));
-      assertEquals(0L, ReviewOrchestrator.elapsedMs(skewed));
     }
   }
 

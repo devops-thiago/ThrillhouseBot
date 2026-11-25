@@ -498,6 +498,24 @@ class ReviewLearningsTest {
     assertEquals("maintainer", learning.author());
   }
 
+  @Test
+  void anInterruptedCaptureStoresNothing() throws Exception {
+    writeAccess("write");
+
+    Thread.currentThread().interrupt();
+    try {
+      var stored =
+          enabled()
+              .captureSurvivingDeclines(
+                  capture(NESTED, "justified", thread(NESTED, 500L, FLAT_THREADS), PLAIN_DIFF));
+
+      assertEquals(0, stored);
+      verify(store, never()).save(any(), anyInt());
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
   /**
    * #958: an earlier round's standing decline carries id 0 and its own thread; it is learned from
    * that thread, about its own finding, and never from the previous round's finding 1.

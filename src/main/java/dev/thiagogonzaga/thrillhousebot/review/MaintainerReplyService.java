@@ -70,6 +70,7 @@ public class MaintainerReplyService {
   private final ReviewThreadService reviewThreadService;
   private final ThrillhouseConfig config;
   private final ReviewTokenLedger tokenLedger;
+  private final PendingReviewGuard pendingReviewGuard;
 
   @Inject
   public MaintainerReplyService(
@@ -86,7 +87,8 @@ public class MaintainerReplyService {
       ResponseCaps responseCaps,
       ReviewThreadService reviewThreadService,
       ThrillhouseConfig config,
-      ReviewTokenLedger tokenLedger) {
+      ReviewTokenLedger tokenLedger,
+      PendingReviewGuard pendingReviewGuard) {
     this.authClient = authClient;
     this.authorizer = authorizer;
     this.triggerDetector = triggerDetector;
@@ -101,6 +103,7 @@ public class MaintainerReplyService {
     this.reviewThreadService = reviewThreadService;
     this.config = config;
     this.tokenLedger = tokenLedger;
+    this.pendingReviewGuard = pendingReviewGuard;
   }
 
   /**
@@ -207,14 +210,7 @@ public class MaintainerReplyService {
     if (reply == null) {
       return;
     }
-    reviewClient.replyToReviewComment(
-        auth,
-        ACCEPT,
-        task.owner(),
-        task.repo(),
-        task.prNumber(),
-        task.rootCommentId(),
-        new GitHubReviewClient.ReplyToReviewCommentRequest(reply));
+    replyInThread(auth, task, reply);
     Log.infof(
         "Posted conversational reply in review thread %d on %s/%s #%d",
         task.rootCommentId(), task.owner(), task.repo(), task.prNumber());
@@ -244,6 +240,23 @@ public class MaintainerReplyService {
     } else {
       ack = resolveThread(auth, task) ? threadClearedAck(botIdentity) : THREAD_CLEAR_PENDING_ACK;
     }
+    replyInThread(auth, task, ack);
+    Log.infof(
+        "Acknowledged a maintainer clear directive in review thread %d on %s/%s #%d",
+        task.rootCommentId(), task.owner(), task.repo(), task.prNumber());
+  }
+
+  /**
+   * Posts {@code body} in the task's review thread, once no batched review holds a pending review
+   * on the pull request (#1434): GitHub keeps one pending review per user, so a reply posted inside
+   * that window could join it unseen. A wait that runs out still replies.
+   */
+  private void replyInThread(String auth, ReplyTask task, String body) {
+    if (!pendingReviewGuard.awaitNoPendingReview(task.owner(), task.repo(), task.prNumber())) {
+      Log.warnf(
+          "A review on %s/%s #%d still holds its pending review — replying in thread %d anyway",
+          task.owner(), task.repo(), task.prNumber(), task.rootCommentId());
+    }
     reviewClient.replyToReviewComment(
         auth,
         ACCEPT,
@@ -251,10 +264,7 @@ public class MaintainerReplyService {
         task.repo(),
         task.prNumber(),
         task.rootCommentId(),
-        new GitHubReviewClient.ReplyToReviewCommentRequest(ack));
-    Log.infof(
-        "Acknowledged a maintainer clear directive in review thread %d on %s/%s #%d",
-        task.rootCommentId(), task.owner(), task.repo(), task.prNumber());
+        new GitHubReviewClient.ReplyToReviewCommentRequest(body));
   }
 
   /**

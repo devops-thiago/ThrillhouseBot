@@ -36,6 +36,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Unit tests for {@link ConfigKeyContextResolver} — extracting config-key tokens from the doc/.env
@@ -458,6 +459,34 @@ class ConfigKeyContextResolverTest {
       assertEquals(
           java.util.Set.of("App.swift", "Boot.scala", "boot.php"),
           ConfigKeyContextResolver.environmentReaders(List.of(swift, scala, php)));
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+        strings = {
+          "pkg/config_test.go",
+          "test.py",
+          "conftest.py",
+          "src/ConfigSpec.scala",
+          "src/FooSpecs.swift",
+          "pkg/config.specs.ts"
+        })
+    void shouldRecognizeTestAndSpecAsWordsOfTheirOwn(String path) {
+      assertTrue(ConfigKeyContextResolver.isTestPath(path));
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+        strings = {
+          "cmd/latest.go",
+          "src/contest.py",
+          "pkg/attest.go",
+          "src/Latest.java",
+          "lib/respec.rb",
+          "lib/respecs.rb"
+        })
+    void shouldNotTakeANameEndingInTestOrSpecForATest(String path) {
+      assertFalse(ConfigKeyContextResolver.isTestPath(path));
     }
 
     @Test

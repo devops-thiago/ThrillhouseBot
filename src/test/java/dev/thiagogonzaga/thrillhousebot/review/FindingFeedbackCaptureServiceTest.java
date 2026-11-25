@@ -474,6 +474,51 @@ class FindingFeedbackCaptureServiceTest {
   }
 
   @Test
+  void captureOnPriorFindingsAsksGitHubNothingWithoutABotFinding() {
+    var comments =
+        List.of(
+            new GitHubReviewClient.PullRequestComment(
+                10L,
+                null,
+                "A.java",
+                "a human note",
+                new GitHubReviewClient.ReviewResponse.User("alice")),
+            new GitHubReviewClient.PullRequestComment(
+                11L,
+                null,
+                "A.java",
+                "a bot note without a marker",
+                new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")));
+
+    capture.captureOnPriorFindings(
+        "Bearer t", new RepoScope(9L, TestScopes.REPOSITORY_ID), "owner", "repo", 3, comments);
+
+    verifyNoInteractions(clientProvider, reactionClient, feedbackService);
+  }
+
+  @Test
+  void captureOnPriorFindingsStopsOnAnInterrupt() {
+    var comments =
+        List.of(
+            new GitHubReviewClient.PullRequestComment(
+                10L,
+                null,
+                "A.java",
+                "old\n" + SuggestionFormatter.findingMarker(1),
+                new GitHubReviewClient.ReviewResponse.User("thrillhousebot[bot]")));
+
+    Thread.currentThread().interrupt();
+    try {
+      capture.captureOnPriorFindings(
+          "Bearer t", new RepoScope(9L, TestScopes.REPOSITORY_ID), "owner", "repo", 3, comments);
+    } finally {
+      Thread.interrupted();
+    }
+
+    verifyNoInteractions(reactionClient, feedbackService);
+  }
+
+  @Test
   void captureOnPriorFindingsNoopsOnEmptyInput() {
     capture.captureOnPriorFindings(
         "Bearer t", new RepoScope(9L, TestScopes.REPOSITORY_ID), "owner", "repo", 3, null);

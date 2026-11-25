@@ -16,7 +16,7 @@
 package dev.thiagogonzaga.thrillhousebot.webhook;
 
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
-import dev.thiagogonzaga.thrillhousebot.github.RepositoryPermissions;
+import dev.thiagogonzaga.thrillhousebot.github.InstallationRepository;
 import io.quarkiverse.githubapp.GitHubClientProvider;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -30,6 +30,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,7 +44,6 @@ import org.slf4j.LoggerFactory;
 public class ManualReviewAuthorizer {
 
   private static final Logger log = LoggerFactory.getLogger(ManualReviewAuthorizer.class);
-  private static final String ACCEPT = "application/vnd.github+json";
 
   /**
    * GitHub {@code author_association} values that a write-access holder can present. Any other
@@ -152,15 +152,10 @@ public class ManualReviewAuthorizer {
 
   private boolean writeAccessConfirmed(
       String owner, String repo, long installationId, String login) {
-    try {
-      return RepositoryPermissions.canAct(
-          clientProvider
-              .getInstallationClient(installationId)
-              .getRepository(owner + "/" + repo)
-              .getPermission(login));
-    } catch (Exception e) {
-      log.warn("Permission check failed for {}/{} user {}: {}", owner, repo, login, e.toString());
-      return false;
-    }
+    Consumer<Exception> failed =
+        e -> log.warn("Permission check failed for {}/{} user {}: {}", owner, repo, login, e);
+    return InstallationRepository.resolve(clientProvider, installationId, owner, repo, failed)
+        .map(repository -> InstallationRepository.mayAct(repository, login, failed))
+        .orElse(false);
   }
 }

@@ -107,7 +107,7 @@ command word gets a written answer instead.
 | Command | What it does | Access |
 |---|---|---|
 | `/help` | List the commands | anyone |
-| `/review` | Run (or re-run) a full review | write |
+| `/review` | Run (or re-run) a full review. On a closed or merged PR it replies with a notice and runs nothing; reopen the PR to review it. | write |
 | `/summary` | Post the PR summary when the PR has none, for example after it was deleted. If one is already there, the bot replies that it did nothing. | write |
 | `/describe` | Suggest a PR title and description, as a comment to copy in. The PR is never edited. | write |
 | `/changelog` | Draft a CHANGELOG entry (Added, Changed, Fixed, Security…), as a comment to copy in | write |
@@ -349,7 +349,16 @@ its own. The summary states how many findings went unverified.
 
 `REVIEW_AGENT_PROMPT_ENABLED=true` adds a collapsed **Agent prompt** block to each
 **inline** finding comment, built from the title, description and suggestion
-already there — no extra model call. File-level threads do not get the block.
+already there. It makes no model call. File-level threads do not get the block.
+The description is repeated up to 1,000 characters, and a comment the block
+would push past GitHub's size limit is posted without it.
+
+`REVIEW_BATCHED_INLINE_REVIEW_ENABLED=true` opens one pending pull request review
+per round, attaches each inline finding to it and submits it once, instead of
+posting each inline comment on its own. If GitHub does not take the submit, the
+pending review is deleted and a separate review lists its findings by file and
+line. A reply in a finding's thread waits until the pending review is submitted
+or deleted, for at most two minutes.
 
 `REVIEW_SUMMARY_VERIFICATION_ENABLED=true` adds one call after the summary call.
 The summary call does not see the diff, so it can describe something the change
@@ -619,6 +628,20 @@ finding once instead of posting a second delta comment. It also names the thread
 round posted for earlier "Things to double-check" items, and says how many new findings
 went only under "Things to double-check". The review keeps its verdict;
 a definite review refusal preserves the same outcome as a regular comment.
+
+The comment also carries one hidden, machine-readable line listing the open
+findings: `<!-- thrillhousebot:findings v=1 [...] -->`. Each entry gives the
+finding's `key` (the one in its thread marker), `file`, `line`, `risk`,
+`confidence`, `status` (`open`), `thread`, `hasSuggestion` and `carried` (open
+since an earlier review), most severe first. `thread` is `true` when the review
+is set to open an inline thread for the finding: it posts inline, its file is
+part of the pull request and it is within the per-run comment cap. It is
+`false` for a finding listed under "Things to double-check", on a file outside
+the pull request, or past the cap. The summary is written before the review
+posts, so a thread GitHub then refuses still reads `true`; the review body lists
+that finding. The cap counts threads that landed, so after a refusal a finding
+past the cap can still get a thread while it reads `false`. An empty list is `[]`. The list stops at 100 entries or 16,000
+characters, and `omitted=N` after `v=1` counts the entries left out. It contains no model-written text.
 
 The risk counts, Key Findings and "Things to double-check" cover the round's
 new findings and every earlier finding still open, each listed once and marked
@@ -1199,7 +1222,7 @@ again. Commands such as `/describe` or `/improve` send nothing.
   "schema_version": 1,
   "event": "review.completed",
   "timestamp": "2026-09-29T12:00:00Z",
-  "bot": { "name": "thrillhousebot", "version": "0.9.2" },
+  "bot": { "name": "thrillhousebot", "version": "0.9.3" },
   "repository": "octo/repo",
   "pull_request": { "number": 42, "head_sha": "0123abc…", "url": "https://github.com/octo/repo/pull/42" },
   "session_url": "https://bot.example/session/…",
@@ -1644,7 +1667,8 @@ and counts skips per reason in the dashboard summary
    refused the task (overload or shutdown); redeliver the webhook from GitHub.
 
 A `/review` from a user with write access bypasses the draft, label,
-base-branch and rate-window gates, but not `/pause`.
+base-branch and rate-window gates, but not `/pause`, and it does not review a
+closed or merged pull request.
 
 ## Responsible use and security
 
@@ -1720,14 +1744,14 @@ Sigstore) and carry build-provenance attestations. To check a release:
 cosign verify \
   --certificate-identity-regexp='https://github.com/devops-thiago/ThrillhouseBot.*' \
   --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-  ghcr.io/devops-thiago/thrillhousebot:v0.9.2
+  ghcr.io/devops-thiago/thrillhousebot:v0.9.3
 
 # Provenance (image)
-gh attestation verify oci://ghcr.io/devops-thiago/thrillhousebot:v0.9.2 \
+gh attestation verify oci://ghcr.io/devops-thiago/thrillhousebot:v0.9.3 \
   --repo devops-thiago/ThrillhouseBot
 
 # Provenance (a downloaded binary)
-gh attestation verify thrillhousebot-v0.9.2-linux-amd64.tar.gz \
+gh attestation verify thrillhousebot-v0.9.3-linux-amd64.tar.gz \
   --repo devops-thiago/ThrillhouseBot
 ```
 
@@ -1859,7 +1883,7 @@ Both images are built from the same native binary and published to GHCR:
 
 - `ghcr.io/devops-thiago/thrillhousebot:latest`: UBI9-micro (default).
 - `ghcr.io/devops-thiago/thrillhousebot:latest-distroless`: distroless base
-  (`:v0.9.2-distroless`, and so on).
+  (`:v0.9.3-distroless`, and so on).
 - Snapshot tags: `:snapshot`, `:v<version>-<short-sha>-snapshot` and
   `:<full-sha>`, each with a `-distroless` variant.
   A weekly job keeps the 10 newest snapshot builds of each variant and

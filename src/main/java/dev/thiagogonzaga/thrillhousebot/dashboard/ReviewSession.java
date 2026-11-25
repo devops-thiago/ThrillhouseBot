@@ -23,6 +23,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -143,6 +144,18 @@ public class ReviewSession extends PanacheEntity {
 
   public Instant getTimestamp() {
     return timestamp;
+  }
+
+  /**
+   * The review's elapsed time so far, from the session's start to now (#1417); 0 for a session with
+   * no start time or a start in the future. Read once per terminal write, so the row and the event
+   * broadcast from the in-memory session carry the same value.
+   */
+  public long elapsedMs() {
+    if (timestamp == null) {
+      return 0L;
+    }
+    return Math.max(0L, Duration.between(timestamp, Instant.now()).toMillis());
   }
 
   public String getModel() {

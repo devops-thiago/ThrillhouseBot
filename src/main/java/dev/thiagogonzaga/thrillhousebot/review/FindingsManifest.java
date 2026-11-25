@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.review;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Locale;
+import java.util.function.Predicate;
 
 /**
  * The hidden, machine-readable view of the pull request's open findings, written into the summary
@@ -31,10 +32,16 @@ import java.util.Locale;
  *
  * <p>Each entry holds {@code key} ({@link SuggestionFormatter#findingKey}, the one in the inline
  * marker), {@code file}, {@code line}, {@code risk} and {@code confidence} (lower case), {@code
- * status} (always {@code open}: the set holds nothing else), {@code thread} (an inline thread
- * exists, so a consumer can reply on it; {@code false} means listed under "Things to double-check",
- * cleared through {@code @thrillhousebot resolved}), {@code hasSuggestion} and {@code carried}
- * (open since an earlier review). Entries run most severe first.
+ * status} (always {@code open}: the set holds nothing else), {@code thread}, {@code hasSuggestion}
+ * and {@code carried} (open since an earlier review). Entries run most severe first.
+ *
+ * <p>{@code thread} is {@code true} when the finding is expected to have an inline thread: a
+ * finding of this round that the review posts inline on a file the pull request changes, within the
+ * per-run comment cap, or a carried finding that posts inline. The summary is written before the
+ * review posts, so a thread GitHub then refuses, which the review body lists instead, still reads
+ * {@code true}. {@code false} means no thread is expected: listed under "Things to double-check",
+ * on a file outside the pull request, or past the comment cap; such a finding is cleared through
+ * {@code @thrillhousebot resolved}.
  *
  * <p>The array is bounded twice, so a pathological pull request cannot push the comment over
  * GitHub's size limit: at {@value #MAX_ENTRIES} entries, and at {@value #MAX_ARRAY_CHARS} rendered
@@ -48,11 +55,17 @@ final class FindingsManifest {
 
   private static final String MARKER_SUFFIX = " -->";
 
-  /** Entries kept: about 160 characters each for a typical path. */
-  static final int MAX_ENTRIES = 200;
+  /**
+   * Entries kept: about 160 characters each for a typical path, so this many fit {@link
+   * #MAX_ARRAY_CHARS}.
+   */
+  static final int MAX_ENTRIES = 100;
 
-  /** Rendered array budget, well inside GitHub's 65,536-character comment limit. */
-  static final int MAX_ARRAY_CHARS = 40_000;
+  /**
+   * Rendered array budget: a quarter of GitHub's 65,536-character comment limit, so the manifest
+   * cannot crowd out the summary it rides in.
+   */
+  static final int MAX_ARRAY_CHARS = 16_000;
 
   private static final Comparator<Finding> MOST_SEVERE_FIRST =
       Comparator.comparing((Finding f) -> riskOf(f)).thenComparing(Finding::confidence);
@@ -64,12 +77,20 @@ final class FindingsManifest {
    * can tell "nothing open" from "a comment posted before the manifest existed".
    */
   static String render(PrSummaryGenerator.CurrentState state) {
+    return render(state, Finding::postsInline);
+  }
+
+  /**
+   * {@link #render(PrSummaryGenerator.CurrentState)}, with {@code thread} decided by {@code
+   * thread}.
+   */
+  static String render(PrSummaryGenerator.CurrentState state, Predicate<Finding> thread) {
     var carried = state.carried();
     var ordered = state.result().findings().stream().sorted(MOST_SEVERE_FIRST).toList();
     var kept = new ArrayList<String>();
     int chars = 2;
     for (Finding finding : ordered) {
-      var rendered = entry(finding, carried.contains(finding));
+      var rendered = entry(finding, carried.contains(finding), thread.test(finding));
       int cost = rendered.length() + 1;
       if (kept.size() == MAX_ENTRIES || chars + cost > MAX_ARRAY_CHARS) {
         break;
@@ -82,7 +103,7 @@ final class FindingsManifest {
     return header + " " + "[" + String.join(",", kept) + "]" + MARKER_SUFFIX;
   }
 
-  private static String entry(Finding finding, boolean carried) {
+  private static String entry(Finding finding, boolean carried, boolean thread) {
     return "{\"key\":\""
         + SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title())
         + "\",\"file\":\""
@@ -94,7 +115,7 @@ final class FindingsManifest {
         + "\",\"confidence\":\""
         + finding.confidence().name().toLowerCase(Locale.ROOT)
         + "\",\"status\":\"open\",\"thread\":"
-        + finding.postsInline()
+        + thread
         + ",\"hasSuggestion\":"
         + finding.hasSuggestion()
         + ",\"carried\":"

@@ -34,8 +34,6 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -293,8 +291,12 @@ public class ReviewOrchestrator {
    * moved a finding, or when {@code /summary} asked for it (#1319).
    */
   private boolean summaryStandsIn(
-      String auth, ReviewRequest req, ReviewResult result, boolean moved) {
-    return publishSummaryBestEffort(auth, req, result) && (moved || req.forceSummary());
+      String auth,
+      ReviewRequest req,
+      ReviewResult result,
+      ReviewContextLoader.ReviewContext ctx,
+      boolean moved) {
+    return publishSummaryBestEffort(auth, req, result, ctx) && (moved || req.forceSummary());
   }
 
   /** The follow-up delta, or {@code ""} on a round that moved no finding (#1319). */
@@ -466,7 +468,7 @@ public class ReviewOrchestrator {
       // summary nor the delta; the summary may still be edited in place, which notifies nobody.
       var findingRound = findingStates.prepare(req, ctx, result);
       var moved = findingRound.moved(result);
-      boolean summaryPosted = summaryStandsIn(auth, req, result, moved);
+      boolean summaryPosted = summaryStandsIn(auth, req, result, ctx, moved);
       // The optional delta enriches the review, never a second notification beside it.
       var followUpDelta = movedDelta(moved, result, summaryPosted, req, previousFindings);
       reviewPublisher.dismissPendingBotReviews(
@@ -677,7 +679,7 @@ public class ReviewOrchestrator {
       String auth, ReviewRequest req, ReviewSession session, long checkRunId, String freshHead) {
     var stoodDown =
         standDown.supersededWhileLoading(auth, req, checkRunId, sessionUrl(session), freshHead);
-    var elapsedMs = elapsedMs(session);
+    var elapsedMs = session.elapsedMs();
     try {
       applySessionState(
           session,
@@ -703,16 +705,10 @@ public class ReviewOrchestrator {
    *     a swallowed failure, so the summary-only review skip never fires without a summary on the
    *     PR.
    */
-  private boolean publishSummaryBestEffort(String auth, ReviewRequest req, ReviewResult result) {
+  private boolean publishSummaryBestEffort(
+      String auth, ReviewRequest req, ReviewResult result, ReviewContextLoader.ReviewContext ctx) {
     try {
-      return reviewPublisher.publishSummary(
-          auth,
-          req.owner(),
-          req.repo(),
-          req.prNumber(),
-          result,
-          req.forceSummary(),
-          PromptSections.prContext(req.prTitle(), req.prDescription()));
+      return reviewPublisher.publishSummary(auth, req, result, ctx.lineResolver());
     } catch (RuntimeException e) {
       Log.warnf(
           e,
@@ -962,7 +958,7 @@ public class ReviewOrchestrator {
 
   /** Applies review completion fields to the in-memory session and persisted entity together. */
   void applyReviewResult(ReviewSession session, ReviewResult result) {
-    var elapsedMs = elapsedMs(session);
+    var elapsedMs = session.elapsedMs();
     applySessionState(
         session,
         s -> {
@@ -995,7 +991,7 @@ public class ReviewOrchestrator {
    * cannot make the next one treat findings it never posted as already raised.
    */
   void applyReviewFailure(ReviewSession session, String errorMessage) {
-    var elapsedMs = elapsedMs(session);
+    var elapsedMs = session.elapsedMs();
     applySessionState(
         session,
         s -> {
@@ -1007,19 +1003,6 @@ public class ReviewOrchestrator {
           }
         });
     outcomeMetrics.recordFailed();
-  }
-
-  /**
-   * The review's elapsed time so far, from the session's start to now (#1417); 0 for a session with
-   * no start time. Read once per terminal write, so the row and the event broadcast from the
-   * in-memory session carry the same value. Visible for tests.
-   */
-  static long elapsedMs(ReviewSession session) {
-    var started = session.getTimestamp();
-    if (started == null) {
-      return 0L;
-    }
-    return Math.max(0L, Duration.between(started, Instant.now()).toMillis());
   }
 
   private void applySessionState(ReviewSession session, Consumer<ReviewSession> mutator) {

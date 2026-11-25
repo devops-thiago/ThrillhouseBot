@@ -20,6 +20,7 @@ import dev.thiagogonzaga.thrillhousebot.config.BotIdentity;
 import dev.thiagogonzaga.thrillhousebot.config.ThrillhouseConfig;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubApiError;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubCommentClient;
+import dev.thiagogonzaga.thrillhousebot.github.GitHubGraphQLException;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubReviewClient;
 import dev.thiagogonzaga.thrillhousebot.github.GitHubWriteBudget;
 import dev.thiagogonzaga.thrillhousebot.github.ReviewThreadService;
@@ -31,10 +32,12 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.WebApplicationException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Predicate;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 /**
@@ -45,11 +48,13 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 @ApplicationScoped
 public class ReviewPublisher {
 
+  private static final String FOUND_PREFIX = "ThrillhouseBot found ";
   private static final String ACCEPT = "application/vnd.github+json";
   private static final String EVENT_REQUEST_CHANGES = "REQUEST_CHANGES";
   private static final String EVENT_APPROVE = "APPROVE";
   private static final String EVENT_COMMENT = "COMMENT";
   private static final String CI_PENDING = "pending";
+  private static final String REVIEW_PENDING = "PENDING";
 
   private final GitHubReviewClient reviewClient;
   private final GitHubCommentClient commentClient;
@@ -59,6 +64,7 @@ public class ReviewPublisher {
   private final PrLabeler labeler;
   private final ThrillhouseConfig config;
   private final BotIdentity botIdentity;
+  private final PendingReviewGuard pendingReviewGuard;
 
   @Inject
   public ReviewPublisher(
@@ -69,7 +75,8 @@ public class ReviewPublisher {
       FollowUpAnalyzer followUpAnalyzer,
       PrLabeler labeler,
       ThrillhouseConfig config,
-      BotIdentity botIdentity) {
+      BotIdentity botIdentity,
+      PendingReviewGuard pendingReviewGuard) {
     this.reviewClient = reviewClient;
     this.commentClient = commentClient;
     this.reviewThreadService = reviewThreadService;
@@ -78,6 +85,7 @@ public class ReviewPublisher {
     this.labeler = labeler;
     this.config = config;
     this.botIdentity = botIdentity;
+    this.pendingReviewGuard = pendingReviewGuard;
   }
 
   /**
@@ -133,12 +141,59 @@ public class ReviewPublisher {
       ReviewResult result,
       boolean forceSummary,
       String prText) {
+    return publishSummary(
+        new SummaryRequest(auth, owner, repo, prNumber, result, forceSummary, prText, null));
+  }
+
+  /**
+   * {@link #publishSummary(SummaryRequest)} for a review request and its diff. {@code lineResolver}
+   * is the round's diff, from which the manifest decides which findings {@link #postReview} will
+   * open a thread for (#1433); {@code null} falls back to {@link Finding#postsInline}.
+   */
+  boolean publishSummary(
+      String auth,
+      ReviewOrchestrator.ReviewRequest req,
+      ReviewResult result,
+      DiffLineResolver lineResolver) {
+    return publishSummary(
+        new SummaryRequest(
+            auth,
+            req.owner(),
+            req.repo(),
+            req.prNumber(),
+            result,
+            req.forceSummary(),
+            PromptSections.prContext(req.prTitle(), req.prDescription()),
+            lineResolver));
+  }
+
+  record SummaryRequest(
+      String auth,
+      String owner,
+      String repo,
+      int prNumber,
+      ReviewResult result,
+      boolean forceSummary,
+      String prText,
+      DiffLineResolver lineResolver) {}
+
+  /** See {@link #publishSummary(String, String, String, int, ReviewResult, boolean, String)}. */
+  boolean publishSummary(SummaryRequest summary) {
+    var auth = summary.auth();
+    var owner = summary.owner();
+    var repo = summary.repo();
+    var prNumber = summary.prNumber();
+    var result = summary.result();
+    var prText = summary.prText();
     if (result.summaryMarkdown().isBlank()) {
       return false;
     }
     var prTextLine = prText == null ? "" : DescriptionGapCarryover.prTextMarker(prText) + "\n";
+    var scrubbed = PromptLabelScrubber.scrub(result);
     var manifestLine =
-        FindingsManifest.render(PrSummaryGenerator.currentState(PromptLabelScrubber.scrub(result)))
+        FindingsManifest.render(
+                PrSummaryGenerator.currentState(scrubbed),
+                threadRule(scrubbed, summary.lineResolver()))
             + "\n";
     var request =
         new GitHubCommentClient.CreateCommentRequest(
@@ -147,12 +202,49 @@ public class ReviewPublisher {
                 + prTextLine
                 + manifestLine
                 + PromptLabelScrubber.scrubMarkdown(result.summaryMarkdown(), result.findings()));
-    if (result.isFirstReview() || forceSummary) {
+    if (result.isFirstReview() || summary.forceSummary()) {
       commentClient.createComment(auth, ACCEPT, owner, repo, prNumber, request);
       return true;
     }
     upsertSummaryComment(auth, owner, repo, prNumber, request);
     return result.hasSupersededPrevious();
+  }
+
+  /**
+   * Which manifest entries {@link #postReview} is set to open an inline thread for (#1433): of the
+   * round's own findings, in the order they are posted, those that post inline on a changed file
+   * ({@link DiffLineResolver#isChangedFile}), up to {@code maxReviewComments}, the same rules
+   * {@link #postInlineComments} applies. Entries are matched by {@link
+   * SuggestionFormatter#findingKey}, so a re-raised finding the summary lists at an earlier
+   * severity still matches. An entry carried from an earlier round, which this round does not post,
+   * keeps {@link Finding#postsInline}. The rule cannot know which posts GitHub will refuse, so
+   * {@code thread} says a thread is expected, not that it exists, and it errs both ways: a refused
+   * post reads {@code true}, and because the poster counts the cap in threads that landed, a
+   * refusal lets a finding past the cap here take the freed slot while it reads {@code false}.
+   */
+  private Predicate<Finding> threadRule(ReviewResult round, DiffLineResolver lineResolver) {
+    if (lineResolver == null) {
+      return Finding::postsInline;
+    }
+    var roundKeys = new HashSet<String>();
+    var threadKeys = new HashSet<String>();
+    var slots = config.review().maxReviewComments();
+    for (var finding : round.findings()) {
+      var key = manifestKey(finding);
+      roundKeys.add(key);
+      if (slots > 0 && finding.postsInline() && lineResolver.isChangedFile(finding.file())) {
+        threadKeys.add(key);
+        slots--;
+      }
+    }
+    return finding -> {
+      var key = manifestKey(finding);
+      return roundKeys.contains(key) ? threadKeys.contains(key) : finding.postsInline();
+    };
+  }
+
+  private static String manifestKey(Finding finding) {
+    return SuggestionFormatter.findingKey(finding.file(), finding.line(), finding.title());
   }
 
   /**
@@ -459,19 +551,37 @@ public class ReviewPublisher {
       return;
     }
 
-    var pendingReviewId =
-        config.review().batchedInlineReviewEnabled()
-                && hasInlinePostCandidates(result, lineResolver)
-            ? openPendingReview(auth, owner, repo, prNumber, commitSha)
-            : Optional.<Long>empty();
+    if (config.review().batchedInlineReviewEnabled()
+        && hasInlinePostCandidates(result, lineResolver)) {
+      // #1434: GitHub keeps one pending review per user, so a thread reply posted while this one
+      // is open could land in it; MaintainerReplyService waits on this hold before replying.
+      try (var _ = pendingReviewGuard.hold(owner, repo, prNumber)) {
+        publishFindings(post, result, openPendingReview(auth, owner, repo, prNumber, commitSha));
+      }
+      return;
+    }
+    publishFindings(post, result, Optional.empty());
+  }
+
+  /**
+   * Posts the round's findings: inline threads, on {@code pending} when the round batches them
+   * (#1434), then the review body with the verdict.
+   */
+  private void publishFindings(
+      PostReviewRequest post, ReviewResult result, Optional<PendingReview> pending) {
+    var auth = post.auth();
+    var owner = post.owner();
+    var repo = post.repo();
+    var prNumber = post.prNumber();
+    var commitSha = post.commitSha();
     var inline =
         postInlineComments(
-            auth, owner, repo, prNumber, commitSha, result, lineResolver, pendingReviewId);
+            auth, owner, repo, prNumber, commitSha, result, post.lineResolver(), pending);
     var event =
         result.reviewState() == ReviewState.REQUEST_CHANGES ? EVENT_REQUEST_CHANGES : EVENT_COMMENT;
 
     if (inline.posted() == 0) {
-      clearPendingReview(auth, owner, repo, prNumber, pendingReviewId);
+      pending.ifPresent(p -> discardPendingReview(auth, owner, repo, prNumber, p.id()));
       // Nothing landed inline: either anchoring failed, the comment cap skipped everything, or
       // every finding was routed to the summary as lower-confidence. Surface them in the review
       // body so follow-ups (which do not re-post the summary) still carry the signal.
@@ -484,17 +594,16 @@ public class ReviewPublisher {
             "No inline comments for %s/%s #%d — lower-confidence findings routed to the summary",
             owner, repo, prNumber);
       }
-      var fallbackParts = new ArrayList<>(skippedFindingsBodyParts(inline));
-      appendPreviousOutcome(fallbackParts, result, post);
-      fallbackParts.addAll(reopenedDeclineNotes(result));
-      appendReviewNotice(fallbackParts, result, post);
       createReviewWithFallback(
           auth,
           owner,
           repo,
           prNumber,
           new GitHubReviewClient.CreateReviewRequest(
-              commitSha, String.join("\n\n", fallbackParts), event, List.of()));
+              commitSha,
+              String.join("\n\n", listingBodyParts(List.of(), inline, result, post)),
+              event,
+              List.of()));
       return;
     }
 
@@ -506,19 +615,14 @@ public class ReviewPublisher {
     appendPreviousOutcome(bodyParts, result, post);
     bodyParts.addAll(reopenedDeclineNotes(result));
     appendReviewNotice(bodyParts, result, post);
-    if (pendingReviewId.isPresent()) {
+    if (pending.isPresent()) {
       // Inline threads landed ({@code inline.posted() > 0} — the branch above returned otherwise).
       // Ends publishReview; the orchestrator still runs check-run conclusion, thread resolution
       // and finding-state writes after postReview returns (#1434).
       submitPendingReviewWithFallback(
-          auth,
-          owner,
-          repo,
-          prNumber,
-          pendingReviewId.get(),
-          commitSha,
-          batchedReviewSubmitBody(bodyParts, event),
-          event);
+          post,
+          pending.get(),
+          new BatchedSubmit(batchedReviewSubmitBody(bodyParts, event), event, inline, result));
       return;
     }
     if (!bodyParts.isEmpty()) {
@@ -533,6 +637,28 @@ public class ReviewPublisher {
   }
 
   /**
+   * The review body that lists findings instead of pointing at inline threads: {@code unpublished}
+   * (threads a batched review held that never reached the pull request, #1434) first, then every
+   * finding the round did not thread, then the previous-round outcome, the reopened declines and
+   * the coverage notice.
+   */
+  private static List<String> listingBodyParts(
+      List<Finding> unpublished,
+      InlineCommentResult inline,
+      ReviewResult result,
+      PostReviewRequest post) {
+    var parts = new ArrayList<String>();
+    if (!unpublished.isEmpty()) {
+      parts.add(unpublishedFindingsBody(unpublished));
+    }
+    parts.addAll(skippedFindingsBodyParts(inline));
+    appendPreviousOutcome(parts, result, post);
+    parts.addAll(reopenedDeclineNotes(result));
+    appendReviewNotice(parts, result, post);
+    return parts;
+  }
+
+  /**
    * Whether the bot's latest submitted review on the PR is an approval of {@code commitSha}. GitHub
    * lists reviews oldest first. A pending review is left out, since this run dismisses it; a
    * dismissed or commented latest review, or an approval of an older commit, is not one (#1144).
@@ -543,7 +669,7 @@ public class ReviewPublisher {
     for (var review : priorReviews) {
       if (review.user() != null
           && botIdentity.matches(review.user().login())
-          && !"PENDING".equals(review.state())) {
+          && !REVIEW_PENDING.equals(review.state())) {
         latest = review;
       }
     }
@@ -633,7 +759,7 @@ public class ReviewPublisher {
     var findings = inline.unanchored();
     var throttled = inline.throttled();
     var sb = new StringBuilder();
-    sb.append("ThrillhouseBot found ")
+    sb.append(FOUND_PREFIX)
         .append(findings.size())
         .append(" issue(s) GitHub accepted no review thread for");
     GitHubWriteBudget.exhausted()
@@ -686,9 +812,27 @@ public class ReviewPublisher {
     return sb.toString();
   }
 
+  /**
+   * The findings whose threads sat on a batched review GitHub did not submit (#1434): the pending
+   * review was discarded with them, so they are listed here rather than lost.
+   */
+  private static String unpublishedFindingsBody(List<Finding> findings) {
+    var sb = new StringBuilder();
+    sb.append(FOUND_PREFIX)
+        .append(findings.size())
+        .append(
+            """
+             issue(s) whose inline threads were not published, because GitHub did not accept \
+            the review that held them:
+
+            """);
+    appendFindingList(sb, findings);
+    return sb.toString();
+  }
+
   private static String capSkippedFindingsBody(List<Finding> findings) {
     var sb = new StringBuilder();
-    sb.append("ThrillhouseBot found ")
+    sb.append(FOUND_PREFIX)
         .append(findings.size())
         .append(
             """
@@ -885,7 +1029,7 @@ public class ReviewPublisher {
   }
 
   /**
-   * How many findings opened a review thread, the ones GitHub took no thread for at all, the ones
+   * The findings that opened a review thread, the ones GitHub took no thread for at all, the ones
    * skipped because {@code maxReviewComments} was reached (never tried for anchoring), and the ones
    * withheld because confidence is low (routed to the summary instead).
    *
@@ -907,13 +1051,19 @@ public class ReviewPublisher {
    * pull request does not change, so no route was tried for them (#925).
    */
   record InlineCommentResult(
-      int posted,
+      List<Finding> threaded,
       List<Finding> unanchored,
       List<Finding> capSkipped,
       List<Finding> confidenceSkipped,
       int throttled,
       Map<String, Integer> refusals,
-      int outsidePullRequest) {}
+      int outsidePullRequest) {
+
+    /** How many findings opened a thread. */
+    int posted() {
+      return threaded.size();
+    }
+  }
 
   /**
    * Posts each finding as its own pull request review comment on the diff. Individual comments
@@ -943,9 +1093,9 @@ public class ReviewPublisher {
       String commitSha,
       ReviewResult result,
       DiffLineResolver lineResolver,
-      Optional<Long> pendingReviewId) {
-    var target = new CommentTarget(auth, owner, repo, prNumber, commitSha, pendingReviewId);
-    var posted = 0;
+      Optional<PendingReview> pendingReview) {
+    var target = new CommentTarget(auth, owner, repo, prNumber, commitSha, pendingReview);
+    var threaded = new ArrayList<Finding>();
     var unanchored = new ArrayList<Finding>();
     var capSkipped = new ArrayList<Finding>();
     var confidenceSkipped = new ArrayList<Finding>();
@@ -960,12 +1110,12 @@ public class ReviewPublisher {
       var finding = result.findings().get(i);
       if (!finding.postsInline()) {
         confidenceSkipped.add(finding);
-      } else if (posted >= maxComments) {
+      } else if (threaded.size() >= maxComments) {
         capSkipped.add(finding);
       } else {
         var delivery = postFindingComment(target, finding, i + 1, lineResolver);
         if (delivery.outcome() == Outcome.THREADED) {
-          posted++;
+          threaded.add(finding);
           continue;
         }
         unanchored.add(finding);
@@ -979,14 +1129,14 @@ public class ReviewPublisher {
     }
     logFindingsWithoutThread(
         target,
-        posted + unanchored.size(),
+        threaded.size() + unanchored.size(),
         unanchored.size(),
         outside,
         throttled,
         budgetSpent,
         refusals);
     return new InlineCommentResult(
-        posted,
+        List.copyOf(threaded),
         List.copyOf(unanchored),
         List.copyOf(capSkipped),
         List.copyOf(confidenceSkipped),
@@ -1094,7 +1244,13 @@ public class ReviewPublisher {
       String repo,
       int prNumber,
       String commitSha,
-      Optional<Long> pendingReviewId) {}
+      Optional<PendingReview> pendingReview) {}
+
+  /**
+   * The pending review a batched round attaches its threads to (#1434): the REST id that submits or
+   * deletes it, and the GraphQL node id {@code addPullRequestReviewThread} takes.
+   */
+  record PendingReview(long id, String nodeId) {}
 
   /**
    * Opens one finding's review thread, preferring the diff line it cites and falling back to a
@@ -1334,6 +1490,10 @@ public class ReviewPublisher {
   private record Rejection(String diagnostics, boolean throttled, String refusal) {
 
     static Rejection of(RuntimeException e) {
+      if (e instanceof GitHubGraphQLException graphQL) {
+        return new Rejection(
+            "graphql errors=" + graphQL.refusal(), graphQL.isThrottled(), graphQL.refusal());
+      }
       var apiError = apiError(e);
       return new Rejection(
           rejectionReason(e),
@@ -1394,16 +1554,10 @@ public class ReviewPublisher {
             + "\n\n"
             + suggestionFormatter.formatReviewComment(finding, false, findingId);
     try {
-      reviewClient.createPullRequestComment(
-          target.auth(),
-          ACCEPT,
-          target.owner(),
-          target.repo(),
-          target.prNumber(),
-          boundToPendingReview(
-              GitHubReviewClient.CreatePullRequestCommentRequest.onFile(
-                  target.commitSha(), body, finding.file()),
-              target));
+      createThread(
+          target,
+          GitHubReviewClient.CreatePullRequestCommentRequest.onFile(
+              target.commitSha(), body, finding.file()));
       return Delivery.THREADED;
     } catch (RuntimeException e) {
       var rejection = Rejection.of(e);
@@ -1465,22 +1619,16 @@ public class ReviewPublisher {
     String side = anchor.side().name();
     String startSide = startLine != null ? side : null;
     try {
-      reviewClient.createPullRequestComment(
-          target.auth(),
-          ACCEPT,
-          target.owner(),
-          target.repo(),
-          target.prNumber(),
-          boundToPendingReview(
-              new GitHubReviewClient.CreatePullRequestCommentRequest(
-                  target.commitSha(),
-                  commentBody(finding, findingId, anchor, includeSuggestion),
-                  finding.file(),
-                  endLine,
-                  side,
-                  startLine,
-                  startSide),
-              target));
+      createThread(
+          target,
+          new GitHubReviewClient.CreatePullRequestCommentRequest(
+              target.commitSha(),
+              commentBody(finding, findingId, anchor, includeSuggestion),
+              finding.file(),
+              endLine,
+              side,
+              startLine,
+              startSide));
       return Optional.empty();
     } catch (RuntimeException e) {
       var rejection = Rejection.of(e);
@@ -1510,7 +1658,7 @@ public class ReviewPublisher {
     try {
       for (var review : priorReviews) {
         // A review from a since-deleted account serializes as user:null.
-        if ("PENDING".equals(review.state())
+        if (REVIEW_PENDING.equals(review.state())
             && review.user() != null
             && botIdentity.matches(review.user().login())) {
           reviewClient.deletePendingReview(auth, ACCEPT, owner, repo, prNumber, review.id());
@@ -1524,40 +1672,27 @@ public class ReviewPublisher {
   }
 
   /**
-   * Whether this round will attempt at least one inline comment under {@link #postInlineComments}'s
-   * cap — the same gate used before opening a pending shell (#1434). Findings on a path the pull
-   * request does not change are skipped because {@link #postFindingComment} attempts no route for
-   * them (#925).
+   * Whether this round will attempt at least one inline comment — the gate before opening a pending
+   * review (#1434). Findings on a path the pull request does not change are skipped because {@link
+   * #postFindingComment} attempts no route for them (#925).
    */
   private boolean hasInlinePostCandidates(ReviewResult result, DiffLineResolver lineResolver) {
-    var slots = config.review().maxReviewComments();
-    for (var finding : result.findings()) {
-      if (!finding.postsInline()) {
-        continue;
-      }
-      if (!lineResolver.isChangedFile(finding.file())) {
-        continue;
-      }
-      if (slots <= 0) {
-        break;
-      }
-      return true;
-    }
-    return false;
+    return config.review().maxReviewComments() > 0
+        && result.findings().stream()
+            .anyMatch(f -> f.postsInline() && lineResolver.isChangedFile(f.file()));
   }
 
   /**
-   * Opens a pending review for this round, so inline comments can attach before one submit (#1434).
-   * Any stranded shell the bot already holds is dismissed first — GitHub allows only one pending
-   * review per user. Fails open to the legacy per-comment path when GitHub refuses the new shell.
+   * Opens a pending review for this round, so inline threads can attach before one submit (#1434).
+   * A stranded bot pending review was already deleted by {@link #dismissPendingBotReviews}, which
+   * the orchestrator runs over the reviews it listed before {@code postReview}. Fails open to the
+   * per-comment path when GitHub refuses the shell, or returns one with no node id to attach to.
    */
-  private Optional<Long> openPendingReview(
+  private Optional<PendingReview> openPendingReview(
       String auth, String owner, String repo, int prNumber, String commitSha) {
-    dismissStrandedBotPending(auth, owner, repo, prNumber);
+    GitHubReviewClient.ReviewResponse pending;
     try {
-      var pending =
-          reviewClient.createPendingReview(auth, ACCEPT, owner, repo, prNumber, commitSha);
-      return Optional.of(pending.id());
+      pending = reviewClient.createPendingReview(auth, ACCEPT, owner, repo, prNumber, commitSha);
     } catch (RuntimeException e) {
       Log.infof(
           e,
@@ -1567,94 +1702,31 @@ public class ReviewPublisher {
           prNumber);
       return Optional.empty();
     }
-  }
-
-  /** Drops a pending shell this round opened but no longer needs. */
-  private void clearPendingReview(
-      String auth, String owner, String repo, int prNumber, Optional<Long> pendingReviewId) {
-    pendingReviewId.ifPresent(id -> discardPendingReview(auth, owner, repo, prNumber, id));
+    if (pending.nodeId() == null || pending.nodeId().isBlank()) {
+      Log.warnf(
+          "Pending review %d on %s/%s #%d came back without a node id — discarding it and posting"
+              + " inline comments separately",
+          pending.id(), owner, repo, prNumber);
+      discardPendingReview(auth, owner, repo, prNumber, pending.id());
+      return Optional.empty();
+    }
+    return Optional.of(new PendingReview(pending.id(), pending.nodeId()));
   }
 
   static final String BATCHED_INLINE_BODY_SUFFIX = " — see inline comments on the diff.";
-
-  static final String BATCHED_SUBMIT_REFUSED_INLINE_NOTE =
-      " — GitHub refused the batched review submit; inline comments from this round were not"
-          + " published.";
 
   /**
    * Body for submitting a pending review. GitHub expects a non-empty body for {@code COMMENT} and
    * {@code REQUEST_CHANGES}; on a clean approval-with-findings round the prose sections can all be
    * empty even when inline threads landed (#1434).
    */
-  private static String batchedReviewSubmitBody(List<String> bodyParts, String event) {
+  static String batchedReviewSubmitBody(List<String> bodyParts, String event) {
     if (!bodyParts.isEmpty()) {
       return String.join("\n\n", bodyParts);
     }
     return EVENT_REQUEST_CHANGES.equals(event)
         ? "ThrillhouseBot requested changes" + BATCHED_INLINE_BODY_SUFFIX
         : "ThrillhouseBot review" + BATCHED_INLINE_BODY_SUFFIX;
-  }
-
-  /**
-   * Review body after a refused batched submit drops the pending shell and its inline threads, so
-   * the fallback review must not point readers at inline comments that no longer exist (#1434).
-   */
-  static String batchedSubmitRefusalFallbackBody(String body) {
-    if (body.contains(BATCHED_INLINE_BODY_SUFFIX)) {
-      return body.replace(BATCHED_INLINE_BODY_SUFFIX, BATCHED_SUBMIT_REFUSED_INLINE_NOTE);
-    }
-    return body
-        + "\n\n"
-        + "⚠️ GitHub refused the batched review submit; inline comments from this round were not"
-        + " published.";
-  }
-
-  /**
-   * Deletes any pending review the bot still owns on the pull request, so a failed submit from an
-   * earlier round cannot block the next batched round (#1434). Walks review pages explicitly so a
-   * stranded shell past GitHub's default page size is not missed.
-   */
-  private void dismissStrandedBotPending(String auth, String owner, String repo, int prNumber) {
-    try {
-      for (int page = 1; page <= GitHubReviewClient.MAX_REVIEW_PAGES; page++) {
-        var batch =
-            reviewClient.listReviewsPage(
-                auth, ACCEPT, owner, repo, prNumber, GitHubReviewClient.REVIEWS_PER_PAGE, page);
-        if (batch == null || batch.isEmpty()) {
-          break;
-        }
-        dismissStrandedBotPendingOnPage(auth, owner, repo, prNumber, batch);
-        if (batch.size() < GitHubReviewClient.REVIEWS_PER_PAGE) {
-          break;
-        }
-      }
-    } catch (RuntimeException e) {
-      Log.warnf(
-          e,
-          "Could not dismiss stranded pending reviews on %s/%s #%d — batched inline may fall back"
-              + " to per-comment posting",
-          owner,
-          repo,
-          prNumber);
-    }
-  }
-
-  private void dismissStrandedBotPendingOnPage(
-      String auth,
-      String owner,
-      String repo,
-      int prNumber,
-      List<GitHubReviewClient.ReviewResponse> batch) {
-    for (var review : batch) {
-      if ("PENDING".equals(review.state())
-          && review.user() != null
-          && botIdentity.matches(review.user().login())) {
-        reviewClient.deletePendingReview(auth, ACCEPT, owner, repo, prNumber, review.id());
-        Log.infof(
-            "Dismissed stranded pending review %d on %s/%s #%d before opening a new one",
-            review.id(), owner, repo, prNumber);
-      }
-    }
   }
 
   private void discardPendingReview(
@@ -1673,26 +1745,48 @@ public class ReviewPublisher {
     }
   }
 
-  private static GitHubReviewClient.CreatePullRequestCommentRequest boundToPendingReview(
-      GitHubReviewClient.CreatePullRequestCommentRequest request, CommentTarget target) {
-    return target.pendingReviewId().map(request::withPullRequestReviewId).orElse(request);
+  /**
+   * Opens one thread: on the round's pending review through GraphQL {@code
+   * addPullRequestReviewThread} when the round batches (#1434), otherwise as its own REST review
+   * comment.
+   */
+  private void createThread(
+      CommentTarget target, GitHubReviewClient.CreatePullRequestCommentRequest request) {
+    if (target.pendingReview().isPresent()) {
+      reviewThreadService.addPendingReviewThread(
+          target.auth(),
+          target.owner(),
+          target.repo(),
+          target.prNumber(),
+          target.pendingReview().get().nodeId(),
+          request);
+      return;
+    }
+    reviewClient.createPullRequestComment(
+        target.auth(), ACCEPT, target.owner(), target.repo(), target.prNumber(), request);
   }
 
+  /** What a batched round submits, and what its fallback lists when the submit fails (#1434). */
+  private record BatchedSubmit(
+      String body, String event, InlineCommentResult inline, ReviewResult result) {}
+
   /**
-   * Submits the pending review that holds this round's inline threads (#1434). A definite refusal
-   * falls back to submitting a body-only review the same way {@link #createReviewWithFallback}
-   * does, then drops the pending shell so a later round is not blocked by GitHub's one-pending
-   * limit — the shell's unsubmitted threads go with it.
+   * Submits the pending review that holds this round's inline threads (#1434).
+   *
+   * <p>When GitHub refuses the submit, or the submit fails ambiguously (a timeout, a 5xx) and a
+   * read of the review shows it still pending, the pending review is discarded first, so a later
+   * round is not blocked by GitHub's one-pending limit, and a separate review then lists every
+   * finding whose thread went with it, as the no-inline path lists the findings it could not
+   * thread. An ambiguous failure after which the review reads as submitted is a success. One whose
+   * state cannot be read throws {@link ReviewPostException}, since listing the findings again could
+   * duplicate a review that landed.
    */
   private void submitPendingReviewWithFallback(
-      String auth,
-      String owner,
-      String repo,
-      int prNumber,
-      long reviewId,
-      String commitSha,
-      String body,
-      String event) {
+      PostReviewRequest post, PendingReview pending, BatchedSubmit submit) {
+    var auth = post.auth();
+    var owner = post.owner();
+    var repo = post.repo();
+    var prNumber = post.prNumber();
     try {
       reviewClient.submitReview(
           auth,
@@ -1700,28 +1794,68 @@ public class ReviewPublisher {
           owner,
           repo,
           prNumber,
-          reviewId,
-          new GitHubReviewClient.SubmitReviewRequest(body, event));
+          pending.id(),
+          new GitHubReviewClient.SubmitReviewRequest(submit.body(), submit.event()));
       return;
     } catch (RuntimeException e) {
       logReviewRejection(e, owner, repo, prNumber);
-      if (!isRefusal(e)) {
-        throw new ReviewPostException(
-            "GitHub review submit rejected for " + owner + "/" + repo + " #" + prNumber, e);
+      if (!isRefusal(e) && submittedDespite(post, pending, e)) {
+        return;
       }
     }
     Log.warnf(
-        "Pending review %d on %s/%s #%d could not be submitted — posting the body as a separate"
-            + " review",
-        reviewId, owner, repo, prNumber);
+        "Pending review %d on %s/%s #%d could not be submitted — discarding it and listing its"
+            + " findings in a separate review",
+        pending.id(), owner, repo, prNumber);
+    discardPendingReview(auth, owner, repo, prNumber, pending.id());
     createReviewWithFallback(
         auth,
         owner,
         repo,
         prNumber,
         new GitHubReviewClient.CreateReviewRequest(
-            commitSha, batchedSubmitRefusalFallbackBody(body), event, List.of()));
-    discardPendingReview(auth, owner, repo, prNumber, reviewId);
+            post.commitSha(),
+            String.join(
+                "\n\n",
+                listingBodyParts(
+                    submit.inline().threaded(), submit.inline(), submit.result(), post)),
+            submit.event(),
+            List.of()));
+  }
+
+  /**
+   * After an ambiguous submit failure, whether the review was submitted anyway: GitHub reads it as
+   * anything but {@code PENDING}. A read that fails too throws {@link ReviewPostException}.
+   */
+  private boolean submittedDespite(
+      PostReviewRequest post, PendingReview pending, RuntimeException submitFailure) {
+    GitHubReviewClient.ReviewResponse review;
+    try {
+      review =
+          reviewClient.getReview(
+              post.auth(), ACCEPT, post.owner(), post.repo(), post.prNumber(), pending.id());
+    } catch (RuntimeException readFailure) {
+      var failure =
+          new ReviewPostException(
+              "GitHub review submit failed for "
+                  + post.owner()
+                  + "/"
+                  + post.repo()
+                  + " #"
+                  + post.prNumber()
+                  + " and the review's state could not be read",
+              submitFailure);
+      failure.addSuppressed(readFailure);
+      throw failure;
+    }
+    var landed = review != null && !REVIEW_PENDING.equals(review.state());
+    if (landed) {
+      Log.infof(
+          "Pending review %d on %s/%s #%d reads as %s after the submit failed — treating it as"
+              + " submitted",
+          pending.id(), post.owner(), post.repo(), post.prNumber(), review.state());
+    }
+    return landed;
   }
 
   /** Lead-in for a review body preserved as an issue comment after GitHub refused it (#704). */

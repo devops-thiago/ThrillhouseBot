@@ -4,17 +4,45 @@ All notable changes to ThrillhouseBot.
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-11-25
+
+Follow-up rounds re-check older findings whenever a fix could stand and stop closing the same
+finding twice, a webhook redelivered after a restart is no longer reviewed again, and `/review`
+on a closed or merged pull request is answered with a notice. The first start runs migrations V4,
+which adds the `webhook_delivery` table, and V5, which adds the `failedmodelcalls` column to
+`reviewsession`. `OTEL_RESOURCE_ATTRIBUTES` is new, and the two new review options,
+`REVIEW_AGENT_PROMPT_ENABLED` and `REVIEW_BATCHED_INLINE_REVIEW_ENABLED`, are off by default.
+There are no new GitHub App permissions.
+
 ### Added
 
-- **Opt-in collapsed agent prompt on inline findings** (#1432): when
-  `REVIEW_AGENT_PROMPT_ENABLED` is on, each inline comment gains a `<details>` block with scope,
-  problem summary and fix guidance derived from the finding already posted — no extra model call.
-- **Opt-in batched inline review** (#1434): when `REVIEW_BATCHED_INLINE_REVIEW_ENABLED` is on, a
-  round opens one pending pull request review, attaches each inline thread to it, and submits it
-  once instead of leaving one empty review per finding. The shell opens only when inline posting
-  is attempted on a changed file, is cleared when nothing lands inline, dismisses any stranded
-  bot-owned pending review before a new one, and is dropped after a refused submit falls back to
-  a body-only review.
+- **A collapsed agent prompt on inline findings** (#1432): with `REVIEW_AGENT_PROMPT_ENABLED`
+  (default off), each inline finding comment ends with a collapsed "Agent prompt" block giving the
+  file, line, problem and suggested fix, built from the finding already posted. It makes no model
+  call, and file-level comments do not get it.
+- **Inline findings in one pending review** (#1434): with `REVIEW_BATCHED_INLINE_REVIEW_ENABLED`
+  (default off), a round opens one pending pull request review, attaches each inline comment to
+  it and submits it once, instead of posting each comment on its own. A round with nothing to
+  post inline opens none. A pending review the bot left behind is deleted before a new one is
+  opened. When GitHub refuses the submit, or it fails without an answer and the review is still
+  pending, the round deletes the pending review and posts a review that lists its findings by
+  file and line. Threads are attached with the GraphQL `addPullRequestReviewThread` mutation, and
+  a reply in a finding's thread waits for the pending review to close, for at most two minutes.
+- **The summary comment carries a machine-readable list of the open findings** (#1433): a hidden
+  `<!-- thrillhousebot:findings v=1 [...] -->` line after the summary's markers lists each open
+  finding's key, file, line, risk, confidence, whether the review opens an inline thread for it
+  (it posts inline, on a file the pull request changes, within the comment cap), whether it has a
+  suggestion, and whether it was carried from an earlier review. It holds no model-written text,
+  lists at most 100 entries or 16,000 characters (`omitted=N` counts the rest), and is `[]` when
+  nothing is open.
+
+### Changed
+
+- Repository permission checks for manual reviews, feedback capture, learnings and dashboard
+  access now read collaborator permission and organization membership through the extension's
+  installation-scoped GitHub client (`GitHubClientProvider`) instead of
+  `GitHubInstallationClient` and `GitHubAuthClient`. `RepositoryPermissions.canAct` takes a
+  `GHPermissionType`. (#1428)
 
 ### Fixed
 
@@ -32,6 +60,17 @@ All notable changes to ThrillhouseBot.
   `process.env`, `Environment.GetEnvironmentVariable`, `env::var`, …), then entry-point files
   (`main`, `Program`, `app`, `index`, `server`, `startup`). The fetch budget is unchanged, and the
   new tiers only use what the named files leave.
+- **A GitHub rate limit no longer holds a review open until it resets**: reads made through the
+  GitHub App client (linked issues, repository instructions and settings, stack manifests, and
+  from this release permission and membership checks) used the client library's default, which
+  sleeps until the limit resets, up to an hour. They now fail at once, and each caller goes on
+  without what it could not read, as it does for any other failed read.
+- **A source file whose name ends in "test" or "spec" is no longer taken for a test**: the config
+  key lookup skipped any file whose name contained `test.` or `spec.`, so `latest.go`,
+  `contest.py` or `attest.go` was never read for key definitions. A name now counts as a test only
+  when `test`, `tests`, `spec` or `specs` is a word of its own before the extension
+  (`foo_test.go`, `config.spec.ts`, `AppConfigTest.java`, `FooSpecs.swift`), or when it is
+  `conftest.py`.
 - **A carried-gap label after a possessive or "the" no longer reads "the a previously listed
   gap"** (#1398): the summary rewrote an echoed label such as "G1" to "a previously listed gap"
   wherever it stood, so "the earlier summary's G1" became "the earlier summary's a previously
@@ -88,6 +127,11 @@ All notable changes to ThrillhouseBot.
   counters such as `thrillhouse.reviews.total` overwrote each other. The id is `HOSTNAME`, or a
   random id generated at startup when it is unset, and `OTEL_RESOURCE_ATTRIBUTES` (new) can set it
   or add other resource attributes.
+
+### Dependencies
+
+- Bumped the Maven minor and patch group, holding back OpenTelemetry (#1418), the actions group
+  (#1416), the frontend npm dependencies (#1414) and the website docs dependencies (#1413)
 
 ## [0.9.2] - 2026-11-16
 

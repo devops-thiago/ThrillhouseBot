@@ -73,7 +73,7 @@ Attackers considered:
 | Bot to model endpoint | Prompts with untrusted PR text out, model text in | Untrusted text fenced in the prompt, model output parsed as data and verified before posting |
 | Browser to dashboard | OAuth login, session cookie, API calls | GitHub OAuth with a `state` check, per-request access checks |
 | Bot to notification webhook | Review outcome payload | HTTPS required by default, optional HMAC signature |
-| Bot to PostgreSQL | Review sessions, feedback, learnings | Hibernate with bound parameters, credentials from the environment |
+| Bot to PostgreSQL | Review sessions, feedback, learnings, finding state, webhook delivery ids | Hibernate with bound parameters, credentials from the environment |
 
 ## Secure design principles
 
@@ -130,7 +130,7 @@ manager and rotated with a restart, without rebuilding.
 |----------|----------------|-------|
 | Forged webhooks (CWE-345) and timing attacks on the signature (CWE-208) | HMAC-SHA256 over the raw body, compared with `MessageDigest.isEqual` | the Quarkiverse GitHub App extension's route (`quarkus.github-app.webhook-secret`) |
 | Replayed deliveries | An `X-GitHub-Delivery` ID seen within `WEBHOOK_DEDUP_TTL` is dropped, across restarts and instances: the ids are stored in the database, and the first instance to insert one handles the delivery. A database failure falls back to the in-memory check. The header is not covered by the signature, so this stops redeliveries, not a replay of a signed body under a new ID | `webhook/WebhookDeduplicator`, `webhook/SeenDeliveries` |
-| Prompt injection from PR content | All model-visible external text is wrapped in fences built from a per-call random value and labelled as untrusted data; findings go through a second verification call | `review/PromptTemplateEscaper`, AGENTS.md "Untrusted data" |
+| Prompt injection from PR content | All model-visible external text is wrapped in fences built from a per-call random value and labelled as untrusted data; findings go through a second verification call. The opt-in agent-prompt block (`REVIEW_AGENT_PROMPT_ENABLED`, off by default) repeats model text derived from the PR; treat it as untrusted input to any agent it is pasted into | `review/PromptTemplateEscaper`, AGENTS.md "Untrusted data" |
 | Log injection (CWE-117) and secrets in logs (CWE-532) | Model and GitHub text is flattened with `LogSafe.oneLine`, enforced by `LogSafeInvariantTest`; the security scan never repeats a matched secret, and a notification URL is logged as scheme, host and port only | `LogSafe`, `review/SecurityScan`, `notification/` |
 | CSRF on login (CWE-352) | Random OAuth `state` in an `HttpOnly`, `Secure`, `SameSite=Lax` cookie, checked on callback | `dashboard/AuthResource` |
 | Guessable session IDs (CWE-330) | 256-bit IDs from `SecureRandom`, 8-hour expiry | `dashboard/DashboardSessionStore` |
