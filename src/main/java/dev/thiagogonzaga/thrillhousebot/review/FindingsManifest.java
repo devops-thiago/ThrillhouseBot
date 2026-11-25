@@ -31,7 +31,8 @@ import java.util.function.Predicate;
  * or suggestion, so nothing model-written enters it.
  *
  * <p>Each entry holds {@code key} ({@link SuggestionFormatter#findingKey}, the one in the inline
- * marker), {@code file}, {@code line}, {@code risk} and {@code confidence} (lower case), {@code
+ * marker: eight hex digits of a SHA-256 over file, line and title, so the title itself never enters
+ * the line), {@code file}, {@code line}, {@code risk} and {@code confidence} (lower case), {@code
  * status} (always {@code open}: the set holds nothing else), {@code thread}, {@code hasSuggestion}
  * and {@code carried} (open since an earlier review). Entries run most severe first.
  *
