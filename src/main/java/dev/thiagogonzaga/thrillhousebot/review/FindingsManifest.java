@@ -69,7 +69,7 @@ final class FindingsManifest {
   static final int MAX_ARRAY_CHARS = 16_000;
 
   private static final Comparator<Finding> MOST_SEVERE_FIRST =
-      Comparator.comparing((Finding f) -> riskOf(f)).thenComparing(Finding::confidence);
+      Comparator.comparing(FindingsManifest::riskOf).thenComparing(Finding::confidence);
 
   private FindingsManifest() {}
 
