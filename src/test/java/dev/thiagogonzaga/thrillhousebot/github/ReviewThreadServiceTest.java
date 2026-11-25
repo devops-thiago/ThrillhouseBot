@@ -317,11 +317,11 @@ class ReviewThreadServiceTest {
   void addPendingReviewThreadRaisesTheThrottleOnceItsRetriesRunOut() throws Exception {
     when(graphQLClient.executeOnce(anyString(), any())).thenReturn(mapper.readTree(THROTTLED));
 
+    var comment = lineComment();
     var failure =
         assertThrows(
             GitHubGraphQLException.class,
-            () ->
-                service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", lineComment()));
+            () -> service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", comment));
 
     assertTrue(failure.isThrottled());
     assertEquals("You have exceeded a secondary rate limit", failure.refusal());
@@ -336,9 +336,10 @@ class ReviewThreadServiceTest {
             mapper.readTree(
                 "{\"errors\":[{\"type\":\"UNPROCESSABLE\",\"message\":\"bad line\"}]}"));
 
+    var comment = lineComment();
     assertThrows(
         GitHubGraphQLException.class,
-        () -> service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", lineComment()));
+        () -> service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", comment));
 
     assertTrue(waits.isEmpty());
     verify(graphQLClient).executeOnce(anyString(), any());
@@ -349,11 +350,11 @@ class ReviewThreadServiceTest {
     var refused = new WebApplicationException(403);
     when(graphQLClient.executeOnce(anyString(), any())).thenThrow(refused);
 
+    var comment = lineComment();
     var failure =
         assertThrows(
             WebApplicationException.class,
-            () ->
-                service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", lineComment()));
+            () -> service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", comment));
 
     assertSame(refused, failure);
   }
