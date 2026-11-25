@@ -136,14 +136,15 @@ public class ReviewThreadService {
 
   /**
    * Opens a thread on the pending review {@code reviewNodeId}, from the same comment the REST route
-   * would post, and returns the new thread's node id. The write is paced, backed off on a throttle
-   * and counted as a dropped post exactly as {@link GitHubReviewClient#createPullRequestComment}
-   * is, so a finding's routes keep their one-delivery accounting ({@link
-   * GitHubReviewClient#asOneComment}). That holds for a throttle GitHub reports in the {@code
-   * errors} of an HTTP 200 as well as for one it answers with a 403 or 429: the errors are read
-   * inside the retry, and a throttle among them is raised there as the 429 {@link GitHubWriteRetry}
-   * backs off and {@link GitHubLostWrites} counts. A refusal is never counted as a delivered
-   * thread.
+   * would post, and returns the new thread's node id. The write is paced ({@link
+   * GitHubWriteRetry#call} takes a {@link GitHubWritePacer} slot before each attempt), backed off
+   * on a throttle and counted as a dropped post exactly as {@link
+   * GitHubReviewClient#createPullRequestComment} is, so a finding's routes keep their one-delivery
+   * accounting ({@link GitHubReviewClient#asOneComment}). That holds for a throttle GitHub reports
+   * in the {@code errors} of an HTTP 200 as well as for one it answers with a 403 or 429: the
+   * errors are read inside the retry, and a throttle among them is raised there as the 429 {@link
+   * GitHubWriteRetry} backs off and {@link GitHubLostWrites} counts. A refusal is never counted as
+   * a delivered thread.
    *
    * @throws GitHubGraphQLException when GitHub answers with {@code errors} and no thread, once any
    *     throttle among them has outlasted its retries
