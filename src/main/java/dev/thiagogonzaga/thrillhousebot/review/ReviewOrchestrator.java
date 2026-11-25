@@ -294,10 +294,9 @@ public class ReviewOrchestrator {
       String auth,
       ReviewRequest req,
       ReviewResult result,
-      DiffLineResolver lineResolver,
+      ReviewContextLoader.ReviewContext ctx,
       boolean moved) {
-    return publishSummaryBestEffort(auth, req, result, lineResolver)
-        && (moved || req.forceSummary());
+    return publishSummaryBestEffort(auth, req, result, ctx) && (moved || req.forceSummary());
   }
 
   /** The follow-up delta, or {@code ""} on a round that moved no finding (#1319). */
@@ -469,7 +468,7 @@ public class ReviewOrchestrator {
       // summary nor the delta; the summary may still be edited in place, which notifies nobody.
       var findingRound = findingStates.prepare(req, ctx, result);
       var moved = findingRound.moved(result);
-      boolean summaryPosted = summaryStandsIn(auth, req, result, lineResolver, moved);
+      boolean summaryPosted = summaryStandsIn(auth, req, result, ctx, moved);
       // The optional delta enriches the review, never a second notification beside it.
       var followUpDelta = movedDelta(moved, result, summaryPosted, req, previousFindings);
       reviewPublisher.dismissPendingBotReviews(
@@ -707,9 +706,9 @@ public class ReviewOrchestrator {
    *     PR.
    */
   private boolean publishSummaryBestEffort(
-      String auth, ReviewRequest req, ReviewResult result, DiffLineResolver lineResolver) {
+      String auth, ReviewRequest req, ReviewResult result, ReviewContextLoader.ReviewContext ctx) {
     try {
-      return reviewPublisher.publishSummary(auth, req, result, lineResolver);
+      return reviewPublisher.publishSummary(auth, req, result, ctx.lineResolver());
     } catch (RuntimeException e) {
       Log.warnf(
           e,

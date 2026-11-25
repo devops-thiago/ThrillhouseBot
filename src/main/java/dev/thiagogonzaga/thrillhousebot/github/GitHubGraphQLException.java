@@ -16,7 +16,10 @@
 package dev.thiagogonzaga.thrillhousebot.github;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import dev.thiagogonzaga.thrillhousebot.LogSafe;
+import jakarta.ws.rs.WebApplicationException;
+import jakarta.ws.rs.core.Response;
 import java.util.LinkedHashSet;
 import java.util.regex.Pattern;
 
@@ -36,6 +39,8 @@ public final class GitHubGraphQLException extends RuntimeException {
   /** GitHub's rate-limit wording, as {@link GitHubApiError} reads it on a REST response. */
   private static final Pattern THROTTLE_WORDING =
       Pattern.compile("(?i)secondary rate limit|rate limit exceeded|submitted too quickly");
+
+  private static final int TOO_MANY_REQUESTS = 429;
 
   private final String refusal;
   private final boolean throttled;
@@ -77,5 +82,19 @@ public final class GitHubGraphQLException extends RuntimeException {
   /** Whether GitHub said it was rate limiting the call rather than refusing it. */
   public boolean isThrottled() {
     return throttled;
+  }
+
+  /**
+   * This refusal as the HTTP failure the REST write path raises for a throttle: a 429 whose body
+   * carries GitHub's words as its {@code message}, with this exception as its cause. {@link
+   * GitHubWriteRetry} backs it off and {@link GitHubLostWrites} counts it exactly as it does a
+   * throttled REST write.
+   */
+  WebApplicationException asHttpThrottle() {
+    return new WebApplicationException(
+        this,
+        Response.status(TOO_MANY_REQUESTS)
+            .entity(JsonNodeFactory.instance.objectNode().put("message", refusal).toString())
+            .build());
   }
 }

@@ -18,6 +18,7 @@ package dev.thiagogonzaga.thrillhousebot.github;
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import jakarta.ws.rs.WebApplicationException;
 import java.util.HashMap;
 import java.util.Map;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -77,10 +78,17 @@ public class ReviewThreadService {
   public record ThreadRef(String id, boolean resolved) {}
 
   private final GitHubGraphQLClient graphQLClient;
+  private final GitHubWriteRetry writeRetry;
 
   @Inject
   public ReviewThreadService(@RestClient GitHubGraphQLClient graphQLClient) {
+    this(graphQLClient, GitHubWriteRetry.DEFAULT);
+  }
+
+  /** The same, backing off with {@code writeRetry}; the seam the tests run the backoff through. */
+  ReviewThreadService(GitHubGraphQLClient graphQLClient, GitHubWriteRetry writeRetry) {
     this.graphQLClient = graphQLClient;
+    this.writeRetry = writeRetry;
   }
 
   /**
@@ -131,9 +139,14 @@ public class ReviewThreadService {
    * would post, and returns the new thread's node id. The write is paced, backed off on a throttle
    * and counted as a dropped post exactly as {@link GitHubReviewClient#createPullRequestComment}
    * is, so a finding's routes keep their one-delivery accounting ({@link
-   * GitHubReviewClient#asOneComment}).
+   * GitHubReviewClient#asOneComment}). That holds for a throttle GitHub reports in the {@code
+   * errors} of an HTTP 200 as well as for one it answers with a 403 or 429: the errors are read
+   * inside the retry, and a throttle among them is raised there as the 429 {@link GitHubWriteRetry}
+   * backs off and {@link GitHubLostWrites} counts. A refusal is never counted as a delivered
+   * thread.
    *
-   * @throws GitHubGraphQLException when GitHub answers with {@code errors} and no thread
+   * @throws GitHubGraphQLException when GitHub answers with {@code errors} and no thread, once any
+   *     throttle among them has outlasted its retries
    */
   public String addPendingReviewThread(
       String auth,
@@ -155,20 +168,34 @@ public class ReviewThreadService {
       putPresent(variables, "startSide", comment.startSide());
     }
     var request = new GitHubGraphQLClient.GraphQLRequest(ADD_THREAD_MUTATION, variables);
-    var response =
-        GitHubLostWrites.SHARED.recording(
-            new GitHubLostWrites.Target(owner, repo, prNumber),
-            () ->
-                GitHubWriteRetry.DEFAULT.call(
-                    "a pending review thread on " + owner + "/" + repo + " #" + prNumber,
-                    auth,
-                    credential -> graphQLClient.executeOnce(credential, request)));
+    try {
+      return GitHubLostWrites.SHARED.recording(
+          new GitHubLostWrites.Target(owner, repo, prNumber),
+          () ->
+              writeRetry.call(
+                  "a pending review thread on " + owner + "/" + repo + " #" + prNumber,
+                  auth,
+                  credential -> createdThreadId(graphQLClient.executeOnce(credential, request))));
+    } catch (WebApplicationException e) {
+      if (e.getCause() instanceof GitHubGraphQLException refusal) {
+        throw refusal;
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * The thread the mutation opened, or GitHub's refusal: as the throttle {@link GitHubWriteRetry}
+   * repeats when its errors say GitHub is rate limiting, and as itself otherwise.
+   */
+  private static String createdThreadId(JsonNode response) {
     var created =
         response.path("data").path("addPullRequestReviewThread").path("thread").path("id");
     if (created.isTextual()) {
       return created.asText();
     }
-    throw GitHubGraphQLException.from(response.path("errors"));
+    var refusal = GitHubGraphQLException.from(response.path("errors"));
+    throw refusal.isThrottled() ? refusal.asHttpThrottle() : refusal;
   }
 
   private static void putPresent(Map<String, Object> variables, String name, Object value) {

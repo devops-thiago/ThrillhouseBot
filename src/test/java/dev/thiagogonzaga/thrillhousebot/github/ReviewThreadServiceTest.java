@@ -21,10 +21,15 @@ import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.ws.rs.WebApplicationException;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -35,7 +40,16 @@ class ReviewThreadServiceTest {
 
   private final ObjectMapper mapper = new ObjectMapper();
 
-  @InjectMocks private ReviewThreadService service;
+  private final List<Duration> waits = new ArrayList<>();
+
+  private ReviewThreadService service;
+
+  @BeforeEach
+  void setUp() {
+    service =
+        new ReviewThreadService(
+            graphQLClient, new GitHubWriteRetry(waits::add, () -> Instant.EPOCH));
+  }
 
   private void stubResponse(String json) throws JsonProcessingException {
     when(graphQLClient.execute(anyString(), any())).thenReturn(mapper.readTree(json));
@@ -271,5 +285,76 @@ class ReviewThreadServiceTest {
 
     assertEquals("Line could not be resolved", failure.refusal());
     assertFalse(failure.isThrottled());
+  }
+
+  private static final String THROTTLED =
+      "{\"data\":{\"addPullRequestReviewThread\":null},"
+          + "\"errors\":[{\"type\":\"RATE_LIMITED\","
+          + "\"message\":\"You have exceeded a secondary rate limit\"}]}";
+
+  private static final String OPENED =
+      "{\"data\":{\"addPullRequestReviewThread\":{\"thread\":{\"id\":\"PRRT_1\"}}}}";
+
+  private static GitHubReviewClient.CreatePullRequestCommentRequest lineComment() {
+    return new GitHubReviewClient.CreatePullRequestCommentRequest(
+        "sha", "body", "src/A.java", 12, "RIGHT", null, null);
+  }
+
+  @Test
+  void addPendingReviewThreadBacksOffAThrottleReportedInTheErrorsAndRepeatsTheWrite()
+      throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any()))
+        .thenReturn(mapper.readTree(THROTTLED), mapper.readTree(OPENED));
+
+    var thread = service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", lineComment());
+
+    assertEquals("PRRT_1", thread);
+    assertEquals(List.of(GitHubApiError.FALLBACK_DELAY), waits);
+    verify(graphQLClient, times(2)).executeOnce(anyString(), any());
+  }
+
+  @Test
+  void addPendingReviewThreadRaisesTheThrottleOnceItsRetriesRunOut() throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any())).thenReturn(mapper.readTree(THROTTLED));
+
+    var failure =
+        assertThrows(
+            GitHubGraphQLException.class,
+            () ->
+                service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", lineComment()));
+
+    assertTrue(failure.isThrottled());
+    assertEquals("You have exceeded a secondary rate limit", failure.refusal());
+    assertEquals(GitHubWriteRetry.MAX_ATTEMPTS - 1, waits.size());
+    verify(graphQLClient, times(GitHubWriteRetry.MAX_ATTEMPTS)).executeOnce(anyString(), any());
+  }
+
+  @Test
+  void addPendingReviewThreadDoesNotRepeatARefusal() throws Exception {
+    when(graphQLClient.executeOnce(anyString(), any()))
+        .thenReturn(
+            mapper.readTree(
+                "{\"errors\":[{\"type\":\"UNPROCESSABLE\",\"message\":\"bad line\"}]}"));
+
+    assertThrows(
+        GitHubGraphQLException.class,
+        () -> service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", lineComment()));
+
+    assertTrue(waits.isEmpty());
+    verify(graphQLClient).executeOnce(anyString(), any());
+  }
+
+  @Test
+  void addPendingReviewThreadPassesOnAnHttpFailureUnchanged() {
+    var refused = new WebApplicationException(403);
+    when(graphQLClient.executeOnce(anyString(), any())).thenThrow(refused);
+
+    var failure =
+        assertThrows(
+            WebApplicationException.class,
+            () ->
+                service.addPendingReviewThread("auth", "owner", "repo", 7, "PRR_9", lineComment()));
+
+    assertSame(refused, failure);
   }
 }

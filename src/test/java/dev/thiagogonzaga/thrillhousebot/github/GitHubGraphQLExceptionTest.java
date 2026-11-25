@@ -17,6 +17,7 @@ package dev.thiagogonzaga.thrillhousebot.github;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -66,5 +67,17 @@ class GitHubGraphQLExceptionTest {
 
     assertEquals(GitHubGraphQLException.MAX_REFUSAL_CHARS + 1, failure.refusal().length());
     assertTrue(failure.refusal().endsWith("…"));
+  }
+
+  @Test
+  void aThrottleIsRaisedAsTheTooManyRequestsTheWritePathBacksOff() throws Exception {
+    var throttle = from("[{\"type\":\"RATE_LIMITED\",\"message\":\"slow down\"}]");
+
+    var http = throttle.asHttpThrottle();
+
+    assertEquals(429, http.getResponse().getStatus());
+    assertSame(throttle, http.getCause());
+    assertTrue(GitHubApiError.of(http).orElseThrow().isThrottled());
+    assertEquals("slow down", GitHubApiError.of(http).orElseThrow().refusal());
   }
 }
