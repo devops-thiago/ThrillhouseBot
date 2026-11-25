@@ -439,9 +439,10 @@ class BatchedInlineReviewTest {
   }
 
   @Test
-  void anAmbiguousSubmitFailureWithAnUnreadableReviewIsTreatedAsPending() {
+  void anAmbiguousSubmitFailureWhoseReviewReadHasNoBodyIsTreatedAsPending() {
     when(reviewClient.submitReview(any(), any(), any(), any(), anyInt(), anyLong(), any()))
         .thenThrow(new RuntimeException("timeout"));
+    when(reviewClient.getReview(any(), any(), any(), any(), eq(7), eq(99L))).thenReturn(null);
 
     post(result(ReviewState.REQUEST_CHANGES, finding(1, "Bug")));
 
