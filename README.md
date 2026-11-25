@@ -639,7 +639,8 @@ part of the pull request and it is within the per-run comment cap. It is
 `false` for a finding listed under "Things to double-check", on a file outside
 the pull request, or past the cap. The summary is written before the review
 posts, so a thread GitHub then refuses still reads `true`; the review body lists
-that finding. An empty list is `[]`. The list stops at 100 entries or 16,000
+that finding. The cap counts threads that landed, so after a refusal a finding
+past the cap can still get a thread while it reads `false`. An empty list is `[]`. The list stops at 100 entries or 16,000
 characters, and `omitted=N` after `v=1` counts the entries left out. It contains no model-written text.
 
 The risk counts, Key Findings and "Things to double-check" cover the round's

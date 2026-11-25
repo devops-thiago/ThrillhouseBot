@@ -218,7 +218,9 @@ public class ReviewPublisher {
    * SuggestionFormatter#findingKey}, so a re-raised finding the summary lists at an earlier
    * severity still matches. An entry carried from an earlier round, which this round does not post,
    * keeps {@link Finding#postsInline}. The rule cannot know which posts GitHub will refuse, so
-   * {@code thread} says a thread is expected, not that it exists.
+   * {@code thread} says a thread is expected, not that it exists, and it errs both ways: a refused
+   * post reads {@code true}, and because the poster counts the cap in threads that landed, a
+   * refusal lets a finding past the cap here take the freed slot while it reads {@code false}.
    */
   private Predicate<Finding> threadRule(ReviewResult round, DiffLineResolver lineResolver) {
     if (lineResolver == null) {
