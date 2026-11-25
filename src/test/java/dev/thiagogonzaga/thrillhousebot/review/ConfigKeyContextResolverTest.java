@@ -441,6 +441,52 @@ class ConfigKeyContextResolverTest {
               List.of(added, context, removed, noPatch, header)));
     }
 
+    /** A line that is only a comment names an environment read without making one. */
+    @ParameterizedTest
+    @ValueSource(
+        strings = {
+          "+// reads RATE_LIMIT_MAX via os.Getenv in main()",
+          "+ *",
+          "+  # falls back to os.environ when unset",
+          "+ * process.env.APP is read by the loader",
+          "+/* switch to process.env when we containerize */",
+          "+-- ENV[\"X\"] is set by the job",
+          "+<!-- import.meta.env.VITE_X -->",
+          " // context comment: os.Getenv(\"X\")"
+        })
+    void shouldNotTakeACommentNamingAnEnvironmentReadForOne(String line) {
+      var file = new FileDiff("a.go", "modified", 1, 0, 1, "@@ -1 +1 @@\n" + line);
+
+      assertTrue(ConfigKeyContextResolver.environmentReaders(List.of(file)).isEmpty());
+    }
+
+    /** Lines that open like a comment in one language but are code in another still count. */
+    @ParameterizedTest
+    @ValueSource(
+        strings = {
+          "+#define LIMIT getenv(\"LIMIT\")",
+          "+# if defined(X)\n+#  define Y getenv(\"Y\")",
+          "+#[cfg(test)] fn v() -> String { env::var(\"X\").unwrap() }",
+          "+*limit = getenv(\"LIMIT\");"
+        })
+    void shouldKeepCodeThatOpensLikeAComment(String lines) {
+      var file = new FileDiff("a.c", "modified", 1, 0, 1, "@@ -1 +1 @@\n" + lines);
+
+      assertEquals(
+          java.util.Set.of("a.c"), ConfigKeyContextResolver.environmentReaders(List.of(file)));
+    }
+
+    /** Code before a trailing comment still reads the environment. */
+    @Test
+    void shouldKeepAReadThatATrailingCommentFollows() {
+      var file =
+          new FileDiff(
+              "a.go", "modified", 1, 0, 1, "@@ -1 +1 @@\n+v := os.Getenv(\"X\") // the limit");
+
+      assertEquals(
+          java.util.Set.of("a.go"), ConfigKeyContextResolver.environmentReaders(List.of(file)));
+    }
+
     /** Swift, Scala and PHP read the environment in their own idioms. */
     @Test
     void shouldFindTheEnvironmentReadsOfSwiftScalaAndPhp() {
