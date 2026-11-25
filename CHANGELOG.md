@@ -127,6 +127,12 @@ There are no new GitHub App permissions.
   counters such as `thrillhouse.reviews.total` overwrote each other. The id is `HOSTNAME`, or a
   random id generated at startup when it is unset, and `OTEL_RESOURCE_ATTRIBUTES` (new) can set it
   or add other resource attributes.
+- **The DCO check accepts a Dependabot commit merged into a release branch unsquashed**: when a
+  Dependabot pull request was merged with a merge commit, its own commit reached the release pull
+  request as it was, and the check failed it there because a person, not the bot, opened the
+  release pull request. The commit now passes when it is GitHub-verified as the bot's, sits in the
+  head of exactly one merged pull request in this repository that the same bot opened, and is not
+  that pull request's squash. Squash merges keep the existing checks.
 
 ### Dependencies
 

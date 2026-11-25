@@ -338,3 +338,74 @@ for (const file of ['other.txt', 'docs/CHANGELOG.md', 'changelog.md']) test(`a l
 test('unknown reconstruction policies are rejected', () => {
   assert.throws(() => new Git().mergeTree(base, source, 'all-files-union'), /Unknown merge proof policy/);
 });
+
+// A bot's own commit merged into a release branch with a merge commit, checked again on a
+// human-opened release PR (#1466: dependabot's 8948a8cb from #1416).
+const dependabot = { id: 49699333, login: 'dependabot[bot]', type: 'Bot' };
+const botCommit = sha(30);
+function botSourceFixture() {
+  const details = { email: '49699333+dependabot[bot]@users.noreply.github.com', signoffs: ['dependabot[bot] <support@github.com>'], remediation: [] };
+  const records = new Map([[botCommit, metadata(botCommit, dependabot)]]);
+  const botPull = { number: 7, merged_at: '2026-11-21T00:00:00Z', merge_commit_sha: sha(31), base: { repo: { full_name: repo } }, head: { sha: sha(32) }, user: dependabot };
+  const releasePull = { number: 9, merged_at: null, merge_commit_sha: null, base: { repo: { full_name: repo } }, head: { sha: botCommit }, user: owner };
+  const pulls = [botPull, releasePull];
+  const fetched = [];
+  const git = {
+    allRange: () => [botCommit], range: () => [botCommit], details: () => structuredClone(details),
+    parents: () => [sha(10)], ancestor: (s, head) => s === botCommit && head === sha(32),
+    fetchPull: (number, head) => fetched.push([number, head]), mergeTree: () => sha(20), tree: () => sha(20),
+  };
+  const api = { commit: async (s) => structuredClone(records.get(s)), pulls: async () => structuredClone(pulls) };
+  const output = [];
+  const checker = new DcoChecker(git, api, repo, (s) => output.push(s));
+  return { git, api, records, botPull, releasePull, pulls, fetched, output, run: () => checker.check(base, botCommit, owner) };
+}
+
+test('a bot commit merged unsquashed passes through the bot PR that contains it', async () => {
+  const f = botSourceFixture(); const result = await f.run();
+  assert.equal(result.failures.length, 0);
+  assert.deepEqual(result.accepted[0], { sha: botCommit, method: 'authenticated-bot-source-pr', pull: 7, head: sha(32) });
+  assert.deepEqual(f.fetched, [[7, sha(32)]]);
+  assert.match(f.output[0], /authenticated-bot-source-pr \(source PR #7\)/);
+});
+
+const invalidBotSource = {
+  'PR opened by a person': (f) => { f.botPull.user = owner; },
+  'unmerged bot PR': (f) => { f.botPull.merged_at = null; },
+  'bot PR in another repository': (f) => { f.botPull.base.repo.full_name = 'attacker/repo'; },
+  'bot not in the allow list': (f) => { const other = { id: 5, login: 'renovate[bot]', type: 'Bot' }; f.botPull.user = other; f.records.get(botCommit).author = other; },
+  'unverified bot commit': (f) => { f.records.get(botCommit).commit.verification.verified = false; },
+  'commit authored by someone else': (f) => { f.records.get(botCommit).author = owner; },
+  'opener id differs from the author': (f) => { f.botPull.user = { ...dependabot, id: 1 }; },
+  'two qualifying bot PRs': (f) => { f.pulls.push({ ...structuredClone(f.botPull), number: 8 }); },
+  'commit outside the bot PR head': (f) => { f.git.ancestor = () => false; },
+  'invalid bot PR head': (f) => { f.botPull.head.sha = '--help'; },
+  'bot PR ref changed': (f) => { f.git.fetchPull = () => { throw new Error('head changed'); }; },
+};
+for (const [name, mutate] of Object.entries(invalidBotSource)) test(`bot source PR fails closed: ${name}`, async () => {
+  const f = botSourceFixture(); mutate(f); const result = await f.run();
+  assert.equal(result.failures.length, 1);
+  assert.equal(result.accepted.length, 0);
+});
+
+test('a bot-authored squash stays on the squash checks', async () => {
+  const f = botSourceFixture(); f.botPull.merge_commit_sha = botCommit;
+  f.git.ancestor = () => { throw new Error('must not use the bot source path'); };
+  const result = await f.run();
+  assert.equal(result.accepted.some((a) => a.method === 'authenticated-bot-source-pr'), false);
+  assert.equal(f.fetched.some(([number]) => number === 7), true); // The squash path fetched it instead.
+});
+
+test('Git.ancestor tells an ancestor from a stranger', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dco-ancestor-'));
+  try {
+    const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.org', '-c', 'commit.gpgsign=false', ...args], { cwd: dir, encoding: 'utf8' }).trim();
+    git('init', '--quiet');
+    git('commit', '--allow-empty', '--quiet', '-m', 'one'); const first = git('rev-parse', 'HEAD');
+    git('commit', '--allow-empty', '--quiet', '-m', 'two'); const second = git('rev-parse', 'HEAD');
+    const g = new Git(dir);
+    assert.equal(g.ancestor(first, second), true);
+    assert.equal(g.ancestor(second, first), false);
+    assert.throws(() => g.ancestor(sha(77), second));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
