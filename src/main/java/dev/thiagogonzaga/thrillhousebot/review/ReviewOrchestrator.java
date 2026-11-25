@@ -34,8 +34,6 @@ import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -682,7 +680,7 @@ public class ReviewOrchestrator {
       String auth, ReviewRequest req, ReviewSession session, long checkRunId, String freshHead) {
     var stoodDown =
         standDown.supersededWhileLoading(auth, req, checkRunId, sessionUrl(session), freshHead);
-    var elapsedMs = elapsedMs(session);
+    var elapsedMs = session.elapsedMs();
     try {
       applySessionState(
           session,
@@ -961,7 +959,7 @@ public class ReviewOrchestrator {
 
   /** Applies review completion fields to the in-memory session and persisted entity together. */
   void applyReviewResult(ReviewSession session, ReviewResult result) {
-    var elapsedMs = elapsedMs(session);
+    var elapsedMs = session.elapsedMs();
     applySessionState(
         session,
         s -> {
@@ -994,7 +992,7 @@ public class ReviewOrchestrator {
    * cannot make the next one treat findings it never posted as already raised.
    */
   void applyReviewFailure(ReviewSession session, String errorMessage) {
-    var elapsedMs = elapsedMs(session);
+    var elapsedMs = session.elapsedMs();
     applySessionState(
         session,
         s -> {
@@ -1006,19 +1004,6 @@ public class ReviewOrchestrator {
           }
         });
     outcomeMetrics.recordFailed();
-  }
-
-  /**
-   * The review's elapsed time so far, from the session's start to now (#1417); 0 for a session with
-   * no start time. Read once per terminal write, so the row and the event broadcast from the
-   * in-memory session carry the same value. Visible for tests.
-   */
-  static long elapsedMs(ReviewSession session) {
-    var started = session.getTimestamp();
-    if (started == null) {
-      return 0L;
-    }
-    return Math.max(0L, Duration.between(started, Instant.now()).toMillis());
   }
 
   private void applySessionState(ReviewSession session, Consumer<ReviewSession> mutator) {

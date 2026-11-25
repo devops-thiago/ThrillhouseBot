@@ -146,11 +146,10 @@ public class ReviewPublisher {
   }
 
   /**
-   * One summary publish. {@code lineResolver} is the round's diff, from which the manifest decides
-   * which findings {@link #postReview} will open a thread for (#1433); {@code null} falls back to
-   * {@link Finding#postsInline}.
+   * {@link #publishSummary(SummaryRequest)} for a review request and its diff. {@code lineResolver}
+   * is the round's diff, from which the manifest decides which findings {@link #postReview} will
+   * open a thread for (#1433); {@code null} falls back to {@link Finding#postsInline}.
    */
-  /** {@link #publishSummary(SummaryRequest)} for a review request and its diff. */
   boolean publishSummary(
       String auth,
       ReviewOrchestrator.ReviewRequest req,
